@@ -1,9 +1,6 @@
 package com.jarvys.agent
 
 import android.content.Context
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalGate
-import com.jarvys.agent.connectors.ApprovalSummary
 import com.jarvys.agent.crew.BotDefinition
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
@@ -16,7 +13,7 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 
-/** Main-chat creation is a reviewed local definition, not a connector grant or a running mission. */
+/** Main-chat creation is a local definition, not a running mission. */
 class BotCreationTool internal constructor(private val service: BotCreationService) : CoreTool {
     constructor(context: Context, sessionId: String) : this(BotCreationService(context, sessionId))
 
@@ -41,7 +38,7 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
             "mascot_scene_json" to text(BotMascotTool.SCENE_GUIDE, BotMascotSceneCompiler.MAX_SOURCE_BYTES),
         )
         return ToolSpec(NAME, "jarvys/bots", "Create and persist a custom bot from the user's request, including its simple name, English instructions, original locally compiled mascot and generated static fallback icon. " +
-            "The configured native bot policy defaults to Allow always; Ask reviews this exact definition, visual description, scene hash, icon prompt and minimum capability/skill scope, and Deny blocks saving. This never changes connector permissions or starts a task. " +
+            "This never changes connector permissions or starts a task. " +
             "Image generation uses existing signed-in Codex image access only; unavailable or failed generation returns a saved bot with an explicitly incomplete icon. " +
             "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. Normal avatars remain static; only an explicit temporary visual test is available in the saved custom bot editor. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
             "bots", ToolSpec.Status.IMPLEMENTED, emptyMap(), properties.keys.toList(),
@@ -60,24 +57,18 @@ internal class BotCreationService(
     private val sessionId: String,
     private val currentCapabilities: () -> List<String>,
     private val currentSkills: () -> List<String>,
-    private val approve: (ApprovalSummary, CancellationToken) -> ApprovalDecision,
     private val iconAvailable: () -> Boolean,
-    private val generateIcon: (String, Int, String, CancellationToken, NativeActionPolicy.Request) -> BotDefinition,
-    private val compileMascot: ((String, Int, String, String, String, CancellationToken, NativeActionPolicy.LinkedRequest) -> BotDefinition)? = null,
-    private val nativePolicy: NativeActionPolicy = NativeActionPolicy.inMemory(),
+    private val generateIcon: (String, Int, String, CancellationToken) -> BotDefinition,
+    private val compileMascot: ((String, Int, String, String, String, CancellationToken) -> BotDefinition)? = null,
 ) {
     constructor(context: Context, sessionId: String) : this(
         CrewProfileRepository(context), sessionId,
         { CoreAgentRuntime.profileCapabilities(context, sessionId) },
         { SkillRepository.get(context).also { it.refresh() }.enabledForRun().map { it.metadata.id } },
-        { summary, token -> ApprovalGate.INSTANCE.request(summary, token) },
         { BotIconService(context, sessionId, ProviderSettings(context)).isAvailable },
-        { id, revision, prompt, token, authorization -> BotIconService(context, sessionId, ProviderSettings(context),
-            { authorization.admit(token) }).generateAndAssign(id, revision, prompt, token,
-            { authorization.admit(token) }) },
-        { id, revision, request, description, scene, token, authorization -> BotMascotService(context, sessionId)
-            .assign(id, revision, request, description, scene, token, true, authorization).definition },
-        NativeActionPolicy(context),
+        { id, revision, prompt, token -> BotIconService(context, sessionId, ProviderSettings(context)).generateAndAssign(id, revision, prompt, token) },
+        { id, revision, request, description, scene, token -> BotMascotService(context, sessionId)
+            .assign(id, revision, request, description, scene, token).definition },
     )
 
     fun capabilities() = currentCapabilities().filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
@@ -87,8 +78,6 @@ internal class BotCreationService(
         token.throwIfCancelled()
         if (token.isCrewRun || (sessionId.isBlank() || sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID))
             return CoreToolResult.failure("Bot creation is available only in the main chat.")
-        var authorization: NativeActionPolicy.Request? = null
-        var mascotAuthorization: NativeActionPolicy.Request? = null
         try {
             require(arguments != null && (arguments.keys == LEGACY_FIELDS || arguments.keys == FIELDS)) {
                 "Provide the bot definition and both visual_description and mascot_scene_json; unknown fields are not accepted."
@@ -124,51 +113,24 @@ internal class BotCreationService(
             val selectedCapabilities = ids("capabilities")
             val operationPrefix = "custom-chat-" + digest(sessionId + "\u0000" + requestKey) + "-"
             // Both hashes are persisted atomically as the stable ID. A reused operation key with
-            // any changed approved field (including icon prompt) must never create another bot.
-            val approvedPayload = JSONArray(listOf(name, description, instructions, JSONArray(selectedSkills),
+            // any changed field (including icon prompt) must never create another bot.
+            val requestPayload = JSONArray(listOf(name, description, instructions, JSONArray(selectedSkills),
                 JSONArray(selectedCapabilities), workspace, iconPrompt))
-            if (hasMascot) approvedPayload.put(visualDescription).put(mascotScene)
-            val fingerprint = digest(approvedPayload.toString())
-            val permission = nativePolicy.prepare(NativeActionPolicy.Operation.BOT_CREATE,
-                NativeActionPolicy.binding(sessionId, requestKey, fingerprint))
-            authorization = permission
+            if (hasMascot) requestPayload.put(visualDescription).put(mascotScene)
+            val fingerprint = digest(requestPayload.toString())
             val id = operationPrefix + fingerprint
-            val childPermission = if (hasMascot && compileMascot != null) nativePolicy.prepare(NativeActionPolicy.Operation.BOT_MASCOT,
-                BotMascotService.binding(sessionId, id, 1, requestKey, checkNotNull(visualDescription), checkNotNull(mascotScene))) else null
-            mascotAuthorization = childPermission
             val draft = CrewProfile(id, 1, name, description, instructions, selectedSkills, selectedCapabilities,
                 if (workspace == "conversation_project") CrewProfile.WorkspaceMode.CONVERSATION_PROJECT else CrewProfile.WorkspaceMode.LEGACY_CHAT)
             draft.validateAvailability(capabilities(), skills())
             synchronized(CREATION_LOCK) { existing(draft, operationPrefix)?.let { return outcome(it, true, "not_retried") } }
-            val summary = ApprovalSummary(
-                title = "Create bot: $name",
-                lines = listOf("Purpose: ${draft.description}", "Instructions (English):\n$instructions",
-                    "Tools: ${draft.capabilities.joinToString().ifEmpty { "None" }}", "Skills: ${draft.skillIds.joinToString().ifEmpty { "None" }}",
-                    "Workspace: $workspace", "Icon prompt: $iconPrompt",
-                    if (hasMascot) "Mascot design and motion: $visualDescription\nScene SHA-256: ${digest(checkNotNull(mascotScene))}\nNine states plus nine reduced poses; compiled locally. A temporary visual test is available in the saved custom bot editor; normal avatars remain static."
-                    else "Legacy request: no animated mascot source was supplied.",
-                    if (iconAvailable()) "Generate the icon with existing Codex image access and quota." else "Image access is unavailable. Save the bot now with its default icon; generation remains incomplete.",
-                    "Saves this definition only. Existing connector approvals remain in force; no task starts."),
-                allowAlwaysAvailable = false,
-            )
-            val combinedReview = permission.requiresApproval
-            permission.authorize(summary, token, approve)
-            if (childPermission != null && childPermission.requiresApproval) {
-                if (combinedReview) {
-                    // Both exact snapshots preceded this card, which includes this scene/hash and definition.
-                    childPermission.approveOnce { token.throwIfCancelled(); permission.requireCurrent() }
-                } else childPermission.authorize(summary.copy(title = "Create mascot: $name"), token, approve)
-            }
             token.throwIfCancelled()
             draft.validateAvailability(capabilities(), skills())
             var saved: BotDefinition? = null
             var duplicate = false
             BotIconService.CommitGate(token).use { gate -> gate.commit {
                 synchronized(CREATION_LOCK) {
-                    saved = existing(draft, operationPrefix)?.also { duplicate = true } ?: run {
-                        permission.admit(token)
-                        repository.create(draft, capabilities(), skills())
-                    }
+                    saved = existing(draft, operationPrefix)?.also { duplicate = true }
+                        ?: repository.create(draft, capabilities(), skills())
                 }
             } }
             val created = checkNotNull(saved)
@@ -178,8 +140,7 @@ internal class BotCreationService(
             if (hasMascot && compileMascot != null) {
                 try {
                     current = compileMascot.invoke(created.id, created.revision, requestKey,
-                        checkNotNull(visualDescription), checkNotNull(mascotScene), token,
-                        permission.linkMascot(checkNotNull(childPermission)))
+                        checkNotNull(visualDescription), checkNotNull(mascotScene), token)
                     mascotStatus = "LOCAL_COMPILED"
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: RuntimeException) {
@@ -190,15 +151,13 @@ internal class BotCreationService(
             }
             if (!iconAvailable()) return outcome(current, false, "unavailable", mascotStatus)
             return try {
-                permission.requireCurrent()
-                outcome(generateIcon(current.id, current.revision, iconPrompt, token, permission), false, "generated", mascotStatus)
+                outcome(generateIcon(current.id, current.revision, iconPrompt, token), false, "generated", mascotStatus)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: BotIconService.Failure) { outcome(repository.definition(created.id), false, "failed_${failure.reason.name.lowercase()}", mascotStatus) }
             catch (_: RuntimeException) { outcome(repository.definition(created.id), false, "failed", mascotStatus) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (invalid: IllegalArgumentException) { return CoreToolResult.failure(invalid.message ?: "Invalid bot definition. Nothing was changed.") }
         catch (_: RuntimeException) { return CoreToolResult.failure("Could not finish bot creation. Use list_bots to check the catalog and retry only with the same request_id.") }
-        finally { mascotAuthorization?.close(); authorization?.close() }
     }
 
     private fun existing(draft: CrewProfile, operationPrefix: String): BotDefinition? {

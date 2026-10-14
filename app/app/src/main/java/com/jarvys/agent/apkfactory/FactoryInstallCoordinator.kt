@@ -13,16 +13,16 @@ import com.jarvys.agent.BuildConfig
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.coding.ProjectScope
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** One durable operation. Saved policy controls admission; Android controls its own grants and install result. */
+/** One durable installation transaction. Android owns source permission and PackageInstaller consent. */
 internal class FactoryInstallCoordinator(
     context: Context,
     private val backend: Backend = AndroidBackend(context),
     private val fullDistribution: Boolean = BuildConfig.FLAVOR == "full",
-    private val operationPolicy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
 ) {
     enum class Availability { READY, SOURCE_PERMISSION_REQUIRED, UNSUPPORTED }
     interface Backend {
@@ -39,12 +39,7 @@ internal class FactoryInstallCoordinator(
     private val journal = AtomicFile(File(root, "session.json"))
     private val artifact = File(root, "approved.apk")
     private var protection: MemoryUiAutomationGuard.Lease? = null
-    private var authority: FactoryOperationPolicy.Grant? = null
-    private var policySubscription: AutoCloseable? = null
-    @Synchronized fun approvalRequired() = authority?.requiresApproval == true
-    @Synchronized fun automatic() = authority?.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS
-    @Synchronized fun requireAuthority() { authority?.checkBeforeEffect() ?: error("Installation authority is unavailable") }
-    private fun releaseAuthority() { unregister?.run(); unregister = null; cancellation = null; policySubscription?.close(); policySubscription = null; authority?.close(); authority = null }
+    private fun releaseOperation() { unregister?.run(); unregister = null; cancellation = null }
     private fun unprotect() { protection?.close(); protection = null }
     private var validation: (() -> Unit)? = null
     private var finalValidation: (() -> Unit)? = null
@@ -55,27 +50,14 @@ internal class FactoryInstallCoordinator(
     private var observer: (() -> Unit)? = null
     private var corrupt = false
     private var workInFlight = false
-    private var recovering = false
-    private var recoveryError: String? = null
 
     @Synchronized fun restore() {
         if (!journalExists()) return
         try {
             val saved = read() ?: return
-            if (saved.getBoolean("interactionOpen")) {
-                if (saved.getString("state") == "checking_permission") {
-                    saved.put("state", "permission_unavailable"); save(saved)
-                } else if (saved.getString("state") in setOf("awaiting_user", "staging")) {
-                    saved.put("state", "interrupted_before_commit")
-                    save(saved)
-                } else if (saved.getString("state") in setOf("committing", "pending_system", "system_ui_open")) {
-                    saved.put("state", "outcome_unknown")
-                    save(saved)
-                }
-            }
+            if (saved.getBoolean("interactionOpen")) retire(saved)
         } catch (_: Exception) {
             corrupt = true
-            // Historical uncertainty is family-local; it never creates a process-global UI lock.
         }
     }
     private fun protect() { if (protection == null) protection = MemoryUiAutomationGuard.enterProtectedSurface() }
@@ -100,21 +82,53 @@ internal class FactoryInstallCoordinator(
         try { stream.write(bytes); journal.finishWrite(stream) }
         catch (failure: Throwable) { journal.failWrite(stream); throw failure }
     }
-    @Synchronized fun prepare(metadata: JSONObject, bytes: ByteArray, validate: () -> Unit, token: CancellationToken, finalCheck: () -> Unit = validate): JSONObject {
-        check(!corrupt) { "Install journal is damaged; native recovery is required" }
-        val prior = read()
-        if (prior?.getBoolean("interactionOpen") == true && prior.getString("state") in TERMINAL && !workInFlight) {
-            runCatching { closeInteraction {} }
+    private fun retire(record: JSONObject) {
+        val id = runCatching { record.getInt("sessionId") }.getOrDefault(-1)
+        if (id >= 0 && backend.exists(id)) {
+            backend.abandon(id)
+            check(!backend.exists(id)) { "Previous PackageInstaller session is still active" }
         }
-        check(read()?.getBoolean("interactionOpen") != true) { "An installation is still pending. Inspect its status or cancel it before a new request; never replay an uncertain commit." }
+        abandonOwnedSessions()
+        record.put("state", "closed_outcome_unknown").put("interactionOpen", false)
+        save(record)
+        pendingIntent = null; launchToken = null; validation = null; finalValidation = null
+        releaseOperation(); unprotect(); artifact.delete()
+        observer?.invoke()
+    }
+
+    private fun retirePrevious() {
+        while (workInFlight) {
+            cancellation?.cancel()
+            stopOperation()
+            try { (this as java.lang.Object).wait() }
+            catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("Previous installation is still stopping", interrupted)
+            }
+        }
+        val previous = try { read() } catch (failure: Exception) { corrupt = true; null }
+        if (previous != null && (previous.optBoolean("interactionOpen") || previous.optString("state") in RETIRE_ON_NEXT_REQUEST)) {
+            retire(previous)
+        } else if (corrupt) {
+            abandonOwnedSessions()
+            journal.delete()
+            pendingIntent = null; launchToken = null; validation = null; finalValidation = null
+            releaseOperation(); unprotect(); artifact.delete()
+            corrupt = false
+        } else abandonOwnedSessions()
+    }
+    private fun abandonOwnedSessions() {
+        backend.ownedSessionIds().forEach { id ->
+            if (backend.exists(id)) {
+                backend.abandon(id)
+                check(!backend.exists(id)) { "Previous PackageInstaller session is still active" }
+            }
+        }
+    }
+    @Synchronized fun prepare(metadata: JSONObject, bytes: ByteArray, validate: () -> Unit, token: CancellationToken, finalCheck: () -> Unit = validate): JSONObject {
+        retirePrevious()
         validate()
         check(fullDistribution) { "Integrated installation is unavailable in Play. Keep the signed artifact; no workaround is attempted." }
-        authority = operationPolicy.acquire(FactoryOperationPolicy.Subject.signedArtifact(metadata.getString("app_id"), metadata.getString("certificate_sha256")),
-            FactoryOperationPolicy.Operation.INSTALL, FactoryOperationPolicy.binding(metadata.toString()))
-        if (authority!!.requiresApproval) {
-            protect()
-            if (protection?.isReadyForUser != true) { unprotect(); releaseAuthority(); error("An automated action was in flight; reopen the configured Ask review after it ends.") }
-        }
         val record = JSONObject().put("schemaVersion", 1).put("nonce", UUID.randomUUID().toString())
             .put("binding", JSONObject(metadata.toString())).put("sessionId", -1).put("state", "awaiting_user")
             .put("interactionOpen", true).put("systemStatus", JSONObject.NULL)
@@ -126,10 +140,9 @@ internal class FactoryInstallCoordinator(
             save(record)
         } catch (failure: Exception) {
             corrupt = true
-            releaseAuthority(); unprotect()
+            releaseOperation(); unprotect()
             throw failure
         }
-        // Permission inspection grants nothing. Only actual ASK or system confirmation owns a UI guard.
         val readyState = try {
             when (backend.availability()) {
                 Availability.READY -> "awaiting_user"
@@ -142,9 +155,8 @@ internal class FactoryInstallCoordinator(
             validation = validate
             finalValidation = finalCheck
             cancellation = token
-            policySubscription = authority!!.onRevoked { stopOperation() }
             unregister = token.registerCancelAction { stopOperation() }
-        } else { releaseAuthority(); unprotect() }
+        } else { releaseOperation(); unprotect() }
         launchToken = UUID.randomUUID().toString()
         return publicStatus(record).put("launch_token", launchToken)
     }
@@ -156,23 +168,20 @@ internal class FactoryInstallCoordinator(
     @Synchronized fun status(binding: JSONObject? = null): JSONObject {
         if (corrupt) return damagedStatus()
         val record = try { read() } catch (_: Exception) {
-            corrupt = true; unprotect(); releaseAuthority(); return damagedStatus()
+            corrupt = true; unprotect(); releaseOperation(); return damagedStatus()
         } ?: return JSONObject().put("state", "no_session")
         if (binding != null) requireBinding(record.getJSONObject("binding"), binding)
         return publicStatus(record)
     }
     private fun damagedStatus() = JSONObject().put("state", "journal_unavailable").put("automation_protected", protection != null)
-        .put("recovery_error", recoveryError ?: JSONObject.NULL)
     private fun publicStatus(record: JSONObject) = JSONObject(record.getJSONObject("binding").toString())
         .put("state", record.getString("state")).put("session_id", record.getInt("sessionId"))
         .put("system_status", record.opt("systemStatus")).put("automation_protected", protection != null)
-        .put("requires_approval", approvalRequired()).put("automatic", automatic())
         .put("notice", "Only an authenticated PackageInstaller success callback confirms this session succeeded. Opening UI, missing sessions or an installed version are not success evidence. Physical app behavior and data retention are untested.")
     @Synchronized fun observe(callback: (() -> Unit)?) { observer = callback }
-    /** STOP/revocation also prevents later effects after commit, without claiming rollback. */
+    /** STOP cancels local work and asks PackageInstaller to abandon any session already created. */
     @Synchronized private fun stopOperation() {
-        policySubscription?.close(); policySubscription = null
-        authority?.revoke()
+        releaseOperation()
         runCatching {
             revokeBeforeCommit()
             if (status().optString("state") in setOf("committing", "pending_system", "system_ui_open", "outcome_unknown")) cancel()
@@ -181,25 +190,24 @@ internal class FactoryInstallCoordinator(
     @Synchronized fun revokeBeforeCommit() {
         if (corrupt) return
         val record = try { read() } catch (_: Exception) {
-            corrupt = true; unprotect(); releaseAuthority(); observer?.invoke(); return
+            corrupt = true; unprotect(); releaseOperation(); observer?.invoke(); return
         } ?: return
         if (record.getString("state") !in setOf("awaiting_user", "staging")) return
         record.put("state", "revoked")
         save(record)
         validation = null; finalValidation = null
         launchToken = null
-        authority?.revoke(); unprotect()
+        unprotect()
         observer?.invoke()
     }
     /** Expensive APK I/O stays off the state monitor so native pause/cancel never waits for hashing. */
-    fun install(humanCheck: () -> Unit) {
+    fun install(activeCheck: () -> Unit) {
         val work = synchronized(this) {
             check(!corrupt)
             val record = read() ?: error("No install request")
             check(record.getString("state") == "awaiting_user") { "This request cannot be replayed" }
-            authority?.approveOnce(humanCheck) ?: error("Installation authority is unavailable")
-            requireAuthority(); unprotect()
-            val checkAuthority = validation ?: error("Installation approval expired; request a new installation")
+            activeCheck(); unprotect()
+            val checkAuthority = validation ?: error("Installation request is no longer active")
             record.put("state", "staging"); save(record)
             workInFlight = true
             record to checkAuthority
@@ -210,36 +218,34 @@ internal class FactoryInstallCoordinator(
         var id = -1
         var commitInvoked = false
         try {
-            humanCheck(); checkAuthority(); requireAuthority()
+            activeCheck(); checkAuthority()
             check(backend.allowed()) { "Per-source install permission is unavailable" }
             verifyArtifact(artifact, binding)
-            synchronized(this) { requireStaging(record); humanCheck() }
-            requireAuthority()
+            synchronized(this) { requireStaging(record); activeCheck() }
             id = backend.create(binding.getString("app_id"), artifact.length())
             synchronized(this) {
                 requireStaging(record)
                 record.put("sessionId", id); save(record)
             }
-            requireAuthority(); backend.write(id, artifact)
+            backend.write(id, artifact)
             verifyArtifact(artifact, binding)
-            checkAuthority(); humanCheck()
+            checkAuthority(); activeCheck()
             check(backend.allowed())
             synchronized(this) {
                 requireStaging(record)
                 // Save before Binder. If the process dies here, restart records UNKNOWN, never replays.
                 record.put("state", "committing"); save(record)
-                humanCheck()
-                finalValidation?.invoke() ?: error("Installation authorization expired")
-                humanCheck()
-                requireAuthority()
+                activeCheck()
+                finalValidation?.invoke() ?: error("Installation request is no longer active")
+                activeCheck()
                 val activeToken = cancellation ?: error("Installation cancellation scope expired")
                 check(activeToken.runIfActive {
-                    requireAuthority()
+                    activeCheck()
                     commitInvoked = true
                     backend.commit(id, record.getString("nonce"))
                 }) { "Installation stopped before commit" }
                 validation = null; finalValidation = null
-                // STOP remains subscribed while a later Android confirmation can still be opened.
+                // Keep the cancellation callback alive while Android may still ask for confirmation.
             }
         } catch (failure: Exception) {
             val abandoned = !commitInvoked && (id < 0 || runCatching { backend.abandon(id); true }.getOrDefault(false))
@@ -253,7 +259,7 @@ internal class FactoryInstallCoordinator(
                 validation = null; finalValidation = null
             }
             throw failure
-        } finally { synchronized(this) { workInFlight = false; observer?.invoke() } }
+        } finally { synchronized(this) { workInFlight = false; (this as java.lang.Object).notifyAll(); observer?.invoke() } }
     }
     private fun requireStaging(record: JSONObject) {
         val current = read() ?: error("Install request missing")
@@ -274,7 +280,7 @@ internal class FactoryInstallCoordinator(
         record.put("state", next).put("systemStatus", status)
         save(record)
         pendingIntent = if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) confirmation else null
-        if (terminal != null) { unprotect(); releaseAuthority() }
+        if (terminal != null) { record.put("interactionOpen", false); save(record); unprotect(); releaseOperation() }
         observer?.invoke()
     }
     private fun terminalOutcome(status: Int): String? = when (status) {
@@ -287,12 +293,11 @@ internal class FactoryInstallCoordinator(
             else -> if (Build.VERSION.SDK_INT >= 34 && status == PackageInstaller.STATUS_FAILURE_TIMEOUT) "failed_by_system" else null
         }
     /** Android may require real system confirmation; opening that UI is not an extra Jarvys approval. */
-    @Synchronized fun takeSystemIntent(humanCheck: () -> Unit): Intent {
-        humanCheck()
+    @Synchronized fun takeSystemIntent(activeCheck: () -> Unit): Intent {
+        activeCheck()
         val record = read() ?: error("No session")
         check(record.getString("state") == "pending_system")
-        val intent = pendingIntent ?: error("System confirmation is unavailable after interruption. Cancel/review this session; do not retry commit.")
-        requireAuthority()
+        val intent = pendingIntent ?: error("System confirmation is unavailable after interruption. Send a new installation request; commit will not be replayed.")
         check(cancellation?.isCancellationRequested == false) { "Installation was stopped" }
         protect()
         if (protection?.isReadyForUser != true) { unprotect(); error("Wait for the automated device action before opening Android confirmation") }
@@ -302,7 +307,6 @@ internal class FactoryInstallCoordinator(
     }
     @Synchronized fun cancel(binding: JSONObject? = null): JSONObject {
         check(!corrupt) { "Install journal unavailable" }
-        check(!recovering) { "Native recovery is in progress" }
         val record = read() ?: return JSONObject().put("state", "no_session")
         if (binding != null) requireBinding(record.getJSONObject("binding"), binding)
         val state = record.getString("state")
@@ -323,73 +327,20 @@ internal class FactoryInstallCoordinator(
         }
         validation = null; pendingIntent = null; launchToken = null
         unregister?.run(); unregister = null
-        releaseAuthority()
+        releaseOperation()
         val id = record.getInt("sessionId")
         if (id < 0 || runCatching { !backend.exists(id) }.getOrDefault(false)) unprotect()
         observer?.invoke()
         return publicStatus(record)
     }
-    /** Explicit native-only recovery. Own installer sessions are not an installed-package inventory. */
-    fun recoverDamagedJournal(humanCheck: () -> Unit) {
-        synchronized(this) {
-            humanCheck()
-            check(corrupt) { "The journal is readable; use the ordinary session controls" }
-            check(!workInFlight && !recovering) { "Wait for the active operation" }
-            recovering = true; workInFlight = true; recoveryError = null
+    @Synchronized fun requireCurrentInstall() {
+        check(!corrupt && cancellation?.isCancellationRequested == false && read()?.getBoolean("interactionOpen") == true) {
+            "Installation request is no longer active"
         }
-        var failureStage = "session_query_failed"
-        try {
-            val ids = backend.ownedSessionIds()
-            failureStage = "too_many_or_invalid_sessions"
-            check(ids.size <= 16 && ids.distinct().size == ids.size && ids.all { it >= 0 })
-            for (id in ids) {
-                failureStage = "foreground_lost"
-                humanCheck()
-                failureStage = "session_abandon_failed"
-                try { backend.abandon(id) } catch (failure: Exception) {
-                    if (backend.exists(id)) throw failure
-                }
-            }
-            failureStage = "session_query_failed"
-            val remaining = backend.ownedSessionIds()
-            failureStage = "sessions_still_present"
-            check(remaining.isEmpty())
-            synchronized(this) {
-                failureStage = "foreground_lost"
-                humanCheck()
-                val record = JSONObject().put("schemaVersion", 1).put("nonce", UUID.randomUUID().toString())
-                    .put("binding", JSONObject()).put("sessionId", -1).put("state", "recovery_outcome_unknown")
-                    .put("interactionOpen", true).put("systemStatus", JSONObject.NULL)
-                failureStage = "journal_write_failed"
-                save(record)
-                validation = null; finalValidation = null; pendingIntent = null; launchToken = null
-                unregister?.run(); unregister = null
-                corrupt = false; releaseAuthority(); unprotect()
-            }
-        } catch (failure: Exception) {
-            synchronized(this) { recoveryError = failureStage }
-            throw failure
-        } finally {
-            synchronized(this) { recovering = false; workInFlight = false; observer?.invoke() }
-        }
-    }
-    /** Foreground protected native close only. An absent session never changes its recorded outcome. */
-    @Synchronized fun closeInteraction(humanCheck: () -> Unit) {
-        humanCheck()
-        check(!corrupt) { "Damaged journal cannot release the safety boundary" }
-        check(!workInFlight) { "Wait for staging or cancellation to finish" }
-        val record = read() ?: return
-        check(record.getString("state") in TERMINAL) { "Cancel or wait for the active session first" }
-        val id = record.getInt("sessionId")
-        check(id < 0 || !backend.exists(id)) { "Android still has this session; cancel it before closing" }
-        if (record.getString("state") == "recovery_outcome_unknown") check(backend.ownedSessionIds().isEmpty()) { "Android still has owned installer sessions" }
-        record.put("interactionOpen", false); save(record)
-        artifact.delete()
-        validation = null; pendingIntent = null; unregister?.run(); unregister = null
-        releaseAuthority(); unprotect()
     }
     companion object {
-        private val TERMINAL = setOf("succeeded", "aborted_by_system", "blocked_by_system", "failed_by_system", "failed_before_commit", "cancelled_before_commit", "cancelled_outcome_unknown", "interrupted_before_commit", "revoked", "permission_required", "permission_unavailable", "installation_unavailable", "recovery_outcome_unknown")
+        private val TERMINAL = setOf("succeeded", "aborted_by_system", "blocked_by_system", "failed_by_system", "failed_before_commit", "cancelled_before_commit", "cancelled_outcome_unknown", "interrupted_before_commit", "revoked", "permission_required", "permission_unavailable", "installation_unavailable", "recovery_outcome_unknown", "closed_outcome_unknown")
+        private val RETIRE_ON_NEXT_REQUEST = setOf("awaiting_user", "staging", "committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested", "cancelled_outcome_unknown", "interrupted_before_commit", "revoked", "failed_before_commit", "recovery_outcome_unknown", "closed_outcome_unknown")
         private val STATES = TERMINAL + setOf("checking_permission", "awaiting_user", "staging", "committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested")
         private var instance: FactoryInstallCoordinator? = null
         @Synchronized fun get(context: Context): FactoryInstallCoordinator = instance ?: FactoryInstallCoordinator(context.applicationContext).also { instance = it; it.restore() }
@@ -440,10 +391,11 @@ internal class FactoryInstallCoordinator(
     }
 }
 
-/** Restores family-local outcome/resource journals without inventing a global human-only surface. */
+/** Restores family-local outcome and resource journals at application startup. */
 class FactoryInstallApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        clearRetiredOperationPolicyState()
         com.jarvys.agent.LocalDiagnostics.install(this)
         FactoryDataBackupCoordinator.get(this)
         FactoryContactCoordinator.get(this)
@@ -454,6 +406,35 @@ class FactoryInstallApplication : Application() {
         FactoryDocumentCoordinator.get(this)
         FactoryPhotoCoordinator.get(this)
         FactoryInstallCoordinator.get(this)
+    }
+
+    private fun clearRetiredOperationPolicyState() {
+        runCatching {
+            AtomicFile(File(noBackupFilesDir, "factory-operation-policy/policy.json")).delete()
+            File(noBackupFilesDir, "factory-operation-policy").delete()
+        }
+        val preferences = getSharedPreferences("jarvys_connectors", Context.MODE_PRIVATE)
+        val values = preferences.all
+        val editor = preferences.edit()
+        var changed = false
+        values.keys.filter { it.startsWith("autonomy_native_") }.forEach { editor.remove(it); changed = true }
+        values.forEach { (key, value) ->
+            if (key.startsWith("ux44_action_policy_v1_") && value is String &&
+                runCatching { JSONObject(value).optString("connectorId") == "native" }.getOrDefault(false)) {
+                editor.remove(key); changed = true
+            }
+        }
+        val audit = values["autonomy_audit"] as? String
+        if (audit != null) runCatching {
+            val saved = JSONArray(audit)
+            val retained = JSONArray()
+            for (index in 0 until saved.length()) {
+                val record = saved.optJSONObject(index) ?: continue
+                if (record.optString("connectorId") != "native") retained.put(record)
+            }
+            if (retained.length() != saved.length()) { editor.putString("autonomy_audit", retained.toString()); changed = true }
+        }
+        if (changed) runCatching { editor.commit() }
     }
 }
 

@@ -14,7 +14,7 @@ import java.net.HttpURLConnection;
 import java.util.Map;
 import static com.jarvys.factory.runtime.HttpJobEngine.*;
 
-/** Cold-process resolution uses the existing authenticated source/policy provider, never Activity state. */
+/** Cold-process resolution uses the authenticated installed source provider, never Activity state. */
 public final class FactoryHttpJobServices {
     public static final String PROCESS=HttpJobRequest.token();
     public static final Clock CLOCK=new Clock(){public long epochMs(){return System.currentTimeMillis();}public long elapsedMs(){return SystemClock.elapsedRealtime();}};
@@ -31,15 +31,15 @@ public final class FactoryHttpJobServices {
         if(override!=null)return override.open(context,ledger,session,params);
         FactoryConfig config=configuration(context);Source source=source(context,config,session);
         Authority authority=(row,current,mode,active)->{
-            if(mode!=Mode.BACKGROUND_NO_UI||!current.fingerprint.equals(source.fingerprint)||!current.owner.equals(row.source.owner))return new Decision(Policy.UNAVAILABLE,null);
+            if(mode!=Mode.BACKGROUND_NO_UI||!current.fingerprint.equals(source.fingerprint)||!current.owner.equals(row.source.owner))return new Decision(SessionStatus.UNAVAILABLE,null);
             active.check();
             // On API 24-27 use the current Network explicitly; newer releases expose the assigned Network.
             network(context,params,row.request.constraints);
             NativeOperationRequest disclosure=NativeOperationRequest.parse("jobs.enqueueHttp",row.request.authorizationDetails("scheduled"));
             NativeBackgroundAuthorization.Result result=NativeBackgroundAuthorization.acquireFiniteHttpJob(context,config,disclosure,
                 new NativeBackgroundAuthorization.SourceIdentity(source.appId,source.certificateSha256,source.apkSha256,source.recordSha256,source.versionCode),active.deadlineElapsedMs,active::active);
-            if(result.decision!=NativeBackgroundAuthorization.Decision.ALLOW){result.close();return new Decision(result.decision==NativeBackgroundAuthorization.Decision.ASK?Policy.ASK:Policy.DENY,null);}
-            try{active.check();result.check();return new Decision(Policy.ALLOW,new Lease(){public void check(){active.check();result.check();active.check();}public void close(){result.close();}});}
+            if(result.decision!=NativeBackgroundAuthorization.Decision.ACTIVE){result.close();return new Decision(SessionStatus.UNAVAILABLE,null);}
+            try{active.check();result.check();return new Decision(SessionStatus.ACTIVE,new Lease(){public void check(){active.check();result.check();active.check();}public void close(){result.close();}});}
             catch(RuntimeException failure){result.close();throw failure;}
         };
         Transport transport=(request,access,cancellation)->{

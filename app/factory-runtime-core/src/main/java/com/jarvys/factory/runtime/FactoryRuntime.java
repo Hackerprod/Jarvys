@@ -82,7 +82,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private BoundedStore store;
     private SensorCapture sensors;
     private BiometricAuthentication biometrics;
-    private NativePermissionSessions nativePermissions;
+    private NativeOperationSessions nativeOperations;
     private NativeEffects nativeEffects;
     private volatile PrivateDatabase database;
     private volatile BackupWork backup;
@@ -233,7 +233,7 @@ public final class FactoryRuntime implements AutoCloseable {
         IncomingPage oldIncomingPage = incomingPage; incomingPage = null;
         if (incomingShares != null && oldIncomingPage != null) incomingShares.endOwner(oldIncomingPage);
         if (nativeEffects != null) nativeEffects.close();
-        if (nativePermissions != null) nativePermissions.close();
+        if (nativeOperations != null) nativeOperations.close();
         if(sensors!=null) sensors.cancel();
         if(biometrics!=null) biometrics.cancel();
         retireDatabase();
@@ -440,7 +440,7 @@ public final class FactoryRuntime implements AutoCloseable {
             // Unparseable/oversized traffic retains this global failAll contract, never cancel authority.
             if(sensors!=null) sensors.cancel();
             if(biometrics!=null) biometrics.cancel();
-            if(nativePermissions!=null) nativePermissions.cancelAll();
+            if(nativeOperations!=null) nativeOperations.cancelAll();
             cancelBackup("CANCELLED", "Backup response ended. A restore may have committed or an export may have been written; inspect before retrying.");
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
@@ -660,13 +660,13 @@ public final class FactoryRuntime implements AutoCloseable {
         final Intent result=work.result; work.result=null;
         try {
             requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
-            if(work.resultCode!=Activity.RESULT_OK || result==null) throw new FactoryException("CANCELLED","Backup was not approved. A created empty file may remain.");
+            if(work.resultCode!=Activity.RESULT_OK || result==null) throw new FactoryException("CANCELLED","Backup did not complete. A created empty file may remain.");
             android.os.Bundle extras=result.getExtras();
             if(extras==null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","planSha256","approved","protocolVersion","authorization")))
                     || !work.nonce.equals(extras.get("nonce")) || !work.plan.sha256().equals(extras.get("planSha256"))
                     || !Boolean.TRUE.equals(extras.get("approved")) || !Integer.valueOf(2).equals(extras.get("protocolVersion"))
                     || !(extras.get("authorization") instanceof android.os.IBinder) || result.getSelector()!=null)
-                throw new FactoryException("BACKUP_UNAVAILABLE","Backup approval did not match the exact native plan.");
+                throw new FactoryException("BACKUP_UNAVAILABLE","Backup result did not match the authenticated native plan.");
             if(work.exporting) {
                 Uri uri=result.getData(); int mode=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
                 if(uri==null || !"content".equals(uri.getScheme()) || uri.getAuthority()==null || uri.getAuthority().isEmpty()
@@ -678,7 +678,7 @@ public final class FactoryRuntime implements AutoCloseable {
                     throw new FactoryException("PERMISSION_DENIED","Backup requires exactly one scoped native write grant.");
                 work.output=uri;
             } else if(result.getData()!=null || result.getClipData()!=null || result.getFlags()!=0)
-                throw new FactoryException("PERMISSION_DENIED","Import approval must contain no document grant.");
+                throw new FactoryException("PERMISSION_DENIED","Import result must not include a document grant.");
             work.authorizationBinder=extras.getBinder("authorization");
             work.applying=true; work.worker=true;
             try { io.execute(()-> applyBackup(work)); }
@@ -999,7 +999,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 config.incomingShare.multiple, limits);
         incomingShares = new IncomingShareInbox(limits, SystemClock::elapsedRealtime);
     }
-    /** Stable source-page identity: ASK may pause the Activity without ending this owner. */
+    /** Stable source-page identity survives a trusted host handoff that pauses the Activity. */
     private final class IncomingPage implements IncomingShareInbox.Owner {
         final int page = generation;
         @Override public boolean current() {
@@ -1093,7 +1093,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 IncomingTake work = new IncomingTake(owner, input.id, claim, documents, reply);
                 try {
                     // The native claim, not renderer-provided details, binds the exact content and indices.
-                    work.attach(nativePermissions.authorize("incomingShare.take", claim.authorizationDetails(), work));
+                    work.attach(nativeOperations.authorize("incomingShare.take", claim.authorizationDetails(), work));
                 } catch (Exception failed) { work.cancel(); throw failed; }
                 return;
             default: throw new FactoryException("UNKNOWN_METHOD", "Incoming sharing method is unavailable.");
@@ -1103,7 +1103,7 @@ public final class FactoryRuntime implements AutoCloseable {
         for (IncomingTake work : new java.util.ArrayList<>(incomingTakes))
             work.failed("CANCELLED", "Incoming share document access was cancelled.");
     }
-    private final class IncomingTake implements NativePermissionSessions.Callback {
+    private final class IncomingTake implements NativeOperationSessions.Callback {
         final IncomingPage owner;
         final String envelopeId;
         final IncomingShareInbox.Claim claim;
@@ -1111,7 +1111,7 @@ public final class FactoryRuntime implements AutoCloseable {
         final Reply reply;
         final android.os.CancellationSignal signal = new android.os.CancellationSignal();
         final java.util.concurrent.atomic.AtomicBoolean cancellationQueued = new java.util.concurrent.atomic.AtomicBoolean();
-        volatile NativePermissionSessions.Lease lease;
+        volatile NativeOperationSessions.Lease lease;
         volatile boolean delivered;
         final Runnable timeout = () -> failed("TIMEOUT", "Incoming share selection expired before delivery.");
         IncomingTake(IncomingPage owner, String envelopeId, IncomingShareInbox.Claim claim, DocumentHandles handles, Reply reply) {
@@ -1122,7 +1122,7 @@ public final class FactoryRuntime implements AutoCloseable {
             // Called under the inbox lock: only enqueue, never call a provider or Binder here.
             claim.onFinished(() -> main.post(this::finished));
         }
-        void attach(NativePermissionSessions.Lease value) {
+        void attach(NativeOperationSessions.Lease value) {
             lease = value;
             value.onCancelled(this::cancel);
             if (!claim.current()) cancel();
@@ -1133,7 +1133,7 @@ public final class FactoryRuntime implements AutoCloseable {
         }
         @Override public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
         @Override public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
-        @Override public void ready(NativePermissionSessions.Lease value) {
+        @Override public void ready(NativeOperationSessions.Lease value) {
             if (lease == null) attach(value);
             try {
                 value.check();
@@ -1166,11 +1166,11 @@ public final class FactoryRuntime implements AutoCloseable {
         }
         void cancel() {
             claim.close(); cancelProvider();
-            NativePermissionSessions.Lease value = lease;
+            NativeOperationSessions.Lease value = lease;
             if (value != null) value.close();
         }
         private void finished() {
-            NativePermissionSessions.Lease value = lease;
+            NativeOperationSessions.Lease value = lease;
             if (value != null) value.close();
             cancelProvider();
             // prepare() cancels before throwing. Do not race its specific HANDLE_LIMIT/IO error
@@ -1189,18 +1189,15 @@ public final class FactoryRuntime implements AutoCloseable {
     private void ensureNativeEffects() throws FactoryException {
         if (host.isPreview()) throw new FactoryException("UNAVAILABLE", "Native effects are unavailable in preview.");
         requireDocumentForeground();
-        if (nativePermissions != null && nativePermissions.isClosed() && nativePermissions.hasPendingReview())
-            throw new FactoryException("BUSY", "A previous native review is still returning.");
         if (nativeEffects != null && nativeEffects.isClosed() && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity()))
             throw new FactoryException("BUSY", "A previous Android permission request is still returning.");
-        if (nativePermissions == null || nativePermissions.isClosed()) nativePermissions = new NativePermissionSessions(activity, config, io, documentForeground);
-        if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativePermissions, io, documentForeground, () -> documents);
+        if (nativeOperations == null || nativeOperations.isClosed()) nativeOperations = new NativeOperationSessions(activity, config, io, documentForeground);
+        if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativeOperations, io, documentForeground, () -> documents);
     }
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         if (nativeEffects != null) nativeEffects.onRequestPermissionsResult(request, permissions, results);
     }
     public void onWindowFocusChanged(boolean focused) {
-        if (nativePermissions != null) nativePermissions.onWindowFocusChanged(focused);
         if (nativeEffects != null) nativeEffects.onWindowFocusChanged(focused);
     }
     private void authorizeTextEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
@@ -1212,7 +1209,7 @@ public final class FactoryRuntime implements AutoCloseable {
         final String mime = request.args.optString("mimeType", "text/plain");
         JSONObject details = sharing ? new JSONObject().put("text", text).put("title", title)
                 : new JSONObject().put("text", text).put("filename", filename).put("mimeType", mime);
-        nativePermissions.authorize(request.method, details, new NativePermissionSessions.Callback() {
+        nativeOperations.authorize(request.method, details, new NativeOperationSessions.Callback() {
             public boolean current() { return reply.current(); }
             public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
             public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
@@ -1220,7 +1217,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 if (export != null && export.reply == reply) export.text = null;
                 reply.fail(code, message);
             }
-            public void ready(NativePermissionSessions.Lease lease) {
+            public void ready(NativeOperationSessions.Lease lease) {
                 if (!FactoryRuntime.this.claimUi(reply)) { lease.close(); return; }
                 try {
                     lease.check();
@@ -1406,7 +1403,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if ("export.text".equals(reply.method) && documentResources.get() != 0) {
             reply.fail("BUSY", "A previous document grant is still closing."); return false;
         }
-        if ((nativePermissions != null && nativePermissions.hasPendingReview()) || (nativeEffects != null && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity())) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if ((nativeEffects != null && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity())) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
@@ -1417,7 +1414,6 @@ public final class FactoryRuntime implements AutoCloseable {
             if (nativeEffects != null) nativeEffects.onActivityResult(requestCode, resultCode, data);
             return; // A prior Activity's late result never targets another operation.
         }
-        if (nativePermissions != null && nativePermissions.onActivityResult(requestCode, resultCode, data)) return;
         if(requestCode==CLIPBOARD_REQUEST) {
             ClipboardWrite work=clipboardWrite;
             if(work==null || work.returned || !work.launched) return;
@@ -1506,7 +1502,7 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         if (nativeEffects != null) nativeEffects.onPause();
-        if (nativePermissions != null) nativePermissions.onPause();
+        if (nativeOperations != null) nativeOperations.onPause();
         if(sensors!=null) sensors.cancel();
         if(biometrics!=null) biometrics.cancel();
         cancelPresentationRecreate();
@@ -1544,7 +1540,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
-        if (nativePermissions != null) nativePermissions.onResume();
+        if (nativeOperations != null) nativeOperations.onResume();
         if (nativeEffects != null) nativeEffects.onResume();
         if (export != null && export.returned) finishExport(export);
         ClipboardWrite copied=clipboardWrite; if(copied!=null && copied.returned) finishClipboardWrite(copied);
@@ -1593,7 +1589,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 .putExtra("nonce",work.nonce);
         try { activity.startActivityForResult(intent,PHOTO_REQUEST); }
         catch (Exception unavailable) {
-            finishPhotoSelection(work); reply.fail("UNAVAILABLE","The matching policy-controlled photo broker is unavailable.");
+            finishPhotoSelection(work); reply.fail("UNAVAILABLE","The matching authenticated photo broker is unavailable.");
         }
     }
     private void cancelPhotoSelection() {
@@ -1711,15 +1707,6 @@ public final class FactoryRuntime implements AutoCloseable {
         }); } catch (RejectedExecutionException ignored) { }
     }
 
-    /** A point-in-time mode check prevents known DENY from starting snapshot disk/provider work.
-     * ALLOW/ASK here grant nothing: the host still rechecks and binds the exact resulting snapshot.
-     */
-    private void requirePreparationPolicy(String operation,java.util.function.BooleanSupplier current) throws FactoryException {
-        NativeInstalledSource description=NativeInstalledSource.describeOperation(activity,config,operation,
-                android.os.SystemClock.elapsedRealtime()+2000L,current);
-        if(description.policyMode==NativeInstalledSource.PolicyMode.DENY)
-            throw new FactoryException("PERMISSION_DENIED","Factory policy denies this operation; no content snapshot was prepared.");
-    }
     private static final class FileShare {
         final Reply reply;
         final String nonce;
@@ -1751,7 +1738,6 @@ public final class FactoryRuntime implements AutoCloseable {
             try {
                 requireDocumentForeground();
                 if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","File sharing was cancelled.");
-                requirePreparationPolicy("share.file", () -> !work.cancelled && documentForeground && !destroyed && reply.current() && fileShare==work);
                 requireDocumentForeground();
                 DocumentBrokerIdentity.verify(activity,config.documentBroker);
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
@@ -1945,14 +1931,14 @@ public final class FactoryRuntime implements AutoCloseable {
         BrowserOpen work = new BrowserOpen(reply, nonce.toString(), url);
         work.control = new BrowserLaunchControl(work.nonce, verifiedHost);
         work.expiration = () -> cancelBrowserOpen(work, "TIMEOUT",
-                "Browser review expired. Any external launch or page load is unconfirmed; close the native flow and browser yourself.");
+                "Browser handoff expired. Any external launch or page load is unconfirmed; submit a new request to continue.");
         browserOpen = work;
         main.postDelayed(work.expiration, BROWSER_LIFETIME_MS);
         // A queued handoff has no authority after pause/reload/expiry, even before host registration.
         main.post(() -> {
             if (browserOpen != work) return;
             if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
-                cancelBrowserOpen(work, "CANCELLED", "Browser launch authority ended before native review."); return;
+                cancelBrowserOpen(work, "CANCELLED", "Browser launch authority ended before the host handoff."); return;
             }
             try {
                 if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching browser host changed.");
@@ -1965,7 +1951,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 activity.startActivityForResult(intent, BROWSER_REQUEST);
             } catch (Exception unavailable) {
                 work.launched = false;
-                cancelBrowserOpen(work, "BROWSER_UNAVAILABLE", "The matching native browser review could not open.");
+                cancelBrowserOpen(work, "BROWSER_UNAVAILABLE", "The matching authenticated browser handoff could not open.");
             }
         });
     }
@@ -1985,7 +1971,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void finishBrowserOpen(BrowserOpen work) {
         if (browserOpen != work) return;
         if (SystemClock.elapsedRealtime() >= work.expiresAt)
-            cancelBrowserOpen(work, "TIMEOUT", "Browser review expired. Launch and page loading remain unconfirmed.");
+            cancelBrowserOpen(work, "TIMEOUT", "Browser handoff expired. Launch and page loading remain unconfirmed.");
         browserOpen = null; main.removeCallbacks(work.expiration); work.control.close();
         if (uiOwner == work.reply) uiOwner = null;
         if (work.cancelled || !work.reply.current()) return;
@@ -2046,14 +2032,14 @@ public final class FactoryRuntime implements AutoCloseable {
         ExternalLaunch work = new ExternalLaunch(reply, nonce.toString(), request.method, argsJson);
         work.control = new ExternalLaunchControl(work.nonce, verifiedHost);
         work.expiration = () -> cancelExternalLaunch(work, "TIMEOUT",
-                "External action review expired. Launch and action completion are unconfirmed; close the native flow and external application yourself.");
+                "External action handoff expired. Launch and action completion are unconfirmed; submit a new request to continue.");
         externalLaunch = work;
         main.postDelayed(work.expiration, EXTERNAL_LIFETIME_MS);
         // A queued handoff has no authority after pause/reload/expiry, even before host registration.
         main.post(() -> {
             if (externalLaunch != work) return;
             if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
-                cancelExternalLaunch(work, "CANCELLED", "External action launch authority ended before native review."); return;
+                cancelExternalLaunch(work, "CANCELLED", "External action launch authority ended before the host handoff."); return;
             }
             try {
                 if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching external action host changed.");
@@ -2066,7 +2052,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 activity.startActivityForResult(intent, EXTERNAL_REQUEST);
             } catch (Exception unavailable) {
                 work.launched = false;
-                cancelExternalLaunch(work, "EXTERNAL_UNAVAILABLE", "The matching native external action review could not open.");
+                cancelExternalLaunch(work, "EXTERNAL_UNAVAILABLE", "The matching authenticated external action handoff could not open.");
             }
         });
     }
@@ -2086,7 +2072,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void finishExternalLaunch(ExternalLaunch work) {
         if (externalLaunch != work) return;
         if (SystemClock.elapsedRealtime() >= work.expiresAt)
-            cancelExternalLaunch(work, "TIMEOUT", "External action review expired. Launch and action completion remain unconfirmed.");
+            cancelExternalLaunch(work, "TIMEOUT", "External action handoff expired. Launch and action completion remain unconfirmed.");
         externalLaunch = null; main.removeCallbacks(work.expiration); work.control.close();
         if (uiOwner == work.reply) uiOwner = null;
         if (work.cancelled || !work.reply.current()) return;
@@ -2156,7 +2142,7 @@ public final class FactoryRuntime implements AutoCloseable {
         main.post(() -> {
             if (contactPick != work) return;
             if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
-                cancelContactPick(work, "CANCELLED", "Contact selection authority ended before native review."); return;
+                cancelContactPick(work, "CANCELLED", "Contact selection authority ended before the system selector."); return;
             }
             try {
                 if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching contact selection host changed.");
@@ -2250,7 +2236,6 @@ public final class FactoryRuntime implements AutoCloseable {
             try {
                 requireDocumentForeground();
                 if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","Audio playback was cancelled.");
-                requirePreparationPolicy("audio.play", () -> !work.cancelled && documentForeground && !destroyed && reply.current() && audioPlayback==work);
                 requireDocumentForeground();
                 DocumentBrokerIdentity.verify(activity,config.documentBroker);
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
@@ -2374,7 +2359,7 @@ public final class FactoryRuntime implements AutoCloseable {
         try { activity.startActivityForResult(intent, DOCUMENT_REQUEST); }
         catch (RuntimeException e) {
             finishDocumentSelection(work);
-            reply.fail("UNAVAILABLE", "The matching policy-controlled Jarvys document broker is unavailable.");
+            reply.fail("UNAVAILABLE", "The matching authenticated Jarvys document broker is unavailable.");
         }
     }
     private void cancelDocumentSelection() {
@@ -2386,7 +2371,7 @@ public final class FactoryRuntime implements AutoCloseable {
             try { DOCUMENT_CLEANUP.execute(work.signal::cancel); }
             catch (RejectedExecutionException ignored) { host.onTrace("documents.cancel", "cleanup_unconfirmed"); }
         }
-        work.reply.fail("CANCELLED", "Document access cancelled. Close the Jarvys picker/review yourself; created files are not rolled back.");
+        work.reply.fail("CANCELLED", "Document access cancelled. Created files are not rolled back; submit a new request to continue.");
         if (work.result != null) { releaseDocumentGrant(work.result); work.result = null; }
         // Never dismiss the broker from JavaScript: its protected picker and latch need native closure.
         if (work.returned) finishDocumentSelection(work);
@@ -2573,7 +2558,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private final class Export {
         final Reply reply; volatile String text;
-        NativePermissionSessions.Lease lease;
+        NativeOperationSessions.Lease lease;
         final java.util.concurrent.atomic.AtomicReference<OutputStream> output = new java.util.concurrent.atomic.AtomicReference<>();
         boolean returned; int resultCode; Intent result;
         Export(Reply reply, String text) { this.reply = reply; this.text = text; }

@@ -21,7 +21,7 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 import org.robolectric.util.ReflectionHelpers;
-import static com.jarvys.factory.runtime.NativePermissionSessionsTest.idle;
+import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
 /** Adapter-only fake policy, sensor, grant and bridge fixtures. No physical sensor is accessed. */
@@ -29,7 +29,7 @@ import static org.junit.Assert.*;
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class NativeSensorEffectsTest {
-    private NativePermissionSessionsTest.Fixture fixture;
+    private NativeOperationSessionsTest.Fixture fixture;
     private NativeEffects effects;
     private FactoryConfig config;
     private SensorSubscriptions subscriptions;
@@ -40,7 +40,7 @@ public class NativeSensorEffectsTest {
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativePermissionSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture();
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"sensors\",\"steps\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
                         .put("packageName", fixture.config.documentBroker.packageName)
@@ -82,7 +82,7 @@ public class NativeSensorEffectsTest {
     @Test public void settledSubscribePromiseKeepsItsPageLeaseAndPollReusesTheSameApprovalBeyondFiveMinutes() throws Exception {
         Result started = subscribe("light"); fixture.pump();
         assertEquals(1, started.successes); assertFalse(started.current()); assertTrue(started.pageCurrent());
-        NativePermissionSessions.Lease lease = onlyLease();
+        NativeOperationSessions.Lease lease = onlyLease();
         assertFalse(lease.ended.get()); assertEquals(1, jobs("jobs").size()); assertEquals(1, jobs("subscriptionJobs").size());
         advance(300001);
         emit(driver.last(), 12);
@@ -98,7 +98,7 @@ public class NativeSensorEffectsTest {
         for (int i = 0; i < 4; i++) {
             driver.permitted = true;
             Result started = subscribe("light"); fixture.pump();
-            NativePermissionSessions.Lease lease = onlyLease();
+            NativeOperationSessions.Lease lease = onlyLease();
             assertEquals(1, started.successes); assertEquals(1, jobs("subscriptionJobs").size());
             driver.permitted = false; advance(SensorSubscriptions.AUTHORIZATION_POLL_MS);
             assertTrue(lease.ended.get()); assertNoRetainedJobs();
@@ -110,23 +110,23 @@ public class NativeSensorEffectsTest {
 
     @Test public void hostRevocationAfterSettledReplyClosesItsRetainedLeaseWithoutAReapproval() throws Exception {
         Result started = subscribe("light"); fixture.pump();
-        NativePermissionSessions.Lease lease = onlyLease();
+        NativeOperationSessions.Lease lease = onlyLease();
         fixture.provider.last().state.set(NativeOperationAuthorization.TERMINAL);
         advance(SensorSubscriptions.AUTHORIZATION_POLL_MS);
         assertTrue(lease.ended.get()); assertNoRetainedJobs(); assertEquals(1, driver.last().unregisters);
         assertEquals(1, fixture.provider.issued.size()); assertEquals(1, started.successes); assertNull(started.error);
     }
 
-    @Test public void policyDenialCannotCreateALiveSensorOrRetainedJob() throws Exception {
-        fixture.provider.deny = true;
+    @Test public void unavailableInstalledSourceCannotCreateALiveSensorOrRetainedJob() throws Exception {
+        fixture.provider.unavailable = true;
         Result denied = subscribe("light"); fixture.pump();
-        assertFailure(denied, "PERMISSION_DENIED"); assertTrue(driver.registrations.isEmpty());
+        assertFailure(denied, "UNAVAILABLE"); assertTrue(driver.registrations.isEmpty());
         assertNoRetainedJobs(); assertEquals(SensorSubscriptions.MAX_PROCESS_LISTENERS, admissions.availablePermits());
     }
 
     @Test public void autonomousFailureClosesLeaseEvenWhenNativeCleanupStillHoldsAdmission() throws Exception {
         Result started = subscribe("light"); fixture.pump();
-        NativePermissionSessions.Lease lease = onlyLease();
+        NativeOperationSessions.Lease lease = onlyLease();
         driver.cleanupThrows = true; driver.permitted = false;
         advance(SensorSubscriptions.AUTHORIZATION_POLL_MS);
         assertTrue(lease.ended.get()); assertNoRetainedJobs(); assertTrue(subscriptions.hasUnconfirmedCleanup());
@@ -173,10 +173,10 @@ public class NativeSensorEffectsTest {
 
     @Test public void pageReplacementAndPauseEndRetainedOwnershipWithoutReusingSettledReplies() throws Exception {
         Result oldPage = subscribe("light"); fixture.pump();
-        NativePermissionSessions.Lease oldLease = onlyLease(); oldPage.page = false;
+        NativeOperationSessions.Lease oldLease = onlyLease(); oldPage.page = false;
         advance(SensorSubscriptions.AUTHORIZATION_POLL_MS);
         assertTrue(oldLease.ended.get()); assertNoRetainedJobs(); assertEquals(1, driver.last().unregisters);
-        Result next = subscribe("light"); fixture.pump(); NativePermissionSessions.Lease nextLease = onlyLease();
+        Result next = subscribe("light"); fixture.pump(); NativeOperationSessions.Lease nextLease = onlyLease();
         effects.onPause(); fixture.sessions.onPause(); idle();
         assertTrue(nextLease.ended.get()); assertNoRetainedJobs(); assertEquals(1, driver.last().unregisters);
         fixture.sessions.onResume(); effects.onResume(); fixture.pump();
@@ -198,7 +198,7 @@ public class NativeSensorEffectsTest {
         ReflectionHelpers.setField(effects, "steps", stepHelper);
         Result current = perform("steps.current", new JSONObject()); fixture.pump();
         assertTrue(stepHelper.status().getBoolean("busy")); assertEquals(0, stepSlots.availablePermits());
-        fixture.provider.deny = true;
+        fixture.provider.unavailable = true;
         Result stopped = perform("steps.cancel", new JSONObject()); idle();
         assertTrue(stopped.value.getBoolean("cancelled")); assertFalse(stopped.value.getBoolean("cleanupFailed"));
         assertFailure(current, "CANCELLED"); assertEquals(1, releases[0]); assertEquals(1, stepSlots.availablePermits());
@@ -218,8 +218,8 @@ public class NativeSensorEffectsTest {
     private void advance(long ms) { now += ms * 1000000L; Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms)); }
     private void emit(Driver.Registration registration, float... values) { now += 1000000L; registration.events.sample(now, values); }
     private Map<?, ?> jobs(String name) { return ReflectionHelpers.getField(effects, name); }
-    private Set<NativePermissionSessions.Lease> leases() { return ReflectionHelpers.getField(fixture.sessions, "leases"); }
-    private NativePermissionSessions.Lease onlyLease() { assertEquals(1, leases().size()); return leases().iterator().next(); }
+    private Set<NativeOperationSessions.Lease> leases() { return ReflectionHelpers.getField(fixture.sessions, "leases"); }
+    private NativeOperationSessions.Lease onlyLease() { assertEquals(1, leases().size()); return leases().iterator().next(); }
     private void assertNoRetainedJobs() { assertTrue(jobs("jobs").isEmpty()); assertTrue(jobs("subscriptionJobs").isEmpty()); assertTrue(leases().isEmpty()); }
     private static void assertFailure(Result result, String error) { assertEquals(error, result.error); assertEquals(1, result.failures); assertEquals(0, result.successes); }
 

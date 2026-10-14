@@ -26,17 +26,15 @@ public class NativeOperationAuthorizationTest {
         return new NativeOperationAuthorization(NONCE, BINDING, SystemClock.elapsedRealtime() + 300000,
             uid -> true, new NativeOperationAuthorization.Authority() {
                 public int status() { if (!current.get()) throw new SecurityException(); return state.get(); }
-                public void checkBeforeEffect() { if (!current.get() || state.get() != NativeOperationAuthorization.APPROVED) throw new SecurityException(); effects.incrementAndGet(); }
+                public void checkBeforeEffect() { if (!current.get() || state.get() != NativeOperationAuthorization.ACTIVE) throw new SecurityException(); effects.incrementAndGet(); }
             }, terminal);
     }
-    @Test public void pendingPollAndPrematureEffectDoNotEndLaterApproval() throws Exception {
-        AtomicInteger state = new AtomicInteger(NativeOperationAuthorization.PENDING), effects = new AtomicInteger();
+    @Test public void activeOperationSessionChecksTheAuthenticatedHostBeforeEffect() throws Exception {
+        AtomicInteger state = new AtomicInteger(NativeOperationAuthorization.ACTIVE), effects = new AtomicInteger();
         NativeOperationAuthorization host = host(state, new AtomicBoolean(true), effects, () -> {});
         NativeOperationAuthorization.Client client = worker(() -> NativeOperationAuthorization.connect(host, NONCE, BINDING, uid -> true, () -> {}));
-        assertEquals(NativeOperationAuthorization.PENDING, (int) worker(client::status));
-        assertThrows(SecurityException.class, client::check);
-        assertFalse(host.isClosed()); assertFalse(client.isClosed()); assertEquals(0, effects.get());
-        state.set(NativeOperationAuthorization.APPROVED); client.check();
+        assertEquals(NativeOperationAuthorization.ACTIVE, (int) worker(client::status)); client.check();
+        assertFalse(host.isClosed()); assertFalse(client.isClosed());
         assertEquals(1, effects.get()); worker(() -> { client.close(); return null; }); assertTrue(host.isClosed());
     }
     @Test public void revokeAfterApprovalIsStickyAndClosesExactlyOnce() throws Exception {
@@ -85,11 +83,11 @@ public class NativeOperationAuthorizationTest {
     @Test public void leaseDeadlineIsAnIrreversibleTerminalBoundary() throws Exception {
         AtomicInteger terminal = new AtomicInteger();
         NativeOperationAuthorization host = new NativeOperationAuthorization(NONCE, BINDING, SystemClock.elapsedRealtime()+1,
-            uid -> true, new NativeOperationAuthorization.Authority() { public int status(){ return 0; } public void checkBeforeEffect(){} }, terminal::incrementAndGet);
+            uid -> true, new NativeOperationAuthorization.Authority() { public int status(){ return NativeOperationAuthorization.ACTIVE; } public void checkBeforeEffect(){} }, terminal::incrementAndGet);
         org.robolectric.shadows.ShadowSystemClock.advanceBy(2, TimeUnit.MILLISECONDS);
         assertEquals(NativeOperationAuthorization.TERMINAL, host.currentStatus()); host.close(); assertEquals(1, terminal.get());
     }
-    @Test public void alreadyApprovedConnectedWorkIsNotCutOffByTheReviewDeadline() throws Exception {
+    @Test public void connectedOperationSessionRemainsLiveWhileItsHostRemainsLive() throws Exception {
         NativeOperationAuthorization host = host(new AtomicInteger(1), new AtomicBoolean(true), new AtomicInteger(), () -> {});
         NativeOperationAuthorization.Client client = worker(() -> NativeOperationAuthorization.connect(host, NONCE, BINDING, uid -> true, () -> {}));
         org.robolectric.shadows.ShadowSystemClock.advanceBy(301, TimeUnit.SECONDS);

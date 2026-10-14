@@ -147,8 +147,8 @@ public final class NativeNotifications {
      * Requests the real Android 13+ permission when absent. This does not grant permission and
      * Android may suppress the dialog. The runtime owns onRequestPermissionsResult, verifies its
      * exact request/permission, rechecks status and the live authorization, then settles its callback.
-     * Authorization must support the shared short live CHECK on main immediately before the
-     * permission request; acquiring a lease or waiting for host approval stays off the UI thread.
+     * The authenticated live caller must pass a short CHECK on main immediately before the
+     * permission request; acquiring its lease stays off the UI thread.
      */
     public JSONObject requestPermission(Activity activity, int requestCode, NativeOperationAuthorization.Access authorization)
             throws FactoryException {

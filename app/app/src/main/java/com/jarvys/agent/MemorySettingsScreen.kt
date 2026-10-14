@@ -206,8 +206,7 @@ fun MemorySettingsScreen(
             confirmButton = { Button(onClick = {
                 val exactDirectory = directoryPath
                 scope.launch {
-                    val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_MODIFY, store,
-                        listOf("Create directory", exactDirectory, conversationId), nativeToken,
+                    val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(store, nativeToken,
                         { uiProtection.requireEffectSelection() }) { store.createDirectoryForUser(exactDirectory, conversationId) } } }
                     result.onSuccess {
                         showDirectoryDialog = false
@@ -249,8 +248,7 @@ fun MemorySettingsScreen(
     LaunchedEffect(clearConfirmStep) {
         if (clearConfirmStep > 0) {
             val result = withContext(Dispatchers.IO) { runCatching {
-                nativeActions.run(NativeActionPolicy.Operation.MEMORY_CLEAR, store,
-                    listOf("Irreversibly clear the selected memory and its history", conversationId), nativeToken,
+                nativeActions.run(store, nativeToken,
                     { uiProtection.requireEffectSelection() }) { store.clearAll(MemoryStore.Actor.USER) }
             } }
             clearConfirmStep = 0
@@ -293,12 +291,11 @@ internal fun MemoryEditorDestination(
     val isIndex = path == MemoryConstants.ROOT_INDEX || path.endsWith("/${MemoryConstants.ROOT_INDEX}")
 
     val nativeToken = rememberMemoryEffectToken(store, "editor", path, isNew)
-    val uiProtection = memoryViewProtection(store, "editor:$path:$isNew", onClose = onBack,
-        draftHash = NativeActionPolicy.binding(path, name, description, body)) ?: return
+    val uiProtection = memoryViewProtection(store, "editor:$path:$isNew", onClose = onBack) ?: return
     val nativeActions = remember(context) { MemoryNativeActions(context) }
 
     fun applyDocument(document: MemoryUiLogic.EditorDocument, revision: Long, newFile: Boolean) {
-        if (loaded) uiProtection.draftChanged(NativeActionPolicy.binding(path, document.name, document.description, document.body))
+        if (loaded) uiProtection.draftChanged()
         loaded = true
         name = document.name
         description = document.description
@@ -353,8 +350,7 @@ internal fun MemoryEditorDestination(
         scope.launch {
             loading = true
             val result = withContext(Dispatchers.IO) { runCatching {
-                nativeActions.run(NativeActionPolicy.Operation.MEMORY_MODIFY, store,
-                    listOf("Save note", path, serialized, revision.toString(), overwrite.toString(), conversationId), nativeToken,
+                nativeActions.run(store, nativeToken,
                     { uiProtection.requireEffectSelection() }) { store.writeUserFile(path, serialized, revision, overwrite, conversationId) }
             } }
             withContext(Dispatchers.Main) {
@@ -375,8 +371,7 @@ internal fun MemoryEditorDestination(
         scope.launch {
             loading = true
             val result = withContext(Dispatchers.IO) { runCatching {
-                nativeActions.run(NativeActionPolicy.Operation.MEMORY_DELETE, store,
-                    listOf("Delete note", path, revision.toString(), overwrite.toString(), conversationId), nativeToken,
+                nativeActions.run(store, nativeToken,
                     { uiProtection.requireEffectSelection() }) { store.deleteUserFile(path, revision, overwrite, conversationId) }
             } }
             withContext(Dispatchers.Main) {
@@ -392,9 +387,9 @@ internal fun MemoryEditorDestination(
         }
     }
     MemoryEditor(path, isIndex, editingNew, name, description, body, loading, error, status,
-        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, value, description, body)); name = value }.onFailure { error=it.message; uiProtection.invalidate() } },
-        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, name, value, body)); description = value }.onFailure { error=it.message; uiProtection.invalidate() } },
-        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, name, description, value)); body = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { value -> runCatching { uiProtection.draftChanged(); name = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { value -> runCatching { uiProtection.draftChanged(); description = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { value -> runCatching { uiProtection.draftChanged(); body = value }.onFailure { error=it.message; uiProtection.invalidate() } },
         { save() }, { delete() }, { status = null }, uiProtection.captureReviewNeeded,
         { runCatching { uiProtection.approveDraftCapture() }.onFailure { error = it.message } })
     if (discardDialog) AlertDialog(onDismissRequest = { discardDialog = false },
@@ -442,8 +437,7 @@ internal fun MemoryHistoryDestination(
         result.onSuccess { revisions = it }.onFailure { status = memoryErrorText(context, it.message) }
     }
     fun restore(id: Long) { scope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_RESTORE, store,
-            listOf("Restore revision", id.toString(), conversationId), nativeToken,
+        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(store, nativeToken,
             { uiProtection.requireEffectSelection() }) { store.restoreRevisionForUser(id, conversationId) } } }
         withContext(Dispatchers.Main) {
             result.onSuccess { onMemoryChanged(); uiProtection.navigate(onBack) }
@@ -451,8 +445,7 @@ internal fun MemoryHistoryDestination(
         }
     } }
     fun undo() { scope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_RESTORE, store,
-            listOf("Undo latest revision", conversationId), nativeToken,
+        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(store, nativeToken,
             { uiProtection.requireEffectSelection() }) { store.undoLastForUser(conversationId) } } }
         withContext(Dispatchers.Main) {
             result.onSuccess { onMemoryChanged(); uiProtection.navigate(onBack) }

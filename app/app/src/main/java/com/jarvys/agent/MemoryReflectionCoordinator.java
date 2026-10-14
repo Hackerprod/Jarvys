@@ -50,9 +50,6 @@ public final class MemoryReflectionCoordinator {
                     : chatWithoutMemory ? app.getString(R.string.reflection_skip_chat) : app.getString(R.string.reflection_auto_off);
             return skippedUi(preferences, sessionId, status);
         }
-        if (!MemoryReflectionAuthority.maySchedule(app)) {
-            return skippedUi(preferences, sessionId, app.getString(R.string.memory_native_reflection_denied));
-        }
         LocalRunStore.ReflectionPayload payload = conversation.buildReflectionPayload(sessionId, throughMessageId);
         boolean compactionPending = conversation.hasPendingCompactionReflection(sessionId)
                 && !payload.compactionIds.isEmpty();
@@ -95,8 +92,6 @@ public final class MemoryReflectionCoordinator {
             conversation.advanceReflectionCheckpoint(sessionId, "automatic reflection disabled", throughMessageId);
             return skipped(preferences, sessionId, app.getString(R.string.reflection_auto_off));
         }
-        if (!MemoryReflectionAuthority.maySchedule(app))
-            return skipped(preferences, sessionId, app.getString(R.string.memory_native_reflection_denied));
         try (MemoryReflectionAuthority authority = new MemoryReflectionAuthority(app, sessionId, manual, token)) {
 
         // Evaluate after persisted transcript state and consume the compaction trigger only in a successful checkpoint.

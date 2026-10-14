@@ -7,7 +7,6 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.util.AtomicFile
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.FileShareTransfer
 import com.jarvys.factory.runtime.StreamingFileShareTransfer
 import org.json.JSONObject
@@ -17,7 +16,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Policy-authorized binary sharing. No external callback is evidence of recipient closure or delivery. */
+/** Authenticated binary sharing. No external callback is evidence of recipient closure or delivery. */
 internal class FactoryFileShareCoordinator(
     context: Context,
     private val verify: (String) -> FactoryDocumentCoordinator.Proof = {
@@ -25,7 +24,6 @@ internal class FactoryFileShareCoordinator(
     },
     private val receive: ((Request, () -> Unit) -> FactoryFileShareStore.Snapshot)? = null,
     private val clean: (() -> Unit)? = null,
-    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
 ) {
     data class Request(val nonce: String, val filename: String, val mimeType: String, val size: Long, val sha256: String, val transfer: IBinder, val protocolVersion: Int = 1) {
         constructor(nonce: String, filename: String, mimeType: String, size: Int, sha256: String, transfer: IBinder) : this(nonce, filename, mimeType, size.toLong(), sha256, transfer, 1)
@@ -58,12 +56,11 @@ internal class FactoryFileShareCoordinator(
     }
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-file-sharing/interaction.json"))
     private val store = FactoryFileShareStore(context.applicationContext)
-    private var lease: MemoryUiAutomationGuard.Lease? = null
     private var owner: String? = null
     private var proof: FactoryDocumentCoordinator.Proof? = null
     private var request: Request? = null
     private var snapshot: FactoryFileShareStore.Snapshot? = null
-    private var permit: FactoryOperationPolicy.Grant? = null
+    private var sourceAuthority: FactoryArtifactAuthority.Token? = null
     private var revocation: AutoCloseable? = null
     private var transferLease = false
     private var leaseId: String? = null
@@ -79,8 +76,7 @@ internal class FactoryFileShareCoordinator(
     private var opened = false // Process-local only. Restart must never claim the chooser opened.
         @Synchronized fun isRestoring() = restoring
     @Synchronized fun status() = state
-    @Synchronized fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available(this)
-    @Synchronized fun needsRecovery() = !restoring && open && (owner == null || broken)
+    @Synchronized fun canBegin() = !busy && !restoring && (open || FactoryInteractionAdmission.available(this))
     @Synchronized fun chooserAttempted() = state in setOf("chooser_pending", "chooser_opened", "launch_failed")
     @Synchronized fun chooserOpened() = opened
     private fun requireWorker() { check(Looper.myLooper() != Looper.getMainLooper()) { "File sharing I/O must not run on the main thread" } }
@@ -93,11 +89,11 @@ internal class FactoryFileShareCoordinator(
             val stream = journal.startWrite()
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
-        } catch (failure: Exception) { broken = true; open = true; owner = null; state = "outcome_unknown"; FactoryInteractionAdmission.restore(this); throw failure }
+        } catch (failure: Exception) { broken = true; throw failure }
     }
     /** Called synchronously at application startup before components can automate anything. */
     @Synchronized private fun prepareRestore() {
-        restoring = true; FactoryInteractionAdmission.restore(this)
+        restoring = true
     }
     /** Disk work runs only on the one bounded host sharing worker. URI capabilities are never restored. */
     fun restore() {
@@ -117,14 +113,14 @@ internal class FactoryFileShareCoordinator(
                 val savedState = saved.getString("state"); val savedOpen = saved.getBoolean("open"); val savedNonce = saved.getString("nonce")
                 require(if (savedOpen) savedState in OPEN_STATES else savedState in CLOSED_STATES)
                 require(savedNonce.matches(Regex("[a-f0-9]{64}")) || (!savedOpen && savedState == "closed_outcome_unknown" && savedNonce.isEmpty()))
-                synchronized(this) { nonce = savedNonce; open = savedOpen; state = if (open) "outcome_unknown" else savedState }
+                synchronized(this) { nonce = savedNonce; open = savedOpen; state = if (open) "closed_outcome_unknown" else savedState; if (open) open = false }
             }
             cleanup() // Any surviving cache bytes are revoked/deleted without restoring a URI registry.
             synchronized(this) {
-                if (open) save() else release()
+                save(); broken = false; release()
             }
         } catch (_: Exception) {
-            synchronized(this) { broken = true; open = true; state = "outcome_unknown"; owner = null; FactoryInteractionAdmission.restore(this) }
+            synchronized(this) { broken = true; open = false; state = "closed_outcome_unknown"; owner = null }
         } finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -135,6 +131,7 @@ internal class FactoryFileShareCoordinator(
         synchronized(this) { check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" } }
         val identity = verify(callingPackage)
         check(identity.appId == callingPackage); checkActive()
+        val authority = FactoryDocumentCoordinator.captureTrustedAuthority(context.applicationContext, identity, setOf("documents", "share"))
         require(value.protocolVersion == 1 || value.protocolVersion == 2)
         require(value.size in 1..identity.resources.fileShare.sourceBytes) { "File-share source exceeds signed budget" }
         if (value.protocolVersion == 1) require(value.size <= FileShareTransfer.MAX_BYTES)
@@ -143,85 +140,92 @@ internal class FactoryFileShareCoordinator(
             val elapsed = android.os.SystemClock.elapsedRealtime() - started
             check(elapsed >= 0 && elapsed < identity.resources.fileShare.transferTimeoutMs) { "File-share transfer expired" }
         }
-        val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(identity), FactoryOperationPolicy.Operation.FILE_SHARE,
-            FactoryOperationPolicy.binding(value.nonce, value.filename, value.mimeType, value.size.toString(), value.sha256, value.protocolVersion.toString(), identity.apk, identity.record))
-        try { FactoryInteractionAdmission.acquire(this) } catch (failure: Exception) { grant.close(); throw failure }
+        try { FactoryInteractionAdmission.acquireOrKeep(this) } catch (failure: Exception) { authority.close(); throw failure }
         synchronized(this) { busy = true }
         var authenticated = false
         try {
-            authenticated = true; checkActive(); grant.requireCurrent()
+            authenticated = true; checkActive(); authority.requireCurrent()
+            if (open || broken) {
+                synchronized(this) {
+                    check(open || broken)
+                    FactoryFileShareRegistry.invalidate()
+                    state = "closed_outcome_unknown"; open = false; save()
+                }
+                cleanup()
+                synchronized(this) { broken = false; release(keepAdmission = true) }
+            }
             val token = synchronized(this) {
                 check(!open && !broken)
                 val boundOwner = UUID.randomUUID().toString()
-                owner = boundOwner; leaseId = boundOwner; proof = identity; request = value; nonce = value.nonce; permit = grant; transferLease = false
-                revocation = grant.onRevoked { revokeTransfer(boundOwner, grant) }
+                owner = boundOwner; leaseId = boundOwner; proof = identity; request = value; nonce = value.nonce; sourceAuthority = authority; transferLease = false
+                revocation = authority.onRevoked { revokeTransfer(boundOwner) }
                 open = true; opened = false; state = "receiving"; save(); owner!!
             }
             cleanup()
-            val active = { synchronized(this) { checkOwner(token); check(state == "receiving"); grant.requireCurrent() }; checkDeadline(); checkActive() }
+            val active = { synchronized(this) { checkOwner(token); check(state == "receiving"); authority.requireCurrent() }; checkDeadline(); checkActive() }
             val staged = if (receive != null) receive.invoke(value, active)
                 else store.stageStreaming(value.nonce, value.filename, value.mimeType, value.size, value.sha256, value.transfer,
-                    value.protocolVersion, identity.resources.fileShare, active) { grant.checkBeforeEffect() }
+                    value.protocolVersion, identity.resources.fileShare, active) { authority.requireCurrent() }
             active()
             // Revalidate after the bounded transfer: no old installed APK or signing evidence is accepted.
             check(verify(callingPackage) == identity)
             checkDeadline() // APK/source revalidation cannot extend the signed transfer deadline.
             return synchronized(this) {
-                checkOwner(token); checkActive(); grant.requireCurrent(); snapshot = staged; state = "review"; save()
-                expire = Runnable { revokeTransfer(token, grant) }.also { handler.postDelayed(it, maxOf(0, staged.expiresAt - android.os.SystemClock.elapsedRealtime())) }
+                checkOwner(token); checkActive(); authority.requireCurrent(); snapshot = staged; state = "review"; save()
+                expire = Runnable { revokeTransfer(token) }.also { handler.postDelayed(it, maxOf(0, staged.expiresAt - android.os.SystemClock.elapsedRealtime())) }
                 token
             }
         } catch (failure: Exception) {
             synchronized(this) {
-                if (open) { owner = null; proof = null; request = null; state = "outcome_unknown"; runCatching { save() } }
+                if (open) { state = "outcome_unknown"; runCatching { save() } }
+                else release()
             }
-            if (synchronized(this) { open }) runCatching { cleanup() }
             // This endpoint belongs to the verified caller only. A stalled cancellation keeps this
             // same worker and admission occupied; never spawn a replacement Binder worker.
             if (authenticated) runCatching { StreamingFileShareTransfer.cancel(value.transfer, value.nonce, value.protocolVersion) }
-            grant.close(); throw failure
+            authority.close(); throw failure
         } finally {
             synchronized(this) { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
         }
     }
-    private fun checkOwner(token: String) { check(open && !broken && owner == token); permit?.requireCurrent() }
-    @Synchronized fun requiresApproval() = permit?.requiresApproval == true
-    @Synchronized fun checkCurrent(token: String) { checkOwner(token); permit?.checkBeforeEffect() }
-    private fun revokeTransfer(boundOwner: String, boundGrant: FactoryOperationPolicy.Grant) {
+    private fun checkOwner(token: String) { check(open && !broken && owner == token); sourceAuthority?.requireCurrent() }
+    @Synchronized fun checkCurrent(token: String) { checkOwner(token) }
+    private fun revokeTransfer(boundOwner: String) {
         // A stale expiry/retry must not invalidate another request's global registry.
         synchronized(this) {
-            if (!open || leaseId != boundOwner || permit !== boundGrant) return
+            if (!open || leaseId != boundOwner) return
             FactoryFileShareRegistry.invalidate()
         }
         try { WORKER.execute {
             synchronized(this) {
-                if (!open || leaseId != boundOwner || permit !== boundGrant) return@execute
-                if (busy) { handler.postDelayed({ revokeTransfer(boundOwner, boundGrant) }, 1000); return@execute }
+                if (!open || leaseId != boundOwner) return@execute
+                if (busy) { handler.postDelayed({ revokeTransfer(boundOwner) }, 1000); return@execute }
             }
             runCatching {
                 cleanup()
                 synchronized(this) {
-                    if (!open || leaseId != boundOwner || permit !== boundGrant) return@synchronized
-                    state = if (state == "outcome_unknown") "closed_outcome_unknown" else "closed"; open = false; save(); release()
+                    if (!open || leaseId != boundOwner) return@synchronized
+                    val uncertain = state in setOf("outcome_unknown", "closed_outcome_unknown", "chooser_pending", "chooser_opened", "launch_failed", "transfer_active")
+                    state = if (uncertain) "closed_outcome_unknown" else "closed"; open = false; save(); release()
                 }
             }.onFailure {
                 synchronized(this) {
-                    if (open && leaseId == boundOwner && permit === boundGrant) {
+                    if (open && leaseId == boundOwner) {
                         owner = null; opened = false; state = "outcome_unknown"
-                        FactoryInteractionAdmission.restore(this); runCatching { save() }
+                        open = false; runCatching { save() }; release()
                     }
                 }
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) {
-            handler.postDelayed({ revokeTransfer(boundOwner, boundGrant) }, 1000)
+            handler.postDelayed({ revokeTransfer(boundOwner) }, 1000)
         }
     }
-    fun prepareChooser(token: String, title: String, human: () -> Unit): Intent {
+    fun prepareChooser(token: String, title: String): Intent {
         requireWorker()
-        val p = synchronized(this) { checkOwner(token); check(state == "review"); human(); permit!!.approveOnce(human); permit!!.checkBeforeEffect(); proof!! }
+        val p = synchronized(this) { checkOwner(token); check(state == "review"); proof!! }
         check(verify(p.appId) == p)
         return synchronized(this) {
-            checkOwner(token); check(state == "review" && proof == p); human(); permit?.checkBeforeEffect()
+            checkOwner(token); check(state == "review" && proof == p)
             val file = snapshot ?: error("No verified snapshot")
             check(android.os.SystemClock.elapsedRealtime() < file.expiresAt) { "File sharing snapshot expired" }
             val send = Intent(Intent.ACTION_SEND).setType(file.mimeType).putExtra(Intent.EXTRA_STREAM, file.uri)
@@ -237,52 +241,42 @@ internal class FactoryFileShareCoordinator(
     @Synchronized fun chooserLaunched(token: String) { checkOwner(token); check(state == "chooser_pending"); opened = true; state = "chooser_opened" }
     @Synchronized fun chooserLaunchFailed(token: String) { checkOwner(token); check(state == "chooser_pending"); opened = false; state = "launch_failed" }
     @Synchronized fun chooserCallback(token: String) { checkOwner(token); check(chooserAttempted()) /* No release, no delivery/closure inference. */ }
-    /** No disk/Binder work on lifecycle callbacks; durable open journal already preserves uncertainty. */
+    /** Lifecycle interruption queues cleanup; the Activity never needs a manual recovery screen. */
     @Synchronized fun invalidate(token: String) {
         if (owner != token || !open || transferLease) return
-        permit?.revoke()
-        owner = null; proof = null; request = null; snapshot = null; opened = false; state = "outcome_unknown"
+        state = "closed_outcome_unknown"
+        revokeTransfer(token)
     }
     /** The returned UI is not the recipient's lifetime. Retain only bounded, revocable read authority. */
     fun detachRecipientLease(token: String, active: () -> Unit): Intent {
         requireWorker()
         return synchronized(this) {
-            checkOwner(token); check(chooserAttempted()); active(); permit!!.checkBeforeEffect()
+            checkOwner(token); check(chooserAttempted()); active()
             val result = Intent().putExtra("nonce", nonce).putExtra("chooserOpened", opened).putExtra("deliveryConfirmed", false)
             transferLease = true; state = "transfer_active"; save()
-            lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
+            FactoryInteractionAdmission.release(this)
             result
         }
     }
-    fun close(token: String, acknowledgedRecipientClosed: Boolean, human: () -> Unit): Intent {
+    fun close(token: String, active: () -> Unit): Intent {
         requireWorker()
         val result = synchronized(this) {
-            check(open && owner == token); human()
+            check(open && owner == token); active()
             check(state == "review" || chooserAttempted())
             Intent().putExtra("nonce", nonce).putExtra("chooserOpened", opened).putExtra("deliveryConfirmed", false)
         }
-        cleanup() // Invalidate registry, revoke grants globally, remove cache BEFORE journal/guard release.
+        cleanup() // Invalidate registry, revoke Android URI grants, remove cache before closing the journal.
         synchronized(this) {
-            check(open && owner == token); human()
-            state = "closed"; open = false; save(); release()
+            check(open && owner == token); active()
+            state = if (chooserAttempted()) "closed_outcome_unknown" else "closed"; open = false; save(); release()
         }
         return result
     }
-    fun acknowledgeRecovery(human: () -> Unit) {
-        requireWorker()
-        synchronized(this) { check(needsRecovery() && !busy); human() }
-        cleanup()
-        synchronized(this) {
-            check(needsRecovery() && !busy); human()
-            if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
-            state = "closed_outcome_unknown"; open = false; save(); broken = false; release()
-        }
-    }
-    private fun release() {
+    private fun release(keepAdmission: Boolean = false) {
         expire?.let(handler::removeCallbacks); expire = null
-        revocation?.close(); revocation = null; permit?.close(); permit = null; transferLease = false; leaseId = null
+        revocation?.close(); revocation = null; sourceAuthority?.close(); sourceAuthority = null; transferLease = false; leaseId = null
         proof = null; request = null; snapshot = null; owner = null; opened = false
-        lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
+        if (!keepAdmission) FactoryInteractionAdmission.release(this)
     }
     companion object {
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
@@ -301,16 +295,6 @@ internal class FactoryFileShareCoordinator(
                 }
             }
             action(); return true
-        }
-        private var recoveryToken: String? = null
-        @Synchronized fun recoveryIntent(context: Context): Intent {
-            recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryFileShareActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
-        }
-        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
-            val token = intent.getStringExtra("nativeRecoveryToken")
-            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken") || intent.data != null || intent.clipData != null || intent.selector != null || intent.flags and GRANT_FLAGS != 0) return false
-            recoveryToken = null; return true
         }
         @Volatile private var instance: FactoryFileShareCoordinator? = null
         fun get(context: Context): FactoryFileShareCoordinator = instance ?: synchronized(this) {

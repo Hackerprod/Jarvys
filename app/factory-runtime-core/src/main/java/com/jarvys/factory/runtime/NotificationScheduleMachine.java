@@ -8,10 +8,10 @@ public final class NotificationScheduleMachine {
     private NotificationScheduleMachine() { }
     public enum State {
         PENDING, ARMING, SCHEDULED, SCHEDULE_UNKNOWN,
-        QUEUED_POLICY_UNAVAILABLE, QUEUED_APPROVAL, QUEUED_OS_BLOCKED, QUEUED_EXACT_PERMISSION,
+        QUEUED_SESSION_UNAVAILABLE, QUEUED_OS_BLOCKED, QUEUED_EXACT_PERMISSION,
         DISPATCH_RESERVED, ACCEPTED, DELIVERY_UNKNOWN, CANCELLED, REVOKED, EXPIRED
     }
-    public enum Policy { ALLOWED, ASK, DENIED, UNAVAILABLE }
+    public enum SessionStatus { ACTIVE, UNAVAILABLE }
     public enum Effect { NONE, ARM, POST, CANCEL_ALARM }
     public static final class Plan {
         public final State state;
@@ -26,12 +26,12 @@ public final class NotificationScheduleMachine {
     }
     /** Initial scheduling or explicitly requested resume, never a hidden fallback from exact. */
     public static Plan resume(NotificationScheduleRequest.Schedule request, State current, long nowEpochMs,
-                              Policy policy, boolean exactAvailable, boolean notificationsReady) {
-        require(request, current, policy);
+                              SessionStatus sessionStatus, boolean exactAvailable, boolean notificationsReady) {
+        require(request, current, sessionStatus);
         if (nowEpochMs < 0) throw new IllegalArgumentException("Invalid clock");
         if (terminal(current) || current == State.DISPATCH_RESERVED || current == State.ARMING) return none(current, "terminal_or_in_flight");
         if (nowEpochMs > request.expiresAtEpochMs) return none(State.EXPIRED, "delivery_window_ended");
-        Plan blocked = policy(policy); if (blocked != null) return blocked;
+        Plan blocked = unavailable(sessionStatus); if (blocked != null) return blocked;
         if (nowEpochMs >= request.atEpochMs) return fire(request, current, nowEpochMs, policy, notificationsReady);
         if (request.precision == NotificationScheduleRequest.Precision.EXACT && !exactAvailable)
             return none(State.QUEUED_EXACT_PERMISSION, "android_exact_alarm_unavailable");
@@ -39,13 +39,13 @@ public final class NotificationScheduleMachine {
     }
     /** Alarm callback: never arms a second alarm or executes application JavaScript. */
     public static Plan fire(NotificationScheduleRequest.Schedule request, State current, long nowEpochMs,
-                            Policy policy, boolean notificationsReady) {
-        require(request, current, policy);
+                            SessionStatus sessionStatus, boolean notificationsReady) {
+        require(request, current, sessionStatus);
         if (nowEpochMs < 0) throw new IllegalArgumentException("Invalid clock");
         if (terminal(current) || current == State.DISPATCH_RESERVED) return none(current, "terminal_or_in_flight");
         if (nowEpochMs < request.atEpochMs) return none(current, "not_due");
         if (nowEpochMs > request.expiresAtEpochMs) return none(State.EXPIRED, "delivery_window_ended");
-        Plan blocked = policy(policy); if (blocked != null) return blocked;
+        Plan blocked = unavailable(sessionStatus); if (blocked != null) return blocked;
         if (!notificationsReady) return none(State.QUEUED_OS_BLOCKED, "android_notification_not_ready");
         return new Plan(State.DISPATCH_RESERVED, Effect.POST, "persist_reservation_before_post_and_live_check_again");
     }
@@ -58,10 +58,10 @@ public final class NotificationScheduleMachine {
         return none(accepted ? State.ACCEPTED : State.DELIVERY_UNKNOWN, accepted ? "notify_returned_no_display_receipt" : "post_result_uncertain_no_auto_replay");
     }
     /** Only before invoking notify, with proof no effect was attempted, can a reservation be released. */
-    public static Plan blockedBeforePost(State current, Policy policy, boolean notificationsReady) {
-        require(current, policy);
+    public static Plan blockedBeforePost(State current, SessionStatus sessionStatus, boolean notificationsReady) {
+        require(current, sessionStatus);
         if (current != State.DISPATCH_RESERVED) return none(current, "stale_preflight_result");
-        Plan blocked = policy(policy); if (blocked != null) return blocked;
+        Plan blocked = unavailable(sessionStatus); if (blocked != null) return blocked;
         if (!notificationsReady) return none(State.QUEUED_OS_BLOCKED, "android_notification_not_ready");
         return none(current, "still_reserved");
     }
@@ -81,11 +81,9 @@ public final class NotificationScheduleMachine {
         if (current == State.REVOKED || current == State.EXPIRED) return new Plan(current, Effect.CANCEL_ALARM, "terminal_cleanup_same_identity");
         return new Plan(State.CANCELLED, Effect.CANCEL_ALARM, "persist_tombstone_before_cleanup");
     }
-    private static Plan policy(Policy policy) {
-        switch (policy) {
-            case DENIED: return none(State.REVOKED, "live_policy_denied");
-            case ASK: return none(State.QUEUED_APPROVAL, "foreground_review_required");
-            case UNAVAILABLE: return none(State.QUEUED_POLICY_UNAVAILABLE, "authenticated_host_unavailable");
+    private static Plan unavailable(SessionStatus sessionStatus) {
+        switch (sessionStatus) {
+            case UNAVAILABLE: return none(State.QUEUED_SESSION_UNAVAILABLE, "authenticated_host_unavailable");
             default: return null;
         }
     }

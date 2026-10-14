@@ -21,7 +21,7 @@ final class NotificationDispatch {
         }catch(FactoryException|RuntimeException failure){
             if(entered.get())return change(store,row,State.DELIVERY_UNKNOWN,"post_result_uncertain_no_auto_replay",process,clock.epochMs());
             State next=row.kind==Kind.IMMEDIATE?State.CANCELLED:clock.epochMs()>row.request.expiresAtEpochMs?State.EXPIRED:
-                    !platform.notificationsReady(row.notification)?State.QUEUED_OS_BLOCKED:State.QUEUED_POLICY_UNAVAILABLE;
+                    !platform.notificationsReady(row.notification)?State.QUEUED_OS_BLOCKED:State.QUEUED_SESSION_UNAVAILABLE;
             return change(store,row,next,"no_post_attempted_preflight_failed",process,clock.epochMs());
         }
     }

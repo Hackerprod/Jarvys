@@ -1,7 +1,6 @@
 package com.jarvys.agent
 
 import android.app.Application
-import com.jarvys.agent.connectors.*
 import com.jarvys.agent.crew.*
 import com.jarvys.agent.workspaces.*
 import java.io.File
@@ -30,7 +29,6 @@ class WorkspaceCoordinationDeliveryTest {
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
-    private lateinit var policy: NativeActionPolicy
     private lateinit var delivery: WorkspaceCoordinationDelivery
     private lateinit var scope: WorkspaceRecord
     private lateinit var target: WorkspaceAssignment
@@ -45,8 +43,7 @@ class WorkspaceCoordinationDeliveryTest {
         File(app.filesDir, "jarvys").deleteRecursively()
         registry = WorkspaceRegistry(app)
         ledger = LocalRunStore(app)
-        policy = NativeActionPolicy.inMemory()
-        delivery = WorkspaceCoordinationDelivery(app, policy, ledger) { session ->
+        delivery = WorkspaceCoordinationDelivery(app, ledger) { session ->
             assertEquals(scope.executionSessionId, session)
             parked?.manager
         }
@@ -104,7 +101,7 @@ class WorkspaceCoordinationDeliveryTest {
         assertTrue(worker.manager.canReplyToCoordination(source))
         reconcile(); assertTrue(references().isEmpty()); assertTrue(notices().isEmpty())
         bind(worker.bot.id); reconcile()
-        WorkspaceCoordinationDelivery(app, policy, LocalRunStore(app)) { worker.manager }.reconcile(scope.workspaceId, freshToken)
+        WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { worker.manager }.reconcile(scope.workspaceId, freshToken)
         val r = references().single()
         assertTrue(r.matchesEvidence(source)); assertEquals(target.revision, r.observedAssignmentRevision)
         assertEquals(r.referenceId, notices().single().referenceId)
@@ -120,23 +117,12 @@ class WorkspaceCoordinationDeliveryTest {
         assertFalse(delivery.inbox(scope.workspaceId, 50, null, noAdmission).toString().contains(source.text))
     }
 
-    @Test fun allowAskDenyGateNoticesAndForegroundReadIsExact() {
-        bind(); evidence()
-        for (mode in listOf(AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, mode)
-            reconcile(); assertEquals(1, references().size); assertTrue(notices().isEmpty())
-        }
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
+    @Test fun reconciliationAutomaticallyRecordsNoticeAndForegroundReadIsExact() {
+        bind(); evidence(); reconcile()
+        assertEquals(1, references().size); assertEquals(1, notices().size)
         val r = references().single()
-        policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ, NativeActionPolicy.binding("synthetic-read")).use { permission ->
-            failure { read(r, admission = Runnable { permission.admit() }) }
-            assertTrue(notices().isEmpty())
-            permission.approveOnce {}
-            val response = read(r, admission = Runnable { permission.admit() })
-            assertEquals(r.contentSha256, response.getString("expected_sha256"))
-        }
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ALLOW)
-        reconcile(); assertEquals(1, notices().size)
+        val response = read(r)
+        assertEquals(r.contentSha256, response.getString("expected_sha256"))
     }
 
     @Test fun asciiFragmentsReconstructAllUtf16TextAndRefsAcrossEscapeBoundaries() {
@@ -212,18 +198,14 @@ class WorkspaceCoordinationDeliveryTest {
         failure { delivery.inbox(scope.workspaceId, 50, null, noAdmission) }
     }
 
-    @Test fun noticeRevocationAndStopFailBeforeDurableDisclosure() {
-        bind(); evidence(); policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK); reconcile()
+    @Test fun stoppedForegroundReadDoesNotReturnEvidence() {
+        bind(); evidence(); reconcile()
         val r = references().single()
-        var checks = 0
-        failure { read(r, admission = Runnable { if (++checks == 3) throw IllegalStateException("Revoked") }) }
-        assertEquals(3, checks); assertTrue(notices().isEmpty())
         val stopped = CancellationToken.cancellable().also { it.cancel() }
-        failure { read(r, stopped) }; assertTrue(notices().isEmpty())
+        failure { read(r, stopped) }; assertEquals(1, notices().size)
     }
 
     @Test fun replyRequiresExactNoticeThenAcceptsOnceAndHistoricalRetryNeverFindsRuntime() {
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
         val (worker, r) = liveQuestion()
         ledger.appendConversationMessage(central, "user", "An unrelated Central row is not a coordination read")
         failure { reply(r) }; assertNull(savedReply(r)); assertTrue(worker.answers().isEmpty())
@@ -237,7 +219,7 @@ class WorkspaceCoordinationDeliveryTest {
         assertEquals(r.messageId, answer.coordination.messageId)
         assertEquals("Untrusted chief answer", answer.text)
         worker.manager.stop(worker.bot.id)
-        val reopened = WorkspaceCoordinationDelivery(app, policy, LocalRunStore(app)) { throw AssertionError("A saved receipt must not look up, prepare, or resume a runtime") }
+        val reopened = WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { throw AssertionError("A saved receipt must not look up, prepare, or resume a runtime") }
         assertEquals(accepted.toString(), reply(r, backend = reopened).toString())
         failure { reply(r, key = "different-key", backend = reopened) }
         failure { reply(r, text = "Changed payload", backend = reopened) }
@@ -283,7 +265,7 @@ class WorkspaceCoordinationDeliveryTest {
     @Test fun startedCrashGapIsUncertainAndNewKeyCannotRedispatch() {
         val (worker, r) = liveQuestion()
         ledger.markWorkspaceCoordinationReplyStarted(prepared(r), noAdmission)
-        val reopened = WorkspaceCoordinationDelivery(app, policy, LocalRunStore(app)) { throw AssertionError("STARTED must not look up a manager") }
+        val reopened = WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { throw AssertionError("STARTED must not look up a manager") }
         val receipt = reply(r, backend = reopened)
         assertEquals("UNCERTAIN_NO_REPLAY", receipt.getString("state"))
         assertFalse(receipt.getBoolean("dispatch_accepted_locally")); assertTrue(worker.answers().isEmpty())
@@ -309,20 +291,14 @@ class WorkspaceCoordinationDeliveryTest {
         } finally { worker.manager.configureCheckpoints(null) }
     }
 
-    @Test fun preparedIndicatorRechecksDelegatePolicyStopAndReopen() {
+    @Test fun preparedReplyRemainsUnsentAndStopOrReopenNeverDispatchesIt() {
         val (worker, r) = liveQuestion(); prepared(r)
         assertEquals("PREPARED_NOT_DISPATCHED", read(r).getString("reply_state"))
         assertEquals(1, delivery.summary(scope.workspaceId).live)
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, AutonomyPolicy.ASK)
-        assertEquals("NEEDS_FOREGROUND_REVIEW", read(r).getString("reply_state"))
-        assertEquals(0, delivery.summary(scope.workspaceId).live); assertTrue(delivery.summary(scope.workspaceId).reviewRequired)
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, AutonomyPolicy.DENY)
-        assertEquals("POLICY_BLOCKED", read(r).getString("reply_state")); assertEquals(0, delivery.summary(scope.workspaceId).live)
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, AutonomyPolicy.ALLOW)
         worker.manager.stop(worker.bot.id)
         assertEquals("HISTORICAL_OR_INTERRUPTED", read(r).getString("reply_state"))
         assertEquals(0, delivery.summary(scope.workspaceId).live)
-        val reopened = WorkspaceCoordinationDelivery(app, policy, LocalRunStore(app)) { null }
+        val reopened = WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { null }
         assertEquals(0, reopened.summary(scope.workspaceId).live)
         failure { reply(r, backend = reopened) }
         assertEquals(WorkspaceCoordinationReply.State.PREPARED, savedReply(r).state); assertTrue(worker.answers().isEmpty())
@@ -347,99 +323,43 @@ class WorkspaceCoordinationDeliveryTest {
         assertEquals(0, delivery.summary(scope.workspaceId).live)
     }
 
-    @Test fun finalAdmissionAfterRegistryReadsRejectsPolicyRevocationBeforeEnqueue() {
-        val (worker, r) = liveQuestion()
-        var finalChecks = 0
-        policy.prepare(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, NativeActionPolicy.binding("synthetic-reply")).use { permission ->
-            val revokeInsideFinalValidation = Runnable {
-                val finalValidation = Thread.currentThread().stackTrace.any { it.methodName == "replyToCoordinationExact" }
-                if (finalValidation) finalChecks++
-                permission.admit()
-                if (finalValidation && finalChecks == 1)
-                    policy.set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, AutonomyPolicy.DENY)
-            }
-            failure { reply(r, admission = revokeInsideFinalValidation) }
-        }
-        assertEquals(2, finalChecks)
-        assertEquals(WorkspaceCoordinationReply.State.STARTED, savedReply(r).state)
-        assertTrue(worker.answers().isEmpty())
-        assertEquals(1, delivery.summary(scope.workspaceId).uncertain)
-    }
-
-    @Test fun askToDenyDuringSummaryReturnsNoStaleReviewIndicator() {
-        bind(); evidence(); reconcile()
-        val backing = InMemoryConnectorAutonomyStore()
-        var reads = 0
-        val flipping = object : ConnectorAutonomyStore by backing {
-            override fun snapshot(connectorId: String, operationName: String): ActionPolicySnapshot {
-                if (operationName == NativeActionPolicy.Operation.WORKSPACE_READ.id && ++reads == 2)
-                    backing.setPolicy(connectorId, operationName, AutonomyPolicy.DENY)
-                return backing.snapshot(connectorId, operationName)
-            }
-        }
-        val changing = NativeActionPolicy(flipping)
-        changing.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
-        val actual = WorkspaceCoordinationDelivery(app, changing, ledger) { throw AssertionError("ASK summary must not consult runtime") }.summary(scope.workspaceId)
-        assertEquals(2, reads); assertEquals(WorkspaceCoordinationSummary(), actual)
-    }
-
-    @Test fun noticeAndReplyMutationsHoldOuterLocksBeforeLedgerUnderOneStopController() {
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
+    @Test fun replyMutationsHoldControlAndStopLocksBeforeLedger() {
         val (_, r) = liveQuestion()
         val stop = StopController.getInstance(); stop.stopRun(); val token = requireNotNull(stop.beginRun())
-        val noticeChecks = AtomicInteger()
-        read(r, token, Runnable {
-            if (Thread.holdsLock(ledger)) {
-                assertTrue("Notice must own DELIVERY before ledger", Thread.holdsLock(DeliveredArtifactStore.DELIVERY_ACTION_LOCK))
-                assertTrue("Notice must own STOP before ledger", Thread.holdsLock(stop)); noticeChecks.incrementAndGet()
-            }
-        })
-        assertTrue(noticeChecks.get() > 0)
         val replyChecks = AtomicInteger()
         reply(r, token = token, admission = Runnable {
             if (Thread.holdsLock(ledger)) {
-                assertTrue("Reply must own native control before ledger", Thread.holdsLock(WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
+                assertTrue("Reply must own control before ledger", Thread.holdsLock(WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
                 assertTrue("Reply must own STOP before ledger", Thread.holdsLock(stop)); replyChecks.incrementAndGet()
             }
         })
         assertEquals(3, replyChecks.get()) // PREPARED, STARTED, ACCEPTED_LOCAL, all before a durable append.
     }
 
-    @Test fun concurrentReadAndReplySharingStopControllerCompleteWithoutAbba() {
+    @Test fun concurrentReadAndReplySharingStopControllerComplete() {
         val (worker, question) = liveQuestion()
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
         worker.manager.send(worker.bot.id, "chief", CrewMessage.Type.FINDING, "Separate synthetic notice", emptyList())
         reconcile()
         val finding = references().single { it.kind == "FINDING" }
         val stop = StopController.getInstance(); stop.stopRun(); val token = requireNotNull(stop.beginRun())
-        val noticeAtAppend = CountDownLatch(1); val releaseNotice = CountDownLatch(1); val replyEntered = CountDownLatch(1)
+        val start = CountDownLatch(1)
         val failure = AtomicReference<Throwable>()
         val readThread = thread(failure) {
-            read(finding, token, Runnable {
-                if (Thread.holdsLock(ledger)) {
-                    assertTrue(Thread.holdsLock(DeliveredArtifactStore.DELIVERY_ACTION_LOCK)); assertTrue(Thread.holdsLock(stop))
-                    noticeAtAppend.countDown(); await(releaseNotice)
-                }
-            })
+            await(start)
+            read(finding, token, noAdmission)
         }
-        var replyThread: Thread? = null
+        val replyThread = thread(failure) {
+            await(start)
+            reply(question, token = token)
+        }
         try {
-            await(noticeAtAppend)
-            replyThread = thread(failure) {
-                replyEntered.countDown()
-                reply(question, token = token, admission = Runnable {
-                    if (Thread.holdsLock(ledger)) {
-                        assertTrue(Thread.holdsLock(stop)); assertTrue(Thread.holdsLock(WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
-                    }
-                })
-            }
-            await(replyEntered); releaseNotice.countDown()
+            start.countDown()
             join(readThread); join(replyThread)
             failure.get()?.let { throw AssertionError("Concurrent integration operation failed", it) }
             assertEquals(2, notices().size); assertEquals(1, worker.answers().size)
         } finally {
-            releaseNotice.countDown()
-            join(readThread); replyThread?.let { join(it) }
+            start.countDown()
+            join(readThread); join(replyThread)
         }
     }
 

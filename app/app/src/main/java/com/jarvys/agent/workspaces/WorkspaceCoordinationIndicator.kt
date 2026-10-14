@@ -17,21 +17,18 @@ data class WorkspaceCoordinationSummary(
     val live: Int = 0,
     val uncertain: Int = 0,
     val historical: Int = 0,
-    val reviewRequired: Boolean = false,
     val pageLimited: Boolean = false,
     val unavailable: Boolean = false,
 )
 
 @Composable
 fun WorkspaceCoordinationIndicator(summary: WorkspaceCoordinationSummary, showHistory: Boolean = false) {
-    if (summary.live == 0 && summary.uncertain == 0 && !summary.reviewRequired && !summary.pageLimited &&
+    if (summary.live == 0 && summary.uncertain == 0 && !summary.pageLimited &&
         !summary.unavailable && (!showHistory || summary.historical == 0)) return
     Column(Modifier.testTag("workspace-coordination-indicator")) {
         if (summary.live > 0) Text(pluralStringResource(R.plurals.workspace_coordination_live, summary.live, summary.live),
             style = MaterialTheme.typography.bodySmall)
         if (summary.uncertain > 0) Text(pluralStringResource(R.plurals.workspace_coordination_uncertain, summary.uncertain, summary.uncertain),
-            style = MaterialTheme.typography.bodySmall)
-        if (summary.reviewRequired) Text(stringResource(R.string.workspace_coordination_review),
             style = MaterialTheme.typography.bodySmall)
         if (showHistory && summary.historical > 0) Text(pluralStringResource(R.plurals.workspace_coordination_historical, summary.historical, summary.historical),
             style = MaterialTheme.typography.bodySmall)

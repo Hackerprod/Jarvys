@@ -12,7 +12,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Closed, immutable disclosure grammar shared by trusted packaged DEX and host review. */
+/** Closed, immutable operation grammar shared by packaged DEX and the authenticated host. */
 public final class NativeOperationRequest {
     public static final int MAX_BYTES = BridgeProtocol.MAX_MESSAGE_BYTES;
     public final String operation, capability;

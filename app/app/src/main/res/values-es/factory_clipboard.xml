@@ -1,5 +1,0 @@
-<resources>
-    <string name="factory_clipboard_title">Copiar texto al portapapeles</string>
-    <string name="factory_clipboard_disclosure">Otras apps podrían leer el texto copiado. Tu política de Factory controla esta operación. La vista previa muestra como máximo los primeros 16.384 caracteres; el número de bytes corresponde al texto completo.</string>
-    <string name="factory_clipboard_copy">Copiar este texto</string>
-</resources>

@@ -11,9 +11,9 @@ import java.util.HashSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-/** No-UI, deadline-aware acquisition of the same authenticated per-operation policy lease. */
+/** No-UI, deadline-aware acquisition of an authenticated installed-source operation session. */
 public final class NativeBackgroundAuthorization {
-    public enum Decision { ALLOW, ASK, DENY }
+    public enum Decision { ACTIVE }
     /** Expected descriptor identity; a caller-supplied value is never authority until the host compares fresh proof. */
     public static final class SourceIdentity {
         public final String appId, certificateSha256, apkSha256, recordSha256;
@@ -50,7 +50,7 @@ public final class NativeBackgroundAuthorization {
             this.decision=decision; this.client=client; this.ended=ended; this.current=current;
         }
         public void check() {
-            if (decision != Decision.ALLOW || client == null || ended.get() || !current.getAsBoolean()) throw new SecurityException("Background authority ended");
+            if (decision != Decision.ACTIVE || client == null || ended.get() || !current.getAsBoolean()) throw new SecurityException("Background operation session ended");
             client.check();
             if (ended.get() || !current.getAsBoolean()) throw new SecurityException("Background authority ended");
         }
@@ -73,7 +73,7 @@ public final class NativeBackgroundAuthorization {
     private static Result acquireInternal(Context context, FactoryConfig config, NativeOperationRequest request, SourceIdentity expectedSource,
                                           long receiverDeadlineElapsedMs, BooleanSupplier current, boolean finiteHttpJob) throws FactoryException {
         if (context == null || config == null || request == null || expectedSource == null || !config.appId.equals(expectedSource.appId) || current == null || !config.appId.equals(context.getPackageName()))
-            throw new IllegalArgumentException("Installed background policy dependencies required");
+            throw new IllegalArgumentException("Installed background source dependencies required");
         NativeOperationAuthorization.Client client=null;
         AtomicBoolean ended=new AtomicBoolean();
         try {
@@ -90,30 +90,20 @@ public final class NativeBackgroundAuthorization {
             if(finiteHttpJob) input.putString("leaseKind","finite_http_job");
             requireCurrent(current,deadline);
             Bundle result=context.getContentResolver().call(Uri.parse("content://"+config.documentBroker.packageName+".factory.operations"),"acquire_background",null,input);
-            // Even a late ALLOW reply must be connected only for immediate cleanup, not abandoned.
+            // Even a late reply must be connected only for immediate cleanup, not abandoned.
             if(result==null || result.hasFileDescriptors() || !Integer.valueOf(1).equals(result.get("protocolVersion")) ||
                     !nonce.equals(result.get("nonce")) || !binding.equals(result.get("binding")) ||
                     !NativeOperationHostIdentity.verifiedUid(context,config.documentBroker,hostUid)) throw new SecurityException();
-            Object status=result.get("status");
-            if(result.containsKey("decision")) {
-                exact(result,"protocolVersion","nonce","binding","status","decision");
-                Decision decision;
-                if("ASK".equals(result.get("decision")) && Integer.valueOf(NativeOperationAuthorization.PENDING).equals(status)) decision=Decision.ASK;
-                else if("DENY".equals(result.get("decision")) && Integer.valueOf(NativeOperationAuthorization.TERMINAL).equals(status)) decision=Decision.DENY;
-                else throw new SecurityException();
-                requireCurrent(current,deadline);
-                return new Result(decision,null,ended,current);
-            }
             exact(result,"protocolVersion","nonce","binding","status","lease");
-            if(!Integer.valueOf(NativeOperationAuthorization.APPROVED).equals(status)) throw new SecurityException();
+            if(!Integer.valueOf(NativeOperationAuthorization.ACTIVE).equals(result.get("status"))) throw new SecurityException();
             IBinder endpoint=result.getBinder("lease"); if(endpoint==null) throw new SecurityException();
             client=NativeOperationAuthorization.connect(endpoint,nonce,binding,
                     uid->uid==hostUid && NativeOperationHostIdentity.verifiedUid(context,config.documentBroker,hostUid),()->ended.set(true));
             requireCurrent(current,deadline);
-            Result allowed=new Result(Decision.ALLOW,client,ended,current); allowed.check(); return allowed;
+            Result active=new Result(Decision.ACTIVE,client,ended,current); active.check(); return active;
         } catch(Exception unavailable) {
             ended.set(true); if(client!=null) client.close();
-            throw new FactoryException("POLICY_UNAVAILABLE","Current background policy authorization is unavailable; no approval was assumed.");
+            throw new FactoryException("SOURCE_UNAVAILABLE","Current installed source session is unavailable.");
         }
     }
     private static void requireCurrent(BooleanSupplier current,long deadline) {

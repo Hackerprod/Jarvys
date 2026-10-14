@@ -37,13 +37,12 @@ class FactoryPhotoActivityTest {
     private val root get() = File(context.noBackupFilesDir, "factory-photos")
     private val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private val request = FactoryPhotoCoordinator.Request("pick", "d".repeat(64))
-    private val policy = FactoryOperationPolicy.inMemory()
     private lateinit var coordinator: FactoryPhotoCoordinator
     private val controllers = mutableListOf<ActivityController<out FactoryPhotoActivity>>()
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         root.deleteRecursively()
-        coordinator = FactoryPhotoCoordinator(context, policy) { caller -> check(caller == proof.appId); proof }
+        coordinator = FactoryPhotoCoordinator(context) { caller -> check(caller == proof.appId); proof }
         FactoryPhotoCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
     }
     @After fun cleanup() {
@@ -54,7 +53,7 @@ class FactoryPhotoActivityTest {
         root.deleteRecursively()
     }
     private fun launch(saved: Bundle? = null): ActivityController<GrantedPhotoActivity> {
-        val control = Robolectric.buildActivity(GrantedPhotoActivity::class.java, FactoryPhotoCoordinator.recoveryIntent(context))
+        val control = Robolectric.buildActivity(GrantedPhotoActivity::class.java, Intent(context))
         controllers += control
         control.create(saved).start().resume().visible()
         return control
@@ -91,10 +90,8 @@ class FactoryPhotoActivityTest {
         control.setup(); val activity = control.get(); drain(activity)
         assertTrue(activity.packageManager.getActivityInfo(ComponentName(activity, FactoryPhotoActivity::class.java), 0).exported)
         assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-        assertFalse(button(activity,"choose").isEnabled); assertNull(button(activity, "use"))
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         assertEquals("idle", coordinator.status())
-        for (name in listOf("choose","close","recover")) assertTrue(button(activity,name).filterTouchesWhenObscured)
         assertNull(shadowOf(activity).nextStartedActivity)
     }
     @Test fun backNeverReturnsSelectedPhoto() {
@@ -132,62 +129,12 @@ class FactoryPhotoActivityTest {
         (binder as com.jarvys.factory.runtime.FileShareTransfer).close()
         assertTrue(activity.isFinishing)
     }
-    @Test fun backgroundRevokesSelectionAndLateCallbackCannotRestoreIt() {
-        val control = launch(); val activity = control.get(); bindSelected(activity)
-        control.pause()
-        assertTrue(coordinator.needsRecovery())
-        shadowOf(activity).callOnActivityResult(6901, Activity.RESULT_OK, Intent().setData(Uri.parse("content://synthetic/photo/late")).addFlags(1))
-        control.resume(); advance(activity)
-        assertNull(button(activity, "use"))
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-    }
-    @Test fun recreationNeverReplaysOldPickerOrRecoversSelection() {
-        val control = launch(); val activity = control.get(); val owner = bindSelected(activity)
-        control.pause().stop().destroy(); controllers.remove(control)
-        val next = launch(Bundle()).get()
-        assertTrue(coordinator.needsRecovery())
-        assertTrue(next.isFinishing)
-        assertNull(next.window.decorView.findViewWithTag<Button>("factory-photos-use"))
-        assertTrue(runCatching { coordinator.pickerTerminal(owner,true) }.isFailure)
-        assertNull(shadowOf(next).nextStartedActivity)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(next).resultCode)
-    }
-    @Test fun taintedScreenCannotApproveEvenAfterAutomationEnds() {
-        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
-        lateinit var activity: FactoryPhotoActivity
-        assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { activity = launch().get() })
-        for (name in listOf("choose","recover")) {
-            assertFalse(button(activity,name).isEnabled); button(activity,name).performClick()
-        }
-        assertEquals("idle", coordinator.status())
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        assertNull(shadowOf(activity).nextStartedActivity)
-    }
-    @Test fun recoveryRequiresActiveForegroundAndDoesNotRestoreGrants() {
-        val owner = coordinator.begin(proof.appId,request); coordinator.launch(owner) {}; coordinator.revoke(owner)
-        val control = launch(); val activity = control.get()
-        assertTrue(button(activity,"recover").isEnabled)
-        control.pause(); button(activity,"recover").performClick()
-        assertTrue(coordinator.needsRecovery())
-        control.resume(); button(activity,"recover").performClick()
-        assertEquals("closed_outcome_unknown",coordinator.status())
-        assertEquals(Activity.RESULT_CANCELED,shadowOf(activity).resultCode)
-        assertNull(shadowOf(activity).resultIntent)
-    }
-    @Test fun nullCallerForgedRecoveryAndMalformedRequestFinishWithoutProtection() {
-        for (intent in listOf(Intent(), Intent().putExtra("nativeRecoveryToken", "forged"))) {
-            val control = Robolectric.buildActivity(FactoryPhotoActivity::class.java,intent)
-            controllers += control; control.setup()
-            assertTrue(control.get().isFinishing)
-            assertEquals(Activity.RESULT_CANCELED,shadowOf(control.get()).resultCode)
-            assertFalse(MemoryUiAutomationGuard.isProtected())
-        }
-    }
-    @Test fun nativeRecoveryTokenIsOneShot() {
-        val intent = FactoryPhotoCoordinator.recoveryIntent(context)
-        assertTrue(FactoryPhotoCoordinator.consumeRecoveryToken(intent))
-        assertFalse(FactoryPhotoCoordinator.consumeRecoveryToken(intent))
-        assertFalse(FactoryPhotoCoordinator.consumeRecoveryToken(Intent().putExtra("nativeRecoveryToken", "forged")))
+    @Test fun nullCallerCannotOpenSystemPicker() {
+        val control = Robolectric.buildActivity(FactoryPhotoActivity::class.java, Intent())
+        controllers += control; control.setup()
+        assertTrue(control.get().isFinishing)
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(control.get()).resultCode)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
     @Test fun successCallbackWithoutOwnedExternalLaunchNeverSelectsOrReturns() {
@@ -207,73 +154,6 @@ class FactoryPhotoActivityTest {
         assertTrue(activity.isFinishing)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         assertTrue(activity.isFinishing)
-    }
-    @Test fun nativeRecoveryTokenRejectsInjectedUriAndGrantEnvelope() {
-        val original = FactoryPhotoCoordinator.recoveryIntent(context)
-        for (bad in listOf(Intent(original).setData(Uri.parse("content://synthetic/x")),
-            Intent(original).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
-            Intent(original).apply { clipData = android.content.ClipData.newRawUri("x", Uri.parse("content://synthetic/x")) },
-            Intent(original).apply { selector = Intent("nested") })) {
-            assertFalse(FactoryPhotoCoordinator.consumeRecoveryToken(bad))
-        }
-        assertTrue(FactoryPhotoCoordinator.consumeRecoveryToken(original))
-    }
-
-    @Test fun foregroundLossSchedulesPotentiallyBlockingProviderCancellationOffMainThread() {
-        val control = launch(); val activity = control.get(); bindSelected(activity)
-        val signal = FactoryPhotoActivity::class.java.getDeclaredField("signal").apply { isAccessible = true }.get(activity) as android.os.CancellationSignal
-        val entered = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
-        signal.setOnCancelListener { entered.countDown(); release.await(5, TimeUnit.SECONDS) }
-        try {
-            val before = System.nanoTime(); control.pause()
-            assertTrue("Pause blocked on provider cancellation", System.nanoTime() - before < 1_000_000_000L)
-            assertTrue(entered.await(5, TimeUnit.SECONDS)); assertTrue(coordinator.needsRecovery())
-            assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        } finally { release.countDown() }
-    }
-    @Test fun selectionExpiryErasesBytesAndPreventsNativeReturn() {
-        val activity = launch().get(); bindSelected(activity)
-        val selected = FactoryPhotoActivity::class.java.getDeclaredField("selected").apply { isAccessible = true }.get(activity) as FactoryPhotoCapture.Image
-        val expire = FactoryPhotoActivity::class.java.getDeclaredField("expireSelection").apply { isAccessible = true }.get(activity) as Runnable
-        expire.run()
-        assertArrayEquals(ByteArray(selected.bytes.size), selected.bytes)
-        assertNull(button(activity, "use")); advance(activity)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertTrue(coordinator.needsRecovery())
-    }
-
-    @Test fun configuredAskHasOneReviewThenAutomaticResultWithoutUse() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val app = android.content.pm.PackageInfo().apply {
-            packageName = proof.appId
-            applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = proof.appId; uid = 20002 }
-        }
-        val pm = shadowOf(context.packageManager)
-        pm.installPackage(app); pm.setPackagesForUid(20002, proof.appId)
-        val picker = android.content.pm.ResolveInfo().apply {
-            activityInfo = android.content.pm.ActivityInfo().apply {
-                packageName = "example.system.photos"; name = "example.system.photos.Picker"; exported = true; enabled = true
-                applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = "example.system.photos"; flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM; enabled = true }
-            }
-        }
-        pm.addResolveInfoForIntent(Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("image/*"), picker)
-        val control = launchRequest(registerPicker = false); val activity = control.get()
-        val owner = FactoryPhotoActivity::class.java.getDeclaredField("token").apply { isAccessible = true }.get(activity) as String
-        assertTrue(button(activity, "choose").isEnabled); assertNull(button(activity, "use"))
-        assertNull(shadowOf(activity).nextStartedActivity)
-        button(activity, "choose").performClick(); drain(activity)
-        val external = shadowOf(activity).nextStartedActivityForResult
-        assertNotNull(external); assertEquals(android.provider.MediaStore.ACTION_PICK_IMAGES, external.intent.action)
-        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, external.intent.flags)
-        assertEquals("picker", coordinator.status()); assertNull(button(activity, "use"))
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        // Synthetic successful selection boundary; actual bytes are tested independently with native decoding.
-        control.pause().resume(); set(activity, "externalOwned", false)
-        coordinator.pickerTerminal(owner, true)
-        set(activity, "selected", FactoryPhotoCapture.Image(byteArrayOf(4, 5, 6), "image/png", 1, 1)); render(activity)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(button(activity, "use"))
-        advance(activity); drain(activity)
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        (shadowOf(activity).resultIntent.extras!!.getBinder("transfer") as com.jarvys.factory.runtime.FileShareTransfer).close()
     }
 
     @Test fun cleanupRetainsAdmissionCaptureUntilCancelledCameraWorkerActuallyCompletes() {
@@ -300,27 +180,6 @@ class FactoryPhotoActivityTest {
             assertTrue(camera.completed); assertTrue(closed.getBoolean(pending))
             com.jarvys.factory.runtime.FileShareTransfer.reserve().close()
         } finally { release.countDown(); writer.close(); FactoryPhotoCapture.cancel(camera); pending.close() }
-    }
-    @Test fun expiryWhilePreparedLaunchWaitsForMainThreadPreventsExternalStart() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val picker = android.content.pm.ResolveInfo().apply {
-            activityInfo = android.content.pm.ActivityInfo().apply {
-                packageName = "example.system.photos"; name = "example.system.photos.Picker"; exported = true; enabled = true
-                applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = "example.system.photos"; flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM; enabled = true }
-            }
-        }
-        shadowOf(context.packageManager).addResolveInfoForIntent(Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("image/*"), picker)
-        val activity = launchRequest(registerPicker = false).get()
-        val owner = FactoryPhotoActivity::class.java.getDeclaredField("token").apply { isAccessible = true }.get(activity) as String
-        button(activity, "choose").performClick(); awaitWorker()
-        assertEquals("picker", coordinator.status())
-        assertNull(shadowOf(activity).nextStartedActivity)
-        set(activity, "selectionDeadline", android.os.SystemClock.elapsedRealtime())
-        (FactoryPhotoActivity::class.java.getDeclaredField("expireSelection").apply { isAccessible = true }.get(activity) as Runnable).run()
-        shadowOf(Looper.getMainLooper()).idle()
-        assertNull(shadowOf(activity).nextStartedActivity)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertTrue(coordinator.needsRecovery())
-        com.jarvys.factory.runtime.FileShareTransfer.reserve().close()
     }
 
     private fun bindCaptureResult(activity: FactoryPhotoActivity, opened: Boolean): Pair<FactoryPhotoCapture.Capture, android.os.ParcelFileDescriptor?> {
@@ -353,8 +212,7 @@ class FactoryPhotoActivityTest {
             }
             assertTrue("Camera cleanup worker did not finish", completed)
             assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-            assertTrue(coordinator.needsRecovery()); assertTrue(capture.cancelled)
-            assertNull(button(activity, "use")); assertTrue(button(activity, "recover").isEnabled)
+            assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(capture.cancelled)
             com.jarvys.factory.runtime.FileShareTransfer.reserve().close()
         } finally { writer?.close(); FactoryPhotoCapture.cancel(capture) }
     }
@@ -376,39 +234,6 @@ class FactoryPhotoActivityTest {
         } finally { FactoryPhotoCapture.cancel(capture) }
     }
 
-    @Test fun recoveryCannotReleaseCrossBrokerAdmissionWhileCancelledPhotoMaterializationStillOwnsBytes() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val picker = android.content.pm.ResolveInfo().apply {
-            activityInfo = android.content.pm.ActivityInfo().apply {
-                packageName = "example.system.photos"; name = "example.system.photos.Picker"; exported = true; enabled = true
-                applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = "example.system.photos"; flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM; enabled = true }
-            }
-        }
-        shadowOf(context.packageManager).addResolveInfoForIntent(Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("image/*"), picker)
-        val activity = launchRequest(registerPicker = false).get()
-        val owner = FactoryPhotoActivity::class.java.getDeclaredField("token").apply { isAccessible = true }.get(activity) as String
-        button(activity, "choose").performClick(); drain(activity)
-        assertNotNull(shadowOf(activity).nextStartedActivityForResult)
-        val pending = FactoryPhotoActivity::class.java.getDeclaredField("admission").apply { isAccessible = true }.get(activity)
-        assertNotNull(pending)
-        val owners = FactoryInteractionAdmission::class.java.getDeclaredField("owners").apply { isAccessible = true }
-        fun currentOwners(): Set<*> = synchronized(FactoryInteractionAdmission) { (owners.get(null) as Set<*>).toSet() }
-        assertEquals(setOf(coordinator, pending), currentOwners())
-        // Model the provider's blocked materialization boundary after its picker has returned.
-        set(activity, "externalOwned", false); set(activity, "working", true); render(activity)
-        button(activity, "close").performClick()
-        assertTrue(coordinator.needsRecovery()); assertFalse(activity.isFinishing)
-        // A separate native recovery interaction can acknowledge uncertainty, never dispose worker bytes.
-        coordinator.acknowledgeRecovery {}
-        assertEquals(setOf(pending), currentOwners())
-        assertFalse(FactoryInteractionAdmission.available()); assertTrue(FactoryDocumentCoordinator(context, policy) { proof }.canBegin())
-        assertTrue(FactoryFileShareCoordinator(context, verify = { proof }).canBegin())
-        set(activity, "working", false)
-        FactoryPhotoActivity::class.java.getDeclaredMethod("cleanup").apply { isAccessible = true }.invoke(activity)
-        assertEquals(emptySet<Any>(), currentOwners()); assertTrue(FactoryInteractionAdmission.available())
-        com.jarvys.factory.runtime.FileShareTransfer.reserve().close()
-    }
-
     private fun launchRequest(registerPicker: Boolean = true): ActivityController<GrantedPhotoActivity> {
         val picker = android.content.pm.ResolveInfo().apply {
             activityInfo = android.content.pm.ActivityInfo().apply {
@@ -422,78 +247,14 @@ class FactoryPhotoActivityTest {
         control.create().start().resume().visible(); repeat(3) { drain(control.get()) }
         return control
     }
-    @Test fun defaultAllowAutomaticallyStartsPickerWithoutGuardDuringAutomation() {
+    @Test fun authenticatedRequestStartsSystemPickerWithoutJarvysApproval() {
         val action = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
         try {
             val activity = launchRequest().get()
             assertEquals("picker", coordinator.status()); assertNotNull(shadowOf(activity).nextStartedActivityForResult)
-            assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(button(activity, "use"))
-            assertEquals(android.view.View.GONE, button(activity, "choose").visibility)
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+            assertNotNull(shadowOf(activity).nextStartedActivityForResult)
         } finally { action.close() }
-    }
-    @Test fun denyDoesNotLaunchPickerOrCreateJournalOrGuard() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        val activity = launchRequest().get()
-        assertTrue(activity.isFinishing); assertNull(shadowOf(activity).nextStartedActivityForResult)
-        assertFalse(File(root, "interaction.json").exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-    }
-    @Test fun configuredAskOwnsGuardOnlyUntilOneApproval() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val activity = launchRequest().get()
-        assertEquals("review", coordinator.status()); assertNull(shadowOf(activity).nextStartedActivityForResult)
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertTrue(button(activity, "choose").isEnabled)
-        button(activity, "choose").performClick(); repeat(3) { drain(activity) }
-        assertEquals("picker", coordinator.status()); assertNotNull(shadowOf(activity).nextStartedActivityForResult)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(button(activity, "use"))
-    }
-    @Test fun policyRevocationCancelsOutstandingPickerAuthorityWithoutReturn() {
-        val activity = launchRequest().get(); assertEquals("picker", coordinator.status())
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY); repeat(3) { drain(activity) }
-        assertTrue(coordinator.needsRecovery()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        assertNull(shadowOf(activity).resultIntent); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun deliveredPhotoRetainsRevocableGrantUntilBinderCloses() {
-        val pm = shadowOf(context.packageManager)
-        pm.installPackage(android.content.pm.PackageInfo().apply {
-            packageName = proof.appId
-            applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = proof.appId; uid = 20002 }
-        }); pm.setPackagesForUid(20002, proof.appId)
-        val activity = launch().get(); val owner = bindSelected(activity); val grant = coordinator.authority(owner)
-        advance(activity); drain(activity)
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode); grant.checkBeforeEffect()
-        val transfer = shadowOf(activity).resultIntent.extras!!.getBinder("transfer") as com.jarvys.factory.runtime.FileShareTransfer
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        val snapshot = com.jarvys.factory.runtime.FileShareTransfer::class.java.getDeclaredField("snapshot").apply { isAccessible = true }
-        assertNull(snapshot.get(transfer)); assertTrue(runCatching { grant.checkBeforeEffect() }.isFailure)
-        transfer.close()
-    }
-
-    @Test fun recoveryUnderAllowNeedsNoGlobalHumanGuardAndNeverReplays() = recoverWithoutGuard(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-    @Test fun recoveryUnderDenyNeedsNoGlobalHumanGuardAndNeverReplays() = recoverWithoutGuard(FactoryOperationPolicy.Mode.DENY)
-    private fun recoverWithoutGuard(mode: FactoryOperationPolicy.Mode) {
-        val owner = coordinator.begin(proof.appId, request); coordinator.launch(owner) {}; coordinator.revoke(owner)
-        policy.setDefaultMode(mode)
-        val automated = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
-        try {
-            val activity = launch().get()
-            assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(button(activity, "recover").isEnabled)
-            button(activity, "recover").performClick(); drain(activity)
-            assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(activity.isFinishing)
-            assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
-            assertNull(shadowOf(activity).nextStartedActivityForResult)
-            assertTrue(runCatching { coordinator.pickerTerminal(owner, true) }.isFailure)
-        } finally { automated.close() }
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        assertTrue(runCatching { coordinator.begin(proof.appId, request) }.isFailure)
-    }
-    @Test fun actualAskReviewRemainsTaintedWhenAutomationWasInFlight() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val automated = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
-        val activity = try { launchRequest().get() } finally { automated.close() }
-        assertFalse(button(activity, "choose").isEnabled); button(activity, "choose").performClick(); drain(activity)
-        assertEquals("review", coordinator.status()); assertNull(shadowOf(activity).nextStartedActivityForResult)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
 
 }

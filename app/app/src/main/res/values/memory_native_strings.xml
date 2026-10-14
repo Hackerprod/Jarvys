@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="memory_native_close">Close</string>
+    <string name="memory_native_selection_changed">Selected memory changed</string>
+    <string name="memory_native_export_destination_unavailable">The selected destination cannot be opened</string>
+    <string name="memory_native_export_success">Memory exported</string>
+    <string name="memory_native_export_incomplete">Export did not complete. Inspect the selected file before retrying.</string>
+    <string name="memory_native_draft_capture_once">Allow capture of this updated draft once</string>
+</resources>

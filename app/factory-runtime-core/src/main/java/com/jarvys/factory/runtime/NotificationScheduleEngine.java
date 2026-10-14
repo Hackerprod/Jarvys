@@ -9,7 +9,7 @@ import static com.jarvys.factory.runtime.NotificationScheduleMachine.*;
 /** One-shot durable scheduler. All host, OS and persistence effects are explicit injected boundaries. */
 public final class NotificationScheduleEngine {
     public interface Clock { long epochMs(); long elapsedMs(); }
-    public enum Mode { BACKGROUND_NO_UI, FOREGROUND_REVIEW }
+    public enum Mode { BACKGROUND_NO_UI, FOREGROUND }
     public enum Kind { SCHEDULED, IMMEDIATE }
     public interface Lease extends AutoCloseable {
         /** A live authenticated Binder CHECK, never a cached boolean. */
@@ -17,11 +17,11 @@ public final class NotificationScheduleEngine {
         @Override void close();
     }
     public static final class Decision implements AutoCloseable {
-        public final Policy policy;
+        public final SessionStatus sessionStatus;
         public final Lease lease;
-        public Decision(Policy policy, Lease lease) {
-            if (policy == null || (policy == Policy.ALLOWED) != (lease != null)) throw new IllegalArgumentException();
-            this.policy = policy; this.lease = lease;
+        public Decision(SessionStatus sessionStatus, Lease lease) {
+            if (sessionStatus == null || (sessionStatus == SessionStatus.ACTIVE) != (lease != null)) throw new IllegalArgumentException();
+            this.sessionStatus = sessionStatus; this.lease = lease;
         }
         @Override public void close() { if (lease != null) lease.close(); }
     }
@@ -119,8 +119,7 @@ public final class NotificationScheduleEngine {
         public JSONObject details() {
             try {
                 JSONObject result=new JSONObject().put("status",state.name().toLowerCase(java.util.Locale.ROOT)).put("kind",kind==Kind.SCHEDULED?"scheduled":"immediate")
-                        .put("reason",reason).put("revision",revision).put("createdAtEpochMs",createdAt).put("updatedAtEpochMs",updatedAt)
-                        .put("lastPolicyCheckIsCurrent",false);
+                        .put("reason",reason).put("revision",revision).put("createdAtEpochMs",createdAt).put("updatedAtEpochMs",updatedAt);
                 if(kind==Kind.SCHEDULED)result.put("scheduleId",scheduleId).put("request",request.authorizationDetails());
                 else result.put("generationId",token).put("id",notification.show.id).put("notification",notification.details());
                 return result;
@@ -259,7 +258,7 @@ public final class NotificationScheduleEngine {
         if (firing && clock.epochMs() < row.request.atEpochMs) return row;
         if (clock.epochMs() > row.request.expiresAtEpochMs) return transitionOrCurrent(row, State.EXPIRED, "delivery_window_ended", session);
         // Persist a safe observable state BEFORE a host IPC can hang or the process can die.
-        Row pending = transition(row, State.QUEUED_POLICY_UNAVAILABLE, "acquiring_current_policy", session.attempt);
+        Row pending = transition(row, State.QUEUED_SESSION_UNAVAILABLE, "acquiring_host_session", session.attempt);
         if (pending == null) return current(row);
         Decision decision;
         try { decision = authority.acquire(pending, source, mode, session); }
@@ -268,11 +267,11 @@ public final class NotificationScheduleEngine {
         try (Decision active = decision) {
             if (!session.active()) return queueUnavailable(pending, "receiver_deadline", session);
             boolean ready = platform.notificationsReady(pending.notification);
-            Plan plan = firing ? NotificationScheduleMachine.fire(pending.request, pending.state, clock.epochMs(), active.policy, ready)
-                    : NotificationScheduleMachine.resume(pending.request, pending.state, clock.epochMs(), active.policy, platform.exactAvailable(), ready);
+            Plan plan = firing ? NotificationScheduleMachine.fire(pending.request, pending.state, clock.epochMs(), active.sessionStatus, ready)
+                    : NotificationScheduleMachine.resume(pending.request, pending.state, clock.epochMs(), active.sessionStatus, platform.exactAvailable(), ready);
             if (plan.effect == Effect.NONE) return transitionOrCurrent(pending, plan.state, plan.reason, session);
             try { active.lease.check(); session.check(); }
-            catch (RuntimeException unavailable) { return queueUnavailable(pending, "live_policy_check_failed", session); }
+            catch (RuntimeException unavailable) { return queueUnavailable(pending, "live_session_check_failed", session); }
             if (plan.effect == Effect.POST) {
                 synchronized (NotificationEffectGate.forId(source.appId, pending.notification.show.id)) {
                     session.check();
@@ -315,7 +314,7 @@ public final class NotificationScheduleEngine {
         return NotificationDispatch.post(store,platform,clock,process,row,lease::check,session);
     }
     private Row queueUnavailable(Row row, String reason, Session session) throws FactoryException {
-        return transitionOrCurrent(row, State.QUEUED_POLICY_UNAVAILABLE, reason, session);
+        return transitionOrCurrent(row, State.QUEUED_SESSION_UNAVAILABLE, reason, session);
     }
     private Row transitionOrCurrent(Row row, State state, String reason, Session session) throws FactoryException {
         Row changed = transition(row, state, reason, session.attempt); return changed == null ? current(row) : changed;

@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v86 / biometrics
+# Factory guidance factory-guidance-v87 / biometrics
 
 ## Local strong OS authentication
 Declared biometrics, installed apps only; all preview methods UNAVAILABLE. Selective normal USE_BIOMETRIC permission, no dangerous permission prompt/broker requirement. Nonbiometric profiles can have other selected permissions; only the base template is permission-free.

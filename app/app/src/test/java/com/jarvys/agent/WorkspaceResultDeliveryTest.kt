@@ -1,7 +1,6 @@
 package com.jarvys.agent
 
 import android.app.Application
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.CrewMissionAccess
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.*
@@ -23,7 +22,6 @@ class WorkspaceResultDeliveryTest {
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
-    private lateinit var policy: NativeActionPolicy
     private lateinit var delivery: WorkspaceResultDelivery
     private lateinit var scope: WorkspaceRecord
     private lateinit var target: WorkspaceAssignment
@@ -32,7 +30,7 @@ class WorkspaceResultDeliveryTest {
         app = RuntimeEnvironment.getApplication()
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
-        policy = NativeActionPolicy.inMemory(); delivery = WorkspaceResultDelivery(app, policy, ledger)
+        delivery = WorkspaceResultDelivery(app, ledger)
         scope = registry.createWorkspace("scope", "Synthetic scope")
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment", "request", "Synthetic request",
             "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)
@@ -51,19 +49,16 @@ class WorkspaceResultDeliveryTest {
 
     @Test fun completionBeforeBindingWaitsThenCatchesUpExactlyOnceAcrossInstances() {
         evidence(); reconcile(); assertTrue(references().isEmpty())
-        bind(); reconcile(); WorkspaceResultDelivery(app, policy, LocalRunStore(app)).reconcile(scope.workspaceId, CancellationToken.uncancellable())
+        bind(); reconcile(); WorkspaceResultDelivery(app, LocalRunStore(app)).reconcile(scope.workspaceId, CancellationToken.uncancellable())
         assertEquals(1, references().size); assertEquals(1, notices().size)
         assertEquals(target.revision, references().single().observedAssignmentRevision)
     }
 
-    @Test fun askAndDenyKeepDurableReferenceWithoutCentralDisclosure() {
+    @Test fun reconciliationAutomaticallyRecordsLocalNoticeForExactDurableReference() {
         bind(); evidence()
-        for (mode in listOf(AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, mode)
-            reconcile(); assertEquals(1, references().size); assertTrue(notices().isEmpty())
-        }
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ALLOW)
-        reconcile(); assertEquals(1, notices().size)
+        reconcile()
+        assertEquals(1, references().size)
+        assertEquals(1, notices().size)
     }
 
     @Test fun receiptNeverEntersMessagesModelContextOrReflectionInput() {
@@ -113,12 +108,12 @@ class WorkspaceResultDeliveryTest {
         assertNotNull(runCatching { delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, 8000, CancellationToken.uncancellable(), noAdmission) }.exceptionOrNull())
     }
 
-    @Test fun foregroundAdmissionRevocationCannotAppendNotice() {
-        bind(); evidence(); policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK); reconcile()
+    @Test fun cancelledForegroundReadDoesNotReturnEvidence() {
+        bind(); evidence(); reconcile()
         val r = references().single(); var checks = 0
-        val revoked = Runnable { checks++; if (checks >= 3) throw IllegalStateException("Revoked synthetic authority") }
-        assertNotNull(runCatching { delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, 0, CancellationToken.uncancellable(), revoked) }.exceptionOrNull())
-        assertTrue(notices().isEmpty())
+        val stopped = Runnable { checks++; if (checks >= 3) throw IllegalStateException("Stopped synthetic read") }
+        assertNotNull(runCatching { delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, 0, CancellationToken.uncancellable(), stopped) }.exceptionOrNull())
+        assertEquals(1, notices().size)
     }
     @Test fun escapedControlCharactersRemainRetrievableWithinToolOutputBudget() {
         bind(); val text = "\u0000\u0001".repeat(9000); evidence(text); reconcile(); val r = references().single()

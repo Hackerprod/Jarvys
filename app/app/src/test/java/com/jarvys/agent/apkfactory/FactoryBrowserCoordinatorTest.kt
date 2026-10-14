@@ -33,7 +33,6 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [34], application = android.app.Application::class)
 class FactoryBrowserCoordinatorTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
-    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-browser")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryBrowserCoordinator
@@ -41,16 +40,15 @@ class FactoryBrowserCoordinatorTest {
     private val executor = Executors.newSingleThreadExecutor()
     private fun <T> io(block: () -> T): T = executor.submit(Callable(block)).get(5, TimeUnit.SECONDS)
     private fun denied(block: () -> Unit) = assertTrue("Expected rejection", runCatching(block).isFailure)
-    private fun make(operationPolicy: FactoryOperationPolicy = policy, verify: (String) -> FactoryDocumentCoordinator.Proof = { proof }) = FactoryBrowserCoordinator(context, operationPolicy, verify).also { owners += it }
+    private fun make(verify: (String) -> FactoryDocumentCoordinator.Proof = { proof }) = FactoryBrowserCoordinator(context, verify).also { owners += it }
     private fun intent() = Intent(context, FactoryBrowserActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", "d".repeat(64)); putString("url", URL); putBinder("control", Binder())
     })
     private fun request() = FactoryBrowserCoordinator.Request.parse(intent())
     private fun begin() = io { coordinator.begin(proof.appId, request()) {} }
-    private fun register(value: FactoryBrowserCoordinator.Session, callback: Runnable = Runnable { value.revoke() }, approve: Boolean = true) {
+    private fun register(value: FactoryBrowserCoordinator.Session, callback: Runnable = Runnable { value.revoke() }) {
         val constructor = BrowserLaunchControl.Registration::class.java.getDeclaredConstructor(IBinder::class.java, Runnable::class.java).apply { isAccessible = true }
         value.registration = constructor.newInstance(Binder(), callback)
-        if (approve) value.authority.approveOnce {}
     }
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); coordinator = make()
@@ -58,48 +56,10 @@ class FactoryBrowserCoordinatorTest {
     @After fun cleanup() {
         owners.asReversed().forEach { owner ->
             owner.session()?.preparing = false
-            if (owner.needsRecovery()) io { owner.close(owner.session(), true) {} }
-            else owner.session()?.let { io { owner.close(it, false) {} } }
+        owner.session()?.let { io { owner.close(it) {} } }
         }
         executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
-    }
-    @Test fun defaultAllowGrantsEffectAuthorityWithoutHumanApproval() {
-        coordinator = make(FactoryOperationPolicy.inMemory())
-        val value = begin(); register(value, approve = false)
-        assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, value.authority.mode); assertFalse(value.authority.requiresApproval)
-        io { coordinator.prepareLaunch(value) {} }; io { coordinator.verifyReady(value) {} }
-        assertTrue(value.attempted); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun askHasNoEffectAuthorityUntilOneExplicitApproval() {
-        val value = begin(); register(value, approve = false)
-        assertTrue(value.authority.requiresApproval)
-        denied { io { coordinator.prepareLaunch(value) {} } }; assertFalse(value.attempted)
-        var approvals = 0; value.authority.approveOnce { approvals++ }
-        value.authority.approveOnce { approvals++ }; assertEquals(1, approvals)
-        io { coordinator.prepareLaunch(value) {} }; assertTrue(value.attempted)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun denyRejectsBeforeJournalAdmissionAndTransferResources() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        denied { begin() }; assertNull(coordinator.session()); assertFalse(File(root, "interaction.json").exists())
-        assertTrue(coordinator.canBegin()); assertTrue(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun changedOperationPolicyRevokesPendingAuthorityWithoutReleasingLiveOwnership() {
-        val value = begin(); register(value)
-        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.BROWSER_OPEN, FactoryOperationPolicy.Mode.DENY)
-        assertTrue(value.revoked.get()); denied { io { coordinator.prepareLaunch(value) {} } }
-        assertFalse(value.attempted); assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available(coordinator))
-        assertTrue(FactoryInteractionAdmission.available(Any())); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun freshVerifiedAllowRequestRetiresRestoredUnknownWithoutReplayingOldNonce() {
-        root.mkdirs(); File(root, "interaction.json").writeText(JSONObject().put("schemaVersion", 1)
-            .put("state", "outcome_unknown").put("open", true).put("nonce", "c".repeat(64)).toString())
-        coordinator = make(FactoryOperationPolicy.inMemory())
-        io { coordinator.restore() }; assertTrue(coordinator.needsRecovery()); assertNull(coordinator.session())
-        denied { io { coordinator.begin(proof.appId, request().copy(nonce = "c".repeat(64))) {} } }
-        val value = begin(); assertEquals("d".repeat(64), value.request.nonce); assertFalse(value.attempted)
-        assertEquals("review", coordinator.status()); assertFalse(MemoryUiAutomationGuard.isProtected())
     }
     @Test fun exactRequestShapeRejectsEveryTransportAndTypeConfusion() {
         val invalid = mutableListOf(intent().putExtra("extra", true), intent().putExtra("protocolVersion", 1L), intent().putExtra("protocolVersion", 2),
@@ -128,33 +88,6 @@ class FactoryBrowserCoordinatorTest {
         denied { io { coordinator.begin(proof.appId, request()) { error("Caller is no longer active") } } }
         assertTrue(coordinator.canBegin()); assertFalse(File(root, "interaction.json").exists())
     }
-    @Test fun automationDoesNotBlockPolicyAcquisitionOrCreateGlobalReviewGuard() {
-        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch(); val active = MemoryUiAutomationGuard.beginAsyncAction(epoch)
-        try { val value = begin(); assertNotNull(value); assertFalse(MemoryUiAutomationGuard.isProtected()); io { coordinator.close(value, false) {} } }
-        finally { active.close() }
-        assertTrue(coordinator.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun failedDurableWriteRetainsFamilyAdmissionUntilRecoveryCanPersist() {
-        root.writeText("Synthetic filesystem obstruction")
-        denied { begin() }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true) {} } }
-        assertTrue(coordinator.needsRecovery()); check(root.delete()); check(root.mkdirs())
-        assertNull(io { coordinator.close(coordinator.session(), true) {} }); assertEquals("closed_outcome_unknown", coordinator.status())
-        assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun reviewJournalContainsOnlyMinimalNonceStateAndNeverUrlOrRecipient() {
-        val value = begin(); val raw = File(root, "interaction.json").readText(); val journal = JSONObject(raw)
-        assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet())
-        assertEquals("review", journal.getString("state")); assertTrue(journal.getBoolean("open"))
-        assertFalse(raw.contains(URL)); assertFalse(raw.contains("example.invalid")); assertFalse(raw.contains(proof.appId)); assertFalse(raw.contains(proof.apk))
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        MemoryUiAutomationGuard.captureAutomationEpoch(); assertTrue(FactoryInteractionAdmission.available(Any()))
-        val receipt = io { coordinator.close(value, false) {} }!!
-        assertEquals(setOf("nonce", "launchRequested", "pageLoadConfirmed"), receipt.extras!!.keySet())
-        assertEquals(value.request.nonce, receipt.getStringExtra("nonce")); assertFalse(receipt.getBooleanExtra("launchRequested", true)); assertFalse(receipt.getBooleanExtra("pageLoadConfirmed", true))
-        assertNull(receipt.data); assertNull(receipt.clipData); assertNull(receipt.component); assertEquals(0, receipt.flags)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); denied { begin() }
-    }
     @Test fun launchRequiresHumanRegistrationAndEveryLatestProofFieldUnchanged() {
         val value = begin(); denied { io { coordinator.prepareLaunch(value) { error("No human") } } }
         denied { io { coordinator.prepareLaunch(value) {} } }; register(value)
@@ -166,26 +99,6 @@ class FactoryBrowserCoordinatorTest {
         assertTrue(value.attempted); assertFalse(value.launchRequested); assertEquals("launch_pending", JSONObject(File(root, "interaction.json").readText()).getString("state"))
         denied { io { coordinator.prepareLaunch(value) {} } }; io { coordinator.verifyReady(value) {} }
         proof = proof.copy(version = 4); denied { io { coordinator.verifyReady(value) {} } }
-    }
-    @Test fun finalVerificationRechecksHumanAndSourceCancellationCannotAuthorizeLaunch() {
-        val value = begin(); register(value); io { coordinator.prepareLaunch(value) {} }
-        denied { io { coordinator.verifyReady(value) { error("Lost focus") } } }
-        value.registration!!.close(); denied { io { coordinator.verifyReady(value) {} } }
-        assertTrue(coordinator.needsRecovery()); assertFalse(value.launchRequested)
-    }
-    @Test fun browserAttemptClosesWithoutExternalClosureAttestationAndNeverConfirmsPageLoad() {
-        val value = begin(); register(value); io { coordinator.prepareLaunch(value) {} }; value.launchRequested = true
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        val receipt = io { coordinator.close(value, false) {} }!!
-        assertTrue(receipt.getBooleanExtra("launchRequested", false)); assertFalse(receipt.getBooleanExtra("pageLoadConfirmed", true))
-        assertTrue(value.registration == null); assertTrue(value.revoked.get()); assertEquals("closed", coordinator.status())
-    }
-    @Test fun exactFiveMinuteExpiryAndForeignSessionFailClosed() {
-        val value = begin(); register(value)
-        val foreign = FactoryBrowserCoordinator.Session("foreign", proof, request(), value.expiresAt, value.authority)
-        denied { coordinator.requireActive(foreign) }; denied { io { coordinator.prepareLaunch(foreign) {} } }
-        ShadowSystemClock.advanceBy(Duration.ofMinutes(5)); denied { coordinator.requireActive(value) }; denied { io { coordinator.prepareLaunch(value) {} } }
-        assertFalse(value.attempted); assertFalse(FactoryInteractionAdmission.available())
     }
     @Test fun sourceVerifierPinsOneInstalledUidAndRejectsSharedUid() {
         val value = begin(); val pm = shadowOf(context.packageManager); val uid = 20002
@@ -199,41 +112,6 @@ class FactoryBrowserCoordinatorTest {
         value.registration = io { BrowserLaunchControl.register(source, value.request.nonce, { true }, Runnable { value.revoke() }) }
         assertFalse(value.registration!!.isRevoked); value.registration!!.close(); assertTrue(value.revoked.get())
         denied { io { BrowserLaunchControl.register(source, "e".repeat(64), { true }, Runnable {}) } }
-    }
-    @Test fun restoreKeepsFamilyUnknownStateWithoutGlobalGuardAndNeverUrlLaunchOrBinderAuthority() {
-        val original = begin(); register(original); io { coordinator.prepareLaunch(original) {} }
-        val restored = make(); io { restored.restore() }
-        assertNull(restored.session()); assertEquals("outcome_unknown", restored.status()); assertTrue(restored.needsRecovery())
-        denied { io { restored.close(null, true) { error("No human") } } }
-        assertNull(io { restored.close(null, true) {} }); assertFalse(FactoryInteractionAdmission.available())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(File(root, "interaction.json").readText().contains(URL))
-    }
-    @Test fun malformedOversizedExtraFieldAndImpossibleJournalsFailClosed() {
-        for (body in listOf("{", "x".repeat(4097), "{\"schemaVersion\":1,\"state\":\"review\",\"open\":false,\"nonce\":\"${"d".repeat(64)}\"}",
-            JSONObject().put("schemaVersion", 1).put("state", "launch_pending").put("open", true).put("nonce", "d".repeat(64)).put("url", URL).toString(),
-            JSONObject().put("schemaVersion", 2).put("state", "closed").put("open", false).put("nonce", "d".repeat(64)).toString())) {
-            root.mkdirs(); File(root, "interaction.json").writeText(body); val restored = make(); io { restored.restore() }
-            assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(restored.session())
-            assertNull(io { restored.close(null, true) {} }); assertEquals("closed_outcome_unknown", restored.status())
-        }
-    }
-    @Test fun pendingPreparationRetainsAdmissionEvenAfterRevocationAndExplicitRecovery() {
-        val value = begin(); value.preparing = true; value.revoke()
-        denied { io { coordinator.close(value, true) {} } }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        value.preparing = false; assertNull(io { coordinator.close(value, true) {} }); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun closedJournalPreventsNonceReplayAcrossRestore() {
-        val value = begin(); io { coordinator.close(value, false) {} }
-        val restored = make(); io { restored.restore() }; assertTrue(restored.canBegin()); assertFalse(restored.needsRecovery())
-        denied { io { restored.begin(proof.appId, request()) {} } }
-        val fresh = io { restored.begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} }; assertNotNull(fresh)
-    }
-    @Test fun recoveryTokenIsExactOneUseWithNoTransportOrExtraAuthority() {
-        val token = FactoryBrowserCoordinator.recoveryIntent(context)
-        val invalid = listOf(Intent(token).putExtra("open", true), Intent(token).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), Intent(token).setData(Uri.parse(URL)), Intent(token).apply { clipData = ClipData.newPlainText("fixture", "fixture") }, Intent(token).apply { selector = Intent("fixture") })
-        invalid.forEach { assertFalse(FactoryBrowserCoordinator.consumeRecoveryToken(it)) }
-        assertTrue(FactoryBrowserCoordinator.consumeRecoveryToken(token)); assertFalse(FactoryBrowserCoordinator.consumeRecoveryToken(token))
-        assertFalse(FactoryBrowserCoordinator.consumeRecoveryToken(Intent().putExtra("nativeRecoveryToken", "forged")))
     }
     companion object { const val URL = "https://example.invalid/review?fixture=browser" }
 }

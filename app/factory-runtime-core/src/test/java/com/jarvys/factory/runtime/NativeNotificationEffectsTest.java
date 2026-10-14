@@ -13,7 +13,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 import org.robolectric.util.ReflectionHelpers;
-import static com.jarvys.factory.runtime.NativePermissionSessionsTest.idle;
+import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static com.jarvys.factory.runtime.NotificationScheduleEngine.*;
 import static org.junit.Assert.*;
 
@@ -22,14 +22,14 @@ import static org.junit.Assert.*;
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class NativeNotificationEffectsTest {
-    private NativePermissionSessionsTest.Fixture fixture;
+    private NativeOperationSessionsTest.Fixture fixture;
     private FactoryConfig config;
     private NativeEffects effects;
     private Adapter adapter;
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativePermissionSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture();
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"notifications\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
                         .put("packageName", fixture.config.documentBroker.packageName)
@@ -43,7 +43,7 @@ public class NativeNotificationEffectsTest {
     @Test public void scheduleBindsOneCompleteImmutableGrantWithoutUi() throws Exception {
         JSONObject args = schedule(); BridgeProtocol.Request request = request("notifications.schedule", args);
         Result result = new Result(); effects.perform(request, result);
-        NativePermissionSessions.Lease lease = lease();
+        NativeOperationSessions.Lease lease = lease();
         assertEquals("notifications.schedule", lease.request.operation);
         String bound = lease.request.canonicalJson();
         request.args.getJSONObject("notification").getJSONArray("actions").getJSONObject(0).getJSONObject("data").put("route", "changed");
@@ -57,7 +57,7 @@ public class NativeNotificationEffectsTest {
 
     @Test public void showDisclosesActionsUsingTheExistingShowGrantOnly() throws Exception {
         Result result = perform("notifications.show", notification());
-        NativePermissionSessions.Lease lease = lease();
+        NativeOperationSessions.Lease lease = lease();
         assertEquals("notifications.show", lease.request.operation);
         assertEquals("details", lease.request.details().getJSONArray("actions").getJSONObject(0).getString("id"));
         fixture.pump();
@@ -70,7 +70,7 @@ public class NativeNotificationEffectsTest {
         Result result = perform("notifications.resumeScheduled", new JSONObject().put("scheduleId", adapter.original.scheduleId));
         assertTrue(fixture.provider.issued.isEmpty());
         fixture.io.runNext(); idle(); // Read-only original request lookup, then foreground authorization.
-        NativePermissionSessions.Lease lease = lease();
+        NativeOperationSessions.Lease lease = lease();
         assertEquals("notifications.schedule", lease.request.operation);
         assertEquals(adapter.original.request.fingerprint(), NotificationScheduleRequest.parseSchedule(lease.request.details()).fingerprint());
         fixture.pump();
@@ -78,16 +78,16 @@ public class NativeNotificationEffectsTest {
         assertEquals(1, fixture.provider.issued.size()); assertEquals(1, result.successes);
     }
 
-    @Test public void resumeCannotBypassScheduleDenial() throws Exception {
-        adapter.original = original(); fixture.provider.deny = true;
+    @Test public void resumeRequiresAuthenticatedHostSession() throws Exception {
+        adapter.original = original(); fixture.provider.unavailable = true;
         Result result = perform("notifications.resumeScheduled", new JSONObject().put("scheduleId", adapter.original.scheduleId));
         fixture.pump();
-        assertEquals(1, adapter.reads); assertEquals(0, adapter.schedules); assertEquals("PERMISSION_DENIED", result.error);
+        assertEquals(1, adapter.reads); assertEquals(0, adapter.schedules); assertEquals("UNAVAILABLE", result.error);
         assertTrue(fixture.provider.issued.isEmpty()); assertEquals(0, result.claims); assertTrue(jobs().isEmpty());
     }
 
-    @Test public void statusCleanupAndInboxRemainUsableWithoutPolicyGrant() throws Exception {
-        fixture.provider.deny = true;
+    @Test public void statusCleanupAndInboxRemainUsableWithoutExternalHostSession() throws Exception {
+        fixture.provider.unavailable = true;
         Result[] results = {
                 perform("notifications.cancel", new JSONObject().put("id", 7)),
                 perform("notifications.scheduleStatus", new JSONObject().put("scheduleId", "reminder")),
@@ -146,17 +146,17 @@ public class NativeNotificationEffectsTest {
         Row row = original(); AtomicInteger checks = new AtomicInteger();
         Authority authority = NotificationEffects.foregroundAuthority(row.request, row, row.source, checks::incrementAndGet);
         Session session = new Session(FactoryNotificationServices.CLOCK, 300_000);
-        Decision decision = authority.acquire(row, row.source, Mode.FOREGROUND_REVIEW, session);
+        Decision decision = authority.acquire(row, row.source, Mode.FOREGROUND, session);
         decision.lease.check(); decision.close();
-        assertEquals(2, checks.get()); // Borrowed grant is live-checked; closing it does not end caller ownership.
+        assertEquals(2, checks.get()); // Borrowed session is live-checked; closing it does not end caller ownership.
         assertThrows(SecurityException.class, () -> authority.acquire(row, row.source, Mode.BACKGROUND_NO_UI, session));
         Row otherGeneration = new Row(row.source, row.request, token('9'), row.state, 1, "test", "", "", 1, 1);
-        assertThrows(SecurityException.class, () -> authority.acquire(otherGeneration, row.source, Mode.FOREGROUND_REVIEW, session));
+        assertThrows(SecurityException.class, () -> authority.acquire(otherGeneration, row.source, Mode.FOREGROUND, session));
         Source otherSource = source(token('8'));
-        assertThrows(SecurityException.class, () -> authority.acquire(row, otherSource, Mode.FOREGROUND_REVIEW, session));
+        assertThrows(SecurityException.class, () -> authority.acquire(row, otherSource, Mode.FOREGROUND, session));
         NotificationScheduleRequest.Schedule changed = NotificationScheduleRequest.parseSchedule(schedule().put("scheduleId", "another"));
         Row otherPayload = new Row(row.source, changed, row.token, row.state, 1, "test", "", "", 1, 1);
-        assertThrows(SecurityException.class, () -> authority.acquire(otherPayload, row.source, Mode.FOREGROUND_REVIEW, session));
+        assertThrows(SecurityException.class, () -> authority.acquire(otherPayload, row.source, Mode.FOREGROUND, session));
         session.invalidate(); assertThrows(SecurityException.class, decision.lease::check);
     }
 
@@ -171,13 +171,13 @@ public class NativeNotificationEffectsTest {
     }
     private Row original() throws Exception {
         return new Row(source(token('3')), NotificationScheduleRequest.parseSchedule(schedule()), token('4'),
-                NotificationScheduleMachine.State.QUEUED_APPROVAL, 1, "foreground_review_required", "", "", 1, 1);
+                NotificationScheduleMachine.State.QUEUED_SESSION_UNAVAILABLE, 1, "authenticated_host_unavailable", "", "", 1, 1);
     }
     private Source source(String apk) { return new Source(config.appId, token('1'), apk, token('2'), 1, true, true, true, new Limits(8, 8, 32, 131072)); }
     private static String token(char value) { return new String(new char[64]).replace('\0', value); }
     private Map<?, ?> jobs() { return ReflectionHelpers.getField(effects, "jobs"); }
     private Object job() { assertEquals(1, jobs().size()); return jobs().values().iterator().next(); }
-    private NativePermissionSessions.Lease lease() { return ReflectionHelpers.getField(job(), "lease"); }
+    private NativeOperationSessions.Lease lease() { return ReflectionHelpers.getField(job(), "lease"); }
     private Result perform(String method, JSONObject args) throws Exception { Result result = new Result(); effects.perform(request(method, args), result); return result; }
     private BridgeProtocol.Request request(String method, JSONObject args) throws Exception {
         return BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, new JSONObject().put("v", 1).put("id", "notification_" + ++sequence)

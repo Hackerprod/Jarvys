@@ -34,7 +34,7 @@ public final class NativeScheduledNotifications implements Platform {
         org.json.JSONObject result=immediate.status(channelId);
         try { return result.put("schedulerAvailable",source.schedulingCapability&&alarms()!=null).put("exactAlarmCapabilityDeclared",source.exactCapability)
                 .put("exactAlarmAccess",!source.exactCapability?"not_declared":Build.VERSION.SDK_INT<31?"not_required":exactAvailable()?"granted":"not_granted")
-                .put("backgroundApprovalUi",false).put("defaultPrecision","inexact"); }
+                .put("defaultPrecision","inexact"); }
         catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
     }
     /** Genuine foreground special-access screen; caller must reread status in onResume. */

@@ -9,6 +9,11 @@ internal object FactoryInteractionAdmission {
     @Synchronized fun available() = owners.isEmpty()
     @Synchronized fun available(owner: Any) = !owners.contains(owner)
     @Synchronized fun acquire(owner: Any) { check(!owners.contains(owner)) { "This Factory interaction already owns its resource slot" }; owners.add(owner) }
+    @Synchronized fun acquireOrKeep(owner: Any) {
+        if (owners.contains(owner)) return
+        check(owners.isEmpty()) { "Another Factory interaction is active" }
+        owners.add(owner)
+    }
     @Synchronized fun restore(owner: Any) { owners.add(owner) }
     @Synchronized fun release(owner: Any) { owners.remove(owner) }
 }

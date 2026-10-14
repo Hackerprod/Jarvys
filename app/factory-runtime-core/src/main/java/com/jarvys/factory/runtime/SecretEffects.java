@@ -26,8 +26,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Installed-app secret effects. Policy is decided by the caller exactly once per Prepared input.
- * This adapter never asks for another approval or transports values to the policy host.
+ * Installed-app secret effects. Each Prepared input remains bound to its authenticated caller session.
+ * This adapter does not request another approval or transport values through the host.
  * Native capture is optional input UI; put/get deliberately allow authorized programmatic values.
  */
 public final class SecretEffects implements AutoCloseable {
@@ -44,7 +44,7 @@ public final class SecretEffects implements AutoCloseable {
     interface SecretsFactory { NativeSecrets open() throws FactoryException; }
     private interface Work { Object run(Pending pending) throws Exception; }
 
-    /** Owns a single immutable parse through policy review and execution. Close on denied admission. */
+    /** Owns a single immutable parse through execution. Close it when admission fails. */
     public static final class Prepared implements AutoCloseable {
         public final String method;
         private final SecretRequest.Put put;

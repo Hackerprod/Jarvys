@@ -1,12 +1,7 @@
 <resources>
   <string name="factory_file_sharing_title">Factory file sharing</string>
-  <string name="factory_file_sharing_settings_summary">Review and close interrupted file sharing</string>
-  <string name="factory_file_sharing_disclosure">Your saved Factory policy controls this share. Only a verified private copy, up to 8 MiB, is shared. Choose a recipient in Android’s chooser. New read access lasts up to five minutes and can be revoked in Factory permissions. Recipient copies and already-open streams cannot be recalled. Jarvys never confirms delivery.</string>
-  <string name="factory_file_sharing_checking">Checking the requesting app and complete file. No sharing has been authorized.</string>
-  <string name="factory_file_sharing_choose">Choose who receives this file</string>
+  <string name="factory_file_sharing_disclosure">A verified private copy is shared with the recipient selected in Android’s chooser. Android grants temporary read access. Jarvys cannot recall copies or streams already opened and does not confirm delivery.</string>
+  <string name="factory_file_sharing_checking">Checking the requesting app and complete file.</string>
   <string name="factory_file_sharing_close">Cancel / close</string>
-  <string name="factory_file_sharing_acknowledge">Clear interrupted sharing</string>
-  <string name="factory_file_sharing_waiting">The recipient may still be reading after the chooser returns. The temporary read lease expires automatically. No delivery or recipient closure is confirmed.</string>
-  <string name="factory_file_sharing_unknown">This interaction was interrupted. Its outcome is unknown and it will not be replayed. Clear the interrupted operation to revoke new access and remove its private copy. Copies and already-open streams cannot be recalled.</string>
-  <string name="factory_file_sharing_rejected">This request is unavailable, expired or revoked. No delivery is confirmed. Review interrupted sharing here if needed.</string>
+  <string name="factory_file_sharing_rejected">This request is unavailable, expired or revoked. No delivery is confirmed.</string>
 </resources>

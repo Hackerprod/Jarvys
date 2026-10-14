@@ -2,8 +2,6 @@ package com.jarvys.agent
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalSummary
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
@@ -38,27 +36,20 @@ class BotMascotToolTest {
     }
     private val repository by lazy { CrewProfileRepository(temporary.root) }
     private val store by lazy { BotMascotStoreTestSupport.store(temporary.root) }
-    private var approvals=0
-    private var decision=ApprovalDecision.APPROVED
-    private var approvalEffect:((CancellationToken)->Unit)?=null
-    private val summaries=mutableListOf<ApprovalSummary>()
     private fun source(name:String="nimbo")=requireNotNull(javaClass.getResourceAsStream("/bot-mascot-scenes/$name.json")).bufferedReader().use { it.readText() }
-    private fun service(session:String="mascot-main")=BotMascotService(repository,store,session,{ summary,token ->
-        approvals++;summaries+=summary;approvalEffect?.invoke(token);decision
-    }, NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK))
+    private fun service(session:String="mascot-main")=BotMascotService(repository,store,session)
     private fun bot()=repository.create(CrewProfile("custom-mascot-tool",1,"Cloud","Custom helper","Follow the requested objective.",emptyList(),listOf("board_read")),listOf("board_read"),emptyList())
     private fun args(id:String="custom-mascot-tool",revision:Int=1,request:String="mascot-1",design:String="nimbo")=linkedMapOf<String,Any>(
         "request_id" to request,"bot_id" to id,"expected_revision" to revision,"visual_description" to "An original floating cloud with expressive dew drops and distinct state poses.","scene_json" to source(design))
     private fun createArgs()=linkedMapOf<String,Any>("request_id" to "create-mascot","name" to "Cloud","description" to "Custom helper",
         "instructions" to "Follow the user objective and explain evidence in English.","capabilities" to listOf("board_read"),"skill_ids" to emptyList<String>(),
         "workspace_mode" to "legacy_chat","icon_prompt" to "A friendly original cloud","visual_description" to "A cloud with moving droplets and distinct calm state poses.","mascot_scene_json" to source())
-    private fun creator(failMascot:Boolean=false)=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},
-        { summary,token->approvals++;summaries+=summary;approvalEffect?.invoke(token);decision },{false},
-        { _,_,_,_,_->throw AssertionError("No image service should run") },
-        { id,revision,request,description,scene,token,authorization->
+    private fun creator(failMascot:Boolean=false)=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},{false},
+        { _,_,_,_->throw AssertionError("No image service should run") },
+        { id,revision,request,description,scene,token->
             if(failMascot)throw IllegalStateException("private failure")
-            service().assign(id,revision,request,description,scene,token,false,authorization).definition
-        }, NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK)))
+            service().assign(id,revision,request,description,scene,token).definition
+        }))
 
     @Test fun compilesOriginalSourceLocallyAndPersistsHonestIndependentVisualMetadata() {
         val original=bot();val result=BotMascotTool(service()).execute(args(),CancellationToken.uncancellable())
@@ -69,13 +60,12 @@ class BotMascotToolTest {
         assertEquals(2,saved.revision);assertNotNull(saved.mascot)
         val bytes=store.read(saved.id,saved.mascot)
         assertArrayEquals(source().toByteArray(Charsets.UTF_8),bytes.source());assertArrayEquals(BotMascotSceneCompiler.compileProduct(source()).bytes,bytes.riv())
-        assertEquals(1,approvals);assertFalse(summaries.single().allowAlwaysAvailable)
     }
     @Test fun durableRetryDoesNotApproveOrAssignAgainEvenAfterLaterIconEdit() {
         bot();val tool=BotMascotTool(service());assertTrue(tool.execute(args(),CancellationToken.uncancellable()).success)
         val assigned=repository.definition("custom-mascot-tool");repository.setIcon(assigned.id,assigned.revision,"12345678-1234-1234-1234-123456789abc.png")
         val result=JSONObject(tool.execute(args(),CancellationToken.uncancellable()).content)
-        assertTrue(result.getBoolean("already_existed"));assertEquals(3,result.getInt("revision"));assertEquals(2,result.getInt("assigned_revision"));assertEquals(1,approvals)
+        assertTrue(result.getBoolean("already_existed"));assertEquals(3,result.getInt("revision"));assertEquals(2,result.getInt("assigned_revision"))
         assertEquals(1,repository.definition(assigned.id).mascotReceipts.size)
     }
     @Test fun reusedOperationWithChangedSourceOrDescriptionCannotOverwrite() {
@@ -83,30 +73,32 @@ class BotMascotToolTest {
         val first=repository.definition("custom-mascot-tool").mascot
         assertFalse(tool.execute(args(revision=2,design="folio"),CancellationToken.uncancellable()).success)
         assertFalse(tool.execute(args(revision=2)+("visual_description" to "Changed design request"),CancellationToken.uncancellable()).success)
-        assertEquals(first,repository.definition("custom-mascot-tool").mascot);assertEquals(1,approvals)
+        assertEquals(first,repository.definition("custom-mascot-tool").mascot)
     }
     @Test fun staleRevisionAndBuiltInOrDisabledBotDoNotCompileOrApproveAssignment() {
         val original=bot();repository.setEnabled(original.id,original.revision,false);val tool=BotMascotTool(service())
         assertFalse(tool.execute(args(),CancellationToken.uncancellable()).success)
-        assertFalse(tool.execute(args(id="coding"),CancellationToken.uncancellable()).success);assertEquals(0,approvals)
+        assertFalse(tool.execute(args(id="coding"),CancellationToken.uncancellable()).success)
     }
-    @Test fun deniedOrCancelledReviewNeverChangesVisual() {
-        bot();decision=ApprovalDecision.DENIED;assertFalse(BotMascotTool(service()).execute(args(),CancellationToken.uncancellable()).success)
-        assertNull(repository.definition("custom-mascot-tool").mascot)
-        decision=ApprovalDecision.APPROVED;approvalEffect={it.cancel()}
-        assertThrows(CancellationException::class.java){BotMascotTool(service()).execute(args(),CancellationToken.cancellable())}
+    @Test fun cancellationBeforeCompilationLeavesVisualUnchanged() {
+        bot();val token=CancellationToken.cancellable().also { it.cancel() }
+        assertThrows(CancellationException::class.java){BotMascotTool(service()).execute(args(),token)}
         assertNull(repository.definition("custom-mascot-tool").mascot)
     }
-    @Test fun concurrentEditDuringReviewWinsAndNoOrphanPackageIsPublished() {
-        val original=bot();approvalEffect={repository.setIcon(original.id,1,"12345678-1234-1234-1234-123456789abc.png")}
-        assertFalse(BotMascotTool(service()).execute(args(),CancellationToken.uncancellable()).success)
+    @Test fun concurrentEditDuringCompilationWinsAndNoOrphanPackageIsPublished() {
+        val original=bot()
+        val editingStore=BotMascotStoreTestSupport.store(temporary.root, {
+            repository.setIcon(original.id,1,"12345678-1234-1234-1234-123456789abc.png")
+            java.util.UUID.randomUUID().toString()
+        }, BotMascotStore.MAX_TOTAL_BYTES, BotMascotStore.MAX_TOTAL_PACKAGES)
+        assertFalse(BotMascotTool(BotMascotService(repository,editingStore,"mascot-main")).execute(args(),CancellationToken.uncancellable()).success)
         val saved=repository.definition(original.id);assertEquals(2,saved.revision);assertNull(saved.mascot);assertTrue(saved.iconRef.isNotEmpty())
     }
     @Test fun rejectsLegacySceneUnknownArgumentsAndNonintegralRevision() {
         bot();val tool=BotMascotTool(service())
         for(invalid in listOf(args()+("scene_json" to source("miga")),args()+("path" to "/untrusted"),args()+("expected_revision" to 1.5),args()+("visual_description" to "line\nbreak")))
             assertFalse(tool.execute(invalid,CancellationToken.uncancellable()).success)
-        assertEquals(0,approvals);assertNull(repository.definition("custom-mascot-tool").mascot)
+        assertNull(repository.definition("custom-mascot-tool").mascot)
     }
     @Test fun scopeIsMainChatOnlyWithoutImageAccessOrDelegationAuthority() {
         val tool=BotMascotTool(service());assertFalse(tool.canDelegate());assertFalse(tool.execute(args(),CancellationToken.crewChild()).success)
@@ -114,7 +106,7 @@ class BotMascotToolTest {
         assertTrue(CoreToolRegistry(listOf(tool)).forDelegatedAgent().names().isEmpty())
         assertTrue(CoreAgentRuntime.crewBotCapabilityScope(CoreToolRegistry(listOf(tool))).names().isEmpty());assertTrue(CrewManager.isCaptainOnly(BotMascotTool.NAME))
         val context=ApplicationProvider.getApplicationContext<Context>();assertTrue(CoreAgentRuntime(context,"main",emptyList()).createTools().names().contains(BotMascotTool.NAME))
-        assertFalse(CoreAgentRuntime.profileCapabilities(context,"main").contains(BotMascotTool.NAME));assertEquals(0,approvals)
+        assertFalse(CoreAgentRuntime.profileCapabilities(context,"main").contains(BotMascotTool.NAME))
     }
     @Test fun auditResultAndCatalogOmitSourceDescriptionAndPrivatePaths() {
         bot();val tool=BotMascotTool(service());val result=tool.execute(args(),CancellationToken.uncancellable());assertTrue(result.success)
@@ -122,11 +114,11 @@ class BotMascotToolTest {
         for(text in listOf(result.content,catalog.content,tool.auditDetail(args()))){assertFalse(text.contains(source()));assertFalse(text.contains(args()["visual_description"] as String));assertFalse(text.contains("bot_mascots"));assertFalse(text.contains("source.json"))}
         assertTrue(catalog.content.contains("LOCAL_COMPILED"));assertFalse(catalog.content.contains("Follow the requested objective"))
     }
-    @Test fun createBotSharesExactCombinedAskWithoutImageAccess() {
+    @Test fun createBotCreatesMascotDirectlyWithoutImageAccess() {
         val result=creator().execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.content,result.success)
-        val value=JSONObject(result.content);assertTrue(value.getBoolean("saved"));assertTrue(value.getBoolean("mascot_compiled"));assertFalse(value.getBoolean("icon_complete"));assertEquals(1,approvals)
+        val value=JSONObject(result.content);assertTrue(value.getBoolean("saved"));assertTrue(value.getBoolean("mascot_compiled"));assertFalse(value.getBoolean("icon_complete"))
         val saved=repository.definition(value.getString("bot_id"));assertNotNull(saved.mascot);assertEquals(1,saved.profile.version);assertEquals(2,saved.revision)
-        val retry=JSONObject(creator().execute(createArgs(),CancellationToken.uncancellable()).content);assertTrue(retry.getBoolean("already_existed"));assertEquals(1,approvals);assertEquals(1,repository.definitions().count{!it.builtIn})
+        val retry=JSONObject(creator().execute(createArgs(),CancellationToken.uncancellable()).content);assertTrue(retry.getBoolean("already_existed"));assertEquals(1,repository.definitions().count{!it.builtIn})
     }
     @Test fun creationVisualFailureKeepsSavedBotAndExplicitIncompleteStatus() {
         val result=creator(true).execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.success)
@@ -134,75 +126,27 @@ class BotMascotToolTest {
     }
     @Test fun changedCreationSceneCannotReuseOperationAndInvalidSceneSavesNothing() {
         assertFalse(creator().execute(createArgs()+("mascot_scene_json" to source("miga")),CancellationToken.uncancellable()).success)
-        assertEquals(0,approvals);assertEquals(0,repository.definitions().count{!it.builtIn})
+        assertEquals(0,repository.definitions().count{!it.builtIn})
         assertTrue(creator().execute(createArgs(),CancellationToken.uncancellable()).success)
         assertFalse(creator().execute(createArgs()+("mascot_scene_json" to source("folio")),CancellationToken.uncancellable()).success)
-        assertEquals(1,approvals);assertEquals(1,repository.definitions().count{!it.builtIn})
+        assertEquals(1,repository.definitions().count{!it.builtIn})
     }
-    @Test fun mascotFailureAfterConcurrentEditNeverRebasesTheApprovedIconWrite() {
+    @Test fun mascotFailureAfterConcurrentEditNeverRebasesTheIconWrite() {
         var images=0
-        val tool=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},
-            { _,_->ApprovalDecision.APPROVED },{true},
-            { _,_,_,_,_->images++;throw AssertionError("Concurrent icon must be preserved") },
-            { id,revision,_,_,_,_,_->repository.setIcon(id,revision,"12345678-1234-1234-1234-123456789abc.png");throw IllegalStateException("CAS changed") }))
+        val tool=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},{true},
+            { _,_,_,_->images++;throw AssertionError("Concurrent icon must be preserved") },
+            { id,revision,_,_,_,_->repository.setIcon(id,revision,"12345678-1234-1234-1234-123456789abc.png");throw IllegalStateException("CAS changed") }))
         val result=tool.execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.content,result.success)
         val saved=repository.definitions().single{!it.builtIn};assertEquals(2,saved.revision);assertEquals("12345678-1234-1234-1234-123456789abc.png",saved.iconRef);assertEquals(0,images)
     }
-    @Test fun invalidDescriptionControlsAndSurrogatesFailBeforeApprovalOrDefinitionSave() {
+    @Test fun invalidDescriptionControlsAndSurrogatesFailBeforeDefinitionSave() {
         for(description in listOf("Bad\u0085description","Bad\ud800description")) {
             assertFalse(creator().execute(createArgs()+("visual_description" to description),CancellationToken.uncancellable()).success)
         }
-        assertEquals(0,approvals);assertEquals(0,repository.definitions().count{!it.builtIn})
+        assertEquals(0,repository.definitions().count{!it.builtIn})
         bot()
         for(description in listOf("Bad\u0085description","Bad\ud800description"))
             assertFalse(BotMascotTool(service()).execute(args()+("visual_description" to description),CancellationToken.uncancellable()).success)
-        assertEquals(0,approvals)
-    }
-
-    @Test fun creationUsesBothPoliciesAndOnlyTheRequiredExactCard() {
-        for ((parentMode, childMode, expectedCards) in listOf(
-            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ALLOW, com.jarvys.agent.connectors.AutonomyPolicy.DENY, 0),
-            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ALLOW, com.jarvys.agent.connectors.AutonomyPolicy.ASK, 1),
-            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ASK, com.jarvys.agent.connectors.AutonomyPolicy.ASK, 1),
-        )) {
-            val folder = temporary.newFolder()
-            val repo = CrewProfileRepository(folder)
-            val mascotStore = BotMascotStoreTestSupport.store(folder)
-            val policy = NativeActionPolicy.inMemory()
-            policy.set(NativeActionPolicy.Operation.BOT_CREATE, parentMode)
-            policy.set(NativeActionPolicy.Operation.BOT_MASCOT, childMode)
-            var cards = 0
-            val approve: (ApprovalSummary, CancellationToken) -> ApprovalDecision = { summary, _ ->
-                cards++; assertTrue(summary.lines.any { it.contains(BotMascotService.digest(source())) })
-                ApprovalDecision.APPROVED
-            }
-            val mascot = BotMascotService(repo, mascotStore, "mascot-main", approve, policy)
-            val creation = BotCreationService(repo, "mascot-main", { listOf("board_read") }, { emptyList() }, approve,
-                { false }, { _, _, _, _, _ -> error("No icon request") },
-                { id, revision, request, description, scene, token, link ->
-                    mascot.assign(id, revision, request, description, scene, token, true, link).definition
-                }, policy)
-            val result = creation.create(createArgs(), CancellationToken.uncancellable())
-            assertEquals(expectedCards, cards)
-            if (childMode == com.jarvys.agent.connectors.AutonomyPolicy.DENY) {
-                assertFalse(result.success); assertTrue(repo.definitions().all { it.builtIn })
-            } else {
-                assertTrue(result.content, result.success)
-                assertNotNull(repo.definitions().single { !it.builtIn }.mascot)
-            }
-        }
-    }
-    @Test fun childRevocationDuringPreparationPreventsMascotPublication() {
-        val original = bot()
-        val policy = NativeActionPolicy.inMemory()
-        val revokingStore = BotMascotStoreTestSupport.store(temporary.root, {
-            policy.set(NativeActionPolicy.Operation.BOT_MASCOT, com.jarvys.agent.connectors.AutonomyPolicy.DENY)
-            java.util.UUID.randomUUID().toString()
-        }, BotMascotStore.MAX_TOTAL_BYTES, BotMascotStore.MAX_TOTAL_PACKAGES)
-        val service = BotMascotService(repository, revokingStore, "mascot-main", { _, _ -> error("Default ALLOW") }, policy)
-        assertFalse(BotMascotTool(service).execute(args(), CancellationToken.uncancellable()).success)
-        assertEquals(original.revision, repository.definition(original.id).revision)
-        assertNull(repository.definition(original.id).mascot)
     }
 
 }

@@ -7,8 +7,6 @@ import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.LocalRunStore
 import com.jarvys.agent.ModelReply
-import com.jarvys.agent.NativeActionPolicy
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMessage
@@ -62,7 +60,6 @@ class WorkspaceCoordinatorIntegrationTest {
         context = RuntimeEnvironment.getApplication()
         context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         CrewMode.write(context, CrewMode.AUTO)
-        NativeActionPolicy(context).set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, AutonomyPolicy.ALLOW)
         managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, _ ->
             modelCalls.incrementAndGet()
             done()

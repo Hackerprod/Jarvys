@@ -3,11 +3,9 @@ package com.jarvys.agent.coding
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
-import com.jarvys.agent.apkfactory.FactoryOperationPolicy
 import com.jarvys.agent.apkfactory.FactorySigningScope
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.agent.apkfactory.TemplateApk
-import com.jarvys.agent.connectors.*
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -28,44 +26,43 @@ import java.util.zip.ZipFile
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FactoryProjectServiceTest {
     @get:Rule val folder=TemporaryFolder()
-    private inner class Fixture(val enableEphemeralSigning:Boolean=false, mode:FactoryOperationPolicy.Mode=FactoryOperationPolicy.Mode.ASK) {
+    private inner class Fixture(val enableEphemeralSigning:Boolean=false) {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val scope=ProjectScopeStore(folder.newFolder()).open("factory-${UUID.randomUUID()}")
         val root=scope.rootDirectory()
         @Volatile var active=true
-        var requested=0
-        var lastSummary:ApprovalSummary?=null
         var obtained=0
         var signedRecord:JSONObject?=null
         var ephemeralIdentity:FactorySigningIdentity.Identity?=null
         var identityState=FactorySigningIdentity.State(false,null,0)
-        var decision=ApprovalDecision.DENIED
-        var duringApproval:()->Unit={}
         var afterRecord:()->Unit={}
         var afterObtain:()->Unit={}
+        private val savedByApp=mutableMapOf<String,FactorySigningIdentity.State>()
+        private val identityByApp=mutableMapOf<String,FactorySigningIdentity.Identity>()
         val identities=object:FactorySigningIdentity(context) {
-            override fun state(appId:String)=identityState
-            override fun obtainAfterApproval(appId:String,approvedState:State):Identity {
-                check(approvedState==state(appId))
+            override fun state(appId:String)=savedByApp[appId] ?: FactorySigningIdentity.State(false,null,0)
+            override fun obtain(appId:String,expectedState:State):Identity {
+                check(expectedState==state(appId))
                 obtained++;check(enableEphemeralSigning) { "No real keys are generated in this test" }
-                ephemeralIdentity?.let { return it }
+                identityByApp[appId]?.let { return it }
                 val pair=java.security.KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()
                 val certificate=com.jarvys.agent.apkfactory.EphemeralFactoryCertificate.create(pair.public.encoded){data ->
                     java.security.Signature.getInstance("SHA256withRSA").run{initSign(pair.private);update(data);sign()}
                 }
-                return Identity(pair.private,certificate,ProjectScope.sha256(certificate.encoded)).also{ephemeralIdentity=it; afterObtain()}
+                return Identity(pair.private,certificate,ProjectScope.sha256(certificate.encoded)).also{
+                    ephemeralIdentity=it;identityByApp[appId]=it;afterObtain()
+                }
             }
             override fun recordSigned(appId:String,fingerprint:String,versionCode:Int,apkSha:String,scope:FactorySigningScope?) {
-                check(enableEphemeralSigning);check(fingerprint==ephemeralIdentity!!.fingerprint)
-                check(versionCode>identityState.lastVersion)
+                check(enableEphemeralSigning);check(fingerprint==identityByApp[appId]!!.fingerprint)
+                check(versionCode>state(appId).lastVersion)
                 assertNotNull(scope)
                 identityState=State(true,fingerprint,versionCode,scope,apkSha)
+                savedByApp[appId]=identityState
                 signedRecord=JSONObject().put("appId",appId).put("fingerprint",fingerprint).put("versionCode",versionCode).put("sha256",apkSha)
                 afterRecord()
             }
         }
-        lateinit var gate:ApprovalGate
-        val policy = FactoryOperationPolicy.inMemory(mode)
         val service:FactoryProjectService
         init {
             // Every current export build embeds the real host pin contract; this is a synthetic test certificate only.
@@ -78,21 +75,7 @@ class FactoryProjectServiceTest {
             org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
             // Keep the host-private history shared within this sandbox, including successive signing fixtures.
             // Robolectric supplies a fresh host data directory for each independently simulated installation/test.
-            gate=ApprovalGate(presenter=object:ApprovalPresenter {
-                override fun show(id:String,summary:ApprovalSummary) {
-                    lastSummary=summary;requested++;assertFalse(summary.allowAlwaysAvailable)
-                    if (identityState.mode == FactorySigningIdentity.RECOVERABLE) {
-                        assertTrue(summary.lines.any{it.contains("recoverable signing identity")})
-                        assertTrue(summary.lines.any{it.contains("not independent proof")})
-                    } else {
-                        assertTrue(summary.lines.any{it.contains("non-exportable")})
-                        assertTrue(summary.lines.any{it.contains("uninstalling Jarvys")})
-                    }
-                    duringApproval();gate.resolve(id,decision)
-                }
-                override fun update(id:String,decision:ApprovalDecision)=Unit
-            })
-            service=FactoryProjectService(context,scope,"test",gate,{active},identities,policy)
+            service=FactoryProjectService(context,scope,"test",{active},identities)
             File(root,"web").mkdir()
             File(root,"web/index.html").writeText("<!doctype html><title>Notebook</title><script src='/factory-sdk.js'></script><script src='/www/app.js'></script>")
             File(root,"web/app.js").writeText("document.title='Notebook';")
@@ -102,18 +85,17 @@ class FactoryProjectServiceTest {
         fun spec(id:String,version:Int,capabilities:List<String> = listOf("storage","export")){File(root,"factory.json").writeText(JSONObject().put("schemaVersion",1).put("appId",id).put("name","Mi cuaderno")
             .put("versionCode",version).put("versionName","$version.0").put("capabilities",JSONArray(capabilities))
             .put("webDir","web").put("icon","icon.json").toString())}
-        fun bootstrapSubject() = FactoryOperationPolicy.Subject.bootstrap("org.example.notebook", ProjectScope.sha256(scope.durableIdentity().toByteArray(Charsets.UTF_8)))
+        fun setIdentityState(appId:String,state:FactorySigningIdentity.State){savedByApp[appId]=state;identityState=state}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
 
-    @Test fun defaultAllowSignsWithoutApprovalCardAndPreservesPackagedDex() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+    @Test fun signingCreatesAnAppKeyAutomaticallyAndPreservesPackagedDex() {
+        val f = Fixture(enableEphemeralSigning = true)
         val build = f.build()
         val result = f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        assertEquals(0, f.requested)
-        assertNull(f.lastSummary)
         assertEquals(1, f.obtained)
         assertTrue(result.getBoolean("signed"))
+        assertEquals(1, f.identityState.lastVersion)
         assertTrue(File(f.root, "signed.apk").isFile)
         val expected = TemplateApk.Spec("org.example.notebook", "Mi cuaderno", 1, "1.0", listOf("storage", "export"))
         val unsigned = File(f.root, "notes.apk").readBytes()
@@ -122,107 +104,16 @@ class FactoryProjectServiceTest {
         assertEquals(TemplateApk.verify(unsigned, expected).dexSha256, TemplateApk.verify(signed, expected).dexSha256)
     }
 
-    @Test fun bootstrapDenyRejectsBeforeApprovalKeyCreationOrSignedOutput() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        val build = f.build()
-        f.policy.setMode(f.bootstrapSubject(), FactoryOperationPolicy.Operation.SIGN, FactoryOperationPolicy.Mode.DENY)
-        assertThrows(Exception::class.java) {
-            f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(0, f.requested)
-        assertEquals(0, f.obtained)
-        assertNull(f.signedRecord)
-        assertFalse(File(f.root, "signed.apk").exists())
-        assertTrue(File(f.root, "notes.apk").isFile)
-    }
-
-    @Test fun signedCertificateDenyRejectsBeforeApprovalOrIdentityUse() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        f.identityState = FactorySigningIdentity.State(true, "a".repeat(64), 0)
-        val build = f.build()
-        f.policy.setMode(FactoryOperationPolicy.Subject.signedArtifact("org.example.notebook", "a".repeat(64)),
-            FactoryOperationPolicy.Operation.SIGN, FactoryOperationPolicy.Mode.DENY)
-        assertThrows(Exception::class.java) {
-            f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(0, f.requested)
-        assertEquals(0, f.obtained)
-        assertFalse(File(f.root, "signed.apk").exists())
-    }
-
-    @Test fun policyRevisionDuringAskInvalidatesApprovedDecisionBeforeKeyCreation() {
+    @Test fun cancellationAfterKeyCreationStopsSigningAndPublication() {
         val f = Fixture(enableEphemeralSigning = true)
-        val build = f.build(); f.decision = ApprovalDecision.APPROVED
-        f.duringApproval = { f.policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS) }
-        assertThrows(Exception::class.java) {
-            f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(1, f.requested)
-        assertEquals(0, f.obtained)
-        assertNull(f.signedRecord)
-        assertFalse(File(f.root, "signed.apk").exists())
-    }
-
-    @Test fun stopAfterIdentityCreationPreventsSigningAndPublicationUnderAllow() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
         val build = f.build(); val token = CancellationToken.cancellable()
         f.afterObtain = { token.cancel() }
         assertThrows(Exception::class.java) {
             f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), token)
         }
-        assertEquals(0, f.requested)
         assertEquals(1, f.obtained)
         assertNull(f.signedRecord)
         assertFalse(File(f.root, "signed.apk").exists())
-    }
-
-    @Test fun policyRevocationAfterIdentityCreationPreventsSigningAndPublicationUnderAllow() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        val build = f.build()
-        f.afterObtain = { f.policy.revokeActive() }
-        assertThrows(Exception::class.java) {
-            f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(0, f.requested)
-        assertEquals(1, f.obtained)
-        assertNull(f.signedRecord)
-        assertFalse(File(f.root, "signed.apk").exists())
-    }
-
-    @Test fun policyRevisionAfterVersionReservationPreventsOutputPublication() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        val build = f.build()
-        f.afterRecord = { f.policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY) }
-        assertThrows(Exception::class.java) {
-            f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(0, f.requested)
-        assertEquals(1, f.obtained)
-        assertNotNull(f.signedRecord)
-        assertEquals(1, f.identityState.lastVersion)
-        assertFalse(File(f.root, "signed.apk").exists())
-        val receipt = File(f.context.noBackupFilesDir, "apk-factory/builds/${f.scope.id()}/${f.identityState.lastApkSha256}-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
-        assertEquals("publication_unconfirmed", JSONObject(receipt.readText()).getString("state"))
-    }
-
-    @Test fun explicitBootstrapAskIsPromotedToCertificateForLaterSigning() {
-        val f = Fixture(enableEphemeralSigning = true, mode = FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        f.policy.setMode(f.bootstrapSubject(), FactoryOperationPolicy.Operation.SIGN, FactoryOperationPolicy.Mode.ASK)
-        f.decision = ApprovalDecision.APPROVED
-        val first = f.build("v1.apk")
-        f.service.sign("v1.apk", first.getString("sha256"), "signed-v1.apk", f.scope.version(), CancellationToken.cancellable())
-        val certificate = FactoryOperationPolicy.Subject.signedArtifact("org.example.notebook", f.identityState.fingerprint!!)
-        assertEquals(FactoryOperationPolicy.Mode.ASK, f.policy.overrideMode(certificate, FactoryOperationPolicy.Operation.SIGN))
-        assertEquals(1, f.requested)
-        f.spec("org.example.notebook", 2)
-        val second = f.build("v2.apk")
-        f.decision = ApprovalDecision.DENIED
-        assertThrows(Exception::class.java) {
-            f.service.sign("v2.apk", second.getString("sha256"), "signed-v2.apk", f.scope.version(), CancellationToken.cancellable())
-        }
-        assertEquals(2, f.requested)
-        assertEquals(1, f.obtained)
-        assertFalse(File(f.root, "signed-v2.apk").exists())
     }
 
     @Test fun localUiIsRuntimeOwnedDeterministicAndAvailableInPreviewWithProvenance() {
@@ -283,7 +174,7 @@ class FactoryProjectServiceTest {
                 val manifest = TemplateApk.inspect(File(f.root, "notes.apk").readBytes())
                 assertTrue(manifest.permissions.isEmpty())
                 assertEquals(listOf("com.jarvys.agent", "com.jarvys.agent.recoverytest"), manifest.plan.queries)
-                assertEquals(0, f.requested); assertEquals(0, f.obtained)
+                assertEquals(0, f.obtained)
             } finally {
                 own.signingInfo = originalSigning
                 org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
@@ -318,25 +209,24 @@ class FactoryProjectServiceTest {
                     assertNull(config.documentBroker)
                 }
             }
-            assertEquals(0, f.requested); assertEquals(0, f.obtained)
+            assertEquals(0, f.obtained)
         }
     }
-    @Test fun installationRejectsUnsignedBuildWithoutApprovalOrSession() {
+    @Test fun installationRejectsUnsignedBuildBeforePackageInstallerSession() {
         val f = Fixture(); val built = f.build()
         assertThrows(Exception::class.java) { f.service.installation("install", "notes.apk", built.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
-        assertEquals(0, f.requested); assertEquals(0, f.obtained)
+        assertEquals(0, f.obtained)
     }
-    @Test fun signedInstallationRoutesToHumanReviewOrExplicitPlayLimitation() {
+    @Test fun signedInstallationIsHandedToAndroidPackageInstaller() {
         val install = com.jarvys.agent.apkfactory.InstallTestFixture()
         try {
-            val f = Fixture(true); val built = f.build(); f.decision = ApprovalDecision.APPROVED
+            val f = Fixture(true); val built = f.build()
             val signed = f.service.sign("notes.apk", built.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
             val result = f.service.installation("install", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
             assertEquals(if (com.jarvys.agent.BuildConfig.FLAVOR == "full") "awaiting_user" else "unavailable_in_play", result.getString("state"))
             assertEquals(signed.getString("sha256"), result.getString("apk_sha256"))
             assertEquals(signed.getString("certificate_sha256"), result.getString("certificate_sha256"))
             assertEquals(0, install.backend.creates); assertEquals(0, install.backend.commits)
-            assertEquals(1, f.requested)
             if (com.jarvys.agent.BuildConfig.FLAVOR == "full") {
                 File(f.root, "signed.apk").delete()
                 val status = f.service.installation("install_status", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
@@ -347,21 +237,20 @@ class FactoryProjectServiceTest {
         } finally { install.close() }
     }
     @Test fun installationRechecksProjectScopeAndDoesNotAcceptCopiedSignedPath() {
-        val f = Fixture(true); val built = f.build(); f.decision = ApprovalDecision.APPROVED
+        val f = Fixture(true); val built = f.build()
         val signed = f.service.sign("notes.apk", built.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
         File(f.root, "signed.apk").copyTo(File(f.root, "copy.apk"))
         assertThrows(Exception::class.java) { f.service.installation("install", "copy.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
         assertThrows(Exception::class.java) { f.service.installation("install", "signed.apk", signed.getString("sha256"), 0, CancellationToken.cancellable()) }
         f.active = false
         assertThrows(Exception::class.java) { f.service.installation("install_status", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
-        assertEquals(1, f.requested)
     }
     @Test fun factoryTestBindsActualBuildWithoutKeysWritesOrInstalledClaims() {
         val f=Fixture(); val built=f.build(); val version=f.scope.version()
         val result=f.service.harness("test","notes.apk",built.getString("sha256"),version,CancellationToken.cancellable())
         assertEquals("passed",result.getString("state")); assertEquals("shared_core_test",result.getString("mode"))
         assertEquals(built.getString("sha256"),result.getString("apk_sha256"))
-        assertEquals(version,f.scope.version()); assertEquals(0,f.requested); assertEquals(0,f.obtained)
+        assertEquals(version,f.scope.version()); assertEquals(0,f.obtained)
         assertFalse(result.toString().contains(f.root.absolutePath))
     }
     @Test fun factoryHarnessRejectsHashScopeAndAvailabilityChanges() {
@@ -397,7 +286,7 @@ class FactoryProjectServiceTest {
     }
     @Test fun factoryHarnessRejectsReadDeniedAndForgedReceiptMetadata() {
         val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
-        val denied=FactoryProjectService(f.context,f.scope.restrict(setOf(ProjectScope.Capability.WRITE)),"test",f.gate,{true},f.identities)
+        val denied=FactoryProjectService(f.context,f.scope.restrict(setOf(ProjectScope.Capability.WRITE)),"test",{true},f.identities)
         assertThrows(Exception::class.java) { denied.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
         val file=receiptFile(f,sha); val original=file.readText()
         for (field in listOf("state","projectIdentity","projectId","templateSha256","apkSha256")) {
@@ -408,7 +297,7 @@ class FactoryProjectServiceTest {
         assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
         file.writeText(JSONObject(original).apply { getJSONObject("spec").put("name","Changed") }.toString())
         assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
-        assertEquals(0,f.requested); assertEquals(0,f.obtained)
+        assertEquals(0,f.obtained)
     }
     @Test fun factoryToolRejectsExtraArgumentsMissingBindingsAndNonIntegerVersion() {
         val f=Fixture(); val tool=ApkFactoryTools.Tool(f.service)
@@ -452,20 +341,19 @@ class FactoryProjectServiceTest {
         if(!keepCurrentContract) {receipt.remove("manifestContract");receipt.remove("dexSha256")}
         receiptFile(f,sha).writeText(receipt.toString());return sha
     }
-    @Test fun legacyLayoutAndV1ReceiptReachApprovalWithoutCreatingKeys() {
-        val f=Fixture();val sha=legacyReceipt(f,false)
-        assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
-        assertTrue(f.lastSummary!!.lines.any{it.contains("exact historical manifest")})
-        assertTrue(f.lastSummary!!.lines.any{it=="Decoded Android permissions: none"})
-        assertTrue(f.lastSummary!!.lines.any { it == "Declared data backup tables (SQLite rows only): none; data backup disabled" })
-        assertTrue(f.lastSummary!!.lines.any{it.contains("com.jarvys.factory.runtime.FactoryActivity")})
+    @Test fun legacyLayoutAndV1ReceiptCanBeSignedDirectly() {
+        val f=Fixture(enableEphemeralSigning=true);val sha=legacyReceipt(f,false)
+        val result=f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())
+        assertTrue(result.getBoolean("signed"));assertEquals(1,f.obtained)
         assertEquals(sha,ProjectScope.sha256(File(f.root,"notes.apk").readBytes()))
+        val expected=TemplateApk.Spec("org.example.notebook","Mi cuaderno",1,"1.0",listOf("storage","export"))
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_SAFE_AREA,
+            TemplateApk.verifyExistingV1(File(f.root,"signed.apk").readBytes(),expected).plan.profile)
     }
-    @Test fun approvedCurrentArtifactSignsVerifiesAndPublishesWithEphemeralIdentity() {
+    @Test fun currentArtifactSignsVerifiesAndPublishesWithEphemeralIdentity() {
         successfulSigningPreservesContract(false)
     }
-    @Test fun approvedLegacyReceiptSignsItsExactHistoricalPlanWithEphemeralIdentity() {
+    @Test fun legacyReceiptSignsItsExactHistoricalPlanWithEphemeralIdentity() {
         successfulSigningPreservesContract(true)
     }
     private fun successfulSigningPreservesContract(legacy:Boolean) {
@@ -475,10 +363,9 @@ class FactoryProjectServiceTest {
         if (legacy) ZipFile(File(f.root,"notes.apk")).use { zip ->
             assertFalse(zip.entries().asSequence().any { it.name.startsWith("assets/factory-ui/") })
         }
-        f.decision=ApprovalDecision.APPROVED
         val result=f.service.sign("notes.apk",sha,"signed.apk",version,CancellationToken.cancellable())
         val output=File(f.root,"signed.apk");val signed=output.readBytes()
-        assertTrue(result.getBoolean("signed"));assertEquals(1,f.requested);assertEquals(1,f.obtained)
+        assertTrue(result.getBoolean("signed"));assertEquals(1,f.obtained)
         assertEquals(version+1,f.scope.version());assertEquals(f.scope.version(),result.getLong("scope_version"))
         assertArrayEquals(unsigned,File(f.root,"notes.apk").readBytes())
         TemplateApk.verifyUnchangedPayload(unsigned,signed)
@@ -495,29 +382,24 @@ class FactoryProjectServiceTest {
         assertEquals(signedSha,result.getString("sha256"));assertEquals(signedSha,f.signedRecord!!.getString("sha256"))
         val receipt=File(f.context.noBackupFilesDir,"apk-factory/builds/${f.scope.id()}/$signedSha-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
         assertEquals("published",JSONObject(receipt.readText()).getString("state"))
-        assertEquals(legacy,f.lastSummary!!.lines.any{it.contains("exact historical manifest")})
     }
-    @Test fun signedUpdatesDiscloseExpansionReductionAndUnchangedScope() {
-        val f=Fixture(enableEphemeralSigning=true); f.decision=ApprovalDecision.APPROVED
+    @Test fun signedUpdatesKeepTheSameAppIdentityAndAdvanceVersion() {
+        val f=Fixture(enableEphemeralSigning=true)
         fun signVersion(version:Int,capabilities:List<String>) {
             f.spec("org.example.notebook",version,capabilities)
             val path="v$version.apk";val build=f.build(path)
             f.service.sign(path,build.getString("sha256"),"signed-v$version.apk",f.scope.version(),CancellationToken.cancellable())
         }
         signVersion(1,listOf("storage"))
-        assertTrue(f.lastSummary!!.lines.any{it.contains("First signing")})
         val firstFingerprint=f.identityState.fingerprint
         signVersion(2,listOf("storage","export"))
-        assertTrue(f.lastSummary!!.lines.any{it=="Scope additions (capabilities): export"})
         signVersion(3,listOf("storage"))
-        assertTrue(f.lastSummary!!.lines.any{it=="Scope removals (capabilities): export"})
         signVersion(4,listOf("storage"))
-        assertTrue(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged")})
         assertEquals(firstFingerprint,f.identityState.fingerprint)
         assertEquals(4,f.identityState.lastVersion)
     }
-    @Test fun signedBiometricUpdatesDisclosePermissionAdditionAndRemovalWithTheSameIdentity() {
-        val f = Fixture(enableEphemeralSigning = true); f.decision = ApprovalDecision.APPROVED
+    @Test fun signedBiometricUpdatesKeepTheSameAppIdentityAndManifestPermissions() {
+        val f = Fixture(enableEphemeralSigning = true)
         fun signVersion(version: Int, capabilities: List<String>) {
             f.spec("org.example.notebook", version, capabilities)
             val path = "biometric-v$version.apk"; val build = f.build(path)
@@ -526,60 +408,20 @@ class FactoryProjectServiceTest {
         signVersion(1, listOf("storage"))
         val fingerprint = f.identityState.fingerprint
         signVersion(2, listOf("storage", "biometrics"))
-        assertTrue(f.lastSummary!!.lines.any { it == "Decoded Android permissions: android.permission.USE_BIOMETRIC" })
-        assertTrue(f.lastSummary!!.lines.any { it == "Scope additions (capabilities): biometrics" })
-        assertTrue(f.lastSummary!!.lines.any { it == "Scope additions (permissions): android.permission.USE_BIOMETRIC" })
+        assertTrue(TemplateApk.inspect(File(f.root,"biometric-signed-v2.apk").readBytes()).permissions.contains("android.permission.USE_BIOMETRIC"))
         signVersion(3, listOf("storage"))
-        assertTrue(f.lastSummary!!.lines.any { it == "Decoded Android permissions: none" })
-        assertTrue(f.lastSummary!!.lines.any { it == "Scope removals (capabilities): biometrics" })
-        assertTrue(f.lastSummary!!.lines.any { it == "Scope removals (permissions): android.permission.USE_BIOMETRIC" })
+        assertFalse(TemplateApk.inspect(File(f.root,"biometric-signed-v3.apk").readBytes()).permissions.contains("android.permission.USE_BIOMETRIC"))
         assertEquals(fingerprint, f.identityState.fingerprint)
         assertEquals(3, f.identityState.lastVersion)
     }
-    @Test fun unresolvedRestoredHistoryBlocksBeforeApprovalAndKeyAccess() {
-        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1,
-            mode=FactorySigningIdentity.RECOVERABLE,continuityKnown=false,continuityResolution="restored_unknown")
-        f.spec("org.example.notebook",2); val build=f.build(); val before=f.identityState
-        val error=assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertTrue(error.message!!.contains("history is unresolved")); assertEquals(0,f.requested); assertEquals(0,f.obtained)
-        assertEquals(before,f.identityState); assertFalse(File(f.root,"signed.apk").exists())
-    }
-    @Test fun recoverableApprovalDisclosesUserDeclaredFloorAndDenialPreservesIdentity() {
-        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),5,
-            mode=FactorySigningIdentity.RECOVERABLE,continuityKnown=true,continuityResolution="user_declared_floor")
-        f.spec("org.example.notebook",6); val build=f.build(); val before=f.identityState
-        assertEquals(FactoryOperationPolicy.Mode.ASK, f.policy.mode(
-            FactoryOperationPolicy.Subject.signedArtifact("org.example.notebook", before.fingerprint!!), FactoryOperationPolicy.Operation.SIGN))
-        val failure = assertThrows(IllegalStateException::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals("Signing was not approved. Nothing was signed.", failure.message)
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertEquals(before,f.identityState)
-        assertTrue(f.lastSummary!!.lines.any{it.contains("user_declared_floor; floor 5")})
-        assertFalse(f.lastSummary!!.lines.any{it.contains("Create a new")})
-        assertTrue(f.lastSummary!!.lines.any{it.contains("not proof of restoration")})
-    }
-    @Test fun missingLegacyBaselineDisclosesUnknownAndDenialPreservesState() {
-        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1)
-        f.spec("org.example.notebook",2);val build=f.build();val before=f.identityState
-        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertTrue(f.lastSummary!!.lines.any{it.contains("Scope expansion cannot be determined")})
-        assertFalse(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged") || it.contains("First signing")})
-        assertEquals(before,f.identityState);assertNull(f.signedRecord);assertEquals(0,f.obtained)
-    }
-    @Test fun concurrentScopeRecordChangeCannotReuseApproval() {
-        val f=Fixture(enableEphemeralSigning=true);val build=f.build();f.decision=ApprovalDecision.APPROVED
-        f.duringApproval={f.identityState=f.identityState.copy(recordSha256="changed")}
-        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertNull(f.signedRecord)
-        assertFalse(File(f.root,"signed.apk").exists())
-    }
     @Test fun interruptedPublicationKeepsReservedVersionAndScope() {
-        val f=Fixture(enableEphemeralSigning=true);val build=f.build();f.decision=ApprovalDecision.APPROVED
+        val f=Fixture(enableEphemeralSigning=true);val build=f.build()
         f.afterRecord={File(f.root,"signed.apk").writeText("collision after signature")}
         assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
         assertNotNull(f.identityState.lastScope);assertEquals(1,f.identityState.lastVersion)
         assertNotNull(f.identityState.lastApkSha256)
         assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"retry.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(1,f.requested);assertEquals(1,f.obtained)
+        assertEquals(1,f.obtained)
         val sha=f.identityState.lastApkSha256!!
         val receipt=File(f.context.noBackupFilesDir,"apk-factory/builds/${f.scope.id()}/$sha-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
         assertEquals("publication_unconfirmed",JSONObject(receipt.readText()).getString("state"))
@@ -598,19 +440,19 @@ class FactoryProjectServiceTest {
     @Test fun newlyRecordedContractCannotFallBackToTheLegacyLayout() {
         val f=Fixture();val sha=legacyReceipt(f,true)
         assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(0,f.requested);assertEquals(0,f.obtained)
+        assertEquals(0,f.obtained)
     }
-    @Test fun staleDexInventoryInReceiptFailsBeforeApproval() {
+    @Test fun staleDexInventoryInReceiptFailsBeforeSigning() {
         val f=Fixture();val built=f.build();val sha=built.getString("sha256");val file=receiptFile(f,sha)
         val receipt=JSONObject(file.readText());receipt.getJSONObject("dexSha256").put("classes.dex","0".repeat(64));file.writeText(receipt.toString())
         assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(0,f.requested);assertEquals(0,f.obtained)
+        assertEquals(0,f.obtained)
     }
-    @Test fun cancellationDuringApprovalCannotCreateIdentityOrPublish() {
-        val f=Fixture();val built=f.build();val token=CancellationToken.cancellable();f.decision=ApprovalDecision.APPROVED
-        f.duringApproval={token.cancel()}
+    @Test fun cancellationAfterIdentityCreationCannotPublishSignedOutput() {
+        val f=Fixture(enableEphemeralSigning=true);val built=f.build();val token=CancellationToken.cancellable()
+        f.afterObtain={token.cancel()}
         assertThrows(Exception::class.java){f.service.sign("notes.apk",built.getString("sha256"),"signed.apk",f.scope.version(),token)}
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
+        assertEquals(1,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
     }
     @Test fun collisionAndSymlinkInputsNeverOverwriteExistingContent() {
         val f=Fixture();File(f.root,"notes.apk").writeText("existing")
@@ -630,38 +472,40 @@ class FactoryProjectServiceTest {
         assertThrows(Exception::class.java){f.service.build("factory.json","notes.apk",0,token)}
         f.active=false;assertThrows(Exception::class.java){f.build()};assertFalse(File(f.root,"notes.apk").exists())
     }
-    @Test fun signingDenialDoesNotCreateAKeyOrOutputAndKeepsUnsignedApk() {
-        val f=Fixture();val build=f.build()
-        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists());assertTrue(File(f.root,"notes.apk").isFile)
-    }
     @Test fun modifiedArtifactOrWrongProjectCannotBorrowBuildReceipt() {
         val f=Fixture();val build=f.build();File(f.root,"notes.apk").appendText("changed")
         assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(0,f.requested)
+        assertEquals(0,f.obtained)
         val other=Fixture();File(f.root,"notes.apk").copyTo(File(other.root,"copied.apk"))
         assertThrows(Exception::class.java){other.service.sign("copied.apk",build.getString("sha256"),"signed.apk",other.scope.version(),CancellationToken.cancellable())}
-        assertEquals(0,other.requested)
+        assertEquals(0,other.obtained)
     }
-    @Test fun revocationDuringApprovalStopsBeforeKeyCreation() {
-        val f=Fixture();val build=f.build();f.decision=ApprovalDecision.APPROVED;f.duringApproval={f.active=false}
+    @Test fun unavailableProjectStopsSigningAfterAutomaticKeyCreation() {
+        val f=Fixture(enableEphemeralSigning=true);val build=f.build();f.afterObtain={f.active=false}
         assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
-        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
+        assertEquals(1,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
     }
-    @Test fun cancelledWhileWaitingForGlobalSigningLockCannotCreateIdentity() {
-        val f=Fixture(); val build=f.build(); f.decision=ApprovalDecision.APPROVED
+    @Test fun cancelledWhileWaitingForSigningLockCannotCreateIdentity() {
+        val f=Fixture(enableEphemeralSigning=true); val build=f.build()
         val lock=FactoryProjectService::class.java.getDeclaredField("SIGN_LOCK").apply{isAccessible=true}.get(null)
         val held=java.util.concurrent.CountDownLatch(1); val release=java.util.concurrent.CountDownLatch(1)
         val holder=java.util.concurrent.Executors.newSingleThreadExecutor()
         val signer=java.util.concurrent.Executors.newSingleThreadExecutor()
         val token=CancellationToken.cancellable()
-        f.duringApproval={holder.submit{ synchronized(lock) {held.countDown(); release.await()} }; assertTrue(held.await(5,java.util.concurrent.TimeUnit.SECONDS))}
+        holder.submit{ synchronized(lock) {held.countDown(); release.await()} }
+        assertTrue(held.await(5,java.util.concurrent.TimeUnit.SECONDS))
+        val started=java.util.concurrent.CountDownLatch(1);val signerThread=java.util.concurrent.atomic.AtomicReference<Thread>()
         try {
             val future=signer.submit<Boolean>{
+                signerThread.set(Thread.currentThread());started.countDown()
                 try {f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),token);false}
                 catch (_:Exception){true}
             }
-            assertTrue(held.await(5,java.util.concurrent.TimeUnit.SECONDS)); token.cancel();release.countDown()
+            assertTrue(started.await(5,java.util.concurrent.TimeUnit.SECONDS))
+            val deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while(signerThread.get().state!=Thread.State.BLOCKED && System.nanoTime()<deadline) Thread.sleep(2)
+            assertEquals(Thread.State.BLOCKED,signerThread.get().state)
+            token.cancel();release.countDown()
             assertTrue(future.get(5,java.util.concurrent.TimeUnit.SECONDS));assertEquals(0,f.obtained)
             assertFalse(File(f.root,"signed.apk").exists())
         } finally {release.countDown();holder.shutdownNow();signer.shutdownNow()}
@@ -735,8 +579,8 @@ class FactoryProjectServiceTest {
         verifier.invoke(f.service, runtime.toString().toByteArray(), legacy)
     }
 
-    @Test fun signingDisclosesExactNonemptyDataBackupPolicyBeforeAnyIdentityUse() {
-        val f = Fixture()
+    @Test fun signingCarriesDeclaredDataBackupTablesInTheGeneratedApp() {
+        val f = Fixture(enableEphemeralSigning=true)
         val packageManager = f.context.packageManager
         val own = packageManager.getPackageInfo(f.context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
         val original = own.signingInfo
@@ -750,12 +594,14 @@ class FactoryProjectServiceTest {
             val spec = File(f.root, "factory.json")
             spec.writeText(JSONObject(spec.readText()).put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes", "tasks")))).toString())
             val build = f.build()
-            assertThrows(Exception::class.java) {
-                f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
+            val signed=f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
+            assertTrue(signed.getBoolean("signed"));assertEquals(1,f.obtained)
+            ZipFile(File(f.root,"signed.apk")).use { zip ->
+                val config=JSONObject(zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() })
+                assertEquals(listOf("notes","tasks"),config.getJSONObject("dataBackup").getJSONArray("tables").let { values ->
+                    (0 until values.length()).map(values::getString)
+                })
             }
-            assertEquals(1, f.requested)
-            assertEquals(0, f.obtained)
-            assertTrue(f.lastSummary!!.lines.any { it == "Declared data backup tables (SQLite rows only): notes, tasks" })
         } finally {
             own.signingInfo = original
             org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)

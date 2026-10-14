@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun catalogHashesBoundsAndImmutableMapAreVerified() {
         val bundle = load()
-        assertEquals("factory-guidance-v86", bundle.version)
+        assertEquals("factory-guidance-v87", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar", "database",
             "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services", "native-input", "radios", "durable-native"), FactoryGuidanceBundle.NAMES)
         assertEquals(14, bundle.resources.size)
@@ -42,20 +42,12 @@ class FactoryGuidanceBundleTest {
         for (method in CapabilityCatalog.METHODS.keys) assertTrue("Undocumented method: $method", all.contains(method))
     }
 
-    @Test fun operationCatalogMatchesPolicyWithoutUniversalConfirmation() {
-        val basics = load().resources.getValue("basics")
-        val list = basics.substringAfter("65 policy operation identifiers (not 134 independent prompts):\n")
-            .substringBefore("\n\n")
-        val documented = Regex("[A-Za-z]+\\.[A-Za-z]+").findAll(list).map { it.value }.toList()
-        val implemented = com.jarvys.agent.apkfactory.FactoryOperationPolicy.Operation.entries.map { it.id }
-        assertEquals(65, implemented.size)
-        assertEquals(implemented.size, documented.size)
-        assertEquals(implemented.toSet(), documented.toSet())
-        contract("basics", "ALLOW_ALWAYS default", "ASK/DENY", "ASK reviews exact request once", "DENY blocks effects",
-            "Coding autonomy is separate", "No agent-operated policy expansion", "backup protocol v2", "legacy v1",
-            "final host authorization", "no blind replay", "performed:false")
+    @Test fun factoryActionsKeepCallerAuthenticationAndSystemOwnedInteractions() {
+        contract("basics", "Authenticated native operations", "installed app caller is authenticated", "Android runtime permission prompts",
+            "user selects documents, contacts, photos or recipients", "Jarvys does not add an operation approval screen",
+            "backup protocol v2", "legacy v1", "authenticated installed artifact", "no blind replay", "performed:false")
         for (text in listOf("appId+certificate", "64 recent artifacts", "retained exact signed scope", "Nonce/request/source-bound",
-            "Android grants", "Pending ASK is no grant", "Damaged/missing evidence fails closed", "precompiled DEX",
+            "Android runtime permissions", "system selectors", "Damaged/missing evidence fails closed", "precompiled DEX",
             "no arbitrary per-app native compiler", "final packaged acceptance")) assertTrue("Missing core boundary: $text", core().contains(text, true))
     }
 
@@ -113,7 +105,7 @@ class FactoryGuidanceBundleTest {
     @Test fun durableWorkKeepsFreshPolicyInertActionsAndUncertainResults() {
         contract("durable-native", "notifications.schedule", "notifications.resumeScheduled", "notifications.pollActions",
             "notifications.ackAction", "notifications.generationStatus", "notifications.forgetGeneration",
-            "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "delivery_unknown", "no auto-repost", "queued_approval",
+            "POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM", "delivery_unknown", "no auto-repost", "queued_os_blocked",
             "widgets.requestPin", "widgets.update", "widgets.remove", "widgets.manage", "launcherPlacementRemoved:false",
             "oncePerGeneration", "widgets.pollActions", "widgets.acknowledgeAction", "dispatchUnknown",
             "jobs.enqueueHttp", "jobs.resume", "execution:\"now\"", "jobs.readResult", "jobs.forget",

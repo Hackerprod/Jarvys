@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v86 / basics
+# Factory guidance factory-guidance-v87 / basics
 
 ## SDK/data
 33 capabilities/134 methods including runtime.info; SDK2/schema1. Inspect first. Methods require declared capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
@@ -9,31 +9,16 @@
 - storage.listPage({afterKey?,limit?}): exclusive sorted key cursor; default limit256, integer1..130816. Returns {keys,hasMore,nextAfterKey,snapshotAcrossPages:false}. Byte bounds shorten pages; use nextAfterKey. Concurrent writes change pages.
 - export.text({filename,text,mimeType?}): MIME text/plain, text/markdown, application/json or text/csv. {saved:true} confirms the native save flow, not provider durability/cloud completion; cancellation rejects.
 - share.text({text,title?}): {chooserOpened:true} proves no delivery.
-- clipboard.write(text): saved host policy; no clipboard read. Preview is simulated with performed:false.
+- clipboard.write(text): writes the supplied text; no clipboard read. Preview is simulated with performed:false.
 - haptics.perform(kind?): tap(default)|longPress, receipt performed.
 - device.info(): platform/apiLevel/appId/targetSdk, no stable personal IDs.
 
 Storage keys match [a-zA-Z0-9_.:-]{1,96}; values need valid paired Unicode. Serialize dependent writes. Signed resourceBudgets:{version:1,storage:{totalBytes,entries,valueBytes}} permits partial fields. Defaults:1MiB/256/64KiB; maxima:16MiB/65536/523264 raw-value bytes. Escaped request/result content must still fit 511KiB, full bridge512KiB; whole-map adapter ceiling,not Android disk limit. Lowered quotas preserve reads/deletes/non-growing replacements.
 
-## One operation policy
-Settings → Factory permissions: ALLOW_ALWAYS default, ASK/DENY optional, app-certificate/operation overrides; Use default removes override. Coding autonomy is separate. ALLOW_ALWAYS advances, ASK reviews exact request once, DENY blocks effects. No agent-operated policy expansion or duplicate Use/Play/sign/install/all-values/closure approvals. Required Android interactions remain.
+## Authenticated native operations
+Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. Jarvys does not add an operation approval screen.
 
-65 policy operation identifiers (not 134 independent prompts):
-- documents.open, documents.create, photos.pick, photos.capture, audio.play
-- browser.open, contacts.pick, share.file, maps.open, phone.dial, email.compose, sms.compose, calendar.insert
-- database.backupExport, database.backupImport, storage.backupExport, storage.backupImport
-- factory.sign, factory.install, clipboard.write, share.text, export.text
-- network.upload, network.download, network.request, network.probe, network.ping
-- notifications.channel, notifications.requestPermission, notifications.show, notifications.cancel, notifications.schedule, notifications.requestExactAlarmAccess
-- speech.voices, speech.speak, speech.stop, voiceRecognition.recognize
-- location.current, location.requestPermission, recording.record, recording.requestPermission, steps.current, steps.requestPermission, sensors.subscribe
-- secrets.put, secrets.capture, secrets.get, secrets.list, secrets.describe, secrets.remove, secrets.reset, secrets.request, incomingShare.take
-- nfc.read, nfc.write, bluetooth.requestPermissions, bluetooth.scan, bluetooth.connect, bluetooth.services, bluetooth.read, bluetooth.write, bluetooth.requestMtu, bluetooth.subscribe
-- widgets.manage, jobs.enqueueHttp
-
-Cleanup/owned-data reads need no fresh effect grant where documented. Widget mutations map to widgets.manage; job resume to jobs.enqueueHttp; notification resume to notifications.schedule. Jobs/secrets.request need no second network.request approval. Handles/status grant nothing.
-
-Core identity/live-lease/retained-scope rules apply. Pending ASK grants nothing; bad persistence/evidence fails closed. No borrowing newer scope.
+Invalid or missing caller/source evidence fails closed. An operation cannot borrow identity or capabilities from a newer artifact. Cleanup and status methods report or close owned work without replaying completed effects; durable work rechecks caller/source identity before effects.
 
 Backup protocol v2 rechecks before writes/commit; legacy v1 ends at final host authorization. Open FDs/completed effects/remote copies cannot be recalled. No blind replay.
 
@@ -44,10 +29,10 @@ Declare dataBackup:{"keys":["settings","tasks"]}; dataBackup.keys defaults empty
 
 - storage.backupExport({version:1,keys,filename}): explicitly select1–32 sorted unique allowed keys. All must exist; missing selected export keys reject the operation.
 - storage.backupImport({version:1,keys,handle,mode}): consumes untouched read handle from documents.open({mimeType:"application/json"}). Archive keys must exactly equal selection. No migration/renaming.
-- mode insertOnly rejects any existing selected key, even if equal. replaceSelectedKeys inserts/replaces selected keys only, preserving unselected state. Changed selected preimage after review fails conflict; current whole-store quotas recheck.
+- mode insertOnly rejects any existing selected key, even if equal. replaceSelectedKeys inserts/replaces selected keys only, preserving unselected state. A changed selected preimage fails with a conflict; current whole-store quotas recheck.
 
 Canonical plaintext jarvys-preferences-data, formatVersion:1/storageVersion:1, ≤1MiB, ≤32 selected keys, ≤64KiB per value. Expanded live budgets do not expand backup v1; reject incompatibility,no truncation/upgrade. Package/certificate labels are compatibility,not authenticity. Secrets unsupported; strings cannot be reliably screened.
 
-Exact installed artifact/pinned host+policy: ALLOW_ALWAYS continues; ASK all-values approval once (keys/counts/mode/overwrite); DENY blocks. Android destination selection and provider upload/cloud-sync/retention disclosure remain. Import locked replacement; no lock during I/O/review. Commit false/exception is unknown outcome, possible changed memory/disk, no rollback or automatic replay.
+The authenticated installed artifact and pinned host are checked before backup effects. Android destination selection and provider upload/cloud-sync/retention disclosure remain. Import uses locked replacement; no lock during I/O. Commit false/exception is an unknown outcome, with possible changed memory/disk, no rollback or automatic replay.
 
 Export providerCommitConfirmed:false, closeStatus:"close_requested" proves no durability. Empty/partial file possible. Five-minute lifetime/310000ms SDK timeout; documents.cancel shares backup cleanup budget with database.cancel, proves no rollback/closure. No storage.cancel. Both UNAVAILABLE in preview before any storage snapshot/handle allocation.

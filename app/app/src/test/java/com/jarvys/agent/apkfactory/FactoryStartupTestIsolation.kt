@@ -46,27 +46,27 @@ internal object FactoryStartupTestIsolation {
         awaitSharingWorkerCompletion()
         val backupSingleton = FactoryDataBackupCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (backupSingleton.get(null) as? FactoryDataBackupCoordinator)?.let { backup ->
-            check(!backup.isBusy() && !backup.needsRecovery() && backup.session() == null) { "Cannot reset a live synthetic backup interaction" }
+            check(!backup.isBusy() && backup.canBegin() && backup.session() == null) { "Cannot reset a live synthetic backup interaction" }
             FactoryInteractionAdmission.release(backup); backupSingleton.set(null, null)
         }
         val contactSingleton = FactoryContactCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (contactSingleton.get(null) as? FactoryContactCoordinator)?.let { contact ->
-            check(!contact.isBusy() && !contact.needsRecovery() && contact.session() == null) { "Cannot reset a live synthetic contact interaction" }
+            check(!contact.isBusy() && contact.canBegin() && contact.session() == null) { "Cannot reset a live synthetic contact interaction" }
             FactoryInteractionAdmission.release(contact); contactSingleton.set(null, null)
         }
         val externalSingleton = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (externalSingleton.get(null) as? FactoryExternalLaunchCoordinator)?.let { external ->
-            check(!external.isBusy() && !external.needsRecovery() && external.session() == null) { "Cannot reset a live synthetic external interaction" }
+            check(!external.isBusy() && external.canBegin() && external.session() == null) { "Cannot reset a live synthetic external interaction" }
             FactoryInteractionAdmission.release(external); externalSingleton.set(null, null)
         }
         val browserSingleton = FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (browserSingleton.get(null) as? FactoryBrowserCoordinator)?.let { browser ->
-            check(!browser.isBusy() && !browser.needsRecovery() && browser.session() == null) { "Cannot reset a live synthetic browser interaction" }
+            check(!browser.isBusy() && browser.canBegin() && browser.session() == null) { "Cannot reset a live synthetic browser interaction" }
             FactoryInteractionAdmission.release(browser); browserSingleton.set(null, null)
         }
         val audioSingleton = FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (audioSingleton.get(null) as? FactoryAudioCoordinator)?.let { audio ->
-            check(!audio.isBusy() && !audio.needsRecovery() && audio.session() == null) { "Cannot reset a live synthetic audio interaction" }
+            check(!audio.isBusy() && audio.canBegin() && audio.session() == null) { "Cannot reset a live synthetic audio interaction" }
             FactoryInteractionAdmission.release(audio); audioSingleton.set(null, null)
         }
         val singleton = FactoryFileShareCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }

@@ -10,12 +10,12 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** One request's live policy lease. Pending is not approval, and terminal state is irreversible. */
+/** One request's live host-authenticated operation session. Terminal state is irreversible. */
 public final class NativeOperationAuthorization extends Binder implements AutoCloseable {
     @FunctionalInterface public interface Access { void check(); }
     @FunctionalInterface public interface Verifier { boolean allowed(int uid); }
     public interface Authority { int status(); void checkBeforeEffect(); }
-    public static final int PENDING = 0, APPROVED = 1, TERMINAL = 2;
+    public static final int ACTIVE = 1, TERMINAL = 2;
     private static final String HOST = "com.jarvys.factory.runtime.NativeOperationAuthorization.v1";
     private static final String CLIENT = "com.jarvys.factory.runtime.NativeOperationCallback.v1";
     private static final int CONNECT = IBinder.FIRST_CALL_TRANSACTION, STATUS = CONNECT + 1,
@@ -46,8 +46,8 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
         if (closed.get()) return TERMINAL;
         try {
             int value = authority.status();
-            if (value != PENDING && value != APPROVED) throw new SecurityException();
-            if (closed.get() || ((!connected.get() || value == PENDING) && SystemClock.elapsedRealtime() >= deadline)) throw new SecurityException();
+            if (value != ACTIVE) throw new SecurityException();
+            if (closed.get() || (!connected.get() && SystemClock.elapsedRealtime() >= deadline)) throw new SecurityException();
             return value;
         } catch (RuntimeException ended) { close(); return TERMINAL; }
     }
@@ -63,7 +63,7 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
             if (code == CONNECT) {
                 if (SystemClock.elapsedRealtime() >= deadline) { close(); return false; }
                 if (incoming == null || !connected.compareAndSet(false, true)) return false;
-                // Never transact while holding this lock or the host policy's lock.
+                // Never transact while holding this lock or the host's session lock.
                 synchronized (callbackLock) {
                     if (closed.get()) throw new SecurityException();
                     incoming.linkToDeath(sourceDeath, 0); callback = incoming;
@@ -71,7 +71,7 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
                 challenge(incoming);
             } else if (!connected.get()) return false;
             int state = currentStatus();
-            if (code == CHECK && state == APPROVED) {
+            if (code == CHECK && state == ACTIVE) {
                 authority.checkBeforeEffect(); state = currentStatus();
             }
             reply.writeNoException(); reply.writeInt(state); return true;
@@ -119,7 +119,7 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
         }
         private int transact(int code) {
             // Android UI-only effects need an immediate live checkpoint, not a queued cached grant.
-            // CHECK has no reverse calls/UI and the host only checks bounded identity/policy metadata.
+            // CHECK has no reverse calls/UI and the host only checks bounded identity metadata.
             if (code != CHECK && Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("Native authorization requires a worker");
             Parcel data = Parcel.obtain(), reply = Parcel.obtain();
             try {
@@ -127,7 +127,7 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
                 if (code == CONNECT) data.writeStrongBinder(callback);
                 if (!host.transact(code, data, reply, 0) || reply.dataSize() > 512 || reply.hasFileDescriptors()) throw new SecurityException();
                 reply.readException(); int state = reply.readInt();
-                if ((state != PENDING && state != APPROVED && state != TERMINAL) || reply.dataAvail() != 0) throw new SecurityException();
+                if ((state != ACTIVE && state != TERMINAL) || reply.dataAvail() != 0) throw new SecurityException();
                 return state;
             } catch (Exception unavailable) { ended(); throw new SecurityException("Native operation authority unavailable", unavailable); }
             finally { data.recycle(); reply.recycle(); }
@@ -138,12 +138,12 @@ public final class NativeOperationAuthorization extends Binder implements AutoCl
             if (value == TERMINAL) ended();
             return closed.get() ? TERMINAL : value;
         }
-        /** A pending CHECK fails without cancelling the outstanding human review. */
+        /** A failed live check ends this caller-authenticated operation session. */
         @Override public void check() {
             if (closed.get()) throw new SecurityException("Native operation authority ended");
             int value = transact(CHECK);
             if (value == TERMINAL) ended();
-            if (value != APPROVED || closed.get()) throw new SecurityException(value == PENDING ? "Native operation is awaiting approval" : "Native operation authority ended");
+            if (value != ACTIVE || closed.get()) throw new SecurityException("Native operation session ended");
         }
         public void requireCurrent() { check(); }
         public boolean isClosed() { return closed.get(); }

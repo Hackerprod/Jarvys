@@ -16,7 +16,7 @@ import java.util.UUID
 /**
  * Additive metadata registry. Opening/reading never resumes work or changes uncertain rows.
  * All read/compare/write sequences use SQLite transactions, including across store instances.
- * beforeWrite runs synchronously inside the transaction: check STOP/policy only, never spawn,
+ * beforeWrite runs synchronously inside the transaction: check STOP only, never spawn,
  * contact a provider or wait for a model here. Commit STARTED before any external effect.
  */
 class WorkspaceRegistry(context: Context) : Closeable {

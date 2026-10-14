@@ -130,7 +130,7 @@ public class FactoryRuntimeIncomingShareTest {
         assertEquals("UNAVAILABLE", request("incomingShare.list", new JSONObject()).value.getJSONObject("error").getString("code"));
         runtime.onResume(); JSONObject reply = request("incomingShare.list", new JSONObject()).value;
         assertTrue(reply.getBoolean("ok")); assertFalse(reply.toString().contains("private source text"));
-        assertNull(field("nativePermissions").get(runtime));
+        assertNull(field("nativeOperations").get(runtime));
     }
     @Test public void listAndDiscardUseNoPolicySession() throws Exception {
         page(PAGE); String id = inbox().capture(owner(), payload("private source text", false));
@@ -138,17 +138,17 @@ public class FactoryRuntimeIncomingShareTest {
         assertEquals(id, listed.value.getJSONArray("result").getJSONObject(0).getString("id"));
         Response discarded = request("incomingShare.discard", new JSONObject().put("id", id));
         assertTrue(discarded.value.getJSONObject("result").getBoolean("discarded"));
-        assertNull(field("nativePermissions").get(runtime)); assertEquals(0, inbox().list(owner()).length());
+        assertNull(field("nativeOperations").get(runtime)); assertEquals(0, inbox().list(owner()).length());
     }
     @Test public void sessionClosureEndsStableOwnerWithoutNeedingForeground() throws Exception {
         page(PAGE); IncomingShareInbox.Owner first = owner(); host.open = false; assertFalse(first.current());
     }
     private final class Take {
         final IncomingShareInbox.Claim claim;
-        final NativePermissionSessions.Callback callback;
+        final NativeOperationSessions.Callback callback;
         final Object work;
         final Response response = new Response();
-        final NativePermissionSessions.Lease lease;
+        final NativeOperationSessions.Lease lease;
         final CountDownLatch closed = new CountDownLatch(1);
         final String id;
         Take(boolean attachment) throws Exception {
@@ -160,20 +160,20 @@ public class FactoryRuntimeIncomingShareTest {
             @SuppressWarnings("unchecked") Map<String, Object> pending = (Map<String, Object>) field("pending").get(runtime); pending.put(requestId, reply);
             Class<?> workClass = Class.forName(FactoryRuntime.class.getName() + "$IncomingTake");
             Constructor<?> constructor = workClass.getDeclaredConstructors()[0]; constructor.setAccessible(true);
-            work = constructor.newInstance(runtime, owner(), id, claim, documents(), reply); callback = (NativePermissionSessions.Callback) work;
-            NativePermissionSessions sessions = new NativePermissionSessions(activity, config, executor(), true);
-            field("nativePermissions").set(runtime, sessions);
+            work = constructor.newInstance(runtime, owner(), id, claim, documents(), reply); callback = (NativeOperationSessions.Callback) work;
+            NativeOperationSessions sessions = new NativeOperationSessions(activity, config, executor(), true);
+            field("nativeOperations").set(runtime, sessions);
             lease = sessions.new Lease(NativeOperationRequest.parse("incomingShare.take", claim.authorizationDetails()), callback);
-            Field leases = NativePermissionSessions.class.getDeclaredField("leases"); leases.setAccessible(true);
-            @SuppressWarnings("unchecked") Set<NativePermissionSessions.Lease> active = (Set<NativePermissionSessions.Lease>) leases.get(sessions); active.add(lease);
+            Field leases = NativeOperationSessions.class.getDeclaredField("leases"); leases.setAccessible(true);
+            @SuppressWarnings("unchecked") Set<NativeOperationSessions.Lease> active = (Set<NativeOperationSessions.Lease>) leases.get(sessions); active.add(lease);
             NativeOperationAuthorization endpoint = new NativeOperationAuthorization(lease.nonce, lease.request.binding(lease.nonce),
                     SystemClock.elapsedRealtime() + 300000, uid -> true, new NativeOperationAuthorization.Authority() {
-                        public int status() { return NativeOperationAuthorization.APPROVED; }
+                        public int status() { return NativeOperationAuthorization.ACTIVE; }
                         public void checkBeforeEffect() { }
                     }, () -> {});
             lease.client = executor().submit(() -> NativeOperationAuthorization.connect(endpoint, lease.nonce,
                     lease.request.binding(lease.nonce), uid -> true, () -> {})).get(5, TimeUnit.SECONDS);
-            Method attach = workClass.getDeclaredMethod("attach", NativePermissionSessions.Lease.class); attach.setAccessible(true); attach.invoke(work, lease);
+            Method attach = workClass.getDeclaredMethod("attach", NativeOperationSessions.Lease.class); attach.setAccessible(true); attach.invoke(work, lease);
         }
         void prepare() throws Exception {
             DocumentHandles handles = documents();
@@ -224,11 +224,10 @@ public class FactoryRuntimeIncomingShareTest {
         assertEquals("CANCELLED", take.response.value.getJSONObject("error").getString("code"));
         assertTrue(take.lease.ended.get()); assertFalse(take.claim.committed());
     }
-    @Test public void ownPendingAskSurvivesPauseWithoutConsumingText() throws Exception {
-        page(PAGE); Take take = new Take(false); take.lease.reviewLaunched = true;
-        runtime.onPause(); assertTrue(take.callback.current()); assertFalse(take.lease.ended.get());
+    @Test public void leavingForegroundCancelsAnUnsettledTakeWithoutConsumingText() throws Exception {
+        page(PAGE); Take take = new Take(false);
+        runtime.onPause(); assertFalse(take.callback.current()); assertTrue(take.lease.ended.get());
         assertEquals("one-time text", take.claim.authorizationDetails().getString("textPreview"));
-        runtime.onResume(); assertTrue(take.callback.current());
     }
     @Test public void replacementPageCancelsPreparedWorkInsteadOfDeliveringToNewPage() throws Exception {
         page(PAGE); Take take = new Take(true); take.prepare(); page(PAGE); take.deliver();

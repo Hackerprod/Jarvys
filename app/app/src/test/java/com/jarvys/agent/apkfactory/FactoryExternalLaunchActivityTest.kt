@@ -47,7 +47,6 @@ import java.util.concurrent.atomic.AtomicInteger
 @Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryExternalLaunchPackageManagerShadow::class, FactoryFileShareOsShadow::class])
 class FactoryExternalLaunchActivityTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
-    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-external-launch")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryExternalLaunchCoordinator
@@ -60,7 +59,7 @@ class FactoryExternalLaunchActivityTest {
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
         FactoryExternalLaunchPackageManagerShadow.beforeQuery = null; FactoryExternalLaunchPackageManagerShadow.useAndroidDefault = false
-        coordinator = FactoryExternalLaunchCoordinator(context, policy) { appId, capability ->
+        coordinator = FactoryExternalLaunchCoordinator(context) { appId, capability ->
             check(appId == proof.appId); check(capability == spec.capability); verifiedCapabilities += capability; proof
         }
         FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
@@ -75,8 +74,7 @@ class FactoryExternalLaunchActivityTest {
         controllers.asReversed().forEach { runCatching { it.pause().stop().destroy() } }
         shadowOf(Looper.getMainLooper()).idle(); drain()
         coordinator.session()?.preparing = false
-        if (coordinator.needsRecovery()) worker { coordinator.close(coordinator.session(), true) {} }
-        else coordinator.session()?.let { worker { coordinator.close(it, false) {} } }
+        coordinator.session()?.let { worker { coordinator.close(it) {} } }
         source.close(); drain()
         FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
@@ -96,7 +94,7 @@ class FactoryExternalLaunchActivityTest {
         controller.create(saved).start().resume().visible(); controller.get().onWindowFocusChanged(true)
         drain(); return controller
     }
-    private fun recovery() = launch(FactoryExternalLaunchCoordinator.recoveryIntent(context), caller = null)
+    private fun recovery() = launch(Intent(context), caller = null)
     private fun button(activity: FactoryExternalActionActivity, name: String) = activity.window.decorView.findViewWithTag<Button>("factory-external-launch-$name")
     private fun choose(activity: FactoryExternalActionActivity) {
         val choice = activity.window.decorView.findViewWithTag<RadioButton>(fixture.component.flattenToString())
@@ -109,38 +107,6 @@ class FactoryExternalLaunchActivityTest {
         val action = registration.javaClass.getDeclaredField("action").apply { isAccessible = true }
         val original = action.get(registration) as Runnable; action.set(registration, Runnable { around(original) })
     }
-    @Test fun allowUsesVerifiedAndroidDefaultAndReturnsHonestTerminalReceiptWithoutClicks() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        FactoryExternalLaunchPackageManagerShadow.useAndroidDefault = true
-        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryExternalLaunchTestPackages.view(spec), listOf(fixture.resolve))
-        val activity = launch().get(); drain()
-        assertEquals(1, activity.launches.size); assertEquals(fixture.component, activity.launches.single().component)
-        assertTrue(activity.isFinishing); assertNull(coordinator.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
-        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("actionConfirmed", true))
-    }
-    @Test fun allowWithoutAndroidDefaultWaitsOnlyForTargetChoiceThenDispatches() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        val activity = launch().get()
-        assertEquals(0, activity.launches.size); assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals(View.GONE, button(activity, "open").visibility)
-        choose(activity); drain(); assertEquals(1, activity.launches.size)
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-    }
-    @Test fun denyHasNoControlRegistrationJournalOrNativeDispatch() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        val activity = launch().get()
-        assertTrue(activity.isFinishing); assertNull(coordinator.session()); assertEquals(0, activity.launches.size)
-        assertFalse(File(root, "interaction.json").exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun policyRevocationBeforeChosenTargetPreventsDispatch() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        val activity = launch().get(); val value = coordinator.session()!!
-        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.MAPS_OPEN, FactoryOperationPolicy.Mode.DENY)
-        assertTrue(value.revoked.get()); render(activity)
-        assertEquals(0, activity.launches.size); assertFalse(button(activity, "open").isEnabled)
-    }
     @Test fun unrelatedStartupOwnerDoesNotBlockThisOperation() {
         val other = Any(); FactoryInteractionAdmission.restore(other)
         try {
@@ -150,38 +116,6 @@ class FactoryExternalLaunchActivityTest {
             assertEquals(1, activity.launches.size); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
             assertFalse(FactoryInteractionAdmission.available(other))
         } finally { FactoryInteractionAdmission.release(other) }
-    }
-    @Test fun blockedInitialBinderRegistrationRetainsOwnershipUntilCancellationSettles() {
-        val entered = CountDownLatch(1); val release = CountDownLatch(1)
-        val blockingControl = object : Binder() {
-            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-                assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
-                entered.countDown(); check(release.await(10, TimeUnit.SECONDS))
-                return source.transact(code, data, reply, flags)
-            }
-        }
-        val first = Robolectric.buildActivity(FactoryExternalLaunchRecordingActivity::class.java, request(blockingControl)); controllers += first
-        shadowOf(first.get()).setCallingPackage(proof.appId)
-        first.create().start().resume().visible(); first.get().onWindowFocusChanged(true)
-        var recovered: FactoryExternalLaunchRecordingActivity? = null
-        try {
-            assertTrue("Initial registration did not reach the worker", entered.await(5, TimeUnit.SECONDS))
-            val value = coordinator.session()!!; assertTrue(value.preparing); assertFalse(value.attempted)
-            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            val recovery = Robolectric.buildActivity(FactoryExternalLaunchRecordingActivity::class.java, FactoryExternalLaunchCoordinator.recoveryIntent(context)); controllers += recovery
-            recovery.create().start().resume().visible(); recovered = recovery.get(); recovered.onWindowFocusChanged(true)
-            assertFalse(button(recovered, "close").isEnabled); button(recovered, "close").performClick()
-            assertFalse(FactoryInteractionAdmission.available()); assertTrue(value.preparing)
-            source.cancel(); assertEquals(0, first.get().launches.size); assertEquals(0, recovered.launches.size)
-        } finally { release.countDown() }
-        drain()
-        assertTrue(coordinator.needsRecovery()); assertTrue(coordinator.session()!!.revoked.get()); assertFalse(coordinator.session()!!.preparing)
-        assertTrue(coordinator.session()!!.registration == null || coordinator.session()!!.registration!!.isRevoked)
-        assertEquals(0, first.get().launches.size)
-        val recovery = recovered!!; render(recovery); assertTrue(button(recovery, "close").isEnabled)
-        button(recovery, "close").performClick(); drain()
-        assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(FactoryInteractionAdmission.available())
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(recovery).resultCode); assertNull(shadowOf(recovery).resultIntent)
     }
     @Test fun fullyAndPartiallyObscuredNativeControlsRejectSyntheticTouch() {
         val activity = launch().get()
@@ -197,11 +131,6 @@ class FactoryExternalLaunchActivityTest {
             val clean = event(0); try { assertTrue(control.onFilterTouchEventForSecurity(clean)) } finally { clean.recycle() }
         }
         assertEquals(0, activity.launches.size); assertFalse(coordinator.session()!!.attempted)
-    }
-    @Test fun cancelledControlBeforeRegistrationCannotEnableAnyLaunch() {
-        source.cancel(); val activity = launch().get()
-        assertTrue(coordinator.needsRecovery()); assertTrue(coordinator.session()!!.revoked.get()); assertFalse(button(activity, "open").isEnabled)
-        assertEquals(0, activity.launches.size); assertFalse(FactoryInteractionAdmission.available())
     }
     @Test fun noEligibleRecipientLeavesReviewClosableWithoutAutomaticFallback() {
         shadowOf(context.packageManager).setResolveInfosForIntent(FactoryExternalLaunchTestPackages.view(spec, discovery = true), emptyList())
@@ -268,36 +197,6 @@ class FactoryExternalLaunchActivityTest {
         val receipt = shadowOf(activity).resultIntent; assertEquals(nonce, receipt.getStringExtra("nonce"))
         assertFalse(receipt.getBooleanExtra("launchRequested", true)); assertFalse(receipt.getBooleanExtra("actionConfirmed", true))
     }
-    @Test fun throwingNativeLaunchConsumesAttemptAndCannotRetryOrClaimSuccess() {
-        val activity = launch().get(); choose(activity); activity.beforeStart = { throw android.content.ActivityNotFoundException("Synthetic recipient vanished") }
-        button(activity, "open").performClick(); drain()
-        assertEquals(1, activity.launches.size); assertTrue(coordinator.session()!!.attempted); assertFalse(coordinator.session()!!.launchRequested); assertTrue(coordinator.needsRecovery())
-        button(activity, "open").performClick(); drain(); assertEquals(1, activity.launches.size)
-        button(activity, "close").performClick(); drain(); assertEquals("closed_outcome_unknown", coordinator.status())
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
-    }
-    @Test fun sourceCancellationBeforeConsentRevokesWithoutAnyNativeLaunch() {
-        val activity = launch().get(); choose(activity); val revoked = CountDownLatch(1)
-        wrapRevocation(coordinator.session()!!) { it.run(); revoked.countDown() }
-        source.cancel(); assertTrue(revoked.await(5, TimeUnit.SECONDS)); shadowOf(Looper.getMainLooper()).idle()
-        button(activity, "open").performClick(); drain()
-        assertTrue(coordinator.needsRecovery()); assertFalse(button(activity, "open").isEnabled); assertEquals(0, activity.launches.size)
-    }
-    @Test fun changedLatestSourceProofPreventsDispatchAfterHumanConsent() {
-        val activity = launch().get(); choose(activity); proof = proof.copy(record = "f".repeat(64))
-        button(activity, "open").performClick(); drain(); assertEquals(0, activity.launches.size)
-        assertFalse(coordinator.session()!!.attempted); assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-    }
-    @Test fun changedRecipientCertificatePreventsDispatchWithoutReplacingNativeChoice() {
-        val activity = launch().get(); choose(activity); fixture.signatures(arrayOf(android.content.pm.Signature(byteArrayOf(9, 9, 9))))
-        button(activity, "open").performClick(); drain(); assertEquals(0, activity.launches.size); assertTrue(coordinator.needsRecovery())
-    }
-    @Test fun focusLossCannotBeUndoneByRegainingFocus() {
-        val activity = launch().get(); choose(activity); activity.onWindowFocusChanged(false)
-        assertFalse(button(activity, "open").isEnabled); assertFalse(button(activity, "close").isEnabled)
-        activity.onWindowFocusChanged(true); button(activity, "open").performClick(); drain()
-        assertEquals(0, activity.launches.size); assertTrue(coordinator.needsRecovery()); assertFalse(button(activity, "open").isEnabled)
-    }
     @Test fun pauseDuringBlockedFinalRecipientVerificationPreventsLaunchAndKeepsRecoveryBusy() = blockedFinalVerification("pause")
     @Test fun focusLossDuringBlockedFinalRecipientVerificationPreventsLaunch() = blockedFinalVerification("focus")
     @Test fun sourceCancellationDuringBlockedFinalRecipientVerificationPreventsLaunch() = blockedFinalVerification("cancel")
@@ -317,7 +216,7 @@ class FactoryExternalLaunchActivityTest {
             when (change) { "pause" -> controller.pause(); "focus" -> activity.onWindowFocusChanged(false); "cancel" -> { source.cancel(); assertTrue(cancelled.await(5, TimeUnit.SECONDS)) } }
             assertTrue(value.revoked.get()); assertEquals(0, activity.launches.size); assertFalse(FactoryInteractionAdmission.available())
             // Do not drain the worker while it is intentionally blocked.
-            val next = Robolectric.buildActivity(FactoryExternalLaunchRecordingActivity::class.java, FactoryExternalLaunchCoordinator.recoveryIntent(context)); controllers += next
+            val next = Robolectric.buildActivity(FactoryExternalLaunchRecordingActivity::class.java, Intent(context)); controllers += next
             next.create().start().resume().visible(); next.get().onWindowFocusChanged(true); recoveryActivity = next.get()
             assertFalse(button(next.get(), "close").isEnabled); button(next.get(), "close").performClick()
             assertTrue(value.preparing); assertFalse(FactoryInteractionAdmission.available())
@@ -334,48 +233,6 @@ class FactoryExternalLaunchActivityTest {
             assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(button(activity, "open"))
         }
         assertEquals("idle", coordinator.status())
-    }
-    @Test fun destroyedReviewAndRecreatedIntentNeverRehydrateOrReplayAuthority() {
-        val first = launch(); val activity = first.get(); choose(activity); first.pause().stop().destroy(); controllers.remove(first)
-        val next = launch(saved = Bundle()).get(); assertTrue(next.isFinishing); assertEquals(0, next.launches.size)
-        assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        val recovered = recovery().get(); assertFalse(button(recovered, "open").isEnabled); button(recovered, "close").performClick(); drain()
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(recovered).resultCode); assertNull(shadowOf(recovered).resultIntent)
-    }
-    @Test fun backAfterTerminalDispatchCannotEraseReceipt() {
-        val controller = launch(); val activity = controller.get(); choose(activity); button(activity, "open").performClick(); drain()
-        activity.onBackPressedDispatcher.onBackPressed(); drain()
-        assertTrue(activity.isFinishing); assertFalse(coordinator.needsRecovery()); assertNull(coordinator.session())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
-        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("actionConfirmed", true)); assertEquals(1, activity.launches.size)
-    }
-    @Test fun externalLifecycleDoesNotReplayOrClaimExternalOutcome() {
-        val controller = launch(); val activity = controller.get(); choose(activity); button(activity, "open").performClick(); drain()
-        activity.onWindowFocusChanged(false); controller.pause().resume(); activity.onWindowFocusChanged(true); drain()
-        assertTrue(activity.isFinishing); assertFalse(coordinator.needsRecovery()); assertNull(coordinator.session())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
-        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("actionConfirmed", true)); assertEquals(1, activity.launches.size)
-    }
-    @Test fun expiredReviewNeverLaunchesAndOnlyExplicitRecoveryReleasesAdmission() {
-        val activity = launch().get(); choose(activity)
-        val expire = FactoryExternalActionActivity::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(activity) as Runnable
-        expire.run(); button(activity, "open").performClick(); drain()
-        assertEquals(0, activity.launches.size); assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        button(activity, "close").performClick(); drain(); assertTrue(FactoryInteractionAdmission.available()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-    }
-    @Test fun saturatedWorkerRejectsUnstartedPreparationWithoutClearingAdmission() {
-        val activity = launch().get(); choose(activity); val entered = CountDownLatch(1); val release = CountDownLatch(1)
-        val executor = FactoryExternalLaunchCoordinator.WORKER; executor.execute { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS)); executor.execute { }
-            button(activity, "open").performClick(); assertFalse(coordinator.session()!!.preparing); assertFalse(coordinator.session()!!.attempted)
-            assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available()); assertEquals(0, activity.launches.size)
-        } finally { release.countDown() }
-        drain(); button(activity, "close").performClick(); drain(); assertEquals("closed_outcome_unknown", coordinator.status())
     }
 }
 

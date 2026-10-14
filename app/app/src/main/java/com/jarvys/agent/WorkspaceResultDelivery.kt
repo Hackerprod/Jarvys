@@ -1,7 +1,6 @@
 package com.jarvys.agent
 
 import android.content.Context
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.*
 import org.json.JSONArray
@@ -13,10 +12,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Local receipt reconciliation only. Never launches a worker, model turn or external effect. */
 class WorkspaceResultDelivery internal constructor(
     context: Context,
-    private val policy: NativeActionPolicy,
     private val ledger: LocalRunStore,
 ) {
-    constructor(context: Context) : this(context, NativeActionPolicy(context), LocalRunStore(context))
+    constructor(context: Context) : this(context, LocalRunStore(context))
     private val app = context.applicationContext
 
     private fun owner(workspaceId: String): WorkspaceRecord = WorkspaceRegistry(app).use { registry ->
@@ -44,7 +42,7 @@ class WorkspaceResultDelivery internal constructor(
         return evidence
     }
 
-    /** Register exact persisted evidence even when disclosure is ASK/DENY; this grants no authority. */
+    /** Register exact persisted evidence for automatic local delivery. */
     private fun register(workspaceId: String, evidenceId: String, token: CancellationToken): WorkspaceResultReference? {
         token.throwIfCancelled()
         val scope = owner(workspaceId)
@@ -73,12 +71,7 @@ class WorkspaceResultDelivery internal constructor(
     }
 
     private fun discloseAutomatically(reference: WorkspaceResultReference, token: CancellationToken) {
-        // Never invoke ApprovalGate from a worker/snapshot/recovery callback.
-        if (policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy != AutonomyPolicy.ALLOW) return
-        policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ, binding(reference)).use { permission ->
-            if (permission.requiresApproval) return
-            notice(reference, token, Runnable { permission.admit(token) })
-        }
+        notice(reference, token, Runnable { token.throwIfCancelled() })
     }
 
     /** Finite scan of durable source evidence. Only idempotent local notice append is retried. */
@@ -107,8 +100,6 @@ class WorkspaceResultDelivery internal constructor(
             ledger.requireWorkspaceResultDisclosureLive(reference, false)
             metadata(reference).put("delivery_state", when {
                 ledger.readWorkspaceResultNotice(scope.ownerCentralSessionId, reference.referenceId) != null -> "DELIVERED_LOCALLY"
-                policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy == AutonomyPolicy.DENY -> "POLICY_BLOCKED"
-                policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy == AutonomyPolicy.ASK -> "NEEDS_FOREGROUND_REVIEW"
                 else -> "PENDING_LOCAL_DELIVERY"
             })
         }
@@ -133,7 +124,7 @@ class WorkspaceResultDelivery internal constructor(
         var end = minOf(evidence.resultText.length, offset + minOf(RESULT_PAGE, evidence.resultText.length - offset))
         if (end < evidence.resultText.length && end > offset && Character.isHighSurrogate(evidence.resultText[end - 1]) &&
             Character.isLowSurrogate(evidence.resultText[end])) end--
-        // The foreground exact READ approval can also finish its corresponding local receipt.
+        // Reading the exact evidence can also finish its corresponding local receipt.
         notice(reference, token, admission)
         val current = assignment(reference)
         admission.run(); token.throwIfCancelled()
@@ -158,9 +149,6 @@ class WorkspaceResultDelivery internal constructor(
         private val pending = HashMap<String, PendingReceipt>()
         private val pendingLock = Any()
         private val errors = ConcurrentHashMap<String, String>()
-        private fun binding(r: WorkspaceResultReference) = NativeActionPolicy.binding(
-            r.ownerCentralSessionId, "workspace_result_notice", r.workspaceId, r.assignmentId, r.referenceId,
-            r.evidenceId, r.contentSha256, r.cycleId)
         private val catalogPending = AtomicBoolean(false)
         @JvmStatic fun scheduleCatalog(context: Context) {
             if (!catalogPending.compareAndSet(false, true)) return

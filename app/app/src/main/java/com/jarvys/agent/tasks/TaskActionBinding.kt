@@ -1,18 +1,18 @@
 package com.jarvys.agent.tasks
 
-import com.jarvys.agent.NativeActionPolicy
+import com.jarvys.agent.ExactActionBinding
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Immutable semantic requests, not grants to the scheduler, providers or a task's tools. */
 internal object TaskActionBinding {
     fun task(session: String, operation: String, task: ScheduledTask, effect: String = ""): String =
-        NativeActionPolicy.binding(session, operation, payload(task), effect)
+        ExactActionBinding.digest(session, operation, payload(task), effect)
 
     fun update(session: String, before: ScheduledTask, after: ScheduledTask): String =
-        NativeActionPolicy.binding(session, "update", payload(before), payload(after))
+        ExactActionBinding.digest(session, "update", payload(before), payload(after))
 
-    fun history(runs: List<TaskRunRecord>): String = NativeActionPolicy.binding(
+    fun history(runs: List<TaskRunRecord>): String = ExactActionBinding.digest(
         *runs.sortedBy { it.idempotencyKey }.map { run -> JSONArray(listOf(
             run.taskId, run.runId, run.scheduledFor, run.startedAt, run.finishedAt ?: JSONObject.NULL,
             run.status, run.deliveryStatus, run.reason ?: JSONObject.NULL, run.skipReason ?: JSONObject.NULL,

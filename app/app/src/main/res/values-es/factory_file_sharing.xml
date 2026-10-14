@@ -1,12 +1,7 @@
 <resources>
   <string name="factory_file_sharing_title">Compartir archivos de Factory</string>
-  <string name="factory_file_sharing_settings_summary">Revisar y cerrar un envío de archivo interrumpido</string>
-  <string name="factory_file_sharing_disclosure">Tu política de Factory controla este envío. Solo se comparte una copia privada verificada, de hasta 8 MiB. Elige el destinatario en el selector de Android. El acceso nuevo dura como máximo cinco minutos y se puede revocar en los permisos de Factory. No se pueden retirar las copias ni los archivos ya abiertos. Jarvys nunca confirma la entrega.</string>
-  <string name="factory_file_sharing_checking">Comprobando la app solicitante y el archivo completo. No se ha autorizado ningún envío.</string>
-  <string name="factory_file_sharing_choose">Elegir quién recibe este archivo</string>
+  <string name="factory_file_sharing_disclosure">Se comparte una copia privada verificada con el destinatario que elijas en el selector de Android. Android concede acceso temporal de lectura. Jarvys no puede retirar las copias ni los flujos ya abiertos y no confirma la entrega.</string>
+  <string name="factory_file_sharing_checking">Comprobando la app solicitante y el archivo completo.</string>
   <string name="factory_file_sharing_close">Cancelar / cerrar</string>
-  <string name="factory_file_sharing_acknowledge">Limpiar el envío interrumpido</string>
-  <string name="factory_file_sharing_waiting">El destinatario puede seguir leyendo después de volver del selector. El permiso temporal de lectura caduca automáticamente. No se confirma la entrega ni el cierre de la app destinataria.</string>
-  <string name="factory_file_sharing_unknown">Esta interacción se interrumpió. Su resultado es desconocido y no se repetirá automáticamente. Limpia la operación para revocar el acceso nuevo y eliminar la copia privada. No se pueden retirar las copias ni los archivos ya abiertos.</string>
-  <string name="factory_file_sharing_rejected">Esta solicitud no está disponible, caducó o fue revocada. No se confirma ninguna entrega. Revisa aquí el envío interrumpido si es necesario.</string>
+  <string name="factory_file_sharing_rejected">La solicitud no está disponible, caducó o se revocó. No se confirma la entrega.</string>
 </resources>

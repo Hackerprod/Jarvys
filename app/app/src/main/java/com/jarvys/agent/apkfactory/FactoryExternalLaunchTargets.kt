@@ -40,6 +40,7 @@ internal class FactoryExternalLaunchTargets(private val context: Context) {
         check(matches.any { info -> runCatching { eligible(info, spec); snapshot(info) == target }.getOrDefault(false) })
         return view(spec).setComponent(target.component)
     }
+    fun systemChooser(spec: ExternalLaunchSpec): Intent = Intent.createChooser(view(spec), null)
     private fun eligible(info: ResolveInfo, spec: ExternalLaunchSpec) {
         val activity = info.activityInfo ?: error("Missing external recipient activity")
         val app = activity.applicationInfo ?: error("Missing external recipient application")

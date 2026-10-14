@@ -25,7 +25,7 @@ final class FactoryWidgetReceiverWork {
             for(int id:selected){if(!current.getAsBoolean())return;WidgetRequest request=e.engine.restorationRequest(id);if(request==null)continue;
                 NativeOperationRequest operation=NativeOperationRequest.parse(WidgetRequest.OPERATION,request.authorizationDetails());
                 try(NativeBackgroundAuthorization.Result lease=NativeBackgroundAuthorization.acquire(owner,e.config,operation,e.identity(),deadline,current)){
-                    if(lease.decision!=NativeBackgroundAuthorization.Decision.ALLOW)continue;
+                    if(lease.decision!=NativeBackgroundAuthorization.Decision.ACTIVE)continue;
                     boolean restored=e.engine.restore(request,()->{if(!current.getAsBoolean())throw new SecurityException("Widget receiver expired");lease.check();if(!current.getAsBoolean())throw new SecurityException("Widget receiver expired");});
                     if(restored&&kind.equals("restored"))e.platform.restoreCompleted(id,lease);
                 }

@@ -40,24 +40,23 @@ class ActionPolicyFoundationTest {
         assertFalse(preferences.contains(key))
         assertEquals(AutonomyPolicy.ALLOW, store.snapshot("future_family", "new_action").policy)
         assertEquals(AutonomyPolicy.ALLOW, ActionPolicyDefaults.descriptor("mcp:new-server", "dynamic-tool").defaultPolicy)
-        assertTrue(ActionPolicyDefaults.registeredActions().any { it.connectorId == "native" && it.operationName == "memory.view" })
+        assertFalse(ActionPolicyDefaults.registeredActions().any { it.connectorId == "native" || it.connectorId == "factory" })
         store.admit(snapshot)
     }
 
-    @Test fun catalogCoversEveryDeviceAndFactoryOperationWithoutCreatingSavedChoices() {
+    @Test fun catalogCoversDeviceAndExternalOperationsWithoutNativePermissionFamilies() {
         val catalog = ActionPolicyDefaults.registeredActions().associateBy { it.connectorId to it.operationName }
         val context = ApplicationProvider.getApplicationContext<Context>()
         val expected = ConnectorRegistry.deviceDefinitions(context).flatMap { definition ->
             definition.operations.map { definition.id to it.name }
-        } + com.jarvys.agent.NativeActionPolicy.Operation.entries.map { "native" to it.id } +
-            com.jarvys.agent.apkfactory.FactoryOperationPolicy.Operation.entries.map { "factory" to it.id } +
-            listOf("linux" to "linux_exec", "linux" to "linux_setup", "linux" to "linux_uninstall", "coding" to "project_exec")
+        } + listOf("linux" to "linux_exec", "linux" to "linux_setup", "linux" to "linux_uninstall", "coding" to "project_exec")
         expected.forEach { key ->
             val descriptor = catalog[key]
             assertNotNull("Missing policy catalog entry: $key", descriptor)
             assertEquals(AutonomyPolicy.ALLOW, descriptor!!.defaultPolicy)
             assertTrue(descriptor.availabilityIsIndependent)
         }
+        assertFalse(catalog.keys.any { it.first == "native" || it.first == "factory" })
         assertTrue(preferences.all.isEmpty())
     }
 

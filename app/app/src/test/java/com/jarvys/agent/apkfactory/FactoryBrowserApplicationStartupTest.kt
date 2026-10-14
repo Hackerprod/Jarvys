@@ -38,7 +38,7 @@ class FactoryBrowserApplicationStartupTest {
         worker {}
         val field = FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val browser = field.get(null) as? FactoryBrowserCoordinator
-        if (browser?.needsRecovery() == true) worker { browser.close(null, true) {} }
+
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (name in listOf("factory-browser", "factory-audio", "factory-file-sharing")) File(context.noBackupFilesDir, name).deleteRecursively()
@@ -64,20 +64,15 @@ class FactoryBrowserApplicationStartupTest {
         } finally { release.countDown() }
         worker {}; FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val browser = FactoryBrowserCoordinator.get(context)
-        assertFalse(browser.isBusy()); assertTrue(browser.needsRecovery()); assertEquals("outcome_unknown", browser.status()); assertNull(browser.session())
-        assertFalse(FactoryInteractionAdmission.available(browser)); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(runCatching { worker { browser.close(null, true) { error("No human confirmation") } } }.isFailure)
-        assertTrue(browser.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        assertNull(worker { browser.close(null, true) {} })
-        assertEquals("closed_outcome_unknown", browser.status()); assertNull(browser.session())
+        assertFalse(browser.isBusy()); assertEquals("closed_outcome_unknown", browser.status()); assertNull(browser.session())
+        assertTrue(browser.canBegin()); assertTrue(FactoryInteractionAdmission.available(browser))
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         val journal = JSONObject(File(root, "interaction.json").readText())
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet()); assertFalse(journal.getBoolean("open"))
     }
     @Test fun openBrowserJournalDoesNotBlockAutomationBeforeAsynchronousRestoreEvenStarts() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "launch_pending").put("open", true).put("nonce", "a".repeat(64)).toString())
-    @Test fun corruptBrowserJournalRetainsFamilyStateThroughRealApplicationStartupAndHumanRecovery() = startup("{")
-    @Test fun reviewJournalRestoresOnlyUnknownOutcomeWithoutRecreatingReviewAuthority() = startup(JSONObject()
+    @Test fun corruptBrowserJournalIsClosedDuringRealApplicationStartup() = startup("{")
+    @Test fun interruptedReviewJournalIsClosedDuringStartup() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "review").put("open", true).put("nonce", "b".repeat(64)).toString())
 }

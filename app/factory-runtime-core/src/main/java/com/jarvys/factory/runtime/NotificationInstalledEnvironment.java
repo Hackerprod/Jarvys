@@ -4,7 +4,7 @@ import android.content.Context;
 import com.jarvys.factory.contract.ResourceBudgets;
 import static com.jarvys.factory.runtime.NotificationScheduleEngine.*;
 
-/** Cold-process adapter to the same authenticated source and live operation policy used by foreground APIs. */
+/** Cold-process adapter to the same authenticated source and live operation session used by foreground APIs. */
 final class NotificationInstalledEnvironment {
     static FactoryConfig configuration(Context context) throws FactoryException {
         try {
@@ -29,20 +29,14 @@ final class NotificationInstalledEnvironment {
             active.check();
             if (mode != Mode.BACKGROUND_NO_UI || row == null || row.request == null ||
                     !source.fingerprint.equals(currentSource.fingerprint) || !source.ownerFingerprint.equals(row.source.ownerFingerprint))
-                return new Decision(NotificationScheduleMachine.Policy.UNAVAILABLE, null);
+                return new Decision(NotificationScheduleMachine.SessionStatus.UNAVAILABLE, null);
             NativeOperationRequest request = NativeOperationRequest.parse("notifications.schedule", row.request.authorizationDetails());
             NativeBackgroundAuthorization.Result result = NativeBackgroundAuthorization.acquire(context, config, request,
                     new NativeBackgroundAuthorization.SourceIdentity(source.appId, source.certificateSha256, source.artifactSha256, source.receiptSha256, source.versionCode),
                     active.deadlineElapsedMs, active::active);
-            if (result.decision == NativeBackgroundAuthorization.Decision.ASK) {
-                result.close(); return new Decision(NotificationScheduleMachine.Policy.ASK, null);
-            }
-            if (result.decision == NativeBackgroundAuthorization.Decision.DENY) {
-                result.close(); return new Decision(NotificationScheduleMachine.Policy.DENIED, null);
-            }
             try {
                 active.check(); result.check();
-                return new Decision(NotificationScheduleMachine.Policy.ALLOWED, new Lease() {
+                return new Decision(NotificationScheduleMachine.SessionStatus.ACTIVE, new Lease() {
                     public void check() { active.check(); result.check(); active.check(); }
                     public void close() { result.close(); }
                 });

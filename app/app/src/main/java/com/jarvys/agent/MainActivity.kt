@@ -1069,8 +1069,7 @@ ${event.text}
         memoryExecutor.execute {
             val selected = memoryStore.forConversation(sessionId)
             val result = runCatching {
-                MemoryNativeActions(this).run(NativeActionPolicy.Operation.MEMORY_RESTORE, selected,
-                    listOf("Undo exact chat memory revision", revisionId.toString(), sessionId), CancellationToken.uncancellable(),
+                MemoryNativeActions(this).run(selected, CancellationToken.uncancellable(),
                     { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
                     selected.undoRevision(revisionId, MemoryStore.Actor.USER, sessionId)
                 }
@@ -1091,8 +1090,7 @@ ${event.text}
         memoryExecutor.execute {
             val result = runCatching {
                 val selected = memoryStore.forConversation(sessionId)
-                val revisions = MemoryNativeActions(this).run(NativeActionPolicy.Operation.MEMORY_RESTORE, selected,
-                    listOf("Undo exact reflection group", reflectionId, sessionId), CancellationToken.uncancellable(),
+                val revisions = MemoryNativeActions(this).run(selected, CancellationToken.uncancellable(),
                     { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
                     selected.undoReflectionGroup(reflectionId, sessionId)
                 }

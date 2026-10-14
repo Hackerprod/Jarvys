@@ -36,7 +36,7 @@ class NotificationEffects {
             return result.put("schedulerAvailable", config.notifications.scheduling && alarms != null)
                     .put("exactAlarmCapabilityDeclared", config.notifications.exactAlarms)
                     .put("exactAlarmAccess", !config.notifications.exactAlarms ? "not_declared" : Build.VERSION.SDK_INT < 31 ? "not_required" : exact ? "granted" : "not_granted")
-                    .put("backgroundApprovalUi", false).put("defaultPrecision", "inexact");
+                    .put("defaultPrecision", "inexact");
         } catch (JSONException impossible) { throw new AssertionError(impossible); }
     }
 
@@ -92,8 +92,8 @@ class NotificationEffects {
                 if (current == null || !resumed.token.equals(current.token) || !request.fingerprint().equals(current.fingerprint))
                     throw new FactoryException("CONFLICT", "Scheduled notification changed while its original request was being reviewed.");
             }
-            Row result = resumed == null ? environment.engine.schedule(request, Mode.FOREGROUND_REVIEW, session)
-                    : environment.engine.resume(request.scheduleId, Mode.FOREGROUND_REVIEW, session);
+            Row result = resumed == null ? environment.engine.schedule(request, Mode.FOREGROUND, session)
+                    : environment.engine.resume(request.scheduleId, Mode.FOREGROUND, session);
             return details(result, request.scheduleId, null);
         }
     }
@@ -105,12 +105,12 @@ class NotificationEffects {
         final String fingerprint = expected.fingerprint();
         return (row, currentSource, mode, session) -> {
             session.check();
-            if (mode != Mode.FOREGROUND_REVIEW || row == null || row.request == null || currentSource == null ||
+            if (mode != Mode.FOREGROUND || row == null || row.request == null || currentSource == null ||
                     !source.fingerprint.equals(currentSource.fingerprint) || !source.ownerFingerprint.equals(row.source.ownerFingerprint) ||
                     !fingerprint.equals(row.fingerprint) || (resumed != null && !resumed.token.equals(row.token)))
                 throw new SecurityException("Notification grant does not bind this immutable schedule.");
             live.check(); session.check();
-            return new Decision(NotificationScheduleMachine.Policy.ALLOWED, new Lease() {
+            return new Decision(NotificationScheduleMachine.SessionStatus.ACTIVE, new Lease() {
                 public void check() { session.check(); live.check(); session.check(); }
                 public void close() { /* NativeEffects owns the foreground lease through bridge delivery. */ }
             });

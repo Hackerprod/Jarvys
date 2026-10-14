@@ -2,7 +2,6 @@ package com.jarvys.agent
 
 import android.content.Context
 import com.jarvys.agent.coding.ProjectScopeStore
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.CrewInputBinding
 import com.jarvys.agent.workspaces.*
 
@@ -10,7 +9,6 @@ import com.jarvys.agent.workspaces.*
 internal class WorkspaceInputIncorporationDelivery(
     context: Context,
     private val ledger: LocalRunStore = LocalRunStore(context),
-    private val policy: NativeActionPolicy = NativeActionPolicy(context),
 ) {
     private val app = context.applicationContext
 
@@ -64,16 +62,12 @@ internal class WorkspaceInputIncorporationDelivery(
         if (admittedInput != null) require(admittedInput.sourceKind == CrewInputBinding.SourceKind.WORKSPACE_REPLY &&
             admittedInput.workspaceId == workspaceId)
         token.throwIfCancelled()
-        if (admittedRead == null && policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy != AutonomyPolicy.ALLOW) return
         admittedRead?.run()
         val owner = scope(workspaceId)
         if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return
-        policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ,
-            NativeActionPolicy.binding(owner.ownerCentralSessionId, "workspace_input_incorporation", workspaceId)).use { permission ->
-            if (admittedRead == null && permission.requiresApproval) return
             fun admit() {
                 token.throwIfCancelled()
-                if (admittedRead == null) permission.admit(token) else admittedRead.run()
+                admittedRead?.run()
             }
             admit()
             // Read-only admission rejects missing identity instead of repairing or creating a project.
@@ -124,7 +118,6 @@ internal class WorkspaceInputIncorporationDelivery(
                 }
                 after = assignments.lastOrNull()?.assignmentId
             } while (assignments.size == PAGE)
-        }
     }
 
     fun read(input: CrewInputBinding, admission: Runnable): WorkspaceInputIncorporation? {
@@ -146,28 +139,21 @@ internal class WorkspaceInputIncorporationDelivery(
         return receipt
     }
 
-    /** Native metadata only, under current read permission; dispatch uncertainty is never erased. */
+    /** Native metadata only; dispatch uncertainty is never erased. */
     fun correctionNote(workspaceId: String, assignmentId: String): String? {
-        if (policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy != AutonomyPolicy.ALLOW) return null
-        return policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ,
-            NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, "workspace_correction_incorporation", workspaceId, assignmentId)).use { permission ->
-            if (permission.requiresApproval) return@use null
-            permission.admit()
             val owner = scope(workspaceId)
             val (assignment, control) = WorkspaceRegistry(app).use { registry ->
                 requireNotNull(registry.getAssignment(workspaceId, assignmentId)) to
                     registry.getLatestCorrection(workspaceId, assignmentId)
             }
-            if (control == null || control.state == WorkspaceControlState.PENDING) return@use null
+            if (control == null || control.state == WorkspaceControlState.PENDING) return null
             WorkspaceInputSources.validateCorrection(owner, assignment, control)
             val receipt = ledger.readWorkspaceInputIncorporation(owner.ownerCentralSessionId,
                 WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, control.requestId)
             if (receipt != null) read(WorkspaceInputSources.correction(owner, assignment, control,
-                receipt.admissionCycleId), Runnable { permission.admit() })
-            else permission.admit()
+                receipt.admissionCycleId), Runnable { })
             AppLanguageRuntime.localizedContext(app).getString(if (receipt != null)
                 R.string.workspace_correction_checkpoint_incorporated else R.string.workspace_correction_checkpoint_unverified)
-        }
     }
 
     companion object {

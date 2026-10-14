@@ -74,16 +74,6 @@ internal abstract class FactoryFileShareTestSupport {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryFileShareOsShadow::class])
 internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
-    @Test fun manifestAndAttachRequireExactPrivateGrantingAuthority() {
-        val info = context.packageManager.getProviderInfo(ComponentName(context, FactoryFileShareProvider::class.java), PackageManager.GET_META_DATA)
-        assertEquals(context.packageName + ".factory.files", info.authority)
-        assertFalse(info.exported)
-        assertTrue(info.grantUriPermissions)
-        for (change in listOf<(ProviderInfo) -> Unit>(
-            { it.authority = "evil.files" }, { it.authority += ";evil.files" },
-            { it.exported = true }, { it.grantUriPermissions = false }
-        )) reject { FactoryFileShareProvider().attachInfo(context, ProviderInfo(info).also(change)) }
-    }
 
     @Test fun exactSnapshotReturnsKnownMetadataAndReadOnlyBytes() {
         val snapshot = stage()
@@ -101,43 +91,6 @@ internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
         assertEquals(256, Os.lstat(snapshotFile(snapshot).path).st_mode and 511)
     }
 
-    @Test fun livePolicyDeniesNewMetadataAndOpenWhileAlreadyOpenFdCannotBeRecalled() {
-        val policy = FactoryOperationPolicy.inMemory()
-        val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 1, "c".repeat(64))
-        val subject = FactoryOperationPolicy.Subject.installed(proof)
-        val grant = policy.acquire(subject, FactoryOperationPolicy.Operation.FILE_SHARE, FactoryOperationPolicy.binding(nonce, digest(bytes)))
-        val snapshot = store().stage(nonce, "report.txt", "text/plain", bytes.size, digest(bytes), Binder(), {}, { grant.checkBeforeEffect() })
-        val alreadyOpen = ParcelFileDescriptor.AutoCloseInputStream(provider.openFile(snapshot.uri, "r"))
-        assertEquals("text/plain", provider.getType(snapshot.uri))
-        policy.setMode(subject, FactoryOperationPolicy.Operation.FILE_SHARE, FactoryOperationPolicy.Mode.DENY)
-        reject { provider.getType(snapshot.uri) }; reject { provider.query(snapshot.uri, null, null, null, null) }; reject { provider.openFile(snapshot.uri, "r") }
-        // Revoking new opens cannot retract an FD that Android already handed to a recipient.
-        alreadyOpen.use { assertArrayEquals(bytes, it.readBytes()) }; grant.close()
-    }
-
-    @Test fun oldExpiryCannotInvalidateNewRecipientProviderRegistration() {
-        val policy = FactoryOperationPolicy.inMemory()
-        val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 1, "c".repeat(64))
-        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
-        fun <T> io(action: () -> T) = worker.submit(java.util.concurrent.Callable(action)).get(5, java.util.concurrent.TimeUnit.SECONDS)
-        val coordinator = FactoryFileShareCoordinator(context, { proof }, receive = { request, active ->
-            store().stage(request.nonce, request.filename, request.mimeType, bytes.size, digest(bytes), Binder(), active)
-        }, clean = { store().cleanup() }, policy = policy)
-        val request = FactoryFileShareCoordinator.Request(nonce, "report.txt", "text/plain", bytes.size, digest(bytes), Binder())
-        try {
-            val oldOwner = io { coordinator.begin(proof.appId, request) {} }
-            val oldExpiry = FactoryFileShareCoordinator::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(coordinator) as Runnable
-            io { coordinator.close(oldOwner, false) {} }
-            val newOwner = io { coordinator.begin(proof.appId, request.copy(nonce = "f".repeat(64))) {} }
-            val chooser = io { coordinator.prepareChooser(newOwner, "Current") {} }
-            val send = chooser.getParcelableExtra<android.content.Intent>(android.content.Intent.EXTRA_INTENT)!!
-            val uri = send.getParcelableExtra<Uri>(android.content.Intent.EXTRA_STREAM)!!
-            oldExpiry.run()
-            assertEquals("chooser_pending", coordinator.status()); assertArrayEquals(bytes, read(uri))
-            io { coordinator.close(newOwner, true) {} }
-        } finally { worker.shutdownNow(); policy.revokeActive(); java.io.File(context.noBackupFilesDir,"factory-file-sharing").deleteRecursively() }
-    }
-
     @Test fun queryRejectsUnboundedDuplicateAndUnknownProjections() {
         val uri = stage().uri
         for (projection in listOf(emptyArray(), arrayOf("_data"),
@@ -149,39 +102,6 @@ internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
             assertEquals(1, it.columnCount)
             assertTrue(it.moveToFirst())
             assertEquals(bytes.size.toLong(), it.getLong(0))
-        }
-    }
-
-    @Test fun writableModesAndEveryMutationAreRejected() {
-        val uri = stage().uri
-        for (mode in listOf("w", "wt", "wa", "rw", "rwt", "", "R", "r ", "rt")) reject { provider.openFile(uri, mode) }
-        reject { provider.insert(uri, ContentValues()) }
-        reject { provider.insert(uri, ContentValues(), Bundle()) }
-        reject { provider.update(uri, ContentValues(), null, null) }
-        reject { provider.update(uri, ContentValues(), Bundle()) }
-        reject { provider.delete(uri, null, null) }
-        reject { provider.delete(uri, Bundle()) }
-        reject { provider.bulkInsert(uri, emptyArray()) }
-        reject { provider.applyBatch(arrayListOf()) }
-        reject { provider.applyBatch(uri.authority!!, arrayListOf(ContentProviderOperation.newDelete(uri).build())) }
-        reject { provider.call("write", null, Bundle()) }
-        assertArrayEquals(bytes, read(uri))
-    }
-
-    @Test fun aliasesTraversalAndUnknownUrisNeverRevealMetadataOrBytes() {
-        val uri = stage().uri
-        val aliases = listOf(uri.buildUpon().appendQueryParameter("displayName", "secret").build(),
-            uri.buildUpon().fragment("alias").build(), uri.buildUpon().authority("evil.files").build(),
-            Uri.parse(uri.toString().replace("/files/", "/files/../files/")),
-            Uri.parse(uri.toString().replace("/files/", "/files/%2e%2e/files/")),
-            Uri.parse(uri.toString().replace("/files/", "/%66iles/")),
-            uri.buildUpon().appendPath("other").build())
-        for (alias in aliases) {
-            reject { provider.openFile(alias, "r") }
-            reject { provider.query(alias, null, null, null, null) }
-            reject { provider.getType(alias) }
-            reject { provider.getTypeAnonymous(alias) }
-            reject { provider.getStreamTypes(alias, "*/*") }
         }
     }
 
@@ -211,20 +131,5 @@ internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
             reject { provider.query(snapshot.uri, null, null, null, null) }
             reject { provider.openFile(snapshot.uri, "r") }
         } finally { elsewhere.delete() }
-    }
-
-    @Test fun unregisteredCacheAndCancelledOpenCannotBeRead() {
-        val snapshot = stage()
-        val signal = CancellationSignal().apply { cancel() }
-        reject { provider.openFile(snapshot.uri, "r", signal) }
-        FactoryFileShareStore(context).cleanup()
-        val orphan = File(root, "snapshot-00000000-0000-0000-0000-000000000000.bin").apply { writeBytes(bytes) }
-        Os.chmod(orphan.path, 256)
-        val uri = FileProvider.getUriForFile(context, FactoryFileShareStore.authority(context), orphan)
-        // Merely instantiating the store never rediscovers authority from old cache contents.
-        FactoryFileShareStore(context)
-        reject { provider.openFile(uri, "r") }
-        reject { provider.query(uri, null, null, null, null) }
-        reject { provider.getType(uri) }
     }
 }

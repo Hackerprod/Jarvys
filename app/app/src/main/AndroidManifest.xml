@@ -11,6 +11,7 @@
         android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Scoped MediaStore Downloads on API 29+ needs no storage permission. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -77,26 +78,13 @@
 
         <provider android:name="com.jarvys.agent.apkfactory.FactoryOperationAuthorizationProvider"
             android:authorities="${applicationId}.factory.operations" android:exported="true" />
-        <activity android:name="com.jarvys.agent.apkfactory.FactoryOperationApprovalActivity"
-            android:exported="true" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
-        <activity android:name="com.jarvys.agent.NativePermissionsActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
-        <activity android:name="com.jarvys.agent.apkfactory.FactoryPermissionsActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryClipboardActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="false" android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name="com.jarvys.agent.apkfactory.FactoryIdentityActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name="com.jarvys.agent.apkfactory.FactoryPreviewActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <activity
-            android:name="com.jarvys.agent.apkfactory.FactoryInstallActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name="com.jarvys.agent.apkfactory.FactoryDocumentActivity"
             android:exported="true"
@@ -119,6 +107,7 @@
         <activity android:name="com.jarvys.agent.apkfactory.FactoryContactActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryPhotoActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <provider android:name="com.jarvys.agent.apkfactory.FactoryPhotoProvider" android:authorities="${applicationId}.factory.camera" android:exported="false" android:grantUriPermissions="true" />
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryInstallActivity" android:exported="false" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
         <receiver
             android:name="com.jarvys.agent.apkfactory.FactoryInstallReceiver"
             android:exported="false" />

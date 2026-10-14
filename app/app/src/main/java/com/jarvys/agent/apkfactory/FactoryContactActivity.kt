@@ -20,20 +20,16 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.jarvys.agent.AppLanguageRuntime
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
 import com.jarvys.factory.runtime.ExternalLaunchControl
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Policy-authorized single phone/email selection with automatic validated delivery. Never reads an address book. */
+/** Authenticated single phone/email selection with validated system picker delivery. Never reads an address book. */
 open class FactoryContactActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryContactCoordinator.get(applicationContext) }
     private val selection by lazy { FactoryContactSelection(applicationContext) }
-    private var guard: MemoryUiAutomationGuard.Lease? = null
-    private var authorityWatch: AutoCloseable? = null
-    private var recoverySurface = false
     private var session: FactoryContactCoordinator.Session? = null
     private var target: FactoryContactSelection.Target? = null
     private var datum: String? = null
@@ -53,18 +49,14 @@ open class FactoryContactActivity : ComponentActivity() {
     private var terminalPending = false
     private lateinit var status: TextView
     private lateinit var valueView: TextView
-    private lateinit var choose: Button
     private lateinit var close: Button
     private val expire = Runnable { revoke(); render() }
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); window.addFlags(WindowManager.LayoutParams.FLAG_SECURE); setResult(Activity.RESULT_CANCELED)
-        val recovery = savedInstanceState == null && runCatching { FactoryContactCoordinator.consumeRecoveryToken(intent) }.getOrDefault(false)
         val caller = callingPackage
-        val incoming = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryContactCoordinator.Request.parse(intent) }.getOrNull() else null
-        if (!recovery && incoming == null) { finish(); return }
-        recoverySurface = recovery
-        if (recovery) session = coordinator.session()
+        val incoming = if (savedInstanceState == null && caller != null) runCatching { FactoryContactCoordinator.Request.parse(intent) }.getOrNull() else null
+        if (incoming == null) { finish(); return }
         val column = PrivateReviewColumn(this).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
         column.addView(TextView(this).apply { setText(R.string.factory_contacts_title); textSize = 22f; privateContact() })
         status = TextView(this).apply { textSize = 16f; privateContact(); autoLinkMask = 0 }; column.addView(status)
@@ -76,9 +68,6 @@ open class FactoryContactActivity : ComponentActivity() {
         }.also {
             it.setText(label); it.tag = "factory-contacts-$name"; it.filterTouchesWhenObscured = true; it.privateContact()
             it.setOnClickListener { if (activeReady()) runCatching(action).onFailure { revoke(); render() } }; column.addView(it)
-        }
-        choose = button(R.string.factory_contacts_choose, "choose") {
-            requireHuman(); coordinator.approve(session ?: error("No request")) { requireHuman() }; releaseGuard(); launchPicker()
         }
         close = button(R.string.factory_external_launch_close, "close") { closeNative() }
         val scroll = ScrollView(this).apply { privateContact(); isFillViewport = true; addView(column) }; setContentView(scroll)
@@ -110,25 +99,17 @@ open class FactoryContactActivity : ComponentActivity() {
                         outcome.onSuccess { (value, selectedTarget) ->
                             if (generation == approved && !isDestroyed && !isFinishing && !value.revoked.get()) {
                                 session = value; target = selectedTarget
-                                if (value.grant.requiresApproval) guard = MemoryUiAutomationGuard.enterProtectedSurface()
-                                authorityWatch = value.grant.onRevoked {
-                                    value.revoke()
-                                    handler.post { if (!closed && session === value) { revoke(); releaseGuard(); render() } }
-                                }
                                 handler.postDelayed(expire, maxOf(0, value.expiresAt - SystemClock.elapsedRealtime()))
                                 advance()
                             } else value.revoke()
                         }.onFailure {
                             rejected = true
-                            if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
-                                session = coordinator.session()
-                            } else finish()
+                            finish()
                         }; render()
                     }
                 }
             }
         }
-        if (recovery) FactoryContactCoordinator.afterStartup { if (!isDestroyed && !isFinishing) { session = coordinator.session(); render() } }
         render()
     }
     private fun awaitStartup(action: () -> Unit) {
@@ -140,20 +121,17 @@ open class FactoryContactActivity : ComponentActivity() {
     }
     private fun activeReady() = resumed && focused && !closed && !isFinishing && !isDestroyed
     private fun requireActive(approved: Long = generation) { check(activeReady() && approved == generation) }
-    private fun humanReady() = activeReady() && guard?.isReadyForUser == true
-    private fun requireHuman() { check(humanReady()); guard!!.requireHumanUiInteraction() }
-    private fun releaseGuard() { guard?.close(); guard = null }
     private fun active(value: FactoryContactCoordinator.Session, approved: Long) {
-        requireActive(approved); coordinator.requireActive(value); value.grant.checkBeforeEffect()
+        requireActive(approved); coordinator.requireCurrent(value)
         check(!signal.isCanceled && value.registration?.isRevoked == false)
     }
     private fun advance() {
         val value = session ?: return
         if (!activeReady() || working || rejected || value.revoked.get()) return
         runCatching {
-            value.grant.requireCurrent()
+            coordinator.requireCurrent(value)
             when (coordinator.status()) {
-                "review" -> if (!value.grant.requiresApproval) launchPicker()
+                "review" -> launchPicker()
                 "selected" -> if (datum != null) deliver()
             }
         }.onFailure { revoke(); render() }
@@ -164,7 +142,6 @@ open class FactoryContactActivity : ComponentActivity() {
     }
     private fun revoke() {
         generation++; rejected = true; datum = null; pendingResult = null; resultReady = false; session?.revoke()
-        releaseGuard()
         if (::valueView.isInitialized) valueView.text = getString(R.string.factory_contacts_none)
         runCatching { CANCELLATION.execute { runCatching { signal.cancel() } } }
     }
@@ -237,11 +214,9 @@ open class FactoryContactActivity : ComponentActivity() {
                 working = false; datum = null
                 outcome.onSuccess { result ->
                     try {
-                        requireActive(approved); check(!signal.isCanceled && SystemClock.elapsedRealtime() < value.expiresAt)
-                        value.grant.checkBeforeEffect()
+                        requireActive(approved); coordinator.requireCurrent(value); check(!signal.isCanceled && SystemClock.elapsedRealtime() < value.expiresAt)
                         setResult(Activity.RESULT_OK, result); closed = true; session = null; finish()
                     } catch (_: Exception) { rejected = true; finish() }
-                    finally { authorityWatch?.close(); authorityWatch = null; value.grant.close() }
                 }.onFailure { revoke(); render() }
             }
         }
@@ -249,12 +224,12 @@ open class FactoryContactActivity : ComponentActivity() {
     private fun closeNative() {
         requireActive()
         if (working || session?.preparing == true) { revoke(); render(); return }
-        val value = session; val recovery = coordinator.needsRecovery(); val approved = generation
-        if (value == null && !recovery) { closed = true; finish(); return }
-        authorityWatch?.close(); authorityWatch = null; releaseGuard(); closing = true
+        val value = session; val approved = generation
+        if (value == null) { closed = true; finish(); return }
+        closing = true
         datum = null; pendingResult = null; working = true; render()
         execute {
-            val outcome = runCatching { coordinator.close(value, recovery, true) { requireActive(approved) } }
+            val outcome = runCatching { coordinator.close(value) { requireActive(approved) } }
             runOnUiThread {
                 working = false
                 outcome.onSuccess { closed = true; session = null; finish() }.onFailure { closing = false; revoke(); render() }
@@ -272,16 +247,11 @@ open class FactoryContactActivity : ComponentActivity() {
                 append('\n').append(it.request.kind)
             }
             target?.let { append("\n\n").append(it.picker.component.flattenToString()) }
-            if (coordinator.needsRecovery()) append("\n\n").append(getString(R.string.factory_documents_unknown))
-            else if (rejected) append("\n\n").append(getString(R.string.factory_contacts_unavailable))
+            if (rejected) append("\n\n").append(getString(R.string.factory_contacts_unavailable))
             else if (working) append("\n\n").append(getString(R.string.factory_documents_checking))
         }
         valueView.text = datum ?: getString(R.string.factory_contacts_none)
         val ready = activeReady() && !working && !rejected && value != null && !value.revoked.get() && value.registration?.isRevoked == false
-        val ask = value?.grant?.requiresApproval == true
-        choose.visibility = if (ask) View.VISIBLE else View.GONE
-        choose.isEnabled = ready && humanReady() && ask && coordinator.status() == "review" && target != null
-        close.setText(if (coordinator.needsRecovery() || (value?.attempted == true && !value.pickerReturned)) R.string.factory_external_launch_recover else R.string.factory_external_launch_close)
         close.isEnabled = activeReady() && !coordinator.isBusy()
     }
     override fun onResume() { super.onResume(); resumed = true; processResult(); advance(); render() }
@@ -298,7 +268,6 @@ open class FactoryContactActivity : ComponentActivity() {
     override fun onDestroy() {
         handler.removeCallbacks(expire); datum = null; pendingResult = null
         if (!closed) revoke()
-        authorityWatch?.close(); authorityWatch = null; releaseGuard()
         super.onDestroy()
     }
     companion object {
