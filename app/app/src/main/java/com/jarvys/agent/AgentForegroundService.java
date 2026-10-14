@@ -165,6 +165,10 @@ public final class AgentForegroundService extends Service {
               queuedRequest.onRejected.run();
             } catch (RuntimeException ignored) { }
           }
+          if (!queuedRequest.followUpClaimId.isEmpty()) {
+            failPendingInput(sessionId, queuedRequest.followUpClaimId);
+          }
+          releaseFollowUpClaim(sessionId, queuedRequest.followUpClaimId);
         }
         failPendingInputRecovery(sessionId);
       }
@@ -210,14 +214,29 @@ public final class AgentForegroundService extends Service {
         break;
       }
 
+      if (!request.followUpClaimId.isEmpty()) {
+        if (!hasFollowUpClaim(sessionId, request.followUpClaimId)
+            || !isPendingFollowUp(sessionId, request.followUpClaimId)) {
+          // STOP or another terminal recovery resolved this request while it was queued.
+          releaseFollowUpClaim(sessionId, request.followUpClaimId);
+          continue;
+        }
+      }
       StopController controller = StopController.forRun();
       CancellationToken token = controller.beginRun();
-      if (token == null) continue;
+      if (token == null) {
+        if (request.onRejected != null) {
+          try { request.onRejected.run(); } catch (RuntimeException ignored) { }
+        }
+        if (!request.followUpClaimId.isEmpty())
+          failPendingInput(sessionId, request.followUpClaimId);
+        releaseFollowUpClaim(sessionId, request.followUpClaimId);
+        continue;
+      }
       ActiveRun active = new ActiveRun(sessionId, controller, token);
       activeRuns.put(sessionId, active);
       activeRunTokens.put(sessionId, token);
       activeRunToken = token;
-      releaseFollowUpClaim(sessionId, request.followUpClaimId);
       synchronized (lane) { lane.active = active; }
       if (request.interactive) {
         com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(active.generation);
@@ -235,6 +254,11 @@ public final class AgentForegroundService extends Service {
       } finally {
         // FutureTask.cancel(true) can mark the Future done before a non-interruptible tool returns.
         // The lane is released here, after the physical call to FutureTask.run() has unwound.
+        boolean stoppedByUser = token.wasStoppedByUser();
+        if (stoppedByUser) {
+          try { failPendingInputRecovery(sessionId); }
+          finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
+        }
         Thread.interrupted();
         token.completeRun();
         activeRuns.remove(sessionId, active);
@@ -242,9 +266,12 @@ public final class AgentForegroundService extends Service {
         if (activeRunToken == token) activeRunToken = activeRunTokens.values().stream().findFirst().orElse(null);
         if (request.interactive) {
           com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(active.generation);
-          if (token.wasStoppedByUser()) failPendingInputRecovery(sessionId);
-          else enqueuePendingInputRecovery(null);
+          if (!stoppedByUser) {
+            releaseFollowUpClaim(sessionId, request.followUpClaimId);
+            enqueuePendingInputRecovery(null);
+          }
         }
+        releaseFollowUpClaim(sessionId, request.followUpClaimId);
         AgentRunUiState.finishPendingGeneration(sessionId, active.generation);
         synchronized (lane) { if (lane.active == active) lane.active = null; }
         refreshForegroundNotification();
@@ -473,6 +500,21 @@ public final class AgentForegroundService extends Service {
       boolean memoryDisabledForConversation,
       boolean regeneration,
       String userMessageId) {
+    startRealAgentInternal(context, goal, skillIds, sessionId, displayGoal,
+        userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration, userMessageId, "");
+  }
+
+  private static void startRealAgentInternal(
+      Context context,
+      String goal,
+      ArrayList<String> skillIds,
+      String sessionId,
+      String displayGoal,
+      boolean userMessageAlreadyRecorded,
+      boolean memoryDisabledForConversation,
+      boolean regeneration,
+      String userMessageId,
+      String followUpRequestId) {
     Intent intent =
         new Intent(context, AgentForegroundService.class)
             .setAction(ACTION_REAL_AGENT)
@@ -483,6 +525,7 @@ public final class AgentForegroundService extends Service {
             .putExtra("chat_memory_disabled", memoryDisabledForConversation)
             .putExtra("chat_regeneration", regeneration)
             .putExtra("chat_user_message_id", userMessageId == null ? "" : userMessageId)
+            .putExtra("chat_follow_up_request_id", followUpRequestId == null ? "" : followUpRequestId)
             .putStringArrayListExtra(
                 "agent_skill_ids",
                 skillIds == null ? new ArrayList<>() : new ArrayList<>(skillIds));
@@ -589,13 +632,23 @@ public final class AgentForegroundService extends Service {
 
   private void failPendingInputRecovery(String onlySessionId) {
     LocalRunStore store = new LocalRunStore(this);
-    List<org.json.JSONObject> pending = onlySessionId == null
-        ? store.readPendingInterruptRequests() : store.readPendingInterruptRequests(onlySessionId);
-    for (org.json.JSONObject request : pending) {
-      String sessionId = request.optString("sessionId", onlySessionId == null ? "" : onlySessionId);
-      String requestId = request.optString("requestId", "");
-      if (sessionId.isEmpty() || requestId.isEmpty()) continue;
-      failPendingInput(sessionId, requestId);
+    if (onlySessionId == null) {
+      Set<String> pendingSessions = new java.util.LinkedHashSet<>();
+      for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
+        String sessionId = request.optString("sessionId", "");
+        if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
+      }
+      for (String sessionId : pendingSessions) failPendingInputRecovery(sessionId);
+      return;
+    }
+    synchronized (interruptAdmissionLock(onlySessionId)) {
+      List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
+      for (org.json.JSONObject request : pending) {
+        String sessionId = request.optString("sessionId", onlySessionId);
+        String requestId = request.optString("requestId", "");
+        if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
+        failPendingInput(sessionId, requestId);
+      }
     }
   }
 
@@ -636,10 +689,10 @@ public final class AgentForegroundService extends Service {
     String text = latest.optString("content", "");
     try {
       startRealAgentInternal(this, "", skills, sessionId, text, true,
-          latest.optBoolean("memoryDisabled", false), false, messageId);
+          latest.optBoolean("memoryDisabled", false), false, messageId, messageId);
     } catch (RuntimeException startFailure) {
-      releaseFollowUpClaim(sessionId, messageId);
-      failPendingInputRecovery(sessionId);
+      try { failPendingInputRecovery(sessionId); }
+      finally { releaseFollowUpClaim(sessionId, messageId); }
     }
   }
 
@@ -650,6 +703,23 @@ public final class AgentForegroundService extends Service {
   private static boolean claimFollowUp(String sessionId, String messageId) {
     if (messageId == null || messageId.isEmpty()) return false;
     return FOLLOW_UP_CLAIMS.computeIfAbsent(sessionId, ignored -> ConcurrentHashMap.newKeySet()).add(messageId);
+  }
+
+  private static boolean hasFollowUpClaim(String sessionId, String messageId) {
+    Set<String> claims = FOLLOW_UP_CLAIMS.get(sessionId);
+    return claims != null && claims.contains(messageId);
+  }
+
+  private boolean isPendingFollowUp(String sessionId, String messageId) {
+    try {
+      for (org.json.JSONObject request : new LocalRunStore(this).readPendingInterruptRequests(sessionId)) {
+        if (messageId.equals(request.optString("requestId", ""))) return true;
+      }
+    } catch (RuntimeException unreadable) {
+      // The caller already confirmed the in-flight claim; an unreadable ledger must not drop it.
+      return true;
+    }
+    return false;
   }
 
   private static void releaseFollowUpClaim(String sessionId, String messageId) {
@@ -798,6 +868,7 @@ public final class AgentForegroundService extends Service {
         intent != null && intent.getBooleanExtra("chat_memory_disabled", false);
     boolean chatRegeneration = intent != null && intent.getBooleanExtra("chat_regeneration", false);
     String chatUserMessageId = intent == null ? "" : intent.getStringExtra("chat_user_message_id");
+    String chatFollowUpRequestId = intent == null ? "" : intent.getStringExtra("chat_follow_up_request_id");
     String sessionId = intent == null ? null : intent.getStringExtra("chat_session_id");
     if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,100}"))
       sessionId = java.util.UUID.randomUUID().toString();
@@ -808,6 +879,7 @@ public final class AgentForegroundService extends Service {
     final boolean memoryDisabledForConversation = chatMemoryDisabled;
     final boolean regeneration = chatRegeneration;
     final String existingUserMessageId = chatUserMessageId == null ? "" : chatUserMessageId;
+    final String followUpRequestId = chatFollowUpRequestId == null ? "" : chatFollowUpRequestId;
     ArrayList<String> selectedSkillIds =
         intent == null ? new ArrayList<>() : intent.getStringArrayListExtra("agent_skill_ids");
     if (selectedSkillIds == null) selectedSkillIds = new ArrayList<>();
@@ -844,7 +916,7 @@ public final class AgentForegroundService extends Service {
         }
       }, isInteractive, isInteractive ? () -> failRejectedInteractiveSubmission(chatSessionId,
           chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId) : null,
-          isInteractive ? existingUserMessageId : ""));
+          isInteractive ? followUpRequestId : ""));
       return START_NOT_STICKY;
     }
 

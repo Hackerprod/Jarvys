@@ -1198,12 +1198,15 @@ object AgentRunUiState {
     @JvmStatic
     fun finishPendingGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
         val ownership = owner()
-        if (ownership.stoppingGeneration != generation) return@synchronized
+        if (ownership.stoppingGeneration != generation || ownership.generation != generation) return@synchronized
+        // The drain thread can still have a pre-STOP ThreadLocal snapshot. Use the latest
+        // published snapshot for this session, and let the stopped generation marker own
+        // finalization instead of relying on a possibly stale `stopping` bit.
+        val current = sessionSnapshots[sessionId] ?: _state.value
+        if (current.sessionId != sessionId) return@synchronized
         ownership.stoppingGeneration = null
         val completion = ownership.stoppedCompletion
         ownership.stoppedCompletion = null
-        val current = _state.value
-        if (current.sessionId != sessionId || !current.stopping) return@synchronized
         val terminalOutcome = completion?.outcome ?: "STOPPED"
         val events = completion?.let {
             val assistant = event("assistant", it.text).copy(
