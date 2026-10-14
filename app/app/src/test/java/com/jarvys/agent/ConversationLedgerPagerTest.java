@@ -449,6 +449,28 @@ public class ConversationLedgerPagerTest {
                 ConversationLedgerPager.prefixScanCountForTests());
     }
 
+    @Test public void appendChurnRetainsOnlyCurrentRoutePageWithinByteBudget() throws Exception {
+        File ledger = temporary.newFile("append-page-cache.jsonl");
+        writeLines(ledger, java.util.Arrays.asList(user("u0", "initial"), assistant("a0")));
+
+        for (int append = 1; append <= 48; append++) {
+            appendLines(ledger, user("u" + append, "question " + append), assistant("a" + append));
+            ConversationLedgerPager.Page page = ConversationLedgerPager.readTail(ledger, 1);
+            assertTrue(page.lines.get(0).contains("u" + append));
+            assertEquals("stale page versions for this ledger must be evicted", 1,
+                    ConversationLedgerPager.cachedPageCountForPathForTests(ledger));
+            assertTrue("pager page cache exceeded its byte budget",
+                    ConversationLedgerPager.cachedPageBytesForTests()
+                            <= ConversationLedgerPager.maxCachedPageBytesForTests());
+        }
+
+        long bytesRead = ConversationLedgerPager.pageBytesReadForTests();
+        ConversationLedgerPager.Page cachedPage = ConversationLedgerPager.readTail(ledger, 1);
+        assertTrue(cachedPage.lines.get(0).contains("u48"));
+        assertEquals("a current page hit must remain a zero-read hit", bytesRead,
+                ConversationLedgerPager.pageBytesReadForTests());
+    }
+
     @Test public void bytePrefixScannerHasTolerantBudgetForFortySevenMiBMostlyProgressLedger() throws Exception {
         File ledger = temporary.newFile("prefix-benchmark-47m.jsonl");
         appendRepeatedProgressRows(ledger, 47L * 1024L * 1024L);

@@ -815,7 +815,7 @@ object AgentRunUiState {
             val identity = refreshEventIdentity(event)
             val replacedLiveTool = event.kind == "tool"
                 && event.stage in setOf("tool_call", "tool_progress", "approval_waiting")
-                && identity == null
+                && refreshToolIdentity(event) == null
                 && !event.toolCallId.isNullOrBlank()
                 && persistedToolCallCounts[event.toolCallId] == 1
             event.id !in transientEventIds

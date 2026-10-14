@@ -28,7 +28,9 @@ public final class ConversationLedgerPager {
     private static final int REVERSE_BLOCK_SIZE = 8 * 1024;
     private static final int FORWARD_BLOCK_SIZE = 16 * 1024;
     private static final int PREFIX_CHECKPOINT_BYTES = 1024 * 1024;
+    private static final long MAX_CACHED_PAGE_BYTES = 4L * 1024L * 1024L;
     private static final int MAX_CACHED_PAGES = 32;
+    private static final int MAX_INDEXED_FILES = 16;
     private static final byte[] ROLE_TOKEN = ascii("\"role\"");
     private static final byte[] CONTENT_TOKEN = ascii("\"content\"");
     private static final byte[] USER_TOKEN = ascii("\"user\"");
@@ -37,12 +39,11 @@ public final class ConversationLedgerPager {
     private static final byte[] CONTENT_WORD = ascii("content");
     private static final byte[] USER_WORD = ascii("user");
     private static final byte[] ASSISTANT_WORD = ascii("assistant");
-    private static final Map<String, Page> PAGE_CACHE = new LinkedHashMap<String, Page>(16, 0.75f, true) {
-        @Override protected boolean removeEldestEntry(Map.Entry<String, Page> eldest) {
-            return size() > MAX_CACHED_PAGES;
-        }
-    };
-    private static final Map<String, PrefixIndex> PREFIX_INDEXES = new LinkedHashMap<>();
+    private static final LinkedHashMap<String, CachedPage> PAGE_CACHE =
+            new LinkedHashMap<>(16, 0.75f, true);
+    private static long cachedPageBytes;
+    private static final LinkedHashMap<String, PrefixIndex> PREFIX_INDEXES =
+            new LinkedHashMap<>(16, 0.75f, true);
     private static long pageBytesRead;
     private static long prefixBytesRead;
     private static long prefixScanCount;
@@ -103,13 +104,71 @@ public final class ConversationLedgerPager {
         long endOffset = beforeOffset == NO_CURSOR ? snapshotLength : Math.min(beforeOffset, snapshotLength);
         String cacheKey = pageCacheKey(snapshot, snapshotLength, beforeOffset, turnCount);
         synchronized (PAGE_CACHE) {
-            Page cached = PAGE_CACHE.get(cacheKey);
-            if (cached != null) return cached;
+            invalidateStalePages(snapshot);
+            CachedPage cached = PAGE_CACHE.get(cacheKey);
+            if (cached != null) return cached.page;
         }
         try (FileChannel channel = FileChannel.open(ledger.toPath(), StandardOpenOption.READ)) {
             Page page = readWindow(channel, endOffset, turnCount, snapshot);
-            synchronized (PAGE_CACHE) { PAGE_CACHE.put(cacheKey, page); }
+            cachePage(cacheKey, snapshot, page);
             return page;
+        }
+    }
+
+    private static void invalidateStalePages(FileSnapshot snapshot) {
+        java.util.Iterator<Map.Entry<String, CachedPage>> iterator = PAGE_CACHE.entrySet().iterator();
+        while (iterator.hasNext()) {
+            CachedPage cached = iterator.next().getValue();
+            if (!cached.path.equals(snapshot.path) || cached.matches(snapshot)) continue;
+            cachedPageBytes -= cached.estimatedBytes;
+            iterator.remove();
+        }
+    }
+
+    private static void cachePage(String key, FileSnapshot snapshot, Page page) {
+        long weight = estimatePageBytes(page);
+        if (weight > MAX_CACHED_PAGE_BYTES) return;
+        synchronized (PAGE_CACHE) {
+            invalidateStalePages(snapshot);
+            CachedPage prior = PAGE_CACHE.put(key, new CachedPage(snapshot, page, weight));
+            if (prior != null) cachedPageBytes -= prior.estimatedBytes;
+            cachedPageBytes += weight;
+            java.util.Iterator<Map.Entry<String, CachedPage>> iterator = PAGE_CACHE.entrySet().iterator();
+            while ((cachedPageBytes > MAX_CACHED_PAGE_BYTES || PAGE_CACHE.size() > MAX_CACHED_PAGES)
+                    && iterator.hasNext()) {
+                CachedPage evicted = iterator.next().getValue();
+                cachedPageBytes -= evicted.estimatedBytes;
+                iterator.remove();
+            }
+        }
+    }
+
+    private static long estimatePageBytes(Page page) {
+        long chars = 0L;
+        for (String line : page.lines) chars += line.length();
+        return chars * 2L + page.lineOffsets.size() * 8L + 128L;
+    }
+
+    /** Drops retained page and prefix state when a conversation is deleted. */
+    static void invalidateFile(File ledger) {
+        if (ledger == null) return;
+        String path = ledger.getAbsolutePath();
+        invalidatePages(ledger);
+        synchronized (PREFIX_INDEXES) { PREFIX_INDEXES.remove(path); }
+    }
+
+    /** Appends discard cached page strings while preserving the incremental prefix index. */
+    static void invalidatePages(File ledger) {
+        if (ledger == null) return;
+        String path = ledger.getAbsolutePath();
+        synchronized (PAGE_CACHE) {
+            java.util.Iterator<Map.Entry<String, CachedPage>> iterator = PAGE_CACHE.entrySet().iterator();
+            while (iterator.hasNext()) {
+                CachedPage cached = iterator.next().getValue();
+                if (!cached.path.equals(path)) continue;
+                cachedPageBytes -= cached.estimatedBytes;
+                iterator.remove();
+            }
         }
     }
 
@@ -174,6 +233,10 @@ public final class ConversationLedgerPager {
             if (index == null || !index.matches(snapshot)) {
                 index = new PrefixIndex(snapshot);
                 PREFIX_INDEXES.put(snapshot.path, index);
+                while (PREFIX_INDEXES.size() > MAX_INDEXED_FILES) {
+                    String eldest = PREFIX_INDEXES.keySet().iterator().next();
+                    PREFIX_INDEXES.remove(eldest);
+                }
             }
         }
         synchronized (index) {
@@ -376,6 +439,21 @@ public final class ConversationLedgerPager {
         prefixScanCount = 0L;
     }
 
+    static int cachedPageCountForPathForTests(File ledger) {
+        String path = ledger.getAbsolutePath();
+        synchronized (PAGE_CACHE) {
+            int count = 0;
+            for (CachedPage cached : PAGE_CACHE.values()) if (cached.path.equals(path)) count++;
+            return count;
+        }
+    }
+
+    static long cachedPageBytesForTests() {
+        synchronized (PAGE_CACHE) { return cachedPageBytes; }
+    }
+
+    static long maxCachedPageBytesForTests() { return MAX_CACHED_PAGE_BYTES; }
+
     static synchronized long pageBytesReadForTests() { return pageBytesRead; }
     static synchronized long prefixBytesReadForTests() { return prefixBytesRead; }
     static synchronized long prefixScanCountForTests() { return prefixScanCount; }
@@ -427,6 +505,30 @@ public final class ConversationLedgerPager {
             this.fileKey = fileKey;
             this.length = length;
             this.modified = modified;
+        }
+    }
+
+    private static final class CachedPage {
+        final String path;
+        final Object fileKey;
+        final long fileLength;
+        final java.nio.file.attribute.FileTime modified;
+        final Page page;
+        final long estimatedBytes;
+
+        CachedPage(FileSnapshot snapshot, Page page, long estimatedBytes) {
+            this.path = snapshot.path;
+            this.fileKey = snapshot.fileKey;
+            this.fileLength = snapshot.length;
+            this.modified = snapshot.modified;
+            this.page = page;
+            this.estimatedBytes = estimatedBytes;
+        }
+
+        boolean matches(FileSnapshot snapshot) {
+            return path.equals(snapshot.path) && fileLength == snapshot.length
+                    && modified.equals(snapshot.modified)
+                    && (fileKey == null ? snapshot.fileKey == null : fileKey.equals(snapshot.fileKey));
         }
     }
 

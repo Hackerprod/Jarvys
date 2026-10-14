@@ -27,10 +27,14 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.FileOutputStream;
+import java.io.FilterInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -50,11 +54,25 @@ public final class LocalRunStore {
     private static final Map<String, String> CREW_SNAPSHOT_DIGESTS = new LinkedHashMap<>();
     private static final Object TIMELINE_PAGE_CACHE_LOCK = new Object();
     private static final long MAX_TIMELINE_PAGE_CACHE_BYTES = 8L * 1024L * 1024L;
+    private static final int MAX_INDEXED_LEDGER_FILES = 16;
+    private static final int MAX_CACHED_TOOL_PAIRS_PER_FILE = 128;
+    private static final int MAX_CACHED_TOOL_ACTIVITY_LOOKUPS_PER_FILE = 128;
     private static long timelinePageCacheBytes;
     private static long timelinePagePagerCallCount;
+    private static long conversationRowsFullParseCount;
+    private static long toolActivityLedgerScanCount;
+    private static long toolActivityLedgerScanBytes;
+    private static long toolActivityScanUnderSessionLockCount;
+    private static long userMessagesAfterScanCount;
+    private static long userMessagesAfterScanBytes;
+    private static long userMessagesAfterScanUnderSessionLockCount;
+    private static volatile Runnable toolActivityScanTestHook;
     private static final LinkedHashMap<String, CachedTimelinePage> TIMELINE_PAGE_CACHE =
             new LinkedHashMap<>(16, 0.75f, true);
-    private static final Map<String, ToolBatchCache> TOOL_BATCH_CACHES = new HashMap<>();
+    private static final LinkedHashMap<String, ToolBatchCache> TOOL_BATCH_CACHES =
+            new LinkedHashMap<>(16, 0.75f, true);
+    private static final LinkedHashMap<String, ToolActivityBatchCache> TOOL_ACTIVITY_BATCH_CACHES =
+            new LinkedHashMap<>(16, 0.75f, true);
     private final File root;
     private final String runBoundary;
     private final ConversationMetadataStore conversationMetadata;
@@ -1103,45 +1121,55 @@ public final class LocalRunStore {
     }
 
     /** Idempotent system-authored assistant message for the dedicated Proactive conversation. */
-    public synchronized String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
-                                                                          String content) {
+    public String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
+            String content) {
         return appendProactiveAssistantMessageIfAbsent(sessionId, decisionId, content, null, "");
     }
 
-    public synchronized String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
-                                                                          String content,
-                                                                          List<ProactiveSuggestedReply> replies,
-                                                                          String threadKey) {
+    public String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
+            String content, List<ProactiveSuggestedReply> replies, String threadKey) {
         if (decisionId == null || decisionId.trim().isEmpty()) {
             throw new IllegalArgumentException("A proactive decision id is required");
         }
         File ledger = conversationFile(sessionId);
-        synchronized (SESSION_TITLE_LOCK) {
-            for (JSONObject existing : readConversationRows(sessionId)) {
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) throw new IllegalStateException("This chat has been deleted");
+            String existingMessageId = "";
+            boolean existingFound = false;
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
+            orderAssistantMessagesBeforeSteering(rows);
+            for (JSONObject existing : rows) {
                 if (decisionId.equals(existing.optString("proactiveDecisionId"))) {
-                    return existing.optString("messageId", "");
+                    existingMessageId = existing.optString("messageId", "");
+                    existingFound = true;
+                    break;
                 }
             }
-            String messageId = java.util.UUID.randomUUID().toString();
-            JSONObject row = new JSONObject();
-            try {
-                row.put("role", "assistant");
-                row.put("content", content == null ? "" : content);
-                row.put("messageId", messageId);
-                row.put("status", "COMPLETED");
-                row.put("type", "proactive_message");
-                row.put("proactiveDecisionId", decisionId);
-                row.put("proactiveThreadKey", threadKey == null ? "" : threadKey);
-                JSONArray replyRows = new JSONArray();
-                if (replies != null) for (ProactiveSuggestedReply reply : replies) {
-                    replyRows.put(new JSONObject().put("label", reply.getLabel()).put("text", reply.getText()));
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                if (existingFound) return existingMessageId;
+                String messageId = java.util.UUID.randomUUID().toString();
+                JSONObject row = new JSONObject();
+                try {
+                    row.put("role", "assistant");
+                    row.put("content", content == null ? "" : content);
+                    row.put("messageId", messageId);
+                    row.put("status", "COMPLETED");
+                    row.put("type", "proactive_message");
+                    row.put("proactiveDecisionId", decisionId);
+                    row.put("proactiveThreadKey", threadKey == null ? "" : threadKey);
+                    JSONArray replyRows = new JSONArray();
+                    if (replies != null) for (ProactiveSuggestedReply reply : replies) {
+                        replyRows.put(new JSONObject().put("label", reply.getLabel()).put("text", reply.getText()));
+                    }
+                    row.put("suggestedReplies", replyRows);
+                    row.put("timestamp", System.currentTimeMillis() / 1000.0);
+                    appendSessionRowLocked(ledger, row);
+                    return messageId;
+                } catch (Exception error) {
+                    throw new IllegalStateException("Could not persist proactive conversation message", error);
                 }
-                row.put("suggestedReplies", replyRows);
-                row.put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(ledger, row);
-                return messageId;
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not persist proactive conversation message", error);
             }
         }
     }
@@ -1169,60 +1197,88 @@ public final class LocalRunStore {
     }
 
     /** Atomically consumes every quick reply on a proactive message and returns only the selected text. */
-    public synchronized ProactiveReplyClaim claimProactiveSuggestedReply(String sessionId, String messageId, int index) {
-        synchronized (SESSION_TITLE_LOCK) {
-            List<JSONObject> rows = readConversationRows(sessionId);
-            for (JSONObject row : rows) {
-                if ("proactive_reply_used".equals(row.optString("type")) && messageId.equals(row.optString("messageId"))) return null;
-            }
+    public ProactiveReplyClaim claimProactiveSuggestedReply(String sessionId, String messageId, int index) {
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return null;
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
+            orderAssistantMessagesBeforeSteering(rows);
+            boolean alreadyUsed = false;
             JSONObject message = null;
             for (JSONObject row : rows) {
-                if ("proactive_message".equals(row.optString("type")) && messageId.equals(row.optString("messageId"))) {
-                    message = row; break;
+                if ("proactive_reply_used".equals(row.optString("type"))
+                        && messageId.equals(row.optString("messageId"))) alreadyUsed = true;
+                if (message == null && "proactive_message".equals(row.optString("type"))
+                        && messageId.equals(row.optString("messageId"))) message = row;
+            }
+            String text = "";
+            String threadKey = "";
+            if (message != null && index >= 0) {
+                JSONArray replies = message.optJSONArray("suggestedReplies");
+                JSONObject reply = replies == null || index >= replies.length() ? null : replies.optJSONObject(index);
+                if (reply != null) {
+                    text = reply.optString("text").trim();
+                    threadKey = message.optString("proactiveThreadKey").trim();
                 }
             }
-            if (message == null || index < 0) return null;
-            JSONArray replies = message.optJSONArray("suggestedReplies");
-            if (replies == null || index >= replies.length()) return null;
-            JSONObject reply = replies.optJSONObject(index);
-            if (reply == null) return null;
-            String text = reply.optString("text").trim();
-            String threadKey = message.optString("proactiveThreadKey").trim();
-            if (text.isEmpty() || threadKey.isEmpty()) return null;
-            JSONObject claimed = new JSONObject();
-            try {
-                claimed.put("type", "proactive_reply_used");
-                claimed.put("messageId", messageId);
-                claimed.put("timestamp", System.currentTimeMillis() / 1000.0);
-            } catch (Exception error) { throw new IllegalStateException("Could not claim proactive reply", error); }
-            appendSessionRowLocked(conversationFile(sessionId), claimed);
-            return new ProactiveReplyClaim(text, threadKey, "");
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                if (alreadyUsed || text.isEmpty() || threadKey.isEmpty()) return null;
+                JSONObject claimed = new JSONObject();
+                try {
+                    claimed.put("type", "proactive_reply_used");
+                    claimed.put("messageId", messageId);
+                    claimed.put("timestamp", System.currentTimeMillis() / 1000.0);
+                } catch (Exception error) { throw new IllegalStateException("Could not claim proactive reply", error); }
+                appendSessionRowLocked(ledger, claimed);
+                return new ProactiveReplyClaim(text, threadKey, "");
+            }
         }
     }
 
-    public synchronized String proactiveThreadKeyForUserMessage(String sessionId, String userMessageId) {
+    public String proactiveThreadKeyForUserMessage(String sessionId, String userMessageId) {
         if (userMessageId == null || userMessageId.isEmpty()) return null;
-        synchronized (SESSION_TITLE_LOCK) {
-            for (JSONObject row : readConversationRows(sessionId)) {
-                if ("user".equals(row.optString("role")) && userMessageId.equals(row.optString("messageId"))) {
-                    String key = row.optString("proactiveThreadKey", "");
-                    return key.isEmpty() ? null : key;
-                }
-            }
-        }
-        return null;
+        JSONObject row = readConversationRowByMessageId(sessionId, userMessageId);
+        if (row == null || !"user".equals(row.optString("role"))) return null;
+        String key = row.optString("proactiveThreadKey", "");
+        return key.isEmpty() ? null : key;
     }
 
-    public synchronized String readConversationMessage(String sessionId, String messageId) {
+    public String readConversationMessage(String sessionId, String messageId) {
         if (messageId == null || messageId.isEmpty()) return null;
-        synchronized (SESSION_TITLE_LOCK) {
-            for (JSONObject row : readConversationRows(sessionId)) {
-                if ("user".equals(row.optString("role")) && messageId.equals(row.optString("messageId"))) {
-                    return row.optString("content", "");
-                }
+        JSONObject row = readConversationRowByMessageId(sessionId, messageId);
+        return row != null && "user".equals(row.optString("role"))
+                ? row.optString("content", "") : null;
+    }
+
+    private JSONObject readConversationRowByMessageId(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || messageId.isEmpty()) return null;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return null;
+            JSONObject result = null;
+            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
+                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (isConversationTimelineLedgerRow(row, false)
+                            && messageId.equals(row.optString("messageId", ""))) {
+                        result = row;
+                        break;
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read conversation message", error);
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return result;
             }
         }
-        return null;
     }
 
     public synchronized void appendAssistantTranslation(String sessionId, String messageId,
@@ -1284,58 +1340,113 @@ public final class LocalRunStore {
         }
     }
 
-    public synchronized void appendAssistantRegenerated(String sessionId, String messageId) {
+    public void appendAssistantRegenerated(String sessionId, String messageId) {
         appendMessageMarker(sessionId, "assistant_regenerated", messageId);
     }
 
-    public synchronized void appendAssistantDeleted(String sessionId, String messageId) {
+    public void appendAssistantDeleted(String sessionId, String messageId) {
         appendMessageMarker(sessionId, "assistant_deleted", messageId);
     }
 
-    public synchronized void appendAssistantTranslationHidden(String sessionId, String messageId) {
+    public void appendAssistantTranslationHidden(String sessionId, String messageId) {
         appendMessageMarker(sessionId, "assistant_translation_hidden", messageId);
     }
 
     /** Commits ownership before the runtime reports a successful native attachment. Repeats are idempotent. */
-    public synchronized void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
+    public void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
         new DeliveredArtifactStore(root.getParentFile()).resolve(sessionId, artifact);
-        synchronized (SESSION_TITLE_LOCK) {
-            for (JSONObject row : readConversationRows(sessionId)) {
-                if ("delivered_file".equals(row.optString("type"))) {
-                    ChatAttachment existing = ChatAttachment.fromJson(row.optJSONObject("artifact"));
-                    if (existing != null && existing.id.equals(artifact.id)) {
-                        if (!existing.equals(artifact)) throw new IllegalStateException("Delivered artifact metadata differs");
-                        return;
-                    }
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) throw new IllegalStateException("This chat has been deleted");
+            ChatAttachment existing = findDeliveredFileInSnapshot(snapshot, artifact.id);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                if (existing != null) {
+                    if (!existing.equals(artifact)) throw new IllegalStateException("Delivered artifact metadata differs");
+                    return;
                 }
+                try {
+                    JSONObject row = new JSONObject().put("type", "delivered_file").put("artifact", artifact.toJson())
+                            .put("timestamp", System.currentTimeMillis() / 1000.0);
+                    appendSessionRowLocked(ledger, row);
+                    return;
+                } catch (Exception failure) { throw new IllegalStateException("Could not persist delivered file", failure); }
             }
-            try {
-                JSONObject row = new JSONObject().put("type", "delivered_file").put("artifact", artifact.toJson())
-                        .put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(conversationFile(sessionId), row);
-            } catch (Exception failure) { throw new IllegalStateException("Could not persist delivered file", failure); }
         }
     }
 
-    public synchronized ChatAttachment findChatFile(String sessionId, String kind, String id) {
-        if (conversationMetadata.read(sessionId).deleted) return null;
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if ("delivered".equals(kind) && "delivered_file".equals(row.optString("type"))) {
-                ChatAttachment attachment = ChatAttachment.fromJson(row.optJSONObject("artifact"));
-                if (attachment != null && attachment.id.equals(id)) return attachment;
-            } else if ("attachment".equals(kind)) {
-                for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) if (attachment.id.equals(id)) return attachment;
+    public ChatAttachment findChatFile(String sessionId, String kind, String id) {
+        if (sessionId == null || id == null || id.isEmpty()
+                || !"delivered".equals(kind) && !"attachment".equals(kind)) return null;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return null;
+            ChatAttachment found = findChatFileInSnapshot(snapshot, sessionId, kind, id);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return found;
             }
+        }
+    }
+
+    private static ChatAttachment findDeliveredFileInSnapshot(LedgerSnapshot snapshot, String id) {
+        return findChatFileInSnapshot(snapshot, null, "delivered", id);
+    }
+
+    private static ChatAttachment findChatFileInSnapshot(LedgerSnapshot snapshot, String sessionId,
+            String kind, String id) {
+        if (!snapshot.exists || snapshot.length <= 0L) return null;
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+            String line;
+            while ((line = reader.previousLine()) != null) try {
+                JSONObject row = new JSONObject(line);
+                if (!isConversationTimelineLedgerRow(row, false)) continue;
+                if ("delivered".equals(kind) && "delivered_file".equals(row.optString("type"))) {
+                    ChatAttachment attachment = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                    if (attachment != null && attachment.id.equals(id)) return attachment;
+                } else if ("attachment".equals(kind)) {
+                    for (ChatAttachment attachment : attachmentsForRow(sessionId, row))
+                        if (attachment.id.equals(id)) return attachment;
+                }
+            } catch (Exception ignored) { }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not read chat file ownership", error);
         }
         return null;
     }
 
-    public synchronized boolean ownsGeneratedFile(String sessionId, String path) {
-        if (conversationMetadata.read(sessionId).deleted) return false;
-        for (JSONObject row : readConversationRows(sessionId))
-            if ("generated_image".equals(row.optString("type")) && "COMPLETED".equals(row.optString("status"))
-                    && path.equals(row.optString("imagePath"))) return true;
-        return false;
+    public boolean ownsGeneratedFile(String sessionId, String path) {
+        if (sessionId == null || path == null) return false;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return false;
+            boolean found = false;
+            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
+                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if ("generated_image".equals(row.optString("type"))
+                            && "COMPLETED".equals(row.optString("status"))
+                            && path.equals(row.optString("imagePath"))) {
+                        found = true;
+                        break;
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not verify generated chat file ownership", error);
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return found;
+            }
+        }
     }
 
     /** Persists an image reference and prompt only; raw image bytes stay in GeneratedImageStore. */
@@ -1382,6 +1493,9 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) {
             conversationMetadata.update(sessionId, "deleted", true);
             invalidateTimelinePageCache(ledger);
+            ConversationLedgerPager.invalidateFile(ledger);
+            TOOL_BATCH_CACHES.remove(ledger.getAbsolutePath());
+            TOOL_ACTIVITY_BATCH_CACHES.remove(ledger.getAbsolutePath());
             SESSION_TITLES_IN_PROGRESS.remove(sessionId);
             boolean complete = true;
             try { complete &= !ledger.exists() || ledger.delete(); }
@@ -1427,23 +1541,47 @@ public final class LocalRunStore {
         conversationMetadata.update(sessionId, "archived", archived);
     }
 
-    public synchronized List<ChatAttachment> readConversationAttachments(String sessionId, String messageId) {
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if (messageId != null && messageId.equals(row.optString("messageId", ""))) return attachmentsForRow(sessionId, row);
-        }
-        return Collections.emptyList();
+    public List<ChatAttachment> readConversationAttachments(String sessionId, String messageId) {
+        JSONObject row = readConversationRowByMessageId(sessionId, messageId);
+        return row == null ? Collections.emptyList() : attachmentsForRow(sessionId, row);
     }
 
-    public synchronized boolean conversationHasAttachments(String sessionId) {
-        for (JSONObject row : readConversationRows(sessionId)) if (!attachmentsForRow(sessionId, row).isEmpty()) return true;
-        return false;
+    public boolean conversationHasAttachments(String sessionId) {
+        return conversationContainsPrivateData(sessionId, false);
     }
 
-    public synchronized boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type")) || "delivered_file".equals(row.optString("type"))) return true;
+    public boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
+        return conversationContainsPrivateData(sessionId, true);
+    }
+
+    private boolean conversationContainsPrivateData(String sessionId, boolean includeGeneratedArtifacts) {
+        if (sessionId == null || conversationMetadata.read(sessionId).deleted) return false;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null || !snapshot.exists || snapshot.length <= 0L) return false;
+            boolean found = false;
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (!attachmentsForRow(sessionId, row).isEmpty()
+                            || includeGeneratedArtifacts && ("generated_image".equals(row.optString("type"))
+                                    || "delivered_file".equals(row.optString("type")))) {
+                        found = true;
+                        break;
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not inspect conversation attachments", error);
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return found;
+            }
         }
-        return false;
     }
 
     public void markConversationHasPrivateCode(String sessionId) {
@@ -1455,22 +1593,40 @@ public final class LocalRunStore {
         return privacy.privateCode || privacy.deleted;
     }
 
-    synchronized List<ConversationImageReference> readConversationImageReferences(String sessionId) {
-        List<ConversationImageReference> result = new ArrayList<>();
-        if (ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return result;
-        String userMessageId = "";
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if ("user".equals(row.optString("role"))) userMessageId = row.optString("messageId", "");
-            for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) {
-                if (attachment.isImage()) result.add(ConversationImageReference.attachment(userMessageId, attachment));
+    List<ConversationImageReference> readConversationImageReferences(String sessionId) {
+        List<ConversationImageReference> empty = Collections.emptyList();
+        if (sessionId == null || ProactiveConversation.SESSION_ID.equals(sessionId)
+                || ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return empty;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return empty;
+            List<ConversationImageReference> result = new ArrayList<>();
+            String userMessageId = "";
+            if (snapshot.exists && snapshot.length > 0L) try (BufferedReader reader = snapshotReader(snapshot)) {
+                String line;
+                while ((line = reader.readLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (!isConversationTimelineLedgerRow(row, false)) continue;
+                    if ("user".equals(row.optString("role"))) userMessageId = row.optString("messageId", "");
+                    for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) {
+                        if (attachment.isImage()) result.add(ConversationImageReference.attachment(userMessageId, attachment));
+                    }
+                    if ("generated_image".equals(row.optString("type"))
+                            && "COMPLETED".equals(row.optString("status"))) {
+                        ConversationImageReference reference = ConversationImageReference.generated(
+                                userMessageId, row.optString("imagePath", ""), row.optString("prompt", ""));
+                        if (reference != null) result.add(reference);
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read conversation image references", error);
             }
-            if ("generated_image".equals(row.optString("type")) && "COMPLETED".equals(row.optString("status"))) {
-                ConversationImageReference reference = ConversationImageReference.generated(
-                        userMessageId, row.optString("imagePath", ""), row.optString("prompt", ""));
-                if (reference != null) result.add(reference);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return Collections.unmodifiableList(result);
             }
         }
-        return Collections.unmodifiableList(result);
     }
 
     private static List<ChatAttachment> attachmentsForRow(String sessionId, JSONObject row) {
@@ -1602,29 +1758,179 @@ public final class LocalRunStore {
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
 
-    public synchronized void appendToolActivity(String sessionId, String userMessageId, ToolActivity activity) {
+    public void appendToolActivity(String sessionId, String userMessageId, ToolActivity activity) {
         try {
             JSONObject value = activity.toJson();
             value.put("detail", new MainChatTranscriptStore(filesDirectory(),sessionId,this).retain(activity.detail));
             value.put("auditDetail", MainChatTranscriptStore.shortText(CrewCheckpointStore.sanitizeText(activity.auditDetail),4000));
-            String sourceBatch="";
-            List<JSONObject> retainedRows=readConversationRows(sessionId);
-            for(JSONObject prior:retainedRows) {
-                if("tool_activity".equals(prior.optString("type")) && userMessageId.equals(prior.optString("userMessageId"))) {
-                    JSONObject priorActivity=prior.optJSONObject("activity");
-                    if(priorActivity!=null && activity.executionId.equals(priorActivity.optString("executionId"))) {
-                        sourceBatch=prior.optString("batchId");break;
-                    }
-                }
-                if("model_tool_calls".equals(prior.optString("type")) && userMessageId.equals(prior.optString("userMessageId"))) {
-                    JSONArray calls=prior.optJSONArray("calls");
-                    if(calls!=null) for(int i=0;i<calls.length();i++) if(activity.callId.equals(calls.getJSONObject(i).optString("id"))) sourceBatch=prior.optString("batchId");
+            File ledger = conversationFile(sessionId);
+            JSONObject row = new JSONObject().put("type","tool_activity").put("schemaVersion",1)
+                    .put("userMessageId",userMessageId).put("batchId","").put("activity",value)
+                    .put("timestamp",activity.timestampMillis/1000.0);
+            while (true) {
+                ToolActivityBatchLookup lookup = toolActivitySourceBatch(
+                        sessionId, userMessageId, activity.executionId, activity.callId);
+                row.put("batchId", lookup.resolution.sourceBatch);
+                synchronized (SESSION_TITLE_LOCK) {
+                    if (!lookup.matches(ledger)) continue;
+                    if (conversationMetadata.read(sessionId).deleted)
+                        throw new IllegalStateException("This chat has been deleted");
+                    ToolActivityBatchCache cache = toolActivityCacheForSnapshotLocked(ledger,
+                            lookup.fileIdentity, lookup.length, lookup.lastModified);
+                    cache.remember(lookup.pairKey, lookup.resolution);
+                    appendSessionRowLocked(ledger,row);
+                    cacheToolActivityAfterAppendLocked(ledger, lookup, row);
+                    return;
                 }
             }
-            JSONObject row = new JSONObject().put("type","tool_activity").put("schemaVersion",1)
-                    .put("userMessageId",userMessageId).put("batchId",sourceBatch).put("activity",value).put("timestamp",activity.timestampMillis/1000.0);
-            synchronized(SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId),row); }
         } catch(Exception failure) { throw new IllegalStateException("Could not persist tool activity",failure); }
+    }
+
+    /** Resolves activity ownership newest-first without materializing or parsing the full timeline. */
+    private ToolActivityBatchLookup toolActivitySourceBatch(String sessionId, String userMessageId,
+            String executionId, String callId) {
+        File ledger = conversationFile(sessionId);
+        String path = ledger.getAbsolutePath();
+        String pair = toolActivityPairKey(userMessageId, executionId, callId);
+        Object identity;
+        long length;
+        long modified;
+        synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) {
+                identity = fileIdentity(ledger);
+                length = ledger.isFile() ? ledger.length() : 0L;
+                modified = ledger.isFile() ? ledger.lastModified() : 0L;
+                return new ToolActivityBatchLookup(ledger, ledger.isFile(), identity, length, modified,
+                        pair, new ActivityBatchResolution("", false));
+            }
+            identity = fileIdentity(ledger);
+            length = ledger.length();
+            modified = ledger.lastModified();
+            ToolActivityBatchCache cache = toolActivityCacheForSnapshotLocked(ledger, identity, length, modified);
+            ActivityBatchResolution cached = pair == null ? null : cache.lookups.get(pair);
+            if (cached != null)
+                return new ToolActivityBatchLookup(ledger, true, identity, length, modified, pair, cached);
+        }
+
+        ActivityBatchResolution discovered = scanToolActivitySourceBatch(
+                ledger, length, userMessageId, executionId, callId);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (!conversationMetadata.read(sessionId).deleted && ledger.isFile()
+                    && sameFileIdentity(identity, fileIdentity(ledger))
+                    && length == ledger.length() && modified == ledger.lastModified()) {
+                ToolActivityBatchCache cache = toolActivityCacheForSnapshotLocked(
+                        ledger, identity, length, modified);
+                if (pair != null) cache.remember(pair, discovered);
+            }
+        }
+        return new ToolActivityBatchLookup(ledger, true, identity, length, modified, pair, discovered);
+    }
+
+    private ActivityBatchResolution scanToolActivitySourceBatch(File ledger, long length,
+            String userMessageId, String executionId, String callId) {
+        Runnable testHook = toolActivityScanTestHook;
+        if (testHook != null) {
+            toolActivityScanTestHook = null;
+            testHook.run();
+        }
+        synchronized (LocalRunStore.class) {
+            toolActivityLedgerScanCount++;
+            if (Thread.holdsLock(SESSION_TITLE_LOCK)) toolActivityScanUnderSessionLockCount++;
+        }
+        String fallbackBatch = "";
+        boolean fallbackFound = false;
+        String activityBatch = "";
+        boolean activityFound = false;
+        if (length > 0L) {
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
+                String line;
+                while ((line = reader.previousLine()) != null) {
+                    try {
+                        JSONObject row = new JSONObject(line);
+                        if (!userMessageId.equals(row.optString("userMessageId", ""))) continue;
+                        String type = row.optString("type");
+                        if ("tool_activity".equals(type)) {
+                            JSONObject priorActivity = row.optJSONObject("activity");
+                            if (priorActivity != null && executionId != null && !executionId.isEmpty()
+                                    && executionId.equals(priorActivity.optString("executionId", ""))) {
+                                activityBatch = row.optString("batchId", "");
+                                activityFound = true;
+                                // A single execution keeps its source batch across all lifecycle rows.
+                                // The newest matching activity therefore has the same association as
+                                // the full forward scan's first matching activity.
+                                break;
+                            }
+                        } else if ("model_tool_calls".equals(type) && !fallbackFound) {
+                            JSONArray calls = row.optJSONArray("calls");
+                            if (calls == null) continue;
+                            for (int index = 0; index < calls.length(); index++) {
+                                JSONObject call = calls.optJSONObject(index);
+                                if (call != null && callId.equals(call.optString("id", ""))) {
+                                    fallbackBatch = row.optString("batchId", "");
+                                    fallbackFound = true;
+                                }
+                            }
+                            if (fallbackFound) {
+                                // For a new execution its call row is the nearest ownership
+                                // record; older callId reuse belongs to an earlier execution.
+                                break;
+                            }
+                        }
+                    } catch (Exception ignored) { }
+                }
+                synchronized (LocalRunStore.class) { toolActivityLedgerScanBytes += reader.bytesRead(); }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not resolve tool activity batch", error);
+            }
+        }
+        return activityFound ? new ActivityBatchResolution(activityBatch, true)
+                : new ActivityBatchResolution(fallbackBatch, false);
+    }
+
+    private static String toolActivityPairKey(String userMessageId, String executionId, String callId) {
+        if (userMessageId == null || userMessageId.isEmpty() || callId == null || callId.isEmpty()) return null;
+        return userMessageId + '\u0000' + (executionId == null ? "" : executionId) + '\u0000' + callId;
+    }
+
+    private static ToolActivityBatchCache toolActivityCacheForSnapshotLocked(File ledger, Object identity,
+            long length, long modified) {
+        String path = ledger.getAbsolutePath();
+        ToolActivityBatchCache cache = TOOL_ACTIVITY_BATCH_CACHES.get(path);
+        if (cache == null || !cache.matches(identity, length, modified)) {
+            cache = new ToolActivityBatchCache(path, identity, length, modified);
+            TOOL_ACTIVITY_BATCH_CACHES.put(path, cache);
+            trimIndexedLedgerCachesLocked();
+        }
+        return cache;
+    }
+
+    private static void cacheToolActivityAfterAppendLocked(File ledger, ToolActivityBatchLookup lookup,
+            JSONObject appendedRow) {
+        Object identity = fileIdentity(ledger);
+        long length = ledger.length();
+        long modified = ledger.lastModified();
+        ToolActivityBatchCache cache = TOOL_ACTIVITY_BATCH_CACHES.get(ledger.getAbsolutePath());
+        if (cache == null || !cache.matches(identity, length, modified)) {
+            cache = new ToolActivityBatchCache(ledger.getAbsolutePath(), identity, length, modified);
+            TOOL_ACTIVITY_BATCH_CACHES.put(ledger.getAbsolutePath(), cache);
+            trimIndexedLedgerCachesLocked();
+            if (lookup.pairKey != null) cache.remember(lookup.pairKey, lookup.resolution);
+            cache.advanceAppendedRow(appendedRow);
+            cache.length = length;
+            cache.lastModified = modified;
+        } else if (lookup.pairKey != null && !cache.lookups.containsKey(lookup.pairKey)) {
+            cache.remember(lookup.pairKey, lookup.resolution);
+            cache.advanceAppendedRow(appendedRow);
+        }
+    }
+
+    private static void trimIndexedLedgerCachesLocked() {
+        while (TOOL_BATCH_CACHES.size() > MAX_INDEXED_LEDGER_FILES)
+            TOOL_BATCH_CACHES.remove(TOOL_BATCH_CACHES.keySet().iterator().next());
+        while (TOOL_ACTIVITY_BATCH_CACHES.size() > MAX_INDEXED_LEDGER_FILES)
+            TOOL_ACTIVITY_BATCH_CACHES.remove(TOOL_ACTIVITY_BATCH_CACHES.keySet().iterator().next());
     }
 
     /** Only reconnect a preview to this chat's canonical existing workspace. Never create a file. */
@@ -1743,13 +2049,14 @@ public final class LocalRunStore {
             if (cache == null || !cache.matches(fileIdentity, length, modified)) {
                 cache = new ToolBatchCache(path, fileIdentity, length, modified);
                 TOOL_BATCH_CACHES.put(path, cache);
+                trimIndexedLedgerCachesLocked();
             }
-            if (pair != null && cache.knownPairs.contains(pair))
+            if (pair != null && cache.batchByPair.containsKey(pair))
                 return new ToolBatchLookup(ledger, true, fileIdentity, length, modified,
-                        cache.batchByPair.getOrDefault(pair, ""));
+                        cache.batchByPair.get(pair));
         }
 
-        Map<String, String> discovered = new HashMap<>();
+        LinkedHashMap<String, String> discovered = new LinkedHashMap<>();
         String found = "";
         if (pair != null && length > 0L) {
             try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
@@ -1764,6 +2071,7 @@ public final class LocalRunStore {
                         String type = row.optString("type");
                         String owner = row.optString("userMessageId", "");
                         if (owner.isEmpty()) continue;
+                        boolean targetFound = false;
                         if ("model_tool_calls".equals(type)) {
                             JSONArray calls = row.optJSONArray("calls");
                             if (calls == null) continue;
@@ -1771,19 +2079,26 @@ public final class LocalRunStore {
                                 JSONObject call = calls.optJSONObject(index);
                                 if (call == null) continue;
                                 String discoveredPair = toolBatchPairKey(owner, call.optString("id", ""));
-                                if (discoveredPair != null) discovered.putIfAbsent(discoveredPair, batchId);
+                                if (discoveredPair == null) continue;
+                                rememberRecentToolPair(discovered, discoveredPair, batchId);
+                                if (pair.equals(discoveredPair)) {
+                                    found = discovered.get(pair);
+                                    targetFound = true;
+                                    break;
+                                }
                             }
                         } else if ("tool_activity".equals(type)) {
                             JSONObject activity = row.optJSONObject("activity");
                             if (activity != null) {
                                 String discoveredPair = toolBatchPairKey(owner, activity.optString("callId", ""));
-                                if (discoveredPair != null) discovered.putIfAbsent(discoveredPair, batchId);
+                                if (discoveredPair != null) {
+                                    rememberRecentToolPair(discovered, discoveredPair, batchId);
+                                    targetFound = pair.equals(discoveredPair);
+                                    if (targetFound) found = discovered.get(pair);
+                                }
                             }
                         }
-                        if (discovered.containsKey(pair)) {
-                            found = discovered.get(pair);
-                            break;
-                        }
+                        if (targetFound) break;
                     } catch (Exception ignored) { }
                 }
             } catch (Exception error) {
@@ -1798,12 +2113,20 @@ public final class LocalRunStore {
                 if (cache == null || !cache.matches(fileIdentity, length, modified)) {
                     cache = new ToolBatchCache(path, fileIdentity, length, modified);
                     TOOL_BATCH_CACHES.put(path, cache);
+                    trimIndexedLedgerCachesLocked();
                 }
                 cache.merge(discovered);
                 if (pair != null) cache.rememberLookup(pair, found);
             }
         }
         return new ToolBatchLookup(ledger, true, fileIdentity, length, modified, found);
+    }
+
+    private static void rememberRecentToolPair(LinkedHashMap<String, String> discovered,
+            String pair, String batchId) {
+        discovered.putIfAbsent(pair, batchId);
+        while (discovered.size() > MAX_CACHED_TOOL_PAIRS_PER_FILE)
+            discovered.remove(discovered.keySet().iterator().next());
     }
 
     private static Object fileIdentity(File file) {
@@ -1831,7 +2154,7 @@ public final class LocalRunStore {
         }
     }
 
-    public synchronized RegenerationPrompt findUserMessageBeforeAssistant(String sessionId, String messageId) {
+    public RegenerationPrompt findUserMessageBeforeAssistant(String sessionId, String messageId) {
         List<JSONObject> messages = readConversationMessages(sessionId);
         int assistantIndex = -1;
         for (int index = 0; index < messages.size(); index++) {
@@ -1852,7 +2175,7 @@ public final class LocalRunStore {
     }
 
     /** Returns the owner recorded on an assistant row, which is the same owner copied to its tombstone. */
-    public synchronized String assistantOwnerUserMessageId(String sessionId, String messageId) {
+    public String assistantOwnerUserMessageId(String sessionId, String messageId) {
         if (messageId == null || messageId.isEmpty()) return "";
         for (JSONObject row : readConversationMessages(sessionId)) {
             if ("assistant".equals(row.optString("role"))
@@ -1862,25 +2185,43 @@ public final class LocalRunStore {
         return "";
     }
 
-    public synchronized boolean isLatestActiveAssistant(String sessionId, String messageId) {
-        List<JSONObject> messages = readConversationMessages(sessionId);
-        Set<String> hidden = hiddenAssistantIds(readConversationRows(sessionId));
-        String latestId = null;
-        for (JSONObject row : messages) {
-            if ("assistant".equals(row.optString("role")) && !hidden.contains(row.optString("messageId"))) {
-                latestId = row.optString("messageId", "");
+    public boolean isLatestActiveAssistant(String sessionId, String messageId) {
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return false;
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
+            Set<String> hidden = hiddenAssistantIds(rows);
+            String latestId = null;
+            for (JSONObject row : rows) {
+                if ("assistant".equals(row.optString("role")) && row.has("content")
+                        && !hidden.contains(row.optString("messageId"))) {
+                    latestId = row.optString("messageId", "");
+                }
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (snapshot.matches(sessionId, ledger, conversationMetadata))
+                    return messageId != null && messageId.equals(latestId);
             }
         }
-        return messageId != null && messageId.equals(latestId);
     }
 
     /** Append-only reaction state; original message rows, indices and compaction boundaries stay intact. */
-    public synchronized boolean setMessageReaction(String sessionId, String messageId, String emoji) {
+    public boolean setMessageReaction(String sessionId, String messageId, String emoji) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || emoji == null
                 || !emoji.isEmpty() && !MessageReactionEmoji.isValid(emoji))
             throw new IllegalArgumentException("Invalid chat reaction");
-        synchronized (SESSION_TITLE_LOCK) {
-            List<JSONObject> messages = readConversationMessages(sessionId);
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) throw new IllegalArgumentException("Reaction target is not a unique user message in this chat");
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
+            List<JSONObject> messages = new ArrayList<>();
+            for (JSONObject row : rows) {
+                String role = row.optString("role");
+                if (("user".equals(role) || "assistant".equals(role)) && row.has("content"))
+                    messages.add(row);
+            }
             int matches = 0;
             boolean user = false;
             for (int index = 0; index < messages.size(); index++) {
@@ -1890,19 +2231,23 @@ public final class LocalRunStore {
                     user = "user".equals(message.optString("role")) && message.optString("proactiveThreadKey").isEmpty();
                 }
             }
-            if (matches != 1 || !user) throw new IllegalArgumentException("Reaction target is not a unique user message in this chat");
-            String previous = readMessageReactions(readConversationRows(sessionId)).getOrDefault(messageId, "");
-            if (previous.equals(emoji)) return false;
-            JSONObject row = new JSONObject();
-            try {
-                row.put("type", "message_reaction");
-                row.put("version", 1);
-                row.put("messageId", messageId);
-                row.put("emoji", emoji);
-                row.put("timestamp", System.currentTimeMillis() / 1000.0);
-            } catch (org.json.JSONException error) { throw new IllegalStateException("Could not create reaction record", error); }
-            appendSessionRowLocked(conversationFile(sessionId), row);
-            return true;
+            String previous = readMessageReactions(rows).getOrDefault(messageId, "");
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                if (matches != 1 || !user)
+                    throw new IllegalArgumentException("Reaction target is not a unique user message in this chat");
+                if (previous.equals(emoji)) return false;
+                JSONObject row = new JSONObject();
+                try {
+                    row.put("type", "message_reaction");
+                    row.put("version", 1);
+                    row.put("messageId", messageId);
+                    row.put("emoji", emoji);
+                    row.put("timestamp", System.currentTimeMillis() / 1000.0);
+                } catch (org.json.JSONException error) { throw new IllegalStateException("Could not create reaction record", error); }
+                appendSessionRowLocked(ledger, row);
+                return true;
+            }
         }
     }
 
@@ -1917,26 +2262,21 @@ public final class LocalRunStore {
         return reactions;
     }
 
-    public synchronized List<JSONObject> readConversationMessages(String sessionId) {
+    public List<JSONObject> readConversationMessages(String sessionId) {
         File ledger = conversationFile(sessionId);
-        List<JSONObject> messages = new ArrayList<>();
-        synchronized (SESSION_TITLE_LOCK) {
-        if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return messages;
-        try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                try {
-                    JSONObject row = new JSONObject(line);
-                    if (isResultOnlyRow(row)) continue;
-                    String role = row.optString("role");
-                    if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) messages.add(row);
-                } catch (Exception ignored) { }
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return new ArrayList<>();
+            List<JSONObject> messages = new ArrayList<>();
+            for (JSONObject row : readConversationRowsFromSnapshot(snapshot)) {
+                String role = row.optString("role");
+                if (("user".equals(role) || "assistant".equals(role)) && row.has("content"))
+                    messages.add(row);
             }
-        } catch (Exception error) {
-            throw new IllegalStateException("Could not read conversation messages", error);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (snapshot.matches(sessionId, ledger, conversationMetadata)) return messages;
+            }
         }
-        }
-        return messages;
     }
 
     /** Loads model context as the latest summary plus the raw tail after its persisted boundary. */
@@ -1958,94 +2298,119 @@ public final class LocalRunStore {
     }
 
     /** Called only after the old worker has unwound. Duplicate IDs never replay a started turn. */
-    synchronized JSONObject dispatchInterruptRequest(String sessionId, String requestId) {
+    JSONObject dispatchInterruptRequest(String sessionId, String requestId) {
         if (sessionId == null || requestId == null || conversationMetadata.read(sessionId).deleted) return null;
-        synchronized (SESSION_TITLE_LOCK) {
-            JSONObject pending = null;
-            for (JSONObject row : readConversationRows(sessionId)) {
-                if (requestId.equals(row.optString("interruptRequestId"))) return null;
-                if ("main_interrupt_request".equals(row.optString("type"))
-                        && requestId.equals(row.optString("requestId"))) pending = row;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            long length;
+            long modified;
+            Object identity;
+            boolean existed;
+            synchronized (SESSION_TITLE_LOCK) {
+                if (conversationMetadata.read(sessionId).deleted) return null;
+                existed = ledger.isFile();
+                identity = fileIdentity(ledger);
+                length = existed ? ledger.length() : 0L;
+                modified = existed ? ledger.lastModified() : 0L;
             }
-            if (pending == null) return null;
-            try {
-                JSONObject user = new JSONObject().put("role", "user").put("messageId", requestId)
-                    .put("interruptRequestId", requestId).put("mainChatAcknowledgementRequired", true)
-                    .put("content", pending.optString("content"))
-                    .put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(conversationFile(sessionId), user);
-                return pending;
-            } catch (Exception error) { throw new IllegalStateException("Could not dispatch replacement message", error); }
+            JSONObject pending = findPendingInterruptRequest(ledger, requestId, length);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (conversationMetadata.read(sessionId).deleted) return null;
+                if (ledger.isFile() != existed
+                        || !sameFileIdentity(identity, fileIdentity(ledger))
+                        || (ledger.isFile() && (length != ledger.length() || modified != ledger.lastModified())))
+                    continue;
+                if (pending == null) return null;
+                try {
+                    JSONObject user = new JSONObject().put("role", "user").put("messageId", requestId)
+                        .put("interruptRequestId", requestId).put("mainChatAcknowledgementRequired", true)
+                        .put("content", pending.optString("content"))
+                        .put("timestamp", System.currentTimeMillis() / 1000.0);
+                    appendSessionRowLocked(ledger, user);
+                    return pending;
+                } catch (Exception error) { throw new IllegalStateException("Could not dispatch replacement message", error); }
+            }
         }
     }
 
+    private static JSONObject findPendingInterruptRequest(File ledger, String requestId, long length) {
+        if (length <= 0L) return null;
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
+            String line;
+            while ((line = reader.previousLine()) != null) try {
+                JSONObject row = new JSONObject(line);
+                if (requestId.equals(row.optString("interruptRequestId", ""))) return null;
+                if ("main_interrupt_request".equals(row.optString("type"))
+                        && requestId.equals(row.optString("requestId", ""))) return row;
+            } catch (Exception ignored) { }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not find replacement message", error);
+        }
+        return null;
+    }
+
     /** Durable acknowledgement that an existing user row entered a run transcript. */
-    public synchronized void markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
+    public void markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
         if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
-        synchronized (SESSION_TITLE_LOCK) {
-            Set<String> userIds = new HashSet<>();
-            Set<String> incorporated = new HashSet<>();
-            Set<String> resolved = new HashSet<>();
-            List<JSONObject> rows = readConversationRows(sessionId);
-            for (JSONObject row : rows) {
-                if ("user".equals(row.optString("role"))) {
-                    String id = row.optString("messageId", "");
-                    if (!id.isEmpty()) userIds.add(id);
-                } else if ("main_chat_input_incorporated".equals(row.optString("type"))) {
-                    addMessageIds(row, incorporated);
+        List<String> requested = nonEmptyIds(messageIds);
+        if (requested.isEmpty()) return;
+        Set<String> targets = new HashSet<>(requested);
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return;
+            InputStatus status = readInputStatus(snapshot, targets);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                JSONArray newlyIncorporated = new JSONArray();
+                for (String id : requested) {
+                    if (status.userIds.contains(id) && !status.resolved.contains(id)
+                            && status.incorporated.add(id)) newlyIncorporated.put(id);
                 }
-            }
-            addResolvedMessageIds(rows, resolved);
-            JSONArray newlyIncorporated = new JSONArray();
-            for (String id : messageIds) {
-                if (id != null && userIds.contains(id) && !resolved.contains(id) && incorporated.add(id))
-                    newlyIncorporated.put(id);
-            }
-            if (newlyIncorporated.length() == 0) return;
-            try {
-                JSONObject row = new JSONObject().put("type", "main_chat_input_incorporated")
-                        .put("messageIds", newlyIncorporated)
-                        .put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(conversationFile(sessionId), row);
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not persist incorporated chat inputs", error);
+                if (newlyIncorporated.length() == 0) return;
+                try {
+                    JSONObject row = new JSONObject().put("type", "main_chat_input_incorporated")
+                            .put("messageIds", newlyIncorporated)
+                            .put("timestamp", System.currentTimeMillis() / 1000.0);
+                    appendSessionRowLocked(ledger, row);
+                    return;
+                } catch (Exception error) {
+                    throw new IllegalStateException("Could not persist incorporated chat inputs", error);
+                }
             }
         }
     }
 
     /** Resolves durable chat inputs that will not enter a run transcript. */
-    public synchronized void markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
+    public void markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
         if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
-        synchronized (SESSION_TITLE_LOCK) {
-            Set<String> knownIds = new HashSet<>();
-            Set<String> incorporated = new HashSet<>();
-            Set<String> resolved = new HashSet<>();
-            List<JSONObject> rows = readConversationRows(sessionId);
-            for (JSONObject row : rows) {
-                if ("user".equals(row.optString("role"))) {
-                    String id = row.optString("messageId", "");
-                    if (!id.isEmpty()) knownIds.add(id);
-                } else if ("main_interrupt_request".equals(row.optString("type"))) {
-                    String id = row.optString("requestId", "");
-                    if (!id.isEmpty()) knownIds.add(id);
-                } else if ("main_chat_input_incorporated".equals(row.optString("type"))) {
-                    addMessageIds(row, incorporated);
+        List<String> requested = nonEmptyIds(messageIds);
+        if (requested.isEmpty()) return;
+        Set<String> targets = new HashSet<>(requested);
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return;
+            InputStatus status = readInputStatus(snapshot, targets);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                JSONArray newlyResolved = new JSONArray();
+                for (String id : requested) {
+                    if (status.knownIds.contains(id) && !status.incorporated.contains(id)
+                            && status.resolved.add(id)) newlyResolved.put(id);
                 }
-            }
-            addResolvedMessageIds(rows, resolved);
-            JSONArray newlyResolved = new JSONArray();
-            for (String id : messageIds) {
-                if (id != null && knownIds.contains(id) && !incorporated.contains(id) && resolved.add(id))
-                    newlyResolved.put(id);
-            }
-            if (newlyResolved.length() == 0) return;
-            try {
-                JSONObject row = new JSONObject().put("type", "main_chat_input_resolved")
-                        .put("messageIds", newlyResolved)
-                        .put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(conversationFile(sessionId), row);
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not persist resolved chat inputs", error);
+                if (newlyResolved.length() == 0) return;
+                try {
+                    JSONObject row = new JSONObject().put("type", "main_chat_input_resolved")
+                            .put("messageIds", newlyResolved)
+                            .put("timestamp", System.currentTimeMillis() / 1000.0);
+                    appendSessionRowLocked(ledger, row);
+                    return;
+                } catch (Exception error) {
+                    throw new IllegalStateException("Could not persist resolved chat inputs", error);
+                }
             }
         }
     }
@@ -2056,6 +2421,109 @@ public final class LocalRunStore {
             String id = ids.optString(i, "");
             if (!id.isEmpty()) destination.add(id);
         }
+    }
+
+    private static List<String> nonEmptyIds(Iterable<String> values) {
+        List<String> ids = new ArrayList<>();
+        for (String id : values) if (id != null && !id.isEmpty()) ids.add(id);
+        return ids;
+    }
+
+    private LedgerSnapshot conversationLedgerSnapshot(String sessionId, File ledger) {
+        synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted) return null;
+            boolean exists = ledger.isFile();
+            return new LedgerSnapshot(ledger, exists, fileIdentity(ledger),
+                    exists ? ledger.length() : 0L, exists ? ledger.lastModified() : 0L);
+        }
+    }
+
+    /** Reads only the requested message identities while walking backwards from one length snapshot. */
+    private static InputStatus readInputStatus(LedgerSnapshot snapshot, Set<String> targets) {
+        InputStatus status = new InputStatus();
+        if (!snapshot.exists || snapshot.length <= 0L) return status;
+        Set<String> sourceRowsFound = new HashSet<>();
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+            String line;
+            while ((line = reader.previousLine()) != null) try {
+                JSONObject row = new JSONObject(line);
+                String role = row.optString("role", "");
+                String type = row.optString("type", "");
+                if ("user".equals(role)) {
+                    String id = row.optString("messageId", "");
+                    if (!id.isEmpty() && (targets == null || targets.contains(id))) {
+                        status.userIds.add(id);
+                        status.knownIds.add(id);
+                        sourceRowsFound.add(id);
+                        if (!row.optString("interruptRequestId", "").isEmpty()
+                                && !row.optBoolean("mainChatAcknowledgementRequired", false))
+                            status.resolved.add(id);
+                    }
+                } else if ("main_interrupt_request".equals(type)) {
+                    String id = row.optString("requestId", "");
+                    if (!id.isEmpty() && (targets == null || targets.contains(id))) {
+                        status.knownIds.add(id);
+                        sourceRowsFound.add(id);
+                    }
+                } else if ("main_chat_input_incorporated".equals(type)) {
+                    addTargetMessageIds(row, status.incorporated, targets);
+                } else if ("main_chat_input_resolved".equals(type)) {
+                    addTargetMessageIds(row, status.resolved, targets);
+                } else if ("assistant".equals(role)) {
+                    String state = row.optString("status", "");
+                    String ownerId = row.optString("userMessageId", "");
+                    if (("FAILED".equals(state) || "PARTIAL".equals(state) || "STOPPED".equals(state))
+                            && !ownerId.isEmpty() && (targets == null || targets.contains(ownerId)))
+                        status.resolved.add(ownerId);
+                }
+                if (targets != null && sourceRowsFound.containsAll(targets)) break;
+            } catch (Exception ignored) { }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not scan conversation input state", error);
+        }
+        return status;
+    }
+
+    private static void addTargetMessageIds(JSONObject row, Set<String> destination, Set<String> targets) {
+        if (targets == null) {
+            addMessageIds(row, destination);
+            return;
+        }
+        JSONArray ids = row.optJSONArray("messageIds");
+        if (ids != null) for (int index = 0; index < ids.length(); index++) {
+            String id = ids.optString(index, "");
+            if (!id.isEmpty() && targets.contains(id)) destination.add(id);
+        }
+    }
+
+    private static List<String> readUserMessageIdsThrough(LedgerSnapshot snapshot, String messageId) {
+        if (!snapshot.exists || snapshot.length <= 0L) return Collections.emptyList();
+        List<String> reverseIds = new ArrayList<>();
+        boolean reachedTarget = false;
+        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+            String line;
+            while ((line = reader.previousLine()) != null) try {
+                JSONObject row = new JSONObject(line);
+                if (!"user".equals(row.optString("role", ""))) continue;
+                String id = row.optString("messageId", "");
+                if (id.isEmpty()) continue;
+                if (!reachedTarget) {
+                    if (messageId.equals(id)) {
+                        reachedTarget = true;
+                        reverseIds.add(id);
+                    }
+                } else reverseIds.add(id);
+            } catch (Exception ignored) { }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not scan conversation message range", error);
+        }
+        if (!reachedTarget) return Collections.emptyList();
+        Collections.reverse(reverseIds);
+        return reverseIds;
     }
 
     private static void addResolvedMessageIds(List<JSONObject> rows, Set<String> destination) {
@@ -2078,40 +2546,65 @@ public final class LocalRunStore {
     }
 
     /** Acknowledges user rows already present in the loaded context through its current owner. */
-    public synchronized void markConversationMessagesIncorporatedThrough(String sessionId, String messageId) {
+    public void markConversationMessagesIncorporatedThrough(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || messageId.isEmpty()) return;
-        List<String> ids = new ArrayList<>();
-        boolean found = false;
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if (!"user".equals(row.optString("role"))) continue;
-            String id = row.optString("messageId", "");
-            if (!id.isEmpty()) ids.add(id);
-            if (messageId.equals(id)) {
-                found = true;
-                break;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return;
+            List<String> idsThrough = readUserMessageIdsThrough(snapshot, messageId);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
             }
+            if (!idsThrough.isEmpty()) markConversationMessagesIncorporated(sessionId, idsThrough);
+            return;
         }
-        if (found) markConversationMessagesIncorporated(sessionId, ids);
     }
 
-    synchronized Set<String> incorporatedConversationMessageIds(String sessionId) {
-        Set<String> incorporated = new HashSet<>();
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if (!"main_chat_input_incorporated".equals(row.optString("type"))) continue;
-            JSONArray ids = row.optJSONArray("messageIds");
-            if (ids != null) for (int i = 0; i < ids.length(); i++) {
-                String id = ids.optString(i, "");
-                if (!id.isEmpty()) incorporated.add(id);
+    Set<String> incorporatedConversationMessageIds(String sessionId) {
+        if (sessionId == null) return Collections.emptySet();
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return Collections.emptySet();
+            Set<String> incorporated = readInputStatus(snapshot, null).incorporated;
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return Collections.unmodifiableSet(incorporated);
             }
         }
-        return Collections.unmodifiableSet(incorporated);
     }
 
-    synchronized Set<String> resolvedConversationMessageIds(String sessionId) {
-        if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptySet();
-        Set<String> resolved = new HashSet<>();
-        addResolvedMessageIds(readConversationRows(sessionId), resolved);
-        return Collections.unmodifiableSet(resolved);
+    Set<String> resolvedConversationMessageIds(String sessionId) {
+        if (sessionId == null) return Collections.emptySet();
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return Collections.emptySet();
+            Set<String> resolved = readInputStatus(snapshot, null).resolved;
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return Collections.unmodifiableSet(resolved);
+            }
+        }
+    }
+
+    /** Returns only resolved/incorporated state for the supplied recent message identities. */
+    Set<String> handledConversationMessageIds(String sessionId, Iterable<String> messageIds) {
+        if (sessionId == null || messageIds == null) return Collections.emptySet();
+        Set<String> targets = new HashSet<>(nonEmptyIds(messageIds));
+        if (targets.isEmpty()) return Collections.emptySet();
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return Collections.emptySet();
+            InputStatus status = readInputStatus(snapshot, targets);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                status.incorporated.addAll(status.resolved);
+                return Collections.unmodifiableSet(status.incorporated);
+            }
+        }
     }
 
     /** Persists an intermediate assistant turn at its logical point before the steering row already on disk. */
@@ -2138,42 +2631,50 @@ public final class LocalRunStore {
     }
 
     /** Unincorporated durable follow-ups, in ledger order, for service recovery after a worker exit. */
-    public synchronized List<JSONObject> readPendingInterruptRequests(String sessionId) {
-        if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptyList();
-        List<JSONObject> rows = readConversationRows(sessionId);
-        Set<String> dispatched = new HashSet<>();
-        Set<String> dispatchedRequiringAcknowledgement = new HashSet<>();
-        Set<String> incorporated = new HashSet<>();
-        Set<String> resolved = new HashSet<>();
-        for (JSONObject row : rows) {
-            String id = row.optString("interruptRequestId", "");
-            if (!id.isEmpty()) {
-                dispatched.add(id);
-                if (row.optBoolean("mainChatAcknowledgementRequired", false))
-                    dispatchedRequiringAcknowledgement.add(id);
-            }
-            if ("main_chat_input_incorporated".equals(row.optString("type"))) {
-                JSONArray ids = row.optJSONArray("messageIds");
-                if (ids != null) for (int i = 0; i < ids.length(); i++) {
-                    String incorporatedId = ids.optString(i, "");
-                    if (!incorporatedId.isEmpty()) incorporated.add(incorporatedId);
+    public List<JSONObject> readPendingInterruptRequests(String sessionId) {
+        if (sessionId == null) return Collections.emptyList();
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return Collections.emptyList();
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
+            Set<String> dispatched = new HashSet<>();
+            Set<String> dispatchedRequiringAcknowledgement = new HashSet<>();
+            Set<String> incorporated = new HashSet<>();
+            Set<String> resolved = new HashSet<>();
+            for (JSONObject row : rows) {
+                String id = row.optString("interruptRequestId", "");
+                if (!id.isEmpty()) {
+                    dispatched.add(id);
+                    if (row.optBoolean("mainChatAcknowledgementRequired", false))
+                        dispatchedRequiringAcknowledgement.add(id);
+                }
+                if ("main_chat_input_incorporated".equals(row.optString("type"))) {
+                    JSONArray ids = row.optJSONArray("messageIds");
+                    if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                        String incorporatedId = ids.optString(i, "");
+                        if (!incorporatedId.isEmpty()) incorporated.add(incorporatedId);
+                    }
                 }
             }
+            addResolvedMessageIds(rows, resolved);
+            List<JSONObject> pending = new ArrayList<>();
+            for (JSONObject row : rows) {
+                if (!"main_interrupt_request".equals(row.optString("type"))) continue;
+                String id = row.optString("requestId", "");
+                boolean alreadyDispatched = dispatchedRequiringAcknowledgement.contains(id);
+                if (id.isEmpty() || resolved.contains(id)
+                        || dispatched.contains(id) && !alreadyDispatched
+                        || alreadyDispatched && incorporated.contains(id)) continue;
+                try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)
+                        .put("alreadyDispatched", alreadyDispatched)); }
+                catch (Exception malformed) { throw new IllegalStateException("Could not read pending chat follow-up", malformed); }
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return Collections.unmodifiableList(pending);
+            }
         }
-        addResolvedMessageIds(rows, resolved);
-        List<JSONObject> pending = new ArrayList<>();
-        for (JSONObject row : rows) {
-            if (!"main_interrupt_request".equals(row.optString("type"))) continue;
-            String id = row.optString("requestId", "");
-            boolean alreadyDispatched = dispatchedRequiringAcknowledgement.contains(id);
-            if (id.isEmpty() || resolved.contains(id)
-                    || dispatched.contains(id) && !alreadyDispatched
-                    || alreadyDispatched && incorporated.contains(id)) continue;
-            try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)
-                    .put("alreadyDispatched", alreadyDispatched)); }
-            catch (Exception malformed) { throw new IllegalStateException("Could not read pending chat follow-up", malformed); }
-        }
-        return Collections.unmodifiableList(pending);
     }
 
     /** All undispatched follow-ups, in stable session and ledger order, for service startup recovery. */
@@ -2193,16 +2694,36 @@ public final class LocalRunStore {
     }
 
     /** UI projection only: the text already exists once in the model's tool-call protocol. */
-    public synchronized AgentRunUiEvent readAssistantProgress(String sessionId, String firstCallId) {
+    public AgentRunUiEvent readAssistantProgress(String sessionId, String firstCallId) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId)) return null;
-        for (JSONObject row : readConversationRows(sessionId)) {
-            JSONArray calls = row.optJSONArray("calls");
-            if ("model_tool_calls".equals(row.optString("type")) && calls != null
-                    && calls.length() > 0 && calls.optJSONObject(0) != null
-                    && firstCallId.equals(calls.optJSONObject(0).optString("id")))
-                return assistantProgressEvent(row, 0L);
+        if (firstCallId == null || firstCallId.isEmpty()) return null;
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return null;
+            AgentRunUiEvent result = null;
+            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
+                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    JSONArray calls = row.optJSONArray("calls");
+                    if ("model_tool_calls".equals(row.optString("type")) && calls != null
+                            && calls.length() > 0 && calls.optJSONObject(0) != null
+                            && firstCallId.equals(calls.optJSONObject(0).optString("id"))) {
+                        result = assistantProgressEvent(row, 0L);
+                        break;
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read assistant progress", error);
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return result;
+            }
         }
-        return null;
     }
 
     private static AgentRunUiEvent assistantProgressEvent(JSONObject row, long id) {
@@ -2220,8 +2741,8 @@ public final class LocalRunStore {
                         row.optString("userMessageId", ""));
     }
 
-    public synchronized List<ConversationTurn> loadConversationContext(String sessionId) {
-        List<JSONObject> rows = readConversationRows(sessionId);
+    public List<ConversationTurn> loadConversationContext(String sessionId) {
+        List<JSONObject> rows = readConversationRowsFromValidatedSnapshot(sessionId);
         List<JSONObject> messages = new ArrayList<>();
         JSONObject latestCompaction = null;
         int latestCompactionRow = -1;
@@ -2287,7 +2808,7 @@ public final class LocalRunStore {
                 || "INTERRUPTED".equals(status) || "ABORTED".equals(status) || "CANCELLED".equals(status);
     }
 
-    public synchronized int latestUserMessageIndex(String sessionId) {
+    public int latestUserMessageIndex(String sessionId) {
         List<JSONObject> messages = readConversationMessages(sessionId);
         for (int index = messages.size() - 1; index >= 0; index--) {
             if ("user".equals(messages.get(index).optString("role"))) return index;
@@ -2295,13 +2816,33 @@ public final class LocalRunStore {
         return -1;
     }
 
-    public synchronized String latestUserMessageId(String sessionId) {
-        List<JSONObject> messages = readConversationMessages(sessionId);
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            JSONObject row = messages.get(index);
-            if ("user".equals(row.optString("role"))) return row.optString("messageId", "");
+    public String latestUserMessageId(String sessionId) {
+        if (sessionId == null) return "";
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null || !snapshot.exists || snapshot.length <= 0L) return "";
+            String result = "";
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (!isResultOnlyRow(row) && "user".equals(row.optString("role", ""))
+                            && row.has("content")) {
+                        result = row.optString("messageId", "");
+                        break;
+                    }
+                } catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not find latest user message", error);
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                return result;
+            }
         }
-        return "";
     }
 
     File filesDirectory() { return root.getParentFile().getParentFile(); }
@@ -2343,23 +2884,80 @@ public final class LocalRunStore {
         return rows;
     }
 
-    private List<JSONObject> readConversationRowsInLedgerOrder(String sessionId, boolean includeResultNotices) {
+    /** Reads a point-in-time conversation projection without holding the append lock during file IO. */
+    private List<JSONObject> readConversationRowsFromValidatedSnapshot(String sessionId) {
+        return readConversationRowsFromValidatedSnapshot(sessionId, false, true);
+    }
+
+    private List<JSONObject> readConversationRowsFromValidatedSnapshot(String sessionId,
+            boolean includeResultNotices, boolean orderBeforeSteering) {
         File ledger = conversationFile(sessionId);
-        List<JSONObject> rows = new ArrayList<>();
-        synchronized (SESSION_TITLE_LOCK) {
-            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return rows;
-            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
-                String line;
-                while ((line = reader.readLine()) != null) try {
-                    JSONObject row = new JSONObject(line);
-                    if (!isConversationTimelineLedgerRow(row, includeResultNotices)) continue;
-                    rows.add(row);
-                } catch (Exception ignored) { }
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not read conversation ledger", error);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return new ArrayList<>();
+            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot, includeResultNotices);
+            if (orderBeforeSteering) orderAssistantMessagesBeforeSteering(rows);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (snapshot.matches(sessionId, ledger, conversationMetadata)) return rows;
             }
         }
+    }
+
+    private List<JSONObject> readConversationRowsInLedgerOrder(String sessionId, boolean includeResultNotices) {
+        return readConversationRowsFromValidatedSnapshot(sessionId, includeResultNotices, false);
+    }
+
+    /** Full conversation projection read outside the append lock and tied to one validated snapshot. */
+    private List<JSONObject> readConversationRowsFromSnapshot(LedgerSnapshot snapshot) {
+        return readConversationRowsFromSnapshot(snapshot, false);
+    }
+
+    private List<JSONObject> readConversationRowsFromSnapshot(LedgerSnapshot snapshot,
+            boolean includeResultNotices) {
+        List<JSONObject> rows = new ArrayList<>();
+        if (!snapshot.exists || snapshot.length <= 0L) return rows;
+        synchronized (LocalRunStore.class) { conversationRowsFullParseCount++; }
+        try (BufferedReader reader = snapshotReader(snapshot)) {
+            String line;
+            while ((line = reader.readLine()) != null) try {
+                JSONObject row = new JSONObject(line);
+                if (isConversationTimelineLedgerRow(row, includeResultNotices)) rows.add(row);
+            } catch (Exception ignored) { }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not read conversation ledger snapshot", error);
+        }
         return rows;
+    }
+
+    private static BufferedReader snapshotReader(LedgerSnapshot snapshot) throws IOException {
+        return new BufferedReader(new InputStreamReader(new BoundedInputStream(
+                new FileInputStream(snapshot.ledger), snapshot.length), StandardCharsets.UTF_8));
+    }
+
+    /** Prevents a concurrent append from extending a read past its captured ledger length. */
+    private static final class BoundedInputStream extends FilterInputStream {
+        private long remaining;
+
+        BoundedInputStream(InputStream input, long limit) {
+            super(input);
+            remaining = Math.max(0L, limit);
+        }
+
+        @Override public int read() throws IOException {
+            if (remaining <= 0L) return -1;
+            int value = in.read();
+            if (value >= 0) remaining--;
+            return value;
+        }
+
+        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (length == 0) return 0;
+            if (remaining <= 0L) return -1;
+            int requested = (int) Math.min((long) length, remaining);
+            int count = in.read(buffer, offset, requested);
+            if (count > 0) remaining -= count;
+            return count;
+        }
     }
 
     private static List<Integer> timelineMessageIndices(List<JSONObject> rows, int firstMessageIndex) {
@@ -2446,18 +3044,43 @@ public final class LocalRunStore {
     }
 
     /** Durable steering inputs appended after the user message that started the active run. */
-    public synchronized List<JSONObject> readUserMessagesAfter(String sessionId, String messageId) {
-        if (messageId == null || messageId.isEmpty()) return Collections.emptyList();
-        boolean afterCursor = false;
-        List<JSONObject> pending = new ArrayList<>();
-        for (JSONObject row : readConversationRows(sessionId)) {
-            if (!afterCursor) {
-                if (messageId.equals(row.optString("messageId", ""))) afterCursor = true;
-                continue;
+    public List<JSONObject> readUserMessagesAfter(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || messageId.isEmpty()) return Collections.emptyList();
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+            if (snapshot == null) return Collections.emptyList();
+            List<JSONObject> reversePending = new ArrayList<>();
+            boolean cursorFound = false;
+            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
+                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
+                String line;
+                while ((line = reader.previousLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (!isConversationTimelineLedgerRow(row, false)) continue;
+                    if (messageId.equals(row.optString("messageId", ""))) {
+                        cursorFound = true;
+                        break;
+                    }
+                    if ("user".equals(row.optString("role")) && row.has("content"))
+                        reversePending.add(row);
+                } catch (Exception ignored) { }
+                synchronized (LocalRunStore.class) {
+                    userMessagesAfterScanCount++;
+                    userMessagesAfterScanBytes += reader.bytesRead();
+                    if (Thread.holdsLock(SESSION_TITLE_LOCK)) userMessagesAfterScanUnderSessionLockCount++;
+                }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read durable chat follow-ups", error);
             }
-            if ("user".equals(row.optString("role")) && row.has("content")) pending.add(row);
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
+                if (!cursorFound) return Collections.emptyList();
+                Collections.reverse(reversePending);
+                return Collections.unmodifiableList(reversePending);
+            }
         }
-        return Collections.unmodifiableList(pending);
     }
 
     public synchronized ReflectionPayload buildReflectionPayload(String sessionId) {
@@ -2879,8 +3502,7 @@ public final class LocalRunStore {
     private static final class ToolBatchCache {
         final String path;
         final Object fileIdentity;
-        final Map<String, String> batchByPair = new HashMap<>();
-        final Set<String> knownPairs = new HashSet<>();
+        final LinkedHashMap<String, String> batchByPair = new LinkedHashMap<>(16, 0.75f, true);
         long length;
         long lastModified;
 
@@ -2903,9 +3525,9 @@ public final class LocalRunStore {
         }
 
         void rememberLookup(String pair, String batchId) {
-            knownPairs.add(pair);
-            if (batchId == null || batchId.isEmpty()) batchByPair.remove(pair);
-            else batchByPair.put(pair, batchId);
+            batchByPair.put(pair, batchId == null ? "" : batchId);
+            while (batchByPair.size() > MAX_CACHED_TOOL_PAIRS_PER_FILE)
+                batchByPair.remove(batchByPair.keySet().iterator().next());
         }
 
         void rememberAppendedRow(JSONObject row) {
@@ -2931,6 +3553,141 @@ public final class LocalRunStore {
         }
     }
 
+    private static final class ActivityBatchResolution {
+        final String sourceBatch;
+        final boolean activityFound;
+
+        ActivityBatchResolution(String sourceBatch, boolean activityFound) {
+            this.sourceBatch = sourceBatch == null ? "" : sourceBatch;
+            this.activityFound = activityFound;
+        }
+    }
+
+    private static final class InputStatus {
+        final Set<String> userIds = new HashSet<>();
+        final Set<String> knownIds = new HashSet<>();
+        final Set<String> incorporated = new HashSet<>();
+        final Set<String> resolved = new HashSet<>();
+    }
+
+    private static final class LedgerSnapshot {
+        final File ledger;
+        final boolean exists;
+        final Object fileIdentity;
+        final long length;
+        final long lastModified;
+
+        LedgerSnapshot(File ledger, boolean exists, Object fileIdentity, long length, long lastModified) {
+            this.ledger = ledger;
+            this.exists = exists;
+            this.fileIdentity = fileIdentity;
+            this.length = length;
+            this.lastModified = lastModified;
+        }
+
+        boolean matches(String sessionId, File currentLedger, ConversationMetadataStore metadata) {
+            if (metadata.read(sessionId).deleted || !ledger.getAbsolutePath().equals(currentLedger.getAbsolutePath()))
+                return false;
+            boolean fileExists = currentLedger.isFile();
+            return exists == fileExists && (!exists || (sameFileIdentity(fileIdentity,
+                    LocalRunStore.fileIdentity(currentLedger)) && length == currentLedger.length()
+                    && lastModified == currentLedger.lastModified()));
+        }
+    }
+
+    private static final class ToolActivityBatchCache {
+        final String path;
+        final Object fileIdentity;
+        final LinkedHashMap<String, ActivityBatchResolution> lookups =
+                new LinkedHashMap<>(16, 0.75f, true);
+        long length;
+        long lastModified;
+
+        ToolActivityBatchCache(String path, Object fileIdentity, long length, long lastModified) {
+            this.path = path;
+            this.fileIdentity = fileIdentity;
+            this.length = length;
+            this.lastModified = lastModified;
+        }
+
+        boolean matches(Object identity, long expectedLength, long expectedModified) {
+            return sameFileIdentity(fileIdentity, identity)
+                    && length == expectedLength && lastModified == expectedModified;
+        }
+
+        void remember(String pairKey, ActivityBatchResolution resolution) {
+            lookups.put(pairKey, resolution);
+            while (lookups.size() > MAX_CACHED_TOOL_ACTIVITY_LOOKUPS_PER_FILE)
+                lookups.remove(lookups.keySet().iterator().next());
+        }
+
+        void advanceAppendedRow(JSONObject row) {
+            String owner = row.optString("userMessageId", "");
+            String type = row.optString("type");
+            String batch = row.optString("batchId", "");
+            if ("model_tool_calls".equals(type)) {
+                JSONArray calls = row.optJSONArray("calls");
+                if (calls == null) return;
+                for (Map.Entry<String, ActivityBatchResolution> entry : lookups.entrySet()) {
+                    ActivityBatchResolution previous = entry.getValue();
+                    if (previous.activityFound) continue;
+                    String[] query = splitToolActivityPairKey(entry.getKey());
+                    if (!owner.equals(query[0])) continue;
+                    for (int index = 0; index < calls.length(); index++) {
+                        JSONObject call = calls.optJSONObject(index);
+                        if (call != null && query[2].equals(call.optString("id", "")))
+                            entry.setValue(new ActivityBatchResolution(batch, false));
+                    }
+                }
+            } else if ("tool_activity".equals(type)) {
+                JSONObject activity = row.optJSONObject("activity");
+                if (activity == null) return;
+                String execution = activity.optString("executionId", "");
+                for (Map.Entry<String, ActivityBatchResolution> entry : lookups.entrySet()) {
+                    ActivityBatchResolution previous = entry.getValue();
+                    String[] query = splitToolActivityPairKey(entry.getKey());
+                    if (!previous.activityFound && owner.equals(query[0]) && execution.equals(query[1]))
+                        entry.setValue(new ActivityBatchResolution(batch, true));
+                }
+            }
+        }
+
+        private static String[] splitToolActivityPairKey(String key) {
+            int first = key.indexOf('\u0000');
+            int second = first < 0 ? -1 : key.indexOf('\u0000', first + 1);
+            if (second < 0) return new String[] {"", "", ""};
+            return new String[] {key.substring(0, first), key.substring(first + 1, second), key.substring(second + 1)};
+        }
+    }
+
+    private static final class ToolActivityBatchLookup {
+        final File ledger;
+        final boolean exists;
+        final Object fileIdentity;
+        final long length;
+        final long lastModified;
+        final String pairKey;
+        final ActivityBatchResolution resolution;
+
+        ToolActivityBatchLookup(File ledger, boolean exists, Object fileIdentity, long length,
+                long lastModified, String pairKey, ActivityBatchResolution resolution) {
+            this.ledger = ledger;
+            this.exists = exists;
+            this.fileIdentity = fileIdentity;
+            this.length = length;
+            this.lastModified = lastModified;
+            this.pairKey = pairKey;
+            this.resolution = resolution;
+        }
+
+        boolean matches(File file) {
+            boolean fileExists = file.isFile();
+            return ledger.getAbsolutePath().equals(file.getAbsolutePath()) && exists == fileExists
+                    && (!exists || (sameFileIdentity(fileIdentity, LocalRunStore.fileIdentity(file))
+                    && file.length() == length && file.lastModified() == lastModified));
+        }
+    }
+
     /** Reads JSONL rows backwards in blocks, retaining only one candidate line at a time. */
     private static final class ReverseLedgerLineReader {
         private static final int BLOCK_SIZE = 8 * 1024;
@@ -2939,6 +3696,7 @@ public final class LocalRunStore {
         private long position;
         private long blockStart = -1L;
         private int blockLength;
+        private long bytesRead;
 
         ReverseLedgerLineReader(java.nio.channels.FileChannel channel, long endOffset) {
             this.channel = channel;
@@ -2967,6 +3725,8 @@ public final class LocalRunStore {
             return new String(bytes, 0, decodedLength, StandardCharsets.UTF_8);
         }
 
+        long bytesRead() { return bytesRead; }
+
         private byte byteAt(long offset) throws IOException {
             if (blockStart < 0L || offset < blockStart || offset >= blockStart + blockLength) {
                 blockStart = (offset / BLOCK_SIZE) * BLOCK_SIZE;
@@ -2979,6 +3739,7 @@ public final class LocalRunStore {
                     readPosition += count;
                 }
                 blockLength = target.position();
+                bytesRead += blockLength;
             }
             int index = (int) (offset - blockStart);
             if (index < 0 || index >= blockLength) throw new IOException("Ledger changed while resolving tool batch");
@@ -2990,8 +3751,8 @@ public final class LocalRunStore {
     public static final int OLDER_TIMELINE_TURNS = 20;
 
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
-    public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
-        List<JSONObject> rows = readConversationRowsInLedgerOrder(sessionId, true);
+    public List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
+        List<JSONObject> rows = readConversationRowsFromValidatedSnapshot(sessionId, true, false);
         java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
         List<Integer> messageIndices = timelineMessageIndices(rows, 0);
         for (int index = 0; index < rows.size(); index++)
@@ -3126,6 +3887,48 @@ public final class LocalRunStore {
     static long timelinePagePagerCallCountForTests() {
         synchronized (TIMELINE_PAGE_CACHE_LOCK) { return timelinePagePagerCallCount; }
     }
+
+    static void resetHotPathMetricsForTests() {
+        synchronized (LocalRunStore.class) {
+            conversationRowsFullParseCount = 0L;
+            toolActivityLedgerScanCount = 0L;
+            toolActivityLedgerScanBytes = 0L;
+            toolActivityScanUnderSessionLockCount = 0L;
+            userMessagesAfterScanCount = 0L;
+            userMessagesAfterScanBytes = 0L;
+            userMessagesAfterScanUnderSessionLockCount = 0L;
+        }
+    }
+
+    static long conversationRowsFullParseCountForTests() {
+        synchronized (LocalRunStore.class) { return conversationRowsFullParseCount; }
+    }
+
+    static long toolActivityLedgerScanCountForTests() {
+        synchronized (LocalRunStore.class) { return toolActivityLedgerScanCount; }
+    }
+
+    static long toolActivityLedgerScanBytesForTests() {
+        synchronized (LocalRunStore.class) { return toolActivityLedgerScanBytes; }
+    }
+
+    static long toolActivityScanUnderSessionLockCountForTests() {
+        synchronized (LocalRunStore.class) { return toolActivityScanUnderSessionLockCount; }
+    }
+
+    static long userMessagesAfterScanCountForTests() {
+        synchronized (LocalRunStore.class) { return userMessagesAfterScanCount; }
+    }
+
+    static long userMessagesAfterScanBytesForTests() {
+        synchronized (LocalRunStore.class) { return userMessagesAfterScanBytes; }
+    }
+
+    static long userMessagesAfterScanUnderSessionLockCountForTests() {
+        synchronized (LocalRunStore.class) { return userMessagesAfterScanUnderSessionLockCount; }
+    }
+
+    static void setToolActivityScanTestHookForTests(Runnable hook) { toolActivityScanTestHook = hook; }
 
     private static TimelineProjectionMarkers timelineProjectionMarkers(String sessionId, List<JSONObject> rows) {
         Map<String, TimelineProjectionMarkers.DecisionResolution> decisions = new LinkedHashMap<>();
@@ -3650,6 +4453,19 @@ public final class LocalRunStore {
                 TOOL_BATCH_CACHES.remove(path);
             }
         }
+        ToolActivityBatchCache activityCache = TOOL_ACTIVITY_BATCH_CACHES.get(path);
+        if (activityCache != null) {
+            Object appendedIdentity = fileIdentity(ledger);
+            if (activityCache.matches(previousIdentity, previousLength, previousModified)
+                    && sameFileIdentity(activityCache.fileIdentity, appendedIdentity)) {
+                activityCache.advanceAppendedRow(row);
+                activityCache.length = ledger.length();
+                activityCache.lastModified = ledger.lastModified();
+            } else {
+                TOOL_ACTIVITY_BATCH_CACHES.remove(path);
+            }
+        }
+        ConversationLedgerPager.invalidatePages(ledger);
         invalidateTimelinePageCache(ledger);
     }
 
