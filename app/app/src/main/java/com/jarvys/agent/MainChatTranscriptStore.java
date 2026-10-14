@@ -60,7 +60,7 @@ final class MainChatTranscriptStore {
         Set<ConversationTurn> historical = Collections.newSetFromMap(new IdentityHashMap<>());
         if (priorHistory != null) historical.addAll(priorHistory);
         Map<ConversationTurn, String> batches = new IdentityHashMap<>();
-        Set<String> started = new HashSet<>(), results = new HashSet<>();
+        Set<String> started = new HashSet<>(), notStarted = new HashSet<>(), results = new HashSet<>();
         Set<ConversationTurn> providerOutputRecorded = Collections.newSetFromMap(new IdentityHashMap<>());
         Set<ConversationTurn> modelErrorsRecorded = Collections.newSetFromMap(new IdentityHashMap<>());
         Set<String> callIds = new HashSet<>();
@@ -110,6 +110,11 @@ final class MainChatTranscriptStore {
                                 append(new JSONObject().put("type", "model_tool_started")
                                         .put("batchId", batch).put("callId", call.id));
                                 started.add(key);
+                            } else if ("NEVER_LAUNCHED".equals(checkpoint.toolLifecycle.get(call.id))
+                                    && !notStarted.contains(key)) {
+                                append(new JSONObject().put("type", "model_tool_not_started")
+                                        .put("batchId", batch).put("callId", call.id));
+                                notStarted.add(key);
                             }
                         }
                     } else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && batch != null) {
@@ -254,6 +259,9 @@ final class MainChatTranscriptStore {
                 }
             } else if ("model_tool_started".equals(type) && states.containsKey(batch)) {
                 states.get(batch).put(row.optString("callId"), "STARTED");
+                latestActivity.put(batch, i);
+            } else if ("model_tool_not_started".equals(type) && states.containsKey(batch)) {
+                states.get(batch).put(row.optString("callId"), "NEVER_LAUNCHED");
                 latestActivity.put(batch, i);
             } else if ("model_tool_result".equals(type) && outputs.containsKey(batch)) {
                 outputs.get(batch).putIfAbsent(row.optString("callId"), row);

@@ -2173,6 +2173,7 @@ public final class LocalRunStore {
     synchronized void appendModelTranscriptRow(String sessionId, JSONObject row) {
         String type = row.optString("type");
         if (!("model_tool_calls".equals(type) || "model_tool_started".equals(type)
+                || "model_tool_not_started".equals(type)
                 || "model_tool_result".equals(type) || "model_artifact".equals(type)
                 || "model_error".equals(type) || "model_provider_output_items".equals(type)) || row.has("role"))
             throw new IllegalArgumentException("Invalid model transcript record");
@@ -2641,6 +2642,7 @@ public final class LocalRunStore {
         Map<String, JSONObject> modelCalls = new LinkedHashMap<>();
         Set<String> modelResults = new HashSet<>();
         Set<String> startedModelCalls = new HashSet<>();
+        Set<String> notStartedModelCalls = new HashSet<>();
         for (JSONObject row : rows) {
             String type = row.optString("type");
             if ("tool_presentation".equals(type)) presentations.put(toolRowKey(row,modelBatches), row);
@@ -2653,6 +2655,7 @@ public final class LocalRunStore {
                 }
             } else if ("model_tool_result".equals(type)) modelResults.add(toolRowKey(row,modelBatches));
             else if ("model_tool_started".equals(type)) startedModelCalls.add(toolRowKey(row,modelBatches));
+            else if ("model_tool_not_started".equals(type)) notStartedModelCalls.add(toolRowKey(row,modelBatches));
         }
         for(Map.Entry<String,List<ToolActivity>> group:activityGroups.entrySet()) {
             ToolActivity projected=ToolActivity.project(group.getValue(),true);
@@ -2767,7 +2770,7 @@ public final class LocalRunStore {
                     String callKey=row.optString("batchId")+"/"+callId;
                     if (typedCalls.contains(callKey)) continue;
                     if (modelResults.contains(callKey) || presentations.containsKey(callKey) || reflectionTools.containsKey(callKey)) continue;
-                    boolean started = startedModelCalls.contains(callKey);
+                    boolean started = startedModelCalls.contains(callKey) && !notStartedModelCalls.contains(callKey);
                     String detail = started
                             ? "Execution started, but no final result was durably recorded. The run may have been interrupted; effects may have occurred. Inspect current evidence before retrying."
                             : "This tool intent was recorded but was never launched. It was not automatically replayed.";

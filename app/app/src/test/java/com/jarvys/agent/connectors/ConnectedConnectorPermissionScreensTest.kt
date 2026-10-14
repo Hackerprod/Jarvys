@@ -242,27 +242,50 @@ class ConnectedConnectorPermissionScreensTest {
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_disable_all_reads)).performScrollTo().performClick()
         assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
+        assertEquals(credentials, fixture.vault.values)
 
         show {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("developer-settings")) {
                 RemoteMcpPolicySettings(fixture.repository, fixture.manager)
             }
         }
         val read = "remote-policy-get_me"
         val write = "remote-policy-issue_write"
+        compose.onNodeWithTag("developer-mcp-${fixture.serverId}").assertExists()
+        compose.onNodeWithTag("remote-exposure-get_me-switch").assertDoesNotExist()
+        compose.onNodeWithText("fixture-token-not-a-real-credential").assertDoesNotExist()
         geometry(read); geometry(write)
         capture("github-connected-read-write")
         compose.onNodeWithTag("$write-control").performScrollTo().performClick()
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_deny)) and hasAnyAncestor(isPopup())).assertExists()
         capture("github-write-menu-all-modes")
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
         assertEquals(1, store.changes.size)
+        pick("$write-control", R.string.remote_service_policy_allow)
+        assertPolicy("$write-control", R.string.remote_service_policy_allow)
+        pick("$write-control", R.string.remote_service_policy_deny)
+        assertPolicy("$write-control", R.string.remote_service_policy_deny)
+        compose.onNodeWithTag("$read-control").performScrollTo().performClick()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_deny)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).performClick()
+        assertPolicy("$read-control", R.string.remote_service_policy_allow)
+        pick("$read-control", R.string.remote_service_policy_ask)
+        assertPolicy("$read-control", R.string.remote_service_policy_ask)
         pick("$read-control", R.string.remote_service_policy_deny)
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
         assertPolicy("$read-control", R.string.remote_service_policy_deny)
-        pick("$write-control", R.string.remote_service_policy_deny)
-        assertPolicy("$write-control", R.string.remote_service_policy_deny)
-        assertEquals(3, store.changes.size)
+        assertEquals(listOf(
+            Triple("mcp:${fixture.serverId}", "issue_write", AutonomyPolicy.ASK),
+            Triple("mcp:${fixture.serverId}", "issue_write", AutonomyPolicy.ALLOW),
+            Triple("mcp:${fixture.serverId}", "issue_write", AutonomyPolicy.DENY),
+            Triple("mcp:${fixture.serverId}", "get_me", AutonomyPolicy.ALLOW),
+            Triple("mcp:${fixture.serverId}", "get_me", AutonomyPolicy.ASK),
+            Triple("mcp:${fixture.serverId}", "get_me", AutonomyPolicy.DENY),
+        ), store.changes)
         assertEquals(credentials, fixture.vault.values)
         assertEquals(1, sessions.get()); assertEquals(0, dispatches.get())
     }
