@@ -21,6 +21,18 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AttachmentDraftViewModelTest {
+    @Test fun defaultViewModelFactoryCanInstantiateItThroughTheApplicationConstructor() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        val store = ViewModelStore()
+        try {
+            val model = androidx.lifecycle.ViewModelProvider(
+                store,
+                androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(application),
+            )[AttachmentDraftViewModel::class.java]
+            assertNotNull(model)
+        } finally { store.clear() }
+    }
+
     @Test fun emptyAndStaleSessionSubmissionsDoNotStartWork() {
         val application = ApplicationProvider.getApplicationContext<Application>()
         val model = AttachmentDraftViewModel(application)

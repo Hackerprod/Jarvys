@@ -22,6 +22,9 @@ class AttachmentDraftViewModel internal constructor(
     private val messageSubmitter: AttachmentMessageSubmitter = LocalAttachmentMessageSubmitter,
     private val submissionExecutor: ExecutorService = newSubmissionExecutor(),
 ) : AndroidViewModel(application) {
+    /** Public (Application) constructor: the default ViewModel factory finds it by reflection. */
+    constructor(application: Application) : this(application, LocalAttachmentMessageSubmitter, newSubmissionExecutor())
+
     data class Submission(val sessionId: String, val text: String, val persisted: Boolean, val error: String?)
     private val app = application.applicationContext
     private val store by lazy { AttachmentStore(app) }
