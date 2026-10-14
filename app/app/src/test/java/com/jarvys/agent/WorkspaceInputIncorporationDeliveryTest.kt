@@ -2,7 +2,6 @@ package com.jarvys.agent
 
 import android.app.Application
 import com.jarvys.agent.coding.ProjectScopeStore
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.*
 import com.jarvys.agent.workspaces.*
 import java.io.File
@@ -26,7 +25,6 @@ class WorkspaceInputIncorporationDeliveryTest {
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
-    private lateinit var policy: NativeActionPolicy
     private lateinit var scope: WorkspaceRecord
     private lateinit var assignment: WorkspaceAssignment
     private lateinit var delivery: WorkspaceInputIncorporationDelivery
@@ -37,7 +35,7 @@ class WorkspaceInputIncorporationDeliveryTest {
         app = RuntimeEnvironment.getApplication()
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         File(app.filesDir, "jarvys").deleteRecursively()
-        registry = WorkspaceRegistry(app); ledger = LocalRunStore(app); policy = NativeActionPolicy.inMemory()
+        registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
         scope = registry.createWorkspace("input-proof", "Synthetic workspace")
         val pending = registry.prepareAssignment(scope.workspaceId, "assignment", "source-request", "Synthetic request",
             "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)
@@ -45,7 +43,7 @@ class WorkspaceInputIncorporationDeliveryTest {
         assignment = registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, "synthetic-bot")
         ledger.appendConversationMessage(scope.executionSessionId, "user", "Synthetic worker ledger")
         ledger.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "user", "Synthetic central ledger")
-        delivery = WorkspaceInputIncorporationDelivery(app, ledger, policy)
+        delivery = WorkspaceInputIncorporationDelivery(app, ledger)
     }
     @After fun close() { registry.close(); app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME) }
 
@@ -96,16 +94,13 @@ class WorkspaceInputIncorporationDeliveryTest {
         assertNull(receipt(binding))
     }
 
-    @Test fun denyAndAskDoNotProduceAutomaticReceipts() {
+    @Test fun durableExactCheckpointProofProducesAutomaticReceipt() {
         val (_, binding) = correction(); save(binding)
-        for (mode in listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK)) {
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, mode); reconcile(); assertNull(receipt(binding))
-        }
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ALLOW)
-        reconcile(); assertNotNull(receipt(binding))
+        reconcile()
+        assertNotNull(receipt(binding))
     }
 
-    @Test fun explicitAskReadReconcilesOnlyItsExactReplyWithoutASecondApproval() {
+    @Test fun exactReplyReconciliationSelectsOnlyItsMatchingInputProof() {
         val (_, native) = correction()
         fun reply(key: String): CrewInputBinding {
             val evidence = CrewCoordinationEvidence.create(scope.executionSessionId, assignment.missionId,
@@ -132,22 +127,14 @@ class WorkspaceInputIncorporationDeliveryTest {
         CrewCheckpointStore(app.filesDir).save(scope.executionSessionId, requireNotNull(assignment.botId),
             JSONObject().put("missionId", assignment.missionId), identity,
             CoreAgentLoop.Checkpoint(emptyList(), proofs.keys, emptyMap(), -1, proofs), JSONObject())
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
-        policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ, NativeActionPolicy.binding("synthetic-read-selected")).use { permission ->
-            assertThrows(Exception::class.java) {
-                delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable { permission.admit() }, selected)
-            }
-            assertTrue(ledger.listWorkspaceInputIncorporations(WorkspaceIdentity.CENTRAL_SESSION, 50, null).isEmpty())
-            permission.approveOnce {}
-            delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable { permission.admit() }, selected)
-            val receipts = ledger.listWorkspaceInputIncorporations(WorkspaceIdentity.CENTRAL_SESSION, 50, null)
-            assertEquals(listOf(selected.sourceId), receipts.map { it.sourceId })
-            assertNull(receipt(native))
-            assertNull(ledger.readWorkspaceInputIncorporation(WorkspaceIdentity.CENTRAL_SESSION,
-                WorkspaceInputIncorporation.SourceKind.REPLY, other.sourceId))
-            assertThrows(IllegalArgumentException::class.java) {
-                delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable { permission.admit() }, native)
-            }
+        delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable {}, selected)
+        val receipts = ledger.listWorkspaceInputIncorporations(WorkspaceIdentity.CENTRAL_SESSION, 50, null)
+        assertEquals(listOf(selected.sourceId), receipts.map { it.sourceId })
+        assertNull(receipt(native))
+        assertNull(ledger.readWorkspaceInputIncorporation(WorkspaceIdentity.CENTRAL_SESSION,
+            WorkspaceInputIncorporation.SourceKind.REPLY, other.sourceId))
+        assertThrows(IllegalArgumentException::class.java) {
+            delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable {}, native)
         }
     }
 

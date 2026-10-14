@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,6 +17,10 @@ class MemorySearchPromptTest {
             .forEach { trigger ->
                 assertTrue("Guidance must remain domain-general", !english.contains(trigger) && !spanish.contains(trigger))
             }
+        assertTrue(english.contains("personal snapshots") && english.contains("explicitly selected"))
+        assertTrue(spanish.contains("instantáneas personales inmutables") && spanish.contains("seleccionadas explícitamente"))
+        assertFalse(english.contains("native sharing policy") || english.contains("ask requires approval") || english.contains("deny blocks sharing"))
+        assertFalse(spanish.contains("política nativa") || spanish.contains("ask exige aprobación") || spanish.contains("deny bloquea compartir"))
     }
 
     @Test

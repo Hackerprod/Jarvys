@@ -17,10 +17,9 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Durable contact-selection authority. Personal data, URI and source identity are never journaled. */
+/** Durable authenticated contact selection. Personal data, URI and source identity are never journaled. */
 internal class FactoryContactCoordinator(
     context: Context,
-    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
     private val verify: (String, String) -> FactoryDocumentCoordinator.Proof = { appId, capability ->
         FactoryDocumentCoordinator.verifyInstalled(context, appId, setOf(capability))
     },
@@ -43,7 +42,7 @@ internal class FactoryContactCoordinator(
             }
         }
     }
-    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val grant: FactoryOperationPolicy.Grant) {
+    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long) {
         val revoked = AtomicBoolean(false)
         @Volatile var registration: ExternalLaunchControl.Registration? = null
         @Volatile var attempted = false
@@ -51,8 +50,8 @@ internal class FactoryContactCoordinator(
         @Volatile var preparing = false
         @Volatile var retired = false
             private set
-        fun revoke() { revoked.set(true); if (!retired) grant.revoke() }
-        fun retire() { retired = true; revoked.set(true) }
+        fun revoke() { revoked.set(true); registration?.close() }
+        fun retire() { retired = true; revoked.set(true); registration?.close() }
 
     }
     private val packageManager = context.applicationContext.packageManager
@@ -64,14 +63,11 @@ internal class FactoryContactCoordinator(
     @Volatile private var busy = false
     @Volatile private var restoring = false
     private var nonce = ""
-    private var restoredUnknown = false
     private var startupWaiter: (() -> Unit)? = null
     fun session() = current
     fun status() = state
     fun isBusy() = busy || restoring
-    fun needsRecovery(): Boolean { val value = current; return open && !restoring && (value == null || value.revoked.get() || broken || runCatching { value.grant.requireCurrent() }.isFailure) }
-    private fun recoverable() = restoredUnknown && open && !broken && current == null
-    fun canBegin() = !broken && !busy && !restoring && (recoverable() || (!open && FactoryInteractionAdmission.available(this)))
+    fun canBegin() = !broken && !busy && !restoring && (open || current == null && FactoryInteractionAdmission.available(this))
     private fun worker() { check(Looper.myLooper() != Looper.getMainLooper()) { "External action I/O must run on the bounded worker" } }
     private fun save() {
         worker()
@@ -82,11 +78,11 @@ internal class FactoryContactCoordinator(
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
         } catch (failure: Exception) {
-            broken = true; open = true; state = "outcome_unknown"; restoredUnknown = false; current?.revoke(); FactoryInteractionAdmission.restore(this)
+            broken = true; open = true; state = "outcome_unknown"; current?.revoke()
             throw failure
         }
     }
-    private fun prepareRestore() { restoring = true; FactoryInteractionAdmission.restore(this) }
+    private fun prepareRestore() { restoring = true }
     fun restore() {
         worker()
         if (!restoring) prepareRestore()
@@ -104,10 +100,15 @@ internal class FactoryContactCoordinator(
                 val old = saved.getString("state")
                 require(if (open) old in OPEN_STATES else old in CLOSED_STATES)
                 require(nonce.matches(Regex("[a-f0-9]{64}")) || (!open && old == "closed_outcome_unknown" && nonce.isEmpty()))
-                state = if (open) "outcome_unknown" else old
+                state = if (open) "closed_outcome_unknown" else old
+                if (open) { open = false; save() }
             }
-            if (open) { save(); restoredUnknown = true } else release()
-        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; restoredUnknown = false; FactoryInteractionAdmission.restore(this) }
+            if (open) { state = "closed_outcome_unknown"; open = false; save() }
+            release()
+        } catch (_: Exception) {
+            broken = false; open = false; state = "closed_outcome_unknown"; nonce = ""
+            runCatching { save() }; release()
+        }
         finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -115,30 +116,27 @@ internal class FactoryContactCoordinator(
     }
     fun begin(callingPackage: String?, request: Request, preparing: Boolean = false, active: () -> Unit): Session {
         worker(); require(!callingPackage.isNullOrBlank()); check(canBegin()); require(request.nonce != nonce)
-        if (!recoverable()) FactoryInteractionAdmission.acquire(this)
         busy = true
-        var acquired: FactoryOperationPolicy.Grant? = null
         try {
             ContactPickSpec.kind(request.kind)
             val proof = verify(callingPackage, "contacts"); check(proof.appId == callingPackage); active()
-            val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.CONTACT_PICK,
-                FactoryOperationPolicy.binding(request.nonce, request.kind))
-            acquired = grant; grant.requireCurrent(); active()
-            if (recoverable()) {
-                check(grant.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS) { "Historical outcome needs explicit recovery" }
-                state = "closed_outcome_unknown"; open = false; save(); restoredUnknown = false
-            }
+            if (open) {
+                check(!broken && current?.preparing != true)
+                val previous = current
+                if (previous == null) FactoryInteractionAdmission.acquire(this)
+                previous?.revoke(); previous?.registration?.close(); previous?.registration = null
+                state = "closed_outcome_unknown"; open = false; save(); current = null
+            } else FactoryInteractionAdmission.acquire(this)
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - 300000)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000, grant)
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000)
             value.preparing = preparing
             current = value; nonce = request.nonce; open = true; state = "review"; save(); return value
         } catch (failure: Exception) {
-            acquired?.close(); current?.preparing = false; current?.revoke()
+            current?.preparing = false; current?.revoke()
             if (open && current != null) { state = "outcome_unknown"; runCatching { save() } }
             throw failure
         } finally { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
     }
-    fun approve(value: Session, human: () -> Unit) { requireActive(value); value.grant.approveOnce(human) }
     fun sourceVerifier(value: Session): ExternalLaunchControl.HostVerifier {
         worker(); requireActive(value)
         val uid = packageManager.getApplicationInfo(value.proof.appId, 0).uid
@@ -147,69 +145,57 @@ internal class FactoryContactCoordinator(
     }
     fun requireActive(value: Session) {
         check(current === value && open && !broken && !value.revoked.get() && SystemClock.elapsedRealtime() < value.expiresAt)
-        value.grant.requireCurrent()
     }
+    fun requireCurrent(value: Session) { requireActive(value); check(verify(value.proof.appId, "contacts") == value.proof) }
     /** Consume authority durably before any external dispatch. No state ever permits replay. */
     fun prepareLaunch(value: Session, active: () -> Unit) {
         worker(); requireActive(value); check(state == "review" && !value.attempted)
-        active(); value.grant.checkBeforeEffect(); check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); active(); value.grant.checkBeforeEffect()
+        active(); requireCurrent(value)
+        requireActive(value); active(); requireCurrent(value)
         check(value.registration?.isRevoked == false)
         value.attempted = true; state = "launch_pending"; save()
     }
     fun verifyReady(value: Session, active: () -> Unit) {
-        worker(); requireActive(value); active(); value.grant.checkBeforeEffect()
+        worker(); requireActive(value); active(); requireCurrent(value)
         check(state == "launch_pending" && value.attempted && verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
+        requireActive(value); active(); requireCurrent(value); check(value.registration?.isRevoked == false)
     }
     fun prepareRead(value: Session, active: () -> Unit) {
         worker(); requireActive(value); check(value.attempted && value.pickerReturned && state == "launch_pending")
-        active(); value.grant.checkBeforeEffect(); check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
+        active(); requireCurrent(value)
+        requireActive(value); active(); requireCurrent(value); check(value.registration?.isRevoked == false)
     }
     fun selected(value: Session) {
-        worker(); requireActive(value); value.grant.checkBeforeEffect(); check(value.attempted && state == "launch_pending" && value.pickerReturned)
+        worker(); requireActive(value); requireCurrent(value); check(value.attempted && state == "launch_pending" && value.pickerReturned)
         check(value.registration?.isRevoked == false); state = "selected"; save()
     }
     /** Only the original foreground owner can deliver the exact validated in-memory datum. */
     fun deliver(value: Session, datum: String, active: () -> Unit): Intent {
         worker(); requireActive(value); check(!value.preparing && state == "selected" && value.pickerReturned)
-        ContactPickSpec.value(datum); active(); value.grant.checkBeforeEffect()
-        check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
+        ContactPickSpec.value(datum); active(); requireCurrent(value)
+        requireActive(value); active(); requireCurrent(value); check(value.registration?.isRevoked == false)
         val result = Intent().putExtra("nonce", nonce).putExtra("kind", value.request.kind).putExtra("value", datum)
         // Persist consumption before returning personal data; a failed/uncertain return is never replayed.
         state = "closed"; open = false; save()
-        value.retire(); value.registration?.close(); value.registration = null; release(closeGrant = false); return result
+        value.retire(); value.registration?.close(); value.registration = null; release(); return result
     }
-    fun close(value: Session?, recovery: Boolean, externalClosedByUser: Boolean, active: () -> Unit) {
+    fun close(value: Session?, active: () -> Unit) {
         worker(); check(!busy && !restoring); active()
-        if (recovery) check(needsRecovery()) else check(value != null && current === value && open && !broken)
+        check(value != null && current === value && open && !broken)
         val owned = current
         check(owned?.preparing != true) { "Contact provider work is still active" }
-        if (recovery || (owned?.attempted == true && !owned.pickerReturned)) check(externalClosedByUser)
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
         active()
-        state = if (recovery) "closed_outcome_unknown" else "closed"; open = false
+        state = if (owned?.attempted == true && !owned.pickerReturned) "closed_outcome_unknown" else "closed"; open = false
         if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
         save(); broken = false; release()
     }
-    private fun release(closeGrant: Boolean = true) { if (closeGrant) current?.grant?.close(); current = null; restoredUnknown = false; FactoryInteractionAdmission.release(this) }
+    private fun release() { current = null; FactoryInteractionAdmission.release(this) }
     companion object {
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("review", "launch_pending", "selected", "outcome_unknown")
         private val CLOSED_STATES = setOf("closed", "closed_outcome_unknown")
         internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)).apply { allowCoreThreadTimeOut(true) }
-        private var recoveryToken: String? = null
-        @Synchronized fun recoveryIntent(context: Context): Intent {
-            recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryContactActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
-        }
-        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
-            val token = intent.getStringExtra("nativeRecoveryToken")
-            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken") || intent.data != null || intent.clipData != null || intent.selector != null || intent.flags and GRANT_FLAGS != 0) return false
-            recoveryToken = null; return true
-        }
         @Volatile private var instance: FactoryContactCoordinator? = null
         fun get(context: Context): FactoryContactCoordinator = instance ?: synchronized(this) {
             instance ?: FactoryContactCoordinator(context.applicationContext).also {

@@ -28,7 +28,7 @@ class FactoryPhotoApplicationStartupTest {
         val field = FactoryPhotoCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val prior = field.get(null) as? FactoryPhotoCoordinator
         if (prior != null) {
-            check(!prior.needsRecovery()) { "Cannot reset a live photo recovery interaction" }
+            check(prior.canBegin()) { "Cannot reset a live photo recovery interaction" }
             FactoryInteractionAdmission.release(prior)
         }
         field.set(null, null)
@@ -41,7 +41,7 @@ class FactoryPhotoApplicationStartupTest {
     @After fun after() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         val photo = FactoryPhotoCoordinator.get(context)
-        if (photo.needsRecovery()) photo.acknowledgeRecovery {}
+
         resetClosedPhotoSingleton(); root.deleteRecursively()
         File(context.noBackupFilesDir, "factory-file-sharing").deleteRecursively()
         File(context.cacheDir, "factory-file-shares").deleteRecursively()
@@ -58,32 +58,12 @@ class FactoryPhotoApplicationStartupTest {
             assertTrue(FactoryFileShareCoordinator.startupPending())
             assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
             assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
-            assertTrue(FactoryPhotoCoordinator.get(context).needsRecovery())
+            assertEquals("closed_outcome_unknown", FactoryPhotoCoordinator.get(context).status())
         } finally { release.countDown() }
         blocker.get(5, TimeUnit.SECONDS); FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         assertFalse(FactoryFileShareCoordinator.startupPending())
-        assertFalse(FactoryFileShareCoordinator.get(context).needsRecovery())
+        assertTrue(FactoryFileShareCoordinator.get(context).canBegin())
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertFalse(FactoryInteractionAdmission.available())
-    }
-    @Test fun openPhotoJournalRetainsOnlyFamilyUncertaintyWithoutGlobalGuard() {
-        root.mkdirs(); journal.writeText(JSONObject().put("schemaVersion", 1).put("state", "picker").put("open", true).put("nonce", "a".repeat(64)).toString())
-        startup()
-        val photo = FactoryPhotoCoordinator.get(context)
-        assertEquals("outcome_unknown", photo.status()); assertTrue(photo.needsRecovery())
-        assertTrue(photo.canBegin()); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
-        assertTrue(runCatching { photo.acknowledgeRecovery { error("background") } }.isFailure)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        photo.acknowledgeRecovery {}
-        assertEquals("closed_outcome_unknown", photo.status())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun malformedPhotoJournalNeedsFamilyRecoveryWithoutGlobalGuard() {
-        root.mkdirs(); journal.writeText("{")
-        startup()
-        val photo = FactoryPhotoCoordinator.get(context)
-        assertTrue(photo.needsRecovery()); assertEquals("outcome_unknown", photo.status())
-        photo.acknowledgeRecovery {}
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
     }
 }

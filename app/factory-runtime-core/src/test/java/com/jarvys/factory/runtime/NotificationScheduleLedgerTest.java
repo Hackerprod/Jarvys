@@ -104,7 +104,7 @@ public class NotificationScheduleLedgerTest {
         ledger.close();ledger=new NotificationScheduleLedger(context);assertEquals(event.eventId,ledger.poll(source.ownerFingerprint).eventId);
     }
     @Test public void expiredIngressDoesNotStealNewerResumeAcquisition()throws Exception {
-        Row row=ledger.insert(source,request("one"),now);Row pending=ledger.change(row,State.QUEUED_POLICY_UNAVAILABLE,"acquiring_current_policy",hex('1'),hex('2'),2000);
+        Row row=ledger.insert(source,request("one"),now);Row pending=ledger.change(row,State.QUEUED_SESSION_UNAVAILABLE,"acquiring_host_session",hex('1'),hex('2'),2000);
         ledger.queueUnavailable(row.token,hex('3'),2000);assertEquals(pending.revision,ledger.get(source.ownerFingerprint,"one").revision);
     }
     @Test public void recoveryProgressSurvivesReopen()throws Exception {

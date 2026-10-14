@@ -243,21 +243,10 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 check(bot.missionId == assignment.missionId)
                 val expectedToken = bot.token
                 val generation = expectedToken.generation()
-                val permission = if (control.type == WorkspaceControlType.PAUSE) null else
-                    NativeActionPolicy(app).prepare(NativeActionPolicy.Operation.WORKSPACE_DELEGATE,
-                        NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, control.requestId,
-                            control.workspaceId, control.assignmentId, control.assignmentRevision.toString(), control.userText))
-                try {
-                    permission?.authorize(com.jarvys.agent.connectors.ApprovalSummary(
-                        AppLanguageRuntime.localizedContext(app).getString(R.string.native_permission_workspace_delegate),
-                        listOf(scope.title, control.type.name, control.userText)), token) { summary, cancellation ->
-                        com.jarvys.agent.connectors.ApprovalGate.INSTANCE.request(summary, cancellation)
-                    }
-                    val validate = Runnable {
-                        token.throwIfCancelled()
-                        check(bot.token.generation() == generation) { "Worker generation changed" }
-                        permission?.admit(token)
-                    }
+                val validate = Runnable {
+                    token.throwIfCancelled()
+                    check(bot.token.generation() == generation) { "Worker generation changed" }
+                }
                     var started: WorkspaceUserControl? = null
                     try {
                         synchronized(controlDispatchLock(control.assignmentId)) {
@@ -318,12 +307,11 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         WorkspaceChanges.changed()
                         throw failure
                     }
-                } finally { permission?.close() }
         }
     }
 
     companion object {
-        /** Called before stopping Crew managers, so an old ASK cannot restart them afterward. */
+        /** Called before stopping Crew managers, so a pending native operation cannot restart them afterward. */
         @JvmStatic fun cancelPendingControls() = WorkspaceControlOwners.cancelPending()
         private val locks = ConcurrentHashMap<String, Any>()
         private val controlLocks = ConcurrentHashMap<String, Any>()

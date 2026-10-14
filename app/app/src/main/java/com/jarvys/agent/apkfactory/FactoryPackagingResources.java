@@ -22,7 +22,7 @@ public final class FactoryPackagingResources {
         private Lease() {}
         @Override public void close() { if (closed.compareAndSet(false,true)) OWNED.set(false); }
     }
-    /** Never waits, including when another operation is waiting for explicit signing approval. */
+    /** Never waits when another APK operation owns its buffers. */
     public static Lease acquire() throws ResourceFailure {
         if (!OWNED.compareAndSet(false,true)) throw new ResourceFailure("Factory resources busy: another process-local APK operation still owns its buffers; retry after it finishes or is cancelled");
         return new Lease();

@@ -2,19 +2,13 @@ package com.jarvys.agent.apkfactory
 
 import android.app.Activity
 import android.content.Context
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewStructure
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -22,18 +16,14 @@ import androidx.activity.OnBackPressedCallback
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.jarvys.agent.AppLanguageRuntime
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
-import com.jarvys.factory.contract.ExternalLaunchSpec
 import com.jarvys.factory.runtime.ExternalLaunchControl
 import java.util.concurrent.RejectedExecutionException
 
-/** Policy-authorized typed handoff. Android defaults or explicit recipient selection preserve identity. */
+/** Authenticated typed handoff. Android resolves a recipient when no default is set. */
 open class FactoryExternalActionActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryExternalLaunchCoordinator.get(applicationContext) }
     private val targets by lazy { FactoryExternalLaunchTargets(applicationContext) }
-    private var guard: MemoryUiAutomationGuard.Lease? = null
-    private var policySubscription: AutoCloseable? = null
     private var session: FactoryExternalLaunchCoordinator.Session? = null
     private var candidates = emptyList<FactoryExternalLaunchTargets.Target>()
     private var selected: FactoryExternalLaunchTargets.Target? = null
@@ -47,33 +37,23 @@ open class FactoryExternalActionActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val expire = Runnable { session?.revoke(); generation++; render() }
     private lateinit var status: TextView
-    private lateinit var details: LinearLayout
-    private lateinit var choices: RadioGroup
-    private lateinit var open: Button
     private lateinit var close: Button
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setResult(Activity.RESULT_CANCELED)
-        val recovery = savedInstanceState == null && runCatching { FactoryExternalLaunchCoordinator.consumeRecoveryToken(intent) }.getOrDefault(false)
         val caller = callingPackage
-        val incoming = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryExternalLaunchCoordinator.Request.parse(intent) }.getOrNull() else null
-        if (!recovery && incoming == null) { rejected = true; finish(); return }
-        if (recovery) session = coordinator.session()
-        val column = PrivateReviewColumn(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
+        val incoming = if (savedInstanceState == null && caller != null) runCatching { FactoryExternalLaunchCoordinator.Request.parse(intent) }.getOrNull() else null
+        if (incoming == null) { rejected = true; finish(); return }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
         column.addView(TextView(this).apply { setText(R.string.factory_external_launch_title); textSize = 22f; isSaveEnabled = false })
-        status = TextView(this).apply { textSize = 16f; privateReview(); autoLinkMask = 0 }; column.addView(status)
-        details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; privateReview() }; column.addView(details)
-        choices = RadioGroup(this).apply { isSaveEnabled = false }; column.addView(choices)
-        fun button(label: Int, name: String, action: () -> Unit) = object : Button(this) {
-            override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
-        }.also {
-            it.setText(label); it.tag = "factory-external-launch-$name"; it.filterTouchesWhenObscured = true; it.isSaveEnabled = false
-            it.setOnClickListener { if (interactionReady() && !working) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
+        status = TextView(this).apply { textSize = 16f; isSaveEnabled = false; autoLinkMask = 0 }; column.addView(status)
+        close = Button(this).apply {
+            setText(R.string.factory_external_launch_close); tag = "factory-external-launch-close"; filterTouchesWhenObscured = true
+            setOnClickListener { if (lifecycleReady() && !working) runCatching { closeNative() }.onFailure { rejected = true; render() } }
+            column.addView(this)
         }
-        open = button(R.string.factory_external_launch_open, "open") { openNative() }
-        close = button(R.string.factory_external_launch_close, "close") { closeNative() }
-        val scroll = ScrollView(this).apply { privateReview(); isFillViewport = true; addView(column) }; setContentView(scroll)
+        val scroll = ScrollView(this).apply { isFillViewport = true; addView(column) }; setContentView(scroll)
         ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom); insets
@@ -81,7 +61,7 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // Back closes only this host request; external outcomes remain unconfirmed.
-                if (working || !interactionReady()) {
+                if (working || !lifecycleReady()) {
                     session?.revoke(); finish(); return
                 }
                 runCatching { closeNative() }.onFailure { session?.revoke(); finish() }
@@ -110,38 +90,18 @@ open class FactoryExternalActionActivity : ComponentActivity() {
                         result.onSuccess { (value, targets, preferred) ->
                             if (!isDestroyed && !isFinishing && generation == approved && !value.revoked.get()) {
                                 session = value; candidates = targets; selected = preferred
-                                if (value.authority.requiresApproval) guard = MemoryUiAutomationGuard.enterProtectedSurface()
-                                policySubscription = value.authority.onRevoked {
-                                    handler.post { guard?.close(); guard = null; render() }
-                                }
-                                targets.forEach { target ->
-                                    choices.addView(object : RadioButton(this) {
-                                        override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
-                                    }.apply {
-                                        text = target.component.flattenToString(); tag = target.component.flattenToString()
-                                        id = View.generateViewId(); isSaveEnabled = false; filterTouchesWhenObscured = true; isChecked = target == selected
-                                        setOnClickListener { if (interactionReady() && !working && !value.attempted) {
-                                            if (value.authority.requiresApproval) requireHuman() else requireLifecycle()
-                                            selected = target; render()
-                                        } }
-                                    })
-                                }
                                 handler.postDelayed(expire, maxOf(0, value.expiresAt - SystemClock.elapsedRealtime()))
                             } else value.revoke()
                         }.onFailure {
                             rejected = true
-                            if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
-                                session = coordinator.session()
-                            } else finish()
+                            finish()
                         }; render()
                     }
                 }
             }
         }
-        if (recovery) FactoryExternalLaunchCoordinator.afterStartup { if (!isDestroyed && !isFinishing) { session = coordinator.session(); render() } }
         render()
     }
-    private fun unoccluded(event: MotionEvent) = Build.VERSION.SDK_INT < 29 || event.flags and MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED == 0
     private fun awaitStartup(action: () -> Unit) {
         val approved = generation
         fun reject() { working = false; rejected = true; if (!isDestroyed) finish() }
@@ -150,32 +110,21 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         }) reject()
     }
     private fun lifecycleReady() = resumed && focused && !isFinishing && !isDestroyed
-    private fun humanReady() = lifecycleReady() && guard?.isReadyForUser == true
-    private fun interactionReady() = if (session?.authority?.requiresApproval == true && !coordinator.needsRecovery()) humanReady() else lifecycleReady()
-    private fun requireHuman(approved: Long = generation) { check(humanReady() && generation == approved); guard!!.requireHumanUiInteraction() }
     private fun requireLifecycle(approved: Long = generation) { check(lifecycleReady() && generation == approved) }
-    private fun approve(value: FactoryExternalLaunchCoordinator.Session) {
-        requireLifecycle()
-        if (value.authority.requiresApproval) {
-            value.authority.approveOnce { requireHuman() }
-            guard?.close(); guard = null
-        }
-        value.authority.checkBeforeEffect()
-    }
     private fun execute(onRejected: (() -> Unit)? = null, action: () -> Unit) {
         try { FactoryExternalLaunchCoordinator.WORKER.execute(action) }
         catch (_: RejectedExecutionException) { onRejected?.invoke(); working = false; rejected = true; session?.revoke(); render() }
     }
     private fun openNative() {
-        requireLifecycle(); val value = session ?: error("Missing external app request"); val target = selected ?: error("Choose an external app")
-        check(!value.attempted && target in candidates); approve(value); val approved = generation
+        requireLifecycle(); val value = session ?: error("Missing external app request"); val target = selected
+        check(!value.attempted && (target == null || target in candidates)); val approved = generation
         working = true; value.preparing = true; render()
         execute(onRejected = { value.preparing = false }) {
             val result = runCatching {
-                targets.verifiedIntent(target, value.request.spec)
+                if (target != null) targets.verifiedIntent(target, value.request.spec)
                 coordinator.prepareLaunch(value) { requireLifecycle(approved) }
                 coordinator.verifyReady(value) { requireLifecycle(approved) }
-                val exact = targets.verifiedIntent(target, value.request.spec)
+                val exact = if (target != null) targets.verifiedIntent(target, value.request.spec) else targets.systemChooser(value.request.spec)
                 coordinator.requireActive(value); requireLifecycle(approved); exact
             }
             runOnUiThread {
@@ -184,7 +133,6 @@ open class FactoryExternalActionActivity : ComponentActivity() {
                     try {
                         requireLifecycle(approved); coordinator.requireActive(value)
                         check(value.registration?.isRevoked == false && selected == target)
-                        value.authority.checkBeforeEffect()
                         externalDispatched = true
                         startActivity(exact)
                         value.launchRequested = true
@@ -197,7 +145,7 @@ open class FactoryExternalActionActivity : ComponentActivity() {
     private fun completeLaunch(value: FactoryExternalLaunchCoordinator.Session) {
         working = true
         execute {
-            val result = runCatching { coordinator.close(value, false) {} }
+            val result = runCatching { coordinator.close(value) {} }
             runOnUiThread {
                 working = false
                 result.onSuccess { receipt ->
@@ -210,11 +158,10 @@ open class FactoryExternalActionActivity : ComponentActivity() {
     private fun closeNative() {
         requireLifecycle(); val value = session ?: coordinator.session(); val approved = generation
         check(value?.preparing != true)
-        val recovery = coordinator.needsRecovery()
-        if (value == null && !recovery) { closed = true; finish(); return }
+        if (value == null) { closed = true; finish(); return }
         working = true; render()
         execute {
-            val result = runCatching { coordinator.close(value, recovery) { requireLifecycle(approved) } }
+            val result = runCatching { coordinator.close(value) { requireLifecycle(approved) } }
             runOnUiThread {
                 working = false
                 result.onSuccess { receipt ->
@@ -229,94 +176,29 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         val value = session
         status.text = buildString {
             append(getString(R.string.factory_external_launch_disclosure))
-            if (value != null) {
-                append("\n\n").append(value.proof.appId).append("\n\n").append(value.request.method)
-                if (value.request.spec.recipient == null && value.request.spec.calendar == null) append("\n\n").append(value.request.spec.display)
-                if (value.request.spec.calendar != null) append("\n\n").append(getString(R.string.factory_calendar_disclosure))
-                selected?.let { append("\n\n").append(it.component.flattenToString()) }
-            }
             if (working || coordinator.isBusy()) append("\n\n").append(getString(R.string.factory_external_launch_checking))
-            if (coordinator.needsRecovery()) append("\n\n").append(getString(R.string.factory_external_launch_unknown))
-            else if (value?.attempted == true) append("\n\n").append(getString(R.string.factory_external_launch_attempted))
+            if (value?.attempted == true) append("\n\n").append(getString(R.string.factory_external_launch_attempted))
             if (rejected || (value != null && candidates.isEmpty() && !value.attempted)) append("\n\n").append(getString(R.string.factory_external_launch_unavailable))
         }
-        details.removeAllViews()
-        if (value != null && (value.request.spec.recipient != null || value.request.spec.calendar != null)) {
-            val spec = value.request.spec
-            fun field(label: Int, name: String, content: String) {
-                details.addView(TextView(this).apply {
-                    privateReview(); setText(label); setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    tag = "factory-editor-$name-label"; setPadding(0, 24, 0, 4)
-                })
-                details.addView(TextView(this).apply {
-                    privateReview(); text = content.ifEmpty { getString(R.string.factory_external_editor_empty) }
-                    tag = "factory-editor-$name"; autoLinkMask = 0; textSize = 16f
-                    setPadding(16, 12, 16, 12)
-                    background = android.graphics.drawable.GradientDrawable().apply {
-                        setColor(android.graphics.Color.TRANSPARENT); setStroke(1, android.graphics.Color.GRAY)
-                    }
-                })
-            }
-            val event = spec.calendar
-            if (event != null) {
-                field(R.string.factory_calendar_source, "calendar-source", "${value.proof.appId}\n${value.proof.version}\nAPK SHA-256: ${value.proof.apk}\nCertificate SHA-256: ${value.proof.certificate}")
-                field(R.string.factory_calendar_title, "calendar-title", event.title)
-                field(R.string.factory_calendar_location, "calendar-location", event.location)
-                fun time(millis: Long): String {
-                    val pattern = if (event.allDay) "yyyy-MM-dd 'UTC'" else "yyyy-MM-dd HH:mm:ss.SSS XXX"
-                    val formatted = java.text.SimpleDateFormat(pattern, java.util.Locale.ROOT).apply {
-                        timeZone = java.util.TimeZone.getTimeZone(event.timeZone)
-                    }.format(java.util.Date(millis))
-                    return "$formatted\n$millis ms (Unix)"
-                }
-                field(R.string.factory_calendar_start, "calendar-start", time(event.startTimeMillis))
-                field(R.string.factory_calendar_end, "calendar-end", time(event.endTimeMillis))
-                field(R.string.factory_calendar_timezone, "calendar-timezone", event.timeZone)
-                field(R.string.factory_calendar_all_day, "calendar-all-day", event.allDay.toString())
-                field(R.string.factory_calendar_description, "calendar-description", event.description)
-            } else {
-                field(R.string.factory_external_editor_recipient, "recipient", spec.recipient)
-                if (spec.kind == ExternalLaunchSpec.Kind.EMAIL_COMPOSE) field(R.string.factory_external_editor_subject, "subject", spec.subject)
-                field(R.string.factory_external_editor_body, "body", spec.body)
-            }
-        }
-        val ready = interactionReady() && !working && !rejected && value != null && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review"
-        open.isEnabled = ready && selected != null
-        open.visibility = if (value?.authority?.requiresApproval == true) View.VISIBLE else View.GONE
-        for (i in 0 until choices.childCount) choices.getChildAt(i).isEnabled = ready
-        close.setText(if (coordinator.needsRecovery() || value?.attempted == true) R.string.factory_external_launch_recover else R.string.factory_external_launch_close)
-        close.isEnabled = interactionReady() && !working && !coordinator.isBusy() && value?.preparing != true
-        if (ready && selected != null && value?.authority?.requiresApproval == false) {
-            // Dispatch once as soon as the active host and verified recipient are ready.
+        close.isEnabled = lifecycleReady() && !working && !coordinator.isBusy() && value?.preparing != true
+        startIfReady()
+    }
+    private fun startIfReady() {
+        val value = session ?: return
+        if (lifecycleReady() && !working && !rejected && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review") {
             runCatching { openNative() }.onFailure { value.revoke(); rejected = true; render() }
         }
     }
-    override fun onResume() { super.onResume(); resumed = true; render() }
+    override fun onResume() { super.onResume(); resumed = true; startIfReady(); render() }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus); focused = hasFocus
         if (!hasFocus && session != null && !closed && !externalDispatched) { generation++; session?.revoke() }
-        render()
+        startIfReady(); render()
     }
     override fun onPause() { resumed = false; generation++; if (!closed && !externalDispatched) session?.revoke(); super.onPause() }
     override fun onDestroy() {
         handler.removeCallbacks(expire)
         if (!closed) session?.revoke()
-        policySubscription?.close(); policySubscription = null
-        guard?.close(); guard = null
         super.onDestroy()
     }
-}
-
-/** Never export review descendants through autofill, including explicit include-unimportant requests. */
-internal class PrivateReviewColumn(context: Context) : LinearLayout(context) {
-    init { privateReview() }
-    override fun dispatchProvideAutofillStructure(structure: ViewStructure, flags: Int) {
-        if (Build.VERSION.SDK_INT >= 26) structure.setAutofillId(autofillId)
-    }
-}
-private fun View.privateReview() {
-    isSaveEnabled = false
-    isSaveFromParentEnabled = false
-    if (Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
-    if (Build.VERSION.SDK_INT >= 30) importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
 }

@@ -5,7 +5,6 @@ import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.ToolSpec
-import com.jarvys.agent.connectors.ApprovalGate
 import org.json.JSONObject
 import java.util.concurrent.CancellationException
 import java.util.function.BooleanSupplier
@@ -14,7 +13,7 @@ import java.util.function.BooleanSupplier
 object ApkFactoryTools {
     const val NAME = "apk_factory"
     @JvmStatic fun create(context: Context, scope: ProjectScope, owner: String, available: BooleanSupplier): CoreTool =
-        Tool(FactoryProjectService(context, scope, owner, ApprovalGate.INSTANCE, available::getAsBoolean))
+        Tool(FactoryProjectService(context, scope, owner, available::getAsBoolean))
 
     internal class Tool(private val service: FactoryProjectService) : CoreTool {
         override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
@@ -26,7 +25,7 @@ object ApkFactoryTools {
                 "output_path" to mapOf("type" to "string"), "expected_sha256" to mapOf("type" to "string"),
                 "expected_scope_version" to mapOf("type" to "integer"))
             return ToolSpec(NAME, "coding_apk_factory",
-                "Inspect the bundled APK factory, build an unsigned separate Android app from factory.json/HTML/CSS/JS/icon in this project, or sign its exact verified artifact with a per-app device key under the configured Factory policy. Read com.jarvys.apk-factory first. Preview opens one isolated shared-runtime harness with RAM app storage and a separate disposable browser profile for an exact verified build; preview_status reports bounded observed events. Test exercises shared native handlers, not website JavaScript or installed APK behavior. Full install applies the configured policy to an exact signed receipt; Android may require its own permission or confirmation. install_status reads durable outcomes; install_cancel requests cancellation without promising rollback. Play does not offer integrated installation. Uses the bundled precompiled DEX and declared generic native capabilities, including HTTP/ICMP networking. No per-app compiler or universal signing key is required. Preview policies do not certify zero traffic. Outputs never overwrite existing files. Factory operations default to ALLOW_ALWAYS; ASK reviews once and DENY blocks. Key loss may prevent future updates.",
+                "Inspect the bundled APK factory, build an unsigned separate Android app from factory.json/HTML/CSS/JS/icon in this project, or sign its exact verified artifact with a per-app device key. Read com.jarvys.apk-factory first. Preview opens one isolated shared-runtime harness with RAM app storage and a separate disposable browser profile for an exact verified build; preview_status reports bounded observed events. Test exercises shared native handlers, not website JavaScript or installed APK behavior. Full install sends an exact signed receipt to Android PackageInstaller; Android may require its own confirmation and the system setting that allows Jarvys to install apps. install_status reads durable outcomes; install_cancel requests cancellation without promising rollback. Play does not offer integrated installation. Uses the bundled precompiled DEX and declared generic native capabilities, including HTTP/ICMP networking. No per-app compiler or universal signing key is required. Preview policies do not certify zero traffic. Outputs never overwrite existing files. Key loss may prevent future updates.",
                 "project", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("action"),
                 mapOf("type" to "object", "properties" to properties, "required" to listOf("action"), "additionalProperties" to false))
         }

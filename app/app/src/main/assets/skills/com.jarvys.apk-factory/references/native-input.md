@@ -1,10 +1,10 @@
-# Factory guidance factory-guidance-v86 / native-input
+# Factory guidance factory-guidance-v87 / native-input
 
 ## Shared contract
-Installed current page/declared capability/live policy; preview UNAVAILABLE. Basics authority/uncertainty rules apply; no hardware,zero-egress or packaged acceptance claim.
+Installed current page and declared capability; operations authenticate the installed caller. Android runtime permissions and system activities still apply; preview UNAVAILABLE. No hardware,zero-egress or packaged acceptance claim.
 
 ## Voice recognition
-voiceRecognition.status({}) → availability/discovery/busy/pendingActivity/error, no microphone probe. voiceRecognition.recognize({language?,languageModel?,prompt?,maxResults?,preferOffline?,timeoutMs?}) launches Android recognition Activity. Defaults empty language/prompt, free_form,5,false,120000ms. language valid BCP47≤64bytes; model free_form|web_search; prompt≤1024bytes; maxResults integer1..32; timeout1..600000. Options≤8192bytes,valid Unicode; ASK once.
+voiceRecognition.status({}) → availability/discovery/busy/pendingActivity/error, no microphone probe. voiceRecognition.recognize({language?,languageModel?,prompt?,maxResults?,preferOffline?,timeoutMs?}) launches Android recognition Activity. Defaults empty language/prompt, free_form,5,false,120000ms. language valid BCP47≤64bytes; model free_form|web_search; prompt≤1024bytes; maxResults integer1..32; timeout1..600000. Options≤8192bytes,valid Unicode. Android's activity may ask the user for input or permission.
 
 Result status:recognized,results,confidenceScores,requestedLanguage,requestedLanguageModel,preferOfflineRequested,completionMeans:recognizer_reported_results. Disclosures mode:installed,simulated:false,engineSelection:android_system_activity,engineVerified:false,networkMayBeUsed:true,networkUseVerified:false,offlineGuaranteed:false,accuracyVerified:false,audioReturned:false. No truncation/fake confidence. preferOffline is a hint; external recognizer may transmit audio.
 voiceRecognition.cancel({}) reports cancel_requested,cancelled,pendingActivity,externalActivityClosedVerified:false,transmittedAudioCannotBeRecalled:true. No closure/deletion proof; late results suppressed.
@@ -22,22 +22,22 @@ Fixed-buffer private-cache canonical44-byte PCM16 WAV; result opaque read handle
 Lifecycle loss cancels; no cross-page delivery. Crash cache files may remain; no secure erasure. Playback uses independent signed audio size/duration/setup budgets and streaming WAV validation; see documents-media. No automatic upload/background.
 
 ## App-private secret vault
-Keystore-encrypted private no-backup vault; each method including list/get uses policy. No host value disclosure, auto-reset or compromised-app/OS protection claim. No project/log credentials. Explicit JS strings cannot be securely erased.
+Keystore-encrypted private no-backup vault. No host value disclosure, auto-reset or compromised-app/OS protection claim. No project/log credentials. Explicit JS strings cannot be securely erased.
 
 scope exactly {origin,methods,header,prefix?}: HTTPS origin (no userinfo/query/fragment/non-root path; canonical lowercase host/default443),1..32 unique uppercase HTTP tokens≤32chars, lowercase-normalized header token≤128chars excluding transport/proxy-owned headers, optional printable ASCII prefix≤128. Wildcard method/origin not accepted. Opaque IDs match sec_[a-f0-9]{32}; label optional≤80 UTF-16 units/paired Unicode/no controls.
 - secrets.put({value,scope,label?,replaceId?}): explicit programmatic nonempty UTF-8 value, signed limit, writes encrypted vault; JS already knows input.
-- secrets.capture({scope,label?,replaceId?}): optional native secure input instead of passing value through JS. Input UI, no second policy approval/value result.
-- secrets.get({id}): explicit plaintext under secrets.get policy, not forbidden/non-disclosing.
+- secrets.capture({scope,label?,replaceId?}): optional native secure input instead of passing value through JS. Input UI returns no secret value to the app.
+- secrets.get({id}): returns explicit plaintext; access is visible to the app.
 - secrets.list({}) and secrets.describe({id}): id/label/scope metadata only, no value/hash/size; put/capture likewise.
 - secrets.remove({id}) → {id,removed:true}; secrets.reset({}) → {reset:true}, explicit vault/key discard, not automatic recovery.
-- secrets.request({id,request}): secrets+network, ordinary bounded network.request options under one secrets.request policy. Native injection rechecks URL/method at each redirect; mismatch fails. No second network approval. Response may echo secret; sent bytes cannot be recalled.
+- secrets.request({id,request}): secrets+network, ordinary bounded network.request options. Native injection rechecks URL/method at each redirect; mismatch fails. Response may echo secret; sent bytes cannot be recalled.
 
 Signed resources.secrets defaults entries32/valueBytes8192/vaultBytes524288; maxima256/32768/4194304; vaultBytes≥valueBytes+8192. Plaintext backups exclude vault; key loss/corruption may be irrecoverable. Preserve errors/unknown writes.
 
 ## Incoming Android shares
 incomingShare requires documents and exact signed incomingShare:{mimeTypes:[...],multiple:boolean}. MIME1..32 sorted unique lowercase≤127chars: exact,type/*,*/*. Only matching SEND/optional SEND_MULTIPLE filters. Sender/MIME/content are untrusted.
 - incomingShare.list({}) → array {id,action,declaredMimeType,textBytes,attachmentIndices,busy,expiresAfterMs,processLocal:true}; no content/URI/provider lookup.
-- incomingShare.take({id,attachmentIndices?}): opaque64hex id; default all remaining attachments, or unique integers0..31 including[] for text only. Reserves all slots before any provider opens; no truncation. One policy binds envelope+selection; DENY opens nothing.
+- incomingShare.take({id,attachmentIndices?}): opaque64hex id; default all remaining attachments, or unique integers0..31 including[] for text only. Reserves all slots before any provider opens; no truncation. Validates the incoming envelope and requested selection before opening providers.
 - Result id/action/declaredMimeType/text/subject/attachments/processLocal:true/contentTypeVerified:false/expiresAfterMs; attachment {index,handle,mode:"read",declaredMimeType}. Text once then null; documents read/close, no URI/path.
 - incomingShare.discard({id}) drops unconsumed content/cancels pending take; already-delivered handles keep separate ownership until closed/session ends.
 

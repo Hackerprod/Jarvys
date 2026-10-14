@@ -40,7 +40,6 @@ public class FactoryRuntimeFileSharingTest {
         String error()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("code");}
     }
     private FactoryRuntime runtime; private Screen screen; private Host host; private int next;
-    private PreparationPolicyTestProvider preparationPolicy;
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
     private DocumentHandles handles()throws Exception{return (DocumentHandles)field("documents").get(runtime);}
     private ThreadPoolExecutor worker()throws Exception{return (ThreadPoolExecutor)field("io").get(runtime);}
@@ -49,7 +48,6 @@ public class FactoryRuntimeFileSharingTest {
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         android.content.pm.ApplicationInfo info=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0);
         info.uid=17777;Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY);
-        preparationPolicy=PreparationPolicyTestProvider.install(screen);
         host=new Host();runtime=new FactoryRuntime(screen,new FrameLayout(screen),host);
         field("config").set(runtime,FactoryConfig.parsePreview(new JSONObject(host.configuration()).put("documentBroker",
                 new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString()));
@@ -90,19 +88,6 @@ public class FactoryRuntimeFileSharingTest {
         assertEquals(size,screen.launched.getLongExtra("size",0));
         runtime.onActivityResult(43,Activity.RESULT_OK,result());assertFalse(reply.value.getJSONObject("result").getBoolean("deliveryConfirmed"));
     }
-    @Test public void denyPreflightDoesNotReadConsumeOrCreateSnapshot()throws Exception{
-        preparationPolicy.mode=NativeInstalledSource.PolicyMode.DENY;
-        java.util.concurrent.atomic.AtomicInteger reads=new java.util.concurrent.atomic.AtomicInteger();
-        String handle=handles().grantRead(new InputStream(){public int read(){reads.incrementAndGet();return -1;}public int read(byte[]b,int o,int n){reads.incrementAndGet();return -1;}});
-        File root=new File(screen.getCacheDir(),FileShareSnapshot.FILE_SHARE_NAMESPACE);boolean existed=root.exists();
-        Response response=shareHandle(handle);idle();assertEquals("PERMISSION_DENIED",response.error());
-        assertEquals(0,reads.get());assertEquals(1,preparationPolicy.calls);assertEquals(existed,root.exists());assertNotNull(handles().metadata(handle));assertNull(screen.launched);
-    }
-    @Test public void askPreflightOnlyDescribesAndLeavesApprovalToContentBoundHost()throws Exception{
-        preparationPolicy.mode=NativeInstalledSource.PolicyMode.ASK;
-        Response response=share(new byte[]{1});idle();assertNull(response.value);assertNotNull(screen.launched);assertEquals(1,preparationPolicy.calls);
-        runtime.onActivityResult(43,Activity.RESULT_CANCELED,null);
-    }
     @Test public void occupiedTransferAdmissionLeavesHandleUntouchedAndReleasesOnlyOwnUiClaim()throws Exception{
         java.util.concurrent.atomic.AtomicInteger reads=new java.util.concurrent.atomic.AtomicInteger();
         String token=handles().grantRead(new ByteArrayInputStream(new byte[]{1,2,3}){
@@ -111,7 +96,7 @@ public class FactoryRuntimeFileSharingTest {
         FileShareTransfer.Admission held=FileShareTransfer.reserve();
         try{
             Response blocked=shareHandle(token);assertEquals("SHARE_BUSY",blocked.error());
-            assertEquals(0,reads.get());assertEquals(0,preparationPolicy.calls);assertNotNull(handles().metadata(token));
+            assertEquals(0,reads.get());assertNotNull(handles().metadata(token));
             assertNull(field("uiOwner").get(runtime));assertNull(field("fileShare").get(runtime));assertNull(screen.launched);
         }finally{held.close();}
         // Retry explicitly after releasing the held slot, using the same still-untouched handle.

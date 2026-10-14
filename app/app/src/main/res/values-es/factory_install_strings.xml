@@ -1,22 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="factory_install_title">Instalaciones de Factory</string>
-    <string name="factory_install_settings_summary">Revisar o cancelar la última sesión de instalación</string>
-    <string name="factory_install_approve">Aprobar este APK exacto</string>
-    <string name="factory_install_system">Abrir confirmación de Android</string>
-    <string name="factory_install_cancel">Solicitar cancelación</string>
-    <string name="factory_install_close">Cerrar sesión revisada</string>
-    <string name="factory_install_disclosure">Este APK puede reemplazar una app con el mismo ID e identidad de firma. Android decide la compatibilidad; actualizar puede cambiar comportamiento o datos. Los permisos de Factory controlan instalar por separado de firmar: Permitir siempre continúa, Preguntar revisa este APK una vez y Denegar lo bloquea. Android puede exigir su propia confirmación. Jarvys no concede permisos por origen ausentes ni afirma éxito por abrir una pantalla.</string>
-    <string name="factory_install_state">Estado registrado de la sesión</string>
-    <string name="factory_install_success">Android informó éxito para esta sesión exacta. No se han probado el funcionamiento de la app ni la conservación de datos.</string>
-    <string name="factory_install_not_success">Este estado no acredita una instalación exitosa. Cancelar después del envío no demuestra reversión. Tras una interrupción, revisa o cancela; nunca se repite automáticamente el envío.</string>
-    <string name="factory_install_interrupted">La operación no pudo completarse. Revisa el estado, el permiso por origen y la vigencia del artefacto. Cancela si corresponde; no se reintentará automáticamente.</string>
-    <string name="factory_install_cancel_first">Cancela la sesión pendiente o espera su resultado antes de cerrar. Un resultado desconocido nunca se considera un éxito.</string>
-    <string name="factory_install_reopen">Ya había una acción automatizada en curso. Sal de esta pantalla y vuelve a abrirla manualmente cuando termine; la aprobación está deshabilitada.</string>
-    <string name="factory_install_permission_required">Android no permite actualmente instalar desde Jarvys. Habilita el permiso por origen en los ajustes de Android si quieres instalar y vuelve a solicitarlo. No se creó una sesión del instalador y la automatización no relacionada sigue disponible.</string>
-    <string name="factory_install_permission_unavailable">No se pudo comprobar el permiso de instalación. No se creó una sesión del instalador. Cierra esta revisión y solicita de nuevo cuando hayas resuelto el problema del dispositivo.</string>
-    <string name="factory_install_unavailable">La instalación integrada no está disponible en esta distribución o versión de Android. Conserva el artefacto firmado del proyecto.</string>
-    <string name="factory_install_recover">Cancelar sesiones propias y recuperar el registro</string>
-    <string name="factory_install_recovery_warning">No se puede leer el registro de instalación. La recuperación cancela las sesiones pendientes del instalador pertenecientes a Jarvys (hasta 16) y puede descartar APK en preparación. No deshace instalaciones completadas ni recupera resultados perdidos. No desinstala apps ni cambia identidades de firma. Un registro histórico desconocido no bloquea la automatización no relacionada.</string>
-    <string name="factory_install_recovery_done">Se recuperó el registro tras comprobar que no quedan sesiones del instalador pertenecientes a Jarvys. Los resultados perdidos siguen siendo desconocidos; no se afirma éxito ni reversión.</string>
+    <string name="factory_install_title">Instalar app con Android</string>
+    <string name="factory_install_system">Continuar en el instalador de Android</string>
+    <string name="factory_install_cancel">Cancelar instalación</string>
+    <string name="factory_install_close">Cerrar</string>
+    <string name="factory_install_open_settings">Abrir ajustes de instalación de Android</string>
+    <string name="factory_install_disclosure">Jarvys envía este APK firmado al PackageInstaller de Android. Android controla la compatibilidad, el resultado de la instalación y cualquier confirmación que muestre el sistema.</string>
+    <string name="factory_install_state">Estado de la instalación</string>
+    <string name="factory_install_success">Android confirmó esta instalación. No se ha probado la app instalada.</string>
+    <string name="factory_install_not_success">Android no ha confirmado que esta sesión terminara con una instalación exitosa.</string>
+    <string name="factory_install_interrupted">Android no pudo completar la solicitud de instalación. Envía una nueva solicitud para continuar.</string>
+    <string name="factory_install_permission_required">Android requiere que Jarvys tenga permiso para instalar apps desde este origen. Abre los ajustes de Android para Jarvys, activa el permiso, vuelve aquí y envía una nueva solicitud de instalación.</string>
+    <string name="factory_install_permission_unavailable">No se pudo comprobar el permiso de instalación de Android y Jarvys no inició una sesión del instalador. Resuelve el ajuste del dispositivo y envía una nueva solicitud.</string>
+    <string name="factory_install_unavailable">La instalación de Android no está disponible en esta distribución o dispositivo. El APK firmado permanece en el proyecto.</string>
 </resources>

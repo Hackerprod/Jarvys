@@ -39,11 +39,10 @@ class WorkspaceCoordinationIndicatorComposeTest {
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 3)).assertExists()
         compose.onNodeWithTag("workspace-list-row-space").performClick()
         assertEquals("space", opened)
-        compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(uncertain = 1, reviewRequired = true, pageLimited = true) }
+        compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(uncertain = 1, pageLimited = true) }
         compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 3)).assertDoesNotExist()
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_uncertain, 1)).assertExists()
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_review)).assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_page_scope)).assertExists()
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(historical = 3) }
         compose.onNodeWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertDoesNotExist()
@@ -107,7 +106,7 @@ class WorkspaceCoordinationIndicatorComposeTest {
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_uncertain, 2)).assertIsDisplayed()
         compose.runOnIdle {
             showHistory.value = true
-            summary.value = WorkspaceCoordinationSummary(reviewRequired = true, pageLimited = true, unavailable = true)
+            summary.value = WorkspaceCoordinationSummary(pageLimited = true, unavailable = true)
         }
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText(compose.activity.getString(R.string.workspace_coordination_unavailable))
@@ -117,7 +116,7 @@ class WorkspaceCoordinationIndicatorComposeTest {
         counters.forEach { resource ->
             for (count in 0..2) compose.onNodeWithText(quantityText(resource, count)).assertDoesNotExist()
         }
-        listOf(R.string.workspace_coordination_review, R.string.workspace_coordination_page_scope,
+        listOf(R.string.workspace_coordination_page_scope,
             R.string.workspace_coordination_unavailable).forEach { resource ->
             compose.onNodeWithText(compose.activity.getString(resource)).assertIsDisplayed()
         }

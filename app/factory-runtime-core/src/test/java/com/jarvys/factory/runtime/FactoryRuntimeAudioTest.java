@@ -39,7 +39,6 @@ public class FactoryRuntimeAudioTest {
         public void postMessage(byte[] bytes){throw new AssertionError();}
         String error()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("code");}
     }
-    private PreparationPolicyTestProvider policy;
     private FactoryRuntime runtime; private Screen screen; private Host host; private int next;
     private final java.util.List<StreamingFileShareTransfer.Admission> admissions=new java.util.ArrayList<>();
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
@@ -50,7 +49,6 @@ public class FactoryRuntimeAudioTest {
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         android.content.pm.ApplicationInfo info=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0);
         info.uid=17777;Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY);
-        policy=PreparationPolicyTestProvider.install(screen);
         host=new Host();runtime=new FactoryRuntime(screen,new FrameLayout(screen),host);
         field("config").set(runtime,FactoryConfig.parsePreview(new JSONObject(host.configuration()).put("documentBroker",
                 new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString()));
@@ -168,24 +166,6 @@ public class FactoryRuntimeAudioTest {
             runtime.onActivityResult(45,Activity.RESULT_CANCELED,null);assertNull(field("audioPlayback").get(runtime));registration.close();
         }finally{thread.shutdownNow();org.robolectric.shadows.ShadowBinder.reset();}
     }
-    @Test public void knownDenyNeverReadsOrConsumesAudioSourceOrCreatesDiskSnapshot()throws Exception {
-        policy.mode=NativeInstalledSource.PolicyMode.DENY;final int[] reads={0};
-        String token=handles().grantRead(new InputStream(){public int read(){reads[0]++;return 17;}
-            public int read(byte[] bytes,int offset,int count){reads[0]++;bytes[offset]=17;return 1;}});
-        File directory=new File(screen.getCacheDir(),"factory-share-snapshots");assertFalse(directory.exists());
-        Response response=shareHandle(token);idle();assertEquals("PERMISSION_DENIED",response.error());
-        assertEquals(1,policy.calls);assertEquals(0,reads[0]);assertFalse(directory.exists());assertNull(screen.launched);
-        assertNull(field("audioPlayback").get(runtime));assertNull(field("uiOwner").get(runtime));
-        handles().read(token,0,1);assertEquals(1,reads[0]);
-    }
-
-    @Test public void askPreflightIsDescriptionOnlyAndLeavesApprovalToExactHostRequest()throws Exception {
-        policy.mode=NativeInstalledSource.PolicyMode.ASK;Response response=share(new byte[]{1});idle();
-        assertEquals(1,policy.calls);assertNotNull(screen.launched);assertNull(response.value);
-        assertFalse(screen.launched.hasExtra("policyMode"));assertFalse(screen.launched.hasExtra("approved"));
-        runtime.onActivityResult(45,Activity.RESULT_CANCELED,null);
-    }
-
     @Test public void aboveLegacyAudioCapUsesLongV2AndBoundedNativeCopy()throws Exception {
         JSONObject configuration=new JSONObject(host.configuration()).put("documentBroker",
                 new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest()));

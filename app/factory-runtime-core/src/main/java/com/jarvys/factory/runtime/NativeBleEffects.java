@@ -9,29 +9,29 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 
-/** NativeEffects' BLE slice. Owns actual policy/UI/lifecycle plumbing without borrowing a settled Job. */
+/** NativeEffects' BLE slice. Owns system permission and lifecycle plumbing without borrowing a settled Job. */
 final class NativeBleEffects implements AutoCloseable {
     static final int PERMISSION_REQUEST = 58;
     private static final Set<NativeBleEffects> QUARANTINE = ConcurrentHashMap.newKeySet();
-    private final Activity activity; private final NativePermissionSessions permissions;
+    private final Activity activity; private final NativeOperationSessions sessions;
     private final AndroidBlePlatform platform; private final BleCentral.Limits limits;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<Grant> grants = ConcurrentHashMap.newKeySet();
     private volatile boolean foreground, closed; private boolean tickScheduled;
     private BleCentral central; private NativeEffects.Reply pageReply;
     private Grant permissionGrant; private String[] permissionNames; private boolean permissionReturned;
-    NativeBleEffects(Activity activity, NativePermissionSessions permissions, BleCentral.Limits limits,
+    NativeBleEffects(Activity activity, NativeOperationSessions sessions, BleCentral.Limits limits,
                      BlePermissions.ScanPrivacy privacy, boolean foreground) {
-        this.activity = activity; this.permissions = permissions; this.limits = limits; this.foreground = foreground;
+        this.activity = activity; this.sessions = sessions; this.limits = limits; this.foreground = foreground;
         platform = new AndroidBlePlatform(activity, privacy, limits); retryQuarantine();
     }
     private final class Grant implements BleCentral.Access {
         final BleRequest request; final NativeEffects.Reply reply;
         final AtomicBoolean ended = new AtomicBoolean(), replySettled = new AtomicBoolean(), revoked = new AtomicBoolean();
-        volatile NativePermissionSessions.Lease lease; volatile boolean started;
+        volatile NativeOperationSessions.Lease lease; volatile boolean started;
         Grant(BleRequest request, NativeEffects.Reply reply) { this.request = request; this.reply = reply; }
         boolean current() { return !closed && !ended.get() && !revoked.get() && (replySettled.get() ? reply.pageCurrent() : reply.current()); }
-        boolean reviewPending() { NativePermissionSessions.Lease value = lease; return value != null && value.reviewLaunched && !value.reviewReturned; }
+
         @Override public void check() {
             if (!foreground || !current() || lease == null) throw new SecurityException("BLE page authority ended");
             lease.check();
@@ -41,7 +41,7 @@ final class NativeBleEffects implements AutoCloseable {
         /** Resource retirement is independent of bridge settlement. Never recursively cancel from close. */
         @Override public void close() {
             if (!ended.compareAndSet(false,true)) return;
-            grants.remove(this); request.clear(); NativePermissionSessions.Lease value = lease; if (value != null) value.close();
+            grants.remove(this); request.clear(); NativeOperationSessions.Lease value = lease; if (value != null) value.close();
         }
         void revoke(String code, String message) {
             revoked.set(true);
@@ -78,11 +78,11 @@ final class NativeBleEffects implements AutoCloseable {
             if (!request.needsPolicy()) { immediate(request,reply); request.clear(); armTick(); return; }
             Grant grant = new Grant(request,reply); grants.add(grant);
             try {
-                grant.lease = permissions.authorize(request.method,request.authorizationDetails(),new NativePermissionSessions.Callback() {
+                grant.lease = sessions.authorize(request.method,request.authorizationDetails(),new NativeOperationSessions.Callback() {
                     public boolean current() { return grant.current(); }
                     public boolean claimUi() { return foreground && grant.current() && reply.claimUi(); }
                     public void releaseUi() { reply.releaseUi(); }
-                    public void ready(NativePermissionSessions.Lease lease) {
+                    public void ready(NativeOperationSessions.Lease lease) {
                         grant.lease = lease;
                         lease.onCancelled(() -> grant.revoke("PERMISSION_DENIED","BLE permission ended; earlier peripheral effects are not undone."));
                         if (!grant.current()) { grant.close(); return; }
@@ -175,7 +175,7 @@ final class NativeBleEffects implements AutoCloseable {
         try {
             if (!grant.current()) { grant.close(); return; }
             Map<String,Object> value = platform.status(); value.put("permissionRequestStatus","returned"); value.put("requestedPermissions",requested);
-            grant.deliver(value,false); // Rechecks policy; status comes from the OS, never callback booleans.
+            grant.deliver(value,false); // Rechecks the authenticated host session; status comes from the OS.
         } catch (Exception failure) { fail(grant,failure); }
     }
     private void releasePermission() {
@@ -187,7 +187,7 @@ final class NativeBleEffects implements AutoCloseable {
         foreground = false; main.removeCallbacks(tick); tickScheduled = false;
         List<Grant> previous = new ArrayList<>(grants);
         if (central != null) central.cancelAll();
-        for (Grant grant : previous) if (grant != permissionGrant && !grant.reviewPending()) {
+        for (Grant grant : previous) if (grant != permissionGrant) {
             grant.failReply("CANCELLED","BLE foreground ownership ended; earlier peripheral effects are not undone."); grant.close();
         }
     }

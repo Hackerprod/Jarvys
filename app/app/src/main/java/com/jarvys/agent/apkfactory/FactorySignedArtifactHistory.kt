@@ -13,7 +13,7 @@ import java.io.FileOutputStream
 /**
  * Host-private, exact signed-artifact evidence. Installed assets never supply authority.
  * Keeps 64 recent artifacts plus the currently installed matching-certificate version, if older.
- * Identity/version continuity remains owned by FactorySigningIdentity, not this history.
+ * Signing key and version state remain owned by FactorySigningIdentity, not this history.
  */
 internal open class FactorySignedArtifactHistory(
     private val directory: File,
@@ -28,7 +28,7 @@ internal open class FactorySignedArtifactHistory(
         fun digest() = ProjectScope.sha256(encoded().toByteArray(Charsets.UTF_8))
     }
     private fun file(appId: String): AtomicFile {
-        FactoryIdentityBackup.validateAppId(appId)
+        FactoryIdentityId.validate(appId)
         return AtomicFile(File(directory, "$appId.json"))
     }
 
@@ -41,7 +41,7 @@ internal open class FactorySignedArtifactHistory(
             return@synchronized
         }
         val certificate = state.fingerprint ?: error("Unknown signing certificate")
-        require(state.continuityKnown && certificate.matches(HASH) && state.lastVersion >= 0)
+        require(certificate.matches(HASH) && state.lastVersion >= 0)
         validateHistory(appId, previous, certificate, state.lastVersion)
         val scope = state.lastScope ?: run {
             if (previous == null) write(appId, emptyList())
@@ -167,10 +167,10 @@ internal open class FactorySignedArtifactHistory(
         private const val MAX_RECORD_BYTES = 64 * 1024
         private val HASH = Regex("[a-f0-9]{64}")
         internal fun authenticateIdentity(appId: String, certificate: String, state: FactorySigningIdentity.State) {
-            FactoryIdentityBackup.validateAppId(appId)
+            FactoryIdentityId.validate(appId)
             FactoryArtifactAuthority.observeIdentity(appId, state)
-            require(state.existing && state.continuityKnown && state.fingerprint == certificate && certificate.matches(HASH)
-                && state.lastVersion > 0 && state.recordSha256?.matches(HASH) == true) { "Unknown or unresolved signing identity" }
+            require(state.existing && state.fingerprint == certificate && certificate.matches(HASH)
+                && state.lastVersion > 0 && state.recordSha256?.matches(HASH) == true) { "Signing identity is unavailable or inconsistent" }
         }
         private fun bounded(input: java.io.InputStream, limit: Int): ByteArray {
             val result = java.io.ByteArrayOutputStream()

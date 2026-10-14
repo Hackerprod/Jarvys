@@ -1,19 +1,19 @@
 {
-  "version": "factory-guidance-v86",
+  "version": "factory-guidance-v87",
   "sha256": {
-    "basics": "85042d94e4ed28a299f49873528a2c9b9a369667c2d8431390ac2276da7c666d",
-    "biometrics": "378d97514a532bb36f0d7ef25e3d4b58a489bb2f33b073192089c7340e5e8bc5",
-    "contacts-calendar": "407d1fcb8d8274b818ef47c53d1d19802e912c9903a64c7cf8df54e00233e84a",
-    "database": "d54c43f492d8c2ef25f3017fb60353e188fec54eeee184742810c76588586231",
-    "documents-media": "838a62a4107e22e26ba6bc5d0c8ecca16c1e2e8ebbe909b393b39273ba6f52f9",
-    "durable-native": "87afd92c4aa67e44817bd2f3aeccc1fd661b4eff4369f891599dfd7559286e93",
-    "external-actions": "e8a0f4f62dad27dc2e58013f8dc34ff8bc617306a6e66fa6bc0d3a2b0b4f4862",
-    "lifecycle": "6fe428f477050eb9255e0b21804837059ebc966e7f05a67098f1db057f47a791",
-    "local-ui": "551ff344966321bf4e5d77b43e5c0ccae4b8687f077c2a959ad837bb246e6b75",
-    "native-input": "dd5c6c1eb1a98f9d5ddfb8e3083e3dab28b74b9cbe4b1cdc568ea6111b783fcf",
-    "native-services": "6587020510942f66e5e2682ebdc8f5fdaf833a5fdc5ee0a03dc91934e0672da9",
-    "presentation": "48485bf6c2d8a0cfa3d18429d189be5b834a3c886427e7fe2eaf69efb2d7ea97",
-    "radios": "7fd193c300388b7cf3748ec5efd37340e2707df703b6321a96b6402e4fbf8599",
-    "sensors": "9ed827b4d2f92e80ecb14a0e77d5caff8e5fe1dfc68cf977b9a227061cfcf8b6"
+    "basics": "9cdc87392763401307d230db813cfba79cb18be3ff78706b738fd5ea2b5f559e",
+    "biometrics": "bc98bd88968ee1f77661e9a2916776b449a3f9d1f84e62c7fec9540e2c61fb62",
+    "contacts-calendar": "33c6e18cfa4ec91cdd4729daa776a53d75f8c4c838d3eb7b95e6de36e26d8a37",
+    "database": "eef3f3d24ea39591c5e40d83688079a9e571178c13f26c6b87aec1f7ad030842",
+    "documents-media": "4ed256a5b06a946b9c3d425097dc3e5e7972067323be1a33f66c3b9dd69bd364",
+    "durable-native": "9b1c53e5ab6a86b31523b6b66f8202dd556949a0d184ffb5c90851f1b4111ab7",
+    "external-actions": "2a74ab081fb2b274b78a83005d49ca1140467c53b9d5db1acf001b73a0e1661a",
+    "lifecycle": "5a841ed4b4c6de32adf3806346ceeae5af00f304ce207f908a8b711180a81038",
+    "local-ui": "557e21ab071fc38da9876b3c00adbac2c845f92616396d9eb8572296b0b38834",
+    "native-input": "b3fe042df1dee5fdd89288edd99e93041c40924c2a341ec9952cf1ce6dbf8cc8",
+    "native-services": "359623517c5f927da1253f007d55532e403f6e03886624418a97a6f0174e5003",
+    "presentation": "0484e93f4b186356473b0440076f8aa80ac385d16917e21e3e5f3d61f9f4fd4a",
+    "radios": "e49fc98418f769799e55a7c0e506e4604cd142f4e5f6a1e8817df8a32520315e",
+    "sensors": "a099463583b8dc8f86fda5860d3a8977d9c2c6dc75a35c3d4576cbf1a41085b1"
   }
 }

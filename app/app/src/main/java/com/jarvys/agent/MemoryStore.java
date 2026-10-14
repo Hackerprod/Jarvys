@@ -141,7 +141,6 @@ public final class MemoryStore {
     private final MemorySeedTextProvider seedTextProvider;
     private volatile boolean testEnabled;
     private final MemoryStore owner;
-    private final NativeActionPolicy nativeActionPolicy;
     private final String scopeConversationId;
     private final String scopeKey;
 
@@ -153,7 +152,6 @@ public final class MemoryStore {
         Context app = context.getApplicationContext();
         this.root = canonicalMemoryRoot(new File(new File(app.getFilesDir(), "jarvys"), MemoryConstants.MEMORY_DIRECTORY));
         this.owner = this;
-        this.nativeActionPolicy = new NativeActionPolicy(app);
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = app.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE);
@@ -169,7 +167,6 @@ public final class MemoryStore {
     MemoryStore(File root, boolean enabled, MemorySeedTextProvider seedTextProvider) {
         this.root = canonicalMemoryRoot(root);
         this.owner = this;
-        this.nativeActionPolicy = NativeActionPolicy.inMemory();
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = null;
@@ -183,7 +180,6 @@ public final class MemoryStore {
 
     private MemoryStore(MemoryStore owner, String conversationId) {
         this.owner = owner;
-        this.nativeActionPolicy = owner.nativeActionPolicy;
         this.scopeConversationId = conversationId;
         this.scopeKey = sha256(conversationId.getBytes(StandardCharsets.UTF_8));
         File scopes = new File(owner.root, SCOPE_DIRECTORY);
@@ -213,8 +209,6 @@ public final class MemoryStore {
         }
         return new MemoryStore(this, conversationId);
     }
-
-    public NativeActionPolicy nativeActionPolicy() { return nativeActionPolicy; }
 
     /** Opaque trusted native scope identity; never an agent-selectable path. */
     public String nativeScopeIdentity() { return sha256((owner.canonicalRoot + "\u0000" + scopeKey).getBytes(StandardCharsets.UTF_8)); }

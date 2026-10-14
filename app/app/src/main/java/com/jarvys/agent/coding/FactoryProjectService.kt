@@ -5,7 +5,6 @@ import android.os.Build
 import android.util.AtomicFile
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.apkfactory.FactoryPackagingResources
-import com.jarvys.agent.apkfactory.FactoryOperationPolicy
 import com.jarvys.agent.apkfactory.FactoryJson
 import com.jarvys.agent.apkfactory.FactoryIcon
 import com.jarvys.agent.apkfactory.FactoryApkSigner
@@ -15,9 +14,6 @@ import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.factory.runtime.FactoryUiAssets
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalGate
-import com.jarvys.agent.connectors.ApprovalSummary
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -29,10 +25,8 @@ internal class FactoryProjectService(
     private val context: Context,
     private val scope: ProjectScope,
     private val owner: String,
-    private val gate: ApprovalGate,
     private val available: () -> Boolean,
     private val identities: FactorySigningIdentity = FactorySigningIdentity(context),
-    private val operationPolicy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
 ) {
     private val privateRoot = File(context.noBackupFilesDir, "apk-factory")
     private fun checkActive(token: CancellationToken) {
@@ -97,7 +91,7 @@ internal class FactoryProjectService(
                 .put("technicalApkBytes", TemplateApk.MAX_APK_BYTES)
                 .put("resourceAdmission", "Defaults shown above; signed resourceBudgets.packaging can raise source limits within maxima. Complete APK includes fixed runtime/config/provenance and ZIP overhead. One process-local operation with conservative actual-size heap admission; availability is not guaranteed.").put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON")
                 .put("adaptiveIcon", "Optional foreground PNG or transparent geometric JSON, opaque #RRGGBB background, insetPercent 0–40 (default 0 preserves canvas); compiled API26 adaptive resource plus legacy fallback"))
-            .put("signing", "Signing follows Factory permissions: Allow always by default, Ask once, or Deny. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
+            .put("signing", "Signing uses a separate RSA key for each app, created locally in AndroidKeyStore on first signing. Android still controls any later installation confirmation and the source-specific install setting.")
             .put("unsupported", "Implemented operations depend on declared capabilities, applicable user grants, and device/OS availability. Native APIs outside the compiled capability catalog require a reviewed template update; per-app native code and compilation are unsupported.")
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject =
@@ -191,60 +185,11 @@ internal class FactoryProjectService(
                 check(saved.keys().asSequence().toSet() == manifest.dexSha256.keys &&
                     manifest.dexSha256.all { (name, sha) -> saved.getString(name) == sha }) { "DEX inventory differs from build receipt" }
             }
-            val approvedState = synchronized(SIGN_LOCK) { identities.state(spec.appId) }
-            check(approvedState.continuityKnown) { "Restored identity history is unresolved. Open Settings > Factory identities and explicitly reconcile the latest version floor before signing." }
-            check(spec.versionCode > approvedState.lastVersion) { "Use a higher versionCode than the last signed release (${approvedState.lastVersion})" }
-            val bootstrapSubject = FactoryOperationPolicy.Subject.bootstrap(spec.appId, ProjectScope.sha256(scope.durableIdentity().toByteArray(Charsets.UTF_8)))
-            val policySubject = approvedState.fingerprint?.let { FactoryOperationPolicy.Subject.signedArtifact(spec.appId, it) }
-                ?: bootstrapSubject
-            // Recovery also runs when a prior first-sign stopped after key creation but before promotion.
-            if (policySubject.certificate != null) operationPolicy.bindBootstrap(bootstrapSubject, policySubject)
-            operationPolicy.acquire(policySubject, FactoryOperationPolicy.Operation.SIGN,
-                FactoryOperationPolicy.binding(expectedSha, outputPath, scope.durableIdentity(), expectedVersion.toString(), approvedState.toString())).use { permission ->
+            val identityState = synchronized(SIGN_LOCK) { identities.state(spec.appId) }
+            check(spec.versionCode > identityState.lastVersion) { "Use a higher versionCode than the last signed release (${identityState.lastVersion})" }
             val signingScope = FactorySigningScope.fromPlan(manifest.plan, spec.resources)
-            val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
-                "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
-                "Declared data backup tables (SQLite rows only): ${spec.dataBackupTables.joinToString().ifEmpty { "none; data backup disabled" }}",
-                "Declared preference backup keys (string values only): ${spec.dataBackupKeys.joinToString().ifEmpty { "none; preference backup disabled" }}",
-                "Incoming sharing: ${spec.incomingShare?.let { "MIME patterns ${it.mimeTypes.joinToString()}; ACTION_SEND; ACTION_SEND_MULTIPLE=${it.multiple}; explicit documents capability; untrusted process-local inbox" } ?: "disabled"}",
-                "Notification scheduling: ${spec.notifications?.scheduling ?: false}; exact alarms: ${spec.notifications?.exactAlarms ?: false}; private receivers: ${manifest.plan.privateComponents.joinToString().ifEmpty { "none" }}",
-                "Bluetooth scan privacy: ${spec.bluetooth?.scanPrivacy ?: "disabled"}; neverForLocation can filter some BLE beacons; OS permission requirements remain in force",
-                "Generic native components: ${manifest.plan.privateComponents.joinToString().ifEmpty { "none" }}; jobs are finite persisted HTTP requests, require network, and run under Android JobScheduler limits",
-                "Resource budgets: ${spec.resources.canonicalText()}",
-                "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
-                "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
-                "Decoded query actions: ${manifest.plan.queryActions.joinToString().ifEmpty { "none" }}",
-                "Decoded features/queries/allowed hosts: ${manifest.plan.features.joinToString().ifEmpty { "none" }} / ${manifest.plan.queries.joinToString().ifEmpty { "none" }} / ${manifest.plan.hosts.joinToString().ifEmpty { "none" }}",
-                "Runtime DEX inventory: ${manifest.dexSha256.size} exact files, verified against the build.")
-            lines += "Verified resource bindings: " + manifest.resourceBindings.entries.joinToString { (role, binding) ->
-                "$role=${binding.type}/${binding.name} (${binding.id}) -> ${binding.path}"
-            }
-            lines += "Verified component DEX bindings: " + manifest.componentDex.entries.joinToString { (name, dex) -> "$name -> $dex" }
-            if (!approvedState.existing || approvedState.lastVersion == 0)
-                lines += "First signing for this app: no previously signed APK scope to compare. Review the full effective scope above."
-            else {
-                lines += "Compare with last signed version ${approvedState.lastVersion}, APK SHA-256: ${approvedState.lastApkSha256 ?: "unavailable"}"
-                lines += signingScope.disclosure(approvedState.lastScope)
-            }
-            if (manifest.plan.profile != com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT)
-                lines += "Previously built runtime: this artifact preserves its exact historical manifest and packaged DEX. Rebuilding from the project adopts the current runtime."
-            if (approvedState.mode == FactorySigningIdentity.RECOVERABLE) {
-                lines += "Reuse this app's recoverable signing identity: ${approvedState.fingerprint}. Its local copy is protected by AndroidKeyStore; recovery requires your encrypted backup and passphrase."
-                lines += "Backup export is not proof of restoration. A backup knows only its recorded releases. Version history resolution: ${approvedState.continuityResolution}; floor ${approvedState.lastVersion}. A user-declared floor is not independent proof of the latest release."
-            } else {
-                if (approvedState.existing) lines += "Reuse this app's existing non-exportable signing identity: ${approvedState.fingerprint}"
-                else lines += "Create a new, persistent, non-exportable signing key for this app only in this device's AndroidKeyStore. To choose a recoverable identity instead, cancel and create it yourself in Settings > Factory identities first."
-                lines += "Clearing or uninstalling Jarvys, losing this device, or losing its Keystore key can permanently prevent updates to apps signed here. These non-exportable keys cannot be backed up or converted. No replacement key will be generated silently."
-            }
-            lines += "This signs a local APK only. It does not install, publish, upload or grant permissions to an app."
             checkActive(token)
-            if (permission.requiresApproval) {
-                val decision = gate.request(ApprovalSummary("Sign generated APK", lines, allowAlwaysAvailable = false, requester = "Coding"), token)
-                permission.approveOnce { check(decision == ApprovalDecision.APPROVED) { "Signing was not approved. Nothing was signed." } }
-            }
-            permission.checkBeforeEffect()
-            checkActive(token)
-            check(FactoryProjectFiles.sha(scope, inputPath, MAX_APK_BYTES, token) == expectedSha) { "Unsigned APK changed during approval" }
+            check(FactoryProjectFiles.sha(scope, inputPath, MAX_APK_BYTES, token) == expectedSha) { "Unsigned APK changed" }
             FactoryProjectFiles.output(scope, outputPath)
             synchronized(SIGN_LOCK) {
                 checkActive(token)
@@ -252,71 +197,60 @@ internal class FactoryProjectService(
                 val identity = token.callIfActive({
                     checkActive(token)
                     lease.validate()
-                    permission.checkBeforeEffect()
-                    check(identities.state(spec.appId) == approvedState) { "Signing identity changed before key creation" }
-                    // Save the prior exact signed scope before its monotonic identity receipt advances.
-                    FactorySignedArtifactHistory(context).preserveLatest(spec.appId, approvedState)
-                    if (policySubject.certificate == null) operationPolicy.prepareBootstrapBinding(policySubject)
-                    permission.checkBeforeEffect()
-                    identities.obtainAfterApproval(spec.appId, approvedState)
+                    check(identities.state(spec.appId) == identityState) { "Signing identity changed before key creation" }
+                    FactorySignedArtifactHistory(context).preserveLatest(spec.appId, identityState)
+                    identities.obtain(spec.appId, identityState)
                 }, null) ?: throw java.util.concurrent.CancellationException("Signing cancelled before identity creation")
+                val id = UUID.randomUUID().toString()
+                val job = newJob(id)
+                val input = File(job, "unsigned.apk").apply { writeBytes(bytes) }
+                val output = File(job, "signed.apk")
+                var preserveStaging = false
                 try {
-                    if (policySubject.certificate == null) operationPolicy.bindBootstrap(policySubject,
-                        FactoryOperationPolicy.Subject.signedArtifact(spec.appId, identity.fingerprint))
-                    checkActive(token); permission.checkBeforeEffect()
-                    val id = UUID.randomUUID().toString()
-                    val job = newJob(id)
-                    val input = File(job, "unsigned.apk").apply { writeBytes(bytes) }
-                    val output = File(job, "signed.apk")
-                    var preserveStaging = false
-                    try {
-                        permission.checkBeforeEffect()
-                        val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
-                        checkActive(token)
-                        require(output.length() <= minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes)) { "Signed APK exceeds declared or technical APK byte limit" }
-                        val outputBytes = output.inputStream().use { readBounded(it, minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes).toInt()) }
-                        val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
-                        TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
-                        check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
-                        val signedSha = ProjectScope.sha256(outputBytes)
-                        val signed = JSONObject(receipt.toString()).put("buildId", id).put("state", "signed_staged")
-                            .put("outputPath", outputPath).put("apkSha256", signedSha).put("apkBytes", outputBytes.size)
-                            .put("unsignedSha256", expectedSha).put("certificateSha256", certificate).put("signed", true)
-                        saveReceipt(signedSha, signed)
-                        preserveStaging = true
-                        // Reserve this version before publication. An interrupted publish must not silently sign another build.
-                        checkActive(token)
-                        lease.validate()
-                        permission.checkBeforeEffect()
-                        identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
-                        // Failure retains the consumed version and staging; no partially recorded artifact is published.
-                        try { FactorySignedArtifactHistory(context).recordCurrent(spec.appId, identities.state(spec.appId)) }
-                        catch (failure: Exception) {
-                            throw IOException("Signature recorded but exact artifact history was not confirmed. Staging was preserved; do not sign this version again.", failure)
-                        }
-                        try {
-                            FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token); permission.checkBeforeEffect() }
-                            signed.put("state", "published")
-                            saveReceipt(signedSha, signed)
-                        } catch (failure: Exception) {
-                            signed.put("state", "publication_unconfirmed"); saveReceipt(signedSha, signed)
-                            throw IOException("Signature verified but output publication was not confirmed. Preserve and inspect $outputPath; do not sign the same version again.", failure)
-                        }
-                        job.deleteRecursively()
-                        return publicReceipt(signed).put("scope_version", scope.version()).put("notice", "Signed APK verified with APK Signature Scheme v2. No installation or device compatibility test was performed.")
-                    } catch (failure: Exception) {
-                        // Only ambiguous publication needs recovery bytes; failed signing attempts do not accumulate files.
-                        if (!preserveStaging) job.deleteRecursively()
-                        throw failure
+                    val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
+                    checkActive(token)
+                    require(output.length() <= minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes)) {
+                        "Signed APK exceeds declared or technical APK byte limit"
                     }
-                } finally {
-                    if (approvedState.mode == FactorySigningIdentity.RECOVERABLE) com.jarvys.agent.apkfactory.FactoryIdentityBackup.destroyBestEffort(identity.key)
+                    val outputBytes = output.inputStream().use {
+                        readBounded(it, minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes).toInt())
+                    }
+                    val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
+                    TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
+                    check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
+                    val signedSha = ProjectScope.sha256(outputBytes)
+                    val signed = JSONObject(receipt.toString()).put("buildId", id).put("state", "signed_staged")
+                        .put("outputPath", outputPath).put("apkSha256", signedSha).put("apkBytes", outputBytes.size)
+                        .put("unsignedSha256", expectedSha).put("certificateSha256", certificate).put("signed", true)
+                    saveReceipt(signedSha, signed)
+                    preserveStaging = true
+                    checkActive(token)
+                    lease.validate()
+                    identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
+                    try { FactorySignedArtifactHistory(context).recordCurrent(spec.appId, identities.state(spec.appId)) }
+                    catch (failure: Exception) {
+                        throw IOException("Signature recorded but exact artifact history was not confirmed. Staging was preserved; do not sign this version again.", failure)
+                    }
+                    try {
+                        FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token) }
+                        signed.put("state", "published")
+                        saveReceipt(signedSha, signed)
+                    } catch (failure: Exception) {
+                        signed.put("state", "publication_unconfirmed")
+                        saveReceipt(signedSha, signed)
+                        throw IOException("Signature verified but output publication was not confirmed. Preserve and inspect $outputPath; do not sign the same version again.", failure)
+                    }
+                    job.deleteRecursively()
+                    return publicReceipt(signed).put("scope_version", scope.version())
+                        .put("notice", "Signed APK verified with APK Signature Scheme v2. No installation or device compatibility test was performed.")
+                } catch (failure: Exception) {
+                    if (!preserveStaging) job.deleteRecursively()
+                    throw failure
                 }
-            }
             }
         }
     }
-    /** Installation has its own configurable authority, never inferred from signing. */
+    /** Installation delegates the final confirmation and result to Android PackageInstaller. */
     fun installation(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject =
         if (action != "install") installationOwned(action, inputPath, expectedSha, expectedVersion, token) else
         FactoryPackagingResources.acquire().use { installationOwned(action, inputPath, expectedSha, expectedVersion, token) }
@@ -351,11 +285,7 @@ internal class FactoryProjectService(
         if (action == "install_status") return coordinator.status(binding)
         if (action == "install_cancel") return coordinator.cancel(binding)
         if (com.jarvys.agent.BuildConfig.FLAVOR != "full") return binding.put("state", "unavailable_in_play")
-            .put("notice", "Integrated installation is not offered by Play. The signed artifact remains in this project; no permission, installer or bypass was invoked.")
-        // Reject a saved DENY before temporary APK verification files or installer staging.
-        // The coordinator still acquires and rechecks the live grant at its effect boundaries.
-        check(operationPolicy.mode(FactoryOperationPolicy.Subject.signedArtifact(spec.appId, binding.getString("certificate_sha256")),
-            FactoryOperationPolicy.Operation.INSTALL) != FactoryOperationPolicy.Mode.DENY) { "Factory installation is denied by the saved policy" }
+            .put("notice", "Android installation is unavailable in this distribution. The signed artifact remains in this project.")
         val bytes = readArtifact(inputPath, receipt.getLong("apkBytes"), token)
         check(bytes.size.toLong() == receipt.getLong("apkBytes") && ProjectScope.sha256(bytes) == expectedSha) { "Signed APK changed" }
         val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null)
@@ -379,7 +309,7 @@ internal class FactoryProjectService(
             context.startActivity(android.content.Intent(context, com.jarvys.agent.apkfactory.FactoryInstallActivity::class.java)
                 .putExtra("launch_token", launch).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (failure: Exception) { coordinator.revokeBeforeCommit(); throw failure }
-        return result.put("notice", "Installation requested under the saved Factory policy. Allow always proceeds without a Jarvys approval; Ask reviews this exact APK once. Android may require its own installer confirmation. This request is not evidence of installation success; Settings > Factory installations retains status.")
+        return result.put("notice", "Installation request sent to Android PackageInstaller. Android may require its own confirmation or the system setting that allows Jarvys to install apps. This request is not evidence of success; install_status reports the recorded result.")
     }
     /** Read-only evidence actions: no signing identities, permission changes, install or project mutation. */
     fun harness(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject =

@@ -81,7 +81,6 @@ internal fun rememberMemoryExport(store: MemoryStore): MemoryNativeExport {
                     awaitNativeMemoryResume(lifecycle)
                     withContext(Dispatchers.IO) {
                         exact.use {
-                            it.appendExactArguments(listOf("Android-selected destination: $uri"))
                             it.execute({ check(!ticket.cancelled); check(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }) {
                                 val output = context.contentResolver.openOutputStream(uri)
                                     ?: error(context.getString(R.string.memory_native_export_destination_unavailable))
@@ -103,8 +102,7 @@ internal fun rememberMemoryExport(store: MemoryStore): MemoryNativeExport {
         owned = ticket // Synchronous reservation precedes any coroutine or IO.
         scope.launch {
             val prepared = withContext(Dispatchers.IO) { runCatching {
-                actions.prepare(NativeActionPolicy.Operation.MEMORY_EXPORT, store,
-                    listOf("Export selected memory", "Include journal: $includeJournal"), token)
+                actions.prepare(store, token)
             } }
             prepared.onSuccess {
                 if (!requests.attach(ticket, it)) { it.close(); return@onSuccess }

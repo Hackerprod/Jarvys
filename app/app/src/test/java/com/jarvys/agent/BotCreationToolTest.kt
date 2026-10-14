@@ -2,8 +2,6 @@ package com.jarvys.agent
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalSummary
 import com.jarvys.agent.crew.BotDefinition
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewProfileRepository
@@ -33,15 +31,11 @@ class BotCreationToolTest {
     private lateinit var settings: ProviderSettings
     private lateinit var secrets: SecretStore
     private var previousSecrets: Any? = null
-    private var approvalCount = 0
     private var imageCount = 0
     private var available = true
-    private var approved = ApprovalDecision.APPROVED
     private var caps = listOf("board_read", "report_done")
     private var availableSkills = emptyList<String>()
-    private var approvalEffect: ((CancellationToken) -> Unit)? = null
     private var imageEffect: ((CancellationToken) -> Unit)? = null
-    private val summaries = mutableListOf<ApprovalSummary>()
     private val session = "bot-create-main"
 
     @Before fun setup() {
@@ -65,7 +59,7 @@ class BotCreationToolTest {
         "capabilities" to listOf("board_read"), "skill_ids" to emptyList<String>(), "workspace_mode" to "legacy_chat",
         "icon_prompt" to "An origami owl inspecting a cobalt circuit, no lettering",
     )
-    private fun tool(repo: CrewProfileRepository = repository, sessionId: String = session, policy: NativeActionPolicy = NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK)): BotCreationTool {
+    private fun tool(repo: CrewProfileRepository = repository, sessionId: String = session): BotCreationTool {
         val client = CodexImageGenerationClient(settings, { request, _, token ->
             imageCount++
             assertEquals(1, request.getJSONArray("input").length())
@@ -75,30 +69,17 @@ class BotCreationToolTest {
             BotIconServiceTest.success()
         }, { _, _, _ -> throw AssertionError("Creation must never invoke image editing") })
         val imageService = BotIconService(context, sessionId, settings, secrets, repo, icons, client)
-        return BotCreationTool(BotCreationService(repo, sessionId, { caps }, { availableSkills }, { summary, token ->
-            approvalCount++; summaries += summary; approvalEffect?.invoke(token); approved
-        }, { available }, { id, revision, prompt, token, authorization ->
-            imageService.generateAndAssign(id, revision, prompt, token, { authorization.admit { token.throwIfCancelled() } })
-        }, nativePolicy = policy))
+        return BotCreationTool(BotCreationService(repo, sessionId, { caps }, { availableSkills }, { available },
+            { id, revision, prompt, token -> imageService.generateAndAssign(id, revision, prompt, token) }))
     }
 
-    @Test fun allowDefaultCreatesWithoutReviewAndDenyHasNoSaveOrImageEffect() {
+    @Test fun creationRunsDirectlyAndKeepsImageGenerationOptional() {
         available = false
-        assertTrue(tool(policy = NativeActionPolicy.inMemory()).execute(arguments("allow-new"), CancellationToken.uncancellable()).success)
-        assertEquals(0, approvalCount)
-        val count = repository.definitions().size
-        assertFalse(tool(policy = NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.DENY))
-            .execute(arguments("deny-new"), CancellationToken.uncancellable()).success)
-        assertEquals(count, repository.definitions().size); assertEquals(0, imageCount)
-    }
-    @Test fun revocationAfterProviderDispatchKeepsSavedBotButStopsIconPublication() {
-        val policy = NativeActionPolicy.inMemory()
-        imageEffect = { policy.set(NativeActionPolicy.Operation.BOT_CREATE, com.jarvys.agent.connectors.AutonomyPolicy.DENY) }
-        val result = tool(policy = policy).execute(arguments("revoke-icon"), CancellationToken.uncancellable())
+        val result = tool().execute(arguments("direct-create"), CancellationToken.uncancellable())
         assertTrue(result.content, result.success)
         val value = JSONObject(result.content)
         assertTrue(value.getBoolean("saved")); assertFalse(value.getBoolean("icon_complete"))
-        assertEquals(1, imageCount); assertEquals(0, approvalCount)
+        assertEquals(0, imageCount)
         assertEquals(1, repository.definitions().count { !it.builtIn })
     }
 
@@ -119,14 +100,12 @@ class BotCreationToolTest {
             }
         }, registry, "Create the user's bot with English instructions.", session)
         assertEquals("COMPLETED", loop.run("Create a software review bot with an icon", emptyList(), CancellationToken.uncancellable(), null).outcome)
-        assertEquals(1, approvalCount); assertEquals(1, imageCount)
+        assertEquals(1, imageCount)
         val restarted = CrewProfileRepository(temporary.root)
         val saved = restarted.definitions().single { !it.builtIn }
         assertEquals("Reviewer", saved.profile.name)
         assertEquals(arguments()["instructions"], saved.profile.prompt)
         assertTrue(icons.resolve(saved.id, saved.iconRef).isFile)
-        assertFalse(summaries.single().allowAlwaysAvailable)
-        assertTrue(summaries.single().lines.any { it.contains("Tools: board_read") })
         var nextTurns = 0
         val next = CoreAgentLoop(CoreAgentLoop.Model { transcript, _, _, _ ->
             if (nextTurns++ == 0) {
@@ -142,26 +121,14 @@ class BotCreationToolTest {
         assertEquals(1, restarted.definitions().count { !it.builtIn })
     }
 
-    @Test fun denialOrAllowAlwaysNeverSavesOrGenerates() {
-        for (decision in listOf(ApprovalDecision.DENIED, ApprovalDecision.APPROVED_ALLOW_ALWAYS)) {
-            approved = decision
-            assertFalse(tool().execute(arguments(), CancellationToken.uncancellable()).success)
-        }
-        assertEquals(0, imageCount); assertEquals(0, repository.definitions().count { !it.builtIn })
-    }
-    @Test fun staleCapabilityAfterReviewDoesNotSave() {
-        approvalEffect = { caps = emptyList() }
-        assertFalse(tool().execute(arguments(), CancellationToken.uncancellable()).success)
-        assertEquals(0, imageCount); assertEquals(0, repository.definitions().count { !it.builtIn })
-    }
-    @Test fun strictSchemaUnknownCapabilityAndBuiltinInjectionNeverReachReview() {
+    @Test fun strictSchemaUnknownCapabilityAndBuiltinInjectionNeverCreateBots() {
         val base = arguments()
         val invalid = listOf(base + ("bot_id" to "coding"), base + ("capabilities" to listOf("create_bot")),
             base + ("capabilities" to listOf("unknown_tool")), base + ("capabilities" to listOf("board_read", "board_read")),
             base + ("name" to "A very long descriptive software reviewer name"), base + ("request_id" to "../escape"),
             base + ("icon_path" to "/private/image.png"), base + ("instructions" to ""))
         invalid.forEach { assertFalse(tool().execute(it, CancellationToken.uncancellable()).success) }
-        assertEquals(0, approvalCount); assertEquals(0, imageCount)
+        assertEquals(0, imageCount)
         assertEquals(2, repository.definitions().size)
     }
     @Test fun sameRequestRetriesAfterRestartWithoutDuplicatingOrChargingAgain() {
@@ -169,27 +136,27 @@ class BotCreationToolTest {
         val again = JSONObject(tool(CrewProfileRepository(temporary.root)).execute(arguments(), CancellationToken.uncancellable()).content)
         assertEquals(first.getString("bot_id"), again.getString("bot_id"))
         assertTrue(again.getBoolean("already_existed")); assertTrue(again.getBoolean("icon_complete"))
-        assertEquals(1, approvalCount); assertEquals(1, imageCount)
+        assertEquals(1, imageCount)
         assertEquals(1, repository.definitions().count { !it.builtIn })
     }
     @Test fun existingRequestCannotOverwriteChangedDefinition() {
         tool().execute(arguments(), CancellationToken.uncancellable())
         assertFalse(tool().execute(arguments() + ("instructions" to "Replace everything."), CancellationToken.uncancellable()).success)
         assertEquals(arguments()["instructions"], repository.definitions().single { !it.builtIn }.profile.prompt)
-        assertEquals(1, approvalCount); assertEquals(1, imageCount)
+        assertEquals(1, imageCount)
     }
     @Test fun sameOperationWithChangedIconPromptFailsAfterRestart() {
         tool().execute(arguments(), CancellationToken.uncancellable())
         val changed = tool(CrewProfileRepository(temporary.root)).execute(arguments() + ("icon_prompt" to "A different visual concept"), CancellationToken.uncancellable())
         assertFalse(changed.success)
-        assertEquals(1, approvalCount); assertEquals(1, imageCount)
+        assertEquals(1, imageCount)
         assertEquals(1, repository.definitions().count { !it.builtIn })
     }
     @Test fun skillSelectionCannotExceedActualRuntimeLimit() {
         caps = listOf("read_skill")
         availableSkills = (1..9).map { "skill.$it" }
         val result = tool().execute(arguments() + mapOf("capabilities" to caps, "skill_ids" to availableSkills), CancellationToken.uncancellable())
-        assertFalse(result.success); assertEquals(0, approvalCount); assertEquals(0, imageCount)
+        assertFalse(result.success); assertEquals(0, imageCount)
         assertEquals(2, repository.definitions().size)
     }
     @Test fun unavailableImageIsHonestAndKeepsSavedConfigWithoutFallback() {
@@ -207,9 +174,9 @@ class BotCreationToolTest {
         tool().execute(arguments(), CancellationToken.uncancellable())
         assertEquals(1, imageCount); assertEquals(1, repository.definitions().count { !it.builtIn })
     }
-    @Test fun cancellationBeforeApprovalCommitSavesNothing() {
-        approvalEffect = { it.cancel() }
-        assertThrows(CancellationException::class.java) { tool().execute(arguments(), CancellationToken.cancellable()) }
+    @Test fun cancellationBeforeCreationSavesNothing() {
+        val token = CancellationToken.cancellable().also { it.cancel() }
+        assertThrows(CancellationException::class.java) { tool().execute(arguments(), token) }
         assertEquals(0, repository.definitions().count { !it.builtIn }); assertEquals(0, imageCount)
     }
     @Test fun cancellationAfterPersistenceLeavesDiscoverableBotAndRetryDoesNotDuplicate() {
@@ -218,7 +185,7 @@ class BotCreationToolTest {
         assertEquals(1, repository.definitions().count { !it.builtIn })
         val retry = JSONObject(tool().execute(arguments(), CancellationToken.uncancellable()).content)
         assertTrue(retry.getBoolean("already_existed")); assertFalse(retry.getBoolean("icon_complete"))
-        assertEquals(1, approvalCount); assertEquals(1, imageCount)
+        assertEquals(1, imageCount)
     }
     @Test fun cancellationAfterSavingBotStopsBeforeIconGeneration() {
         val token = CancellationToken.cancellable()
@@ -245,7 +212,6 @@ class BotCreationToolTest {
         assertTrue(CoreToolRegistry(listOf(tool())).forDelegatedAgent().names().isEmpty())
         assertTrue(CoreAgentRuntime.crewBotCapabilityScope(CoreToolRegistry(listOf(tool()))).names().isEmpty())
         assertTrue(CrewManager.isCaptainOnly(BotCreationTool.NAME))
-        assertEquals(0, approvalCount)
     }
     @Test fun resultAndAuditDoNotExposeInstructionsIconPromptOrImageFiles() {
         val result = tool().execute(arguments(), CancellationToken.uncancellable())

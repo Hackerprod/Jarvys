@@ -9,14 +9,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import com.jarvys.agent.connectors.AutonomyPolicy
-import com.jarvys.agent.connectors.ConnectorStateStore
 import org.junit.Assert.*
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,52 +30,33 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34], application = android.app.Application::class)
 class MemoryUiProtectionComposeTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
-    @Before fun isolate() {
-        com.jarvys.agent.apkfactory.FactoryStartupTestIsolation.releaseCompletedSharingStartup()
-        compose.activity.getSharedPreferences(ConnectorStateStore.PREFERENCES, 0).edit().clear().commit()
-    }
-    private fun policy() = NativeActionPolicy(compose.activity)
     private fun store() = MemoryStore(Files.createTempDirectory("native-view-test").toFile(), true,
         testMemorySeedProvider(AppLanguageChoice.ENGLISH)).forConversation("session")
 
-    @Test fun firstUseDefaultAllowsSelectedSettingsAfterItsAuthorizedFrame() {
+    @Test fun firstUseShowsSelectedSettingsAfterItsAuthorizedFrame() {
         val store = store()
         compose.setContent { MaterialTheme { MemorySettingsScreen(store, true, {}, "session", {}, {}, false, "", 0, false, {}, {}, {}, { _, _ -> }) } }
-        waitFor("memory-home-list")
-        drawAll()
+        waitFor("memory-home-list"); drawAll()
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertTrue(MemoryUiAutomationGuard.isAutomationEpochValid(MemoryUiAutomationGuard.captureAutomationEpoch()))
         assertFalse(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         assertTrue(store.listSharedPersonalForUser().isEmpty())
     }
-    @Test fun askProtectsBeforeContentAndDenyNeverInitializesSelectedScope() {
+
+    @Test fun editorProtectsPixelsDuringSelectionSetupThenAllowsTheCurrentDraft() {
         val store = store()
-        policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, AutonomyPolicy.DENY)
         compose.setContent { MaterialTheme { MemoryEditorDestination(store, "session", "human.md", false, {}, {}, {}) } }
-        compose.waitForIdle()
-        assertTrue(MemoryUiAutomationGuard.isProtected())
-        compose.onNodeWithTag("memory-editor-name").assertDoesNotExist()
-        assertFalse(java.io.File(store.rootDirectory(), "human.md").exists())
-    }
-    @Test fun askAllowsOnlyReviewedDraftAndNewDraftImmediatelyProtectsCapture() {
-        val store = store()
-        policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, AutonomyPolicy.ASK)
-        compose.setContent { MaterialTheme { MemoryEditorDestination(store, "session", "human.md", false, {}, {}, {}) } }
-        waitText("Allow once")
-        compose.onNodeWithTag("memory-editor-name").assertDoesNotExist()
-        assertTrue(MemoryUiAutomationGuard.isProtected())
-        compose.onNodeWithText("Allow once").performClick()
         waitFor("memory-editor-name"); drawAll()
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
         compose.onNodeWithTag("memory-editor-name").performTextInput(" draft")
         assertFalse(MemoryUiAutomationGuard.isAutomationEpochValid(epoch))
         assertTrue(MemoryUiAutomationGuard.isProtected())
-        compose.onNodeWithTag("memory-editor-name").assertIsDisplayed()
-        compose.onNodeWithText("Allow capture of this updated draft once").performClick()
-        drawAll()
+        waitFor("memory-editor-name"); drawAll()
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun approvedDialogReleasesItsOwnWindowAndPreservesPreexistingActivitySecurity() {
+
+    @Test fun scopeScreenReleasesItsOwnWindowAndPreservesPreexistingActivitySecurity() {
         val store = store()
         compose.runOnIdle { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
         compose.setContent { MaterialTheme { MemoryScopeReviewDialog(store, null, {}, {}) } }
@@ -89,7 +66,8 @@ class MemoryUiProtectionComposeTest {
         assertTrue(compose.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun revocationAndSelectionTransitionRejectQueuedCaptureBeforeNewContent() {
+
+    @Test fun navigationInvalidatesOldCaptureBeforeRenderingTheNewSelection() {
         val store = store()
         val key = mutableStateOf("first")
         var access: MemoryViewAccess? = null
@@ -104,11 +82,10 @@ class MemoryUiProtectionComposeTest {
         assertFalse(MemoryUiAutomationGuard.isAutomationEpochValid(old))
         waitFor("selected"); drawAll()
         val current = MemoryUiAutomationGuard.captureAutomationEpoch()
-        policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, AutonomyPolicy.DENY)
-        assertFalse(MemoryUiAutomationGuard.isAutomationEpochValid(current))
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertTrue(MemoryUiAutomationGuard.isAutomationEpochValid(current))
     }
-    @Test fun contentRefreshDoesNotCancelCompoundEffectTokenButNavigationDoes() {
+
+    @Test fun compoundMutationKeepsItsTokenAcrossRefreshAndNavigationCancelsFutureWork() {
         val store = store()
         var access: MemoryViewAccess? = null
         var token: CancellationToken? = null
@@ -134,9 +111,9 @@ class MemoryUiProtectionComposeTest {
         }
         store.addChangeListener(listener)
         val initialCompositions = recomposeCount.get()
-        val activity = compose.activity // ActivityScenario lookup must not wait for the blocked test/UI thread.
+        val activity = compose.activity
         val thread = Thread {
-            try { MemoryNativeActions(activity).run(NativeActionPolicy.Operation.MEMORY_MODIFY, store, listOf("two/levels"), exactToken,
+            try { MemoryNativeActions(activity).run(store, exactToken,
                 { exactAccess.requireEffectSelection() }) { store.createDirectoryForUser("two/levels", "session") } }
             catch (e: Throwable) { failure.set(e) }
         }
@@ -152,56 +129,18 @@ class MemoryUiProtectionComposeTest {
             assertTrue(exactToken.isCancellationRequested)
         } finally { continueCommit.countDown(); thread.join(5_000); store.removeChangeListener(listener) }
     }
-    @Test fun detachedDestroyedWindowReleasesGuard() {
-        policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, AutonomyPolicy.ASK)
-        val store = store()
-        compose.setContent { MaterialTheme { MemoryScopeReviewDialog(store, null, {}, {}) } }
-        waitText("Allow once"); assertTrue(MemoryUiAutomationGuard.isProtected())
+
+    @Test fun destroyedScopeWindowReleasesMemoryUiGuard() {
+        compose.setContent { MaterialTheme { MemoryScopeReviewDialog(store(), null, {}, {}) } }
+        waitFor("memory-scope-dialog"); assertTrue(MemoryUiAutomationGuard.isProtected())
         compose.activityRule.scenario.close(); shadowOf(Looper.getMainLooper()).idle()
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun simultaneousCaptureAndDurablePreferenceEditsDoNotDeadlock() {
-        val store = store()
-        compose.setContent { MaterialTheme { MemoryScopeReviewDialog(store, null, {}, {}) } }
-        waitFor("memory-scope-dialog"); drawAll()
-        val finished = CountDownLatch(1)
-        val thread = Thread {
-            try { repeat(100) { runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() } } }
-            finally { finished.countDown() }
-        }
-        thread.start()
-        compose.runOnIdle {
-            repeat(20) { policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, if (it % 2 == 0) AutonomyPolicy.DENY else AutonomyPolicy.ALLOW) }
-        }
-        assertTrue(finished.await(5, TimeUnit.SECONDS)); thread.join(5_000)
-        assertFalse(thread.isAlive)
+
+    private fun waitFor(tag: String) {
+        compose.waitUntil(10_000) { shadowOf(Looper.getMainLooper()).idle(); runCatching { compose.onNodeWithTag(tag).fetchSemanticsNode(); true }.getOrDefault(false) }
+        compose.waitForIdle()
     }
-    @Test fun taintedAskNeverBecomesHumanConsentAfterGestureEndsAndRequiresReentry() {
-        policy().set(NativeActionPolicy.Operation.MEMORY_VIEW, AutonomyPolicy.ASK)
-        val store = store(); val showing = mutableStateOf(true)
-        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
-        lateinit var gesture: MemoryUiAutomationGuard.Action
-        assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { gesture = MemoryUiAutomationGuard.beginAsyncAction(epoch) })
-        try {
-            compose.setContent { MaterialTheme {
-                if (showing.value) MemoryScopeReviewDialog(store, null, { showing.value = false }, {})
-                else Text("away", Modifier.testTag("away"))
-            } }
-            waitText("Finish the interaction and reopen this review manually")
-            gesture.close()
-            compose.onNodeWithTag("memory-scope-dialog").assertDoesNotExist()
-            assertTrue(MemoryUiAutomationGuard.isProtected())
-            compose.onNodeWithText("Close").performClick(); waitFor("away"); drawAll()
-            compose.runOnIdle { showing.value = true }
-            waitText("Allow once")
-            compose.onNodeWithText("Allow once").performClick()
-            waitFor("memory-scope-dialog"); drawAll()
-            assertFalse(MemoryUiAutomationGuard.isProtected())
-            assertTrue(store.listSharedPersonalForUser().isEmpty())
-        } finally { gesture.close() }
-    }
-    private fun waitText(text: String) = compose.waitUntil(10_000) { shadowOf(Looper.getMainLooper()).idle(); runCatching { compose.onNodeWithText(text).fetchSemanticsNode(); true }.getOrDefault(false) }
-    private fun waitFor(tag: String) { compose.waitUntil(10_000) { shadowOf(Looper.getMainLooper()).idle(); runCatching { compose.onNodeWithTag(tag).fetchSemanticsNode(); true }.getOrDefault(false) }; compose.waitForIdle() }
     private fun drawAll() {
         compose.runOnIdle {
             val roots = listOfNotNull(compose.activity.window.decorView, ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView)

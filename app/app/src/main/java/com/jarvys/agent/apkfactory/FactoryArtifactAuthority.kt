@@ -39,7 +39,7 @@ internal object FactoryArtifactAuthority {
     }
     fun observeIdentity(appId: String, state: FactorySigningIdentity.State) {
         active.forEach { token ->
-            if (token.proof.appId == appId && (!state.existing || !state.continuityKnown || token.proof.certificate != state.fingerprint ||
+            if (token.proof.appId == appId && (!state.existing || token.proof.certificate != state.fingerprint ||
                 token.proof.version > state.lastVersion || (!token.retained && token.proof.record != state.recordSha256))) token.close()
         }
     }

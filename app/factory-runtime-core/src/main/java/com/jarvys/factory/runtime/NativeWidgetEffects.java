@@ -5,7 +5,7 @@ import java.util.*;
 import java.util.function.BooleanSupplier;
 import org.json.*;
 
-/** Small bridge adapter; main NativeEffects still owns policy UI, job lifetime and replies. */
+/** Small bridge adapter; NativeEffects owns live operation sessions, job lifetime and replies. */
 public final class NativeWidgetEffects {
     public static final class Prepared {
         public final String method;
@@ -13,8 +13,8 @@ public final class NativeWidgetEffects {
         private final int widgetId;
         private final String eventId;
         private Prepared(String method,WidgetRequest effect,int widgetId,String eventId){this.method=method;this.effect=effect;this.widgetId=widgetId;this.eventId=eventId;}
-        public boolean requiresAuthorization(){return effect!=null;}
-        public String policyOperation(){return effect==null?null:WidgetRequest.OPERATION;}
+        public boolean requiresSession(){return effect!=null;}
+        public String operation(){return effect==null?null:WidgetRequest.OPERATION;}
         public JSONObject authorizationDetails(){if(effect==null)throw new IllegalStateException("Own-data reads do not carry effect authorization");return effect.authorizationDetails();}
         /** Run on the bounded IO worker; pass the lease for this exact Prepared effect, or null for own-data calls. */
         public Object execute(Context context,long deadlineElapsedMs,BooleanSupplier active,NativeOperationAuthorization.Access live)throws FactoryException{

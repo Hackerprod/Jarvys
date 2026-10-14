@@ -1,6 +1,5 @@
 package com.jarvys.agent.ui.settings
 
-import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,7 +41,6 @@ import com.jarvys.agent.JarvysChoiceOption
 import com.jarvys.agent.JarvysChoiceSheet
 import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.ui.TaskSettingsEntry
-import com.jarvys.agent.apkfactory.FactoryIdentityActivity
 import java.util.Date
 
 enum class SettingsWorkspacePage { HOME, PREFERENCES }
@@ -190,67 +188,6 @@ private fun SettingsIndex(
     Spacer(Modifier.height(22.dp))
     SettingsSection(stringResource(R.string.settings_device)) {
         SettingsIndexRow(LucideIcons.Accessibility, stringResource(R.string.settings_accessibility), null, onAccessibility)
-        SettingsRule()
-        val context = LocalContext.current
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.native_permissions_title),
-            stringResource(R.string.native_permissions_summary),
-            { context.startActivity(Intent(context, com.jarvys.agent.NativePermissionsActivity::class.java)) },
-            testTag = "settings-native-permissions-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_permissions_title),
-            stringResource(R.string.factory_permissions_summary),
-            { context.startActivity(Intent(context, com.jarvys.agent.apkfactory.FactoryPermissionsActivity::class.java)) },
-            testTag = "settings-factory-permissions-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_identity_title),
-            stringResource(R.string.factory_identity_settings_summary),
-            { context.startActivity(Intent(context, FactoryIdentityActivity::class.java)) },
-            testTag = "settings-factory-identities-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_install_title),
-            stringResource(R.string.factory_install_settings_summary),
-            { context.startActivity(Intent(context, com.jarvys.agent.apkfactory.FactoryInstallActivity::class.java)) },
-            testTag = "settings-factory-installations-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_documents_title),
-            stringResource(R.string.factory_documents_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryDocumentCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-documents-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_file_sharing_title),
-            stringResource(R.string.factory_file_sharing_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryFileShareCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-file-sharing-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_contacts_title),
-            stringResource(R.string.factory_contacts_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryContactCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-contacts-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_photos_title),
-            stringResource(R.string.factory_photos_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryPhotoCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-photos-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_audio_title),
-            stringResource(R.string.factory_audio_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryAudioCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-audio-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_browser_title),
-            stringResource(R.string.factory_browser_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryBrowserCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-browser-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_data_backup_title),
-            stringResource(R.string.factory_data_backup_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryDataBackupCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-data-backup-row")
-        SettingsRule()
-        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_external_launch_title),
-            stringResource(R.string.factory_external_launch_settings_summary),
-            { context.startActivity(com.jarvys.agent.apkfactory.FactoryExternalLaunchCoordinator.recoveryIntent(context)) },
-            testTag = "settings-factory-external-launch-row")
     }
 }
 

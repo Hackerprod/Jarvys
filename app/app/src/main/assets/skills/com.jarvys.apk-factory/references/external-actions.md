@@ -1,6 +1,6 @@
-# Factory guidance factory-guidance-v86 / external-actions
+# Factory guidance factory-guidance-v87 / external-actions
 
-Named capabilities+pinned host/retained exact artifact/recipient checks; no documents dependency. ALLOW_ALWAYS dispatches to verified default recipient or waits for choice; ASK reviews data/recipient once; DENY blocks. Five-minute authority, no replay/second closure acknowledgment. Cancel cannot recall data/close recipient tasks. Preview UNAVAILABLE; documents.cancel unrelated. Receipts prove dispatch,not rendering/navigation/dial/draft/event/send/delivery. Recovery preserves uncertainty.
+Named capabilities+pinned host/retained exact artifact/recipient checks; no documents dependency. Dispatches to a verified default recipient or opens the relevant Android chooser for the user to select one. Five-minute operation lifetime, no replay or closure acknowledgment. Cancel cannot recall data/close recipient tasks. Preview UNAVAILABLE; documents.cancel unrelated. Receipts prove dispatch,not rendering/navigation/dial/draft/event/send/delivery. A new interaction automatically closes an interrupted one from the same family while preserving its uncertain outcome.
 
 ## Browser
 browser.open({url}): ASCII≤2048,lowercase https/DNS host≥2 labels (≤63/label,253total),optional:443. Reject userinfo/fragment/local/numeric host/trailing dot/control/whitespace/backslash/malformed escapes incl escaped control/space/DEL/backslash. No normalization/secret detection. Full URL reaches browser/site; cookies/accounts/history/sync and DNS/redirects/resources/app launches outside Jarvys control. No Jarvys fetch/INTERNET from browser capability. {launchRequested,pageLoadConfirmed:false}; no automatic retry.

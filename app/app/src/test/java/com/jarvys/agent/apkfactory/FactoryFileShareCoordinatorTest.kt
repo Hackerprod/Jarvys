@@ -33,26 +33,24 @@ class FactoryFileShareCoordinatorTest {
     private val journal get() = File(root, "interaction.json")
     private val executor = Executors.newSingleThreadExecutor()
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
-    private val operationPolicy = FactoryOperationPolicy.inMemory()
     private var cleanups = 0
     private var received = 0
     private var cleanupFailure = false
     private lateinit var coordinator: FactoryFileShareCoordinator
     private fun <T> io(block: () -> T): T = executor.submit(Callable { block() }).get(10, TimeUnit.SECONDS)
     private fun fail(block: () -> Unit) { assertTrue("Expected fail-closed rejection", runCatching(block).isFailure) }
-    private fun wire() = Intent(context, FactoryFileShareActivity::class.java).putExtras(Bundle().apply {
-        putInt("protocolVersion", 1); putString("nonce", "d".repeat(64)); putString("filename", "file.bin")
+    private fun wire(nonce: String = "d".repeat(64)) = Intent(context, FactoryFileShareActivity::class.java).putExtras(Bundle().apply {
+        putInt("protocolVersion", 1); putString("nonce", nonce); putString("filename", "file.bin")
         putString("mimeType", "application/octet-stream"); putInt("size", 3); putString("sha256", "e".repeat(64)); putBinder("transfer", Binder())
     })
-    private fun request() = FactoryFileShareCoordinator.Request.parse(wire())
+    private fun request(nonce: String = "d".repeat(64)) = FactoryFileShareCoordinator.Request.parse(wire(nonce))
     private fun make(verify: (String) -> FactoryDocumentCoordinator.Proof = { check(it == proof.appId); proof }) = FactoryFileShareCoordinator(context, verify,
         receive = { value, active ->
             active(); received++
             FactoryFileShareStore.Snapshot(Uri.parse("content://${context.packageName}.factory.files/files/synthetic.bin"), value.filename, value.mimeType, value.size, SystemClock.elapsedRealtime() + 300000)
-        }, clean = { cleanups++; check(!cleanupFailure) }, policy = operationPolicy)
+        }, clean = { cleanups++; check(!cleanupFailure) })
     @Before fun setup() { root.deleteRecursively(); coordinator = make() }
     @After fun cleanup() {
-        operationPolicy.revokeActive()
         FactoryFileShareCoordinator.WORKER.prestartCoreThread()
         val barrier = java.util.concurrent.FutureTask(Callable { Unit })
         check(FactoryFileShareCoordinator.WORKER.queue.offer(barrier, 5, TimeUnit.SECONDS)); barrier.get(5, TimeUnit.SECONDS)
@@ -62,7 +60,7 @@ class FactoryFileShareCoordinatorTest {
         root.deleteRecursively(); File(context.noBackupFilesDir,"factory-documents").deleteRecursively()
     }
     private fun begin() = io { coordinator.begin(proof.appId, request()) {} }
-    private fun prepare(owner: String) = io { coordinator.prepareChooser(owner, "Synthetic") {} }
+    private fun prepare(owner: String) = io { coordinator.prepareChooser(owner, "Synthetic") }
     @Test fun exactTypedProtocolRejectsEveryUnexpectedAuthoritySurface() {
         for (changed in listOf(
             wire().putExtra("protocolVersion", 1L), wire().putExtra("protocolVersion", 2), wire().putExtra("size", 3L),
@@ -90,159 +88,27 @@ class FactoryFileShareCoordinatorTest {
         fail { io { coordinator.begin(proof.appId, request) {} } }
         assertEquals(0, received); assertFalse(journal.exists()); assertTrue(FactoryInteractionAdmission.available())
     }
-    @Test fun expandedSignedBudgetAllowsV2WithoutClaimingDelivery() {
-        val resources = com.jarvys.factory.contract.ResourceBudgets.parse(mapOf("version" to 1, "fileShare" to mapOf("sourceBytes" to 4L*1024*1024*1024)))
-        proof = proof.copy(resources = resources)
-        val request = FactoryFileShareCoordinator.Request.parse(wire().putExtra("protocolVersion", 2).putExtra("size", 2147483649L))
-        val token = io { coordinator.begin(proof.appId, request) {} }
-        assertEquals(1, received); assertEquals("review", coordinator.status())
-        val outcome = io { coordinator.close(token, false) {} }
-        assertFalse(outcome.getBooleanExtra("deliveryConfirmed", true))
-    }
-    @Test fun slowSourceRevalidationCannotExtendSignedTransferDeadline() {
-        proof = proof.copy(resources = com.jarvys.factory.contract.ResourceBudgets.parse(mapOf("version" to 1, "fileShare" to mapOf("transferTimeoutMs" to 1))))
-        var verifications = 0
-        coordinator = make {
-            verifications++
-            if (verifications == 2) org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(2))
-            proof
-        }
-        fail { begin() }
-        assertEquals(2, verifications); assertEquals(1, received)
-        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.chooserOpened())
-    }
     @Test fun callerProofPrecedesPullAndUnknownCallerGetsNoLatch() {
         fail { io { coordinator.begin(null, request()) {} } }
         fail { io { coordinator.begin("evil.app", request()) {} } }
         assertEquals(0, received); assertFalse(journal.exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
         assertTrue(FactoryInteractionAdmission.available())
     }
-    @Test fun independentFamiliesDoNotGloballyBlockConfiguredAutonomy() {
-        val documents = FactoryDocumentCoordinator(context) { proof }
-        val documentOwner = documents.begin(proof.appId, FactoryDocumentCoordinator.Request("open", "text/plain", null, "a".repeat(64)))
-        val owner = begin(); assertEquals(1, received)
-        documents.close(documentOwner, false) {}
-        assertFalse(coordinator.canBegin())
-        io { coordinator.close(owner, false) {} }
-        assertTrue(documents.canBegin()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun durableLatchPrecedesChooserAndResultNeverAssertsDelivery() {
-        val owner = begin(); assertEquals("review", JSONObject(journal.readText()).getString("state"))
-        val chooser = prepare(owner)
-        assertEquals("chooser_pending", JSONObject(journal.readText()).getString("state"))
-        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
-        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, chooser.flags)
-        val send = chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)!!
-        assertEquals(Intent.ACTION_SEND, send.action); assertNull(send.component); assertNull(send.`package`)
-        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, send.flags)
-        assertEquals(send.getParcelableExtra<Uri>(Intent.EXTRA_STREAM), send.clipData!!.getItemAt(0).uri)
-        coordinator.chooserLaunched(owner); coordinator.chooserCallback(owner)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        val result = io { coordinator.close(owner, true) {} }
-        assertEquals(setOf("nonce", "chooserOpened", "deliveryConfirmed"), result.extras!!.keySet())
-        assertTrue(result.getBooleanExtra("chooserOpened", false)); assertFalse(result.getBooleanExtra("deliveryConfirmed", true))
-        assertNull(result.data); assertNull(result.clipData); assertNull(result.selector); assertEquals(0, result.flags)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-        fail { begin() }
-    }
-    @Test fun launchFailureAndPrelaunchCancelNeverClaimChooserOpened() {
-        val owner = begin(); prepare(owner); coordinator.chooserLaunchFailed(owner)
-        val result = io { coordinator.close(owner, true) {} }
-        assertFalse(result.getBooleanExtra("chooserOpened", true)); assertFalse(result.getBooleanExtra("deliveryConfirmed", true))
-    }
-    @Test fun chooserReturnDetachesUiButRetainsBoundedRecipientLease() {
-        val owner = begin(); prepare(owner); coordinator.chooserLaunched(owner); coordinator.chooserCallback(owner)
-        val receipt = io { coordinator.detachRecipientLease(owner) {} }
-        assertTrue(receipt.getBooleanExtra("chooserOpened", false)); assertFalse(receipt.getBooleanExtra("deliveryConfirmed", true))
-        assertEquals("transfer_active", coordinator.status()); assertEquals(1, cleanups)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-        assertFalse(coordinator.canBegin()); coordinator.invalidate(owner)
-        assertEquals("transfer_active", coordinator.status())
-        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        val worker = FactoryFileShareCoordinator.WORKER; worker.prestartCoreThread()
-        val barrier = java.util.concurrent.FutureTask(Callable { Unit }); check(worker.queue.offer(barrier,5,TimeUnit.SECONDS)); barrier.get(5,TimeUnit.SECONDS)
-        assertEquals("closed", coordinator.status()); assertEquals(2, cleanups)
-    }
-    @Test fun staleExpiryAndRevocationRetryCannotCloseNewShare() {
-        val owner = begin()
-        val expired = FactoryFileShareCoordinator::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(coordinator) as Runnable
-        io { coordinator.close(owner, false) {} }
-        val fresh = request().copy(nonce = "f".repeat(64))
-        val newOwner = io { coordinator.begin(proof.appId, fresh) {} }
-        val before = cleanups; expired.run()
-        val worker = FactoryFileShareCoordinator.WORKER; worker.prestartCoreThread()
-        val barrier = java.util.concurrent.FutureTask(Callable { Unit }); check(worker.queue.offer(barrier,5,TimeUnit.SECONDS)); barrier.get(5,TimeUnit.SECONDS)
-        assertEquals("review", coordinator.status()); assertEquals(before, cleanups)
-        io { coordinator.prepareChooser(newOwner, "Still current") {} }
-        io { coordinator.close(newOwner, true) {} }
-    }
-    @Test fun failedDetachedLeaseCleanupExposesBoundRecoveryAndRetainsAdmission() {
-        val owner = begin(); prepare(owner); coordinator.chooserLaunched(owner)
-        io { coordinator.detachRecipientLease(owner) {} }; assertTrue(FactoryInteractionAdmission.available())
-        cleanupFailure = true; operationPolicy.revokeActive()
-        val worker = FactoryFileShareCoordinator.WORKER; worker.prestartCoreThread()
-        val barrier = java.util.concurrent.FutureTask(Callable { Unit }); check(worker.queue.offer(barrier,5,TimeUnit.SECONDS)); barrier.get(5,TimeUnit.SECONDS)
-        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.canBegin()); assertFalse(FactoryInteractionAdmission.available())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        cleanupFailure = false; io { coordinator.acknowledgeRecovery {} }
-        assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun cleanupFailureRetainsAdmissionAndGuardUntilHumanRetry() {
-        val owner = begin(); prepare(owner); coordinator.chooserLaunched(owner)
-        cleanupFailure = true
-        fail { io { coordinator.close(owner, true) {} } }
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        cleanupFailure = false
-        io { coordinator.close(owner, true) {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun changedIdentityAfterCopyCannotBecomeReviewAndCleanupRuns() {
-        var checks = 0
-        coordinator = make { checks++; if (checks == 2) proof.copy(version = 3) else proof }
-        fail { begin() }
-        assertEquals(1, received); assertTrue(cleanups >= 2); assertTrue(coordinator.needsRecovery())
-        io { coordinator.acknowledgeRecovery {} }
-    }
-    @Test fun changedScopeAtHumanApprovalCannotLaunch() {
-        val owner = begin(); proof = proof.copy(record = "f".repeat(64))
-        fail { prepare(owner) }; assertEquals("review", coordinator.status())
-        io { coordinator.close(owner, false) {} }
-    }
-    @Test fun restoreDropsLaunchEvidenceAndEveryJournalKeepsItsOwnAdmission() {
-        val owner = begin(); prepare(owner); coordinator.chooserLaunched(owner)
-        val restored = make(); io { restored.restore() }
-        assertTrue(restored.needsRecovery()); assertFalse(restored.chooserOpened())
-        fail { io { restored.close(owner, true) {} } }
-        io { restored.acknowledgeRecovery {} }
-        // Simulated old process still owns its lease. Releasing the restored journal cannot release it.
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        io { coordinator.close(owner, true) {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun malformedUnknownJournalRequiresProtectedNativeRecovery() {
-        root.mkdirs(); journal.writeText("{")
-        io { coordinator.restore() }
-        assertTrue(coordinator.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
-        io { coordinator.acknowledgeRecovery {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertEquals("", JSONObject(journal.readText()).getString("nonce"))
-    }
-    @Test fun defaultAllowDoesNotCreateHumanGuardDuringAutomatedAction() {
-        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch(); val action = MemoryUiAutomationGuard.beginAsyncAction(epoch)
-        try { val owner = begin(); assertEquals(1, received); assertFalse(MemoryUiAutomationGuard.isProtected()); io { coordinator.close(owner, false) {} } }
-        finally { action.close() }
-    }
-    @Test fun denyRejectsBeforeTransferJournalOrAdmission() {
-        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        fail { begin() }; assertEquals(0, received); assertFalse(journal.exists()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun askRequiresApprovalCallbackOnlyForItsBoundRequest() {
-        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val owner = begin(); assertTrue(coordinator.requiresApproval())
-        fail { io { coordinator.prepareChooser(owner, "Synthetic") { error("No human approval") } } }
-        prepare(owner); assertFalse(coordinator.requiresApproval())
-        io { coordinator.close(owner, true) {} }
-    }
     @Test fun mainThreadIoIsRejectedBeforeWork() { fail { coordinator.begin(proof.appId, request()) {} }; assertEquals(0, received) }
+    @Test fun newInteractionRetriesAutomaticCleanupAfterTransientStartupFailure() {
+        root.mkdirs()
+        journal.writeText(JSONObject().put("schemaVersion", 1).put("state", "chooser_opened")
+            .put("open", true).put("nonce", "c".repeat(64)).toString())
+        cleanupFailure = true
+        io { coordinator.restore() }
+        assertTrue(coordinator.canBegin())
+        cleanupFailure = false
+
+        io { coordinator.begin(proof.appId, request("f".repeat(64))) {} }
+        assertEquals(1, received)
+        assertEquals("review", coordinator.status())
+        assertEquals(3, cleanups)
+    }
     @Test fun currentExactIdentityIndependentlyRequiresBothCapabilities() {
         fun evidence(caps: List<String>): FactorySigningIdentity.State {
             val scope = JSONObject()
@@ -254,41 +120,6 @@ class FactoryFileShareCoordinatorTest {
             FactoryDocumentCoordinator.verifyEvidence(proof.appId, proof.certificate, proof.apk, 2, evidence(caps), setOf("documents", "share"))
         }
         assertEquals(proof, FactoryDocumentCoordinator.verifyEvidence(proof.appId, proof.certificate, proof.apk, 2, evidence(listOf("documents", "share")), setOf("documents", "share")))
-    }
-    @Test fun malformedDocumentAndShareJournalsRestoreIndependentGuards() {
-        val documentRoot = File(context.noBackupFilesDir, "factory-documents").apply { mkdirs() }
-        File(documentRoot, "interaction.json").writeText("{")
-        root.mkdirs(); journal.writeText("{")
-        val documents = FactoryDocumentCoordinator(context) { proof }
-        documents.restore(); io { coordinator.restore() }
-        assertTrue(documents.needsRecovery()); assertTrue(coordinator.needsRecovery())
-        io { coordinator.acknowledgeRecovery {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        documents.acknowledgeRecovery {}
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
-    }
-    @Test fun stalledTransferRetainsAdmissionUntilActualWorkerCompletion() {
-        val entered = java.util.concurrent.CountDownLatch(1)
-        val release = java.util.concurrent.CountDownLatch(1)
-        coordinator = FactoryFileShareCoordinator(context, { proof }, receive = { value, active ->
-            entered.countDown(); check(release.await(10, TimeUnit.SECONDS)); active()
-            FactoryFileShareStore.Snapshot(Uri.parse("content://${context.packageName}.factory.files/files/synthetic.bin"), value.filename, value.mimeType, value.size, SystemClock.elapsedRealtime() + 300000)
-        }, clean = {}, policy = operationPolicy)
-        val future = executor.submit(Callable { coordinator.begin(proof.appId, request()) {} })
-        try {
-            assertTrue(entered.await(5, TimeUnit.SECONDS))
-            assertFalse(coordinator.canBegin()); assertFalse(FactoryInteractionAdmission.available())
-            assertFalse(MemoryUiAutomationGuard.isProtected())
-            val documents = FactoryDocumentCoordinator(context) { proof }
-            val documentOwner = documents.begin(proof.appId, FactoryDocumentCoordinator.Request("open", "text/plain", null, "b".repeat(64)))
-            documents.close(documentOwner, false) {}
-            assertEquals(1, FactoryFileShareCoordinator.WORKER.maximumPoolSize)
-            assertTrue(FactoryFileShareCoordinator.WORKER.queue is java.util.concurrent.ArrayBlockingQueue<*>)
-            assertEquals(1, FactoryFileShareCoordinator.WORKER.queue.remainingCapacity())
-        } finally { release.countDown() }
-        val owner = future.get(10, TimeUnit.SECONDS)
-        io { coordinator.close(owner, false) {} }
-        assertTrue(FactoryInteractionAdmission.available())
     }
 
 }

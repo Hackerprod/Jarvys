@@ -1391,33 +1391,21 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="crew_progress_tool_error">Tool reported an error</string>
     <!-- Elapsed minutes:seconds is a clock, not a plural quantity. --><string name="crew_last_progress" xmlns:tools="http://schemas.android.com/tools" tools:ignore="PluralsCandidate">%1$s · Last activity: %2$s · %3$d:%4$02d ago</string>
     <string name="factory_audio_title">Factory audio</string>
-    <string name="factory_audio_play">Play once</string>
     <string name="factory_audio_close">Stop and close</string>
-    <string name="factory_audio_recover">Clean up and close</string>
-    <string name="factory_audio_settings_summary">Clean up an interrupted native audio operation</string>
-    <string name="factory_audio_disclosure">Local PCM16 WAV plays once under your Factory permission setting. Ask requires one approval; Allow always starts automatically. Duration is limited by this signed application’s resource budget. Audio uses the current Android output and volume; other people or connected devices may hear it. No volume or output change, speech engine, upload, looping or background playback. Earlier document selection may use a cloud provider. Cancellation requests do not prove an immediate remote stop.</string>
-    <string name="factory_audio_checking">Checking the installed app, permission setting and native audio.</string>
-    <string name="factory_audio_unknown">Interrupted or uncertain outcome. The previous audio is never replayed. Native cleanup must finish before another audio request can start; other operations remain available.</string>
+    <string name="factory_audio_disclosure">Local PCM16 WAV audio plays once using Android’s current output and volume; other people or connected devices may hear it. Jarvys does not change the volume or output, upload audio, loop playback or play audio in the background. Earlier document selection may use a cloud provider.</string>
+    <string name="factory_audio_checking">Checking the installed app and local audio.</string>
     <string name="factory_audio_attempted">This one-shot playback was attempted. The result does not prove sound was heard. The request finishes after native cleanup is confirmed.</string>
     <string name="factory_audio_unavailable">Audio is unavailable or was interrupted. No automatic retry.</string>
     <string name="factory_browser_title">Factory browser</string>
-    <string name="factory_browser_open">Open this exact URL once</string>
     <string name="factory_browser_close">Cancel and close</string>
-    <string name="factory_browser_recover">Close interrupted request</string>
-    <string name="factory_browser_settings_summary">Close an interrupted browser request</string>
-    <string name="factory_browser_disclosure">Your Factory permission setting controls this browser request. Allow always uses the verified Android default browser, or asks you to choose a recipient if no default is available. Ask requires one approval. Opening sends the complete URL, including its path and query, to the browser and destination website. Do not include passwords, tokens or other secrets. The browser may use its cookies, signed-in account, history, sync and network settings. DNS, redirects and page resources may contact other destinations or open apps. HTTPS does not establish a safe destination. Jarvys does not fetch or verify the page. The result confirms only a launch request. Cancellation cannot retract the request or undo website effects.</string>
-    <string name="factory_browser_checking">Checking the installed app, permission setting and available browsers.</string>
-    <string name="factory_browser_unknown">The previous outcome is unknown and will not be replayed. Closing this request does not close or verify the external browser.</string>
+    <string name="factory_browser_disclosure">Opening sends the complete URL, including its path and query, to the verified Android default browser or to the browser you choose in Android’s selector. Do not include passwords, tokens or other secrets. The browser may use cookies, accounts, history, sync and network settings. DNS, redirects and page resources may contact other destinations or open apps. HTTPS does not establish a safe destination. Jarvys does not fetch or verify the page. The result confirms only a launch request, and cancellation cannot undo website effects.</string>
+    <string name="factory_browser_checking">Checking the installed app and available browsers.</string>
     <string name="factory_browser_attempted">A browser launch was requested. Page load, rendering and delivery remain unconfirmed.</string>
     <string name="factory_browser_unavailable">No compatible browser is available, or this review was interrupted. No implicit fallback or automatic retry.</string>
     <string name="factory_external_launch_title">External action</string>
-    <string name="factory_external_launch_settings_summary">Close an interrupted map, dialer, email, SMS or calendar editor request.</string>
-    <string name="factory_external_launch_disclosure">Your Factory permission setting controls this request. Allow always uses the verified Android default app, or asks you to choose a recipient if no default is available. Ask requires one approval. Opening shares these fields with that app, which may use its network, accounts, history, existing permissions and cloud draft sync. Maps requests a location display; phone requests a dialer (ACTION_DIAL); email and SMS request an editor (ACTION_SENDTO). Jarvys never presses Send or calls automatically through these operations. The external app may ignore or change the fields and may transmit or save them; its behavior is outside Jarvys control. Jarvys reads no location or contacts for this request. Opening does not confirm display, navigation, calling, draft saving, sending or delivery. Do not submit secrets.</string>
-    <string name="factory_external_launch_open">Open selected app</string>
+    <string name="factory_external_launch_disclosure">Opening shares these fields with the verified Android default app or with the app you choose in Android’s selector. It may use its network, accounts, history, permissions and cloud draft sync. Maps requests a location display; phone opens a dialer (ACTION_DIAL); email and SMS open an editor (ACTION_SENDTO). Jarvys never presses Send or calls automatically through these operations. The external app may ignore or change the fields and may transmit or save them; its behavior is outside Jarvys’ control. Jarvys reads no location or contacts for this request. Opening does not confirm display, navigation, calling, draft saving, sending or delivery. Do not submit secrets.</string>
     <string name="factory_external_launch_close">Cancel request</string>
-    <string name="factory_external_launch_recover">Close interrupted request</string>
     <string name="factory_external_launch_checking">Checking exact app identities. Please wait.</string>
-    <string name="factory_external_launch_unknown">The previous outcome is unknown and will not be replayed. Closing this request does not close or verify the external app.</string>
     <string name="factory_external_launch_attempted">A launch was requested. Display, navigation, calling, draft saving, sending and delivery remain unconfirmed.</string>
     <string name="factory_external_launch_unavailable">This request or recipient is unavailable, changed or revoked. Nothing will be retried automatically.</string>
     <string name="factory_external_editor_recipient">Recipient</string>
@@ -1426,13 +1414,10 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_external_editor_empty">(empty)</string>
     <string name="factory_contacts_title">Factory contact selection</string>
     <string name="factory_contacts_value">Selected phone or email</string>
-    <string name="factory_contacts_choose">Choose one phone or email</string>
-    <string name="factory_contacts_use">Share this exact value with the app</string>
     <string name="factory_contacts_none">No selected value</string>
     <string name="factory_contacts_destination">Receiving generated app</string>
-    <string name="factory_contacts_settings_summary">Recover or close a protected contact selection</string>
-    <string name="factory_contacts_unavailable">Contact selection is unavailable or revoked. No value will be returned. Close the picker yourself before acknowledging an uncertain outcome.</string>
-    <string name="factory_contacts_disclosure">The trusted Android picker selects one phone number or email address. Jarvys reads only that selected row and automatically returns the exact value to the verified app below. The app can retain it or share it later using other capabilities. No name, contact ID, URI or address book is returned. This does not authorize a call or message. With Ask, this review approves the selection flow once; Android permissions still apply. Only choose information you want to share with this app. Cancellation does not prove an external picker has closed.</string>
+    <string name="factory_contacts_unavailable">Contact selection is unavailable or was cancelled. No value was returned.</string>
+    <string name="factory_contacts_disclosure">The Android picker lets you choose one phone number or email address. Jarvys reads only that selected row and automatically returns the exact value to the verified app below. The app can retain it or share it later. No name, contact ID, URI or address book is returned. This does not authorize a call or message. Only choose information you want to share with this app.</string>
     <string name="factory_calendar_disclosure">Calendar requests only an event editor (ACTION_INSERT). Jarvys does not read or write the calendar database and never presses Save. Opening shares every displayed field with the selected app; it may save, transmit or cloud-sync a draft. It may ignore or change the requested timezone, all-day setting, times or other values. Review them again in that app. All-day boundaries are UTC dates with an exclusive end date. A launch request does not prove an editor appeared or an event was created or saved.</string>
     <string name="factory_calendar_source">Source app, version and signed APK identity</string>
     <string name="factory_calendar_title">Title</string>
@@ -1442,14 +1427,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_calendar_timezone">Timezone (requested)</string>
     <string name="factory_calendar_all_day">All day (requested)</string>
     <string name="factory_calendar_description">Description</string>
-    <string name="factory_operation_review_title">Allow this operation?</string>
-    <string name="factory_operation_review_disclosure">Review the exact request from this installed Factory app. This approval applies only to this request.</string>
-    <string name="factory_operation_review_approve">Allow once</string>
-    <string name="native_permission_workspace_create">Create durable workspaces</string>
-    <string name="native_permission_workspace_delegate">Delegate workspace work</string>
-    <string name="native_permission_workspace_read">Read workspace results</string>
-    <string name="native_permission_workspace_deliver">Deliver workspace files to central</string>
-    <string name="workspace_policy_disclosure">Applies to this exact workspace action. Worker capabilities and Android or provider permissions remain independent.</string>
 
     <plurals name="workspace_coordination_live">
         <item quantity="one">%1$d question or blocker can receive an exact reply.</item>
@@ -1459,7 +1436,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
         <item quantity="one">%1$d reply attempt has an uncertain outcome. Do not resend automatically.</item>
         <item quantity="other">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</item>
     </plurals>
-    <string name="workspace_coordination_review">Coordination access or reply needs foreground permission review.</string>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d historical or superseded request. Reopening does not resume work.</item>
         <item quantity="other">%1$d historical or superseded requests. Reopening does not resume work.</item>

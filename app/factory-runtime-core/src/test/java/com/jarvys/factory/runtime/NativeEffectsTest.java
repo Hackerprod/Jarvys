@@ -36,7 +36,7 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 import org.robolectric.util.ReflectionHelpers;
-import static com.jarvys.factory.runtime.NativePermissionSessionsTest.idle;
+import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
 /** Adapter integration with synthetic Android permissions, fake HTTP, and silent fake speech engines. */
@@ -44,7 +44,7 @@ import static org.junit.Assert.*;
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class NativeEffectsTest {
-    private NativePermissionSessionsTest.Fixture fixture;
+    private NativeOperationSessionsTest.Fixture fixture;
     private NativeEffects effects;
     private FactoryConfig config;
     private ThreadPoolExecutor networkIo;
@@ -55,7 +55,7 @@ public class NativeEffectsTest {
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativePermissionSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture();
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(
                 "[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
@@ -90,18 +90,18 @@ public class NativeEffectsTest {
         idle(); fixture.close();
     }
 
-    @Test public void denyLeavesNetworkNotificationAndSpeechAdaptersUntouched() throws Exception {
-        fixture.provider.deny = true;
+    @Test public void unavailableInstalledSourceLeavesNetworkNotificationAndSpeechAdaptersUntouched() throws Exception {
+        fixture.provider.unavailable = true;
         Result network = perform("network.request", new JSONObject().put("url", "https://synthetic.invalid/"));
         Result channel = perform("notifications.channel", new JSONObject().put("id", "denied").put("name", "Denied"));
         Result speech = perform("speech.speak", new JSONObject().put("text", "Never spoken"));
         fixture.pump();
         for (Result result : new Result[]{network, channel, speech}) {
-            assertEquals("PERMISSION_DENIED", result.error); assertEquals(1, result.calls); assertEquals(0, result.successes);
+            assertEquals("UNAVAILABLE", result.error); assertEquals(1, result.calls); assertEquals(0, result.successes);
         }
         assertEquals(0, opens.get()); assertTrue(engines.isEmpty());
         assertNull(notifications.getNotificationChannel("factory.denied"));
-        assertEquals(0, Shadows.shadowOf(notifications).size()); assertTrue(fixture.screen.reviews.isEmpty());
+        assertEquals(0, Shadows.shadowOf(notifications).size()); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void cancellationBypassesFullNetworkQueueAndLateTransportResultCannotSucceed() throws Exception {

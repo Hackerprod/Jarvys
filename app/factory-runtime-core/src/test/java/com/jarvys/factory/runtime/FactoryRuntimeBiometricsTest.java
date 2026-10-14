@@ -63,7 +63,7 @@ public class FactoryRuntimeBiometricsTest {
     FactoryRuntime runtime;
     Driver driver;
     BiometricAuthentication.ProcessGate gate;
-    final NativePermissionSessionsTest.PolicyProvider policyProvider=new NativePermissionSessionsTest.PolicyProvider();
+    final NativeOperationSessionsTest.SessionProvider policyProvider=new NativeOperationSessionsTest.SessionProvider();
     long now;
     int sequence;
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
@@ -102,7 +102,7 @@ public class FactoryRuntimeBiometricsTest {
     }
     @After public void cleanup()throws Exception{
         closeRuntime();Shadows.shadowOf(Looper.getMainLooper()).idle();
-        for(NativePermissionSessionsTest.Issued issued:policyProvider.issued)issued.host.close();
+        for(NativeOperationSessionsTest.Issued issued:policyProvider.issued)issued.host.close();
         screen.finish();
     }
     String arguments(){return "{\"reason\":\"Confirm this local action\"}";}

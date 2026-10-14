@@ -51,7 +51,9 @@ class TaskManagementScopeTest {
         val guidance = AgentPrompts.TASK_MANAGEMENT_GUIDANCE
         assertTrue(guidance.contains("list_tasks"))
         assertTrue(guidance.contains("now_local"))
+        assertTrue(guidance.contains("schedule_task directly"))
         assertTrue(guidance.contains("self-contained"))
+        assertFalse(guidance.contains("ALLOW") || guidance.contains("ASK") || guidance.contains("DENY") || guidance.contains("policy"))
         assertFalse(guidance.contains("Linux", ignoreCase = true))
         assertFalse(guidance.contains("email", ignoreCase = true))
     }

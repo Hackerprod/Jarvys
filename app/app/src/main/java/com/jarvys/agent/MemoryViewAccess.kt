@@ -7,14 +7,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.jarvys.agent.connectors.ConnectorStateStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -36,12 +34,10 @@ internal class MemoryViewAccess(
     private val store: MemoryStore,
     private val key: String,
     private val shared: Boolean,
-    private val initialDraftHash: String,
     private val lifecycle: Lifecycle,
     private val route: MemoryViewRoute,
     private val changed: () -> Unit,
 ) : AutoCloseable {
-    private val policy = NativeActionPolicy(view.context)
     private val routeEpoch = route.currentEpoch()
     @Volatile private var previouslyDisplayed = false
     private val invalidated = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -71,16 +67,11 @@ internal class MemoryViewAccess(
     @Volatile private var alive = true
     @Volatile private var ready = false
     @Volatile private var displayReady = false
-    var captureReviewNeeded by mutableStateOf(false)
-        private set
-    @Volatile private var request: NativeActionPolicy.Request? = null
     var state: String = ""
         private set
     private var transition: MemoryUiAutomationGuard.Lease? = null
     private var secure: MemorySecureWindows.Lease? = null
     private var registration: AutoCloseable? = null
-    private var ask: MemoryUiAutomationGuard.Lease? = null
-    val requiresApproval get() = request?.requiresApproval == true
     fun attach() {
         protect()
         registration = MemoryUiAutomationGuard.registerViewAuthority { captureAllowed() }
@@ -98,34 +89,17 @@ internal class MemoryViewAccess(
     }
     fun prepare() {
         check(alive)
-        var candidate = policy.prepare(NativeActionPolicy.Operation.MEMORY_VIEW,
-            NativeActionPolicy.binding(store.nativeScopeIdentity(), key, shared.toString()))
-        try {
-            candidate.requireCurrent()
-            store.ensureInitialized()
-            state = store.nativeStateFingerprint(shared)
-            candidate = candidate.rebind(NativeActionPolicy.binding(store.nativeScopeIdentity(), key, shared.toString(), state, initialDraftHash))
-            request = candidate
-        } catch (failure: RuntimeException) { candidate.close(); throw failure }
-    }
-    fun openReview() {
-        if (requiresApproval && ask == null) {
-            val acquired = MemoryUiAutomationGuard.enterProtectedSurface()
-            if (!acquired.isReadyForUser) { acquired.close(); error(view.context.getString(R.string.memory_native_finish_interaction)) }
-            ask = acquired
-        }
+        store.ensureInitialized()
+        state = store.nativeStateFingerprint(shared)
     }
     fun authorize() {
-        val exact = checkNotNull(request)
-        if (exact.requiresApproval) exact.approveOnce { checkNotNull(ask).requireHumanUiInteraction(); requireActive() }
-        store.withNativeState(state, shared, { exact.admit { requireActive() } }) {
-            ready = true; displayReady = true; previouslyDisplayed = true; captureReviewNeeded = false
+        store.withNativeState(state, shared, { requireActive() }) {
+            ready = true; displayReady = true; previouslyDisplayed = true
         }
-        ask?.close(); ask = null
     }
     private fun requireActive() { check(alive && !invalidated.get() && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
-    /** Short exact-selection check; safe inside final policy admission (no disk reads). */
-    fun requireSelection() { requireActive(); check(displayReady); checkNotNull(request).requireCurrent() }
+    /** Short exact-selection check; data revision is checked separately before a read. */
+    fun requireSelection() { requireActive(); check(displayReady) }
     /** Already-bound effects retain route identity while their own mutations invalidate capture. */
     fun requireEffectSelection() { route.requireCurrent(routeEpoch); check(previouslyDisplayed) }
     fun requireCurrent() {
@@ -135,28 +109,21 @@ internal class MemoryViewAccess(
     fun allowsUiAction(): Boolean = runCatching { requireCurrent(); true }.getOrDefault(false)
     fun <T> read(block: () -> T): T {
         requireCurrent()
-        val result = store.withNativeState(state, shared, { checkNotNull(request).admit { requireActive(); check(ready) } }) { block() }
+        val result = store.withNativeState(state, shared, { requireActive(); check(ready) }) { block() }
         // Internal seeding/recovery may have changed the view. Never publish it under the old revision.
         requireCurrent()
         return result
     }
-    /** A draft edit is a content revision, not a new permission family. Keep human editing usable. */
-    fun draftChanged(exactDraftHash: String) {
+    /** A draft edit is a content revision. Keep human editing usable. */
+    fun draftChanged() {
         requireSelection()
         ready = false
         protect()
-        request = checkNotNull(request).rebind(NativeActionPolicy.binding(store.nativeScopeIdentity(), key, state, exactDraftHash))
-        captureReviewNeeded = requiresApproval
-        if (!requiresApproval) authorize()
-    }
-    fun approveDraftCapture() {
-        requireSelection()
-        openReview()
         authorize()
     }
     private fun captureAllowed(): Boolean = runCatching {
         requireCurrent(); check(ready)
-        store.withNativeState(state, shared, { checkNotNull(request).admit { requireActive(); check(ready) } }) { true }
+        store.withNativeState(state, shared, { requireActive(); check(ready) }) { true }
     }.getOrDefault(false)
     fun releaseTransitionAfterFrame() {
         if (!ready) return
@@ -167,13 +134,6 @@ internal class MemoryViewAccess(
         releaseChildWindowsAfterFrame()
     }
     /** Must run before route/tab/new-content mutation, not after a different selection has rendered. */
-    fun invalidateIfPolicyChanged(key: String?) {
-        // A SharedPreferences callback may run inside the policy setter lock. Never take a Request/store lock here.
-        val id = NativeActionPolicy.CONNECTOR_ID
-        val operation = NativeActionPolicy.Operation.MEMORY_VIEW.id
-        if (request != null && (key == null || key == com.jarvys.agent.connectors.PersistedActionPolicies.policyKey(id, operation) ||
-                key == com.jarvys.agent.connectors.PersistedActionPolicies.metadataKey(id, operation))) invalidate()
-    }
     fun invalidateIfDataChanged() {
         if (state.isNotEmpty() && runCatching { store.nativeStateFingerprint(shared) == state }.getOrDefault(false).not()) invalidate()
     }
@@ -186,8 +146,6 @@ internal class MemoryViewAccess(
     fun navigate(action: () -> Unit) { route.close(); invalidate(); action() }
     override fun close() {
         ready = false; displayReady = false; alive = false
-        request?.close(); request = null
-        ask?.close(); ask = null
         protect()
         val guard = transition; val window = secure
         transition = null; secure = null
@@ -202,9 +160,8 @@ internal class MemoryViewAccess(
 
 @Composable
 internal fun memoryViewProtection(store: MemoryStore, key: String, shared: Boolean = false,
-                                  onClose: (() -> Unit)? = null, draftHash: String = ""): MemoryViewAccess? {
+                                  onClose: (() -> Unit)? = null): MemoryViewAccess? {
     val view = LocalView.current
-    val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     var generation by remember(store, key) { mutableIntStateOf(0) }
     var ready by remember(store, key, generation) { mutableStateOf(false) }
@@ -219,7 +176,7 @@ internal fun memoryViewProtection(store: MemoryStore, key: String, shared: Boole
         onDispose { route.close(); owner.lifecycle.removeObserver(observer) }
     }
     val access = remember(store, key, shared, generation, owner) {
-        MemoryViewAccess(view, store, key, shared, draftHash, owner.lifecycle, route) { generation++ }
+        MemoryViewAccess(view, store, key, shared, owner.lifecycle, route) { generation++ }
     }
     DisposableEffect(access) {
         access.attach()
@@ -232,16 +189,11 @@ internal fun memoryViewProtection(store: MemoryStore, key: String, shared: Boole
             override fun onMemoryChanged(revision: MemoryStore.Revision) = access.invalidateIfDataChanged()
             override fun onMemoryCleared() = access.invalidateIfDataChanged()
         }
-        // Any durable policy edit invalidates the existing exact selection before another capture.
-        val preferences = context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, android.content.Context.MODE_PRIVATE)
-        val policyListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key -> access.invalidateIfPolicyChanged(key) }
         owner.lifecycle.addObserver(observer)
         MemoryStore.addGlobalSearchListener(listener)
-        preferences.registerOnSharedPreferenceChangeListener(policyListener)
         onDispose {
             owner.lifecycle.removeObserver(observer)
             MemoryStore.removeGlobalSearchListener(listener)
-            preferences.unregisterOnSharedPreferenceChangeListener(policyListener)
             access.close()
         }
     }
@@ -250,8 +202,7 @@ internal fun memoryViewProtection(store: MemoryStore, key: String, shared: Boole
         runCatching { withContext(Dispatchers.IO) { access.prepare() } }.onSuccess {
             prepared = true
             runCatching {
-                if (access.requiresApproval) access.openReview()
-                else { access.authorize(); ready = true }
+                access.authorize(); ready = true
             }.onFailure { error = it.message }
         }.onFailure { error = it.message }
     }
@@ -260,13 +211,7 @@ internal fun memoryViewProtection(store: MemoryStore, key: String, shared: Boole
         return access
     }
     Column(Modifier.padding(20.dp)) {
-        Text(error ?: stringResource(if (!prepared) R.string.memory_native_review_loading else R.string.memory_native_review_prompt))
-        if (prepared && access.requiresApproval) {
-            Text(stringResource(R.string.memory_native_review_scope, store.nativeScopeIdentity(), key, access.state))
-            Button(onClick = {
-                runCatching { access.authorize() }.onSuccess { ready = true }.onFailure { error = it.message }
-            }) { Text(stringResource(R.string.memory_native_allow_once)) }
-        }
+        Text(error ?: stringResource(R.string.memory_loading))
         if (onClose != null) Button(onClick = { access.navigate(onClose) }) { Text(stringResource(R.string.memory_native_close)) }
     }
     return null

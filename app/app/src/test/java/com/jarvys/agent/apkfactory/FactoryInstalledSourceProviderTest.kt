@@ -33,8 +33,7 @@ class FactoryInstalledSourceProviderTest {
     private val exited = CountDownLatch(1)
     private var block: CountDownLatch? = null
     private val provider = object : FactoryOperationAuthorizationProvider() {
-        override fun operationPolicy(context: Context): FactoryOperationPolicy = error("Descriptor accessed operation policy")
-        override fun verifiedCaller(context: Context, caller: String, capabilities: Set<String>): FactoryDocumentCoordinator.Proof {
+                override fun verifiedCaller(context: Context, caller: String, capabilities: Set<String>): FactoryDocumentCoordinator.Proof {
             assertEquals(setOf("notifications"), capabilities)
             verified.incrementAndGet()
             // Deliberately emulate an uninterruptible platform read that completes after timeout.

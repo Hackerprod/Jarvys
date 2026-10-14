@@ -11,8 +11,8 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 
-/** One policy-authorized SAF interaction. The journal never contains a document URI or document bytes. */
-internal class FactoryDocumentCoordinator(context: Context, private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context), private val verify: (String) -> Proof = { verifyInstalled(context, it) }) {
+/** One authenticated SAF interaction. The journal never contains a document URI or document bytes. */
+internal class FactoryDocumentCoordinator(context: Context, private val verify: (String) -> Proof = { verifyInstalled(context, it) }) {
     data class Request(val operation: String, val mimeType: String, val filename: String?, val nonce: String) {
         companion object {
             fun parse(intent: Intent): Request {
@@ -36,7 +36,6 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
     data class Proof(val appId: String, val certificate: String, val apk: String, val version: Long, val record: String,
         val resources: com.jarvys.factory.contract.ResourceBudgets = com.jarvys.factory.contract.ResourceBudgets.legacy())
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-documents/interaction.json"))
-    private var permit: FactoryOperationPolicy.Grant? = null
     private var owner: String? = null
     private var proof: Proof? = null
     private var request: Request? = null
@@ -44,12 +43,9 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
     private var verifying = false
     private var state = "idle"
     private var open = false
-    private var restoredUnknown = false
     private var previousNonce: String? = null
     @Synchronized fun restore() {
         if (!journal.baseFile.exists() && !File(journal.baseFile.path + ".bak").exists()) return
-        // Unknown outcomes reserve only this family; they never acquire a global human UI lease.
-        FactoryInteractionAdmission.restore(this)
         try {
             val bytes = journal.openRead().use { input -> val bytes = ByteArray(4097); var count = 0; while (count < bytes.size) { val n = input.read(bytes, count, bytes.size - count); if (n < 0) break; check(n > 0); count += n }; require(count <= 4096); bytes.copyOf(count) }
             val saved = FactoryJson.objectFrom(bytes, 4096)
@@ -61,9 +57,13 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
             val savedState = saved.getString("state")
             require(if (open) savedState in setOf("review", "picker", "cancelling", "selected", "cancelled", "outcome_unknown") else savedState in setOf("returned", "cancelled", "closed_outcome_unknown"))
             require(previousNonce!!.matches(Regex("[a-f0-9]{64}")) || (previousNonce == "" && savedState == "closed_outcome_unknown"))
-            state = if (open) "outcome_unknown" else savedState
-            if (open) { save(); restoredUnknown = true } else FactoryInteractionAdmission.release(this)
-        } catch (_: Exception) { broken = true; open = true; restoredUnknown = false; state = "outcome_unknown" }
+            if (open) { state = "closed_outcome_unknown"; open = false; save() } else state = savedState
+            FactoryInteractionAdmission.release(this)
+        } catch (_: Exception) {
+            broken = false; open = false; state = "closed_outcome_unknown"; previousNonce = ""
+            runCatching { save() }
+            FactoryInteractionAdmission.release(this)
+        }
     }
     private fun save() {
         try {
@@ -73,56 +73,46 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
             try { stream.write(bytes); stream.fd.sync() } catch (e: Throwable) { journal.failWrite(stream); throw e }
             journal.finishWrite(stream)
             check(journal.readFully().contentEquals(bytes))
-        } catch (e: Exception) { broken = true; open = true; restoredUnknown = false; state = "outcome_unknown"; permit?.revoke(); throw e }
+        } catch (e: Exception) { broken = true; open = true; state = "outcome_unknown"; throw e }
     }
-    private fun recoverable() = restoredUnknown && open && !broken && owner == null
-    @Synchronized fun canBegin() = !broken && !verifying && (recoverable() || (!open && FactoryInteractionAdmission.available(this)))
+    @Synchronized fun canBegin() = !broken && !verifying && (open || FactoryInteractionAdmission.available(this))
     fun begin(callingPackage: String?, value: Request): String {
         require(!callingPackage.isNullOrBlank()) { "Android calling package is required" }
         synchronized(this) {
             check(canBegin()) { "A document interaction is already in progress" }
             require(value.nonce != previousNonce) { "Replayed document request" }
-            if (!recoverable()) FactoryInteractionAdmission.acquire(this)
+            if (!open) FactoryInteractionAdmission.acquire(this)
             verifying = true
         }
-        var acquired: FactoryOperationPolicy.Grant? = null
         try {
             val identity = verify(callingPackage)
             require(identity.appId == callingPackage)
-            val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(identity),
-                if (value.operation == "open") FactoryOperationPolicy.Operation.DOCUMENT_OPEN else FactoryOperationPolicy.Operation.DOCUMENT_CREATE,
-                FactoryOperationPolicy.binding(value.operation, value.mimeType, value.filename ?: "", value.nonce))
-            acquired = grant
             return synchronized(this) {
-                check(!broken && (!open || recoverable()))
-                grant.requireCurrent()
-                if (recoverable()) {
-                    check(grant.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS) { "Historical outcome needs explicit recovery" }
-                    state = "closed_outcome_unknown"; open = false; save(); restoredUnknown = false
-                }
-                permit = grant
+                check(!broken)
+                if (open) {
+                    state = "closed_outcome_unknown"; open = false; save()
+                    proof = null; request = null; owner = null
+                } else FactoryInteractionAdmission.acquire(this)
                 owner = UUID.randomUUID().toString(); proof = identity; request = value
                 previousNonce = value.nonce; state = "review"; open = true; save()
                 owner!!
             }
-        } catch (failure: Exception) { acquired?.close(); throw failure }
+        } catch (failure: Exception) { throw failure }
         finally { synchronized(this) { verifying = false; if (!open && !broken) FactoryInteractionAdmission.release(this) } }
     }
     @Synchronized fun status() = state
-    @Synchronized fun needsRecovery() = open && (owner == null || broken || permit?.let { runCatching { it.requireCurrent() }.isFailure } == true)
     private fun checkOwner(token: String) { check(open && !broken && token == owner) }
-    @Synchronized fun authority(token: String): FactoryOperationPolicy.Grant { checkOwner(token); return permit ?: error("Authority revoked") }
-    fun approve(token: String, human: () -> Unit) { authority(token).approveOnce(human) }
+    fun requireCurrent(token: String, active: () -> Unit = {}) { verified(token, active) }
     private fun verified(token: String, active: () -> Unit): Proof {
-        val p = synchronized(this) { checkOwner(token); active(); permit!!.checkBeforeEffect(); proof ?: error("Authority revoked") }
+        val p = synchronized(this) { checkOwner(token); active(); proof ?: error("Caller proof unavailable") }
         check(verify(p.appId) == p) { "Installed app or signing evidence changed" }
-        synchronized(this) { checkOwner(token); active(); permit!!.checkBeforeEffect(); check(proof == p) }
+        synchronized(this) { checkOwner(token); active(); check(proof == p) }
         return p
     }
     fun launch(token: String, active: () -> Unit): Intent {
         val p = verified(token, active)
         return synchronized(this) {
-            checkOwner(token); active(); permit!!.checkBeforeEffect(); check(proof == p && state == "review")
+            checkOwner(token); active(); check(proof == p && state == "review")
             val r = request!!
             state = "picker"; save()
             Intent(if (r.operation == "open") Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT)
@@ -133,14 +123,14 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
     }
     @Synchronized fun pickerTerminal(token: String, selected: Boolean) {
         checkOwner(token); check(state == "picker" || state == "cancelling")
-        if (selected && state == "picker") permit!!.checkBeforeEffect()
+        if (selected && state == "picker") check(proof?.let { runCatching { verify(it.appId) == it }.getOrDefault(false) } == true)
         state = if (selected && state == "picker") "selected" else "cancelled"; save()
     }
     @Synchronized fun cancelPicker(token: String) { checkOwner(token); check(state == "picker"); state = "cancelling"; proof = null; save() }
     @Synchronized fun revoke(token: String) {
         if (owner != token || !open) return
-        proof = null; request = null; owner = null; state = "outcome_unknown"; restoredUnknown = false
-        permit?.revoke(); permit?.close(); permit = null; save()
+        proof = null; request = null; owner = null; state = "closed_outcome_unknown"; open = false; save()
+        FactoryInteractionAdmission.release(this)
     }
     /** Consumption is durable before return. The Activity owns a successful grant until actual delivery. */
     fun close(token: String, deliver: Boolean, active: () -> Unit): Request? {
@@ -148,34 +138,16 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
         return synchronized(this) {
             checkOwner(token); active()
             check(state in setOf("review", "selected", "cancelled"))
-            val result = if (deliver) { permit!!.checkBeforeEffect(); check(state == "selected" && proof == p); request } else null
+            val result = if (deliver) { check(state == "selected" && proof == p); request } else null
             state = if (deliver) "returned" else "cancelled"; open = false; save()
             proof = null; request = null; owner = null
-            if (!deliver) permit?.close()
-            permit = null; FactoryInteractionAdmission.release(this)
+            FactoryInteractionAdmission.release(this)
             result
         }
-    }
-    /** This acknowledges uncertainty, never asserts that an old external picker was closed. */
-    @Synchronized fun acknowledgeRecovery(active: () -> Unit) {
-        active(); check(needsRecovery())
-        state = "closed_outcome_unknown"; open = false; if (previousNonce?.matches(Regex("[a-f0-9]{64}")) != true) previousNonce = ""; save(); broken = false; restoredUnknown = false
-        proof = null; request = null; owner = null; permit?.close(); permit = null; FactoryInteractionAdmission.release(this)
     }
     companion object {
         private val STATES = setOf("idle", "review", "picker", "cancelling", "selected", "cancelled", "returned", "outcome_unknown", "closed_outcome_unknown")
         private val HOSTS = setOf("com.jarvys.agent", "com.jarvys.agent.recoverytest")
-        private var recoveryToken: String? = null
-        @Synchronized fun recoveryIntent(context: Context): Intent {
-            recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryDocumentActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
-        }
-        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
-            val token = intent.getStringExtra("nativeRecoveryToken")
-            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken")) return false
-            recoveryToken = null
-            return true
-        }
         @Volatile private var instance: FactoryDocumentCoordinator? = null
         fun get(context: Context): FactoryDocumentCoordinator = instance ?: synchronized(this) {
             instance ?: FactoryDocumentCoordinator(context.applicationContext).also { it.restore(); instance = it }
@@ -242,7 +214,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
             require(info.packageName == appId && app.packageName == appId && app.splitSourceDirs.isNullOrEmpty() && info.splitNames.isNullOrEmpty())
         }
         internal fun verifyEvidence(appId: String, cert: String, apk: String, version: Long, evidence: FactorySigningIdentity.State, requiredCapabilities: Set<String> = setOf("documents")): Proof {
-            require(evidence.existing && evidence.continuityKnown && evidence.fingerprint == cert && evidence.lastApkSha256 == apk && evidence.lastVersion.toLong() == version)
+            require(evidence.existing && evidence.fingerprint == cert && evidence.lastApkSha256 == apk && evidence.lastVersion.toLong() == version)
             val scope = evidence.lastScope?.toJson()?.getJSONArray("capabilities") ?: error("Unknown signed scope")
             require(requiredCapabilities.isNotEmpty() && requiredCapabilities.all { required -> (0 until scope.length()).any { scope.getString(it) == required } })
             return Proof(appId, cert, apk, version, evidence.recordSha256 ?: error("Unknown identity record"),

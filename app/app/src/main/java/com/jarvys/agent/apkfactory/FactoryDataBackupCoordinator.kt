@@ -7,7 +7,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.AtomicFile
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.BackupReviewControl
 import com.jarvys.factory.runtime.BackupCommitAuthorization
 import com.jarvys.factory.runtime.DatabaseBackupFormat
@@ -20,17 +19,15 @@ import com.jarvys.factory.runtime.FileShareTransfer
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Host operation-policy authority. Never opens the generated database or persists archive/URI/table data. */
+/** Authenticated backup broker. Never opens the generated database or persists archive/URI/table data. */
 internal class FactoryDataBackupCoordinator(
     context: Context,
     private val currentIdentity: (FactoryDataBackupPolicy.Verified) -> Unit = { FactoryDataBackupPolicy.requireCurrent(context, it) },
-    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
     private val verify: (String, DataBackupPlan) -> FactoryDataBackupPolicy.Verified = { appId, plan -> FactoryDataBackupPolicy.verify(context, appId, plan) },
 ) {
     data class Request(val plan: DataBackupPlan, val transfer: IBinder, val control: IBinder, val protocolVersion: Int = 2) {
@@ -52,13 +49,11 @@ internal class FactoryDataBackupCoordinator(
             }
         }
     }
-    class Session(val verified: FactoryDataBackupPolicy.Verified, val request: Request, val grant: FactoryOperationPolicy.Grant? = null) {
+    class Session(val verified: FactoryDataBackupPolicy.Verified, val request: Request) {
         val revoked = AtomicBoolean(false)
         @Volatile var preparing = true
         @Volatile var pickerOutstanding = false
-        @Volatile var abandoned = false
         @Volatile var authorization: BackupCommitAuthorization? = null
-        @Volatile var revocation: AutoCloseable? = null
         @Volatile var handedOff = false
         @Volatile var registration: BackupReviewControl.Registration? = null
         @Volatile var archive: DataBackupArchive? = null
@@ -67,7 +62,7 @@ internal class FactoryDataBackupCoordinator(
         fun revoke() {
             if (revoked.compareAndSet(false, true)) {
                 synchronized(this) { archive = null }
-                grant?.revoke(); authorization?.close()
+                authorization?.close()
             }
         }
         @Synchronized fun discardArchive() { archive = null }
@@ -78,7 +73,6 @@ internal class FactoryDataBackupCoordinator(
         }
     }
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-data-backup/interaction.json"))
-    private var lease: MemoryUiAutomationGuard.Lease? = null
     @Volatile private var current: Session? = null
     @Volatile private var state = "idle"
     @Volatile private var open = false
@@ -90,10 +84,9 @@ internal class FactoryDataBackupCoordinator(
     fun session() = current
     fun status() = state
     fun isBusy() = busy || restoring || current?.preparing == true
-    fun needsRecovery() = open && !restoring && (current == null || current?.revoked?.get() == true || broken)
-    fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available(this)
+    fun canBegin() = !broken && !busy && !restoring && current?.preparing != true && (open || FactoryInteractionAdmission.available(this))
     private fun worker() { check(Looper.myLooper() != Looper.getMainLooper()) { "Backup review requires the bounded worker" } }
-    private fun prepareRestore() { restoring = true; FactoryInteractionAdmission.restore(this) }
+    private fun prepareRestore() { restoring = true }
     private fun save() {
         worker()
         try {
@@ -103,7 +96,7 @@ internal class FactoryDataBackupCoordinator(
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
         } catch (failure: Exception) {
-            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); FactoryInteractionAdmission.restore(this); throw failure
+            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); throw failure
         }
     }
     fun restore() {
@@ -121,10 +114,15 @@ internal class FactoryDataBackupCoordinator(
                 open = saved.getBoolean("open"); nonce = saved.getString("nonce"); val old = saved.getString("state")
                 require(if (open) old in OPEN_STATES else old in CLOSED_STATES)
                 require(nonce.matches(Regex("[a-f0-9]{64}")) || (!open && old == "closed_outcome_unknown" && nonce.isEmpty()))
-                state = if (open) "outcome_unknown" else old
+                state = if (open) "closed_outcome_unknown" else old
+                if (open) { open = false; save() }
             }
-            if (open) save() else release()
-        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; FactoryInteractionAdmission.restore(this) }
+            if (open) { state = "closed_outcome_unknown"; open = false; save() }
+            release()
+        } catch (_: Exception) {
+            broken = false; open = false; state = "closed_outcome_unknown"; nonce = ""
+            runCatching { save() }; release()
+        }
         finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -133,23 +131,23 @@ internal class FactoryDataBackupCoordinator(
     fun begin(callingPackage: String?, request: Request, active: () -> Unit): Session {
         worker(); require(!callingPackage.isNullOrBlank()); check(canBegin()); require(request.plan.nonce != nonce)
         checkDeadline(request.plan); require(callingPackage == request.plan.appId)
-        // Installed identity and DENY are checked before admission, journal, Binder or archive resources.
+        // Installed identity is checked before admission, journal, Binder or archive resources.
         val verified = verify(callingPackage, request.plan)
         FactoryDataBackupPolicy.validate(request.plan, verified); active(); checkDeadline(request.plan)
-        val operation = if (request.plan.isStorage) {
-            if (request.plan.operation == "export") FactoryOperationPolicy.Operation.STORAGE_BACKUP_EXPORT else FactoryOperationPolicy.Operation.STORAGE_BACKUP_IMPORT
-        } else if (request.plan.operation == "export") FactoryOperationPolicy.Operation.DATABASE_BACKUP_EXPORT else FactoryOperationPolicy.Operation.DATABASE_BACKUP_IMPORT
-        val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(verified.proof), operation,
-            FactoryOperationPolicy.binding(request.plan.nonce, request.plan.sha256()))
-        try { FactoryInteractionAdmission.acquire(this) } catch (failure: Exception) { grant.close(); throw failure }
+        if (open) {
+            check(!broken && current?.preparing != true)
+            val previous = current
+            if (previous == null) FactoryInteractionAdmission.acquire(this)
+            previous?.revoke(); previous?.authorization?.close(); previous?.registration?.close(); previous?.registration = null
+            state = "closed_outcome_unknown"; open = false; save(); current = null
+        } else FactoryInteractionAdmission.acquire(this)
         busy = true
         try {
-            active(); grant.requireCurrent()
-            val value = Session(verified, request, grant)
+            active(); currentIdentity(verified)
+            val value = Session(verified, request)
             current = value; nonce = request.plan.nonce; open = true; state = "review"
-            value.revocation = grant.onRevoked { value.revoke() }
             save(); return value
-        } catch (failure: Exception) { current?.preparing = false; current?.revoke(); grant.close(); throw failure }
+        } catch (failure: Exception) { current?.preparing = false; current?.revoke(); throw failure }
         finally { busy = false; if (!open && !broken) release() }
     }
     fun prepare(value: Session, active: () -> Unit, revoked: Runnable) {
@@ -182,7 +180,7 @@ internal class FactoryDataBackupCoordinator(
         }
     }
     fun requireActive(value: Session) {
-        check(current === value && open && !broken && !value.revoked.get()); checkDeadline(value.plan); value.grant?.requireCurrent()
+        check(current === value && open && !broken && !value.revoked.get()); checkDeadline(value.plan); currentIdentity(value.verified)
     }
     private fun revalidate(value: Session) {
         requireActive(value)
@@ -192,8 +190,6 @@ internal class FactoryDataBackupCoordinator(
     private fun authorize(value: Session, action: () -> Unit) {
         worker(); requireActive(value); check(!value.preparing && value.archive != null)
         action(); revalidate(value)
-        val grant = value.grant ?: error("Missing operation policy")
-        grant.approveOnce(action); grant.checkBeforeEffect(); action(); revalidate(value)
     }
     fun launchPicker(value: Session, action: () -> Unit): Intent {
         authorize(value, action); check(state == "review" && value.plan.operation == "export" && !value.pickerOutstanding)
@@ -211,17 +207,17 @@ internal class FactoryDataBackupCoordinator(
         worker(); check(current === value && open && value.pickerOutstanding)
         value.revoke(); state = "cancelling"; save()
     }
-    fun approve(value: Session, action: () -> Unit): Intent {
+    fun complete(value: Session, action: () -> Unit): Intent {
         authorize(value, action)
         check(!value.pickerOutstanding && if (value.plan.operation == "export") state == "selected" else state == "review")
         val result = Intent().putExtra("nonce", value.plan.nonce).putExtra("planSha256", value.plan.sha256()).putExtra("approved", true)
         if (value.request.protocolVersion == 1) {
-            // Old DEX has no post-result checkpoint. Keep its grant until the Activity's actual handoff.
-            value.grant!!.checkBeforeEffect(); state = "legacy_authorized"; save(); return result
+            // Old DEX has no post-result checkpoint, so keep the session until the Activity hands off.
+            state = "legacy_authorized"; save(); return result
         }
         val authorization = BackupCommitAuthorization(value.plan.nonce, value.plan.sha256(), value.plan.deadline,
             { uid -> uid == value.verified.source.uid && runCatching { currentIdentity(value.verified) }.isSuccess },
-            { requireActive(value); check(value.registration?.isRevoked == false); currentIdentity(value.verified); value.grant!!.checkBeforeEffect() },
+            { requireActive(value); check(value.registration?.isRevoked == false); currentIdentity(value.verified) },
             { finishAuthorization(value) })
         value.authorization = authorization
         result.putExtra("protocolVersion", 2).putExtras(android.os.Bundle().apply { putBinder("authorization", authorization) })
@@ -233,7 +229,6 @@ internal class FactoryDataBackupCoordinator(
     fun finishLegacyHandoff(value: Session, delivered: Boolean) {
         check(value.request.protocolVersion == 1)
         synchronized(value) { if (value.handedOff) return; value.handedOff = true }
-        value.grant?.close()
         finishLegacyJournal(value, delivered)
     }
     private fun finishLegacyJournal(value: Session, delivered: Boolean) {
@@ -246,7 +241,7 @@ internal class FactoryDataBackupCoordinator(
         }
     }
     private fun finishAuthorization(value: Session) {
-        value.revoked.set(true); value.discardArchive(); value.grant?.revoke()
+        value.revoked.set(true); value.discardArchive()
         // Binder threads never do journal I/O. A blocked worker retains family admission.
         try { WORKER.execute {
             if (current === value && open && !value.preparing) runCatching {
@@ -256,24 +251,21 @@ internal class FactoryDataBackupCoordinator(
             Handler(Looper.getMainLooper()).postDelayed({ if (current === value && open) finishAuthorization(value) }, 1000)
         }
     }
-    fun close(value: Session?, recovery: Boolean, externalClosedByUser: Boolean, action: () -> Unit) {
+    fun close(value: Session?, action: () -> Unit) {
         worker(); check(!busy && !restoring); action()
-        if (recovery) { check(needsRecovery()); check(value == null || current === value) }
-        else check(value != null && current === value && open && !broken)
+        check(value != null && current === value && open && !broken)
         val owned = current; check(owned?.preparing != true)
-        if (owned?.pickerOutstanding == true) check(recovery && owned.abandoned && externalClosedByUser)
-        if (recovery) check(externalClosedByUser)
+        check(owned?.pickerOutstanding != true)
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
         action()
-        state = if (recovery) "closed_outcome_unknown" else "closed"; open = false
+        state = "closed"; open = false
         if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
         save(); broken = false; release()
     }
     private fun release() {
         val owned = current; current = null
-        owned?.revocation?.close(); owned?.revocation = null
-        owned?.revoke(); owned?.registration?.close(); owned?.registration = null; owned?.grant?.close()
-        lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
+        owned?.revoke(); owned?.registration?.close(); owned?.registration = null
+        FactoryInteractionAdmission.release(this)
     }
     companion object {
         internal const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
@@ -284,16 +276,6 @@ internal class FactoryDataBackupCoordinator(
         internal fun checkDeadline(plan: StorageBackupPlan) = checkDeadline(DataBackupPlan.of(plan))
         internal fun checkDeadline(plan: DataBackupPlan) {
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && plan.deadline > now && plan.deadline - now <= DatabaseBackupPlan.LIFETIME_MILLIS)
-        }
-        private var recoveryToken: String? = null
-        @Synchronized fun recoveryIntent(context: Context): Intent {
-            recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryDataBackupActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
-        }
-        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
-            val token = intent.getStringExtra("nativeRecoveryToken")
-            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken") || intent.data != null || intent.clipData != null || intent.selector != null || intent.flags and GRANT_FLAGS != 0) return false
-            recoveryToken = null; return true
         }
         @Volatile private var instance: FactoryDataBackupCoordinator? = null
         fun get(context: Context): FactoryDataBackupCoordinator = instance ?: synchronized(this) {

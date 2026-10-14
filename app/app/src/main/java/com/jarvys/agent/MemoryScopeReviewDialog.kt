@@ -140,11 +140,8 @@ internal fun MemoryScopeReviewDialog(
         error = null
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching {
-                nativeActions.prepare(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, sourceStore,
-                    listOf("Share immutable PERSONAL snapshot", path, "Destination: shared PERSONAL projection"), nativeToken).use { action ->
+                nativeActions.prepare(sourceStore, nativeToken).use { action ->
                     val exact = uiProtection.read { sourceStore.reviewForSharing(path) }
-                    action.appendExactArguments(listOf("Source conversation: ${exact.sourceConversationId}",
-                        "Revision: ${exact.revisionId}", "SHA-256: ${exact.sha256}", "Exact content:", exact.content))
                     action.execute({ uiProtection.requireEffectSelection() }) { sourceStore.approveSharedPersonal(exact) }
                 }
             } }
@@ -159,8 +156,7 @@ internal fun MemoryScopeReviewDialog(
         mutationInFlight = true
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching {
-                nativeActions.run(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, store,
-                    listOf("Revoke PERSONAL projection", grant.id, grant.sha256, grant.revisionId.toString()), nativeToken,
+                nativeActions.run(store, nativeToken,
                     { uiProtection.requireEffectSelection() }) { store.revokeSharedPersonal(grant.id) }
             } }
             mutationInFlight=false

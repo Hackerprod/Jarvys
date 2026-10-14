@@ -35,7 +35,7 @@ class FactoryAudioApplicationStartupTest {
         val field = FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val previous = field.get(null) as? FactoryAudioCoordinator
         if (previous != null) {
-            check(!previous.isBusy() && !previous.needsRecovery() && previous.session() == null)
+            check(!previous.isBusy() && previous.canBegin() && previous.session() == null)
             check(FactoryInteractionAdmission.available(previous)) { "Never erase a live audio resource owner" }
             FactoryInteractionAdmission.release(previous)
         }
@@ -50,10 +50,6 @@ class FactoryAudioApplicationStartupTest {
         audioBarrier()
         val singleton = FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val audio = singleton.get(null) as? FactoryAudioCoordinator
-        if (audio != null && audio.needsRecovery()) {
-            val close = FutureTask(Callable { audio.close(null, true) {} })
-            check(FactoryAudioCoordinator.WORKER.queue.offer(close, 5, TimeUnit.SECONDS)); close.get(5, TimeUnit.SECONDS)
-        }
         resetClosedAudio()
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         root.deleteRecursively()
@@ -78,17 +74,12 @@ class FactoryAudioApplicationStartupTest {
         } finally { release.countDown() }
         audioBarrier(); FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val audio = FactoryAudioCoordinator.get(context)
-        assertFalse(audio.isBusy()); assertTrue(audio.needsRecovery()); assertEquals("outcome_unknown", audio.status())
-        assertNull(audio.session()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertFalse(FactoryInteractionAdmission.available(audio)); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
-        val refused = FutureTask(Callable { audio.close(null, true) { error("No human confirmation") } })
-        check(worker.queue.offer(refused, 5, TimeUnit.SECONDS)); assertTrue(runCatching { refused.get(5, TimeUnit.SECONDS) }.isFailure)
-        assertTrue(audio.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        val close = FutureTask(Callable { audio.close(null, true) {} })
-        check(worker.queue.offer(close, 5, TimeUnit.SECONDS)); assertNull(close.get(5, TimeUnit.SECONDS))
-        assertEquals("closed_outcome_unknown", audio.status()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        assertFalse(audio.isBusy()); assertEquals("closed_outcome_unknown", audio.status())
+        assertNull(audio.session()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(audio.canBegin())
+        assertTrue(FactoryInteractionAdmission.available(audio)); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
+        assertTrue(FactoryInteractionAdmission.available())
     }
     @Test fun openAudioJournalDoesNotBlockAutomationBeforeAsyncRestoreStarts() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "play_pending").put("open", true).put("nonce", "a".repeat(64)).toString())
-    @Test fun corruptAudioJournalRetainsFamilyStateThroughRealApplicationStartup() = startup("{")
+    @Test fun corruptAudioJournalIsClosedDuringRealApplicationStartup() = startup("{")
 }

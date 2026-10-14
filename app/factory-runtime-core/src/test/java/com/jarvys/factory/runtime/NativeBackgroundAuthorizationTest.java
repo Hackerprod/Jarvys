@@ -45,7 +45,6 @@ public final class NativeBackgroundAuthorizationTest {
     private long receiverDeadline;
     public static final class ReplyProvider extends ContentProvider {
         int calls;
-        String decision="ASK";
         Bundle request;
         Consumer<Bundle> mutate=reply->{};
         NativeOperationAuthorization lease;
@@ -58,16 +57,12 @@ public final class NativeBackgroundAuthorizationTest {
                 NativeBackgroundAuthorization.SourceIdentity source=NativeBackgroundAuthorization.SourceIdentity.parse(input.getString("expectedSource"));
                 String nonce=input.getString("nonce"),binding=operation.binding(nonce,source.bindingEvidence());
                 Bundle result=new Bundle();result.putInt("protocolVersion",1);result.putString("nonce",nonce);result.putString("binding",binding);
-                if (decision.equals("ALLOW")) {
-                    lease=new NativeOperationAuthorization(nonce,binding,input.getLong("deadlineElapsedMs"),uid->true,
-                            new NativeOperationAuthorization.Authority() {
-                                public int status(){return NativeOperationAuthorization.APPROVED;}
-                                public void checkBeforeEffect(){checks.incrementAndGet();}
-                            },closed::incrementAndGet);
-                    result.putBinder("lease",lease);result.putInt("status",NativeOperationAuthorization.APPROVED);
-                } else {
-                    result.putString("decision",decision);result.putInt("status",decision.equals("ASK")?NativeOperationAuthorization.PENDING:NativeOperationAuthorization.TERMINAL);
-                }
+                lease=new NativeOperationAuthorization(nonce,binding,input.getLong("deadlineElapsedMs"),uid->true,
+                        new NativeOperationAuthorization.Authority() {
+                            public int status(){return NativeOperationAuthorization.ACTIVE;}
+                            public void checkBeforeEffect(){checks.incrementAndGet();}
+                        },closed::incrementAndGet);
+                result.putBinder("lease",lease);result.putInt("status",NativeOperationAuthorization.ACTIVE);
                 mutate.accept(result);return result;
             } catch(FactoryException invalid){throw new AssertionError(invalid);}
         }
@@ -125,39 +120,35 @@ public final class NativeBackgroundAuthorizationTest {
                 " ".repeat(1025)+source.canonicalJson()};
         for(String raw:invalid)assertThrows(FactoryException.class,()->NativeBackgroundAuthorization.SourceIdentity.parse(raw));
     }
-    @Test public void askAndDenyAreSourceBoundDecisionsWithoutAnEffectLease()throws Exception {
-        for(String decision:new String[]{"ASK","DENY"}) {
-            provider.decision=decision;
-            try(NativeBackgroundAuthorization.Result result=acquire()) {
-                assertEquals(NativeBackgroundAuthorization.Decision.valueOf(decision),result.decision);
-                assertThrows(SecurityException.class,result::check);assertNull(provider.lease);
-            }
+    @Test public void activeSessionIsBoundToExactSourceAndChecksBeforeEffects()throws Exception {
+        try(NativeBackgroundAuthorization.Result result=acquire()) {
+            assertEquals(NativeBackgroundAuthorization.Decision.ACTIVE,result.decision);
+            int before=provider.checks.get();result.check();assertEquals(before+1,provider.checks.get());
+            current.set(false);assertThrows(SecurityException.class,result::check);
         }
         assertEquals(receiverDeadline,provider.request.getLong("deadlineElapsedMs"));
         assertEquals(source.bindingEvidence(),NativeBackgroundAuthorization.SourceIdentity.parse(provider.request.getString("expectedSource")).bindingEvidence());
-        assertEquals(0,provider.checks.get());
     }
     @Test public void repliesCannotDropOrSubstituteSourceBinding()throws Exception {
         rejected(reply->reply.putString("binding",operation.binding(provider.request.getString("nonce"))));
         rejected(reply->reply.putString("binding",hash('d')));
-        rejected(reply->reply.putString("reviewToken",hash('d')));
+        rejected(reply->reply.putBoolean("unexpected",true));
         rejected(reply->reply.putLong("protocolVersion",1L));
-        rejected(reply->reply.putInt("status",NativeOperationAuthorization.APPROVED));
+        rejected(reply->reply.putInt("status",NativeOperationAuthorization.TERMINAL));
     }
-    @Test public void lateAllowIsConnectedOnlyToCloseItsGrant()throws Exception {
-        provider.decision="ALLOW";
+    @Test public void lateSessionReplyIsConnectedOnlyToCloseItsLease()throws Exception {
         rejected(reply->ShadowSystemClock.advanceBy(2001,TimeUnit.MILLISECONDS));
         assertNotNull(provider.lease);assertTrue(provider.lease.isConnected());assertTrue(provider.lease.isClosed());
         assertEquals(1,provider.closed.get());assertEquals(0,provider.checks.get());
     }
-    @Test public void cancellationDuringCallClosesTheLateAllowWithoutCheckingAnEffect()throws Exception {
-        provider.decision="ALLOW";rejected(reply->current.set(false));
+    @Test public void cancellationDuringCallClosesTheLateSessionWithoutCheckingAnEffect()throws Exception {
+        rejected(reply->current.set(false));
         assertTrue(provider.lease.isConnected());assertTrue(provider.lease.isClosed());
         assertEquals(1,provider.closed.get());assertEquals(0,provider.checks.get());
     }
-    @Test public void allowRequiresLiveChecksAndClosesTheSameGrant()throws Exception {
-        provider.decision="ALLOW";NativeBackgroundAuthorization.Result result=acquire();
-        assertEquals(NativeBackgroundAuthorization.Decision.ALLOW,result.decision);int prior=provider.checks.get();result.check();
+    @Test public void sessionRequiresLiveChecksAndClosesTheSameLease()throws Exception {
+        NativeBackgroundAuthorization.Result result=acquire();
+        assertEquals(NativeBackgroundAuthorization.Decision.ACTIVE,result.decision);int prior=provider.checks.get();result.check();
         assertEquals(prior+1,provider.checks.get());current.set(false);assertThrows(SecurityException.class,result::check);
         worker(()->{result.close();result.close();return null;});assertTrue(provider.lease.isClosed());assertEquals(1,provider.closed.get());
     }

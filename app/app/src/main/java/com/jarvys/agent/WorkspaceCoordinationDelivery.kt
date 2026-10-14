@@ -1,7 +1,6 @@
 package com.jarvys.agent
 
 import android.content.Context
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.workspaces.*
 import org.json.JSONArray
@@ -11,11 +10,10 @@ import java.util.concurrent.ConcurrentHashMap
 /** Selected durable observations. Reconciliation never runs a model, restores a mailbox or resumes work. */
 class WorkspaceCoordinationDelivery internal constructor(
     context: Context,
-    private val policy: NativeActionPolicy,
     private val ledger: LocalRunStore,
     private val existingManager: (String) -> com.jarvys.agent.crew.CrewManager? = { CoreAgentRuntime.crewManagerForSession(it) },
 ) {
-    constructor(context: Context) : this(context, NativeActionPolicy(context), LocalRunStore(context))
+    constructor(context: Context) : this(context, LocalRunStore(context))
     private val app = context.applicationContext
 
     private fun owner(workspaceId: String): WorkspaceRecord = WorkspaceRegistry(app).use { registry ->
@@ -75,10 +73,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             val ids = ledger.listCrewCoordinationEvidence(scope.executionSessionId, PAGE, after)
             for (id in ids) {
                 val reference = register(workspaceId, id, token) ?: continue
-                if (policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy != AutonomyPolicy.ALLOW) continue
-                policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ, binding(reference)).use { permission ->
-                    if (!permission.requiresApproval) notice(reference, token, Runnable { permission.admit(token) })
-                }
+                notice(reference, token, Runnable { token.throwIfCancelled() })
             }
             after = ids.lastOrNull()
         } while (ids.size == PAGE)
@@ -122,7 +117,7 @@ class WorkspaceCoordinationDelivery internal constructor(
         val evidence = source(reference)
         val exactReply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
         if (exactReply != null && exactReply.state != WorkspaceCoordinationReply.State.PREPARED)
-            WorkspaceInputIncorporationDelivery(app, ledger, policy).reconcile(workspaceId, token, admission,
+            WorkspaceInputIncorporationDelivery(app, ledger).reconcile(workspaceId, token, admission,
                 WorkspaceInputSources.reply(exactReply))
         val content = coordinationContent(evidence.text, evidence.refs)
         require(offset <= content.length)
@@ -144,7 +139,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             .put("revision_semantics", "Registration revision does not prove a correction was consumed.")
     }
 
-    /** Called under the same per-assignment lock used by native controls; approval waits occur upstream. */
+    /** Called under the same per-assignment lock used by native controls. */
     fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
               expectedRevision: Long, requestId: String, originalUserRequest: String,
               token: CancellationToken, admission: Runnable): JSONObject {
@@ -209,46 +204,25 @@ class WorkspaceCoordinationDelivery internal constructor(
         } } finally { WorkspaceChanges.changed() }
     }
 
-    /** Native metadata projection only: no model invocation, body rendering or approval dialog. */
+    /** Native metadata projection only: no model invocation or body rendering. */
     fun summary(workspaceId: String): WorkspaceCoordinationSummary = try {
-        val initial = policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ)
-        val mode = initial.policy
-        if (mode == AutonomyPolicy.DENY) WorkspaceCoordinationSummary()
-        else {
-            val scope = owner(workspaceId)
-            val references = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, PAGE, null)
-            val selected = references.filter { it.kind == "QUESTION" || it.kind == "BLOCKER" }
-            if (mode == AutonomyPolicy.ASK) {
-                if (initial.sameAuthorizationAs(policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ)))
-                    WorkspaceCoordinationSummary(reviewRequired = selected.isNotEmpty(), pageLimited = references.size == PAGE)
-                else WorkspaceCoordinationSummary()
-            } else policy.prepare(NativeActionPolicy.Operation.WORKSPACE_READ,
-                NativeActionPolicy.binding(scope.ownerCentralSessionId, "workspace_coordination_indicator", workspaceId)).use { permission ->
-                if (permission.requiresApproval) WorkspaceCoordinationSummary()
-                else {
-                    permission.admit()
-                    var live = 0; var uncertain = 0; var historical = 0; var review = false
-                    selected.forEach { reference ->
-                        permission.admit()
-                        val evidence = source(reference)
-                        ledger.requireWorkspaceCoordinationDisclosureLive(reference, false)
-                        when (replyState(reference, evidence)) {
-                            "LIVE_REPLYABLE", "PREPARED_NOT_DISPATCHED" -> live++
-                            "UNCERTAIN_NO_REPLAY" -> uncertain++
-                            "NEEDS_FOREGROUND_REVIEW" -> review = true
-                            "HISTORICAL_OR_SUPERSEDED", "HISTORICAL_OR_INTERRUPTED" -> historical++
-                            // Existing controls/permission settings describe these live-but-blocked cases.
-                            else -> Unit
-                        }
-                    }
-                    permission.admit()
-                    WorkspaceCoordinationSummary(live, uncertain, historical, review, references.size == PAGE)
-                }
+        val scope = owner(workspaceId)
+        val references = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, PAGE, null)
+        val selected = references.filter { it.kind == "QUESTION" || it.kind == "BLOCKER" }
+        var live = 0; var uncertain = 0; var historical = 0
+        selected.forEach { reference ->
+            val evidence = source(reference)
+            ledger.requireWorkspaceCoordinationDisclosureLive(reference, false)
+            when (replyState(reference, evidence)) {
+                "LIVE_REPLYABLE", "PREPARED_NOT_DISPATCHED" -> live++
+                "UNCERTAIN_NO_REPLAY" -> uncertain++
+                "HISTORICAL_OR_SUPERSEDED", "HISTORICAL_OR_INTERRUPTED" -> historical++
+                else -> Unit
             }
         }
+        WorkspaceCoordinationSummary(live, uncertain, historical, references.size == PAGE)
     } catch (_: Exception) {
-        if (policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy == AutonomyPolicy.DENY)
-            WorkspaceCoordinationSummary() else WorkspaceCoordinationSummary(unavailable = true)
+        WorkspaceCoordinationSummary(unavailable = true)
     }
 
     private fun replyState(reference: WorkspaceCoordinationReference, evidence: CrewCoordinationEvidence): String {
@@ -265,17 +239,13 @@ class WorkspaceCoordinationDelivery internal constructor(
         if (pendingControl) return "NATIVE_CONTROL_PENDING"
         if (existingManager(reference.executionSessionId)?.canReplyToCoordination(evidence) != true)
             return "HISTORICAL_OR_INTERRUPTED"
-        return when (policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_DELEGATE).policy) {
-            AutonomyPolicy.ALLOW -> if (reply?.state == WorkspaceCoordinationReply.State.PREPARED) "PREPARED_NOT_DISPATCHED" else "LIVE_REPLYABLE"
-            AutonomyPolicy.ASK -> "NEEDS_FOREGROUND_REVIEW"
-            AutonomyPolicy.DENY -> "POLICY_BLOCKED"
-        }
+        return if (reply?.state == WorkspaceCoordinationReply.State.PREPARED) "PREPARED_NOT_DISPATCHED" else "LIVE_REPLYABLE"
     }
 
     private fun incorporation(reference: WorkspaceCoordinationReference, admission: Runnable): JSONObject {
         val reply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
         val receipt = if (reply == null || reply.state == WorkspaceCoordinationReply.State.PREPARED) null
-            else WorkspaceInputIncorporationDelivery(app, ledger, policy).read(WorkspaceInputSources.reply(reply), admission)
+            else WorkspaceInputIncorporationDelivery(app, ledger).read(WorkspaceInputSources.reply(reply), admission)
         return JSONObject().put("state", if (receipt == null) "UNVERIFIED" else "CHECKPOINT_INCORPORATED")
             .put("first_incorporation_cycle_id", receipt?.firstIncorporationCycleId ?: JSONObject.NULL)
             .put("checkpoint_payload_sha256", receipt?.checkpointPayloadSha256 ?: JSONObject.NULL)
@@ -338,9 +308,6 @@ class WorkspaceCoordinationDelivery internal constructor(
         private const val PAGE = 50
         private const val TEXT_PAGE = 8000
         private val errors = ConcurrentHashMap<String, String>()
-        private fun binding(reference: WorkspaceCoordinationReference) = NativeActionPolicy.binding(
-            reference.ownerCentralSessionId, "workspace_coordination_notice", reference.workspaceId,
-            reference.assignmentId, reference.referenceId, reference.evidenceId, reference.contentSha256, reference.cycleId)
         @JvmStatic fun issue(workspaceId: String): String? = errors[workspaceId]
         /** Reuses the existing finite receipt scheduler and its STOP ownership; no new work queue. */
         @JvmStatic fun schedule(context: Context, executionSessionId: String) = WorkspaceResultDelivery.schedule(context, executionSessionId)

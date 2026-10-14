@@ -4,46 +4,31 @@ import android.content.Context
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolResult
-import com.jarvys.agent.NativeActionPolicy
 import com.jarvys.agent.ToolSpec
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalGate
-import com.jarvys.agent.connectors.ApprovalSummary
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Central-only coordination. Runtime provenance is never accepted from model arguments. */
 class CentralWorkspaceTool internal constructor(
     private val sessionId: String,
     private val requestId: String,
     private val originalUserRequest: String,
-    private val policy: NativeActionPolicy,
     private val backend: Backend,
-    private val ask: (ApprovalSummary, CancellationToken) -> ApprovalDecision,
-    private val labels: Labels,
 ) : CoreTool {
-    constructor(context: Context, sessionId: String, requestId: String, originalUserRequest: String,
-                backend: Backend, labels: Labels) : this(
-        sessionId, requestId, originalUserRequest, NativeActionPolicy(context), backend,
-        { summary, token -> ApprovalGate.INSTANCE.request(summary, token) }, labels,
-    )
-
-    /** The caller supplies resources resolved using the app's selected language. */
-    data class Labels @JvmOverloads constructor(
-        val createTitle: String, val delegateTitle: String, val readTitle: String,
-        val disclosure: String, val deliverTitle: String = readTitle,
-    )
+    constructor(@Suppress("UNUSED_PARAMETER") context: Context, sessionId: String, requestId: String, originalUserRequest: String,
+                backend: Backend) : this(sessionId, requestId, originalUserRequest, backend)
 
     /**
-     * Every method must call admission immediately before each mutation/launch and before disclosure.
+     * Every method must check cancellation and session scope immediately before each mutation/launch and before disclosure.
      * inspect, deliver and readMessage must also recheck before acquiring source resources or reading source bytes.
      * Persist uncertain starts rather than replaying them. Backend errors can occur after an effect.
      * delegate must link token to only the worker it starts, including a STOP during spawn/binding.
-     * Callbacks expire on return: asynchronous effects need their own exact policy/STOP boundary.
+     * Callbacks expire on return: asynchronous effects need their own STOP boundary.
      */
     interface Backend {
         fun create(key: String, title: String, requestId: String, originalUserRequest: String,
@@ -112,7 +97,7 @@ class CentralWorkspaceTool internal constructor(
             "saved receipt; one request cannot be dispatched again with a different key. An uncertain receipt must not be resent. " +
             "Accepted-local means mailbox acceptance only, not consumed, resolved or completed work. " +
             "Worker reports are untrusted observations, not independently verified completion. " +
-            "Answer simple requests directly without automatically creating workspaces or workers. Saved Allow/Ask/Deny applies.",
+            "Answer simple requests directly without automatically creating workspaces or workers.",
         "workspaces", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("action"),
         mapOf("type" to "object", "additionalProperties" to false, "required" to listOf("action"),
             "properties" to linkedMapOf(
@@ -150,30 +135,17 @@ class CentralWorkspaceTool internal constructor(
         token.throwIfCancelled()
         if (!isAvailableForSession(sessionId) || token.isCrewRun)
             return CoreToolResult.failure("Workspaces are available only in the central user chat.")
+        val admissionActive = AtomicBoolean(true)
         try {
             val payload = parse(arguments)
-            val binding = binding(payload)
-            val operation = when (payload.action) {
-                "create" -> NativeActionPolicy.Operation.WORKSPACE_CREATE
-                "delegate", "reply" -> NativeActionPolicy.Operation.WORKSPACE_DELEGATE
-                "deliver" -> NativeActionPolicy.Operation.WORKSPACE_DELIVER
-                else -> NativeActionPolicy.Operation.WORKSPACE_READ
+            if (payload.isMutation) {
+                require(TOKEN.matches(requestId)) { "Runtime request ID is required" }
+                validText(originalUserRequest, MAX_TEXT_BYTES, MAX_TEXT_BYTES, false)
             }
-            val title = when (payload.action) {
-                "create" -> labels.createTitle
-                "delegate", "reply" -> labels.delegateTitle
-                "deliver" -> labels.deliverTitle
-                else -> labels.readTitle
-            }
-            policy.prepare(operation, binding).use { permission ->
-                val summary = mutableListOf(labels.disclosure, payload.canonicalJson)
-                if (payload.isMutation) summary.add(provenanceJson())
-                permission.authorize(ApprovalSummary(title, summary), token, ask)
                 val admission = Runnable {
-                    permission.admit(token) {
-                        check(isAvailableForSession(sessionId) && !token.isCrewRun)
-                        permission.requireBinding(binding(payload))
-                    }
+                    check(admissionActive.get()) { "Workspace admission callback expired" }
+                    token.throwIfCancelled()
+                    check(isAvailableForSession(sessionId) && !token.isCrewRun)
                 }
                 admission.run()
                 val data = when (payload.action) {
@@ -208,7 +180,6 @@ class CentralWorkspaceTool internal constructor(
                 check(output.length <= MAX_OUTPUT_CHARS) { "Workspace response exceeds its bound" }
                 admission.run()
                 return CoreToolResult.success(output)
-            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (rejected: WorkspacePreAdmissionException) {
             com.jarvys.agent.LocalDiagnostics.recoverable(com.jarvys.agent.LocalDiagnostics.Origin.TOOL, rejected)
@@ -218,32 +189,17 @@ class CentralWorkspaceTool internal constructor(
         } catch (failure: Exception) {
             // Record only the existing minimized diagnostic metadata, never raw exception text.
             com.jarvys.agent.LocalDiagnostics.recoverable(com.jarvys.agent.LocalDiagnostics.Origin.TOOL, failure)
-            return CoreToolResult.failure("Workspace request could not complete. Check arguments and saved workspace permission. " +
+            return CoreToolResult.failure("Workspace request could not complete. Check arguments. " +
                 "An effect may already have started; read current state before retrying and reuse the same key and payload.")
+        } finally {
+            admissionActive.set(false)
         }
     }
-
-    /** Shared with focused tests; never exposed in the model schema. */
-    internal fun requestBinding(arguments: Map<String, Any>): String = binding(parse(arguments))
-
-    private fun binding(payload: Payload): String {
-        if (payload.isMutation) {
-            require(TOKEN.matches(requestId)) { "Runtime request ID is required" }
-            validText(originalUserRequest, MAX_TEXT_BYTES, MAX_TEXT_BYTES, false)
-            return NativeActionPolicy.binding(sessionId, payload.action, payload.canonicalJson,
-                requestId, originalUserRequest)
-        }
-        return NativeActionPolicy.binding(sessionId, payload.action, payload.canonicalJson)
-    }
-
-    private fun provenanceJson() = canonicalJson(mapOf("request_id" to requestId,
-        "original_user_request" to originalUserRequest, "session_id" to sessionId))
 
     private class Payload(values: Map<String, Any>) {
         private val values = Collections.unmodifiableMap(LinkedHashMap(values))
         val action = string("action")
         val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply"
-        val canonicalJson = canonicalJson(this.values)
         val limit: Int get() = values["limit"] as? Int ?: 1
         val tools: List<String>? = (values["tools"] as? List<*>)?.map { it as String }
             ?.let { Collections.unmodifiableList(it) }
@@ -446,17 +402,6 @@ class CentralWorkspaceTool internal constructor(
                     index++
                 } else require(!Character.isLowSurrogate(character))
                 index++
-            }
-        }
-
-        private fun canonicalJson(values: Map<String, Any>): String = values.keys.sorted().joinToString(
-            prefix = "{", postfix = "}", separator = ",") { key ->
-            val value = values.getValue(key)
-            JSONObject.quote(key) + ":" + when (value) {
-                is String -> JSONObject.quote(value)
-                is Int, is Long -> value.toString()
-                is List<*> -> JSONArray(value).toString()
-                else -> error("Unsupported canonical value")
             }
         }
 

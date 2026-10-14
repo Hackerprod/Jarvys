@@ -155,13 +155,6 @@ class FactoryPhotoCaptureTest {
         await(value); assertTrue(value.failure); assertNull(value.image)
         rejects { FactoryPhotoCapture.take(value) }
     }
-    @Test fun providerRejectsExportedWrongAuthorityAndMissingGrantConfiguration() {
-        for (which in 0..2) {
-            val info = ProviderInfo().apply { authority = FactoryPhotoCapture.authority(context); exported = false; grantUriPermissions = true }
-            when (which) { 0 -> info.authority = "wrong"; 1 -> info.exported = true; 2 -> info.grantUriPermissions = false }
-            rejects { FactoryPhotoProvider().attachInfo(context, info) }
-        }
-    }
     @Test fun providerDeniesReadsQueriesMutationsCallsAndCancelledOpen() {
         val value = reserve(); val provider = FactoryPhotoProvider()
         assertNull(provider.getType(value.uri))

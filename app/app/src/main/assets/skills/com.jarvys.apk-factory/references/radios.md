@@ -1,7 +1,7 @@
-# Factory guidance factory-guidance-v86 / radios
+# Factory guidance factory-guidance-v87 / radios
 
 ## Foreground NFC NDEF
-Declared nfc; selective NFC normal permission and optional hardware.nfc feature, no arbitrary tag API/HCE/payment service/intent dispatch. Installed,preview UNAVAILABLE. Exact read/write policy; status/cancel no new grant. ALLOW direct,ASK once,DENY no reader. Nearby tag physically required.
+Declared nfc; selective NFC normal permission and optional hardware.nfc feature, no arbitrary tag API/HCE/payment service/intent dispatch. Installed,preview UNAVAILABLE. Operations use the declared capability; status/cancel do not start a reader. Nearby tag physically required.
 - nfc.status({}) → status,busy,available,enabled,nfcPermissionGranted,foreground,stateKnown,foregroundOnly:true,cleanupFailed,error,lastWriteOutcome,limits. Discovery only; no RF probe/settings enabling.
 - nfc.read({timeoutMs?}) → {status:"read"|"empty",records,byteLength,foregroundOnly:true}; no NDEF message gives empty list, non-NDEF NDEF_UNSUPPORTED, no silent formatting.
 - nfc.write({records,timeoutMs?,allowFormat?}) → {status:"written",formatted,byteLength,writeOutcome:"confirmed",rollback:false,foregroundOnly:true}. allowFormat defaults false; only explicit true plus NdefFormatable permits format. Checks writable/max-size before write; no retry or read-only locking.
@@ -20,7 +20,7 @@ All IDs canonical lowercase opaque UUIDs, page-native ownership; no raw address.
 - bluetooth.poll({handle}): scanId|connectionId, bounded events,active,cleanupPending,cumulative decimal-string droppedEvents. Correlate operation IDs; no second prompt per event. Live checks through delivery.
 - bluetooth.stopScan({scanId}): stopped/cleanupPending, drops scan events. Delivered device handles remain until new scan epoch/page cancellation.
 - bluetooth.connect({deviceId}): scanned device only, direct LE autoConnect=false; connectionId plus connecting/connected, actual connection event follows. No implicit discovery/write.
-- bluetooth.services({connectionId,offset,limit}): offset0..4352,limit1..256. First offset0 starts discovery and returns operationId; completion includes catalog. Later calls cached page {entries,offset,nextOffset,totalEntries,cached}; byte-bound may shorten page, no hidden truncation. Cached call still uses own services policy.
+- bluetooth.services({connectionId,offset,limit}): offset0..4352,limit1..256. First offset0 starts discovery and returns operationId; completion includes catalog. Later calls cached page {entries,offset,nextOffset,totalEntries,cached}; byte-bound may shorten page, no hidden truncation.
 - bluetooth.read({connectionId,attributeId}): characteristic/ordinary descriptor, completion valueBase64 (empty is valid).
 - bluetooth.write({connectionId,attributeId,valueBase64,writeType}): exact canonical Base64 bytes, response|noResponse. Descriptors require response; CCCD only through subscribe/unsubscribe. No implicit app-level packet splitting.
 - bluetooth.requestMtu({connectionId,mtu}): integer23..517, callback reports requestedMtu/actualMtu/noResponsePayloadBytes. Admission true is not negotiation. Android14 stack behavior may differ from request; honor observed MTU for no-response payload.
@@ -31,5 +31,5 @@ All IDs canonical lowercase opaque UUIDs, page-native ownership; no raw address.
 
 Queued GATT receipts {connectionId,operationId,accepted:true} mean admission, not completion. Native rejection may give not_started. Write evidence distinguishes not_sent,sent_to_stack,att_acknowledged,unknown; none means peripheral business success. No blind retry of an uncertain write. Service catalog preserves duplicate UUID instances: service {kind,serviceId,uuid,instanceId,type}; characteristic {kind,attributeId,serviceId,uuid,properties}; descriptor {kind,attributeId,characteristicId,uuid}. Service-changed retires IDs; reconnect/discover,no hidden reflection.
 
-Policy:requestPermissions/scan/connect/services/read/write/requestMtu/subscribe. Status/poll/cleanup no new prompt. Resource leases outlive reply; one-shots through poll delivery/drop. Lifecycle cancels,failed cleanup stays pending. Write review length/hash/destination/type,no raw values/addresses in logs/review.
+Bluetooth runtime permission requests use Android's OS flow. Status/poll/cleanup do not request new permissions. Resource leases outlive reply; one-shots through poll delivery/drop. Lifecycle cancels,failed cleanup stays pending. Write validation checks length/hash/destination/type; raw values/addresses are not logged.
 Signed resources.bluetooth defaults/maxima: connections4/16,discoveredDevices128/1024,queuedOperations32/256,bufferedEvents128/2048,pollEvents32/256,services64/256,attributes512/4096,subscriptions16/256,valueBytes512/512,scanDurationMs30000/300000,operationTimeoutMs30000/300000. All minima1, pollEvents≤bufferedEvents; current Android/ATT/MTU can bind earlier. Overflow reports dropped events rather than promising lossless telemetry. SDK620000ms is no lease extension; physical acceptance unverified.

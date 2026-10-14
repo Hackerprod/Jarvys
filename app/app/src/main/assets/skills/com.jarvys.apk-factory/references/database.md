@@ -1,7 +1,7 @@
-# Factory guidance factory-guidance-v86 / database
+# Factory guidance factory-guidance-v87 / database
 
 ## Private typed SQLite
-database:no per-query approval/broker/permission. Private unencrypted no-backup SQLite persists; preview RAM lost on close/reset/pause. No raw SQL/path/ATTACH/extensions.
+database uses private unencrypted no-backup SQLite; preview RAM is lost on close/reset/pause. No raw SQL/path/ATTACH/extensions.
 - database.info({}) → current schema/version (initial0).
 - database.migrate({fromVersion,toVersion,steps}): atomic adjacent versions0..1000,1..16 steps createTable:{kind,table,columns} or addColumn:{kind,table,column,definition}. Definition {type,nullable}, type text|integer|real|boolean; addColumn must be nullable. No drop/rename/index/type-change.
 - database.transact({version,operations}): atomic insert/update:{kind,table,id,values} or delete:{kind,table,id}. Nonempty values, required insert columns, no duplicate insert; missing update fails. Exact schema version.
@@ -19,6 +19,6 @@ dataBackup.tables defaults empty; empty tables list disables backup. Explicit so
 
 Canonical plaintext jarvys-sqlite-data formatVersion:1≤1MiB; frozen backup bounds≤8tables/16columns/10000rows/4KiBcell/16KiBrow. Expanded live schemas/data that cannot fit reject; no silent truncation/backup format upgrade. Selected schemas/rows+version/package/certificate labels,not SQL/ZIP/preferences/keys/files. Labels compatibility,not authentication. Secrets unsupported,not reliably detectable.
 
-Exact artifact/pinned host: ALLOW_ALWAYS continues,ASK all values/selection/consequences once,DENY blocks. Android export selection/cloud-sync/retention disclosure remain. Protocol v2 checks live authority before each write/import commit; legacy v1 stops at final host authorization.
+The authenticated installed artifact and pinned host are checked before database effects. Android export selection and provider cloud-sync/retention disclosure remain. Protocol v2 rechecks the caller/source before each write/import commit; legacy v1 authenticates the host at final commit.
 
 Export bytes/hash plus providerCommitConfirmed:false/closeStatus:"close_requested" proves no durable file or successful restore; failure can leave empty/partial file. Import transaction receipt proves no physical durability. Cancel/lost reply/timeout may follow commit; inspect state and never automatically retry. Five-minute operation/310000ms SDK timeout; database.cancel/documents.cancel share native backup control admission. UNAVAILABLE in preview before database/handle allocation. Device/provider/restore/update acceptance remains unverified.

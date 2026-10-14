@@ -301,16 +301,9 @@ public final class CoreAgentRuntime {
     }
     if (mainChat && depth == 0 && context != null && allowedTools == null
         && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
-      Context localized = AppLanguageRuntime.localizedContext(context);
       CoreTool workspace = new com.jarvys.agent.workspaces.CentralWorkspaceTool(context, sessionId,
           com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(), request,
-          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context),
-          new com.jarvys.agent.workspaces.CentralWorkspaceTool.Labels(
-              localized.getString(R.string.native_permission_workspace_create),
-              localized.getString(R.string.native_permission_workspace_delegate),
-              localized.getString(R.string.native_permission_workspace_read),
-              localized.getString(R.string.workspace_policy_disclosure),
-              localized.getString(R.string.native_permission_workspace_deliver)));
+          new com.jarvys.agent.workspaces.WorkspaceCoordinator(context));
       if (allowed(workspace)) toolRegistry = toolRegistry.with(Collections.singletonList(workspace));
       List<String> centralTools = new ArrayList<>(toolRegistry.names());
       centralTools.remove("delegate_subtask");

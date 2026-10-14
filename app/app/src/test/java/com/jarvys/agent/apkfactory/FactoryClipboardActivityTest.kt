@@ -33,13 +33,12 @@ class FactoryClipboardActivityTest {
     class TestActivity : FactoryClipboardActivity() {
         internal override fun verifiedCaller(caller: String): FactoryDocumentCoordinator.Proof { check(caller == identity.appId); return identity }
         internal override fun sourceUid(caller: String): Int = Binder.getCallingUid()
-        internal override fun operationPolicy() = policy
-    }
+            }
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val clipboard get() = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     private val controllers = mutableListOf<ActivityController<TestActivity>>()
     private lateinit var source: ClipboardWriteControl
-    @Before fun setup() { policy = FactoryOperationPolicy.inMemory(); source = ClipboardWriteControl(nonce) { true } }
+    @Before fun setup() { source = ClipboardWriteControl(nonce) { true } }
     @After fun cleanup() {
         controllers.forEach { runCatching { it.pause().stop().destroy() } }; source.close(); drain()
         assertFalse(MemoryUiAutomationGuard.isProtected())
@@ -66,40 +65,6 @@ class FactoryClipboardActivityTest {
         assertEquals(setOf("nonce", "copied"), shadowOf(activity).resultIntent.extras!!.keySet())
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun askNeedsOneProtectedCopyAndDenyNeverCopies() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val activity = launch().get()
-        assertNull(clipboard.primaryClip); assertTrue(MemoryUiAutomationGuard.isProtected())
-        activity.window.decorView.findViewWithTag<Button>("factory-clipboard-copy").performClick(); drain()
-        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        assertEquals("synthetic clipboard text", clipboard.primaryClip!!.getItemAt(0).text.toString())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun denyHasNoClipboardSideEffectOrProtectedSurface() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        val activity = launch().get()
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(clipboard.primaryClip)
-        assertTrue(activity.isFinishing); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun policyRevocationAndPauseCancelPendingAsk() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val controller = launch(); val activity = controller.get()
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY); drain()
-        assertNull(clipboard.primaryClip); assertTrue(activity.isFinishing)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-    }
-    @Test fun pauseWhileAskIsPendingCannotCopyEvenAfterResume() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val controller = launch(); val activity = controller.get()
-        controller.pause(); controller.resume(); activity.onWindowFocusChanged(true); drain()
-        assertNull(clipboard.primaryClip); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-    }
-    @Test fun sourceCancellationRevokesPendingAsk() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val activity = launch().get(); source.cancel()
-        repeat(20) { Thread.sleep(5); shadowOf(Looper.getMainLooper()).idle() }; drain()
-        assertNull(clipboard.primaryClip); assertTrue(activity.isFinishing)
-    }
     @Test fun exactParserRejectsWrongTypesExtrasAndAuthority() {
         for (value in listOf(wire().putExtra("protocolVersion", 1L), wire().putExtra("appId", identity.appId),
             wire().putExtra("text", 1), wire().putExtra("nonce", "short"), wire().putExtra("control", "not a binder"),
@@ -111,6 +76,5 @@ class FactoryClipboardActivityTest {
     companion object {
         private val nonce = "c".repeat(64)
         private val identity = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "d".repeat(64))
-        private lateinit var policy: FactoryOperationPolicy
     }
 }

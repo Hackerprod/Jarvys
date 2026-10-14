@@ -1,5 +1,0 @@
-<resources>
-    <string name="factory_clipboard_title">Copy text to clipboard</string>
-    <string name="factory_clipboard_disclosure">Other apps may be able to read copied text. Your Factory policy controls this operation. The preview below shows at most the first 16,384 characters; the byte count covers the complete text.</string>
-    <string name="factory_clipboard_copy">Copy this text</string>
-</resources>

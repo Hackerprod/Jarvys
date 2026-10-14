@@ -26,22 +26,6 @@ internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
         assertNotEquals(snapshot.uri, stage().uri)
     }
 
-    @Test fun orphanSnapshotGrantsAreRevokedWithoutRestoringRegistryAuthority() {
-        root.mkdirs()
-        Os.chmod(root.path, 448)
-        val orphan = File(root, "snapshot-00000000-0000-0000-0000-000000000000.bin").apply { writeBytes(bytes) }
-        val uri = FileProvider.getUriForFile(context, FactoryFileShareStore.authority(context), orphan)
-        reject { provider.getType(uri) }
-        context.failRevocation = true
-        reject { store().cleanup() }
-        assertFalse(orphan.exists())
-        reject { stage() }
-        context.failRevocation = false
-        store().cleanup()
-        assertEquals(listOf(uri, uri), context.revocations.map { it.first })
-        reject { provider.getType(uri) }
-    }
-
     @Test fun failedRevocationRetainsAdmissionUntilCleanupCanRetry() {
         val store = store()
         val snapshot = stage(store)
@@ -84,24 +68,6 @@ internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
         val maximum = ByteArray(FactoryFileShareStore.MAX_BYTES) { (it % 251).toByte() }
         val last = stage(store(maximum), size = maximum.size, sha256 = digest(maximum))
         assertArrayEquals(maximum, read(last.uri))
-    }
-
-    @Test fun stagingCannotBeOpenedAndConcurrentAdmissionCannotBeTaken() {
-        var checked = false
-        val store = FactoryFileShareStore(context) { _, _, _, _, output, _ ->
-            val staging = root.listFiles()!!.single()
-            assertTrue(staging.name.startsWith("staging-"))
-            val uri = FileProvider.getUriForFile(context, FactoryFileShareStore.authority(context), staging)
-            reject { provider.openFile(uri, "r") }
-            reject { provider.query(uri, null, null, null, null) }
-            reject { provider.getType(uri) }
-            reject { stage() }
-            output.write(bytes)
-            checked = true
-        }
-        stage(store)
-        assertTrue(checked)
-        reject { stage() }
     }
 
     @Test fun cleanupDuringCopyCancelsPublicationAndDoesNotReleaseItsAdmissionEarly() {

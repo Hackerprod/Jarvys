@@ -373,24 +373,14 @@ class MemoryNavigationComposeTest {
         compose.onNodeWithTag("memory-shared-title").assertTextContains(context.getString(R.string.memory_title))
     }
 
-    @Test fun leavingNativeShareReviewForChatDiscardsConsentAndReentryStartsAtHome() {
+    @Test fun leavingMemoryScopeForChatClosesTheScopeScreenAndReentryStartsAtHome() {
         val store = newStore()
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        NativeActionPolicy(context).set(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, com.jarvys.agent.connectors.AutonomyPolicy.ASK)
         val nav = showMemory(store)
         compose.onNodeWithTag("memory-home-list").scrollToIndexWithClock(4)
         compose.onNodeWithTag("memory-scope-open").performClick()
-        scrollListToTag("memory-scope-list", "memory-scope-review-human.md")
-        compose.onNodeWithTag("memory-scope-review-human.md").performClick()
-        compose.waitUntil(10_000) {
-            shadowOf(Looper.getMainLooper()).idle()
-            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true
-        }
-        val review = requireNotNull(org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog())
         assertTrue(store.listSharedPersonalForUser().isEmpty())
         compose.runOnIdle { nav.controller.navigate(AppNavigationBackPolicy.CHAT_ROOT) }
         awaitRoute(nav, AppNavigationBackPolicy.CHAT_ROOT)
-        compose.waitUntil(10_000) { shadowOf(Looper.getMainLooper()).idle(); !review.isShowing }
         compose.onNodeWithTag("memory-test-enter").assertIsDisplayed().performClick()
         awaitRoute(nav, AppNavigationBackPolicy.MEMORY)
         compose.onNodeWithTag("memory-home-list").assertIsDisplayed()

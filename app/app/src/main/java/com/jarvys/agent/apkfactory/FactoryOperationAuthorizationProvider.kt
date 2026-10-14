@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
-/** Authenticated, bounded transport for the existing durable FactoryOperationPolicy. */
+/** Authenticated, bounded transport that rechecks the installed app and signing evidence. */
 open class FactoryOperationAuthorizationProvider : ContentProvider() {
     override fun onCreate() = true
 
@@ -78,12 +78,10 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             backgroundDeadline = minOf(requireNotNull(backgroundDeadline), started + timeout + 5_000L)
         }
         val leaseDeadline = backgroundDeadline
-        val selected = FactoryOperationPolicy.Operation.entries.singleOrNull { it.id == request.operation }
-            ?: throw SecurityException("Unsupported native operation")
+        require(CapabilityCatalog.METHODS.containsKey(request.operation))
         val cancelled = AtomicBoolean()
         val completed = AtomicReference<Session?>()
         val work = WORKER.submit<Session> {
-            var grant: FactoryOperationPolicy.Grant? = null
             var session: Session? = null
             var trust: AutoCloseable? = null
             try {
@@ -105,31 +103,20 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                 trust = authority
                 check(!cancelled.get())
                 val binding = if (expectedSource == null) request.binding(nonce) else request.binding(nonce, expectedSource.bindingEvidence())
-                val policyBinding = request.binding(nonce, FactoryOperationPolicy.binding(proof.appId, proof.certificate, proof.apk, proof.version.toString(), proof.record))
                 check(SystemClock.elapsedRealtime() < acquisitionDeadline)
-                val policy = operationPolicy(app)
-                val subject = FactoryOperationPolicy.Subject.installed(proof)
-                if (background) {
-                    check(policy.isHealthy())
-                    val mode = policy.mode(subject, selected)
-                    if (mode != FactoryOperationPolicy.Mode.ALLOW_ALWAYS) throw BackgroundDecision(mode)
-                }
-                grant = policy.acquire(subject, selected, policyBinding)
-                // A change to ASK between the read and acquisition creates no background review UI.
-                if (background && grant.requiresApproval) throw BackgroundDecision(FactoryOperationPolicy.Mode.ASK)
                 check(!cancelled.get())
-                val value = Session(app, uid, caller, nonce, request, proof, grant, binding, stamp,
+                val value = Session(app, uid, caller, nonce, request, proof, binding, stamp,
                     { authority.requireCurrent() }, { authority.close() }, leaseDeadline)
                 session = value
                 register(value)
-                value.attachRevocation()
+                value.attachDeadline()
                 value.attachTrustRevocation(authority.onRevoked { MAIN.post { value.close() } })
                 completed.set(value)
                 check(!cancelled.get())
                 value.requireCurrent()
                 value
             } catch (failure: Throwable) {
-                session?.close() ?: run { grant?.close(); trust?.close() }
+                session?.close() ?: trust?.close()
                 throw failure
             }
         }
@@ -138,37 +125,23 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             check(!cancelled.get() && SystemClock.elapsedRealtime() < acquisitionDeadline)
             return Bundle().apply {
                 putInt("protocolVersion", 1); putString("nonce", value.nonce); putString("binding", value.binding)
-                putBinder("lease", value.lease); putInt("status", if (value.closed.get()) NativeOperationAuthorization.TERMINAL
-                    else if (value.grant.requiresApproval) NativeOperationAuthorization.PENDING else NativeOperationAuthorization.APPROVED)
-                if (value.grant.requiresApproval) putString("reviewToken", value.token)
+                putBinder("lease", value.lease); putInt("status", if (value.closed.get()) NativeOperationAuthorization.TERMINAL else NativeOperationAuthorization.ACTIVE)
             }
         } catch (failure: Throwable) {
-            // A worker finishing after timeout cannot publish an orphan grant or review token.
+            // A worker finishing after timeout cannot publish an orphan authorization lease.
             cancelled.set(true); completed.get()?.close(); work.cancel(true)
             if (work is Runnable) WORKER.remove(work)
             if (failure is InterruptedException) Thread.currentThread().interrupt()
-            val decision = (failure as? java.util.concurrent.ExecutionException)?.cause ?: failure
-            if (background && decision is BackgroundDecision) return Bundle().apply {
-                putInt("protocolVersion", 1); putString("nonce", nonce); putString("binding", request.binding(nonce, requireNotNull(expectedSource).bindingEvidence()))
-                putString("decision", decision.mode.name)
-                putInt("status", if (decision.mode == FactoryOperationPolicy.Mode.ASK) NativeOperationAuthorization.PENDING else NativeOperationAuthorization.TERMINAL)
-            }
             throw SecurityException("Native operation authorization unavailable", failure)
         }
     }
 
-    private class BackgroundDecision(val mode: FactoryOperationPolicy.Mode) : RuntimeException()
-
     /**
-     * Point-in-time installed source metadata for a cold receiver. This creates no operation grant,
-     * review, policy write, or reusable authority; every effect still needs its own fresh live lease.
+     * Point-in-time installed source metadata for a cold receiver. Each effect still needs a fresh live lease.
      */
     private fun describeInstalled(app: Context, caller: String, uid: Int, arg: String?, extras: Bundle?): Bundle {
-        val hasOperation = extras?.containsKey("operation") == true
         require(arg == null && extras != null && !extras.hasFileDescriptors() &&
-            extras.keySet() == setOf("protocolVersion", "nonce", "capability", "deadlineElapsedMs") +
-                (if (hasOperation) setOf("operation") else emptySet()))
-        @Suppress("DEPRECATION") val rawOperation = if (hasOperation) extras.get("operation") else null
+            extras.keySet() == setOf("protocolVersion", "nonce", "capability", "deadlineElapsedMs"))
         @Suppress("DEPRECATION") val version = extras.get("protocolVersion")
         @Suppress("DEPRECATION") val nonce = extras.get("nonce")
         @Suppress("DEPRECATION") val capability = extras.get("capability")
@@ -176,11 +149,6 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         val started = SystemClock.elapsedRealtime()
         require(version is Int && version == 1 && nonce is String && nonce.matches(HEX) &&
             capability is String && capability in CapabilityCatalog.SUPPORTED && rawDeadline is Long && rawDeadline > started)
-        val selected = if (hasOperation) {
-            require(rawOperation is String && CapabilityCatalog.METHODS[rawOperation]?.capability == capability)
-            FactoryOperationPolicy.Operation.entries.singleOrNull { it.id == rawOperation }
-                ?: throw SecurityException("Operation has no Factory policy")
-        } else null
         val deadline = minOf(rawDeadline, started + 2_000L)
         requireCaller(app, caller, uid)
         val cancelled = AtomicBoolean()
@@ -191,7 +159,7 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             requireCurrent()
             requireCaller(app, caller, uid)
             val before = sourceStamp(app, caller, uid)
-            val capabilities = setOf(capability) + if (rawOperation == "share.file" || rawOperation == "audio.play") setOf("documents") else emptySet()
+            val capabilities = setOf(capability)
             val proof = verifiedCaller(app, caller, capabilities)
             requireCurrent()
             require(proof.appId == caller && proof.certificate.matches(HEX) && proof.apk.matches(HEX) &&
@@ -209,12 +177,6 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                     putString("certificateSha256", proof.certificate); putString("apkSha256", proof.apk)
                     putString("recordSha256", proof.record); putLong("versionCode", proof.version)
                     putString("resourceBudgets", ResourceBudgetsJson.toJson(proof.resources).toString())
-                    if (selected != null) {
-                        val policy = operationPolicy(app)
-                        check(policy.isHealthy())
-                        putString("operation", selected.id)
-                        putString("policyMode", policy.mode(FactoryOperationPolicy.Subject.installed(proof), selected).name)
-                    }
                 }
                 check(sourceStamp(app, caller, uid) == stamp) { "Installed source changed" }
                 authority.requireCurrent()
@@ -239,7 +201,6 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
 
     internal open fun verifiedCaller(context: Context, caller: String, capabilities: Set<String>) =
         FactoryDocumentCoordinator.verifyInstalled(context, caller, capabilities)
-    internal open fun operationPolicy(context: Context) = FactoryOperationPolicy.get(context)
 
     // This provider is not a document store, file broker, or generic query interface.
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor = throw SecurityException("Unsupported")
@@ -251,7 +212,7 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
 
     /**
      * Device automation coordinates only with the other installed host's live UI guard.
-     * This endpoint grants no Factory operation and reads or changes no durable policy.
+     * This endpoint performs no Factory operation and reads or changes no durable preferences.
      */
     internal class PeerGuardSession(private val context: Context, private val caller: String,
                                     private val uid: Int, private val stamp: SourceStamp) : Binder(), AutoCloseable {
@@ -340,68 +301,53 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
     internal class Session(
         private val context: Context, val uid: Int, val caller: String, val nonce: String,
         val request: NativeOperationRequest, val proof: FactoryDocumentCoordinator.Proof,
-        val grant: FactoryOperationPolicy.Grant, val binding: String, private val stamp: SourceStamp,
+        val binding: String, private val stamp: SourceStamp,
         private val trusted: (FactoryDocumentCoordinator.Proof) -> Unit,
         private val closeTrust: () -> Unit = {},
         private val hardDeadline: Long? = null,
     ) : AutoCloseable {
-        val token = randomToken()
         val deadline = hardDeadline ?: (SystemClock.elapsedRealtime() + LEASE_MS)
         val closed = AtomicBoolean()
-        val claimed = AtomicBoolean()
-        private val subscription = AtomicReference<AutoCloseable?>()
         private val trustSubscription = AtomicReference<AutoCloseable?>()
-        private val expired = Runnable { if (hardDeadline != null || !lease.isConnected || grant.requiresApproval) close() }
+        private val expired = Runnable { if (hardDeadline != null || !lease.isConnected) close() }
         val lease = NativeOperationAuthorization(nonce, binding, deadline,
-            { callerUid -> callerUid == uid && runCatching { requireCaller(context, caller, uid); true }.getOrDefault(false) },
+            { callerUid -> callerIsCurrent(callerUid) },
             object : NativeOperationAuthorization.Authority {
                 override fun status(): Int {
                     requireCurrent()
-                    return if (grant.requiresApproval) NativeOperationAuthorization.PENDING else NativeOperationAuthorization.APPROVED
+                    return NativeOperationAuthorization.ACTIVE
                 }
-                override fun checkBeforeEffect() { requireCurrent(); grant.checkBeforeEffect(); requireCurrent() }
+                override fun checkBeforeEffect() { requireCurrent() }
             }, Runnable { finish() })
-        fun attachRevocation() {
-            val value = grant.onRevoked { close() }
-            subscription.set(value)
-            if (closed.get()) subscription.getAndSet(null)?.close()
-            else {
-                MAIN.postDelayed(expired, maxOf(0, deadline - SystemClock.elapsedRealtime()))
-                if (closed.get()) MAIN.removeCallbacks(expired)
-            }
+        fun attachDeadline() {
+            MAIN.postDelayed(expired, maxOf(0, deadline - SystemClock.elapsedRealtime()))
+            if (closed.get()) MAIN.removeCallbacks(expired)
         }
         fun attachTrustRevocation(value: AutoCloseable) {
             trustSubscription.set(value)
             if (closed.get()) trustSubscription.getAndSet(null)?.close()
         }
+        private fun callerIsCurrent(callerUid: Int): Boolean {
+            if (callerUid != uid) return false
+            val valid = runCatching { requireCaller(context, caller, uid); true }.getOrDefault(false)
+            if (!valid) close()
+            return valid
+        }
+        private fun deadlineIsCurrent(): Boolean =
+            (hardDeadline == null && lease.isConnected) || SystemClock.elapsedRealtime() < deadline
         fun requireCurrent() {
-            check(!closed.get() && (hardDeadline == null && (!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
-            grant.requireCurrent()
+            check(!closed.get() && deadlineIsCurrent())
             check(sourceStamp(context, caller, uid) == stamp) { "Installed native caller changed" }
             trusted(proof)
-            grant.requireCurrent()
-            check(!closed.get() && (hardDeadline == null && (!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
-        }
-        fun approve(human: () -> Unit) {
-            val pending = grant.requiresApproval
-            try {
-                check(!closed.get())
-                grant.approveOnce {
-                    check(!closed.get() && SystemClock.elapsedRealtime() < deadline)
-                    trusted(proof); human()
-                    check(!closed.get() && SystemClock.elapsedRealtime() < deadline)
-                }
-                // A delayed main callback cannot turn an expired pending review into an unbounded lease.
-                if (pending) check(SystemClock.elapsedRealtime() < deadline)
-            } catch (failure: Throwable) { close(); throw failure }
+            check(!closed.get() && deadlineIsCurrent())
         }
         override fun close() { lease.close() }
         private fun finish() {
             if (!closed.compareAndSet(false, true)) return
             MAIN.removeCallbacks(expired)
-            subscription.getAndSet(null)?.close(); trustSubscription.getAndSet(null)?.close()
-            try { grant.revoke(); closeTrust() }
-            finally { synchronized(REGISTRY) { if (REGISTRY[token] === this) REGISTRY.remove(token) } }
+            trustSubscription.getAndSet(null)?.close()
+            try { closeTrust() }
+            finally { synchronized(REGISTRY) { REGISTRY.values.remove(this) } }
         }
     }
     internal data class SourceStamp(val uid: Int, val version: Long, val updated: Long, val path: String, val certificate: String)
@@ -412,7 +358,6 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         const val METHOD_ACQUIRE_BACKGROUND = "acquire_background"
         const val METHOD_DESCRIBE_INSTALLED = "describe_installed"
         const val METHOD_GUARD_STATUS = "guardStatus"
-        const val ACTIVITY = "com.jarvys.agent.apkfactory.FactoryOperationApprovalActivity"
         internal const val GUARD_INTERFACE = "com.jarvys.agent.PeerUiAutomationGuard.v1"
         internal const val GUARD_CHECK = IBinder.FIRST_CALL_TRANSACTION
         internal const val GUARD_BEGIN = GUARD_CHECK + 1
@@ -462,18 +407,8 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             SEEN.entries.removeAll { it.value <= now }
             check(REGISTRY.size < 32 && REGISTRY.values.count { it.uid == value.uid } < 4 && SEEN.size < 256) { "Native authorization capacity reached" }
             val replay = "${value.caller}:${value.nonce}"
-            check(replay !in SEEN && value.token !in REGISTRY && REGISTRY.values.none { it.caller == value.caller && it.nonce == value.nonce }) { "Replayed native operation request" }
-            SEEN[replay] = value.deadline; REGISTRY[value.token] = value
-        }
-        /** Wrong caller/nonce/token never consumes another requester's review opportunity. */
-        internal fun claim(context: Context, caller: String, token: String, nonce: String): Session {
-            require(token.matches(HEX) && nonce.matches(HEX))
-            val value = synchronized(REGISTRY) { REGISTRY[token] } ?: error("Unknown native review")
-            require(value.caller == caller && value.nonce == nonce)
-            requireCaller(context, caller, value.uid)
-            value.requireCurrent()
-            check(value.grant.requiresApproval && value.claimed.compareAndSet(false, true)) { "Native review already consumed" }
-            return value
+            check(replay !in SEEN && value.nonce !in REGISTRY && REGISTRY.values.none { it.caller == value.caller && it.nonce == value.nonce }) { "Replayed native operation request" }
+            SEEN[replay] = value.deadline; REGISTRY[value.nonce] = value
         }
         internal fun requireCaller(context: Context, caller: String, uid: Int) {
             require(caller != context.packageName && context.packageManager.getPackagesForUid(uid)?.toSet() == setOf(caller)) { "Unknown or shared native caller UID" }

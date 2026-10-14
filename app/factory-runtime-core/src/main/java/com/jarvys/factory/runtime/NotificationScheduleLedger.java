@@ -197,7 +197,7 @@ public final class NotificationScheduleLedger implements Store, NotificationActi
     public synchronized void queueUnavailable(String token, String process, long now) throws FactoryException {
         Row row = byAlarmToken(token);
         if (row == null || row.kind!=Kind.SCHEDULED || now < row.request.atEpochMs || (row.state != State.SCHEDULED && row.state != State.PENDING && row.state != State.SCHEDULE_UNKNOWN)) return;
-        change(row, State.QUEUED_POLICY_UNAVAILABLE, "authenticated_host_unavailable", process, "", now);
+        change(row, State.QUEUED_SESSION_UNAVAILABLE, "authenticated_host_unavailable", process, "", now);
     }
     public synchronized void invalidateVisibleActions(String artifact, int notificationId) {
         ContentValues values = new ContentValues(); values.put("enabled", 0);
@@ -252,11 +252,22 @@ public final class NotificationScheduleLedger implements Store, NotificationActi
         Source source = new Source(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getInt(23)!=0,c.getInt(24)!=0,c.getInt(5)!=0,
                 new Limits(c.getInt(6),c.getInt(7),c.getInt(8),c.getLong(9)));
         Kind kind=Kind.valueOf(c.getString(22));
-        Row row=kind==Kind.SCHEDULED?new Row(source,NotificationScheduleRequest.parseSchedule(c.getString(10)),c.getString(11),State.valueOf(c.getString(12)),c.getLong(13),c.getString(14),c.getString(15),c.getString(16),c.getLong(17),c.getLong(18)):
-                new Row(source,NotificationScheduleRequest.parseNotification(c.getString(10)),c.getString(11),State.valueOf(c.getString(12)),c.getLong(13),c.getString(14),c.getString(15),c.getString(16),c.getLong(17),c.getLong(18));
+        State state=readState(c.getString(12));
+        if (!state.name().equals(c.getString(12))) {
+            ContentValues migration=new ContentValues(); migration.put("state",state.name()); migration.put("reason","authenticated_host_unavailable");
+            helper.getWritableDatabase().update("schedules",migration,"artifact=? AND schedule_id=? AND state=?",
+                    new String[]{c.getString(20),kind==Kind.SCHEDULED?NotificationScheduleRequest.parseSchedule(c.getString(10)).scheduleId:"@"+c.getString(11),c.getString(12)});
+        }
+        Row row=kind==Kind.SCHEDULED?new Row(source,NotificationScheduleRequest.parseSchedule(c.getString(10)),c.getString(11),state,c.getLong(13),c.getString(14),c.getString(15),c.getString(16),c.getLong(17),c.getLong(18)):
+                new Row(source,NotificationScheduleRequest.parseNotification(c.getString(10)),c.getString(11),state,c.getLong(13),c.getString(14),c.getString(15),c.getString(16),c.getLong(17),c.getLong(18));
         if(!ownPackage.equals(source.appId)||!source.ownerFingerprint.equals(c.getString(20))||!source.fingerprint.equals(c.getString(21))||!row.fingerprint.equals(c.getString(19)))
             throw new FactoryException("INVALID_ARTIFACT","Notification ledger identity mismatch.");
         return row;
+    }
+    private static State readState(String stored) throws FactoryException {
+        if ("QUEUED_APPROVAL".equals(stored) || "QUEUED_POLICY_UNAVAILABLE".equals(stored)) return State.QUEUED_SESSION_UNAVAILABLE;
+        try { return State.valueOf(stored); }
+        catch (RuntimeException invalid) { throw new FactoryException("STORAGE_UNAVAILABLE","Notification ledger state is invalid."); }
     }
 
     private static ContentValues source(Source source) {

@@ -79,10 +79,14 @@ class ApkFactorySkillScopeTest {
         assertTrue(parsed.body.contains("Implement the requested workflow with real inspected APIs, not a canned demo."))
         assertTrue(parsed.body.contains("precompiled DEX"))
         assertTrue(parsed.body.contains("Build/sign/install/physical acceptance are separate."))
-        assertTrue(parsed.body.contains("Install only when requested, with the exact signed receipt"))
+        assertTrue(parsed.body.contains("factory.install submits the exact signed receipt to PackageInstaller."))
+        assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
+            .contains("Never automate Android security screens or retry an uncertain commit."))
         assertTrue(parsed.body.contains("window.Jarvys"))
         assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
-            .contains("Legacy AndroidKeyStore keys are non-exportable; loss may block updates."))
+            .contains("Each app gets a non-exportable AndroidKeyStore RSA signing key automatically on its first signature; key loss may block updates."))
+        assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
+            .contains("There is no signing-key export/import. Source/APK/data backups do not restore signing keys."))
     }
 
     @Test fun repositoryExposesFactoryOnlyForExactCodingProfile() {
@@ -264,8 +268,8 @@ class ApkFactorySkillScopeTest {
     @Test fun customBotCreationCatalogOmitsReservedToolsAndSkillsEvenWithBroadInputs() {
         val service = BotCreationService(CrewProfileRepository(context), "factory-catalog-test",
             { listOf("read_skill", "apk_factory", "board_read") }, { listOf(id, "ordinary.skill") },
-            { _, _ -> error("Catalog inspection must not request approval") }, { false },
-            { _, _, _, _, _ -> error("Catalog inspection must not generate an icon") })
+            { false },
+            { _: String, _: Int, _: String, _: CancellationToken -> error("Catalog inspection must not generate an icon") })
         assertEquals(listOf("read_skill", "board_read"), service.capabilities())
         assertEquals(listOf("ordinary.skill"), service.skills())
         val declaration = BotCreationTool(service).declaration()
@@ -441,7 +445,7 @@ class ApkFactorySkillScopeTest {
             "external-actions" to listOf("pageLoadConfirmed:false", "No normalization/secret detection", "Full URL reaches browser/site",
                 "Opening shares fields; recipient may change/ignore/cloud-sync/transmit", "actionConfirmed:false"),
             "contacts-calendar" to listOf("Returns only {kind,value}", "no broad query/new permission/fallback",
-                "Opening shares fields; recipient can ignore/change/save/sync", "never auto-press Save", "both UTC midnight,exclusive end"),
+                "Opening shares fields; recipient can ignore/change/save/sync", "never auto-presses Save", "both UTC midnight,exclusive end"),
             "database" to listOf("rollbackConfirmed:false", "No total disk/RAM guarantee", "no physical durability",
                 "Device/provider/restore/update acceptance remains unverified"),
             "presentation" to listOf("preferencesCommitted:true", "Android memory may already differ; readback is no disk proof",
@@ -449,8 +453,10 @@ class ApkFactorySkillScopeTest {
             "sensors" to listOf("device-natural", "includesGravity", "16KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),
             "biometrics" to listOf("BIOMETRIC_STRONG", "USE_BIOMETRIC", "authorizesOtherActions:false",
                 "cancellationAcknowledged:false", "2 seconds", "process restart", "fake tests establish no physical matching/closure/device acceptance"),
-            "lifecycle" to listOf("signing alone does not request install", "no global automation lock/data/key erase",
-                "unknown history needs native floor review", "no process-isolation/zero-egress proof", "Shared tests run no project JS/device",
+            "lifecycle" to listOf("signing alone does not request install", "Process-local packaging gate fails busy for overlap",
+                "There is no signing-key export/import.", "Source/APK/data backups do not restore signing keys.",
+                "uncertain effects are not replayed.",
+                "no process-isolation/zero-egress proof", "Shared tests run no project JS/device",
                 "awaits final packaged validation and physical/ARM64/update/restore acceptance"))
         for ((name, phrases) in expected) for (phrase in phrases) assertTrue("$name: $phrase", modules.getValue(name).contains(phrase, true))
     }

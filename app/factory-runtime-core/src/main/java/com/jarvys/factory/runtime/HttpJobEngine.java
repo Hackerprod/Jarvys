@@ -6,14 +6,14 @@ import org.json.JSONObject;
 
 /** Finite generic work, never a JavaScript lifetime. All effect boundaries are injected and fenced. */
 public final class HttpJobEngine {
-    public enum State { ACCEPTED, QUEUED, PREPARING, RUNNING, COMPLETED, UNKNOWN, CANCELLED, DENIED }
+    public enum State { ACCEPTED, QUEUED, PREPARING, RUNNING, COMPLETED, UNKNOWN, CANCELLED }
     public enum Mode { BACKGROUND_NO_UI, FOREGROUND_NOW, FOREGROUND_REPLAY }
-    public enum Policy { ALLOW, ASK, DENY, UNAVAILABLE }
+    public enum SessionStatus { ACTIVE, UNAVAILABLE }
     public interface Clock { long epochMs(); long elapsedMs(); }
     public interface Lease extends NativeOperationAuthorization.Access, AutoCloseable { @Override void close(); }
     public static final class Decision implements AutoCloseable {
-        public final Policy policy; public final Lease lease;
-        public Decision(Policy policy,Lease lease){if(policy==null||(policy==Policy.ALLOW)!=(lease!=null))throw new IllegalArgumentException();this.policy=policy;this.lease=lease;}
+        public final SessionStatus sessionStatus; public final Lease lease;
+        public Decision(SessionStatus status,Lease lease){if(status==null||(status==SessionStatus.ACTIVE)!=(lease!=null))throw new IllegalArgumentException();this.sessionStatus=status;this.lease=lease;}
         public void close(){if(lease!=null)lease.close();}
     }
     public interface Authority {
@@ -59,8 +59,7 @@ public final class HttpJobEngine {
         public JSONObject details(){
             try{return new JSONObject().put("jobId",request.jobId).put("status",state==State.PREPARING?"queued":state.name().toLowerCase(Locale.ROOT))
                 .put("reason",reason).put("revision",revision).put("createdAtEpochMs",createdAt).put("updatedAtEpochMs",updatedAt)
-                .put("resultAvailable",!result.isEmpty()).put("resultAcknowledged",acknowledged).put("outcomeMayHaveOccurred",state==State.RUNNING||state==State.UNKNOWN||(state==State.PREPARING&&"authorizing_replay".equals(reason)))
-                .put("lastPolicyCheckIsCurrent",false);}
+                .put("resultAvailable",!result.isEmpty()).put("resultAcknowledged",acknowledged).put("outcomeMayHaveOccurred",state==State.RUNNING||state==State.UNKNOWN||(state==State.PREPARING&&"authorizing_replay".equals(reason)));}
             catch(Exception impossible){throw new IllegalStateException(impossible);}
         }
     }
@@ -88,7 +87,7 @@ public final class HttpJobEngine {
         if(store==null||authority==null||platform==null||transport==null||clock==null||source==null||process==null)throw new IllegalArgumentException();
         this.store=store;this.authority=authority;this.platform=platform;this.transport=transport;this.clock=clock;this.source=source;this.process=process;
     }
-    /** Admission is durable and inert. Current policy is acquired only when HTTP can actually run. */
+    /** Admission is durable and inert. The authenticated host session is acquired only when HTTP can run. */
     public Row enqueue(HttpJobRequest request,Session session) throws FactoryException {
         session.check();
         Row existing=store.get(source.owner,request.jobId);
@@ -109,7 +108,7 @@ public final class HttpJobEngine {
         Row row=recover(store.byToken(token));
         if(row==null||!source.owner.equals(row.source.owner))return new RunResult(null,false);
         if(row.state!=State.ACCEPTED&&row.state!=State.QUEUED)return new RunResult(row,false);
-        if("policy_ask".equals(row.reason))return new RunResult(row,false);
+        if("session_unavailable".equals(row.reason))return new RunResult(row,false);
         return run(row,Mode.BACKGROUND_NO_UI,session);
     }
     /** Explicit caller intent to run NOW; applies even when original scheduler constraints are unmet. */
@@ -128,11 +127,11 @@ public final class HttpJobEngine {
         if(row==null)return new RunResult(status(initial.request.jobId),false);
         try(Decision decision=authority.acquire(row,source,mode,session)){
             session.check();
-            if(decision.policy!=Policy.ALLOW){
-                State next=mode==Mode.FOREGROUND_REPLAY?State.UNKNOWN:decision.policy==Policy.DENY?State.DENIED:State.QUEUED;
-                String reason=decision.policy==Policy.ASK?"policy_ask":decision.policy==Policy.DENY?"policy_denied":"policy_unavailable";
+            if(decision.sessionStatus!=SessionStatus.ACTIVE){
+                State next=mode==Mode.FOREGROUND_REPLAY?State.UNKNOWN:State.QUEUED;
+                String reason="session_unavailable";
                 Row changed=change(row,next,reason,"","","",false);
-                return new RunResult(changed,decision.policy==Policy.UNAVAILABLE&&mode==Mode.BACKGROUND_NO_UI);
+                return new RunResult(changed,decision.sessionStatus==SessionStatus.UNAVAILABLE&&mode==Mode.BACKGROUND_NO_UI);
             }
             decision.lease.check();session.check();store.checkBudget(source,row);
             session.reserving();
@@ -193,5 +192,5 @@ public final class HttpJobEngine {
     private Row change(Row row,State state,String reason,String process,String attempt,String result,boolean acknowledged)throws FactoryException{
         return store.change(row,state,reason,process,attempt,result,acknowledged,clock.epochMs());
     }
-    public static boolean terminal(State state){return state==State.COMPLETED||state==State.UNKNOWN||state==State.CANCELLED||state==State.DENIED;}
+    public static boolean terminal(State state){return state==State.COMPLETED||state==State.UNKNOWN||state==State.CANCELLED;}
 }

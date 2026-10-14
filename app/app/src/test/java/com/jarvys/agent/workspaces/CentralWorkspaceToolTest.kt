@@ -3,10 +3,6 @@ package com.jarvys.agent.workspaces
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
-import com.jarvys.agent.NativeActionPolicy
-import com.jarvys.agent.connectors.ApprovalDecision
-import com.jarvys.agent.connectors.ApprovalSummary
-import com.jarvys.agent.connectors.AutonomyPolicy
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -22,7 +18,6 @@ class CentralWorkspaceToolTest {
     private val assignment = "22345678-1234-1234-1234-123456789abc"
     private val request = "turn-123"
     private val userText = "Review the new workspace implementation."
-    private val labels = CentralWorkspaceTool.Labels("Create workspace", "Delegate work", "Read workspaces", "Saved workspace permission applies.", "Deliver workspace file")
     private val create = mapOf<String, Any>("action" to "create", "key" to "create-stable", "title" to "Review workspace implementation")
     private val list = mapOf<String, Any>("action" to "list")
     private val delegate get() = mapOf<String, Any>("action" to "delegate", "workspace_id" to workspace,
@@ -83,17 +78,9 @@ class CentralWorkspaceToolTest {
                 "limit" to limit, "afterAssignmentId" to afterAssignmentId), admission)
     }
 
-    private fun tool(backend: Backend = Backend(), policy: NativeActionPolicy = NativeActionPolicy.inMemory(),
-                     session: String = WorkspaceIdentity.CENTRAL_SESSION, requestId: String = request,
-                     originalRequest: String = userText,
-                     ask: (ApprovalSummary, CancellationToken) -> ApprovalDecision = { _, _ -> error("Unexpected Ask") }) =
-        CentralWorkspaceTool(session, requestId, originalRequest, policy, backend, ask, labels)
-    private fun operation(arguments: Map<String, Any>) = when (arguments["action"]) {
-        "create" -> NativeActionPolicy.Operation.WORKSPACE_CREATE
-        "delegate" -> NativeActionPolicy.Operation.WORKSPACE_DELEGATE
-        "deliver" -> NativeActionPolicy.Operation.WORKSPACE_DELIVER
-        else -> NativeActionPolicy.Operation.WORKSPACE_READ
-    }
+    private fun tool(backend: Backend = Backend(), session: String = WorkspaceIdentity.CENTRAL_SESSION,
+                     requestId: String = request, originalRequest: String = userText) =
+        CentralWorkspaceTool(session, requestId, originalRequest, backend)
 
     @Test fun knownPreAdmissionRejectionReturnsActionableCodeWithoutPrivateCause() {
         val backend = Backend().apply { beforeAdmission = {
@@ -121,18 +108,13 @@ class CentralWorkspaceToolTest {
         assertEquals(1, backend.calls.size)
     }
 
-    @Test fun publicConstructorRequiresInjectedBackendAndLocalizedLabels() {
+    @Test fun publicConstructorRequiresInjectedBackend() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val constructed = CentralWorkspaceTool(context, WorkspaceIdentity.CENTRAL_SESSION, request, userText,
-            Backend(), CentralWorkspaceTool.Labels("Crear espacio", "Delegar trabajo", "Leer espacios", "Divulgación local"))
-        val compatible = CentralWorkspaceTool.Labels::class.java.getConstructor(String::class.java, String::class.java,
-            String::class.java, String::class.java).newInstance("Create", "Delegate", "Read", "Disclosure")
-        assertEquals("Read", compatible.deliverTitle)
+        val constructed = CentralWorkspaceTool(context, WorkspaceIdentity.CENTRAL_SESSION, request, userText, Backend())
         assertEquals(CentralWorkspaceTool.NAME, constructed.declaration().name)
         assertFalse(constructed.canDelegate())
     }
-
-    @Test fun defaultAllowRoutesAllActionsWithoutPrompts() {
+    @Test fun routesAllActionsWithoutPermissionPrompts() {
         val backend = Backend()
         val tool = tool(backend)
         val token = CancellationToken.cancellable()
@@ -157,126 +139,10 @@ class CentralWorkspaceToolTest {
             "expectedSha256" to sha, "filename" to null), backend.calls[4].values)
     }
 
-    @Test fun denyPreventsEachBackendEntryAndNeverPrompts() {
-        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult)) {
-            val backend = Backend()
-            val policy = NativeActionPolicy.inMemory()
-            policy.set(operation(arguments), AutonomyPolicy.DENY)
-            val result = tool(backend, policy).execute(arguments, CancellationToken.uncancellable())
-            assertFalse(result.success)
-            assertEquals(0, backend.entries)
-            assertTrue(backend.calls.isEmpty())
-        }
-    }
-
-    @Test fun askPromptsExactlyOncePerCallAndDisclosesExactPayloadAndRuntimeProvenance() {
-        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult)) {
-            val backend = Backend()
-            var asks = 0
-            val result = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { summary, _ ->
-                asks++
-                assertFalse(summary.allowAlwaysAvailable)
-                assertEquals(labels.disclosure, summary.lines.first())
-                val payload = JSONObject(summary.lines[1])
-                assertEquals(arguments["action"], payload.getString("action"))
-                if (arguments["action"] == "inspect_file") {
-                    assertEquals(labels.readTitle, summary.title)
-                    assertEquals(workspace, payload.getString("workspace_id"))
-                    assertEquals(inspect["path"], payload.getString("path"))
-                }
-                if (arguments["action"] == "deliver") {
-                    assertEquals(labels.deliverTitle, summary.title)
-                    assertEquals(workspace, payload.getString("workspace_id"))
-                    assertEquals(deliver["path"], payload.getString("path"))
-                    assertEquals(sha, payload.getString("expected_sha256"))
-                }
-                if (arguments["action"] in setOf("create", "delegate", "deliver")) {
-                    val runtime = JSONObject(summary.lines[2])
-                    assertEquals(request, runtime.getString("request_id"))
-                    assertEquals(userText, runtime.getString("original_user_request"))
-                    assertEquals(WorkspaceIdentity.CENTRAL_SESSION, runtime.getString("session_id"))
-                } else assertEquals(2, summary.lines.size)
-                ApprovalDecision.APPROVED
-            }).execute(arguments, CancellationToken.uncancellable())
-            assertTrue(result.content, result.success)
-            assertEquals(1, asks)
-            assertEquals(1, backend.calls.size)
-        }
-    }
-
-    @Test fun nonApprovedAskDecisionsNeverEnterBackend() {
-        for (decision in ApprovalDecision.entries.filter { it != ApprovalDecision.APPROVED }) {
-            val backend = Backend()
-            val result = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, _ -> decision })
-                .execute(delegate, CancellationToken.uncancellable())
-            assertFalse(decision.name, result.success)
-            assertEquals(0, backend.entries)
-        }
-    }
-
-    @Test fun changedPolicyDuringAskPreventsBackendEntry() {
-        for (replacement in AutonomyPolicy.entries) {
-            val backend = Backend()
-            val policy = NativeActionPolicy.inMemory(AutonomyPolicy.ASK)
-            val result = tool(backend, policy, ask = { _, _ ->
-                policy.set(NativeActionPolicy.Operation.WORKSPACE_DELEGATE, replacement)
-                ApprovalDecision.APPROVED
-            }).execute(delegate, CancellationToken.uncancellable())
-            assertFalse(replacement.name, result.success)
-            assertEquals(0, backend.entries)
-        }
-    }
-
-    @Test fun revocationAtBackendEffectBoundaryPreventsEffects() {
-        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult)) {
-            val backend = Backend()
-            val policy = NativeActionPolicy.inMemory()
-            backend.beforeAdmission = { policy.set(operation(arguments), AutonomyPolicy.DENY) }
-            assertFalse(tool(backend, policy).execute(arguments, CancellationToken.uncancellable()).success)
-            assertEquals(1, backend.entries)
-            assertTrue(backend.calls.isEmpty())
-        }
-    }
-
-    @Test fun policyAllowDenyAllowRaceStillRevokesOriginalAdmission() {
-        val backend = Backend()
-        val policy = NativeActionPolicy.inMemory()
-        backend.beforeAdmission = {
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_CREATE, AutonomyPolicy.DENY)
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_CREATE, AutonomyPolicy.ALLOW)
-        }
-        assertFalse(tool(backend, policy).execute(create, CancellationToken.uncancellable()).success)
-        assertTrue(backend.calls.isEmpty())
-    }
-
-    @Test fun revocationAfterBackendEffectSuppressesItsDataWithoutClaimingNoEffect() {
-        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult)) {
-            val backend = Backend()
-            val policy = NativeActionPolicy.inMemory()
-            backend.afterAdmission = { policy.set(operation(arguments), AutonomyPolicy.DENY) }
-            backend.result = { JSONObject().put("marker", "must not expose") }
-            val result = tool(backend, policy).execute(arguments, CancellationToken.uncancellable())
-            assertFalse(result.success)
-            assertFalse(result.content.contains("must not expose"))
-            assertTrue(result.content.contains("may already have started"))
-            assertEquals(1, backend.calls.size)
-        }
-    }
-
     @Test fun stopBeforeExecutionNeverEntersBackend() {
         val backend = Backend()
         val token = CancellationToken.cancellable().apply { cancel() }
         assertThrows(CancellationException::class.java) { tool(backend).execute(create, token) }
-        assertEquals(0, backend.entries)
-    }
-
-    @Test fun stopDuringAskNeverEntersBackend() {
-        val backend = Backend()
-        val token = CancellationToken.cancellable()
-        val tool = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, _ ->
-            token.cancel(); ApprovalDecision.APPROVED
-        })
-        assertThrows(CancellationException::class.java) { tool.execute(delegate, token) }
         assertEquals(0, backend.entries)
     }
 
@@ -464,43 +330,16 @@ class CentralWorkspaceToolTest {
         assertNotEquals(backend.calls.single().values["mission"], backend.calls.single().values["originalUserRequest"])
     }
 
-    @Test fun payloadBindingIncludesSessionActionCanonicalArgumentsAndActualUserTurn() {
-        val tool = tool()
-        val expected = NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, "create",
-            "{\"action\":\"create\",\"key\":\"create-stable\",\"title\":\"Review workspace implementation\"}", request, userText)
-        assertEquals(expected, tool.requestBinding(create))
-        assertEquals(expected, tool.requestBinding(create.entries.reversed().associate { it.toPair() }))
-        assertNotEquals(expected, tool.requestBinding(create + ("title" to "Changed title")))
-        assertNotEquals(expected, tool.requestBinding(create + ("key" to "other-key")))
-        assertNotEquals(expected, tool(requestId = "other-turn").requestBinding(create))
-        assertNotEquals(expected, tool(originalRequest = "Other user message").requestBinding(create))
-        assertNotEquals(expected, tool(session = "other-session").requestBinding(create))
-        assertEquals(NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, "list", "{\"action\":\"list\",\"limit\":20}"),
-            tool.requestBinding(list))
-    }
-
-    @Test fun everyDelegationFieldIsBoundAndSemanticallyEquivalentToolOrderIsCanonical() {
-        val tool = tool()
-        val original = delegate + mapOf("tools" to listOf("read_skill", "board_read"), "name" to "Reviewer")
-        val binding = tool.requestBinding(original)
-        assertEquals(binding, tool.requestBinding(original + ("tools" to listOf("board_read", "read_skill"))))
-        assertEquals(binding, tool.requestBinding(original + ("mission_access" to "standard")))
-        for ((key, value) in mapOf<String, Any>("workspace_id" to assignment, "key" to "other-key", "role" to "coder",
-            "mission" to "Changed mission", "tools" to listOf("read_skill"), "name" to "Changed name", "mission_access" to "read_only"))
-            assertNotEquals(key, binding, tool.requestBinding(original + (key to value)))
-        assertNotEquals(tool.requestBinding(delegate), tool.requestBinding(delegate + ("tools" to emptyList<String>())))
-    }
-
-    @Test fun argumentMutationDuringAskCannotChangeApprovedPayloadOrToolCapabilities() {
+    @Test fun argumentMutationAtBackendAdmissionCannotChangeParsedPayloadOrToolCapabilities() {
         val backend = Backend()
         val tools = mutableListOf("read_skill")
         val arguments = (delegate + ("tools" to tools)).toMutableMap()
-        val tool = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, _ ->
-            arguments["mission"] = "unapproved replacement"
-            arguments["key"] = "unapproved-key"
+        backend.beforeAdmission = {
+            arguments["mission"] = "replacement after parse"
+            arguments["key"] = "replacement-key"
             tools.add("run_command")
-            ApprovalDecision.APPROVED
-        })
+        }
+        val tool = tool(backend)
         assertTrue(tool.execute(arguments, CancellationToken.uncancellable()).success)
         assertEquals(delegate["mission"], backend.calls.single().values["mission"])
         assertEquals(delegate["key"], backend.calls.single().values["key"])
@@ -508,7 +347,6 @@ class CentralWorkspaceToolTest {
         @Suppress("UNCHECKED_CAST") val received = backend.calls.single().values["tools"] as MutableList<String>
         assertThrows(UnsupportedOperationException::class.java) { received.add("run_command") }
     }
-
     @Test fun repeatedCallsPreserveIdempotencyKeyAndRuntimeProvenance() {
         val backend = Backend()
         val tool = tool(backend)
@@ -605,119 +443,20 @@ class CentralWorkspaceToolTest {
         }
     }
 
-    @Test fun everyDeliveryArgumentAndRuntimeProvenanceIsBound() {
-        val tool = tool()
-        val original = deliver + ("filename" to "report.txt")
-        val binding = tool.requestBinding(original)
-        assertEquals(NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, "deliver",
-            "{\"action\":\"deliver\",\"expected_sha256\":\"$sha\",\"filename\":\"report.txt\",\"path\":\"outputs\\/report.txt\",\"workspace_id\":\"$workspace\"}",
-            request, userText), binding)
-        assertEquals(binding, tool.requestBinding(original.entries.reversed().associate { it.toPair() }))
-        for ((key, value) in mapOf("workspace_id" to assignment, "path" to "other.txt",
-            "expected_sha256" to "b".repeat(64), "filename" to "other.txt"))
-            assertNotEquals(key, binding, tool.requestBinding(original + (key to value)))
-        assertNotEquals(binding, tool.requestBinding(deliver))
-        assertNotEquals(binding, tool(requestId = "other-turn").requestBinding(original))
-        assertNotEquals(binding, tool(originalRequest = "Other user request").requestBinding(original))
-        assertNotEquals(binding, tool(session = "other-chat").requestBinding(original))
+    @Test fun inspectionUsesExactImmutableReadArguments() {
         val backend = Backend()
-        assertFalse(tool(backend, requestId = "").execute(deliver, CancellationToken.uncancellable()).success)
-        assertFalse(tool(backend, originalRequest = "").execute(deliver, CancellationToken.uncancellable()).success)
-        assertEquals(0, backend.entries)
-    }
-
-    @Test fun deliveryApprovalForwardsImmutableExactPayloadAndExpiresOnReturn() {
-        val backend = Backend()
-        val arguments = (deliver + ("filename" to "report.txt")).toMutableMap()
-        val token = CancellationToken.cancellable()
-        val tool = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, actualToken ->
-            assertSame(token, actualToken)
-            arguments["workspace_id"] = assignment
-            arguments["path"] = "other.txt"
-            arguments["expected_sha256"] = "b".repeat(64)
-            arguments["filename"] = "other.txt"
-            arguments["destination"] = "other-chat"
-            ApprovalDecision.APPROVED
-        })
-        assertTrue(tool.execute(arguments, token).success)
-        assertEquals(mapOf("workspaceId" to workspace, "path" to deliver["path"], "expectedSha256" to sha,
-            "filename" to "report.txt"), backend.calls.single().values)
-        assertSame(token, backend.calls.single().token)
-        assertThrows(IllegalStateException::class.java) { backend.lastAdmission!!.run() }
-    }
-
-    @Test fun deliveryAskDenialAndPolicyChangesNeverBecomeFreshAuthority() {
-        for (decision in ApprovalDecision.entries.filter { it != ApprovalDecision.APPROVED }) {
-            val backend = Backend()
-            assertFalse(tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, _ -> decision })
-                .execute(deliver, CancellationToken.uncancellable()).success)
-            assertEquals(0, backend.entries)
-        }
-        for (replacement in AutonomyPolicy.entries) {
-            val backend = Backend()
-            val policy = NativeActionPolicy.inMemory(AutonomyPolicy.ASK)
-            assertFalse(tool(backend, policy, ask = { _, _ ->
-                policy.set(NativeActionPolicy.Operation.WORKSPACE_DELIVER, replacement)
-                ApprovalDecision.APPROVED
-            }).execute(deliver, CancellationToken.uncancellable()).success)
-            assertEquals(0, backend.entries)
-        }
-        val backend = Backend()
-        val policy = NativeActionPolicy.inMemory()
-        backend.beforeAdmission = {
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_DELIVER, AutonomyPolicy.DENY)
-            policy.set(NativeActionPolicy.Operation.WORKSPACE_DELIVER, AutonomyPolicy.ALLOW)
-        }
-        assertFalse(tool(backend, policy).execute(deliver, CancellationToken.uncancellable()).success)
-        assertTrue(backend.calls.isEmpty())
-    }
-
-    @Test fun deliveryStopDuringApprovalPreventsBackendAndFailedInvocationExpiresCallback() {
-        val backend = Backend()
-        val token = CancellationToken.cancellable()
-        val tool = tool(backend, NativeActionPolicy.inMemory(AutonomyPolicy.ASK), ask = { _, _ ->
-            token.cancel(); ApprovalDecision.APPROVED
-        })
-        assertThrows(CancellationException::class.java) { tool.execute(deliver, token) }
-        assertEquals(0, backend.entries)
-        val failed = Backend().apply { result = { error("private delivery failure") } }
-        val result = tool(failed).execute(deliver, CancellationToken.uncancellable())
-        assertFalse(result.success)
-        assertFalse(result.content.contains("private delivery failure"))
-        assertThrows(IllegalStateException::class.java) { failed.lastAdmission!!.run() }
-    }
-
-
-    @Test fun inspectionUsesReadPolicyAndExactImmutableReadBinding() {
-        val backend = Backend()
-        val policy = NativeActionPolicy.inMemory()
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_DELIVER, AutonomyPolicy.DENY)
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_READ, AutonomyPolicy.ASK)
         val arguments = inspect.toMutableMap()
-        var asks = 0
-        val tool = tool(backend, policy, requestId = "", originalRequest = "", ask = { summary, _ ->
-            asks++
-            assertEquals(labels.readTitle, summary.title)
-            assertEquals(2, summary.lines.size)
-            assertEquals(inspect["path"], JSONObject(summary.lines[1]).getString("path"))
+        backend.beforeAdmission = {
             arguments["workspace_id"] = assignment
-            arguments["path"] = "unapproved.txt"
-            arguments["filename"] = "unapproved.txt"
-            ApprovalDecision.APPROVED
-        })
-        val expected = NativeActionPolicy.binding(WorkspaceIdentity.CENTRAL_SESSION, "inspect_file",
-            "{\"action\":\"inspect_file\",\"path\":\"\\/project\\/build\\/report.txt\",\"workspace_id\":\"$workspace\"}")
-        assertEquals(expected, tool.requestBinding(inspect))
-        assertNotEquals(expected, tool.requestBinding(inspect + ("path" to "other.txt")))
-        assertNotEquals(expected, tool.requestBinding(inspect + ("workspace_id" to assignment)))
+            arguments["path"] = "replacement.txt"
+        }
+        val tool = tool(backend, requestId = "", originalRequest = "")
         val token = CancellationToken.cancellable()
         assertTrue(tool.execute(arguments, token).success)
-        assertEquals(1, asks)
         assertEquals(mapOf("workspaceId" to workspace, "path" to inspect["path"]), backend.calls.single().values)
         assertSame(token, backend.calls.single().token)
         assertThrows(IllegalStateException::class.java) { backend.lastAdmission!!.run() }
     }
-
     @Test fun inspectionAcceptsOnlyAnExactWorkspaceAndOrdinaryOrOwnedProjectPath() {
         val backend = Backend()
         val tool = tool(backend)
@@ -742,13 +481,8 @@ class CentralWorkspaceToolTest {
     }
 
     @Test fun immutableResultReadBindsExactIdHashAndOffsetWithoutFileAuthority() {
-        val backend = Backend(); val policy = NativeActionPolicy.inMemory()
-        policy.set(NativeActionPolicy.Operation.WORKSPACE_DELIVER, AutonomyPolicy.DENY)
-        val tool = tool(backend, policy)
+        val backend = Backend(); val tool = tool(backend)
         assertTrue(tool.execute(readResult, CancellationToken.uncancellable()).success)
-        val first = tool.requestBinding(readResult)
-        assertNotEquals(first, tool.requestBinding(readResult + ("offset" to 1)))
-        assertNotEquals(first, tool.requestBinding(readResult + ("expected_sha256" to "c".repeat(64))))
         for (bad in listOf<Any>(-1, 1.5, "0", 2147483648L))
             assertFalse(tool.execute(readResult + ("offset" to bad), CancellationToken.uncancellable()).success)
         for (field in listOf("source_session", "destination_session", "owner", "user_text", "generation"))

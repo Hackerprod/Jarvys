@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
-/** Process-local ownership tests. The approval wait below is synthetic; no provider or UI is used. */
+/** Process-local ownership tests. The delayed result below is synthetic; no provider or UI is used. */
 class WorkspaceControlStopOwnershipTest {
     private val registered = mutableListOf<CancellationToken>()
 
@@ -57,17 +57,17 @@ class WorkspaceControlStopOwnershipTest {
         assertTrue(newer.runIfActive {})
     }
 
-    @Test fun lateSyntheticApprovalCannotDispatchAfterGlobalStop() {
+    @Test fun lateSyntheticResultCannotDispatchAfterGlobalStop() {
         val token = owner(WorkspaceControlType.RESUME)
         val waiting = CountDownLatch(1)
-        val approval = CountDownLatch(1)
+        val releaseResult = CountDownLatch(1)
         val finished = CountDownLatch(1)
         val effects = AtomicInteger()
         val failure = AtomicReference<Throwable?>()
         val thread = Thread {
             try {
                 waiting.countDown()
-                assertTrue(approval.await(5, TimeUnit.SECONDS))
+                assertTrue(releaseResult.await(5, TimeUnit.SECONDS))
                 assertFalse(token.runIfActive { effects.incrementAndGet() })
             } catch (problem: Throwable) { failure.set(problem) }
             finally { finished.countDown() }
@@ -75,11 +75,11 @@ class WorkspaceControlStopOwnershipTest {
         try {
             assertTrue(waiting.await(5, TimeUnit.SECONDS))
             WorkspaceControlOwners.cancelPending()
-            approval.countDown()
+            releaseResult.countDown()
             assertTrue(finished.await(5, TimeUnit.SECONDS))
             failure.get()?.let { throw AssertionError(it) }
             assertEquals(0, effects.get())
-        } finally { approval.countDown(); thread.interrupt() }
+        } finally { releaseResult.countDown(); thread.interrupt() }
     }
 
     @Test fun actionAdmissionAndStopHaveOneOrderWithoutHoldingCleanupOpen() {

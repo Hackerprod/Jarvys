@@ -37,7 +37,7 @@ class FactoryDataBackupApplicationStartupTest {
     }
     @After fun cleanup() {
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
-        val value = created(); if (value.needsRecovery()) worker { value.close(null, true, true) {} }
+        val value = created(); assertTrue(value.canBegin())
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         roots.forEach { File(context.noBackupFilesDir, it).deleteRecursively() }; File(context.cacheDir, "factory-file-shares").deleteRecursively()
@@ -55,17 +55,14 @@ class FactoryDataBackupApplicationStartupTest {
             assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
         } finally { release.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
-        val value = created(); assertTrue(value.needsRecovery()); assertEquals("outcome_unknown", value.status()); assertNull(value.session())
-        assertTrue(runCatching { worker { value.close(null, true, false) {} } }.isFailure)
-        assertTrue(runCatching { worker { value.close(null, true, true) { error("No human acknowledgement") } } }.isFailure)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        worker { value.close(null, true, true) {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        val value = created(); assertEquals("closed_outcome_unknown", value.status()); assertNull(value.session())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(value.canBegin())
+        assertTrue(FactoryInteractionAdmission.available())
         val saved = JSONObject(File(root, "interaction.json").readText())
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), saved.keys().asSequence().toSet())
         assertEquals("closed_outcome_unknown", saved.getString("state")); assertFalse(saved.getBoolean("open"))
     }
-    @Test fun pickerJournalProtectsBeforeRestoreWorkerCanRunAndNeverReplays() = startup(JSONObject()
+    @Test fun interruptedPickerJournalIsClosedDuringStartup() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "picker").put("open", true).put("nonce", "a".repeat(64)).toString())
     @Test fun malformedJournalAlsoProtectsBeforeAnyStartupAction() = startup("{")
 }

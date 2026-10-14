@@ -20,10 +20,9 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** One foreground policy-bound audio interaction. Durable state never restores audio or playback authority. */
+/** One authenticated foreground audio interaction. Durable state never restores playback authority. */
 internal class FactoryAudioCoordinator(
     context: Context,
-    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
     private val verify: (String) -> FactoryDocumentCoordinator.Proof = {
         FactoryDocumentCoordinator.verifyInstalled(context, it, setOf("documents", "audio"))
     },
@@ -52,7 +51,7 @@ internal class FactoryAudioCoordinator(
             }
         }
     }
-    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val authority: FactoryOperationPolicy.Grant,
+    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long,
         val setupExpiresAt: Long = expiresAt - proof.resources.audio.durationMs) {
         val revoked = AtomicBoolean(false)
         val playerClean = AtomicBoolean(true)
@@ -63,7 +62,7 @@ internal class FactoryAudioCoordinator(
         @Volatile var player: FactoryAudioPlayer? = null
         @Volatile var attempted = false
         /** No disk, worker, package manager or coordinator monitor on urgent revocation. */
-        fun revoke() { revoked.set(true); authority.revoke() }
+        fun revoke() { revoked.set(true); registration?.close() }
     }
     private val application = context.applicationContext
     private val packageManager = application.packageManager
@@ -79,8 +78,7 @@ internal class FactoryAudioCoordinator(
     fun session() = current
     fun status() = state
     fun isBusy() = busy || restoring
-    fun needsRecovery(): Boolean { val value = current; return open && !restoring && (value == null || value.revoked.get() || broken) }
-    fun canBegin() = (!open || (current == null && state == "outcome_unknown")) && !broken && !busy && !restoring && (current == null || FactoryInteractionAdmission.available(this))
+    fun canBegin() = !broken && !busy && !restoring && (open || current == null && FactoryInteractionAdmission.available(this))
     private fun worker() { check(Looper.myLooper() != Looper.getMainLooper()) { "Audio I/O must run on the bounded worker" } }
     private fun save() {
         worker()
@@ -91,11 +89,11 @@ internal class FactoryAudioCoordinator(
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
         } catch (failure: Exception) {
-            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); FactoryInteractionAdmission.restore(this)
+            broken = true; open = true; state = "outcome_unknown"; current?.revoke()
             throw failure
         }
     }
-    private fun prepareRestore() { restoring = true; FactoryInteractionAdmission.restore(this) }
+    private fun prepareRestore() { restoring = true }
     fun restore() {
         worker()
         if (!restoring) prepareRestore()
@@ -113,10 +111,15 @@ internal class FactoryAudioCoordinator(
                 val old = saved.getString("state")
                 require(if (open) old in OPEN_STATES else old in CLOSED_STATES)
                 require(nonce.matches(Regex("[a-f0-9]{64}")) || (!open && old == "closed_outcome_unknown" && nonce.isEmpty()))
-                state = if (open) "outcome_unknown" else old
+                state = if (open) "closed_outcome_unknown" else old
+                if (open) { open = false; save() }
             }
-            if (open) save() else release()
-        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; FactoryInteractionAdmission.restore(this) }
+            if (open) { state = "closed_outcome_unknown"; open = false; save() }
+            release()
+        } catch (_: Exception) {
+            broken = false; open = false; state = "closed_outcome_unknown"; nonce = ""
+            runCatching { save() }; release()
+        }
         finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -125,25 +128,34 @@ internal class FactoryAudioCoordinator(
     fun begin(callingPackage: String?, request: Request, active: () -> Unit): Session {
         worker(); require(!callingPackage.isNullOrBlank()); check(canBegin()); require(request.nonce != nonce)
         busy = true
-        var acquired: FactoryOperationPolicy.Grant? = null
         var bytes: ByteArray? = null
         try {
             val proof = verify(callingPackage); check(proof.appId == callingPackage); active()
             // The authenticated artifact is the only source of developer-selected limits.
             require(request.protocolVersion in 1..2 && request.size in 46..FactoryAudioPcm.MAX_STREAM_BYTES && request.size <= proof.resources.audio.sourceBytes)
             require(request.protocolVersion != 1 || request.size <= FactoryAudioPcm.MAX_BYTES)
-            val authority = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.AUDIO_PLAY, FactoryOperationPolicy.binding(request.nonce, request.size.toString(), request.sha256))
-            acquired = authority
-            // An authenticated fresh ALLOW request can retire restored unknown state. It never replays it.
+            var replacingActiveSession = false
             if (open) {
-                check(current == null && !broken && authority.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-                state = "closed_outcome_unknown"; open = false; save(); release()
+                check(!broken)
+                val previous = current
+                check(previous?.preparing?.get() != true)
+                previous?.revoke(); previous?.registration?.close(); previous?.registration = null
+                previous?.let { interrupted ->
+                    interrupted.player?.stop()?.let { cleanup ->
+                        interrupted.playerClean.set(cleanup.cleanupConfirmed)
+                        check(cleanup.cleanupConfirmed) { "Interrupted audio playback cleanup is not complete" }
+                    }
+                }
+                previous?.pcm?.close(); previous?.pcm = null
+                previous?.snapshot?.close(); previous?.snapshot = null
+                state = "closed_outcome_unknown"; open = false; save(); current = null
+                replacingActiveSession = previous != null
             }
-            FactoryInteractionAdmission.acquire(this)
+            if (!replacingActiveSession) FactoryInteractionAdmission.acquire(this)
             val lifetime = proof.resources.audio.setupTimeoutMs + proof.resources.audio.durationMs
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - lifetime)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + lifetime, authority, now + proof.resources.audio.setupTimeoutMs)
-            current = value; acquired = null; authority.onRevoked { value.revoked.set(true) }; nonce = request.nonce; open = true; state = "receiving"; save()
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + lifetime, now + proof.resources.audio.setupTimeoutMs)
+            current = value; nonce = request.nonce; open = true; state = "receiving"; save()
             val checkActive = { requirePlaybackStart(value); active() }
             val pcm = if (receive != null) {
                 // Legacy injectable ownership seam used by host tests; production always uses disk.
@@ -169,7 +181,7 @@ internal class FactoryAudioCoordinator(
         } catch (failure: Exception) {
             current?.revoke(); if (current != null && open) { state = "outcome_unknown"; runCatching { save() } }
             throw failure
-        } finally { acquired?.close(); bytes?.fill(0); busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
+        } finally { bytes?.fill(0); busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
     }
     fun sourceVerifier(value: Session): FileShareTransfer.HostVerifier {
         worker(); requireActive(value)
@@ -179,58 +191,47 @@ internal class FactoryAudioCoordinator(
     }
     fun requireActive(value: Session) {
         check(current === value && open && !broken && !value.revoked.get() && SystemClock.elapsedRealtime() < value.expiresAt)
-        value.authority.requireCurrent()
     }
     /** Setup may not consume the time reserved for the complete declared clip. */
     fun requirePlaybackStart(value: Session) {
         requireActive(value)
         check(SystemClock.elapsedRealtime() < value.setupExpiresAt)
     }
-    /** Worker revalidates durable evidence; main will independently recheck volatile authority before sound. */
+    /** Worker revalidates the exact installed caller before sound. */
     fun preparePlay(value: Session, active: () -> Unit) {
         worker(); requirePlaybackStart(value); check(state == "review" && !value.attempted)
-        active(); value.authority.checkBeforeEffect(); check(verify(value.proof.appId) == value.proof)
-        requirePlaybackStart(value); active(); value.authority.checkBeforeEffect()
+        active(); check(verify(value.proof.appId) == value.proof)
+        requirePlaybackStart(value); active()
         check(value.registration != null && !value.registration!!.isRevoked)
         value.attempted = true; state = "play_pending"; save()
     }
     fun verifyReady(value: Session, active: () -> Unit) {
-        worker(); requirePlaybackStart(value); active(); value.authority.checkBeforeEffect()
+        worker(); requirePlaybackStart(value); active()
         check(state == "play_pending" && value.attempted && verify(value.proof.appId) == value.proof)
-        requirePlaybackStart(value); active(); value.authority.checkBeforeEffect(); check(value.registration?.isRevoked == false)
+        requirePlaybackStart(value); active(); check(value.registration?.isRevoked == false)
     }
-    fun close(value: Session?, recovery: Boolean, active: () -> Unit): Intent? {
+    fun close(value: Session?, active: () -> Unit): Intent? {
         worker(); check(!busy && !restoring); active()
-        if (recovery) check(needsRecovery()) else { check(value != null && current === value && open && !broken); check(!value.revoked.get()) }
-        val owned = current
+        check(value != null && current === value && open && !broken)
+        val owned = requireNotNull(current)
         check(owned?.preparing?.get() != true && owned?.playerClean?.get() != false) { "Native audio cleanup remains unconfirmed" }
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
         // No feeder may still read this descriptor. Failed closes retain ownership/admission.
         owned?.pcm?.close(); owned?.pcm = null
         owned?.snapshot?.close(); owned?.snapshot = null
         active()
-        val result = if (!recovery && owned != null) Intent().putExtra("nonce", nonce).putExtra("playbackAttempted", owned.attempted).putExtra("audibilityConfirmed", false) else null
-        state = if (recovery) "closed_outcome_unknown" else "closed"; open = false
+        val result = Intent().putExtra("nonce", nonce).putExtra("playbackAttempted", owned.attempted).putExtra("audibilityConfirmed", false)
+        state = "closed"; open = false
         if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
         save(); broken = false; release(); return result
     }
-    private fun release() { current?.authority?.close(); current = null; FactoryInteractionAdmission.release(this) }
+    private fun release() { current = null; FactoryInteractionAdmission.release(this) }
     companion object {
         const val SETUP_DURATION_MS = 300000L
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("receiving", "review", "play_pending", "outcome_unknown")
         private val CLOSED_STATES = setOf("closed", "closed_outcome_unknown")
         internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)).apply { allowCoreThreadTimeOut(true) }
-        private var recoveryToken: String? = null
-        @Synchronized fun recoveryIntent(context: Context): Intent {
-            recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryAudioActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
-        }
-        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
-            val token = intent.getStringExtra("nativeRecoveryToken")
-            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken") || intent.data != null || intent.clipData != null || intent.selector != null || intent.flags and GRANT_FLAGS != 0) return false
-            recoveryToken = null; return true
-        }
         @Volatile private var instance: FactoryAudioCoordinator? = null
         fun get(context: Context): FactoryAudioCoordinator = instance ?: synchronized(this) {
             instance ?: FactoryAudioCoordinator(context.applicationContext).also {

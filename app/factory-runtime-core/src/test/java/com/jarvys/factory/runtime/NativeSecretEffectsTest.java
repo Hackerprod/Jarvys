@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowAlertDialog;
 import org.robolectric.util.ReflectionHelpers;
-import static com.jarvys.factory.runtime.NativePermissionSessionsTest.idle;
+import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
 /** Real policy leases and native Job wiring; synthetic vault/HTTP only, never live credentials. */
@@ -26,7 +26,7 @@ import static org.junit.Assert.*;
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class NativeSecretEffectsTest {
-    private NativePermissionSessionsTest.Fixture fixture;
+    private NativeOperationSessionsTest.Fixture fixture;
     private FactoryConfig config;
     private NativeEffects effects;
     private final SecretEffectsTest.Vault vault = new SecretEffectsTest.Vault();
@@ -35,7 +35,7 @@ public class NativeSecretEffectsTest {
     private int opened, sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativePermissionSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture();
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"secrets\",\"network\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
                         .put("packageName", fixture.config.documentBroker.packageName)
@@ -65,7 +65,7 @@ public class NativeSecretEffectsTest {
     private JSONObject put() throws Exception { return SecretEffectsPreparedTest.metadata().put("value", SecretEffectsTest.SYNTHETIC); }
     private Map<?, ?> jobs() { return ReflectionHelpers.getField(effects, "jobs"); }
     private Object job() { assertEquals(1, jobs().size()); return jobs().values().iterator().next(); }
-    private NativePermissionSessions.Lease lease() { return ReflectionHelpers.getField(job(), "lease"); }
+    private NativeOperationSessions.Lease lease() { return ReflectionHelpers.getField(job(), "lease"); }
     /** Capture the immutable input owner while authorization is still queued, before Handle takeover. */
     private SecretEffects.Prepared prepared() throws Exception {
         Runnable cancellation = ReflectionHelpers.getField(job(), "cancellation");
@@ -85,15 +85,15 @@ public class NativeSecretEffectsTest {
     }
     private void work() throws Exception { fixture.pump(); queue.next(); idle(); }
 
-    @Test public void deniedPutReleasesNativeInputWithoutConstructingVaultOrAdapter() throws Exception {
-        fixture.provider.deny = true;
+    @Test public void unavailableInstalledSourceReleasesNativeInputWithoutConstructingVaultOrAdapter() throws Exception {
+        fixture.provider.unavailable = true;
         Result result = perform("secrets.put", put());
         SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
         assertTrue(bytes.length > 0); assertNull(ReflectionHelpers.getField(effects, "secrets"));
         fixture.pump();
-        assertEquals("PERMISSION_DENIED", result.error); assertReleased(prepared, bytes);
+        assertEquals("UNAVAILABLE", result.error); assertReleased(prepared, bytes);
         assertTrue(jobs().isEmpty()); assertNull(ReflectionHelpers.getField(effects, "secrets"));
-        assertEquals(0, result.claims); assertTrue(fixture.screen.reviews.isEmpty());
+        assertEquals(0, result.claims); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void approvedCaptureLazilyCreatesAdapterWithDeclaredInputBudget() throws Exception {
@@ -114,7 +114,7 @@ public class NativeSecretEffectsTest {
         // No Save or worker task: this verifies admission/UI only, never AndroidKeyStore.
     }
 
-    @Test public void pauseBeforePolicyResponseReleasesPutAndPreventsLateAdmission() throws Exception {
+    @Test public void pauseBeforeSessionReplyReleasesPutAndPreventsLateAdmission() throws Exception {
         Result result = perform("secrets.put", put());
         SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
         effects.onPause(); fixture.sessions.onPause(); fixture.pump();
@@ -123,38 +123,10 @@ public class NativeSecretEffectsTest {
         assertEquals(0, result.successes);
     }
 
-    @Test public void askTimeoutClearsPutButKeepsReviewUiTombstoneUntilReturn() throws Exception {
-        fixture.provider.nextState = NativeOperationAuthorization.PENDING;
-        Result result = perform("secrets.put", put());
-        SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
-        NativePermissionSessions.Lease lease = lease(); fixture.pump();
-        assertEquals(1, result.claims); assertTrue(fixture.sessions.hasPendingReview());
-        lease.expiry.run(); idle();
-        assertReleased(prepared, bytes); assertEquals("TIMEOUT", result.error); assertTrue(jobs().isEmpty());
-        assertEquals(0, result.releases); assertTrue(result.held);
-        fixture.sessions.onActivityResult(NativePermissionSessions.REVIEW_REQUEST, Activity.RESULT_CANCELED, null); idle();
-        assertEquals(1, result.releases); assertFalse(result.held);
-    }
-
-    @Test public void approvedAskRetainsExactInputAcrossItsOwnHandoffAndUsesOneGrant() throws Exception {
-        installSyntheticAdapter(); fixture.provider.nextState = NativeOperationAuthorization.PENDING;
-        Result result = perform("secrets.put", put());
-        SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
-        NativePermissionSessions.Lease lease = lease(); fixture.pump();
-        effects.onPause(); fixture.sessions.onPause();
-        assertFalse(Arrays.equals(new byte[bytes.length], bytes)); assertEquals(1, jobs().size()); assertEquals(0, opened);
-        fixture.provider.last().state.set(NativeOperationAuthorization.APPROVED);
-        fixture.sessions.onActivityResult(NativePermissionSessions.REVIEW_REQUEST, Activity.RESULT_OK,
-                NativePermissionSessionsTest.returned(lease));
-        fixture.sessions.onResume(); effects.onResume(); work();
-        assertEquals(1, result.successes); assertEquals(1, result.claims); assertEquals(1, result.releases);
-        assertEquals(1, fixture.provider.issued.size()); assertEquals(1, opened); assertReleased(prepared, bytes);
-    }
-
     @Test public void putUsesImmutableSnapshotThenExplicitGetReceivesItsOwnLease() throws Exception {
         installSyntheticAdapter();
         BridgeProtocol.Request request = request("secrets.put", put()); Result saved = new Result(); effects.perform(request, saved);
-        NativePermissionSessions.Lease putLease = lease();
+        NativeOperationSessions.Lease putLease = lease();
         assertFalse(putLease.request.canonicalJson().contains(SecretEffectsTest.SYNTHETIC));
         request.args.put("value", "changed-after-policy-binding"); request.args.getJSONObject("scope").put("origin", "https://changed.example.test");
         work();
@@ -163,7 +135,7 @@ public class NativeSecretEffectsTest {
         assertEquals(0, saved.claims); assertEquals(1, saved.successes); assertTrue(jobs().isEmpty());
         Result read = perform("secrets.get", new JSONObject().put("id", metadata.getString("id"))); work();
         assertEquals(SecretEffectsTest.SYNTHETIC, read.value); assertEquals(2, fixture.provider.issued.size());
-        assertEquals(0, read.claims); assertTrue(fixture.screen.reviews.isEmpty());
+        assertEquals(0, read.claims); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void secretRequestUsesOneBoundGrantAndNativeConnectionInjection() throws Exception {
@@ -173,7 +145,7 @@ public class NativeSecretEffectsTest {
         Result response = perform("secrets.request", new JSONObject().put("id", id).put("request", new JSONObject()
                 .put("url", "https://api.example.test/path").put("method", "POST").put("body", "payload")
                 .put("headers", new JSONObject().put("X-Ordinary", "yes"))));
-        NativePermissionSessions.Lease requestLease = lease();
+        NativeOperationSessions.Lease requestLease = lease();
         assertEquals("secrets.request", requestLease.request.operation);
         JSONObject bound = requestLease.request.details();
         assertEquals(id, bound.getString("id")); assertEquals(7, bound.getJSONObject("request").getInt("bodyBytes"));

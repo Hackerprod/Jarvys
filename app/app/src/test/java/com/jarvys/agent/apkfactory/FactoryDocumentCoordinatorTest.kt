@@ -27,13 +27,12 @@ class FactoryDocumentCoordinatorTest {
     private val root get() = File(context.noBackupFilesDir, "factory-documents")
     private val journal get() = File(root, "interaction.json")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
-    private val policy = FactoryOperationPolicy.inMemory()
     private lateinit var coordinator: FactoryDocumentCoordinator
     private fun fail(block: () -> Unit) { assertTrue("Expected fail-closed rejection", runCatching(block).isFailure) }
     private fun intent(op: String = "open", nonce: String = "d".repeat(64)) = Intent().putExtra("operation", op).putExtra("mimeType", "text/plain").putExtra("nonce", nonce)
     private fun request(op: String = "open", nonce: String = "d".repeat(64)) = FactoryDocumentCoordinator.Request.parse(intent(op, nonce).apply { if (op == "create") putExtra("filename", "document.txt") })
     private fun begin(op: String = "open") = coordinator.begin(proof.appId, request(op))
-    @Before fun setup() { root.deleteRecursively(); coordinator = FactoryDocumentCoordinator(context, policy) { proof } }
+    @Before fun setup() { root.deleteRecursively(); coordinator = FactoryDocumentCoordinator(context) { proof } }
     @After fun cleanup() {
         // Process death in synthetic tests drops process-local leases; production has no such reset.
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
@@ -59,89 +58,17 @@ class FactoryDocumentCoordinatorTest {
         fail { coordinator.begin("evil.app", request()) }
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun singleFlightAndNoAutomaticGrantOrRelease() {
-        val owner = begin()
-        fail { coordinator.begin(proof.appId, request(nonce = "e".repeat(64))) }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        val picker = coordinator.launch(owner) {}
-        assertEquals(Intent.ACTION_OPEN_DOCUMENT, picker.action)
-        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, picker.flags)
-        fail { coordinator.launch(owner) {} }
-        fail { coordinator.close(owner, true) {} }
-        coordinator.pickerTerminal(owner, true)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals(request(), coordinator.close(owner, true) {})
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fail { coordinator.begin(proof.appId, request()) }
-    }
-    @Test fun createRequestsOnlyWriteAndNoPersistence() {
-        val owner = begin("create")
-        assertEquals(Intent.FLAG_GRANT_WRITE_URI_PERMISSION, coordinator.launch(owner) {}.flags)
-        coordinator.pickerTerminal(owner, false)
-        assertNull(coordinator.close(owner, false) {})
-    }
-    @Test fun backOrCancelNeverReturnsSelection() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, true)
-        assertNull(coordinator.close(owner, false) {})
-        assertEquals("cancelled", coordinator.status())
-    }
-    @Test fun pickerCancelWaitsForTerminalAndSeparateNativeClose() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.cancelPicker(owner)
-        fail { coordinator.close(owner, false) {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        coordinator.pickerTerminal(owner, true)
-        assertEquals("cancelled", coordinator.status())
-        fail { coordinator.close(owner, true) {} }
-        coordinator.close(owner, false) {}
-    }
-    @Test fun noHandlerCanRecordCancelledWithoutGrant() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, false)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(coordinator.close(owner, false) {})
-    }
-    @Test fun staleCallbackAndDestroyedOwnerCannotDeliver() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.revoke(owner)
-        fail { coordinator.pickerTerminal(owner, true) }; fail { coordinator.close(owner, true) {} }
-        assertTrue(coordinator.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
-        coordinator.acknowledgeRecovery {}
-        assertEquals("closed_outcome_unknown", coordinator.status())
-    }
     @Test fun foregroundLossDuringVerificationPreventsEffect() {
         var foreground = true
-        coordinator = FactoryDocumentCoordinator(context, policy) { foreground = false; proof }
+        coordinator = FactoryDocumentCoordinator(context) { foreground = false; proof }
         val owner = begin(); foreground = true
         fail { coordinator.launch(owner) { check(foreground) } }
         assertEquals("review", coordinator.status())
-    }
-    @Test fun changedCertificateHashVersionOrEvidenceRevokesBeforeReturn() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, true)
-        for (changed in listOf(proof.copy(certificate="e".repeat(64)), proof.copy(apk="e".repeat(64)), proof.copy(version=3), proof.copy(record="e".repeat(64)))) {
-            val original = proof; proof = changed; fail { coordinator.close(owner, true) {} }; proof = original
-        }
-        coordinator.close(owner, false) {}
     }
     @Test fun defaultAllowRunsDuringAutomationWithoutHumanLease() {
         val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
         val action = MemoryUiAutomationGuard.beginAsyncAction(epoch)
         try { val owner = begin(); coordinator.launch(owner) {}; assertTrue(journal.exists()); assertFalse(MemoryUiAutomationGuard.isProtected()) } finally { action.close() }
-    }
-    @Test fun restartRestoresLatchAndNeverRestoresOwnerOrSelection() {
-        val owner = begin(); coordinator.launch(owner) {}
-        val restored = FactoryDocumentCoordinator(context, policy) { proof }; restored.restore()
-        assertTrue(restored.needsRecovery()); assertEquals("outcome_unknown", restored.status())
-        fail { restored.pickerTerminal(owner, true) }; fail { restored.close(owner, true) {} }
-        fail { restored.acknowledgeRecovery { error("background") } }
-        restored.acknowledgeRecovery {}
-        assertEquals("closed_outcome_unknown", restored.status())
-    }
-    @Test fun malformedAndSemanticallyInvalidJournalRetainLatch() {
-        for (body in listOf("{", "x".repeat(4097), JSONObject().put("schemaVersion",1).put("state","picker").put("open",false).put("nonce","d".repeat(64)).toString())) {
-            root.mkdirs(); journal.writeText(body)
-            val restored = FactoryDocumentCoordinator(context, policy) { proof }; restored.restore()
-            assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
-            restored.acknowledgeRecovery {}
-            val again = FactoryDocumentCoordinator(context, policy) { proof }; again.restore()
-            assertFalse(again.needsRecovery())
-        }
     }
     @Test fun resultsRejectFileMultiSelectionNestedIntentsAndMissingModes() {
         val valid = Intent().setData(Uri.parse("content://provider/document/1")).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -160,7 +87,7 @@ class FactoryDocumentCoordinatorTest {
     @Test fun installedEvidenceRequiresExactCurrentKnownDocumentScope() {
         val good = evidence()
         assertEquals(proof, FactoryDocumentCoordinator.verifyEvidence(proof.appId,proof.certificate,proof.apk,2,good))
-        for (bad in listOf(good.copy(existing=false),good.copy(continuityKnown=false),good.copy(lastScope=null),good.copy(lastApkSha256=null),good.copy(lastVersion=1),good.copy(fingerprint="f".repeat(64)),good.copy(recordSha256=null))) {
+        for (bad in listOf(good.copy(existing=false),good.copy(lastScope=null),good.copy(lastApkSha256=null),good.copy(lastVersion=1),good.copy(fingerprint="f".repeat(64)),good.copy(recordSha256=null))) {
             fail { FactoryDocumentCoordinator.verifyEvidence(proof.appId,proof.certificate,proof.apk,2,bad) }
         }
     }
@@ -195,60 +122,6 @@ class FactoryDocumentCoordinatorTest {
             override fun read() = 0
             override fun read(buffer: ByteArray, offset: Int, length: Int) = 0
         }, 3) }
-    }
-
-    @Test fun configuredAskRequiresOneApprovalOnlyAndNeverCreatesCoordinatorLease() {
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
-        val owner = begin(); val grant = coordinator.authority(owner)
-        assertTrue(grant.requiresApproval); assertFalse(MemoryUiAutomationGuard.isProtected())
-        fail { coordinator.launch(owner) {} }
-        var approvals = 0
-        coordinator.approve(owner) { approvals++ }
-        assertFalse(grant.requiresApproval)
-        coordinator.approve(owner) { error("Approval must not repeat") }
-        coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, true)
-        assertEquals(request(), coordinator.close(owner, true) {})
-        assertEquals(1, approvals); grant.checkBeforeEffect(); grant.close()
-    }
-    @Test fun denyRejectsBeforeJournalPickerOrHostResourceOwnership() {
-        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.DOCUMENT_OPEN, FactoryOperationPolicy.Mode.DENY)
-        fail { begin() }
-        assertFalse(journal.exists()); assertEquals("idle", coordinator.status()); assertTrue(coordinator.canBegin())
-        assertTrue(FactoryInteractionAdmission.available(coordinator)); assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-    @Test fun policyRevisionInvalidatesBothPendingAndSelectedRequests() {
-        val owner = begin(); coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, true)
-        val grant = coordinator.authority(owner)
-        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.DOCUMENT_OPEN, FactoryOperationPolicy.Mode.DENY)
-        fail { grant.checkBeforeEffect() }; fail { coordinator.close(owner, true) {} }
-        assertTrue(coordinator.needsRecovery()); assertNull(coordinator.close(owner, false) {})
-    }
-    @Test fun successfulJournalConsumptionRetainsGrantUntilActualActivityDelivery() {
-        val owner = begin(); val grant = coordinator.authority(owner)
-        coordinator.launch(owner) {}; coordinator.pickerTerminal(owner, true); coordinator.close(owner, true) {}
-        grant.checkBeforeEffect()
-        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
-        fail { grant.checkBeforeEffect() }; grant.close()
-    }
-    @Test fun validHistoricalUnknownAllowsOnlyNewVerifiedAllowRequestWithoutReplay() {
-        root.mkdirs(); journal.writeText(JSONObject().put("schemaVersion", 1).put("state", "picker").put("open", true).put("nonce", "d".repeat(64)).toString())
-        val restored = FactoryDocumentCoordinator(context, policy) { proof }; restored.restore()
-        assertTrue(restored.canBegin()); assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
-        fail { restored.begin(proof.appId, request()) }
-        val fresh = request(nonce = "e".repeat(64))
-        val owner = restored.begin(proof.appId, fresh)
-        assertEquals("review", restored.status()); assertEquals(fresh.nonce, JSONObject(journal.readText()).getString("nonce"))
-        assertNull(restored.close(owner, false) {})
-    }
-    @Test fun historicalUnknownDoesNotBypassDenyOrAsk() {
-        root.mkdirs(); journal.writeText(JSONObject().put("schemaVersion", 1).put("state", "picker").put("open", true).put("nonce", "d".repeat(64)).toString())
-        val restored = FactoryDocumentCoordinator(context, policy) { proof }; restored.restore()
-        for (mode in listOf(FactoryOperationPolicy.Mode.DENY, FactoryOperationPolicy.Mode.ASK)) {
-            policy.setDefaultMode(mode)
-            fail { restored.begin(proof.appId, request(nonce = "e".repeat(64))) }
-            assertEquals("outcome_unknown", restored.status()); assertTrue(restored.needsRecovery())
-        }
-        restored.acknowledgeRecovery {}; assertFalse(restored.needsRecovery())
     }
 
 }

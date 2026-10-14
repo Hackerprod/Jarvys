@@ -15,12 +15,12 @@ import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Process-local, Activity-instance inbox. Only metadata is visible until a native policy lease allows take. */
+/** Process-local, Activity-instance inbox. Payload reads require the current authenticated caller session. */
 public final class IncomingShareInbox implements AutoCloseable {
     public interface Clock { long millis(); }
     /** Native page/session identity. current() must be nonblocking and must not perform provider I/O. */
     public interface Owner { boolean current(); }
-    /** A checked unified ALLOW/ASK lease, not a renderer-controlled Boolean. */
+    /** A checked authenticated operation session, not a renderer-controlled Boolean. */
     public interface Access { void check(); }
     public interface Opener { InputStream open(String contentUri) throws Exception; }
     private final Object lock=new Object();
@@ -162,7 +162,7 @@ public final class IncomingShareInbox implements AutoCloseable {
                 } catch(org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
             }
         }
-        /** Run on bounded I/O executor only, after one unified policy authorization. */
+        /** Run on bounded I/O executor only, while the authenticated caller session remains current. */
         public void prepare(DocumentHandles documents,Access access,Opener opener) throws Exception {
             if(documents==null || access==null || opener==null)throw new IllegalArgumentException();
             try { access.check(); } catch(RuntimeException denied) { close();throw denied; }

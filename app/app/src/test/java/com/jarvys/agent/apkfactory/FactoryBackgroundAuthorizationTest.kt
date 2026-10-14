@@ -39,13 +39,9 @@ class FactoryBackgroundAuthorizationTest {
     private lateinit var proof: FactoryDocumentCoordinator.Proof
     private val sessions = mutableListOf<FactoryOperationAuthorizationProvider.Session>()
     private val verifications = AtomicInteger()
-    private val policyReads = AtomicInteger()
     private val provider = object : FactoryOperationAuthorizationProvider() {
         override fun verifiedCaller(context: Context, caller: String, capabilities: Set<String>): FactoryDocumentCoordinator.Proof {
             verifications.incrementAndGet(); return proof
-        }
-        override fun operationPolicy(context: Context): FactoryOperationPolicy {
-            policyReads.incrementAndGet(); error("Mismatched source reached operation policy")
         }
     }
     @Suppress("DEPRECATION") @Before fun setup() {
@@ -70,17 +66,15 @@ class FactoryBackgroundAuthorizationTest {
         putLong("deadlineElapsedMs", SystemClock.elapsedRealtime() + 8000); putString("expectedSource", source)
     }
     private fun session(hardDeadline: Long?): FactoryOperationAuthorizationProvider.Session {
-        val policy = FactoryOperationPolicy.inMemory()
         val request = NativeOperationRequest.parse("notifications.cancel", "{\"id\":1}")
         val nonce = java.util.UUID.randomUUID().toString().replace("-", "").padEnd(64, '0')
         val binding = if (hardDeadline == null) request.binding(nonce) else request.binding(nonce, identity().bindingEvidence())
-        val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.NOTIFICATIONS_CANCEL, binding)
-        return FactoryOperationAuthorizationProvider.Session(context, uid, caller, nonce, request, proof, grant, binding,
+        return FactoryOperationAuthorizationProvider.Session(context, uid, caller, nonce, request, proof, binding,
             FactoryOperationAuthorizationProvider.sourceStamp(context, caller, uid), {}, {}, hardDeadline).also {
-            sessions += it; FactoryOperationAuthorizationProvider.register(it); it.attachRevocation()
+            sessions += it; FactoryOperationAuthorizationProvider.register(it); it.attachDeadline()
         }
     }
-    @Test fun everyChangedExpectedSourceFieldRejectsBeforeAnyGrant() {
+    @Test fun everyChangedExpectedSourceFieldRejectsBeforeAnySession() {
         val changes = mapOf("certificateSha256" to "d".repeat(64), "apkSha256" to "d".repeat(64), "recordSha256" to "d".repeat(64), "versionCode" to 2)
         for ((field, value) in changes) {
             val changed = JSONObject(identity().canonicalJson()).put(field, value).toString()
@@ -90,13 +84,13 @@ class FactoryBackgroundAuthorizationTest {
         }
         val wrongApp = JSONObject(identity().canonicalJson()).put("appId", "example.other").toString()
         assertThrows(IllegalArgumentException::class.java) { provider.call("acquire_background", null, extras(wrongApp)) }
-        assertEquals(4, verifications.get()); assertEquals(0, policyReads.get())
+        assertEquals(4, verifications.get())
     }
     @Test fun missingAndMalformedBackgroundIdentityRejectBeforeVerification() {
         assertThrows(IllegalArgumentException::class.java) { provider.call("acquire_background", null, extras().apply { remove("expectedSource") }) }
         assertThrows(IllegalArgumentException::class.java) { provider.call("acquire_background", null, extras().apply { putInt("expectedSource", 1) }) }
         assertThrows(com.jarvys.factory.runtime.FactoryException::class.java) { provider.call("acquire_background", null, extras("{}")) }
-        assertEquals(0, verifications.get()); assertEquals(0, policyReads.get())
+        assertEquals(0, verifications.get())
     }
     @Test fun connectedAllowedBackgroundLeaseCannotPassHardDeadlineEvenBeforeTimerRuns() {
         val value = session(SystemClock.elapsedRealtime() + 8000)
@@ -104,14 +98,14 @@ class FactoryBackgroundAuthorizationTest {
         client.check(); assertTrue(value.lease.isConnected)
         ShadowSystemClock.advanceBy(8000, TimeUnit.MILLISECONDS)
         assertThrows(SecurityException::class.java) { client.check() }
-        assertTrue(value.closed.get()); assertThrows(IllegalStateException::class.java) { value.grant.requireCurrent() }
+        assertTrue(value.closed.get()); assertThrows(IllegalStateException::class.java) { value.requireCurrent() }
     }
     @Test fun backgroundTimerClosesConnectedAllowedLeaseWithoutAnotherClientCheck() {
         val value = session(SystemClock.elapsedRealtime() + 8000)
         worker { NativeOperationAuthorization.connect(value.lease, value.nonce, value.binding, { true }, {}) }
         shadowOf(Looper.getMainLooper()).idleFor(8000, TimeUnit.MILLISECONDS)
         assertTrue(value.closed.get()); assertTrue(value.lease.isClosed)
-        assertThrows(IllegalStateException::class.java) { value.grant.requireCurrent() }
+        assertThrows(IllegalStateException::class.java) { value.requireCurrent() }
     }
     @Test fun foregroundConnectedAllowRetainsHistoricalUnboundedLiveLeaseBehavior() {
         val value = session(null)

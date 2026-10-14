@@ -31,12 +31,53 @@ class FactoryInstallCoordinatorTest {
     @After fun after() { fixture.close() }
     private fun fails(action: () -> Unit) { assertTrue("Expected closed authority boundary", runCatching(action).isFailure) }
 
+    @Test fun prepareAutomaticallyRetiresPriorOpenAndUnknownInstallations() {
+        for (prior in listOf("awaiting_user", "outcome_unknown")) {
+            fixture.close(); fixture = InstallTestFixture()
+            fixture.seed(prior, if (prior == "outcome_unknown") 17 else -1)
+            fixture.backend.exists = prior == "outcome_unknown"
+            val oldNonce = fixture.nonce()
+            val result = fixture.prepare()
+            assertEquals("awaiting_user", result.getString("state"))
+            assertNotEquals(oldNonce, fixture.nonce())
+            assertEquals("awaiting_user", fixture.record().getString("state"))
+            assertTrue(fixture.record().getBoolean("interactionOpen"))
+            assertEquals(-1, fixture.record().getInt("sessionId"))
+            if (prior == "outcome_unknown") assertEquals(1, fixture.backend.abandons)
+        }
+    }
+
+    @Test fun prepareDoesNotProceedWhilePreviousPackageInstallerSessionCannotBeAbandoned() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.backend.exists = true
+        fixture.backend.failAbandon = true
+
+        fails { fixture.prepare() }
+
+        assertEquals(0, fixture.backend.availabilityChecks)
+        assertEquals(1, fixture.backend.abandons)
+        assertTrue(fixture.record().getBoolean("interactionOpen"))
+        assertEquals("outcome_unknown", fixture.record().getString("state"))
+        assertTrue(fixture.backend.exists)
+    }
+
+    @Test fun prepareAbandonsOwnedInstallerSessionsWhenPreviousJournalHasNoSessionId() {
+        fixture.seed("staging", -1)
+        fixture.backend.exists = true
+        fixture.backend.ownedIds = listOf(17)
+
+        val result = fixture.prepare()
+
+        assertEquals("awaiting_user", result.getString("state"))
+        assertEquals(listOf(17), fixture.backend.abandonedIds)
+        assertFalse(fixture.backend.exists)
+        assertEquals("awaiting_user", fixture.state())
+    }
+
     @Test fun preparationPersistsExactBindingAndOneShotLaunchWithoutCreatingSession() {
         val result = fixture.prepare()
         assertEquals("awaiting_user", result.getString("state"))
-        assertTrue(result.getBoolean("requires_approval"))
-        assertFalse(result.getBoolean("automatic"))
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         assertEquals(0, fixture.backend.creates)
         assertEquals(fixture.binding.toString(), fixture.record().getJSONObject("binding").toString())
         assertFalse(fixture.coordinator.consumeLaunch("forged"))
@@ -47,12 +88,10 @@ class FactoryInstallCoordinatorTest {
     }
 
 
-    @Test fun defaultAllowStagesAndCommitsWithoutHostApprovalOrGlobalGuard() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+    @Test fun installationStagesAndCommitsWithoutJarvysApproval() {
+        fixture.close(); fixture = InstallTestFixture()
         fixture.signed()
         val result = fixture.prepare()
-        assertFalse(result.getBoolean("requires_approval"))
-        assertTrue(result.getBoolean("automatic"))
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertEquals(0, fixture.backend.creates)
         fixture.coordinator.install {}
@@ -63,54 +102,8 @@ class FactoryInstallCoordinatorTest {
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
-    @Test fun denyStopsBeforeArtifactJournalOrInstallerResources() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.DENY))
-        fails { fixture.prepare() }
-        assertFalse(fixture.artifact.exists())
-        assertFalse(fixture.journal.exists())
-        assertEquals(0, fixture.backend.availabilityChecks)
-        assertEquals(0, fixture.backend.permissionChecks)
-        assertEquals(0, fixture.backend.creates)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-
-    @Test fun policyRevisionWhileAwaitingAskRevokesApprovalAndPreventsSession() {
-        fixture.prepare()
-        assertTrue(fixture.coordinator.approvalRequired())
-        fixture.policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
-        assertEquals("revoked", fixture.state())
-        assertFalse(fixture.coordinator.approvalRequired())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.install {} }
-        assertEquals(0, fixture.backend.creates)
-        assertEquals(0, fixture.backend.commits)
-    }
-
-    @Test fun policyRevisionDuringStagingAbandonsSessionBeforeCommit() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
-        fixture.signed(); fixture.prepare()
-        fixture.backend.afterWrite = { fixture.policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY) }
-        fails { fixture.coordinator.install {} }
-        assertEquals(1, fixture.backend.creates)
-        assertEquals(1, fixture.backend.writes)
-        assertEquals(1, fixture.backend.abandons)
-        assertEquals(0, fixture.backend.commits)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-
-    @Test fun policyRevisionAfterCommitPreventsOpeningSystemConfirmation() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
-        fixture.signed(); fixture.prepare(); fixture.coordinator.install {}
-        fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION, Intent("synthetic.confirm"))
-        fixture.policy.revokeActive()
-        fails { fixture.coordinator.takeSystemIntent {} }
-        assertEquals(1, fixture.backend.commits)
-        assertEquals(1, fixture.backend.abandons)
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-
     @Test fun stopAfterCommitPreventsOpeningSystemConfirmation() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+        fixture.close(); fixture = InstallTestFixture()
         fixture.signed(); fixture.prepare(); fixture.coordinator.install {}
         fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION, Intent("synthetic.confirm"))
         fixture.token.cancel()
@@ -129,7 +122,7 @@ class FactoryInstallCoordinatorTest {
     }
 
     @Test fun actualSystemConfirmationRefusesAutomatedInFlightEntryWithoutConsumingIntent() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+        fixture.close(); fixture = InstallTestFixture()
         fixture.signed(); fixture.prepare(); fixture.coordinator.install {}
         val confirmation = Intent("synthetic.confirm")
         fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION, confirmation)
@@ -165,18 +158,16 @@ class FactoryInstallCoordinatorTest {
         assertTrue(dispatched)
         fails { fixture.coordinator.install {} }
         fails { fixture.coordinator.takeSystemIntent {} }
-        fails { fixture.coordinator.closeInteraction { error("Not foreground") } }
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.coordinator.closeInteraction {}
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
         assertEquals(0, fixture.backend.creates)
         assertEquals(0, fixture.backend.commits)
     }
 
-    @Test fun permissionIsQueriedOnlyAfterProtectionAndDurableReviewExist() {
+    @Test fun permissionIsQueriedOnlyAfterInstallRequestIsDurable() {
         fixture.backend.beforeAvailability = {
-            assertTrue(MemoryUiAutomationGuard.isProtected())
+            assertFalse(MemoryUiAutomationGuard.isProtected())
             assertTrue(fixture.journal.exists())
             assertTrue(fixture.record().getBoolean("interactionOpen"))
             assertEquals(-1, fixture.record().getInt("sessionId"))
@@ -195,7 +186,6 @@ class FactoryInstallCoordinatorTest {
         fails { fixture.coordinator.install {} }
         assertEquals(0, fixture.backend.creates)
         assertEquals(0, fixture.backend.commits)
-        fixture.coordinator.closeInteraction {}
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
@@ -207,26 +197,24 @@ class FactoryInstallCoordinatorTest {
         fails { fixture.coordinator.takeSystemIntent {} }
         assertEquals(0, fixture.backend.creates)
         assertEquals(0, fixture.backend.commits)
-        fixture.coordinator.closeInteraction {}
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
-    @Test fun unavailableStatesSurviveRestartWithoutAuthorityOrGlobalGuard() {
+    @Test fun unavailableInstallRequestIsClosedAutomaticallyOnRestart() {
         for (state in listOf("permission_required", "permission_unavailable", "installation_unavailable")) {
             fixture.seed(state)
             fixture.restart()
-            assertEquals(state, fixture.state())
+            assertEquals("closed_outcome_unknown", fixture.state())
             assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
             assertFalse(MemoryUiAutomationGuard.isProtected())
             fails { fixture.coordinator.install {} }
-            fixture.coordinator.closeInteraction {}
             assertFalse(MemoryUiAutomationGuard.isProtected())
         }
         assertEquals(0, fixture.backend.creates)
         assertEquals(0, fixture.backend.commits)
     }
 
-    @Test fun manualPermissionGrantDoesNotResumeOldRequestButFreshRequestRechecks() {
+    @Test fun newRequestRechecksAndroidInstallSourceAvailability() {
         fixture.backend.allowed = false
         fixture.prepare()
         val oldNonce = fixture.nonce()
@@ -235,7 +223,6 @@ class FactoryInstallCoordinatorTest {
         fails { fixture.coordinator.install {} }
         assertEquals(1, fixture.backend.availabilityChecks)
         assertEquals(0, fixture.backend.creates)
-        fixture.coordinator.closeInteraction {}
         assertEquals("awaiting_user", fixture.prepare().getString("state"))
         assertNotEquals(oldNonce, fixture.nonce())
         assertEquals(2, fixture.backend.availabilityChecks)
@@ -243,12 +230,12 @@ class FactoryInstallCoordinatorTest {
         assertEquals(0, fixture.backend.commits)
     }
 
-    @Test fun automatedEntryCannotAcquireNativeApproval() {
+    @Test fun automatedPreparationNeedsNoJarvysApproval() {
         val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
-        assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { fails { fixture.prepare() } })
-        assertEquals(0, fixture.backend.availabilityChecks)
+        assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { assertEquals("awaiting_user", fixture.prepare().getString("state")) })
+        assertEquals(1, fixture.backend.availabilityChecks)
         assertEquals(0, fixture.backend.permissionChecks)
-        assertFalse(fixture.journal.exists())
+        assertTrue(fixture.journal.exists())
         assertEquals(0, fixture.backend.creates)
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
@@ -264,20 +251,18 @@ class FactoryInstallCoordinatorTest {
         assertEquals("awaiting_user", fixture.state())
     }
 
-    @Test fun cancellationRevokesApprovalAndReleasesAskGuard() {
+    @Test fun cancellationRevokesInstallRequestBeforeStaging() {
         fixture.prepare()
         fixture.token.cancel()
         assertEquals("revoked", fixture.state())
         fails { fixture.coordinator.install {} }
         assertEquals(0, fixture.backend.creates)
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction { error("Not foreground") } }
-        fixture.coordinator.closeInteraction {}
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertFalse(fixture.artifact.exists())
     }
 
-    @Test fun scopeRevokedBeforeApprovalNeverCreatesSession() {
+    @Test fun scopeRevokedBeforeInstallNeverCreatesSession() {
         var authorized = true
         fixture.prepare { check(authorized) }
         authorized = false
@@ -359,7 +344,6 @@ class FactoryInstallCoordinatorTest {
 
     @Test fun pendingSystemUiRequiresCurrentAuthorityAndForegroundAndIntentIsOneShot() {
         fixture.signed(); fixture.prepare(); fixture.coordinator.install {}
-        assertFalse(fixture.coordinator.approvalRequired())
         assertFalse(MemoryUiAutomationGuard.isProtected())
         val confirmation = Intent("synthetic.confirm")
         fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION, confirmation)
@@ -375,11 +359,11 @@ class FactoryInstallCoordinatorTest {
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
-    @Test fun restartNeverReplaysApprovalCommitOrUnavailableSystemIntent() {
-        for ((prior, expected) in listOf("awaiting_user" to "interrupted_before_commit", "staging" to "interrupted_before_commit", "committing" to "outcome_unknown", "pending_system" to "outcome_unknown", "system_ui_open" to "outcome_unknown")) {
+    @Test fun restartNeverReplaysCommitOrUnavailableSystemIntent() {
+        for (prior in listOf("awaiting_user", "staging", "committing", "pending_system", "system_ui_open", "outcome_unknown")) {
             fixture.seed(prior, 17)
             fixture.restart()
-            assertEquals(expected, fixture.state())
+            assertEquals("closed_outcome_unknown", fixture.state())
             fails { fixture.coordinator.install {} }
             fails { fixture.coordinator.takeSystemIntent {} }
             assertFalse(fixture.coordinator.consumeLaunch("forged"))
@@ -396,9 +380,7 @@ class FactoryInstallCoordinatorTest {
         assertEquals("succeeded", fixture.coordinator.cancel().getString("state"))
         assertEquals(PackageInstaller.STATUS_SUCCESS, fixture.coordinator.status().getInt("system_status"))
         assertEquals(0, fixture.backend.abandons)
-        fails { fixture.coordinator.closeInteraction {} }
         fixture.backend.exists = false
-        fixture.coordinator.closeInteraction {}
         assertEquals("succeeded", fixture.state())
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
@@ -407,7 +389,6 @@ class FactoryInstallCoordinatorTest {
         fixture.seed("outcome_unknown", 17)
         assertEquals("cancelled_outcome_unknown", fixture.coordinator.cancel().getString("state"))
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.coordinator.closeInteraction {}
         assertEquals("cancelled_outcome_unknown", fixture.state())
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
@@ -466,14 +447,13 @@ class FactoryInstallCoordinatorTest {
         assertEquals(0, fixture.backend.commits)
     }
 
-    @Test fun lateTerminalReconciliationNeverReopensHumanClosedInteraction() {
+    @Test fun lateTerminalReconciliationNeverReopensClosedInteraction() {
         for ((status, expected) in listOf(
             PackageInstaller.STATUS_SUCCESS to "succeeded",
             PackageInstaller.STATUS_FAILURE_ABORTED to "aborted_by_system"
         )) {
             fixture.seed("outcome_unknown", 17)
             fixture.coordinator.cancel()
-            fixture.coordinator.closeInteraction {}
             assertFalse(MemoryUiAutomationGuard.isProtected())
             assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
             val automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch()
@@ -493,7 +473,6 @@ class FactoryInstallCoordinatorTest {
         fixture.seed("outcome_unknown", 17)
         val oldNonce = fixture.nonce()
         fixture.coordinator.cancel()
-        fixture.coordinator.closeInteraction {}
         fixture.signed()
         fixture.prepare()
         fixture.coordinator.install {}
@@ -519,7 +498,6 @@ class FactoryInstallCoordinatorTest {
         assertEquals("cancelled_outcome_unknown", fixture.coordinator.cancel().getString("state"))
         assertEquals(0, fixture.backend.abandons)
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.coordinator.closeInteraction {}
         assertEquals("cancelled_outcome_unknown", fixture.state())
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
         assertFalse(MemoryUiAutomationGuard.isProtected())
@@ -536,7 +514,6 @@ class FactoryInstallCoordinatorTest {
         assertEquals("cancelled_outcome_unknown", fixture.coordinator.cancel().getString("state"))
         assertEquals(1, fixture.backend.abandons)
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.coordinator.closeInteraction {}
         assertEquals("cancelled_outcome_unknown", fixture.state())
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertEquals(0, fixture.backend.commits)
@@ -553,7 +530,6 @@ class FactoryInstallCoordinatorTest {
         assertEquals(1, fixture.backend.abandons)
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
         assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction {} }
         assertEquals(0, fixture.backend.commits)
     }
 
@@ -571,10 +547,8 @@ class FactoryInstallCoordinatorTest {
         fixture.seed("committing", 17); fixture.backend.exists = true
         fixture.backend.keepOnAbandon = true
         assertEquals("cancel_requested", fixture.coordinator.cancel().getString("state"))
-        fails { fixture.coordinator.closeInteraction {} }
         fixture.backend.failAbandon = true
         assertEquals("outcome_unknown", fixture.coordinator.cancel().getString("state"))
-        fails { fixture.coordinator.closeInteraction {} }
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
@@ -591,7 +565,7 @@ class FactoryInstallCoordinatorTest {
     }
 
     @Test fun stopLatchedDuringFinalValidationCannotCommitWhileItsCallbackWaitsForCoordinatorLock() {
-        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+        fixture.close(); fixture = InstallTestFixture()
         fixture.signed()
         val stopper = Executors.newSingleThreadExecutor()
         var stopped: java.util.concurrent.Future<Boolean>? = null
@@ -657,13 +631,11 @@ class FactoryInstallCoordinatorTest {
             assertTrue(writing.await(10, TimeUnit.SECONDS))
             fixture.token.cancel()
             assertEquals("revoked", fixture.state())
-            fails { fixture.coordinator.closeInteraction {} }
             assertFalse(MemoryUiAutomationGuard.isProtected())
             release.countDown()
             assertTrue(work.get(10, TimeUnit.SECONDS))
             assertEquals(0, fixture.backend.commits)
             assertEquals(1, fixture.backend.abandons)
-            fixture.coordinator.closeInteraction {}
             assertFalse(MemoryUiAutomationGuard.isProtected())
         } finally { release.countDown(); executor.shutdownNow(); executor.awaitTermination(10, TimeUnit.SECONDS) }
     }
@@ -688,187 +660,23 @@ class FactoryInstallCoordinatorTest {
         fixture.seed("awaiting_user")
         assertTrue(fixture.journal.renameTo(File(fixture.root, "session.json.bak")))
         fixture.restart()
-        assertEquals("interrupted_before_commit", fixture.state())
+        assertEquals("closed_outcome_unknown", fixture.state())
         assertFalse(MemoryUiAutomationGuard.isProtected())
         fails { fixture.coordinator.install {} }
         assertEquals(0, fixture.backend.creates)
     }
 
-    private fun damageInstallJournal() {
-        fixture.journal.parentFile!!.mkdirs()
-        fixture.journal.writeText("{broken")
-        fixture.coordinator.restore()
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-
-    @Test fun damagedRecoveryAbandonsOnlyOwnedSessionsAndRequiresForegroundClose() {
-        damageInstallJournal()
-        fixture.backend.ownedIds = listOf(17, 18)
-        fails { fixture.coordinator.recoverDamagedJournal { error("Not foreground") } }
-        assertEquals(0, fixture.backend.abandons)
-        fixture.coordinator.recoverDamagedJournal {}
-        assertEquals(listOf(17, 18), fixture.backend.abandonedIds)
-        assertEquals("recovery_outcome_unknown", fixture.state())
-        assertEquals(-1, fixture.coordinator.status().getInt("session_id"))
-        assertEquals(0, fixture.record().getJSONObject("binding").length())
-        assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.install {} }
-        assertFalse(fixture.coordinator.consumeLaunch("forged"))
-        fails { fixture.coordinator.closeInteraction { error("Not foreground") } }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.coordinator.closeInteraction {}
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals("recovery_outcome_unknown", fixture.state())
-        assertEquals(0, fixture.backend.creates)
-        assertEquals(0, fixture.backend.commits)
-    }
-
-    @Test fun damagedRecoverySessionQueryFailureCannotInventOutcome() {
-        damageInstallJournal()
-        fixture.backend.ownedQueryFailure = true
-        fails { fixture.coordinator.recoverDamagedJournal {} }
-        assertEquals(0, fixture.backend.abandons)
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction {} }
-    }
-
-    @Test fun damagedRecoveryRejectsOversizedDuplicateAndNegativeSessionListsBeforeAbandon() {
-        damageInstallJournal()
-        for (ids in listOf((0..16).toList(), listOf(17, 17), listOf(-1, 17))) {
-            fixture.backend.ownedIds = ids
-            fails { fixture.coordinator.recoverDamagedJournal {} }
-            assertEquals(0, fixture.backend.abandons)
-            assertEquals("journal_unavailable", fixture.state())
-            assertFalse(MemoryUiAutomationGuard.isProtected())
-        }
-    }
-
-    @Test fun damagedRecoveryStopsBeforeNextAbandonWhenForegroundIsLost() {
-        damageInstallJournal()
-        fixture.backend.ownedIds = listOf(17, 18)
-        var foreground = true
-        fixture.backend.beforeAbandon = { foreground = false }
-        fails { fixture.coordinator.recoverDamagedJournal { check(foreground) } }
-        assertEquals(listOf(17), fixture.backend.abandonedIds)
-        assertEquals(listOf(18), fixture.backend.ownedIds)
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction {} }
-    }
-
-    @Test fun damagedRecoveryRemainsUnavailableIfFinalQueryFindsNewSession() {
-        damageInstallJournal()
-        fixture.backend.ownedIds = listOf(17)
-        fixture.backend.beforeOwnedQuery = {
-            if (fixture.backend.ownedQueries == 2) fixture.backend.ownedIds = listOf(99)
-        }
-        fails { fixture.coordinator.recoverDamagedJournal {} }
-        assertEquals(listOf(17), fixture.backend.abandonedIds)
-        assertEquals(listOf(99), fixture.backend.ownedIds)
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-    }
-
-    @Test fun damagedRecoveryCannotOverlapAnotherRecoveryOrOrdinaryCancellation() {
-        damageInstallJournal()
-        val querying = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val executor = Executors.newSingleThreadExecutor()
-        fixture.backend.beforeOwnedQuery = {
-            if (fixture.backend.ownedQueries == 1) {
-                querying.countDown()
-                check(release.await(10, TimeUnit.SECONDS))
-            }
-        }
-        val recovery = executor.submit<Boolean> { runCatching { fixture.coordinator.recoverDamagedJournal {} }.isSuccess }
-        try {
-            assertTrue(querying.await(10, TimeUnit.SECONDS))
-            fails { fixture.coordinator.recoverDamagedJournal {} }
-            fails { fixture.coordinator.cancel() }
-            fails { fixture.coordinator.closeInteraction {} }
-            assertFalse(MemoryUiAutomationGuard.isProtected())
-            release.countDown()
-            assertTrue(recovery.get(10, TimeUnit.SECONDS))
-            assertEquals("recovery_outcome_unknown", fixture.state())
-            assertEquals(0, fixture.backend.abandons)
-        } finally { release.countDown(); executor.shutdownNow(); executor.awaitTermination(10, TimeUnit.SECONDS) }
-    }
-
-    @Test fun damagedRecoveryCannotRaceActiveStaging() {
-        fixture.signed(); fixture.prepare()
-        val writing = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val executor = Executors.newSingleThreadExecutor()
-        fixture.backend.afterWrite = { writing.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
-        val work = executor.submit<Boolean> { runCatching { fixture.coordinator.install {} }.isFailure }
-        try {
-            assertTrue(writing.await(10, TimeUnit.SECONDS))
-            fails { fixture.coordinator.recoverDamagedJournal {} }
-            assertEquals(0, fixture.backend.ownedQueries)
-            assertEquals(0, fixture.backend.abandons)
-            fixture.token.cancel()
-            release.countDown()
-            assertTrue(work.get(10, TimeUnit.SECONDS))
-            assertEquals(0, fixture.backend.commits)
-        } finally { release.countDown(); executor.shutdownNow(); executor.awaitTermination(10, TimeUnit.SECONDS) }
-    }
-
-    @Test fun damagedRecoveryJournalWriteFailureCannotClaimRecovery() {
-        damageInstallJournal()
-        fixture.backend.beforeOwnedQuery = {
-            if (fixture.backend.ownedQueries == 2) {
-                check(fixture.root.deleteRecursively())
-                fixture.root.writeText("synthetic path collision preventing durable recovery")
-            }
-        }
-        fails { fixture.coordinator.recoverDamagedJournal {} }
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction {} }
-        assertEquals(0, fixture.backend.creates)
-        assertEquals(0, fixture.backend.commits)
-    }
-
-    @Test fun recoveredInteractionCloseRequeriesOwnedSessionsAndFailsClosed() {
-        damageInstallJournal()
-        fixture.coordinator.recoverDamagedJournal {}
-        fixture.backend.ownedIds = listOf(88)
-        fails { fixture.coordinator.closeInteraction {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals(0, fixture.backend.abandons)
-        fixture.backend.ownedIds = emptyList()
-        fixture.backend.ownedQueryFailure = true
-        fails { fixture.coordinator.closeInteraction {} }
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fixture.backend.ownedQueryFailure = false
-        fixture.coordinator.closeInteraction {}
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        assertEquals("recovery_outcome_unknown", fixture.state())
-    }
-
-    @Test fun corruptJournalBlocksInstallFamilyWithoutCreatingGlobalGuard() {
-        fixture.journal.parentFile!!.mkdirs(); fixture.journal.writeText("{broken")
-        fixture.coordinator.restore()
-        assertEquals("journal_unavailable", fixture.state())
-        assertFalse(MemoryUiAutomationGuard.isProtected())
-        fails { fixture.coordinator.closeInteraction {} }
-        fails { fixture.prepare() }
-        assertEquals(0, fixture.backend.creates)
-    }
 }
 
 /** Shared synthetic fixture. Reflection replaces only the process singleton and releases test-owned leases. */
-internal class InstallTestFixture(private val fullDistribution: Boolean = true, val policy: FactoryOperationPolicy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)) {
+internal class InstallTestFixture(private val fullDistribution: Boolean = true) {
     val context: Context = ApplicationProvider.getApplicationContext()
     val root = File(context.noBackupFilesDir, "factory-install")
     val journal = File(root, "session.json")
     val artifact = File(root, "approved.apk")
     val backend = FakeInstallBackend()
     val token = CancellationToken.cancellable()
-    var bytes = "synthetic unsigned approval-only fixture".toByteArray()
+    var bytes = "synthetic unsigned installer fixture".toByteArray()
     val binding = JSONObject().put("app_id", "org.example.installfixture").put("app_name", "Synthetic fixture")
         .put("version_code", 1).put("version_name", "1.0").put("project_id", "synthetic-project")
         .put("scope_version", 3).put("receipt_sha256", "b".repeat(64)).put("input_path", "dist/test.apk")
@@ -877,7 +685,7 @@ internal class InstallTestFixture(private val fullDistribution: Boolean = true, 
     init {
         singleton()?.let { release(it) }
         root.deleteRecursively()
-        coordinator = FactoryInstallCoordinator(context, backend, fullDistribution, policy)
+        coordinator = FactoryInstallCoordinator(context, backend, fullDistribution)
         setSingleton(coordinator)
     }
     fun prepare(validate: () -> Unit = {}) = coordinator.prepare(binding, bytes, validate, token)
@@ -889,12 +697,8 @@ internal class InstallTestFixture(private val fullDistribution: Boolean = true, 
         journal.writeText(JSONObject().put("schemaVersion", 1).put("nonce", "12345678-1234-1234-1234-123456789abc")
             .put("binding", binding).put("sessionId", sessionId).put("state", state)
             .put("interactionOpen", true).put("systemStatus", JSONObject.NULL).toString())
-        // Restore historical family state without creating live operation authority.
-        coordinator.restore()
-        val restored = record().put("state", state)
-        journal.writeText(restored.toString())
     }
-    fun restart() { release(coordinator); coordinator = FactoryInstallCoordinator(context, backend, fullDistribution, policy); setSingleton(coordinator); coordinator.restore() }
+    fun restart() { release(coordinator); coordinator = FactoryInstallCoordinator(context, backend, fullDistribution); setSingleton(coordinator); coordinator.restore() }
     fun signed() {
         val pair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
         val certificate = EphemeralFactoryCertificate.create(pair.public.encoded) { data ->

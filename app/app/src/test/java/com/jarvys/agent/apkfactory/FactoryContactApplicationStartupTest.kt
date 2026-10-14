@@ -39,9 +39,9 @@ class FactoryContactApplicationStartupTest {
     @After fun cleanup() {
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = FactoryContactCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.get(null) as? FactoryContactCoordinator
-        if (contacts?.needsRecovery() == true) worker { contacts.close(null, true, true) {} }
+
         val external = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.get(null) as? FactoryExternalLaunchCoordinator
-        if (external?.needsRecovery() == true) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} }
+
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (name in DIRECTORIES) File(context.noBackupFilesDir, name).deleteRecursively()
@@ -68,22 +68,17 @@ class FactoryContactApplicationStartupTest {
         } finally { release.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = contactsCreatedByApplication()
-        assertFalse(contacts.isBusy()); assertTrue(contacts.needsRecovery()); assertEquals("outcome_unknown", contacts.status()); assertNull(contacts.session())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(runCatching { worker { contacts.close(null, true, false) {} } }.isFailure)
-        assertTrue(runCatching { worker { contacts.close(null, true, true) { error("No human confirmation") } } }.isFailure)
-        assertEquals(Unit, worker { contacts.close(null, true, true) {} })
-        assertEquals("closed_outcome_unknown", contacts.status()); assertNull(contacts.session())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        assertFalse(contacts.isBusy()); assertEquals("closed_outcome_unknown", contacts.status()); assertNull(contacts.session())
+        assertTrue(contacts.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertTrue(FactoryInteractionAdmission.available())
         val journal = JSONObject(File(root, "interaction.json").readText())
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet()); assertFalse(journal.getBoolean("open"))
     }
     @Test fun openPickerJournalReservesOnlyItsFamilyBeforeAsynchronousRestore() = startup(saved("launch_pending"))
     @Test fun selectedJournalRestoresNoContactDatumOrCallbackAuthority() = startup(saved("selected"))
     @Test fun initialReviewJournalRestoresOnlyUnknownOutcome() = startup(saved("review"))
-    @Test fun corruptJournalNeedsRecoveryWithoutBlockingAutomation() = startup("{")
-    @Test fun realStartupKeepsExternalRecoveryWhenContactRecoveryClosesFirst() = simultaneousRecovery(contactsFirst = true)
-    @Test fun realStartupKeepsContactRecoveryWhenExternalRecoveryClosesFirst() = simultaneousRecovery(contactsFirst = false)
+    @Test fun corruptJournalIsClosedWithoutBlockingAutomation() = startup("{")
+    @Test fun realStartupClosesContactAndExternalJournalsAutomatically() = simultaneousRecovery(contactsFirst = true)
     private fun simultaneousRecovery(contactsFirst: Boolean) {
         root.mkdirs(); externalRoot.mkdirs()
         File(root, "interaction.json").writeText(saved("selected")); File(externalRoot, "interaction.json").writeText(saved("launch_pending", "e".repeat(64)))
@@ -99,13 +94,10 @@ class FactoryContactApplicationStartupTest {
         } finally { contactsRelease.countDown(); externalRelease.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = contactsCreatedByApplication(); val external = externalCreatedByApplication()
-        assertTrue(contacts.needsRecovery()); assertTrue(external.needsRecovery()); assertNull(contacts.session()); assertNull(external.session())
-        if (contactsFirst) worker { contacts.close(null, true, true) {} } else worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} }
-        assertTrue(if (contactsFirst) external.needsRecovery() else contacts.needsRecovery())
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
-        if (contactsFirst) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} } else worker { contacts.close(null, true, true) {} }
+        assertEquals("closed_outcome_unknown", contacts.status()); assertEquals("closed_outcome_unknown", external.status()); assertNull(contacts.session()); assertNull(external.session())
+        assertTrue(contacts.canBegin()); assertTrue(external.canBegin())
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
         for (directory in listOf(root, externalRoot)) {
             val saved = JSONObject(File(directory, "interaction.json").readText())
             assertEquals(setOf("schemaVersion", "state", "open", "nonce"), saved.keys().asSequence().toSet())
