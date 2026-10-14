@@ -61,12 +61,12 @@ public class LocalRunStoreInterruptReadParityTest {
                 SESSION, ConversationLedgerPager.NO_CURSOR, 2);
         LocalRunStore.ConversationTimelinePage interruptedPage = interrupted(() ->
                 interrupted.readConversationTimelinePage(SESSION, ConversationLedgerPager.NO_CURSOR, 2));
-        assertEquals(ordinaryPage.events, interruptedPage.events);
+        assertEquals(stable(ordinaryPage.events), stable(interruptedPage.events));
         assertEquals(ordinaryPage.olderCursor, interruptedPage.olderCursor);
         assertEquals(ordinaryPage.hasOlder, interruptedPage.hasOlder);
 
-        assertEquals(ordinary.readRecentConversationTimeline(SESSION),
-                interrupted(() -> interrupted.readRecentConversationTimeline(SESSION)));
+        assertEquals(stable(ordinary.readRecentConversationTimeline(SESSION)),
+                stable(interrupted(() -> interrupted.readRecentConversationTimeline(SESSION))));
         assertEquals(jsonValues(ordinary.readUserMessagesAfter(SESSION, USER_ID)),
                 interrupted(() -> jsonValues(interrupted.readUserMessagesAfter(SESSION, USER_ID))));
         assertEquals(jsonValues(ordinary.listConversations()),
@@ -162,5 +162,10 @@ public class LocalRunStoreInterruptReadParityTest {
 
     private interface ThrowingSupplier<T> {
         T get() throws Exception;
+    }
+
+    /** Event payloads such as ToolActivity and CrewMissionSnapshot have identity-based toString; compare content only. */
+    private static String stable(Object value) {
+        return String.valueOf(value).replaceAll("@[0-9a-fA-F]+","@obj");
     }
 }
