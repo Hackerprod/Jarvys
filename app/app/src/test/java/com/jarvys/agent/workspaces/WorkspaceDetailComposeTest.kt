@@ -49,6 +49,7 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithTag("workspace-chat-timeline").assertIsDisplayed()
         compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
         compose.onNodeWithText("Worker question").assertIsDisplayed()
+        compose.onNodeWithTag("chat-message-list").performScrollToNode(hasText("Workspace answer"))
         compose.onNodeWithText("Workspace answer", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("tool-group-2").assertIsDisplayed()
         compose.onNodeWithText("Mission").assertDoesNotExist()

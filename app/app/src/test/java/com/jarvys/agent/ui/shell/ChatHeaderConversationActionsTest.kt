@@ -29,6 +29,8 @@ class ChatHeaderConversationActionsTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
     @Test fun headerMenuRenamesAndConfirmsDeletingItsConversation() {
+        // Keep Compose animations under test-clock control while the rename text field is mounted.
+        compose.mainClock.autoAdvance = false
         val calls = mutableListOf<Triple<String, ConversationAction, String?>>()
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalReducedMotion provides true) {

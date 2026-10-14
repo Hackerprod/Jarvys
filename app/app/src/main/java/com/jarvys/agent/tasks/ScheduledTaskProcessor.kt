@@ -98,8 +98,11 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             if (!result.outcome.equals("COMPLETED", ignoreCase = true)) return permanentFailure(task, scheduledFor,
                 TaskRunCause.EXECUTION_FAILED, result.outcome, toolCalls, currentModel(), occurrenceId)
             val response = scope.respondent.result()
-            val finalText = displayText(result.text.orEmpty())
-            val noVisibleResult = finalText.isBlank() || finalText == NO_REPLY
+            val rawFinalText = result.text.orEmpty()
+            val finalText = displayText(rawFinalText)
+            // Compare the control token before Markdown sanitization: that projection removes
+            // underscores, so NO_REPLY would otherwise become ordinary visible text (NOREPLY).
+            val noVisibleResult = finalText.isBlank() || rawFinalText.trim().equals(NO_REPLY, ignoreCase = true)
 
             if (noVisibleResult && task.delivery == TaskDelivery.ONLY_IF_NOTABLE) {
                 val recovered = recoverIncident(task)
@@ -149,7 +152,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             }
             if (isTransient(failure)) return TaskExecutionResult("RETRYABLE", "NOT_APPLICABLE",
                 toolsCalled = toolCalls.toList(), causeCode = transientCause(failure),
-                causeDetail = failure.message?.takeIf(String::isNotBlank), model = currentModel())
+                causeDetail = transientCauseDetail(failure), model = currentModel())
             val (cause, detail) = normalizedCause(failure)
             return permanentFailure(task, scheduledFor, cause, detail, toolCalls, currentModel(), occurrenceId)
         } finally {
@@ -302,6 +305,21 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         is ProviderTransportException, is IOException -> TaskRunCause.NETWORK
         is CodexResponseException -> TaskRunCause.PROVIDER_UNAVAILABLE
         else -> TaskRunCause.NETWORK
+    }
+
+    /** Keep the provider's underlying transport detail when an adapter wraps it for classification. */
+    private fun transientCauseDetail(error: RuntimeException): String? {
+        val seen = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+        var cause: Throwable? = error
+        var detail: String? = null
+        while (cause != null && seen.add(cause)) {
+            if (cause is ProviderTransportException || cause is IOException ||
+                cause is ProviderHttpException || cause is CodexResponseException) {
+                cause.message?.takeIf(String::isNotBlank)?.let { detail = it }
+            }
+            cause = cause.cause
+        }
+        return detail ?: error.message?.takeIf(String::isNotBlank)
     }
 
     private fun normalizedCause(error: RuntimeException): Pair<TaskRunCause, String?> = when (error) {
