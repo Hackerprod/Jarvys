@@ -314,8 +314,9 @@ object AgentRunUiState {
         val durationMs: Long,
     )
 
-    private data class WorkingSnapshot(val sessionId: String, var snapshot: AgentRunUiSnapshot)
-    private val workingSnapshot = ThreadLocal<WorkingSnapshot?>()
+    // A thread carries only its target session. The snapshot itself always lives in
+    // sessionSnapshots, so a long-running run cannot write an old thread-local copy back.
+    private val workingSession = ThreadLocal<String?>()
     private val approvalSessionContext = ThreadLocal<String?>()
     private val sessionSnapshots = mutableMapOf<String, AgentRunUiSnapshot>()
     private val sessionOwners = mutableMapOf<String, RunOwnership>()
@@ -324,16 +325,20 @@ object AgentRunUiState {
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
     private val _state = object {
         var value: AgentRunUiSnapshot
-            get() = workingSnapshot.get()?.snapshot ?: publishedState.value
+            get() {
+                val sessionId = workingSession.get() ?: return publishedState.value
+                return synchronized(lock) {
+                    sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
+                }
+            }
             set(value) {
-                val working = workingSnapshot.get()
-                if (working != null) synchronized(lock) {
-                    working.snapshot = value
-                    sessionSnapshots[working.sessionId] = value
-                    sessionOwners[working.sessionId]?.takeIf {
-                        it.active && it.sessionId == working.sessionId && value.running
+                val sessionId = workingSession.get()
+                if (sessionId != null) synchronized(lock) {
+                    sessionSnapshots[sessionId] = value
+                    sessionOwners[sessionId]?.takeIf {
+                        it.active && it.sessionId == sessionId && value.running
                     }?.liveSnapshot = value
-                    if (visibleSessionId == working.sessionId) publishedState.value = value
+                    if (visibleSessionId == sessionId) publishedState.value = value
                     else refreshVisibleInteractiveOwnerLocked()
                 }
                 else {
@@ -347,7 +352,7 @@ object AgentRunUiState {
             }
     }
 
-    private fun currentSessionId(): String? = workingSnapshot.get()?.sessionId ?: _state.value.sessionId
+    private fun currentSessionId(): String? = workingSession.get() ?: _state.value.sessionId
     private fun owner(): RunOwnership = sessionOwners.getOrPut(currentSessionId().orEmpty()) { RunOwnership() }
     private var activeGeneration: Long
         get() = owner().generation
@@ -365,24 +370,18 @@ object AgentRunUiState {
         get() = sessionProgress.getOrPut(currentSessionId().orEmpty()) { mutableListOf() }
 
     private fun <T> inSession(sessionId: String, block: () -> T): T {
-        val existing = workingSnapshot.get()
-        if (existing?.sessionId == sessionId) return block()
-        val initial = synchronized(lock) {
-            sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
-        }
-        val working = WorkingSnapshot(sessionId, initial)
-        workingSnapshot.set(working)
+        val existing = workingSession.get()
+        if (existing == sessionId) return block()
+        workingSession.set(sessionId)
         return try {
             block()
         } finally {
-            // Restore the thread context before doing any publication work. Even if publishing
-            // throws, this thread must not retain a stale session projection.
-            if (existing == null) workingSnapshot.remove() else workingSnapshot.set(existing)
+            // Restore the session context even when nested session work or publication throws.
+            if (existing == null) workingSession.remove() else workingSession.set(existing)
             synchronized(lock) {
-                // State setters publish each working update immediately. Another thread may
-                // publish a newer stop/finalization snapshot while this block is still running,
-                // so never replace that shared snapshot with this thread's stale local copy.
-                val latest = sessionSnapshots.getOrPut(sessionId) { working.snapshot }
+                // Keep legacy behavior where entering a session establishes its empty snapshot,
+                // while always using the latest shared value.
+                val latest = sessionSnapshots.getOrPut(sessionId) { AgentRunUiSnapshot(sessionId = sessionId) }
                 if (visibleSessionId == sessionId) publishedState.value = latest
             }
         }
@@ -473,14 +472,14 @@ object AgentRunUiState {
             .map { it.key }
         val visible = visibleSessionId
         return when (activeOwners.size) {
-            0 -> workingSnapshot.get()?.sessionId ?: visible
+            0 -> workingSession.get() ?: visible
             1 -> activeOwners.single()
             else -> visible?.takeIf { it in activeOwners }
         }
     }
 
     private fun fallbackForUnknownGenerationLocked(): String? {
-        workingSnapshot.get()?.sessionId?.let { return it }
+        workingSession.get()?.let { return it }
         val visible = visibleSessionId ?: return null
         val hasActiveOwner = sessionOwners.any { (sessionId, ownership) ->
             ownership.active && ownership.sessionId == sessionId
@@ -496,7 +495,7 @@ object AgentRunUiState {
         val previousContext = approvalSessionContext.get()
         approvalSessionContext.set(sessionId)
         try {
-            if (workingSnapshot.get()?.sessionId == sessionId) action(sessionId)
+            if (workingSession.get() == sessionId) action(sessionId)
             else inSession(sessionId) { action(sessionId) }
         } finally {
             if (previousContext == null) approvalSessionContext.remove()
@@ -552,7 +551,7 @@ object AgentRunUiState {
         appendUserForSameTurn: Boolean,
         preserveActiveRun: Boolean,
     ): Long? = run {
-        if (workingSnapshot.get() == null) showSession(sessionId)
+        if (workingSession.get() == null) showSession(sessionId)
         inSession(sessionId) { synchronized(lock) {
         val runStillActive = preserveActiveRun && owner().active && owner().sessionId == sessionId
         val previousStopPending = preserveActiveRun && owner().stoppingGeneration != null
@@ -669,7 +668,7 @@ object AgentRunUiState {
 
     @JvmStatic
     fun beginRegenerationRun(sessionId: String, goal: String) = run {
-        if (workingSnapshot.get() == null) showSession(sessionId)
+        if (workingSession.get() == null) showSession(sessionId)
         inSession(sessionId) { synchronized(lock) {
         owner().stoppingGeneration = null
         owner().stoppedCompletion = null
@@ -832,7 +831,7 @@ object AgentRunUiState {
 
     @JvmStatic
     fun resetSession(sessionId: String) = run {
-        if (workingSnapshot.get() == null) showSession(sessionId)
+        if (workingSession.get() == null) showSession(sessionId)
         inSession(sessionId) { synchronized(lock) {
         preserveOwnedSnapshot()
         pendingProgress.clear()
@@ -1006,6 +1005,29 @@ object AgentRunUiState {
             liveModelWaitId = if (stillOwnsRun) _state.value.liveModelWaitId else null,
             liveUserWaitId = if (stillOwnsRun) _state.value.liveUserWaitId else null,
             liveRunIdentity = if (stillOwnsRun) _state.value.liveRunIdentity else null)
+        refreshPersistedSession(sessionId, events)
+    } }
+
+    /** Resolves a queued submission stopped before it acquired a generation. */
+    @JvmStatic
+    fun stopUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        val stillOwnsRun = ownedRunActive && ownedSessionId == sessionId
+        val stopFinalizationPending = owner().stoppingGeneration != null
+        if (!stillOwnsRun) _state.value.headerMascotAnimationRequest?.let { request ->
+            resolveHeaderMascotAnimationLocked(request, "cancelled", null)
+        }
+        val latest = _state.value
+        _state.value = latest.copy(
+            running = stillOwnsRun,
+            stopping = if (stillOwnsRun || stopFinalizationPending) latest.stopping else false,
+            outcome = if (stillOwnsRun || stopFinalizationPending) latest.outcome else "STOPPED",
+            liveMascotTool = if (stillOwnsRun) latest.liveMascotTool else null,
+            liveModelWaitId = if (stillOwnsRun) latest.liveModelWaitId else null,
+            liveUserWaitId = if (stillOwnsRun) latest.liveUserWaitId else null,
+            liveRunIdentity = if (stillOwnsRun) latest.liveRunIdentity else null,
+        )
         refreshPersistedSession(sessionId, events)
     } }
 
@@ -1443,7 +1465,7 @@ object AgentRunUiState {
                 liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
                 liveModelWaitId = null,
                 liveUserWaitId = if (ownership?.active == true && ownership.sessionId == sessionId) "approval:$id" else null)
-            if (workingSnapshot.get()?.sessionId == sessionId) _state.value = updated
+            if (workingSession.get() == sessionId) _state.value = updated
             else sessionSnapshots[sessionId] = updated
             if (ownership?.active == true && ownership.sessionId == sessionId) ownership.liveSnapshot = updated
             if (visibleSessionId == sessionId) publishedState.value = updated

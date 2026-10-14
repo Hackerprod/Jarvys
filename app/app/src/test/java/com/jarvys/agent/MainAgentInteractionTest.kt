@@ -151,6 +151,94 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun steeringAdmittedAfterRunExitIsPickedUpExactlyOnce() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "steering-exit-race-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
+        val initialEntered = CountDownLatch(1)
+        val releaseInitial = CountDownLatch(1)
+        val admissionReached = CountDownLatch(1)
+        val releaseAdmission = CountDownLatch(1)
+        val emptyRecoveryScan = CountDownLatch(1)
+        val followUpEntered = CountDownLatch(1)
+        val senderFinished = CountDownLatch(1)
+        val initialResultReady = AtomicBoolean(false)
+        val calls = AtomicInteger()
+        val accepted = AtomicReference<Boolean>()
+        val senderFailure = AtomicReference<Throwable?>()
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, progress ->
+            if (calls.incrementAndGet() == 1) {
+                initialEntered.countDown()
+                while (releaseInitial.count > 0) {
+                    try { releaseInitial.await() } catch (_: InterruptedException) { }
+                }
+                initialResultReady.set(true)
+                progress.onInitialUserMessageIncorporated()
+                CoreAgentLoop.Result("initial-race-run", "initial done", 1, "COMPLETED")
+            } else {
+                followUpEntered.countDown()
+                progress.onInitialUserMessageIncorporated()
+                CoreAgentLoop.Result("follow-up-race-run", "follow-up done", 1, "COMPLETED")
+            }
+        }
+        service.beforeInterruptAdmissionForTesting = Runnable {
+            admissionReached.countDown()
+            releaseAdmission.await()
+        }
+        service.afterPendingInputRecoveryScanForTesting = Runnable {
+            if (initialResultReady.get()) emptyRecoveryScan.countDown()
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, initialId), 0, 1)
+            assertTrue("The owning run reaches its held model response", initialEntered.await(5, TimeUnit.SECONDS))
+            val sender = Thread {
+                try {
+                    accepted.set(AgentForegroundService.interruptAndSend(
+                        context, session, "arrived at run exit", arrayListOf(), false,
+                    ))
+                } catch (failure: Throwable) {
+                    senderFailure.set(failure)
+                } finally {
+                    senderFinished.countDown()
+                }
+            }
+            sender.start()
+            assertTrue("Steering pauses before session admission", admissionReached.await(5, TimeUnit.SECONDS))
+
+            releaseInitial.countDown()
+            assertTrue("The original run leaves its session lane", awaitRunFinished(service, context))
+            assertTrue("The run's empty recovery scan has completed", emptyRecoveryScan.await(5, TimeUnit.SECONDS))
+            releaseAdmission.countDown()
+
+            assertTrue("Steering admission returns", senderFinished.await(5, TimeUnit.SECONDS))
+            assertNull(senderFailure.get())
+            assertEquals(true, accepted.get())
+            assertTrue("The admitted message runs as one follow-up", followUpEntered.await(10, TimeUnit.SECONDS))
+            assertTrue("The follow-up leaves its session lane", awaitRunFinished(service, context))
+
+            val messages = store.readConversationMessages(session)
+            val steering = messages.single { it.optString("role") == "user"
+                && it.optString("content") == "arrived at run exit" }
+            val steeringId = steering.optString("messageId")
+            assertTrue(store.incorporatedConversationMessageIds(session).contains(steeringId))
+            assertEquals(1, messages.count { it.optString("role") == "assistant"
+                && it.optString("userMessageId") == steeringId })
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertEquals(2, calls.get())
+        } finally {
+            releaseInitial.countDown()
+            releaseAdmission.countDown()
+            service.beforeInterruptAdmissionForTesting = null
+            service.afterPendingInputRecoveryScanForTesting = null
+            AgentForegroundService.stopRun(session)
+            stopManagedService(context)
+        }
+    }
+
     @Test fun concurrentSteeringPersistsAndDispatchesInArrivalOrder() {
         withHeldWorker { service, context, session, release ->
             val provider = AgentForegroundService::class.java.getDeclaredField("activeSteeringProvider")
@@ -991,6 +1079,113 @@ class MainAgentInteractionTest {
         } finally {
             releaseFirst.countDown()
             StopController.stopAllRuns()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun stopCancelsAndResolvesQueuedMessagesForOnlyThatSession() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "stop-queued-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val firstId = store.appendConversationMessage(session, "user", "first held message")
+        val queuedId = store.appendConversationMessage(session, "user", "must stay queued")
+        val service = startManagedService(context)
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val calls = AtomicInteger()
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
+            calls.incrementAndGet()
+            if (goal == "first held message") {
+                firstEntered.countDown()
+                while (releaseFirst.count > 0) {
+                    try { releaseFirst.await() } catch (_: InterruptedException) { }
+                }
+            }
+            CoreAgentLoop.Result("stop-queued-$goal", "finished $goal", 1, "COMPLETED")
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, firstId), 0, 1)
+            assertTrue("The first request owns the lane", firstEntered.await(5, TimeUnit.SECONDS))
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, queuedId), 0, 2)
+
+            AgentForegroundService.stopRun(session)
+            releaseFirst.countDown()
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+
+            assertEquals("STOP must not promote the queued request", 1, calls.get())
+            val messages = store.readConversationMessages(session)
+            val stoppedResponse = messages.single { it.optString("role") == "assistant"
+                && it.optString("userMessageId") == queuedId }
+            assertEquals("FAILED", stoppedResponse.optString("status"))
+            assertEquals(service.getString(R.string.agent_run_stopped), stoppedResponse.optString("content"))
+            assertTrue(store.resolvedConversationMessageIds(session).contains(queuedId))
+            assertFalse(store.incorporatedConversationMessageIds(session).contains(queuedId))
+            val state = AgentRunUiState.snapshotForSession(session)
+            assertFalse(state.running)
+            assertFalse(state.stopping)
+            assertEquals("STOPPED", state.outcome)
+        } finally {
+            releaseFirst.countDown()
+            AgentForegroundService.stopRun(session)
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun stopCannotMissPublishedRunBeforeGenerationBinding() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "stop-bind-window-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val userMessageId = store.appendConversationMessage(session, "user", "stop during bind")
+        val service = startManagedService(context)
+        val runPublished = CountDownLatch(1)
+        val allowBind = CountDownLatch(1)
+        val stopStarted = CountDownLatch(1)
+        val stopReturned = CountDownLatch(1)
+        val runnerEntered = CountDownLatch(1)
+        val releaseRunner = CountDownLatch(1)
+        val runnerCalls = AtomicInteger()
+        service.beforeGenerationBindForTesting = Runnable {
+            runPublished.countDown()
+            allowBind.await()
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+            runnerCalls.incrementAndGet()
+            runnerEntered.countDown()
+            while (releaseRunner.count > 0) {
+                try { releaseRunner.await() } catch (_: InterruptedException) { }
+            }
+            CoreAgentLoop.Result("stop-bind-window", "run completed", 1, "COMPLETED")
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, userMessageId), 0, 1)
+            assertTrue("The service publishes the run before binding its UI generation", runPublished.await(5, TimeUnit.SECONDS))
+
+            val stopper = Thread {
+                stopStarted.countDown()
+                AgentForegroundService.stopRun(session)
+                stopReturned.countDown()
+            }
+            stopper.start()
+            assertTrue("STOP reaches the published run", stopStarted.await(5, TimeUnit.SECONDS))
+            allowBind.countDown()
+            assertTrue("STOP completes after generation binding", stopReturned.await(5, TimeUnit.SECONDS))
+            releaseRunner.countDown()
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+
+            assertTrue(runnerCalls.get() <= 1)
+            val state = AgentRunUiState.snapshotForSession(session)
+            assertFalse("A stopped generation must release the busy UI", state.running)
+            assertFalse(state.stopping)
+            assertEquals("STOPPED", state.outcome)
+        } finally {
+            allowBind.countDown()
+            releaseRunner.countDown()
+            service.beforeGenerationBindForTesting = null
+            AgentForegroundService.stopRun(session)
             stopManagedService(context)
         }
     }

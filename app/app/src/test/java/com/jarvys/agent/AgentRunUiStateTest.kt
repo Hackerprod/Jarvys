@@ -15,6 +15,70 @@ import java.util.concurrent.atomic.AtomicReference
 
 class AgentRunUiStateTest {
     @Test
+    fun toolResultUsesLatestSharedSessionSnapshotAfterConcurrentSessionWrites() {
+        val session = "shared-snapshot-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Original run")
+        AgentRunUiState.bindGeneration(session, 901L)
+
+        val workerEnteredSession = CountDownLatch(1)
+        val allowToolResult = CountDownLatch(1)
+        val workerFailure = AtomicReference<Throwable?>()
+        val workerSnapshot = AtomicReference<AgentRunUiSnapshot?>()
+        val worker = Thread {
+            try {
+                AgentRunUiState.withSession(session, Runnable {
+                    workerEnteredSession.countDown()
+                    allowToolResult.await()
+                    AgentRunUiState.onToolActivity(ToolActivity(
+                        "result-event", "$session:901", "call-1", "deliver_file", "Deliver File",
+                        "", "", "tool_result", "Delivered", "", "", "", 1L,
+                    ))
+                    workerSnapshot.set(AgentRunUiState.state.value)
+                })
+            } catch (failure: Throwable) {
+                workerFailure.set(failure)
+                workerEnteredSession.countDown()
+            }
+        }
+        worker.start()
+        try {
+            workerEnteredSession.await()
+            val artifact = ChatAttachment(
+                "00000000-0000-0000-0000-000000000901", "delivered.txt", "text/plain", 1L,
+                ChatAttachment.Kind.FILE, "00000000-0000-0000-0000-000000000901-delivered.txt",
+            )
+            AgentRunUiState.deliveredFileAdded(session, artifact)
+            AgentRunUiState.beginChatSubmission(session, "Steering message", emptyList())
+            AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+                sessionId = session,
+                visible = true,
+                resumed = true,
+                availableAnimationIds = setOf("working"),
+            ))
+            allowToolResult.countDown()
+            worker.join()
+
+            assertNull(workerFailure.get())
+            val live = AgentRunUiState.state.value
+            val sessionSnapshot = AgentRunUiState.snapshotForSession(session)
+            listOf(live, sessionSnapshot, requireNotNull(workerSnapshot.get())).forEach { snapshot ->
+                assertTrue(snapshot.events.any { it.kind == "delivered_file"
+                    && it.deliveredArtifact?.id == artifact.id })
+                assertTrue(snapshot.events.any { it.kind == "user" && it.text == "Steering message" })
+                assertEquals(session, snapshot.headerMascotAvailability.sessionId)
+                assertTrue(snapshot.headerMascotAvailability.visible)
+            }
+        } finally {
+            allowToolResult.countDown()
+            worker.join()
+            AgentRunUiState.stopPendingGeneration(session, 901L)
+            AgentRunUiState.finishPendingGeneration(session, 901L)
+            AgentRunUiState.resetSession("$session-cleanup")
+        }
+    }
+
+    @Test
     fun stoppedCompactionClearsBusyIndicatorWithoutAddingACompactionRow() {
         AgentRunUiState.resetSession("compact-stop")
         AgentRunUiState.compactionStarted("compact-stop", "Compacting…")
