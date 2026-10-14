@@ -3,6 +3,7 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import android.os.Looper
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -19,12 +20,13 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Normalized Room store for the conversation ledger (M0 schema version). Room entities do not emit
- * SQL CHECK constraints; equivalent state, enum, bounds, and transition validation is an M1
- * repository responsibility and will be covered by M1 repository-level tests.
+ * SQL CHECK constraints; triggers install the invariants SQLite can enforce. Remaining payload,
+ * enum, bounds, optional sequence-marker, and first-wins import checks are M1 repository responsibilities.
  */
 @Database(
     entities = [
         Conversation::class,
+        Tombstone::class,
         ConversationItem::class,
         Message::class,
         MessagePart::class,
@@ -55,6 +57,8 @@ import java.util.concurrent.atomic.AtomicInteger
         CrewBot::class,
         CrewBotTool::class,
         CrewMessage::class,
+        CrewMessageActivity::class,
+        CrewMessageInputBinding::class,
         CrewMessageRef::class,
         CrewResultEvidence::class,
         WorkspaceResultRef::class,
@@ -80,6 +84,7 @@ abstract class JarvysChatDatabase : RoomDatabase() {
         @JvmField
         val ENTITY_TABLE_NAMES: Set<String> = setOf(
             "conversations",
+            "tombstones",
             "conversation_items",
             "messages",
             "message_parts",
@@ -110,6 +115,8 @@ abstract class JarvysChatDatabase : RoomDatabase() {
             "crew_bots",
             "crew_bot_tools",
             "crew_messages",
+            "crew_message_activities",
+            "crew_message_input_bindings",
             "crew_message_refs",
             "crew_result_evidence",
             "workspace_result_refs",
@@ -140,9 +147,14 @@ object JarvysChatDatabaseProvider {
 
     private val isolatedExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
 
+    /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
-    fun getInstance(context: Context): JarvysChatDatabase = instance ?: synchronized(this) {
-        instance ?: run {
+    fun getInstance(context: Context): JarvysChatDatabase {
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "JarvysChatDatabaseProvider.getInstance must be called off the main thread"
+        }
+        return instance ?: synchronized(this) {
+            instance ?: run {
             val databaseFile = File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME)
             databaseFile.parentFile?.mkdirs()
             check(databaseFile.parentFile?.isDirectory == true) {
@@ -156,6 +168,7 @@ object JarvysChatDatabaseProvider {
                 throw error
             }
             opened.also { instance = it }
+            }
         }
     }
 
@@ -236,6 +249,17 @@ object JarvysChatDatabaseProvider {
     }
 
     private fun connectionPragmasCallback(): Callback = object : Callback() {
+        override fun onConfigure(db: SupportSQLiteDatabase) {
+            super.onConfigure(db)
+            // Room's WAL connection pool invokes this once for every physical SQLite connection.
+            db.setForeignKeyConstraintsEnabled(true)
+        }
+
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            super.onCreate(db)
+            DatabaseTriggers.create(db)
+        }
+
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
             setPragma(db, "foreign_keys=ON")
@@ -252,6 +276,55 @@ object JarvysChatDatabaseProvider {
         }
     }
 
+/** Invariants Room cannot encode. Every future migration that rebuilds these tables must call [create]. */
+internal object DatabaseTriggers {
+    fun create(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_tombstone_resurrection " +
+                "BEFORE INSERT ON conversations " +
+                "WHEN EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=NEW.id) " +
+                "BEGIN SELECT RAISE(ABORT,'conversation_tombstoned'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_tombstones_no_update " +
+                "BEFORE UPDATE ON tombstones BEGIN SELECT RAISE(ABORT,'tombstones_are_immutable'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_tombstones_no_delete " +
+                "BEFORE DELETE ON tombstones BEGIN SELECT RAISE(ABORT,'tombstones_are_immutable'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_workspace_reply_transition_monotonic " +
+                "BEFORE INSERT ON workspace_coordination_reply_transitions " +
+                "WHEN NOT EXISTS (SELECT 1 FROM workspace_coordination_replies r " +
+                "WHERE r.conversation_id=NEW.conversation_id AND r.reply_id=NEW.reply_id AND " +
+                "((r.state='PREPARED' AND NEW.state='STARTED' AND NEW.state_at_ms>=r.state_at_ms) OR " +
+                "(r.state='STARTED' AND NEW.state='ACCEPTED_LOCAL' AND NEW.state_at_ms>=r.state_at_ms))) " +
+                "BEGIN SELECT RAISE(ABORT,'invalid_workspace_reply_transition'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_workspace_reply_update_monotonic " +
+                "BEFORE UPDATE OF state,state_at_ms ON workspace_coordination_replies " +
+                "WHEN NOT ((OLD.state='PREPARED' AND NEW.state='STARTED' AND NEW.state_at_ms>=OLD.state_at_ms) OR " +
+                "(OLD.state='STARTED' AND NEW.state='ACCEPTED_LOCAL' AND NEW.state_at_ms>=OLD.state_at_ms)) " +
+                "BEGIN SELECT RAISE(ABORT,'invalid_workspace_reply_transition'); END",
+        )
+        val activeStates = "'preparing','requesting','streaming','waiting_tool'"
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_generation_run_target_insert " +
+                "BEFORE INSERT ON generation_run " +
+                "WHEN (NEW.active_target_key IS NULL) != (NEW.state NOT IN ($activeStates)) " +
+                "BEGIN SELECT RAISE(ABORT,'generation_run_target_state_mismatch'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_generation_run_target_update " +
+                "BEFORE UPDATE OF state,active_target_key ON generation_run " +
+                "WHEN (NEW.active_target_key IS NULL) != (NEW.state NOT IN ($activeStates)) " +
+                "BEGIN SELECT RAISE(ABORT,'generation_run_target_state_mismatch'); END",
+        )
+    }
+}
+
     /** Some PRAGMA assignments return a row; Android rejects those through execSQL, so they go through query. */
     private fun setPragma(db: SupportSQLiteDatabase, assignment: String) {
         db.query("PRAGMA $assignment").use { cursor -> cursor.moveToFirst() }
@@ -265,7 +338,7 @@ object JarvysChatDatabaseProvider {
     }
 
     private fun createExecutors(): List<ExecutorService> = listOf(
-        Executors.newSingleThreadExecutor(NamedDaemonThreadFactory("jarvys-chat-query")),
+        Executors.newFixedThreadPool(4, NamedDaemonThreadFactory("jarvys-chat-read")),
         Executors.newSingleThreadExecutor(NamedDaemonThreadFactory("jarvys-chat-transaction")),
     )
 

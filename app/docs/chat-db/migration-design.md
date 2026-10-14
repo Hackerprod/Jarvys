@@ -14,15 +14,19 @@ Fuentes: `kelivo-db-report.md` (arquitectura de referencia) y `ledger-inventory.
 
 ## 3. Modelo (normalizado, sin blobs genéricos)
 Identidad y orden:
-- `conversations` (id, kind, title, generated_title, pinned, archived, private_code, deleted_at (tombstone), created/updated/last_message_at, message_count, next_seq, import_* de trazabilidad).
+- `conversations` (id, kind, title, generated_title, pinned, archived, private_code, created/updated/last_message_at, message_count, next_seq, import_* de trazabilidad); `tombstones(scope, entity_id, deleted_at, payload)` no tiene FK y conserva el borrado tras CASCADE.
 - Contador `seq` monótono por conversación (equivale a la posición en el ledger), asignado en la misma transacción que el insert. Espina `conversation_items(conversation_id, seq, item_kind, sort_seq, sort_sub, turn_anchor_seq)` para paginar/proyectar en orden, incluido el reordenado por steering (`beforeMessageId`).
 - Los ids de UI pasan a ser `seq` (no offset de bytes); cursores = `seq` (keyset), como `loadLinearMessageWindow` de Kelivo.
 
 Mensajes y cuerpo (como `message_rows` + `message_part_rows`):
 - `messages` (PK conversation_id+message_id; role, status, run_id, owner_user_message_id, before_message_id, proactive_*, interrupt_request_id, timestamps; marcadores como COLUMNAS: `hidden_kind/hidden_seq`, `translation_hidden_seq`, `suggested_replies_consumed_seq`, `input_state/input_state_seq`; `stable_id` y `message_index` persistidos para ids legado y firstKept).
-- Cuerpo en `message_parts` (revision, ordinal, kind, payload): texto, razonamiento, adjuntos (referencias a archivos), igual que Kelivo; los resultados de herramienta del protocolo del modelo van en sus tablas tipadas (el protocolo de Jarvys exige lotes/ciclo de vida/primera-gana, que Kelivo no tiene).
+- Cuerpo en `message_parts` (ordinal, kind, payload): Jarvys no versiona mensajes; regenerar oculta el mensaje anterior y crea otro, y `messages.updated_at` acompana el streaming/snapshot.
 - Tablas tipadas para: adjuntos, traducciones, reacciones, quick replies, decisiones+opciones, interrupts (+skills), lotes de herramientas, llamadas, resultados, actividades, presentaciones, marcadores de reflexión, errores de modelo, provider output items, artefactos del modelo, entregas, imágenes generadas, compactaciones (+acks), reflexiones (+revisiones), crew (misiones, bots, mensajes, refs), y los 9 diarios estrictos (UNIQUE/FK sustituyen al scan estricto; texto UTF-16 exacto como BLOB).
-- JSON opaco SOLO donde el contenido es genuinamente opaco: argumentos de herramienta, provider output items, `inputBinding` de crew (estructura no inventariada aún).
+- JSON opaco SOLO donde el contenido es genuinamente opaco: argumentos de herramienta y provider output items. Crew `inputBinding` y `activity` se normalizan en tablas hijas con sus campos conocidos.
+- Todos los `conversation_items` y eventos tipados que exponen timestamp guardan `created_at REAL` en segundos; `seq` sigue siendo el orden y los campos `*Millis` conservan milisegundos.
+- Los `seq` propios de filas tipadas tienen FK CASCADE a `conversation_items`; secuencias opcionales de estado como `hidden_seq`, `dispatched_seq` y `last_activity_seq` son referencias lógicas para que borrar un marcador no elimine su entidad propietaria. M1 valida que esas posiciones pertenezcan a la conversación y tendrá test de repositorio.
+- `file_refs` identifica cada archivo por `relative_path` UNIQUE y puede indexar `sha256` sin unicidad; sus FKs desde historial usan `SET NULL`. El borrado fisico de archivos ocurre fuera de la transaccion SQLite.
+- Los notices/reply intents del ledger central guardan `evidence_id` como referencia logica al ledger de ejecucion; la verificacion cruzada queda en el repositorio porque ambos imports y borrados son independientes.
 - Estado de ejecución: tabla `generation_run`/estados activos con optimistic lock y UNIQUE parcial por mensaje activo, y al arrancar los runs activos pasan a `interrupted` (patrón Kelivo) — sustituye los marcadores de recuperación actuales cuando se aborde runs.
 
 ## 4. Repositorio
@@ -37,7 +41,9 @@ Historial que ve el modelo idéntico (orden tras steering, índice de mensaje in
 ## 6. Migración de datos (patrón Kelivo)
 - Por conversación, perezosa y también en segundo plano con prioridad baja, en streaming (nunca cargar el ledger entero), transacciones por lote, reanudable (`import_*` + checkpoint), fuera del hilo principal, con el servicio de agente sin escribir en esa conversación durante el corte.
 - Se construye en archivo temporal/tablas de staging y se publica al validar: conteos por tipo, DIGEST del texto de mensajes, `integrity_check`/`foreign_key_check`, comparación de paridad de `loadConversationContext` (JSONL vs DB) y de proyección de timeline.
-- Reparaciones y reporte: filas corruptas/truncadas (se cuentan y reportan, no se pierden en silencio), ids legado, snapshots de crew duplicados (se importa el último por misión conservando su `seq`), tombstones (`.meta.json deleted` gana; no se resucita nada).
+- Reparaciones y reporte: filas corruptas/truncadas (se cuentan y reportan, no se pierden en silencio), ids legado, snapshots de crew duplicados (se importa el último por misión conservando su `seq`), tombstones (`.meta.json deleted` gana; M2 importa tombstones a la tabla sin FK y no resucita ids).
+- M2 expande el `compaction_reflection_consumed` legado sin ids a todos los ids de compactacion anteriores en esa conversacion.
+- Los triggers instalados al crear la BD deben recrearse en cada migracion futura que reconstruya sus tablas. La primera-gana de incorporations/resultados usa `INSERT OR IGNORE` en M1; el test de import idempotente se implementa junto al repositorio M1.
 - El JSONL original NO se borra: queda como respaldo de solo lectura hasta que el dueño lo apruebe expresamente. Una vez migrada, la DB es la única fuente de verdad (sin doble escritura).
 - Datos reales para prueba: los 4 ledgers del teléfono (48 MB, 36 MB, 9+9 MB) se copian al PC por adb y sirven de golden test local.
 

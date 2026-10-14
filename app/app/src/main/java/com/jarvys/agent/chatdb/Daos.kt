@@ -4,22 +4,43 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 
-/** Foundational conversation operations. Plain inserts abort on duplicates and cannot clear tombstones. */
+/** Conversation writes preserve tombstones even though deleting the conversation cascades its children. */
 @Dao
 interface ConversationDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insert(conversation: Conversation): Long
+    internal suspend fun insertConversationRow(conversation: Conversation): Long
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    internal suspend fun insertTombstoneRow(tombstone: Tombstone)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope = 'conversation' AND entity_id = :id)")
+    suspend fun isTombstoned(id: String): Boolean
+
+    /** Must be the only insertion path; transaction closes the check/insert race with deletion. */
+    @Transaction
+    suspend fun insertIfNotTombstoned(conversation: Conversation): Long {
+        check(!isTombstoned(conversation.id)) { "conversation_tombstoned: ${conversation.id}" }
+        return insertConversationRow(conversation)
+    }
 
     @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): Conversation?
 
     @Query("DELETE FROM conversations WHERE id = :id")
-    suspend fun deleteById(id: String): Int
+    internal suspend fun deleteConversationRow(id: String): Int
 
-    /** A tombstone is monotonic; an existing deleted row is never changed back to live. */
-    @Query("UPDATE conversations SET deleted_at = :deletedAt WHERE id = :id AND deleted_at IS NULL")
-    suspend fun tombstone(id: String, deletedAt: Long): Int
+    /** Deletes all conversation rows by CASCADE and preserves the permanent tombstone atomically. */
+    @Transaction
+    suspend fun deleteById(id: String, deletedAt: Long = System.currentTimeMillis()): Int {
+        val deleted = deleteConversationRow(id)
+        if (deleted > 0) insertTombstoneRow(Tombstone("conversation", id, deletedAt))
+        return deleted
+    }
+
+    /** Compatibility name; marking deleted always removes the content in the same transaction. */
+    suspend fun tombstone(id: String, deletedAt: Long): Int = deleteById(id, deletedAt)
 }
 
 /** Sequence-keyed timeline spine queries for newest and strictly older pages. */

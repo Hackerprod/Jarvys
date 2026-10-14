@@ -8,7 +8,10 @@ import androidx.room.Index
 @Entity(
     tableName = "user_decisions",
     primaryKeys = ["conversation_id", "decision_id"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [Index(name = "idx_user_decisions_seq", value = ["conversation_id", "seq"])],
 )
 data class UserDecision(
@@ -22,6 +25,7 @@ data class UserDecision(
     val option_id: String? = null,
     val option_label: String? = null,
     val resolved_seq: Long? = null,
+    val created_at: Double,
 )
 
 /** Options nested under `user_decision_request` rows. */
@@ -48,9 +52,13 @@ data class UserDecisionOption(
 @Entity(
     tableName = "interrupt_requests",
     primaryKeys = ["conversation_id", "request_id"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [
         Index(name = "idx_interrupt_requests_pending", value = ["conversation_id", "dispatched_seq"]),
+        Index(name = "idx_interrupt_requests_dispatched_seq", value = ["dispatched_seq"]),
         Index(name = "idx_interrupt_requests_input_state", value = ["conversation_id", "input_state", "input_state_seq"]),
         Index(name = "idx_interrupt_requests_seq", value = ["conversation_id", "seq"]),
     ],
@@ -66,6 +74,7 @@ data class InterruptRequest(
     /** Input status can precede dispatch when the receipt names the request rather than a message. */
     val input_state: String? = null,
     val input_state_seq: Long? = null,
+    val created_at: Double,
 )
 
 /** Skill identifiers nested under `main_interrupt_request` rows. */
@@ -84,11 +93,14 @@ data class InterruptRequestSkill(
     val skill_id: String,
 )
 
-/** `model_tool_calls` batches and their opaque provider output payload. */
+/** `model_tool_calls` batches and opaque provider output; malformed call arrays are retained verbatim. */
 @Entity(
     tableName = "tool_batches",
     primaryKeys = ["conversation_id", "batch_id"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [
         Index(name = "idx_tool_batches_owner", value = ["conversation_id", "owner_user_message_id", "seq"]),
         Index(name = "idx_tool_batches_seq", value = ["conversation_id", "seq"]),
@@ -102,6 +114,11 @@ data class ToolBatch(
     val message_index: Long,
     val assistant_text: String,
     val assistant_progress: Boolean,
+    val created_at: Double,
+    /** Latest source event position, including duplicate result events ignored by first-wins result storage. */
+    val last_activity_seq: Long? = null,
+    val calls_decode_error: String? = null,
+    val raw_calls: String? = null,
     /** Provider-specific output item shapes have no common schema and are retained opaquely. */
     val provider_output_items_json: String? = null,
 )
@@ -138,6 +155,7 @@ data class ToolCall(
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ToolCall::class, parentColumns = ["conversation_id", "batch_id", "call_id"], childColumns = ["conversation_id", "batch_id", "call_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [Index(name = "idx_tool_results_seq", value = ["conversation_id", "seq"])],
 )
@@ -149,18 +167,20 @@ data class ToolResult(
     val tool_name: String,
     val lifecycle: String,
     val output: String,
+    val created_at: Double,
 )
 
-/** Append-only `tool_activity` lifecycle rows for tools and executions. */
+/** Append-only lifecycle rows; duplicate global event_id import is first-wins (`INSERT OR IGNORE`). */
 @Entity(
     tableName = "tool_activities",
     primaryKeys = ["conversation_id", "seq"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ToolBatch::class, parentColumns = ["conversation_id", "batch_id"], childColumns = ["conversation_id", "source_batch_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
-        Index(name = "idx_tool_activities_event", value = ["conversation_id", "event_id"], unique = true),
+        Index(name = "idx_tool_activities_event", value = ["event_id"], unique = true),
         Index(name = "idx_tool_activities_owner_execution", value = ["conversation_id", "owner_user_message_id", "execution_id", "seq"]),
         Index(name = "idx_tool_activities_batch_call", value = ["conversation_id", "source_batch_id", "call_id", "seq"]),
     ],
@@ -183,6 +203,7 @@ data class ToolActivity(
     val audit_detail: String? = null,
     val reflection_source: String? = null,
     val timestamp_millis: Long,
+    val created_at: Double,
 )
 
 /** Last-wins `tool_presentation` rows used by the conversation timeline. */
@@ -192,6 +213,7 @@ data class ToolActivity(
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ToolBatch::class, parentColumns = ["conversation_id", "batch_id"], childColumns = ["conversation_id", "batch_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
         Index(name = "idx_tool_presentations_batch_call", value = ["conversation_id", "batch_id", "call_id", "seq"]),
@@ -210,13 +232,17 @@ data class ToolPresentation(
     val audit_detail: String? = null,
     val preview_expected: Boolean = false,
     val preview_id: String? = null,
+    val created_at: Double,
 )
 
 /** `reflection_tool` lifecycle ledger rows. */
 @Entity(
     tableName = "reflection_tool_markers",
     primaryKeys = ["conversation_id", "seq"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [
         Index(name = "idx_reflection_tool_owner", value = ["conversation_id", "owner_user_message_id", "seq"]),
         Index(name = "idx_reflection_tool_batch_call", value = ["conversation_id", "batch_id", "call_id"]),
@@ -232,13 +258,17 @@ data class ReflectionToolMarker(
     val source: String,
     val stage: String,
     val marker: String,
+    val created_at: Double,
 )
 
 /** `model_error` rows, including failures excluded from conversation context. */
 @Entity(
     tableName = "model_errors",
     primaryKeys = ["conversation_id", "seq"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [Index(name = "idx_model_errors_owner", value = ["conversation_id", "owner_user_message_id", "seq"])],
 )
 data class ModelError(
@@ -253,7 +283,10 @@ data class ModelError(
 @Entity(
     tableName = "model_provider_outputs",
     primaryKeys = ["conversation_id", "seq"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
     indices = [
         Index(name = "idx_model_provider_outputs_owner", value = ["conversation_id", "owner_user_message_id", "seq"]),
         Index(name = "idx_model_provider_outputs_message_index", value = ["conversation_id", "message_index"]),
@@ -274,7 +307,8 @@ data class ModelProviderOutput(
     primaryKeys = ["conversation_id", "artifact_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
-        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.SET_NULL),
     ],
     indices = [Index(name = "idx_model_artifacts_seq", value = ["conversation_id", "seq"]), Index(name = "idx_model_artifacts_file", value = ["file_ref_id"])],
 )
@@ -295,7 +329,8 @@ data class ModelArtifact(
     primaryKeys = ["conversation_id", "artifact_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
-        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.SET_NULL),
     ],
     indices = [Index(name = "idx_delivered_files_seq", value = ["conversation_id", "seq"]), Index(name = "idx_delivered_files_file", value = ["file_ref_id"])],
 )
@@ -310,6 +345,7 @@ data class DeliveredFile(
     val relative_path: String,
     val sha256: String? = null,
     val file_ref_id: String? = null,
+    val created_at: Double,
 )
 
 /** `generated_image` ledger row and optional disk-file reference. */
@@ -318,7 +354,8 @@ data class DeliveredFile(
     primaryKeys = ["conversation_id", "seq"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
-        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.SET_NULL),
     ],
     indices = [Index(name = "idx_generated_images_path", value = ["image_path"]), Index(name = "idx_generated_images_file", value = ["file_ref_id"])],
 )
@@ -333,5 +370,6 @@ data class GeneratedImage(
     val status: String,
     val error: String? = null,
     val file_ref_id: String? = null,
+    val created_at: Double,
 )
 

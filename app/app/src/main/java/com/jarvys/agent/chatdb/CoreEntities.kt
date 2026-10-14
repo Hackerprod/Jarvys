@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 
-/** Conversation metadata, `.meta.json` tombstones, `session_title` rows, and legacy-import receipts. */
+/** Conversation metadata and legacy-import receipts. Deletion tombstones live independently in [Tombstone]. */
 @Entity(tableName = "conversations")
 data class Conversation(
     @androidx.room.PrimaryKey val id: String,
@@ -14,7 +14,6 @@ data class Conversation(
     val pinned: Boolean = false,
     val archived: Boolean = false,
     val private_code: Boolean = false,
-    val deleted_at: Long? = null,
     val created_at: Long = 0L,
     val updated_at: Long = 0L,
     val last_message_at: Long? = null,
@@ -24,6 +23,15 @@ data class Conversation(
     val legacy_ledger_bytes: Long? = null,
     val legacy_ledger_sha256: String? = null,
     val imported_at: Long? = null,
+)
+
+/** Deletion history survives the conversation CASCADE and permanently blocks resurrection. */
+@Entity(tableName = "tombstones", primaryKeys = ["scope", "entity_id"])
+data class Tombstone(
+    val scope: String,
+    val entity_id: String,
+    val deleted_at: Long,
+    val payload: String? = null,
 )
 
 /** Ordered ledger spine for timeline-visible rows and positional markers of every ledger row type. */
@@ -39,8 +47,7 @@ data class Conversation(
         ),
     ],
     indices = [
-        Index(name = "idx_conversation_items_queue", value = ["conversation_id", "seq"], orders = [Index.Order.ASC, Index.Order.DESC]),
-        Index(name = "idx_conversation_items_sort", value = ["conversation_id", "sort_seq", "sort_sub"]),
+        Index(name = "idx_conversation_items_sort", value = ["conversation_id", "sort_seq", "sort_sub", "seq"]),
         Index(name = "idx_conversation_items_turn_anchor", value = ["conversation_id", "turn_anchor_seq"]),
     ],
 )
@@ -52,6 +59,8 @@ data class ConversationItem(
     val sort_seq: Long,
     val sort_sub: Int = 0,
     val turn_anchor_seq: Long? = null,
+    /** Original ledger timestamp in seconds; seq remains the only ordering key. */
+    val created_at: Double = 0.0,
 )
 
 /** `role=user`, `role=assistant`, and `proactive_message` rows plus positional message markers; body lives only in message_parts. */
@@ -65,9 +74,15 @@ data class ConversationItem(
             childColumns = ["conversation_id"],
             onDelete = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = ConversationItem::class,
+            parentColumns = ["conversation_id", "seq"],
+            childColumns = ["conversation_id", "seq"],
+            onDelete = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
-        Index(name = "idx_messages_conversation_seq", value = ["conversation_id", "seq"]),
+        Index(name = "idx_messages_conversation_seq", value = ["conversation_id", "seq"], unique = true),
         Index(name = "idx_messages_conversation_role_seq", value = ["conversation_id", "role", "seq"]),
         Index(name = "idx_messages_owner", value = ["conversation_id", "owner_user_message_id"]),
         Index(name = "idx_messages_message_index", value = ["conversation_id", "message_index"]),
@@ -97,6 +112,7 @@ data class Message(
     /** Optional source integer retained from the proposed legacy schema; M2 will define its importer mapping. */
     val legacy_id: Long? = null,
     val created_at: Double,
+    val updated_at: Double = 0.0,
     val hidden_kind: String? = null,
     val hidden_seq: Long? = null,
     val translation_hidden_seq: Long? = null,
@@ -105,10 +121,10 @@ data class Message(
     val input_state_seq: Long? = null,
 )
 
-/** User/assistant `content` and reasoning body parts; revision is retained for snapshot replacement and optimistic updates. */
+/** User/assistant `content` and reasoning body parts. Re-generation creates a new message identity. */
 @Entity(
     tableName = "message_parts",
-    primaryKeys = ["conversation_id", "message_id", "revision", "ordinal"],
+    primaryKeys = ["conversation_id", "message_id", "ordinal"],
     foreignKeys = [
         ForeignKey(
             entity = Conversation::class,
@@ -123,14 +139,10 @@ data class Message(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [
-        Index(name = "idx_message_parts_message_ordinal", value = ["message_id", "ordinal"], unique = true),
-    ],
 )
 data class MessagePart(
     val conversation_id: String,
     val message_id: String,
-    val revision: Long = 0L,
     val ordinal: Int,
     val kind: String,
     val payload: String,
@@ -143,7 +155,7 @@ data class MessagePart(
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = Message::class, parentColumns = ["conversation_id", "message_id"], childColumns = ["conversation_id", "message_id"], onDelete = ForeignKey.CASCADE),
-        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.SET_NULL),
     ],
     indices = [
         Index(name = "idx_message_attachments_id", value = ["conversation_id", "attachment_id"]),
@@ -170,9 +182,10 @@ data class MessageAttachment(
     primaryKeys = ["conversation_id", "message_id", "seq"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = Message::class, parentColumns = ["conversation_id", "message_id"], childColumns = ["conversation_id", "message_id"], onDelete = ForeignKey.CASCADE),
     ],
-    indices = [Index(name = "idx_message_translations_message_seq", value = ["conversation_id", "message_id", "seq"])],
+    indices = [Index(name = "idx_message_translations_seq", value = ["conversation_id", "seq"])],
 )
 data class MessageTranslation(
     val conversation_id: String,
@@ -180,20 +193,25 @@ data class MessageTranslation(
     val seq: Long,
     val language: String,
     val content: String,
+    val created_at: Double,
 )
 
 /** Current state derived from `message_reaction` rows for a stable message identity. */
 @Entity(
     tableName = "message_reactions",
     primaryKeys = ["conversation_id", "target_stable_id"],
-    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
-    indices = [Index(name = "idx_message_reactions_stable_id", value = ["conversation_id", "target_stable_id"])],
+    foreignKeys = [
+        ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index(name = "idx_message_reactions_seq", value = ["conversation_id", "seq"])],
 )
 data class MessageReaction(
     val conversation_id: String,
     val target_stable_id: String,
     val emoji: String,
     val seq: Long,
+    val created_at: Double = 0.0,
 )
 
 /** `proactive_message.suggestedReplies` rows attached to proactive assistant messages. */
@@ -204,7 +222,6 @@ data class MessageReaction(
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = Message::class, parentColumns = ["conversation_id", "message_id"], childColumns = ["conversation_id", "message_id"], onDelete = ForeignKey.CASCADE),
     ],
-    indices = [Index(name = "idx_proactive_replies_message", value = ["conversation_id", "message_id"])],
 )
 data class ProactiveSuggestedReply(
     val conversation_id: String,
@@ -217,7 +234,10 @@ data class ProactiveSuggestedReply(
 /** File metadata for attachment, delivered-file, generated-image, and model-artifact rows; retained for deferred M1 GC. */
 @Entity(
     tableName = "file_refs",
-    indices = [Index(name = "idx_file_refs_sha256", value = ["sha256"], unique = true)],
+    indices = [
+        Index(name = "idx_file_refs_relative_path", value = ["relative_path"], unique = true),
+        Index(name = "idx_file_refs_sha256", value = ["sha256"]),
+    ],
 )
 data class FileRef(
     @androidx.room.PrimaryKey val id: String,
@@ -225,6 +245,10 @@ data class FileRef(
     val relative_path: String,
     val bytes: Long,
     val last_referenced_at: Long,
+    /** Earliest GC attempt time; deleting the ref never deletes history or the physical file in SQL. */
+    val not_before: Long? = null,
+    val attempts: Int = 0,
+    val generation: Long = 0,
 )
 
 /** Normalized string part kinds; unknown kinds remain round-trippable. */

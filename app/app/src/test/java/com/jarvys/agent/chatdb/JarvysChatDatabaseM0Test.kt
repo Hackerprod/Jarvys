@@ -14,8 +14,8 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -24,6 +24,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
@@ -94,13 +95,15 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun deletingConversationCascadesAcrossNormalizedChildTables() = onDatabaseThread {
         val id = "cascade"
-        database.conversationDao().insert(conversation(id))
-        database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1))
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        database.conversationItemDao().insertAll((1L..6L).map { seq ->
+            ConversationItem(id, seq, "event", "row-$seq", seq, created_at = seq + 0.25)
+        })
         database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
         val sqlite = database.openHelper.writableDatabase
         sqlite.execSQL(
-            "INSERT INTO message_parts(conversation_id,message_id,revision,ordinal,kind,payload) VALUES(?,?,?,?,?,?)",
-            arrayOf(id, "m1", 0L, 0, MessagePartKinds.TEXT, "hello")
+            "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
+            arrayOf(id, "m1", 0, MessagePartKinds.TEXT, "hello")
         )
         sqlite.execSQL(
             "INSERT INTO message_attachments(conversation_id,message_id,ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id) " +
@@ -108,32 +111,32 @@ class JarvysChatDatabaseM0Test {
             arrayOf(id, "m1", 0, "a1", "note.txt", "text/plain", 5L, "file", "attachments/note.txt", "hash-a1", null)
         )
         sqlite.execSQL(
-            "INSERT INTO message_translations(conversation_id,message_id,seq,language,content) VALUES(?,?,?,?,?)",
-            arrayOf(id, "m1", 2L, "es", "hola")
+            "INSERT INTO message_translations(conversation_id,message_id,seq,language,content,created_at) VALUES(?,?,?,?,?,?)",
+            arrayOf(id, "m1", 2L, "es", "hola", 2.25)
         )
         sqlite.execSQL(
             "INSERT INTO proactive_suggested_replies(conversation_id,message_id,ordinal,label,text) VALUES(?,?,?,?,?)",
             arrayOf(id, "m1", 0, "Yes", "Yes")
         )
         sqlite.execSQL(
-            "INSERT INTO tool_batches(conversation_id,batch_id,seq,message_index,assistant_text,assistant_progress) VALUES(?,?,?,?,?,?)",
-            arrayOf(id, "b1", 3L, 0L, "working", 1)
+            "INSERT INTO tool_batches(conversation_id,batch_id,seq,message_index,assistant_text,assistant_progress,created_at) VALUES(?,?,?,?,?,?,?)",
+            arrayOf(id, "b1", 3L, 0L, "working", 1, 3.25)
         )
         sqlite.execSQL(
             "INSERT INTO tool_calls(conversation_id,batch_id,ordinal,call_id,name,arguments_json,lifecycle,lifecycle_seq) VALUES(?,?,?,?,?,?,?,?)",
             arrayOf(id, "b1", 0, "c1", "lookup", "{}", "STARTED", 3L)
         )
         sqlite.execSQL(
-            "INSERT INTO tool_results(conversation_id,batch_id,call_id,seq,tool_name,lifecycle,output) VALUES(?,?,?,?,?,?,?)",
-            arrayOf(id, "b1", "c1", 4L, "lookup", "RESULT", "done")
+            "INSERT INTO tool_results(conversation_id,batch_id,call_id,seq,tool_name,lifecycle,output,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            arrayOf(id, "b1", "c1", 4L, "lookup", "RESULT", "done", 4.25)
         )
         sqlite.execSQL(
             "INSERT INTO model_errors(conversation_id,seq,message_index,error_code) VALUES(?,?,?,?)",
             arrayOf(id, 5L, 0L, "test_error")
         )
         sqlite.execSQL(
-            "INSERT INTO generated_images(conversation_id,seq,prompt,status) VALUES(?,?,?,?)",
-            arrayOf(id, 6L, "a small test image", "FAILED")
+            "INSERT INTO generated_images(conversation_id,seq,prompt,status,created_at) VALUES(?,?,?,?,?)",
+            arrayOf(id, 6L, "a small test image", "FAILED", 6.25)
         )
 
         listOf(
@@ -150,7 +153,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun declaredPrimaryAndUniqueKeysRejectDuplicates() = onDatabaseThread {
-        database.conversationDao().insert(conversation("unique"))
+        database.conversationDao().insertIfNotTombstoned(conversation("unique"))
         database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "m1", 1))
         assertSuspendConstraint {
             database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "other", 1))
@@ -161,19 +164,21 @@ class JarvysChatDatabaseM0Test {
             database.messageDao().insert(message("unique", "m1", "stable-duplicate-id", 2, 1))
         }
         database.openHelper.writableDatabase.execSQL(
-            "INSERT INTO message_parts(conversation_id,message_id,revision,ordinal,kind,payload) VALUES(?,?,?,?,?,?)",
-            arrayOf("unique", "m1", 0L, 0, MessagePartKinds.TEXT, "first")
+            "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
+            arrayOf("unique", "m1", 0, MessagePartKinds.TEXT, "first")
         )
         assertConstraint {
             database.openHelper.writableDatabase.execSQL(
-                "INSERT INTO message_parts(conversation_id,message_id,revision,ordinal,kind,payload) VALUES(?,?,?,?,?,?)",
-                arrayOf("unique", "m1", 0L, 0, MessagePartKinds.TEXT, "duplicate ordinal")
+                "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
+                arrayOf("unique", "m1", 0, MessagePartKinds.TEXT, "duplicate ordinal")
             )
         }
+        database.conversationItemDao().insert(ConversationItem("unique", 2, "message", "m2", 2))
         assertSuspendConstraint {
             database.messageDao().insert(message("unique", "m2", "stable-1", 2, 1))
         }
         database.messageDao().insert(message("unique", "m2", "stable-2", 2, 1, proactiveDecisionId = "decision-1"))
+        database.conversationItemDao().insert(ConversationItem("unique", 3, "message", "m3", 3))
         assertSuspendConstraint {
             database.messageDao().insert(message("unique", "m3", "stable-3", 3, 2, proactiveDecisionId = "decision-1"))
         }
@@ -183,7 +188,8 @@ class JarvysChatDatabaseM0Test {
     fun activeGenerationRunKeysAreUniqueAndTerminalRunsReleaseTheKey() = onDatabaseThread {
         val conversationId = "active-runs"
         val messageId = "m1"
-        database.conversationDao().insert(conversation(conversationId))
+        database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
+        database.conversationItemDao().insert(ConversationItem(conversationId, 1, "message", messageId, 1))
         database.messageDao().insert(message(conversationId, messageId, "stable-m1", 1, 0))
         val sqlite = database.openHelper.writableDatabase
         val activeTargetKey = "${conversationId.length}:$conversationId${messageId.length}:$messageId"
@@ -198,26 +204,34 @@ class JarvysChatDatabaseM0Test {
 
         insertRun("run-1", "streaming", activeTargetKey)
         assertConstraint { insertRun("run-duplicate", "requesting", activeTargetKey) }
+        assertConstraint { insertRun("active-without-key", "streaming", null) }
+        assertConstraint { insertRun("terminal-with-key", "complete", activeTargetKey) }
 
         sqlite.execSQL("UPDATE generation_run SET state='complete', active_target_key=NULL WHERE id='run-1'")
         insertRun("run-2", "preparing", activeTargetKey)
         insertRun("run-terminal-1", "complete", null)
         insertRun("run-terminal-2", "failed", null)
+        assertConstraint { sqlite.execSQL("UPDATE generation_run SET active_target_key=NULL WHERE id='run-2'") }
+        assertConstraint { sqlite.execSQL("UPDATE generation_run SET active_target_key=? WHERE id='run-terminal-1'", arrayOf(activeTargetKey)) }
         assertEquals(4L, rowCount(sqlite, "generation_run"))
     }
 
     @Test
     fun pendingInterruptIndexIsNonUniqueAndIncludesDispatchPosition() = onDatabaseThread {
         val conversationId = "pending-interrupts"
-        database.conversationDao().insert(conversation(conversationId))
+        database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
+        database.conversationItemDao().insertAll(listOf(
+            ConversationItem(conversationId, 1, "interrupt", "pending-1", 1),
+            ConversationItem(conversationId, 2, "interrupt", "pending-2", 2),
+        ))
         val sqlite = database.openHelper.writableDatabase
         sqlite.execSQL(
-            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq) VALUES(?,?,?,?,?,?)",
-            arrayOf<Any?>(conversationId, "pending-1", 1L, "first", 0, null),
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq,created_at) VALUES(?,?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-1", 1L, "first", 0, null, 1.25),
         )
         sqlite.execSQL(
-            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq) VALUES(?,?,?,?,?,?)",
-            arrayOf<Any?>(conversationId, "pending-2", 2L, "second", 0, null),
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq,created_at) VALUES(?,?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-2", 2L, "second", 0, null, 2.25),
         )
 
         val indexSql = sqlite.query(
@@ -240,7 +254,7 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun itemKeysetPagesCoverFiveHundredRowsWithoutGapsOrDuplicates() = onDatabaseThread {
         val id = "pages"
-        database.conversationDao().insert(conversation(id))
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
         val items = (1L..500L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq) }
         val messages = (1L..500L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
         database.withTransaction {
@@ -263,10 +277,273 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun tombstonePreventsDuplicateInsertFromResurrectingConversation() = onDatabaseThread {
         val id = "deleted"
-        database.conversationDao().insert(conversation(id))
-        assertEquals(1, database.conversationDao().tombstone(id, 99L))
-        assertSuspendConstraint { database.conversationDao().insert(conversation(id)) }
-        assertEquals(99L, database.conversationDao().getById(id)?.deleted_at)
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        assertEquals(1, database.conversationDao().deleteById(id, 99L))
+        assertTrue(database.conversationDao().isTombstoned(id))
+        assertEquals(null, database.conversationDao().getById(id))
+        assertTrue(runCatching {
+            database.conversationDao().insertIfNotTombstoned(conversation(id))
+        }.isFailure)
+        assertConstraint {
+            database.openHelper.writableDatabase.execSQL(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES(?,?,?)", arrayOf(id, 1L, 1L),
+            )
+        }
+        assertEquals(99L, scalarLong(
+            database.openHelper.writableDatabase,
+            "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
+            arrayOf(id),
+        ))
+    }
+
+    @Test
+    fun everyConversationChildCascadesAndOnlyGlobalStorageAndTombstoneRowsRemain() = onDatabaseThread {
+        val id = "cascade-every-table"
+        val sqlite = database.openHelper.writableDatabase
+        val seeded = seedEveryConversationChild(sqlite, id)
+        val childTables = JarvysChatDatabase.ENTITY_TABLE_NAMES - setOf(
+            "conversations", "tombstones", "storage_meta", "file_refs",
+        )
+        assertEquals(childTables, seeded.keys - setOf("conversations", "file_refs"))
+        childTables.forEach { table -> assertEquals("fixture row in $table", 1L, rowCount(sqlite, table)) }
+        assertEmptyForeignKeyCheck(sqlite)
+
+        assertEquals(1, database.conversationDao().deleteById(id, 1234L))
+        childTables.forEach { table -> assertEquals("CASCADE did not clear $table", 0L, rowCount(sqlite, table)) }
+        assertEquals(1L, rowCount(sqlite, "tombstones"))
+        assertEquals(1L, rowCount(sqlite, "file_refs"))
+        assertEquals(0L, rowCount(sqlite, "storage_meta"))
+        assertTrue(database.conversationDao().isTombstoned(id))
+        assertNull(database.conversationDao().getById(id))
+        assertTrue(runCatching {
+            database.conversationDao().insertIfNotTombstoned(conversation(id))
+        }.isFailure)
+        assertEmptyForeignKeyCheck(sqlite)
+    }
+
+    @Test
+    fun foreignKeyCheckIsEmptyAndEveryDeclaredForeignKeyRejectsAnOrphan() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        val seeded = seedEveryConversationChild(sqlite, "fk-every-table")
+        assertEmptyForeignKeyCheck(sqlite)
+        var checked = 0
+        seeded.forEach { (table, row) ->
+            foreignKeys(sqlite, table).forEach { foreignKey ->
+                val childColumn = foreignKey.columns.last().first
+                val column = tableColumns(sqlite, table).getValue(childColumn)
+                val orphan = orphanValue(table, childColumn, column.type, row[childColumn])
+                val setSql = "UPDATE `$table` SET `$childColumn`=? WHERE " +
+                    primaryKeyColumns(sqlite, table).joinToString(" AND ") { "`$it`=?" }
+                val keyArgs = primaryKeyColumns(sqlite, table).map { row[it] }.toTypedArray()
+                val error = runCatching { sqlite.execSQL(setSql, arrayOf(orphan, *keyArgs)) }.exceptionOrNull()
+                assertConstraintFailure("$table.${foreignKey.parentTable} FK ($childColumn)", error)
+                assertEmptyForeignKeyCheck(sqlite)
+                checked++
+            }
+        }
+        assertTrue("Expected to exercise declared foreign keys", checked >= 35)
+    }
+
+    @Test
+    fun duplicateRowsAreRejectedForEveryStrictJournalTable() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        val seeded = seedEveryConversationChild(sqlite, "unique-journal")
+        val journalTables = setOf(
+            "crew_result_evidence", "workspace_result_refs", "crew_coordination_evidence",
+            "crew_coordination_evidence_refs", "workspace_coordination_refs",
+            "workspace_coordination_replies", "workspace_coordination_reply_transitions",
+            "workspace_input_incorporations",
+        )
+        journalTables.forEach { table ->
+            val row = seeded.getValue(table)
+            assertConstraint("duplicate $table") { insertRow(sqlite, table, row) }
+        }
+        assertTrue("ToolActivity event identities are global", "event_id" in uniqueIndexColumns(sqlite, "tool_activities"))
+    }
+
+    @Test
+    fun messagePartsHaveNoRevisionAndOrdinalIsUniqueWithinTheMessage() = onDatabaseThread {
+        val id = "message-part-shape"
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1))
+        database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
+        val sqlite = database.openHelper.writableDatabase
+        val columns = tableColumns(sqlite, "message_parts").keys
+        assertTrue("revision is deliberately absent", "revision" !in columns)
+        val pk = primaryKeyColumns(sqlite, "message_parts")
+        assertEquals(listOf("conversation_id", "message_id", "ordinal"), pk)
+        sqlite.execSQL(
+            "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
+            arrayOf(id, "m1", 0, MessagePartKinds.TEXT, "first"),
+        )
+        assertConstraint {
+            sqlite.execSQL(
+                "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
+                arrayOf(id, "m1", 0, MessagePartKinds.TEXT, "second"),
+            )
+        }
+    }
+
+    @Test
+    fun ledgerCreatedAtColumnsAreRealAndRoundTripTheOriginalDouble() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        val seeded = seedEveryConversationChild(sqlite, "timestamp-round-trip")
+        val expected = 98_765.4321
+        val requiredEventTables = setOf(
+            "conversation_items", "messages", "interrupt_requests", "delivered_files", "generated_images", "tool_batches",
+            "tool_results", "tool_activities", "tool_presentations", "reflection_tool_markers", "reflections",
+            "message_translations", "user_decisions", "message_reactions", "compactions", "compaction_reflection_acks",
+        )
+        requiredEventTables.forEach { table ->
+            assertTrue("$table must persist the ledger timestamp", "created_at" in tableColumns(sqlite, table))
+        }
+        val eventTables = seeded.keys.filter { tableColumns(sqlite, it)["created_at"]?.type.equals("REAL", ignoreCase = true) }
+        assertTrue("timestamp columns are represented in the spine and event rows", requiredEventTables.all { it in eventTables })
+        eventTables.forEach { table ->
+            val column = tableColumns(sqlite, table).getValue("created_at")
+            assertEquals("$table.created_at must be REAL", "REAL", column.type.uppercase())
+            assertEquals("$table.created_at must be NOT NULL", 1, column.notNull)
+            val actual = scalarDouble(sqlite, "SELECT created_at FROM `$table` LIMIT 1")
+            assertEquals("$table timestamp", expected, actual, 0.0000001)
+        }
+    }
+
+    @Test
+    fun crewMessageActivityBindingAndLosslessTextRoundTripAsTypedRows() = onDatabaseThread {
+        val id = "crew-round-trip"
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_snapshot", "mission-1", 1))
+        val sqlite = database.openHelper.writableDatabase
+        val synthesis = ExactUtf16.encode(String(charArrayOf('S', '\uD800', 'Y')))
+        val error = ExactUtf16.encode(String(charArrayOf('E', '\uDC00', 'R')))
+        val result = ExactUtf16.encode(String(charArrayOf('R', '\uD800', 'S')))
+        val messageText = ExactUtf16.encode(String(charArrayOf('M', '\uDC00', 'G')))
+        sqlite.execSQL(
+            "INSERT INTO crew_missions(conversation_id,mission_id,first_snapshot_seq,last_snapshot_seq,schema_version,process_id,title," +
+                "original_instructions,title_source,status,synthesis,started_at_ms,finished_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", 1L, 1L, 4, "process-1", "title", "instructions", "user", "completed", synthesis, 10L, 20L),
+        )
+        sqlite.execSQL(
+            "INSERT INTO crew_bots(conversation_id,mission_id,bot_id,ordinal,name,status,error,result,resume_required,can_resume) " +
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", "bot-1", 0, "Bot", "completed", error, result, 0, 1),
+        )
+        sqlite.execSQL(
+            "INSERT INTO crew_messages(conversation_id,mission_id,ordinal,message_id,from_bot,to_bot,type,text,timestamp_ms,origin) " +
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", 0, "message-1", "bot-1", "chief", "ANSWER", messageText, 123456L, "local_activity"),
+        )
+        sqlite.execSQL(
+            "INSERT INTO crew_message_activities(conversation_id,mission_id,message_id,schema_version,event_id,execution_id,call_id," +
+                "tool_name,display_name,skill_id,skill_name,stage,detail,preview_id,audit_detail,reflection_source,timestamp_millis) " +
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", "message-1", 1, "event-1", "execution-1", "call-1", "read_skill", "Read skill",
+                "skill-1", "Skill", "tool_result", "activity detail", "preview-1", "audit", "web", 234567L),
+        )
+        sqlite.execSQL(
+            "INSERT INTO crew_message_input_bindings(conversation_id,mission_id,message_id,schema_version,source_kind,source_id," +
+                "owner_central_session_id,workspace_id,execution_session_id,assignment_id,input_mission_id,bot_id,mailbox_message_id," +
+                "source_payload_sha256,delivery_sha256,admission_cycle_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", "message-1", 1, "WORKSPACE_REPLY", "source-1", "central", "workspace", id,
+                "assignment", "mission-1", "bot-1", "mailbox-1", "a".repeat(64), "b".repeat(64), "cycle-1"),
+        )
+
+        assertEquals("BLOB", tableColumns(sqlite, "crew_missions").getValue("synthesis").type.uppercase())
+        assertEquals("BLOB", tableColumns(sqlite, "crew_bots").getValue("error").type.uppercase())
+        assertEquals("BLOB", tableColumns(sqlite, "crew_bots").getValue("result").type.uppercase())
+        assertArrayEquals(synthesis, scalarBlob(sqlite, "SELECT synthesis FROM crew_missions WHERE mission_id='mission-1'"))
+        assertArrayEquals(error, scalarBlob(sqlite, "SELECT error FROM crew_bots WHERE bot_id='bot-1'"))
+        assertArrayEquals(result, scalarBlob(sqlite, "SELECT result FROM crew_bots WHERE bot_id='bot-1'"))
+        assertArrayEquals(messageText, scalarBlob(sqlite, "SELECT text FROM crew_messages WHERE message_id='message-1'"))
+
+        val activity = sqlite.query(
+            "SELECT schema_version,event_id,execution_id,call_id,tool_name,display_name,skill_id,skill_name,stage,detail," +
+                "preview_id,audit_detail,reflection_source,timestamp_millis FROM crew_message_activities WHERE message_id='message-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            (0 until cursor.columnCount).map { cursor.getString(it) }
+        }
+        assertEquals(listOf("1", "event-1", "execution-1", "call-1", "read_skill", "Read skill", "skill-1", "Skill",
+            "tool_result", "activity detail", "preview-1", "audit", "web", "234567"), activity)
+        assertEquals("WORKSPACE_REPLY", scalarString(sqlite,
+            "SELECT source_kind FROM crew_message_input_bindings WHERE message_id='message-1'"))
+        assertEquals("cycle-1", scalarString(sqlite,
+            "SELECT admission_cycle_id FROM crew_message_input_bindings WHERE message_id='message-1'"))
+        assertTrue("input binding is no longer an opaque JSON column", "input_binding_json" !in tableColumns(sqlite, "crew_messages"))
+
+        val crewMessageA = CrewMessage(id, "mission-1", 0, "message-1", "bot-1", "chief", "ANSWER", messageText, 123456L, "local_activity")
+        val crewMessageB = crewMessageA.copy(text = messageText.copyOf())
+        assertEquals(crewMessageA, crewMessageB)
+        assertEquals(crewMessageA.hashCode(), crewMessageB.hashCode())
+
+        val missionA = CrewMission(id, "mission-1", 1L, 1L, 4, "process-1", "title", "instructions", "user", "completed", synthesis, 10L, 20L)
+        val missionB = missionA.copy(synthesis = synthesis.copyOf())
+        assertEquals(missionA, missionB)
+        assertEquals(missionA.hashCode(), missionB.hashCode())
+        val botA = CrewBot(id, "mission-1", "bot-1", 0, name = "Bot", status = "completed", error = error, result = result,
+            resume_required = false, can_resume = true)
+        val botB = botA.copy(error = error.copyOf(), result = result.copyOf())
+        assertEquals(botA, botB)
+        assertEquals(botA.hashCode(), botB.hashCode())
+        val evidenceA = CrewResultEvidence("evidence-1", id, 1L, 1, "mission-1", "bot-1", "cycle-1", "DONE", result, 30L, "sha256")
+        val evidenceB = evidenceA.copy(result_text = result.copyOf())
+        assertEquals(evidenceA, evidenceB)
+        assertEquals(evidenceA.hashCode(), evidenceB.hashCode())
+    }
+
+    @Test
+    fun deletingFileReferenceLeavesConversationHistoryAndPhysicalFileInPlace() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        seedEveryConversationChild(sqlite, "file-reference-gc")
+        val physicalFile = File(temporary.root, "test-artifact.bin").apply { writeBytes(byteArrayOf(8, 7, 6)) }
+        sqlite.execSQL(
+            "INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at,attempts,generation) VALUES(?,?,?,?,?,?,?)",
+            arrayOf("same-hash-second-copy", "file_refs_sha256", "second-copy.bin", 3L, 1L, 0, 0L),
+        )
+        assertEquals("hashes are non-unique", 2L, rowCount(sqlite, "file_refs"))
+        assertConstraint {
+            sqlite.execSQL(
+                "INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at) VALUES(?,?,?,?,?)",
+                arrayOf("duplicate-path", "another-sha", "test-artifact.bin", 3L, 1L),
+            )
+        }
+
+        sqlite.execSQL("DELETE FROM file_refs WHERE id='file_refs_id'")
+        listOf("message_attachments", "model_artifacts", "delivered_files", "generated_images").forEach { table ->
+            assertEquals("GC must preserve $table history", 1L, rowCount(sqlite, table))
+            assertNull(scalarNullableString(sqlite, "SELECT file_ref_id FROM `$table` LIMIT 1"))
+        }
+        assertTrue("physical file deletion is outside the SQLite transaction", physicalFile.exists())
+    }
+
+    @Test
+    fun foreignKeysAreConfiguredForConcurrentReaderConnections() {
+        val sqlite = database.openHelper.writableDatabase
+        val start = CountDownLatch(1)
+        val readers = Executors.newFixedThreadPool(4)
+        try {
+            val futures = (1..4).map {
+                readers.submit<Long> {
+                    start.await(10, TimeUnit.SECONDS)
+                    sqlite.query(
+                        "WITH RECURSIVE n(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM n WHERE x<200000) SELECT SUM(x) FROM n",
+                    ).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        cursor.getLong(0)
+                    }
+                }
+            }
+            start.countDown()
+            futures.forEach { assertEquals(20_000_100_000L, it.get(30, TimeUnit.SECONDS)) }
+        } finally {
+            readers.shutdownNow()
+        }
+        assertConstraint {
+            sqlite.execSQL(
+                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,created_at) VALUES(?,?,?,?,?,?)",
+                arrayOf("missing-parent", 1L, "message", "orphan", 1L, 1.25),
+            )
+        }
     }
 
     @Test
@@ -293,8 +570,8 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun migrationTestHelperCanCreateAndValidateExportedV1Schema() {
         val schemaAsset = "${JarvysChatDatabase::class.java.name}/1.json"
-        val hasExportedSchema = runCatching { context.assets.open(schemaAsset).use { } }.isSuccess
-        assumeTrue("KSP must first export $schemaAsset", hasExportedSchema)
+        val schemaSize = context.assets.open(schemaAsset).use { it.readBytes().size }
+        assertTrue("Test assets must contain generated schema $schemaAsset", schemaSize > 0)
 
         onDatabaseThreadBlocking {
             val helper = MigrationTestHelper(
@@ -312,13 +589,14 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun strictJournalTextRoundTripsUnpairedUtf16CodeUnitsAsBlob() = onDatabaseThread {
         val id = "utf16"
-        database.conversationDao().insert(conversation(id))
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_result_evidence", "e1", 1))
         val exactText = String(charArrayOf('A', '\uD800', 'B', '\uDC00', 'Z'))
         val expectedBytes = ExactUtf16.encode(exactText)
         database.openHelper.writableDatabase.execSQL(
-            "INSERT INTO crew_result_evidence(evidence_id,conversation_id,seq,mission_id,bot_id,cycle_id,reported_status,result_text,produced_at_ms,content_sha256) " +
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            arrayOf("e1", id, 1L, "mission-1", "bot-1", "cycle-1", "completed", expectedBytes, 123L, "sha256")
+            "INSERT INTO crew_result_evidence(evidence_id,conversation_id,seq,schema_version,mission_id,bot_id,cycle_id,reported_status,result_text,produced_at_ms,content_sha256) " +
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf("e1", id, 1L, 1, "mission-1", "bot-1", "cycle-1", "completed", expectedBytes, 123L, "sha256")
         )
         val sqlite = database.openHelper.writableDatabase
         val storedType = sqlite.query("PRAGMA table_info(crew_result_evidence)").use { cursor ->
@@ -342,7 +620,7 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun indexedTailReadStaysWithinHalfSecondAfterFiftyThousandMessages() = onDatabaseThread {
         val id = "bench-50k"
-        database.conversationDao().insert(conversation(id))
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
         val items = (1L..50_000L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq) }
         val messages = (1L..50_000L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
         database.withTransaction {
@@ -396,6 +674,224 @@ class JarvysChatDatabaseM0Test {
         database.query("SELECT COUNT(*) FROM `$table`").use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getLong(0)
+        }
+
+    private data class SqlColumn(val type: String, val notNull: Int, val primaryKeyPosition: Int)
+    private data class SqlForeignKey(
+        val id: Int,
+        val parentTable: String,
+        val columns: List<Pair<String, String>>,
+    )
+
+    /** Inserts one valid fixture row into every entity table whose rows belong to this conversation. */
+    private fun seedEveryConversationChild(
+        sqlite: SupportSQLiteDatabase,
+        conversationId: String,
+    ): Map<String, Map<String, Any?>> {
+        database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
+        val rows = linkedMapOf<String, Map<String, Any?>>()
+        rows["conversations"] = linkedMapOf("id" to conversationId)
+        val item = ConversationItem(conversationId, 1, "fixture", "fixture-row", 1, created_at = 98_765.4321)
+        database.conversationItemDao().insert(item)
+        rows["conversation_items"] = linkedMapOf("conversation_id" to conversationId, "seq" to 1L)
+
+        val fileRef = linkedMapOf<String, Any?>(
+            "id" to "file_refs_id", "sha256" to "file_refs_sha256", "relative_path" to "test-artifact.bin",
+            "bytes" to 3L, "last_referenced_at" to 1L, "attempts" to 0, "generation" to 0L,
+        )
+        insertRow(sqlite, "file_refs", fileRef)
+        rows["file_refs"] = fileRef
+
+        val pending = (JarvysChatDatabase.ENTITY_TABLE_NAMES - setOf(
+            "conversations", "conversation_items", "tombstones", "storage_meta", "file_refs",
+        )).toMutableSet()
+        while (pending.isNotEmpty()) {
+            val before = pending.size
+            for (table in pending.toList()) {
+                val foreignKeys = foreignKeys(sqlite, table)
+                if (foreignKeys.any { it.parentTable !in rows }) continue
+                val row = genericEntityRow(sqlite, table, rows, foreignKeys)
+                insertRow(sqlite, table, row)
+                rows[table] = row
+                pending.remove(table)
+            }
+            check(pending.size < before) {
+                "Could not seed entity rows because of an unresolved FK dependency: ${pending.sorted()}"
+            }
+        }
+        return rows
+    }
+
+    private fun genericEntityRow(
+        sqlite: SupportSQLiteDatabase,
+        table: String,
+        parentRows: Map<String, Map<String, Any?>>,
+        foreignKeys: List<SqlForeignKey>,
+    ): Map<String, Any?> {
+        val columns = tableColumns(sqlite, table)
+        val uniqueColumns = uniqueIndexColumns(sqlite, table)
+        val foreignKeyColumns = foreignKeys.flatMap { it.columns }.map { it.first }.toSet()
+        val included = columns.filter { (name, column) ->
+            column.notNull != 0 || column.primaryKeyPosition != 0 || name in uniqueColumns || name in foreignKeyColumns
+        }.keys
+        val values = linkedMapOf<String, Any?>()
+        foreignKeys.forEach { foreignKey ->
+            val parent = parentRows.getValue(foreignKey.parentTable)
+            foreignKey.columns.forEach { (child, parentColumn) ->
+                val value = parent[parentColumn]
+                    ?: error("Fixture parent ${foreignKey.parentTable}.$parentColumn has no key value")
+                val previous = values.put(child, value)
+                check(previous == null || previous == value) { "Conflicting fixture values for $table.$child" }
+            }
+        }
+        included.forEach { name ->
+            if (name !in values) {
+                values[name] = genericColumnValue(table, name, columns.getValue(name).type)
+            }
+        }
+        return values
+    }
+
+    private fun genericColumnValue(table: String, name: String, type: String): Any? = when {
+        table == "generation_run" && name == "state" -> "complete"
+        table == "workspace_coordination_replies" && name == "state" -> "PREPARED"
+        table == "workspace_coordination_reply_transitions" && name == "state" -> "STARTED"
+        name == "active_target_key" -> null
+        name == "is_notice" -> 1
+        name == "schema_version" -> 1
+        name == "lifecycle" -> "RESULT"
+        name == "source_kind" -> "WORKSPACE_REPLY"
+        name == "transport_kind" -> "USER"
+        name == "created_at" && type.equals("REAL", true) -> 98_765.4321
+        type.equals("BLOB", true) -> byteArrayOf(65, 0, 66)
+        type.equals("REAL", true) -> 98_765.4321
+        type.contains("INT", ignoreCase = true) -> when (name) {
+            "ordinal", "sort_sub", "schema_version" -> 0
+            "memory_disabled", "allow_dismiss", "assistant_progress", "preview_expected", "resume_required", "can_resume" -> 1
+            else -> 1L
+        }
+        else -> "${table}_$name"
+    }
+
+    private fun insertRow(sqlite: SupportSQLiteDatabase, table: String, row: Map<String, Any?>) {
+        val columns = row.keys.toList()
+        val placeholders = List(columns.size) { "?" }.joinToString(",")
+        val columnSql = columns.joinToString(",") { "`$it`" }
+        sqlite.execSQL("INSERT INTO `$table`($columnSql) VALUES($placeholders)", columns.map { row[it] }.toTypedArray())
+    }
+
+    private fun tableColumns(sqlite: SupportSQLiteDatabase, table: String): Map<String, SqlColumn> =
+        sqlite.query("PRAGMA table_info(`$table`)").use { cursor ->
+            buildMap {
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    put(name, SqlColumn(
+                        type = cursor.getString(cursor.getColumnIndexOrThrow("type")),
+                        notNull = cursor.getInt(cursor.getColumnIndexOrThrow("notnull")),
+                        primaryKeyPosition = cursor.getInt(cursor.getColumnIndexOrThrow("pk")),
+                    ))
+                }
+            }
+        }
+
+    private fun primaryKeyColumns(sqlite: SupportSQLiteDatabase, table: String): List<String> =
+        tableColumns(sqlite, table).entries
+            .filter { it.value.primaryKeyPosition > 0 }
+            .sortedBy { it.value.primaryKeyPosition }
+            .map { it.key }
+
+    private fun uniqueIndexColumns(sqlite: SupportSQLiteDatabase, table: String): Set<String> {
+        val names = sqlite.query("PRAGMA index_list(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    if (cursor.getInt(cursor.getColumnIndexOrThrow("unique")) != 0) {
+                        add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+                    }
+                }
+            }
+        }
+        return names.flatMap { index ->
+            sqlite.query("PRAGMA index_info(`$index`)").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        cursor.getString(cursor.getColumnIndexOrThrow("name"))?.let(::add)
+                    }
+                }
+            }
+        }.toSet()
+    }
+
+    private fun foreignKeys(sqlite: SupportSQLiteDatabase, table: String): List<SqlForeignKey> {
+        val grouped = linkedMapOf<Int, Pair<String, MutableList<Pair<Int, Pair<String, String>>>>>()
+        sqlite.query("PRAGMA foreign_key_list(`$table`)").use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.getInt(cursor.getColumnIndexOrThrow("id"))
+                val parentTable = cursor.getString(cursor.getColumnIndexOrThrow("table"))
+                val sequence = cursor.getInt(cursor.getColumnIndexOrThrow("seq"))
+                val child = cursor.getString(cursor.getColumnIndexOrThrow("from"))
+                val parent = cursor.getString(cursor.getColumnIndexOrThrow("to"))
+                val entry = grouped.getOrPut(id) { parentTable to mutableListOf() }
+                entry.second += sequence to (child to parent)
+            }
+        }
+        return grouped.map { (id, parentAndColumns) ->
+            SqlForeignKey(id, parentAndColumns.first, parentAndColumns.second.sortedBy { it.first }.map { it.second })
+        }
+    }
+
+    private fun orphanValue(table: String, column: String, type: String, current: Any?): Any = when {
+        type.equals("BLOB", true) -> byteArrayOf(90, 91)
+        type.equals("REAL", true) -> -999.75
+        type.contains("INT", true) -> (current as? Number)?.toLong()?.plus(1_000_000L) ?: -999_999L
+        else -> "orphan_${table}_${column}"
+    }
+
+    private fun assertEmptyForeignKeyCheck(sqlite: SupportSQLiteDatabase) {
+        sqlite.query("PRAGMA foreign_key_check").use { cursor ->
+            assertTrue("PRAGMA foreign_key_check returned a violation", !cursor.moveToFirst())
+        }
+    }
+
+    private fun assertConstraint(label: String, block: () -> Unit) {
+        val failure = runCatching(block).exceptionOrNull()
+        assertConstraintFailure(label, failure)
+    }
+
+    private fun assertConstraintFailure(label: String, failure: Throwable?) {
+        assertNotNull("Expected SQLite constraint failure for $label", failure)
+        var cause: Throwable? = failure
+        while (cause != null && cause !is SQLiteConstraintException) cause = cause.cause
+        assertNotNull("Expected SQLiteConstraintException for $label but got $failure", cause)
+    }
+
+    private fun scalarLong(sqlite: SupportSQLiteDatabase, sql: String, args: Array<out Any?> = emptyArray()): Long =
+        sqlite.query(sql, args).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getLong(0)
+        }
+
+    private fun scalarDouble(sqlite: SupportSQLiteDatabase, sql: String): Double =
+        sqlite.query(sql).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getDouble(0)
+        }
+
+    private fun scalarString(sqlite: SupportSQLiteDatabase, sql: String): String =
+        sqlite.query(sql).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getString(0)
+        }
+
+    private fun scalarNullableString(sqlite: SupportSQLiteDatabase, sql: String): String? =
+        sqlite.query(sql).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            if (cursor.isNull(0)) null else cursor.getString(0)
+        }
+
+    private fun scalarBlob(sqlite: SupportSQLiteDatabase, sql: String): ByteArray =
+        sqlite.query(sql).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getBlob(0)
         }
 
     private fun assertConstraint(block: () -> Unit) {
