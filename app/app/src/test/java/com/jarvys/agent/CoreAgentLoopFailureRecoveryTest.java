@@ -2,8 +2,10 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
@@ -100,26 +102,39 @@ public class CoreAgentLoopFailureRecoveryTest {
     }
 
     @Test public void parallelCancellationRecordsLaunchedAndUnlaunchedCallsInOriginalOrder() {
-        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger runningEffects = new AtomicInteger();
+        AtomicInteger announcedEffects = new AtomicInteger();
+        AtomicInteger pendingEffects = new AtomicInteger();
         CountDownLatch firstStarted = new CountDownLatch(1);
         CancellationToken token = CancellationToken.cancellable();
         CoreTool parallel = tool((arguments, current) -> {
-            effects.incrementAndGet();
-            firstStarted.countDown();
-            try {
-                new CountDownLatch(1).await();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new CancellationException("Interrupted while the effect was in progress");
+            String path = (String) arguments.get("path");
+            if ("running".equals(path)) {
+                if (runningEffects.incrementAndGet() == 1) {
+                    firstStarted.countDown();
+                    try {
+                        new CountDownLatch(1).await();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new CancellationException("Interrupted while the effect was in progress");
+                    }
+                }
+            } else if ("announced".equals(path)) {
+                announcedEffects.incrementAndGet();
+            } else if ("pending".equals(path)) {
+                pendingEffects.incrementAndGet();
             }
             return CoreToolResult.success("unexpected completion");
         }, CoreTool.ExecutionMode.PARALLEL);
         CoreAgentLoop loop = loop(parallel, (transcript, prompt, declarations, current) ->
-                new ModelReply("", Arrays.asList(call("started", "/project"), call("pending", "/project"))));
+                new ModelReply("", Arrays.asList(
+                        call("running", "running"), call("announced", "announced"), call("pending", "pending"))));
+        List<ToolActivity> events = new ArrayList<>();
         CoreAgentLoop.ProgressListener listener = new CoreAgentLoop.ProgressListener() {
             @Override public void onProgress(String stage, String message) { }
             @Override public void onToolActivity(ToolActivity activity) {
-                if (!"tool_call".equals(activity.stage) || !"pending".equals(activity.callId)) return;
+                events.add(activity);
+                if (!"tool_call".equals(activity.stage) || !"announced".equals(activity.callId)) return;
                 try {
                     firstStarted.await();
                 } catch (InterruptedException interrupted) {
@@ -133,23 +148,51 @@ public class CoreAgentLoopFailureRecoveryTest {
         assertThrows(CancellationException.class,
                 () -> loop.run("Perform parallel work", Collections.emptyList(), token, listener));
 
-        assertEquals(1, effects.get());
+        assertEquals(1, runningEffects.get());
+        assertEquals(0, announcedEffects.get());
+        assertEquals(0, pendingEffects.get());
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
-        assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("started"));
+        assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("running"));
+        assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("announced"));
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("pending"));
+        assertEquals(1L, events.stream().filter(event -> "running".equals(event.callId)
+                && "tool_call".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "running".equals(event.callId)
+                && "tool_interrupted".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "running".equals(event.callId)
+                && "tool_not_started".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "announced".equals(event.callId)
+                && "tool_call".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "announced".equals(event.callId)
+                && "tool_interrupted".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "announced".equals(event.callId)
+                && "tool_not_started".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "pending".equals(event.callId)
+                && "tool_call".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "pending".equals(event.callId)
+                && "tool_not_started".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "pending".equals(event.callId)
+                && "tool_interrupted".equals(event.stage)).count());
         java.util.List<ConversationTurn> results = new java.util.ArrayList<>();
         for (ConversationTurn turn : checkpoint.transcript)
             if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) results.add(turn);
-        assertEquals(2, results.size());
-        assertEquals(Arrays.asList("started", "pending"), Arrays.asList(
-                results.get(0).toolCallId, results.get(1).toolCallId));
+        assertEquals(3, results.size());
+        assertEquals(Arrays.asList("running", "announced", "pending"), Arrays.asList(
+                results.get(0).toolCallId, results.get(1).toolCallId, results.get(2).toolCallId));
         assertTrue(results.get(0).content.contains("INTERRUPTED_UNCERTAIN"));
-        assertTrue(results.get(1).content.contains("NEVER_LAUNCHED"));
+        assertTrue(results.get(1).content.contains("INTERRUPTED_UNCERTAIN"));
+        assertTrue(results.get(2).content.contains("NEVER_LAUNCHED"));
         CoreAgentLoop resumed = loop(parallel, (transcript, prompt, declarations, current) ->
                 new ModelReply("Continued safely.", Collections.emptyList()));
         resumed.restoreCheckpoint(checkpoint);
-        assertEquals(2, resumed.transcriptSnapshot().stream()
+        CoreAgentLoop.Result resumedResult = resumed.run("", checkpoint.transcript,
+                CancellationToken.uncancellable(), null);
+        assertEquals("COMPLETED", resumedResult.outcome);
+        assertEquals(3L, resumed.transcriptSnapshot().stream()
                 .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
+        assertEquals("Uncertain work is not retried when resuming the checkpoint", 1, runningEffects.get());
+        assertEquals(0, announcedEffects.get());
+        assertEquals(0, pendingEffects.get());
     }
 
     @Test public void repeatedUnknownToolTerminatesAsNoProgressAfterThreeModelTurns() {

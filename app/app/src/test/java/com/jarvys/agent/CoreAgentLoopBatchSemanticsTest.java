@@ -142,32 +142,53 @@ public class CoreAgentLoopBatchSemanticsTest {
                 && "cancel-call".equals(turn.toolCallId) && turn.content.contains("tool-local cancellation")));
     }
 
-    @Test public void cancelledParallelWorkerThatNeverClaimsExecutionIsNeverLaunched() throws Exception {
-        AtomicInteger effects = new AtomicInteger();
-        AtomicInteger interruptedEvents = new AtomicInteger();
-        CoreTool tool = tool("effect", CoreTool.ExecutionMode.PARALLEL, (arguments, token) -> {
-            effects.incrementAndGet();
-            return CoreToolResult.success("effect completed");
+    @Test public void cancellationAfterParallelToolCallAnnouncementInterruptsClaimedCallAndLeavesTailUnlaunched() {
+        AtomicInteger announcedEffects = new AtomicInteger();
+        AtomicInteger pendingEffects = new AtomicInteger();
+        CoreTool announcedTool = tool("announced", CoreTool.ExecutionMode.PARALLEL, (arguments, token) -> {
+            announcedEffects.incrementAndGet();
+            return CoreToolResult.success("announced effect completed");
+        });
+        CoreTool pendingTool = tool("pending", CoreTool.ExecutionMode.PARALLEL, (arguments, token) -> {
+            pendingEffects.incrementAndGet();
+            return CoreToolResult.success("pending effect completed");
         });
         CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
-                new ModelReply("", Collections.singletonList(
-                        new ModelReply.Call("unlaunched-call", "effect", Collections.emptyMap()))),
-                new CoreToolRegistry(Collections.singletonList(tool)), "", "never-launched-cas");
+                new ModelReply("", Arrays.asList(
+                        new ModelReply.Call("announced-call", "announced", Collections.emptyMap()),
+                        new ModelReply.Call("pending-call", "pending", Collections.emptyMap()))),
+                new CoreToolRegistry(Arrays.asList(announcedTool, pendingTool)), "", "announced-cancellation");
         CancellationToken token = CancellationToken.cancellable();
+        List<ToolActivity> events = new java.util.ArrayList<>();
         loop.setCheckpointListener(checkpoint -> { });
         CoreAgentLoop.Result result = loop.run("Run the call", Collections.emptyList(), token,
                 new CoreAgentLoop.ProgressListener() {
                     @Override public void onProgress(String stage, String message) { }
                     @Override public void onToolActivity(ToolActivity activity) {
-                        if ("tool_call".equals(activity.stage)) token.cancelForTimeout();
-                        if ("tool_interrupted".equals(activity.stage)) interruptedEvents.incrementAndGet();
+                        events.add(activity);
+                        if ("tool_call".equals(activity.stage) && "announced-call".equals(activity.callId))
+                            token.cancelForTimeout();
                     }
                 });
 
         assertEquals("PARTIAL", result.outcome);
-        assertEquals(0, effects.get());
-        assertEquals(0, interruptedEvents.get());
-        assertEquals("NEVER_LAUNCHED", loop.checkpointSnapshot().toolLifecycle.get("unlaunched-call"));
+        assertEquals(0, announcedEffects.get());
+        assertEquals(0, pendingEffects.get());
+        CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
+        assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("announced-call"));
+        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("pending-call"));
+        assertEquals(1L, events.stream().filter(event -> "announced-call".equals(event.callId)
+                && "tool_call".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "announced-call".equals(event.callId)
+                && "tool_interrupted".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "announced-call".equals(event.callId)
+                && "tool_not_started".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "pending-call".equals(event.callId)
+                && "tool_call".equals(event.stage)).count());
+        assertEquals(1L, events.stream().filter(event -> "pending-call".equals(event.callId)
+                && "tool_not_started".equals(event.stage)).count());
+        assertEquals(0L, events.stream().filter(event -> "pending-call".equals(event.callId)
+                && "tool_interrupted".equals(event.stage)).count());
     }
 
     @Test public void interruptedParallelActivityIsEmittedOnlyOnce() throws Exception {
