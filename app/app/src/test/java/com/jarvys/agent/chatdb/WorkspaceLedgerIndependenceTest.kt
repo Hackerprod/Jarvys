@@ -55,14 +55,14 @@ class WorkspaceLedgerIndependenceTest {
         val sqlite = database.openHelper.writableDatabase
         (1L..5L).forEach { seq ->
             sqlite.execSQL(
-                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,created_at) VALUES(?,?,?,?,?,?)",
-                arrayOf(central, seq, "workspace", "central-$seq", seq, seq + 0.25),
+                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
+                arrayOf(central, seq, "workspace", "central-$seq", seq, 0, seq + 0.25),
             )
         }
         (1L..2L).forEach { seq ->
             sqlite.execSQL(
-                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,created_at) VALUES(?,?,?,?,?,?)",
-                arrayOf(execution, seq, "evidence", "execution-$seq", seq, seq + 0.25),
+                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
+                arrayOf(execution, seq, "evidence", "execution-$seq", seq, 0, seq + 0.25),
             )
         }
         val resultEvidenceId = "result-evidence-from-execution"

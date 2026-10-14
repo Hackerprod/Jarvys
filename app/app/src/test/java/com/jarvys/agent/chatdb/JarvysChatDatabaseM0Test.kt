@@ -142,7 +142,10 @@ class JarvysChatDatabaseM0Test {
         listOf(
             "conversation_items", "messages", "message_parts", "message_attachments", "message_translations",
             "proactive_suggested_replies", "tool_batches", "tool_calls", "tool_results", "model_errors", "generated_images"
-        ).forEach { assertEquals("fixture row in $it", 1L, rowCount(sqlite, it)) }
+        ).forEach { table ->
+            val expectedRows = if (table == "conversation_items") 6L else 1L
+            assertEquals("fixture rows in $table", expectedRows, rowCount(sqlite, table))
+        }
 
         assertEquals(1, database.conversationDao().deleteById(id))
         listOf(
@@ -286,7 +289,9 @@ class JarvysChatDatabaseM0Test {
         }.isFailure)
         assertConstraint {
             database.openHelper.writableDatabase.execSQL(
-                "INSERT INTO conversations(id,created_at,updated_at) VALUES(?,?,?)", arrayOf(id, 1L, 1L),
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 0, 1L, 1L, 0L, 1L, "not_started"),
             )
         }
         assertEquals(99L, scalarLong(
@@ -503,8 +508,8 @@ class JarvysChatDatabaseM0Test {
         assertEquals("hashes are non-unique", 2L, rowCount(sqlite, "file_refs"))
         assertConstraint {
             sqlite.execSQL(
-                "INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at) VALUES(?,?,?,?,?)",
-                arrayOf("duplicate-path", "another-sha", "test-artifact.bin", 3L, 1L),
+                "INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at,attempts,generation) VALUES(?,?,?,?,?,?,?)",
+                arrayOf("duplicate-path", "another-sha", "test-artifact.bin", 3L, 1L, 0, 0L),
             )
         }
 
@@ -540,8 +545,8 @@ class JarvysChatDatabaseM0Test {
         }
         assertConstraint {
             sqlite.execSQL(
-                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,created_at) VALUES(?,?,?,?,?,?)",
-                arrayOf("missing-parent", 1L, "message", "orphan", 1L, 1.25),
+                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
+                arrayOf("missing-parent", 1L, "message", "orphan", 1L, 0, 1.25),
             )
         }
     }

@@ -139,7 +139,15 @@ val prepareApkFactoryTemplate by tasks.registering {
     }
 }
 android.sourceSets.getByName("main").assets.srcDir(factoryAssets)
-android.sourceSets["test"].assets.srcDir("$projectDir/schemas")
+androidComponents {
+    onVariants { variant ->
+        // Room's generated schema JSON is a unit-test asset for each product-flavor variant.
+        // Wiring it on the UnitTestVariant makes it part of the test runtime assets Robolectric sees.
+        variant.unitTest?.sources?.assets?.addStaticSourceDirectory(
+            project.layout.projectDirectory.dir("schemas").asFile.absolutePath,
+        )
+    }
+}
 tasks.configureEach {
     if ((name.startsWith("merge") && name.endsWith("Assets")) || name.startsWith("lintAnalyze") ||
         name.startsWith("lintVitalAnalyze") || name.endsWith("LintVitalReportModel") ||
