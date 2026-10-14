@@ -15,18 +15,75 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.ui.chat.ConversationTimelineItem
+import com.jarvys.agent.ui.chat.ConversationVisibility
+import com.jarvys.agent.ui.chat.ToolGrouping
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 import java.nio.file.Files
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AgentRunRestorationComposeTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping() {
+        val root = Files.createTempDirectory("restored-delivered-preview").toFile()
+        val store = LocalRunStore(root)
+        val session = "restored-preview-${System.nanoTime()}"
+        val userId = store.appendConversationMessage(session, "user", "Create a web page")
+        val projectId = WorkspaceStore.projectIdForSession(session)
+        val workspace = WorkspaceStore(File(root, "jarvys/workspaces"), projectId,
+            null, null, null, session, false)
+        workspace.write("index.html", "<!doctype html><h1>Restored page</h1>")
+        val artifacts = DeliveredArtifactStore(File(root, "jarvys"))
+        val artifact = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
+        store.appendDeliveredFile(session, artifact)
+        val preview = requireNotNull(artifacts.previewForAttachment(session, artifact))
+        store.appendConversationToolPresentation(session, userId, "Build output", "tool_result", "preview-call",
+            "{\"artifact_id\":\"delivered:${artifact.id}\"}", preview.token, "")
+        store.appendConversationToolPresentation(session, userId, "Read output", "tool_result", "read-call",
+            "Read completed", null, "")
+        store.appendConversationToolPresentation(session, userId, "Write output", "tool_error", "write-call",
+            "Write failed", null, "")
+
+        val timeline = LocalRunStore(root).readConversationTimeline(session)
+        val matchingResult = timeline.single { it.toolCallId == "preview-call" }
+        val deliveredCard = timeline.single { it.kind == "delivered_file" }
+        val projected = ConversationVisibility.project(timeline)
+        assertFalse(projected.any { it.id == matchingResult.id })
+        assertTrue(projected.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == artifact.id })
+        val toolGroup = ToolGrouping.project(projected).filterIsInstance<ConversationTimelineItem.ToolGroup>().single()
+        assertEquals(2, toolGroup.toolCount)
+        assertFalse(toolGroup.events.any { it.id == matchingResult.id })
+
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.fillMaxSize()) {
+                    AgentRunScreen(conversationKey = session, events = timeline, isRunning = false,
+                        emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
+                        onOpenSkillFile = {}, chatWithoutMemory = false)
+                }
+            }
+        }
+
+        compose.onNodeWithTag("conversation-activity-${matchingResult.id}").assertDoesNotExist()
+        compose.onNodeWithTag("delivered-file-${deliveredCard.id}").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-${toolGroup.firstEventId}").performScrollTo().assertIsDisplayed()
+        root.deleteRecursively()
+    }
 
     @Test fun restoredToolCardsAndCompletedAssistantFooterAreVisible() {
         val root = Files.createTempDirectory("restored-chat-tools").toFile()

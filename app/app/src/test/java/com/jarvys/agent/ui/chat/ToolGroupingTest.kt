@@ -10,7 +10,7 @@ import org.junit.Test
 
 class ToolGroupingTest {
     private fun tool(id: Long, stage: String = "tool_result", name: String = "tool-$id") =
-        AgentRunUiEvent.toolEvent(id, stage, name, null, "call-$id", null, id)
+        AgentRunUiEvent.toolEvent(id, "tool_result", name, null, "call-$id", null, id).copy(stage = stage)
 
     private fun item(event: AgentRunUiEvent) = ConversationTimelineItem.Event(event)
 
