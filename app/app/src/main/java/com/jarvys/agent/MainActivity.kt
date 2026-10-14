@@ -116,6 +116,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -225,6 +226,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -1900,15 +1902,28 @@ private fun JarvysApp(
     var workspaceChatReload by remember { mutableIntStateOf(0) }
     var workspaceOlderHistoryLoading by remember(routeWorkspaceId) { mutableStateOf(false) }
     var workspaceOlderHistoryLoadError by remember(routeWorkspaceId) { mutableStateOf(false) }
-    var workspaceOlderHistoryRequestSerial by remember(routeWorkspaceId) { mutableLongStateOf(0L) }
+    var workspaceOlderHistoryRequestSerial by remember { mutableLongStateOf(0L) }
+    var workspaceOlderHistoryJob by remember { mutableStateOf<Job?>(null) }
     val workspaceChatActive = route == Routes.COORDINATED_WORKSPACE
+    val latestWorkspaceChatActive by rememberUpdatedState(workspaceChatActive)
+    val latestRouteWorkspaceId by rememberUpdatedState(routeWorkspaceId)
     val crewRoute = route == Routes.CREW_EMPTY || route.startsWith("crew/")
     var workspaceCrewSessionId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(route, workspaceChatActive, crewRoute) {
         if (workspaceChatActive || !crewRoute) workspaceCrewSessionId = null
     }
     val activeWorkspaceCrewSessionId = workspaceCrewSessionId.takeIf { crewRoute }
+    DisposableEffect(workspaceChatActive, routeWorkspaceId) {
+        onDispose {
+            workspaceOlderHistoryRequestSerial++
+            workspaceOlderHistoryJob?.cancel()
+            workspaceOlderHistoryJob = null
+        }
+    }
     LaunchedEffect(route, routeWorkspaceId, conversationSessionId, workspaceRevision, workspaceChatReload) {
+        workspaceOlderHistoryRequestSerial++
+        workspaceOlderHistoryJob?.cancel()
+        workspaceOlderHistoryJob = null
         if (workspaceChatActive && routeWorkspaceId != null) {
             val executionSessionId = runCatching { WorkspaceIdentity.executionSessionId(routeWorkspaceId) }.getOrNull()
             if (executionSessionId == null) {
@@ -1916,26 +1931,38 @@ private fun JarvysApp(
                 return@LaunchedEffect
             }
             val previous = workspaceChatState.value
-            workspaceOlderHistoryRequestSerial++
             workspaceOlderHistoryLoading = false
             workspaceOlderHistoryLoadError = false
-            workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
-                previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
-                previous?.events.orEmpty(), loading = true)
+            workspaceChatState.value = previous?.withLoading()
+                ?: WorkspaceChatUiState(routeWorkspaceId, executionSessionId, "", WorkspaceUiStatus.UNKNOWN,
+                    loading = true)
             AgentRunUiState.showSession(executionSessionId)
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId, previous)
                 }
-                workspaceChatState.value = loaded
-                AgentRunUiState.restoreSession(executionSessionId, loaded.events)
+                val current = workspaceChatState.value?.takeIf {
+                    it.workspaceId == routeWorkspaceId && it.executionSessionId == executionSessionId
+                } ?: previous
+                workspaceChatState.value = current?.withRefreshedTimelinePage(loaded) ?: loaded
+                val currentEvents = AgentRunUiState.snapshotForSession(executionSessionId).events
+                if (currentEvents.isEmpty()) AgentRunUiState.restoreSession(executionSessionId, loaded.events)
+                else {
+                    AgentRunUiState.showSession(executionSessionId)
+                    AgentRunUiState.refreshPersistedSession(executionSessionId, loaded.events)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
-                    previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
-                    previous?.events.orEmpty(), error = context.getString(R.string.workspace_chat_load_error))
-                AgentRunUiState.restoreSession(executionSessionId, previous?.events.orEmpty())
+                val current = workspaceChatState.value?.takeIf {
+                    it.workspaceId == routeWorkspaceId && it.executionSessionId == executionSessionId
+                } ?: previous
+                workspaceChatState.value = current?.withLoadError(context.getString(R.string.workspace_chat_load_error))
+                    ?: WorkspaceChatUiState(routeWorkspaceId, executionSessionId, "", WorkspaceUiStatus.UNKNOWN,
+                        error = context.getString(R.string.workspace_chat_load_error))
+                val currentEvents = AgentRunUiState.snapshotForSession(executionSessionId).events
+                if (currentEvents.isEmpty()) AgentRunUiState.restoreSession(executionSessionId, previous?.events.orEmpty())
+                else AgentRunUiState.showSession(executionSessionId)
             }
         } else {
             AgentRunUiState.showSession(activeWorkspaceCrewSessionId ?: conversationSessionId)
@@ -2236,15 +2263,19 @@ private fun JarvysApp(
                                 workspaceOlderHistoryRequestSerial = requestSerial
                                 workspaceOlderHistoryLoading = true
                                 workspaceOlderHistoryLoadError = false
-                                scope.launch(Dispatchers.IO) {
-                                    val page = runCatching {
+                                workspaceOlderHistoryJob = scope.launch(Dispatchers.IO) {
+                                    val page = try {
                                         LocalRunStore(context).readConversationTimelinePage(
                                             sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS,
                                             state.invalidatedToolTurnMessageIds, state.projectionMarkers)
-                                    }.getOrNull()
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        null
+                                    }
                                     withContext(Dispatchers.Main) {
                                         if (requestSerial != workspaceOlderHistoryRequestSerial
-                                            || !workspaceChatActive || routeWorkspaceId != state.workspaceId
+                                            || !latestWorkspaceChatActive || latestRouteWorkspaceId != state.workspaceId
                                             || workspaceChatState.value?.executionSessionId != sessionId) return@withContext
                                         if (page != null) {
                                             AgentRunUiState.prependPersistedSession(
@@ -2257,6 +2288,7 @@ private fun JarvysApp(
                                             workspaceOlderHistoryLoadError = true
                                         }
                                         workspaceOlderHistoryLoading = false
+                                        workspaceOlderHistoryJob = null
                                     }
                                 }
                             }

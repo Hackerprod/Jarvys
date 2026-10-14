@@ -2,13 +2,18 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 import java.io.ByteArrayInputStream;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
@@ -159,5 +164,51 @@ public class LocalRunAttachmentRecoveryTest {
         store.markConversationHasPrivateCode("code-chat");
         assertTrue(store.conversationHasPrivateCode("code-chat"));
         assertTrue(new LocalRunStore(temp.getRoot()).conversationHasPrivateCode("code-chat"));
+    }
+
+    @Test public void orphanCleanupExtendsLedgerScanAfterAppendAndKeepsNewAttachmentReference() throws Exception {
+        LocalRunStore store = store();
+        ChatAttachment keep = file("chat", "keep-during-scan.txt");
+        ChatAttachment orphan = file("chat", "orphan-during-scan.txt");
+        File ledger = ledger("chat");
+        char[] payload = new char[900];
+        Arrays.fill(payload, 'x');
+        String ordinaryRow = new JSONObject().put("role", "user").put("content", new String(payload)).toString() + "\n";
+        int rowBytes = ordinaryRow.getBytes(StandardCharsets.UTF_8).length;
+        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                new FileOutputStream(ledger), StandardCharsets.UTF_8))) {
+            long writtenBytes = 0L;
+            while (writtenBytes < 20L * 1024L * 1024L) {
+                writer.write(ordinaryRow);
+                writtenBytes += rowBytes;
+            }
+        }
+        assertTrue("fixture must represent a large conversation ledger", ledger.length() >= 20L * 1024L * 1024L);
+
+        LocalRunStore.resetHotPathMetricsForTests();
+        AtomicReference<Throwable> appendFailure = new AtomicReference<>();
+        LocalRunStore.setAttachmentCleanupScanTestHookForTests(() -> {
+            LocalRunStore.setAttachmentCleanupScanTestHookForTests(null);
+            Thread appender = new Thread(() -> {
+                try {
+                    store.appendConversationMessage("chat", "user", "added while cleanup was scanning",
+                            java.util.Collections.singletonList(keep));
+                } catch (Throwable error) { appendFailure.set(error); }
+            }, "attachment-cleanup-ledger-appender");
+            appender.start();
+            try { appender.join(); }
+            catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for concurrent ledger append", error);
+            }
+        });
+        store.cleanupOrphanAttachments();
+
+        assertNull(appendFailure.get());
+        assertTrue("a row appended before final validation must protect its attachment",
+                attachments().resolve("chat", keep).isFile());
+        assertThrows(IllegalArgumentException.class, () -> attachments().resolve("chat", orphan));
+        assertTrue("the retry should read only the append suffix, not rescan the full ledger",
+                LocalRunStore.attachmentCleanupLedgerScanBytesForTests() < 2L * ledger.length());
     }
 }

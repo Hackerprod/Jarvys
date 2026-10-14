@@ -78,13 +78,19 @@ public class LocalRunStoreCrewSnapshotReadTest {
         assertEquals(ordinaryRows, store.conversationMessageCount(session));
         store.appendCrewMissionSnapshot(snapshot("mission-a", session, "saved-a"));
         LocalRunStore.resetHotPathMetricsForTests();
+        LocalRunStore.setCrewSnapshotReadTestHookForTests(() -> {
+            LocalRunStore.setCrewSnapshotReadTestHookForTests(null);
+            store.appendCrewMissionSnapshot(snapshot("mission-b", session, "saved-b"));
+        });
 
         List<CrewMissionSnapshot> first = store.readCrewMissionSnapshots(session);
         long firstBytes = LocalRunStore.crewSnapshotLedgerScanBytesForTests();
         long firstScans = LocalRunStore.crewSnapshotLedgerScanCountForTests();
-        assertEquals(Collections.singletonList("mission-a"), missionIds(first));
+        assertEquals(Arrays.asList("mission-a", "mission-b"), missionIds(first));
         assertTrue(firstBytes >= 20L * 1024L * 1024L);
-        assertEquals(1L, LocalRunStore.crewSnapshotRowsParsedCountForTests());
+        assertEquals("a cold read that races an append extends the saved prefix",
+                ledger.length(), firstBytes);
+        assertEquals(2L, LocalRunStore.crewSnapshotRowsParsedCountForTests());
         assertEquals(0L, LocalRunStore.conversationRowsFullParseCountForTests());
 
         store.readCrewMissionSnapshots(session);
@@ -94,13 +100,13 @@ public class LocalRunStoreCrewSnapshotReadTest {
         assertEquals(1L, LocalRunStore.crewSnapshotCacheHitCountForTests());
 
         long previousLength = ledger.length();
-        store.appendCrewMissionSnapshot(snapshot("mission-b", session, "saved-b"));
+        store.appendCrewMissionSnapshot(snapshot("mission-c", session, "saved-c"));
         List<CrewMissionSnapshot> appended = store.readCrewMissionSnapshots(session);
-        assertEquals(Arrays.asList("mission-a", "mission-b"), missionIds(appended));
+        assertEquals(Arrays.asList("mission-a", "mission-b", "mission-c"), missionIds(appended));
         assertEquals(firstScans + 1L, LocalRunStore.crewSnapshotLedgerScanCountForTests());
         assertEquals("append extension reads only the new suffix", ledger.length() - previousLength,
                 LocalRunStore.crewSnapshotLedgerScanBytesForTests() - firstBytes);
-        assertEquals(2L, LocalRunStore.crewSnapshotRowsParsedCountForTests());
+        assertEquals(3L, LocalRunStore.crewSnapshotRowsParsedCountForTests());
     }
 
     private static File ledger(File files, String session) {
@@ -120,6 +126,7 @@ public class LocalRunStoreCrewSnapshotReadTest {
             String line;
             while ((line = reader.readLine()) != null) try {
                 JSONObject row = new JSONObject(line);
+                if (LocalRunStore.isResultOnlyRow(row)) continue;
                 if (!"crew_snapshot".equals(row.optString("type"))) continue;
                 CrewMissionSnapshot value = CrewMissionSnapshot.fromJson(row);
                 if (value != null && session.equals(value.conversationId)) latest.put(value.missionId, value);

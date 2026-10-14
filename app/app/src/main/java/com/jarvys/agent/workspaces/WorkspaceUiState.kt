@@ -127,6 +127,7 @@ class WorkspaceChatUiState(
     translationMessageIds: Set<String> = emptySet(),
     invalidatedToolTurnMessageIds: Set<String> = emptySet(),
     val projectionMarkers: LocalRunStore.TimelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers(),
+    val hasLoadedOlderHistoryPage: Boolean = false,
 ) {
     val events: List<AgentRunUiEvent> = Collections.unmodifiableList(ArrayList(events))
     val hiddenAssistantMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(hiddenAssistantMessageIds))
@@ -156,6 +157,7 @@ class WorkspaceChatUiState(
         translationMessageIds = page.translationMessageIds,
         invalidatedToolTurnMessageIds = page.invalidatedToolTurnMessageIds,
         projectionMarkers = page.projectionMarkers,
+        hasLoadedOlderHistoryPage = false,
     )
 
     fun withOlderTimelinePage(page: LocalRunStore.ConversationTimelinePage): WorkspaceChatUiState = WorkspaceChatUiState(
@@ -173,6 +175,68 @@ class WorkspaceChatUiState(
         translationMessageIds = translationMessageIds + page.translationMessageIds,
         invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds + page.invalidatedToolTurnMessageIds,
         projectionMarkers = page.projectionMarkers,
+        hasLoadedOlderHistoryPage = true,
+    )
+
+    /** Keeps the already loaded older window while replacing the newest page after a refresh. */
+    fun withRefreshedTimelinePage(refreshed: WorkspaceChatUiState): WorkspaceChatUiState {
+        require(refreshed.workspaceId == workspaceId && refreshed.executionSessionId == executionSessionId) {
+            "Refreshed workspace chat must belong to the same workspace"
+        }
+        val keepOlderWindow = hasLoadedOlderHistoryPage
+        return WorkspaceChatUiState(
+            workspaceId = workspaceId,
+            executionSessionId = executionSessionId,
+            title = refreshed.title,
+            status = refreshed.status,
+            events = refreshed.events,
+            loading = refreshed.loading,
+            error = refreshed.error,
+            hasOlderHistory = if (keepOlderWindow) hasOlderHistory else refreshed.hasOlderHistory,
+            olderHistoryCursor = if (keepOlderWindow) olderHistoryCursor else refreshed.olderHistoryCursor,
+            hiddenAssistantMessageIds = hiddenAssistantMessageIds + refreshed.hiddenAssistantMessageIds,
+            hiddenTranslationMessageIds = hiddenTranslationMessageIds + refreshed.hiddenTranslationMessageIds,
+            translationMessageIds = translationMessageIds + refreshed.translationMessageIds,
+            invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds + refreshed.invalidatedToolTurnMessageIds,
+            projectionMarkers = refreshed.projectionMarkers.withOlderPage(projectionMarkers),
+            hasLoadedOlderHistoryPage = keepOlderWindow,
+        )
+    }
+
+    fun withLoading(): WorkspaceChatUiState = WorkspaceChatUiState(
+        workspaceId = workspaceId,
+        executionSessionId = executionSessionId,
+        title = title,
+        status = status,
+        events = events,
+        loading = true,
+        error = null,
+        hasOlderHistory = hasOlderHistory,
+        olderHistoryCursor = olderHistoryCursor,
+        hiddenAssistantMessageIds = hiddenAssistantMessageIds,
+        hiddenTranslationMessageIds = hiddenTranslationMessageIds,
+        translationMessageIds = translationMessageIds,
+        invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds,
+        projectionMarkers = projectionMarkers,
+        hasLoadedOlderHistoryPage = hasLoadedOlderHistoryPage,
+    )
+
+    fun withLoadError(message: String): WorkspaceChatUiState = WorkspaceChatUiState(
+        workspaceId = workspaceId,
+        executionSessionId = executionSessionId,
+        title = title,
+        status = status,
+        events = events,
+        loading = false,
+        error = message,
+        hasOlderHistory = hasOlderHistory,
+        olderHistoryCursor = olderHistoryCursor,
+        hiddenAssistantMessageIds = hiddenAssistantMessageIds,
+        hiddenTranslationMessageIds = hiddenTranslationMessageIds,
+        translationMessageIds = translationMessageIds,
+        invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds,
+        projectionMarkers = projectionMarkers,
+        hasLoadedOlderHistoryPage = hasLoadedOlderHistoryPage,
     )
 }
 

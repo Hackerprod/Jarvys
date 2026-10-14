@@ -64,5 +64,35 @@ class WorkspaceChatTimelinePagingTest {
         assertEquals((totalTurns - combined.size until totalTurns).map { "user-$it" },
             combined.map { it.messageId })
         assertFalse(combined.zipWithNext().any { (first, second) -> first.messageId == second.messageId })
+
+        val paged = refreshed.withOlderTimelinePage(older)
+        AgentRunUiState.resetSession(sessionId)
+        AgentRunUiState.restoreSession(sessionId, refreshed.events)
+        AgentRunUiState.prependPersistedSession(sessionId, older.events,
+            refreshed.hiddenAssistantMessageIds, refreshed.hiddenTranslationMessageIds,
+            refreshed.translationMessageIds)
+        val cachedTimelineIds = AgentRunUiState.snapshotForSession(sessionId).events.map { it.id }
+        assertEquals(cachedTimelineIds.size, cachedTimelineIds.distinct().size)
+
+        ledger.appendText("{\"role\":\"user\",\"messageId\":\"user-$totalTurns\",\"content\":\"$filler\"}\n")
+        val appendedTail = WorkspaceProjection.chat(context, workspaceId, paged)
+        val preserved = paged.withRefreshedTimelinePage(appendedTail)
+        assertTrue("refresh must keep the cursor after the already loaded older page",
+            preserved.hasLoadedOlderHistoryPage)
+        assertEquals(paged.olderHistoryCursor, preserved.olderHistoryCursor)
+        assertEquals(paged.hasOlderHistory, preserved.hasOlderHistory)
+        assertEquals("user-$totalTurns", preserved.events.last().messageId)
+
+        AgentRunUiState.showSession(sessionId)
+        AgentRunUiState.refreshPersistedSession(sessionId, appendedTail.events)
+        val refreshedTimeline = AgentRunUiState.snapshotForSession(sessionId).events
+        assertTrue("refresh must retain events from the previously loaded older page",
+            refreshedTimeline.map { it.id }.containsAll(cachedTimelineIds))
+        assertTrue(refreshedTimeline.any { it.messageId == "user-$totalTurns" })
+        assertEquals(refreshedTimeline.size, refreshedTimeline.map { it.id }.distinct().size)
+        val refreshedUserIds = refreshedTimeline.filter { it.kind == "user" }.map { it.messageId }
+        assertEquals(refreshedUserIds.size, refreshedUserIds.distinct().size)
+        assertEquals((totalTurns - cachedTimelineIds.size until totalTurns + 1).map { "user-$it" },
+            refreshedUserIds)
     }
 }
