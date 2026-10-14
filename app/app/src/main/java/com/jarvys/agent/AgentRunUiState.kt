@@ -396,7 +396,7 @@ object AgentRunUiState {
     }
 
     private fun sessionForApprovalLocked(id: String): String? {
-        publishedState.value.takeIf { snapshot -> snapshot.events.any { it.approvalId == id } }
+        return publishedState.value.takeIf { snapshot -> snapshot.events.any { it.approvalId == id } }
             ?.sessionId
             ?: sessionSnapshots.entries.firstOrNull { (_, snapshot) ->
                 snapshot.events.any { it.approvalId == id }
@@ -1397,7 +1397,6 @@ object AgentRunUiState {
             publishOwnedSnapshot(current.copy(events = events,
                 liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "approval:$id" && status != "PENDING" }))
         } }
-    }
 
     @JvmStatic
     fun markProactiveRepliesUsed(messageId: String) {
