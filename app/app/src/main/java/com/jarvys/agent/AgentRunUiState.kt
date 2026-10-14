@@ -654,9 +654,9 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun restoreSession(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
-        showSession(sessionId)
-        inSession(sessionId) {
+    fun restoreSession(sessionId: String, events: List<AgentRunUiEvent>) {
+        synchronized(lock) { showSession(sessionId) }
+        inSession(sessionId) { synchronized(lock) {
         preserveOwnedSnapshot()
         if (ownedRunActive && ownedSessionId == sessionId && ownedLiveSnapshot != null) {
             _state.value = ownedLiveSnapshot!!.copy(running = true, interactiveOwnerSessionId = ownedSessionId)
@@ -681,7 +681,7 @@ object AgentRunUiState {
             reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis,
         )
-        }
+        } }
     }
 
     @JvmStatic
@@ -738,8 +738,7 @@ object AgentRunUiState {
     } }
 
     @JvmStatic
-    fun crewMissionChanged(sessionId: String, snapshot: CrewMissionSnapshot) = synchronized(lock) {
-        inSession(sessionId) {
+    fun crewMissionChanged(sessionId: String, snapshot: CrewMissionSnapshot) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val events = current.events.toMutableList()
@@ -757,8 +756,7 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun workspaceResultAdded(reference: com.jarvys.agent.workspaces.WorkspaceResultReference) = synchronized(lock) {
-        inSession(reference.ownerCentralSessionId) {
+    fun workspaceResultAdded(reference: com.jarvys.agent.workspaces.WorkspaceResultReference) = inSession(reference.ownerCentralSessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != reference.ownerCentralSessionId) return@synchronized
         if (current.events.any { it.kind == "workspace_result" && it.workspaceResultReference?.referenceId == reference.referenceId }) return@synchronized
@@ -890,6 +888,14 @@ object AgentRunUiState {
             resolveHeaderMascotAnimationLocked(request, "rejected", reason)
         }
         if (generationChanged) ownedLiveSnapshot = null
+        // A generation identifies one run; binding it again supersedes any stale owner that still carries it.
+        sessionOwners.forEach { (otherSession, other) ->
+            if (otherSession != sessionId && other.generation == generation) {
+                other.generation = Long.MIN_VALUE
+                other.active = false
+                other.liveSnapshot = null
+            }
+        }
         ownedSessionId = sessionId
         activeGeneration = generation
         ownedRunActive = true
