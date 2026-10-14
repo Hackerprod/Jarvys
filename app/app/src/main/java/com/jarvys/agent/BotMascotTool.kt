@@ -30,7 +30,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
             require(rawRevision is Number) { "expected_revision must be a positive integer from list_bots." }
             val revision = try { java.math.BigDecimal(rawRevision.toString()).intValueExact() } catch (_: RuntimeException) { 0 }
             require(revision > 0) { "expected_revision must be a positive integer from list_bots." }
-            CoreToolResult.success(service.outcome(service.assign(id, revision, request, description, source, token, true)).toString())
+            CoreToolResult.success(service.outcome(service.assign(id, revision, request, description, source, token)).toString())
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (invalid: IllegalArgumentException) { CoreToolResult.failure(invalid.message ?: "Invalid mascot scene. The existing visual was kept.") }
         catch (_: RuntimeException) { CoreToolResult.failure("Could not finish local mascot authoring. Inspect list_bots, then retry the same request_id; do not recreate the bot.") }
