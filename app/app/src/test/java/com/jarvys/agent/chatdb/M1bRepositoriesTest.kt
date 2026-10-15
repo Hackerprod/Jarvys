@@ -2,6 +2,8 @@ package com.jarvys.agent.chatdb
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.jarvys.agent.crew.CrewCoordinationEvidence
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -53,7 +55,7 @@ class M1bRepositoriesTest {
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
         databaseExecutor.submit<T> { runBlocking { block() } }.get(60, TimeUnit.SECONDS)
 
-    @Test fun modelProtocolUsesFirstResultsLastProviderOutputAndPreservesCompactionParity() = onDatabaseThread {
+    @Test fun modelProtocolUsesFirstResultsAndExcludesPreBoundaryProviderOutputsAfterCompaction() = onDatabaseThread {
         success(conversations.ensureConversation("protocol"))
         val user = success(conversations.appendMessage(AppendMessageInput(
             conversationId = "protocol", role = "user", parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "question")),
@@ -149,7 +151,7 @@ class M1bRepositoriesTest {
         assertEquals("artifact-model-1", resultEvents.first().firstResult!!.file_artifact_id)
         assertEquals(first.seq, resultEvents.first().firstResult!!.seq)
         assertEquals(resultEvents.last().seq, batchEntries.first().value.batch.last_activity_seq)
-        assertEquals("[{\"item\":\"last\"}]", transcript.latestProviderOutputItemsByOwner[owner]!!.items_json)
+        assertTrue("pre-boundary provider outputs are excluded from restored state", transcript.latestProviderOutputItemsByOwner.isEmpty())
         assertEquals(16L, transcript.compactionBoundaryRowIndex)
         assertEquals(compaction.seq, transcript.compactionBoundarySeq)
         assertEquals(1L, transcript.firstKeptMessageIndex)
@@ -161,6 +163,76 @@ class M1bRepositoriesTest {
             arrayOf("protocol", owner, "execution-1", "incomplete-call"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("detail"))) } }.joinToString(" ")
         assertTrue(plan.contains("idx_tool_activities_execution_call"))
+    }
+
+    @Test fun providerOutputsAreLastWinsWhenNoCompactionBoundaryExists() = onDatabaseThread {
+        success(conversations.ensureConversation("provider-last-wins"))
+        val user = success(conversations.appendMessage(AppendMessageInput(
+            conversationId = "provider-last-wins", role = "user", parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "question")),
+        )))
+        success(model.appendProviderOutputItems("provider-last-wins", user.messageId, 0, "[{\"item\":\"first\"}]"))
+        success(model.appendProviderOutputItems("provider-last-wins", user.messageId, 0, "[{\"item\":\"last\"}]"))
+
+        assertEquals("[{\"item\":\"last\"}]", model.readModelTranscript("provider-last-wins")
+            .latestProviderOutputItemsByOwner[user.messageId]?.items_json)
+    }
+
+    @Test fun nullableM1bCursorColumnsRestoreWithoutNullDereferences() = onDatabaseThread {
+        success(conversations.ensureConversation("nullable-m1b"))
+
+        val failedImage = success(artifacts.appendGeneratedImage(GeneratedImageInput(
+            conversationId = "nullable-m1b", prompt = "failed", status = "FAILED", error = null,
+        )))
+        assertNull(failedImage.image_path)
+        assertNull(failedImage.error)
+        assertNull(failedImage.file_ref_id)
+
+        val activity = success(model.appendToolActivity(ToolActivityInput(
+            conversationId = "nullable-m1b", eventId = "nullable-event", ownerUserMessageId = null,
+            executionId = null, callId = null, toolName = "reader", stage = "tool_call", timestampMillis = 5L,
+        )))!!
+        assertNull(activity.owner_user_message_id)
+        assertNull(activity.source_batch_id)
+        assertNull(activity.execution_id)
+        assertNull(activity.call_id)
+        assertNull(activity.display_name)
+        assertNull(activity.detail)
+        assertNull(activity.preview_id)
+
+        success(memory.appendCrewSnapshot("nullable-m1b", crewSnapshot(
+            "nullable-m1b", "nullable-mission", 3, "Crew", "DONE", "DONE", "message",
+        )))
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE crew_missions SET process_id=NULL,title_source=NULL,synthesis=NULL,finished_at_ms=NULL WHERE conversation_id=? AND mission_id=?",
+            arrayOf("nullable-m1b", "nullable-mission"),
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE crew_bots SET role_id=NULL,role_name=NULL,color_key=NULL,mission=NULL,error=NULL,result=NULL,waiting_reason=NULL," +
+                "started_at_ms=NULL,finished_at_ms=NULL,recovery_note=NULL,phase=NULL,last_progress=NULL,last_progress_at_ms=NULL,cycle_id=NULL " +
+                "WHERE conversation_id=? AND mission_id=?",
+            arrayOf("nullable-m1b", "nullable-mission"),
+        )
+        val restoredCrew = memory.readCrewMissionSnapshots("nullable-m1b").single()
+        assertNull(restoredCrew.processId)
+        assertEquals("", restoredCrew.title)
+        assertEquals("fallback", restoredCrew.titleSource)
+        assertEquals("", restoredCrew.synthesis)
+        assertEquals(0L, restoredCrew.finishedAtMillis)
+        val bot = restoredCrew.bots.single()
+        assertNull(bot.roleId)
+        assertNull(bot.roleName)
+        assertNull(bot.colorKey)
+        assertNull(bot.mission)
+        assertEquals("", bot.error)
+        assertEquals("", bot.result)
+        assertEquals("", bot.waitingReason)
+        assertEquals("", bot.recoveryNote)
+        assertEquals("", bot.phase)
+        assertEquals("", bot.lastProgress)
+        assertEquals("", bot.cycleId)
+        assertEquals(0L, bot.startedAtMillis)
+        assertEquals(0L, bot.finishedAtMillis)
+        assertEquals("message", restoredCrew.messages.single().text)
     }
 
     @Test fun undecodableModelCallRowsRetainRawCallsAndDecodeFailure() = onDatabaseThread {
@@ -328,7 +400,52 @@ class M1bRepositoriesTest {
         val recovered = memory.recoverCrewMissions("crew", "new-process")
         assertEquals("INTERRUPTED", recovered.last().status)
         assertTrue(recovered.last().bots.single().resumeRequired)
-        assertEquals("new-process", recovered.last().processId)
+        assertEquals(com.jarvys.agent.crew.CrewProcessIdentity.ID, recovered.last().processId)
+    }
+
+    @Test fun crewCoordinationSnapshotRejectsNullReferenceMessageIdAndDigest() = onDatabaseThread {
+        val conversationId = WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString())
+        val missionId = "nullable-mission"
+        val messageId = "message-$missionId"
+        success(conversations.ensureConversation(conversationId))
+        val evidence = CrewCoordinationEvidence.create(
+            conversationId,
+            missionId,
+            "bot",
+            UUID.nameUUIDFromBytes("cycle-$missionId".toByteArray()).toString(),
+            messageId,
+            "QUESTION",
+            "question",
+            emptyList(),
+            1_000L,
+        )
+        success(StrictJournalRepository(database).appendCrewCoordinationEvidence(evidence))
+        val snapshot = crewSnapshot(conversationId, missionId, 4, "coordination", "RUNNING", "RUNNING", "question")
+        snapshot.getJSONArray("messages").getJSONObject(0)
+            .put("type", "QUESTION")
+            .put("coordination", evidence.reference().toJson())
+        success(memory.appendCrewSnapshot(conversationId, snapshot))
+
+        val sql = database.openHelper.writableDatabase
+        sql.execSQL(
+            "UPDATE crew_messages SET reference_message_id=NULL WHERE conversation_id=? AND mission_id=?",
+            arrayOf(conversationId, missionId),
+        )
+        val missingMessageId = runCatching { memory.readCrewMissionSnapshots(conversationId) }.exceptionOrNull()
+        assertTrue(missingMessageId is IllegalStateException)
+        assertEquals("crew_snapshot_coordination_reference_message_id_null", missingMessageId?.message)
+
+        sql.execSQL(
+            "UPDATE crew_messages SET reference_message_id=? WHERE conversation_id=? AND mission_id=?",
+            arrayOf(messageId, conversationId, missionId),
+        )
+        sql.execSQL(
+            "UPDATE crew_messages SET evidence_content_sha256=NULL WHERE conversation_id=? AND mission_id=?",
+            arrayOf(conversationId, missionId),
+        )
+        val missingDigest = runCatching { memory.readCrewMissionSnapshots(conversationId) }.exceptionOrNull()
+        assertTrue(missingDigest is IllegalStateException)
+        assertEquals("crew_snapshot_coordination_reference_digest_null", missingDigest?.message)
     }
 
     @Test fun failedModelResultRollsBackSequenceAndConcurrentAppendsStayContiguous() {
@@ -395,7 +512,7 @@ class M1bRepositoriesTest {
             .put("refs", JSONArray().put("ref-a")).put("timestampMillis", 10_000L)
         return JSONObject().put("type", "crew_snapshot").put("crewSchemaVersion", version)
             .put("missionId", mission).put("conversationId", conversation).put("processId", "old-process")
-            .put("title", title).put("originalInstructions", "instructions").put("titleSource", "user")
+            .put("title", title).put("originalInstructions", "instructions").put("titleSource", "agent")
             .put("status", missionStatus).put("synthesis", "synthesis-$title").put("startedAtMillis", 1_000L)
             .put("finishedAtMillis", 0L).put("bots", JSONArray().put(bot)).put("messages", JSONArray().put(message))
             .put("timestamp", 100.25)

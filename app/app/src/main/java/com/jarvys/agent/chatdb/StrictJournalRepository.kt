@@ -740,8 +740,11 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     ).use { c ->
         if (!c.moveToFirst()) null else {
             val schemaVersion = c.getInt(0)
+            val sourceReferenceId = if (c.isNull(3)) {
+                throw IllegalStateException("Corrupt workspace_input_incorporations row: source_reference_id is null")
+            } else c.getString(3)
             val value = InputIncorporation.create(InputIncorporation.SourceKind.valueOf(c.getString(1)), c.getString(2),
-                c.getString(3), c.getString(4), c.getString(5), c.getString(6), c.getString(7), c.getString(8),
+                sourceReferenceId, c.getString(4), c.getString(5), c.getString(6), c.getString(7), c.getString(8),
                 c.getString(9), c.getString(10), c.getString(11), c.getString(12), c.getString(13), c.getString(14),
                 c.getString(15), c.getString(16), c.getString(17), c.getString(18), c.getLong(19), c.getLong(20))
             check(schemaVersion == InputIncorporation.SCHEMA_VERSION && value.receiptId == receiptId) { "Corrupt workspace_input_incorporations identity" }

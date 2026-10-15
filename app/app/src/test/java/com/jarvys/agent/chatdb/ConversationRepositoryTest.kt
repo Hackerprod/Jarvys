@@ -607,24 +607,30 @@ class ConversationRepositoryTest {
                     .map { it.trim().trim('`', '\"', '[', ']') }
                 val line = source.substring(0, match.range.first).count { it == '\n' } + 1
                 val tail = source.substring(match.range.last + 1)
-                val valuesStart = Regex("(?is)\\bVALUES\\s*\\(").find(tail)
-                val valueExpressions = if (valuesStart != null) {
-                    val open = tail.indexOf('(', valuesStart.range.first)
-                    val close = matchingSqlParen(tail, open)
+                val sqlEnd = closingKotlinStringQuote(tail, 0)
+                    ?: throw AssertionError("${sourceFile.name}:$line INSERT INTO $table has no closing source literal")
+                val sqlText = tail.substring(0, sqlEnd)
+                val valuesStart = findTopLevelSqlKeyword(sqlText, setOf("VALUES"))
+                val selectStart = findTopLevelSqlKeyword(sqlText, setOf("SELECT"))
+                val valueExpressions = if (valuesStart != null && (selectStart == null || valuesStart.start < selectStart.start)) {
+                    val open = sqlText.indexOf('(', valuesStart.endExclusive)
+                    assertTrue("${sourceFile.name}:$line INSERT INTO $table has no VALUES list", open >= 0)
+                    val close = matchingSqlParen(sqlText, open)
                     assertTrue("${sourceFile.name}:$line INSERT INTO $table has an unterminated VALUES list", close >= 0)
-                    splitSqlExpressions(tail.substring(open + 1, close))
+                    splitSqlExpressions(sqlText.substring(open + 1, close))
                 } else {
-                    val selectStart = Regex("(?is)\\bSELECT\\b").find(tail)
+                    val select = selectStart
                         ?: throw AssertionError("${sourceFile.name}:$line INSERT INTO $table has neither VALUES nor SELECT")
-                    val whereStart = Regex("(?is)\\bWHERE\\b").find(tail, selectStart.range.last + 1)
-                        ?: throw AssertionError("${sourceFile.name}:$line INSERT INTO $table SELECT has no WHERE boundary")
-                    splitSqlExpressions(tail.substring(selectStart.range.last + 1, whereStart.range.first))
+                    val projectionStart = findTopLevelSqlKeyword(sqlText, setOf("FROM", "WHERE", "RETURNING"), select.endExclusive)
+                    val projectionEnd = projectionStart?.start ?: sqlText.length
+                    splitSqlExpressions(sqlText.substring(select.endExclusive, projectionEnd))
                 }
                 assertEquals(
                     "${sourceFile.name}:$line INSERT INTO $table must provide one value per explicit column",
                     insertedColumnList.size, valueExpressions.size,
                 )
                 val insertedColumns = insertedColumnList.toSet()
+                assertEquals("${sourceFile.name}:$line INSERT INTO $table must not repeat explicit columns", insertedColumnList.size, insertedColumns.size)
                 val tableInfo = db.query("PRAGMA table_info($table)").use { cursor ->
                     buildList {
                         while (cursor.moveToNext()) add(
@@ -658,6 +664,26 @@ class ConversationRepositoryTest {
         assertTrue("raw INSERT audit must cover repository and Daos.kt @Query statements", auditedInsertCount > 0)
     }
 
+    @Test fun insertSelectProjectionAuditIgnoresNestedClausesAndQuotedCommas() {
+        val withWhere = "SELECT ?, COALESCE(?, (SELECT 'a, WHERE b')), 'WHERE, in value' WHERE EXISTS(SELECT 1 WHERE 1=1)"
+        val whereSelect = findTopLevelSqlKeyword(withWhere, setOf("SELECT"))!!
+        val whereEnd = findTopLevelSqlKeyword(withWhere, setOf("FROM", "WHERE", "RETURNING"), whereSelect.endExclusive)!!
+        assertEquals(
+            listOf("?", "COALESCE(?, (SELECT 'a, WHERE b'))", "'WHERE, in value'"),
+            splitSqlExpressions(withWhere.substring(whereSelect.endExclusive, whereEnd.start)),
+        )
+
+        val withoutWhere = "SELECT ?, COALESCE(?, (SELECT 'a, b'))\" + arrayOf(\"WHERE\")"
+        val noWhereSelect = findTopLevelSqlKeyword(withoutWhere, setOf("SELECT"))!!
+        val noWhereEnd = closingKotlinStringQuote(withoutWhere, noWhereSelect.endExclusive)!!
+        val noWhereSql = withoutWhere.substring(0, noWhereEnd)
+        assertNull(findTopLevelSqlKeyword(noWhereSql, setOf("FROM", "WHERE", "RETURNING"), noWhereSelect.endExclusive))
+        assertEquals(
+            listOf("?", "COALESCE(?, (SELECT 'a, b'))"),
+            splitSqlExpressions(noWhereSql.substring(noWhereSelect.endExclusive)),
+        )
+    }
+
     private fun splitSqlExpressions(value: String): List<String> {
         val result = mutableListOf<String>()
         var depth = 0
@@ -684,6 +710,54 @@ class ConversationRepositoryTest {
         }
         result += value.substring(start).trim()
         return result.filter(String::isNotEmpty)
+    }
+
+    private data class SqlKeyword(val start: Int, val endExclusive: Int)
+
+    /** The source auditor may see a SELECT without FROM/WHERE; its Kotlin literal closes that projection. */
+    private fun closingKotlinStringQuote(value: String, startIndex: Int): Int? {
+        var index = startIndex.coerceAtLeast(0)
+        while (index < value.length) {
+            if (value[index] == '"') {
+                var escapedBy = 0
+                var previous = index - 1
+                while (previous >= startIndex && value[previous] == '\\') {
+                    escapedBy++
+                    previous--
+                }
+                if (escapedBy % 2 == 0) return index
+            }
+            index++
+        }
+        return null
+    }
+
+    /** Finds a SQL clause keyword outside nested expressions, subqueries, and quoted text. */
+    private fun findTopLevelSqlKeyword(value: String, keywords: Set<String>, startIndex: Int = 0): SqlKeyword? {
+        var depth = 0
+        var quote: Char? = null
+        var index = startIndex.coerceAtLeast(0)
+        while (index < value.length) {
+            val ch = value[index]
+            if (quote != null) {
+                if (ch == quote) {
+                    if (index + 1 < value.length && value[index + 1] == quote) index++ else quote = null
+                }
+            } else when (ch) {
+                '\'', '\"', '`' -> quote = ch
+                '[' -> quote = ']'
+                '(' -> depth++
+                ')' -> depth--
+                else -> if (depth == 0 && (ch.isLetter() || ch == '_')) {
+                    val wordStart = index
+                    while (index + 1 < value.length && (value[index + 1].isLetterOrDigit() || value[index + 1] == '_')) index++
+                    val word = value.substring(wordStart, index + 1)
+                    if (word.uppercase() in keywords) return SqlKeyword(wordStart, index + 1)
+                }
+            }
+            index++
+        }
+        return null
     }
 
     private fun matchingSqlParen(value: String, open: Int): Int {
@@ -981,7 +1055,8 @@ class ConversationRepositoryTest {
 
     @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
         success(runBlocking { repository.ensureConversation("wal-reader") })
-        runBlocking { append("wal-reader", "user", "visible before writer") }
+        runBlocking { append("wal-reader", "user", "committed page before writer") }
+        val visible = runBlocking { append("wal-reader", "user", "visible before writer") }
         val writer = Executors.newSingleThreadExecutor()
         val reader = Executors.newSingleThreadExecutor()
         val writerEntered = CountDownLatch(1)
@@ -999,6 +1074,8 @@ class ConversationRepositoryTest {
             assertTrue(writerEntered.await(10, TimeUnit.SECONDS))
             val read = reader.submit(Callable { runBlocking { repository.readTailWindow("wal-reader", 1) } })
             assertEquals("the read sees the committed prefix without waiting for the writer", "visible before writer", read.get(3, TimeUnit.SECONDS).slots.single { it.item.item_kind == "message" }.message?.text)
+            val previousPage = reader.submit(Callable { runBlocking { repository.readWindowBefore("wal-reader", visible.seq, 1) } })
+            assertEquals("paged reads use the query pool while the writer is held", "committed page before writer", previousPage.get(3, TimeUnit.SECONDS).slots.single { it.item.item_kind == "message" }.message?.text)
             releaseWriter.countDown()
             write.get(10, TimeUnit.SECONDS)
         } finally {

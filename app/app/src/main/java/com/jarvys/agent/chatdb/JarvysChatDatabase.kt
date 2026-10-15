@@ -10,6 +10,9 @@ import androidx.room.RoomDatabase
 import androidx.room.RoomDatabase.Callback
 import androidx.room.RoomDatabase.JournalMode
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.IdentityHashMap
 import java.util.concurrent.ExecutionException
@@ -147,6 +150,7 @@ internal object JarvysChatDatabaseProvider {
     private var instance: JarvysChatDatabase? = null
 
     private val isolatedExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
+    private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
 
     /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
@@ -168,7 +172,10 @@ internal object JarvysChatDatabaseProvider {
                 executorSet.forEach(ExecutorService::shutdown)
                 throw error
             }
-            opened.also { instance = it }
+            opened.also {
+                synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
+                instance = it
+            }
             }
         }
     }
@@ -183,6 +190,7 @@ internal object JarvysChatDatabaseProvider {
         return try {
             buildDatabase(context.applicationContext, databaseFile, executorSet).also { database ->
                 synchronized(isolatedExecutors) { isolatedExecutors[database] = executorSet }
+                synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
             }
         } catch (error: Throwable) {
             executorSet.forEach(ExecutorService::shutdown)
@@ -194,8 +202,16 @@ internal object JarvysChatDatabaseProvider {
     internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) {
         database.close()
         val executors = synchronized(isolatedExecutors) { isolatedExecutors.remove(database) }.orEmpty()
+        synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
         executors.forEach(ExecutorService::shutdown)
     }
+
+    /** Runs a read projection on the query pool belonging to this exact Room database instance. */
+    internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: () -> T): T =
+        withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
+            ?: throw IllegalStateException("No Jarvys chat query executor is registered for this database")) {
+            operation()
+        }
 
     private fun buildDatabase(
         context: Context,

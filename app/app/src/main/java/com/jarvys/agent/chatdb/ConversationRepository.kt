@@ -708,14 +708,18 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      */
     suspend fun readTailWindow(conversationId: String, turns: Int): MessageWindow {
         require(turns > 0) { "turns must be positive" }
-        return readWindow(conversationId, cursorSeq = null, turns = turns)
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            readWindow(conversationId, cursorSeq = null, turns = turns)
+        }
     }
 
     /** Replaces paged timeline reads from `LocalRunStore.java:readConversationTimelinePage`, resolving the ledger sequence cursor to the projected sort key. */
     suspend fun readWindowBefore(conversationId: String, cursorSeq: Long, turns: Int): MessageWindow {
         require(turns > 0) { "turns must be positive" }
         require(cursorSeq > 0) { "cursorSeq must be positive" }
-        return readWindow(conversationId, cursorSeq, turns)
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            readWindow(conversationId, cursorSeq, turns)
+        }
     }
 
     /** Returns the latest `role=user` ID derived from `LocalRunStore.java:readConversationMessages`. */

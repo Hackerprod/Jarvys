@@ -583,12 +583,16 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         "SELECT * FROM crew_messages WHERE conversation_id=? AND coordination_evidence_id=? LIMIT 1", arrayOf(conversationId, id),
     ).use { c ->
         if (!c.moveToFirst()) throw IllegalStateException("crew_snapshot_coordination_reference_missing")
+        val messageId = c.getStringOrNullMemory("reference_message_id")
+            ?: throw IllegalStateException("crew_snapshot_coordination_reference_message_id_null")
+        val contentSha256 = c.getStringOrNullMemory("evidence_content_sha256")
+            ?: throw IllegalStateException("crew_snapshot_coordination_reference_digest_null")
         JSONObject().put("schemaVersion", 1).put("evidenceId", id).put("conversationId", conversationId)
             .put("missionId", c.getString(c.getColumnIndexOrThrow("mission_id")))
             .put("botId", sql.query("SELECT bot_id FROM crew_coordination_evidence WHERE conversation_id=? AND evidence_id=?", arrayOf(conversationId, id)).use { e -> if (e.moveToFirst()) e.getString(0) else "" })
             .put("cycleId", sql.query("SELECT cycle_id FROM crew_coordination_evidence WHERE conversation_id=? AND evidence_id=?", arrayOf(conversationId, id)).use { e -> if (e.moveToFirst()) e.getString(0) else "" })
-            .put("messageId", c.getString(c.getColumnIndexOrThrow("reference_message_id")))
-            .put("contentSha256", c.getString(c.getColumnIndexOrThrow("evidence_content_sha256")))
+            .put("messageId", messageId)
+            .put("contentSha256", contentSha256)
     }
 
     private fun inputBindingJson(c: android.database.Cursor): JSONObject = JSONObject()

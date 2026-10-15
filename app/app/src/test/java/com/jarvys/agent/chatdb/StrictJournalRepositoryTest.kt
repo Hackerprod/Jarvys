@@ -181,6 +181,18 @@ class StrictJournalRepositoryTest {
         assertNull(success(repository.readWorkspaceInputIncorporation(
             WorkspaceIdentity.CENTRAL_SESSION, WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, "another-source",
         )))
+
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE workspace_input_incorporations SET source_reference_id=NULL WHERE conversation_id=? AND receipt_id=?",
+            arrayOf(WorkspaceIdentity.CENTRAL_SESSION, receipt.receiptId),
+        )
+        val corruption = runCatching {
+            repository.readWorkspaceInputIncorporation(
+                WorkspaceIdentity.CENTRAL_SESSION, WorkspaceInputIncorporation.SourceKind.REPLY, accepted.replyId,
+            )
+        }.exceptionOrNull()
+        assertTrue(corruption is IllegalStateException)
+        assertEquals("Corrupt workspace_input_incorporations row: source_reference_id is null", corruption?.message)
     }
 
     @Test fun failedInsertRollsBackAllocatedSequenceAndSpineItem() = onDatabaseThread {
