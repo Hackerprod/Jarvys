@@ -205,6 +205,44 @@ class StrictJournalRepositoryTest {
         assertEquals("Corrupt workspace_input_incorporations row: source_reference_id is null", corruption?.message)
     }
 
+    @Test fun replyReceiptCannotBeReadOrAppendedAfterItsSourceReferenceDisappears() = onDatabaseThread {
+        val fixture = coordinationFixture()
+        success(repository.appendCrewCoordinationEvidence(fixture.evidence))
+        val ref = WorkspaceCoordinationReference.create(fixture.evidence, WorkspaceIdentity.CENTRAL_SESSION,
+            fixture.workspace, uuid(12), "request-a", 1L)
+        success(repository.appendWorkspaceCoordinationReference(ref))
+        success(repository.appendWorkspaceCoordinationNotice(ref))
+        val prepared = WorkspaceCoordinationReply.create(ref, "reply-missing-source", "answer",
+            "central-request", "question", 31_010L)
+        success(repository.prepareWorkspaceCoordinationReply(prepared))
+        success(repository.markWorkspaceCoordinationReplyStarted(
+            prepared.withState(WorkspaceCoordinationReply.State.STARTED, 31_011L)))
+        val accepted = prepared.withState(WorkspaceCoordinationReply.State.ACCEPTED_LOCAL, 31_012L)
+        success(repository.markWorkspaceCoordinationReplyAccepted(accepted))
+        val receipt = WorkspaceInputIncorporation.create(
+            WorkspaceInputIncorporation.SourceKind.REPLY, accepted.replyId, ref.referenceId,
+            accepted.mailboxMessageId, WorkspaceIdentity.CENTRAL_SESSION, fixture.workspace, fixture.execution,
+            uuid(14), "request-a", fixture.mission, "bot-a", fixture.cycle, uuid(15),
+            accepted.payloadSha256, "a".repeat(64), "INBOX", "b".repeat(64), "c".repeat(64), 31_020L, 31_021L,
+        )
+        success(repository.appendWorkspaceInputIncorporation(receipt))
+
+        database.testChatSql.execSQL(
+            "DELETE FROM workspace_coordination_refs WHERE conversation_id=? AND reference_id=? AND is_notice=0",
+            arrayOf(fixture.execution, ref.referenceId),
+        )
+
+        val readFailure = runCatching {
+            repository.readWorkspaceInputIncorporation(
+                WorkspaceIdentity.CENTRAL_SESSION, WorkspaceInputIncorporation.SourceKind.REPLY, accepted.replyId,
+            )
+        }.exceptionOrNull()
+        assertTrue("a reply receipt with a missing source reference must fail closed", readFailure is IllegalStateException)
+        val appendFailure = runCatching { repository.appendWorkspaceInputIncorporation(receipt) }.exceptionOrNull()
+        assertTrue("a reply receipt with a missing source reference must not be re-appended", appendFailure is IllegalStateException)
+        assertEquals(1L, count("SELECT COUNT(*) FROM workspace_input_incorporations WHERE receipt_id=?", arrayOf(receipt.receiptId)))
+    }
+
     @Test fun failedInsertRollsBackAllocatedSequenceAndSpineItem() = onDatabaseThread {
         val fixture = resultFixture()
         success(repository.appendCrewResultEvidence(fixture.result))

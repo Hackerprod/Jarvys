@@ -5,11 +5,14 @@ import com.jarvys.agent.chatdb.ConversationDecisionValue
 import com.jarvys.agent.chatdb.ConversationMessageAt
 import com.jarvys.agent.chatdb.ConversationRepository
 import com.jarvys.agent.chatdb.ConversationSummary
+import com.jarvys.agent.chatdb.ConversationArtifact
 import com.jarvys.agent.chatdb.FileRef
 import com.jarvys.agent.chatdb.GlobalTimelineMarkers
 import com.jarvys.agent.chatdb.InterruptRequestValue
 import com.jarvys.agent.chatdb.JarvysChatDatabase
 import com.jarvys.agent.chatdb.MemoryTimelineRepository
+import com.jarvys.agent.chatdb.Compaction
+import com.jarvys.agent.chatdb.GeneratedImage
 import com.jarvys.agent.chatdb.MessageCounts
 import com.jarvys.agent.chatdb.MessageWindow
 import com.jarvys.agent.chatdb.ModelTranscriptEntry
@@ -17,11 +20,14 @@ import com.jarvys.agent.chatdb.ModelTranscriptRepository
 import com.jarvys.agent.chatdb.ModelTranscriptSnapshot
 import com.jarvys.agent.chatdb.ReflectionPayloadSnapshot
 import com.jarvys.agent.chatdb.StrictJournalRepository
+import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
 import com.jarvys.agent.chatdb.StoredMessage
 import com.jarvys.agent.chatdb.chatSql
 import com.jarvys.agent.chatdb.withChatReadTransaction
 import com.jarvys.agent.chatdb.JarvysChatDatabaseProvider
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.workspaces.WorkspaceIdentity
+import com.jarvys.agent.ToolActivity as UiToolActivity
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -182,12 +188,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     suspend fun readWindowBefore(conversationId: String, cursorSeq: Long, turns: Int): MessageWindow =
         readProjection { conversations.readWindowBefore(conversationId, cursorSeq, turns) }
 
-    /**
-     * Domain-event projection for persisted user/assistant messages and the last visible
-     * translation. Item selection and ordering reuse the indexed, steering-aware sequence window.
-     * Tool/progress, compaction, reflection, decision, crew, artifact and workspace notice rows are
-     * retained by their typed repositories but are not yet assembled into `AgentRunUiEvent` here.
-     */
+    /** Projects persisted UI timeline rows in the indexed, steering-aware sequence window. */
     suspend fun readRecentConversationTimeline(conversationId: String, turns: Int): TimelineEventPage = readProjection {
         projectTimelinePage(conversationId, conversations.readTailWindow(conversationId, turns))
     }
@@ -208,8 +209,76 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val messagesById = (messages + translationTargets.values).associateBy { it.messageId }
         val reactions = conversations.readMessageReactions(conversationId)
         val ordinaryChat = (conversations.readConversationKind(conversationId) ?: "chat") !in setOf("proactive", "tasks")
+        val transcriptSnapshot = transcript.readModelTranscript(conversationId)
+        val modelEntries = transcriptSnapshot.entries
+        val batchesBySeq = modelEntries.filterIsInstance<ModelTranscriptEntry.Batch>().associateBy { it.seq }
+        val batchesById = batchesBySeq.values.associateBy { it.value.batch.batch_id }
+        val modelResults = modelEntries.filterIsInstance<ModelTranscriptEntry.ResultActivity>()
+        val modelResultKeys = modelResults.mapTo(HashSet()) { timelineToolKey(it.batchId, it.callId, null) }
+        val invalidations = readTimelineInvalidations(conversationId)
+        val rawActivities = readTimelineToolActivities(conversationId)
+            .filter { activity ->
+                val owner = activity.owner_user_message_id
+                owner != null && activity.execution_id != null && !isInvalidated(owner, activity.seq, invalidations)
+            }
+        val activityGroups = rawActivities.groupBy { it.owner_user_message_id!! to it.execution_id!! }
+        val typedCalls = HashSet<String>()
+        val typedReflectionCalls = HashSet<String>()
+        val activityEventsByFirstSeq = HashMap<Long, AgentRunUiEvent>()
+        for ((ownerAndExecution, rows) in activityGroups) {
+            val ordered = rows.sortedBy { it.seq }
+            val first = ordered.first()
+            val activityValues = ordered.map(::toUiToolActivity)
+            val source = first.source_batch_id?.takeIf(String::isNotBlank) ?: ownerAndExecution.first
+            ordered.forEach { activity ->
+                activity.call_id?.takeIf(String::isNotBlank)?.let { callId ->
+                    typedCalls += timelineToolKey(activity.source_batch_id, callId, ownerAndExecution.first)
+                    typedReflectionCalls += "${ownerAndExecution.first}/$callId"
+                }
+            }
+            val projected = UiToolActivity.project(activityValues, false)
+            var durableResult: Pair<String, String>? = null
+            if (!UiToolActivity.definitive(projected.stage)) {
+                val matchingResult = modelResults.firstOrNull { timelineToolKey(it.batchId, it.callId, null) == "$source/${first.call_id.orEmpty()}" }
+                    ?.firstResult
+                if (matchingResult != null) {
+                    val stage = when (matchingResult.lifecycle) {
+                        "INTERRUPTED_UNCERTAIN" -> "tool_interrupted"
+                        "NEVER_LAUNCHED" -> "tool_not_started"
+                        else -> if (matchingResult.output.startsWith("Tool error:")) "tool_error" else "tool_result"
+                    }
+                    durableResult = stage to matchingResult.output
+                }
+            }
+            val activityEvent = AgentRunUiEvent.activityEvent(first.seq, projected)
+            activityEventsByFirstSeq[first.seq] = (durableResult?.let { (stage, detail) ->
+                activityEvent.copy(stage = stage, detail = detail.ifEmpty { null })
+            } ?: activityEvent).copyToolTimelineIdentity("execution:${projected.executionId}", ownerAndExecution.first)
+        }
+        val presentations = readTimelineToolPresentations(conversationId)
+        val latestPresentations = presentations.groupBy { timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id) }
+            .mapValues { (_, values) -> values.maxBy { it.seq } }
+        val presentationKeys = presentations.mapTo(HashSet()) {
+            timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id)
+        }
+        val reflectionTools = readTimelineReflectionTools(conversationId)
+        val reflectionToolsByKey = reflectionTools.groupBy { timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id) }
+            .mapValues { (_, values) -> values.maxBy { it.seq } }
+        val compactionsBySeq = readTimelineCompactions(conversationId).associateBy { it.seq }
+        val reflectionRows = readTimelineReflections(conversationId)
+        val undoneReflections = reflectionRows.asSequence().filter { it.kind == "reflection_undo" }
+            .mapNotNull { it.reflectionId }.toSet()
+        val reflectionsBySeq = reflectionRows.associateBy { it.seq }
+        val decisionsBySeq = conversations.readDecisions(conversationId).associateBy { it.seq }
+        val pendingInterrupts = conversations.pendingInterruptRequests(conversationId).associateBy { it.seq }
+        val dispatchedInterrupts = pendingInterrupts.values.filter { it.dispatchedSeq != null }.mapTo(HashSet()) { it.requestId }
+        val artifactsBySeq = artifacts.artifactsForConversation(conversationId).associateBy { it.seq }
+        val generatedImagesBySeq = readTimelineGeneratedImages(conversationId).associateBy { it.seq }
+        val crewSnapshotsAtSeq = readTimelineLatestCrewSnapshots(conversationId)
+        val crewSnapshots = memory.readCrewMissionSnapshots(conversationId).associateBy { it.missionId }
         val events = ArrayList<AgentRunUiEvent>()
         for (slot in window.slots) {
+            val seq = slot.item.seq
             val message = slot.message
             if (message != null) {
                 val role = message.role
@@ -220,13 +289,13 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 val proactive = message.proactiveDecisionId != null
                 if (role == "user") {
                     events += if (threadKey.isEmpty()) {
-                        AgentRunUiEvent.messageEvent(slot.item.seq, role, message.text, timestamp)
+                        AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
                             .copyMetadata(message.messageId, 0L)
                             .copyAttachments(if (ordinaryChat) message.attachments.map(::toChatAttachment) else emptyList())
                             .copyReaction(reactions[message.stableId].orEmpty())
                     } else {
                         AgentRunUiEvent.proactiveMessageEvent(
-                            slot.item.seq, role, message.text, timestamp, message.messageId, threadKey,
+                            seq, role, message.text, timestamp, message.messageId, threadKey,
                             emptyList(), false,
                         )
                     }
@@ -235,30 +304,329 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                     val duration = message.durationMillis ?: 0L
                     events += if (proactive || threadKey.isNotEmpty()) {
                         AgentRunUiEvent.proactiveMessageEvent(
-                            slot.item.seq, role, message.text, timestamp, message.messageId, threadKey.ifEmpty { null },
+                            seq, role, message.text, timestamp, message.messageId, threadKey.ifEmpty { null },
                             message.suggestedReplies.map { ProactiveSuggestedReply(it.label, it.text) },
                             message.suggestedRepliesConsumedSeq != null, duration, stage, proactive,
                         )
                     } else {
-                        AgentRunUiEvent.messageEvent(slot.item.seq, role, message.text, timestamp)
+                        AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
                             .copyMetadata(message.messageId, duration)
                             .copyStage(stage)
                     }
                 }
                 continue
             }
-            if (slot.item.item_kind == "assistant_translation") {
-                val target = messagesById[slot.item.item_key] ?: continue
-                if (target.hiddenKind in HIDDEN_ASSISTANT_KINDS) continue
-                val translation = target.translation?.takeIf { it.seq == slot.item.seq } ?: continue
-                events += AgentRunUiEvent.translationEvent(
-                    slot.item.seq, translation.language, translation.content, target.messageId,
-                    (slot.item.created_at * 1_000.0).toLong(),
-                )
+            val timestamp = (slot.item.created_at * 1_000.0).toLong()
+            when (slot.item.item_kind) {
+                "assistant_translation" -> {
+                    val target = messagesById[slot.item.item_key] ?: continue
+                    if (target.hiddenKind in HIDDEN_ASSISTANT_KINDS) continue
+                    val translation = target.translation?.takeIf { it.seq == seq } ?: continue
+                    if (target.translationHiddenSeq?.let { it >= translation.seq } == true) continue
+                    events += AgentRunUiEvent.translationEvent(seq, translation.language, translation.content, target.messageId, timestamp)
+                }
+                "main_interrupt_request" -> {
+                    val request = pendingInterrupts[seq] ?: continue
+                    if (request.requestId in dispatchedInterrupts) continue
+                    events += AgentRunUiEvent.messageEvent(seq, "user", request.content, timestamp)
+                        .copyMetadata("pending-${request.requestId}", 0L).copyStage("QUEUED")
+                }
+                "user_decision_request" -> {
+                    val decision = decisionsBySeq[seq] ?: continue
+                    events += AgentRunUiEvent.userDecisionEvent(
+                        seq, decision.decisionId, decision.title, decision.body, decision.options,
+                        decision.allowDismiss, decision.status, decision.optionId, decision.optionLabel,
+                        (decision.createdAtSeconds * 1_000.0).toLong(),
+                    )
+                }
+                "compaction" -> {
+                    val compaction = compactionsBySeq[seq] ?: continue
+                    if (invalidations.values.any { it > seq }) continue
+                    events += AgentRunUiEvent.compactionEvent(
+                        seq, compaction.summary, compaction.summarized_messages.toInt(), compaction.mode, timestamp,
+                    )
+                }
+                "reflection_event", "reflection_commit" -> {
+                    val reflection = reflectionsBySeq[seq] ?: continue
+                    val reflectionId = reflection.reflectionId ?: continue
+                    if (reflection.revisionIds.isEmpty()) continue
+                    events += AgentRunUiEvent.reflectionMemoryEvent(
+                        seq, reflection.summary.orEmpty(), reflectionId, reflection.revisionIds,
+                        if (reflectionId in undoneReflections) "undone" else reflection.status ?: "completed", timestamp,
+                    )
+                }
+                "crew_snapshot" -> {
+                    val missionId = slot.item.item_key
+                    if (crewSnapshotsAtSeq[missionId] != seq) continue
+                    val snapshot = crewSnapshots[missionId] ?: continue
+                    events += AgentRunUiEvent.crewMissionEvent(seq, snapshot)
+                }
+                "delivered_file" -> {
+                    val artifact = artifactsBySeq[seq]?.toChatAttachment() ?: continue
+                    events += AgentRunUiEvent.deliveredFileEvent(seq, artifact, timestamp)
+                }
+                "generated_image" -> {
+                    val image = generatedImagesBySeq[seq] ?: continue
+                    events += AgentRunUiEvent.generatedImageEvent(
+                        seq, image.image_path, image.prompt, image.revised_prompt.orEmpty(), image.mime_type ?: "image/png",
+                        image.size.orEmpty(), image.status, image.error.orEmpty(), timestamp,
+                    )
+                }
+                "workspace_result_notice" -> {
+                    if (!WorkspaceIdentity.isCentral(conversationId)) continue
+                    val exact = (strictJournals.readWorkspaceResultReference(conversationId, slot.item.item_key, true)
+                        as? com.jarvys.agent.chatdb.ChatDbResult.Success)?.value ?: continue
+                    events += AgentRunUiEvent.workspaceResultEvent(seq, exact, exact.producedAtMillis)
+                }
+                "tool_activity" -> activityEventsByFirstSeq[seq]?.let(events::add)
+                "model_tool_calls" -> {
+                    val batch = batchesBySeq[seq]?.value ?: continue
+                    val owner = batch.batch.owner_user_message_id.orEmpty()
+                    if (owner.isEmpty() || isInvalidated(owner, seq, invalidations)) continue
+                    val pending = batch.calls.filter { state ->
+                        val key = timelineToolKey(batch.batch.batch_id, state.call.call_id, owner)
+                        state.result == null && key !in typedCalls && key !in presentationKeys &&
+                            key !in reflectionToolsByKey && key !in modelResultKeys
+                    }
+                    val progress = batch.batch.assistant_text.trim().takeIf { batch.batch.assistant_progress && it.isNotEmpty() }
+                    if (pending.isNotEmpty()) {
+                        val started = pending.any { it.call.lifecycle == "STARTED" }
+                        val details = pending.joinToString("\n\n") { state ->
+                            val call = state.call
+                            val status = if (call.lifecycle == "STARTED")
+                                "Execution started, but no final result was durably recorded. The run may have been interrupted; effects may have occurred. Inspect current evidence before retrying."
+                            else "This tool intent was recorded but was never launched. It was not automatically replayed."
+                            "${CoreToolRegistry.humanizeToolName(call.name)} (${call.call_id}): $status"
+                        }
+                        val detail = listOfNotNull(progress?.let(WebSearchCitationMarkup::resolve), details).joinToString("\n\n")
+                        val displayName = pending.map { CoreToolRegistry.humanizeToolName(it.call.name) }.distinct().joinToString(", ")
+                        val callIds = pending.joinToString(",") { it.call.call_id }
+                        events += AgentRunUiEvent.toolEvent(
+                            seq, if (started) "tool_interrupted" else "tool_not_started", displayName, detail,
+                            callIds, null, timestamp,
+                        ).copyToolTimelineIdentity("${batch.batch.batch_id}/$callIds", owner)
+                    } else if (progress != null) {
+                        val firstCall = batch.calls.firstOrNull()?.call?.call_id.orEmpty()
+                        val scope = batch.batch.batch_id.ifEmpty { owner }
+                        events += AgentRunUiEvent.messageEvent(seq, "assistant", WebSearchCitationMarkup.resolve(progress), timestamp)
+                            .copyMetadata("progress-$scope/$firstCall", 0L).copyStage("PROGRESS")
+                            .copyToolTimelineIdentity("progress:$scope/$firstCall", owner)
+                    }
+                }
+                "model_tool_result" -> {
+                    val resultEntry = modelResults.firstOrNull { it.seq == seq } ?: continue
+                    val result = resultEntry.firstResult ?: continue
+                    val key = timelineToolKey(resultEntry.batchId, resultEntry.callId, null)
+                    val batch = batchesById[resultEntry.batchId]?.value
+                    val owner = batch?.batch?.owner_user_message_id.orEmpty()
+                    if (owner.isEmpty() || isInvalidated(owner, seq, invalidations) || key in presentationKeys || key in typedCalls) continue
+                    val tool = reflectionToolsByKey[key]?.tool_name ?: CoreToolRegistry.humanizeToolName(result.tool_name)
+                    val stage = when (result.lifecycle) {
+                        "INTERRUPTED_UNCERTAIN" -> "tool_interrupted"
+                        "NEVER_LAUNCHED" -> "tool_not_started"
+                        else -> if (result.output.startsWith("Tool error:")) "tool_error" else "tool_result"
+                    }
+                    events += AgentRunUiEvent.toolEvent(seq, stage, tool, result.output.ifEmpty { null }, resultEntry.callId, null, timestamp)
+                        .copyToolTimelineIdentity(key, owner)
+                }
+                "tool_presentation" -> {
+                    val presentation = latestPresentations.values.firstOrNull { it.seq == seq } ?: continue
+                    val key = timelineToolKey(presentation.batch_id, presentation.call_id, presentation.owner_user_message_id)
+                    val owner = presentation.owner_user_message_id.orEmpty()
+                    if (owner.isEmpty() || isInvalidated(owner, seq, invalidations) || key in typedCalls) continue
+                    if (!presentation.stage.isTimelineToolResultStage()) continue
+                    events += AgentRunUiEvent.toolEvent(
+                        seq, presentation.stage, presentation.tool_name,
+                        presentation.detail?.takeIf(String::isNotEmpty), presentation.call_id,
+                        presentation.preview_id, timestamp,
+                    ).copyToolPresentation(presentation.audit_detail, false)
+                        .copyToolTimelineIdentity(key, owner)
+                }
+                "reflection_tool" -> {
+                    val marker = reflectionTools.firstOrNull { it.seq == seq } ?: continue
+                    val key = timelineToolKey(marker.batch_id, marker.call_id, marker.owner_user_message_id)
+                    val owner = marker.owner_user_message_id.orEmpty()
+                    if (owner.isEmpty() || isInvalidated(owner, seq, invalidations) || key in typedCalls ||
+                        key in presentationKeys || key in modelResultKeys || "${owner}/${marker.call_id.orEmpty()}" in typedReflectionCalls) continue
+                    if (!marker.stage.isTimelineToolResultStage()) continue
+                    events += AgentRunUiEvent.toolEvent(
+                        seq, marker.stage, marker.tool_name, null, marker.call_id, null, timestamp,
+                    ).copyToolTimelineIdentity(key, owner)
+                }
             }
         }
         return TimelineEventPage(events, window.olderCursorSeq)
     }
+
+    private fun readTimelineInvalidations(conversationId: String): Map<String, Long> = database.chatSql.query(
+        "SELECT owner_user_message_id,MAX(hidden_seq) FROM messages WHERE conversation_id=? " +
+            "AND hidden_kind IN ('assistant_regenerated','assistant_deleted') AND owner_user_message_id IS NOT NULL " +
+            "GROUP BY owner_user_message_id",
+        arrayOf(conversationId),
+    ).use { c -> buildMap { while (c.moveToNext()) put(c.getString(0), c.getLong(1)) } }
+
+    private fun isInvalidated(owner: String, seq: Long, invalidations: Map<String, Long>): Boolean =
+        invalidations[owner]?.let { seq < it } == true
+
+    private fun readTimelineToolActivities(conversationId: String): List<StoredToolActivity> = database.chatSql.query(
+        "SELECT * FROM tool_activities WHERE conversation_id=? ORDER BY seq",
+        arrayOf(conversationId),
+    ).use { c -> buildList {
+        while (c.moveToNext()) add(StoredToolActivity(
+            c.getString(c.getColumnIndexOrThrow("conversation_id")),
+            c.getLong(c.getColumnIndexOrThrow("seq")),
+            c.getString(c.getColumnIndexOrThrow("event_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("owner_user_message_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("source_batch_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("execution_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("call_id")),
+            c.getString(c.getColumnIndexOrThrow("tool_name")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("display_name")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("skill_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("skill_name")),
+            c.getString(c.getColumnIndexOrThrow("stage")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("detail")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("preview_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("audit_detail")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("reflection_source")),
+            c.getLong(c.getColumnIndexOrThrow("timestamp_millis")),
+            c.getDouble(c.getColumnIndexOrThrow("created_at")),
+        ))
+    } }
+
+    private fun toUiToolActivity(value: StoredToolActivity): UiToolActivity = UiToolActivity(
+        value.event_id, value.execution_id.orEmpty(), value.call_id.orEmpty(), value.tool_name,
+        value.display_name.orEmpty(), value.skill_id.orEmpty(), value.skill_name.orEmpty(), value.stage,
+        value.detail.orEmpty(), value.preview_id.orEmpty(), value.audit_detail.orEmpty(),
+        value.reflection_source.orEmpty(), value.timestamp_millis,
+    )
+
+    private fun readTimelineToolPresentations(conversationId: String): List<TimelineToolPresentation> = database.chatSql.query(
+        "SELECT * FROM tool_presentations WHERE conversation_id=? ORDER BY seq",
+        arrayOf(conversationId),
+    ).use { c -> buildList {
+        while (c.moveToNext()) add(TimelineToolPresentation(
+            c.getLong(c.getColumnIndexOrThrow("seq")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("owner_user_message_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("batch_id")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("call_id")),
+            c.getString(c.getColumnIndexOrThrow("tool_name")),
+            c.getString(c.getColumnIndexOrThrow("stage")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("detail")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("audit_detail")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("preview_id")),
+        ))
+    } }
+
+    private fun readTimelineReflectionTools(conversationId: String): List<TimelineReflectionTool> = database.chatSql.query(
+        "SELECT seq,owner_user_message_id,batch_id,call_id,tool_name,stage FROM reflection_tool_markers " +
+            "WHERE conversation_id=? ORDER BY seq",
+        arrayOf(conversationId),
+    ).use { c -> buildList {
+        while (c.moveToNext()) add(TimelineReflectionTool(
+            c.getLong(0), c.getStringOrNull(1), c.getStringOrNull(2), c.getStringOrNull(3), c.getString(4), c.getString(5),
+        ))
+    } }
+
+    private fun readTimelineCompactions(conversationId: String): List<Compaction> = database.chatSql.query(
+        "SELECT * FROM compactions WHERE conversation_id=? ORDER BY seq",
+        arrayOf(conversationId),
+    ).use { c -> buildList {
+        while (c.moveToNext()) add(Compaction(
+            c.getString(c.getColumnIndexOrThrow("conversation_id")),
+            c.getString(c.getColumnIndexOrThrow("compaction_id")),
+            c.getLong(c.getColumnIndexOrThrow("seq")),
+            c.getString(c.getColumnIndexOrThrow("summary")),
+            c.getLong(c.getColumnIndexOrThrow("first_kept")),
+            c.getLong(c.getColumnIndexOrThrow("summarized_messages")),
+            c.getString(c.getColumnIndexOrThrow("trigger")),
+            c.getString(c.getColumnIndexOrThrow("mode")),
+            c.getDouble(c.getColumnIndexOrThrow("created_at")),
+        ))
+    } }
+
+    private fun readTimelineReflections(conversationId: String): List<TimelineReflection> {
+        val rows = database.chatSql.query(
+            "SELECT seq,kind,reflection_id,summary,status,created_at FROM reflections WHERE conversation_id=? ORDER BY seq",
+            arrayOf(conversationId),
+        ).use { c -> buildList {
+            while (c.moveToNext()) add(TimelineReflection(
+                c.getLong(0), c.getString(1), c.getStringOrNull(2), c.getStringOrNull(3),
+                c.getStringOrNull(4), c.getDouble(5), emptyList(),
+            ))
+        } }
+        if (rows.isEmpty()) return rows
+        val revisions = database.chatSql.query(
+            "SELECT reflection_seq,revision_id FROM reflection_revisions WHERE conversation_id=? ORDER BY reflection_seq,ordinal",
+            arrayOf(conversationId),
+        ).use { c -> buildMap<Long, MutableList<Long>> {
+            while (c.moveToNext()) getOrPut(c.getLong(0)) { mutableListOf() }.add(c.getLong(1))
+        } }
+        return rows.map { it.copy(revisionIds = revisions[it.seq].orEmpty()) }
+    }
+
+    private fun readTimelineGeneratedImages(conversationId: String): List<GeneratedImage> = database.chatSql.query(
+        "SELECT * FROM generated_images WHERE conversation_id=? ORDER BY seq",
+        arrayOf(conversationId),
+    ).use { c -> buildList {
+        while (c.moveToNext()) add(GeneratedImage(
+            c.getString(c.getColumnIndexOrThrow("conversation_id")),
+            c.getLong(c.getColumnIndexOrThrow("seq")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("image_path")),
+            c.getString(c.getColumnIndexOrThrow("prompt")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("revised_prompt")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("size")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("mime_type")),
+            c.getString(c.getColumnIndexOrThrow("status")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("error")),
+            c.getStringOrNull(c.getColumnIndexOrThrow("file_ref_id")),
+            c.getDouble(c.getColumnIndexOrThrow("created_at")),
+        ))
+    } }
+
+    private fun readTimelineLatestCrewSnapshots(conversationId: String): Map<String, Long> = database.chatSql.query(
+        "SELECT mission_id,last_snapshot_seq FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq",
+        arrayOf(conversationId),
+    ).use { c -> buildMap { while (c.moveToNext()) put(c.getString(0), c.getLong(1)) } }
+
+    private fun ConversationArtifact.toChatAttachment(): ChatAttachment? = runCatching {
+        ChatAttachment(artifact_id, name, mime_type, size_bytes,
+            ChatAttachment.Kind.valueOf(kind.uppercase(Locale.ROOT)), relative_path)
+    }.getOrNull()
+
+    private fun timelineToolKey(batchId: String?, callId: String?, ownerUserMessageId: String?): String =
+        "${batchId?.takeIf(String::isNotBlank) ?: ownerUserMessageId.orEmpty()}/${callId.orEmpty()}"
+
+    private data class TimelineToolPresentation(
+        val seq: Long,
+        val owner_user_message_id: String?,
+        val batch_id: String?,
+        val call_id: String?,
+        val tool_name: String,
+        val stage: String,
+        val detail: String?,
+        val audit_detail: String?,
+        val preview_id: String?,
+    )
+
+    private data class TimelineReflectionTool(
+        val seq: Long,
+        val owner_user_message_id: String?,
+        val batch_id: String?,
+        val call_id: String?,
+        val tool_name: String,
+        val stage: String,
+    )
+
+    private data class TimelineReflection(
+        val seq: Long,
+        val kind: String,
+        val reflectionId: String?,
+        val summary: String?,
+        val status: String?,
+        val createdAtSeconds: Double,
+        val revisionIds: List<Long>,
+    )
 
     suspend fun messageCounts(conversationId: String): MessageCounts =
         readProjection { conversations.messageCounts(conversationId) }
@@ -455,3 +823,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
 }
 
 private fun android.database.Cursor.getStringOrNull(index: Int): String? = if (isNull(index)) null else getString(index)
+
+private fun String.isTimelineToolResultStage(): Boolean = this in setOf(
+    "tool_result", "tool_error", "tool_interrupted", "tool_not_started",
+)

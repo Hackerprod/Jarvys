@@ -320,6 +320,7 @@ class MainActivity : ComponentActivity() {
     private var timelineLoading by mutableStateOf(false)
     private var timelineOlderLoading by mutableStateOf(false)
     private var timelineOlderLoadError by mutableStateOf(false)
+    private val chatDatabaseFailureNoticeShown = java.util.concurrent.atomic.AtomicBoolean(false)
     private var timelineHasOlder by mutableStateOf(false)
     private var timelineOlderCursor by mutableLongStateOf(LocalRunStore.NO_TIMELINE_CURSOR)
     private var timelineRequestSerial = 0L
@@ -1171,10 +1172,11 @@ ${event.text}
             && AgentRunUiState.containsEvent(sessionId, event)
 
     private fun reportChatDatabaseFailure(error: Throwable) {
-        AgentErrorReporter.report(
-            this, "chatdb", null, null, null, error.message, error.javaClass.name,
-            android.util.Log.getStackTraceString(error),
-        )
+        if (!chatDatabaseFailureNoticeShown.compareAndSet(false, true)) return
+        runOnUiThread {
+            if (!isFinishing && !isDestroyed)
+                toast(getString(R.string.chat_database_unavailable), Toast.LENGTH_LONG)
+        }
     }
 
     private fun shareGeneratedImage(sessionId: String, event: AgentRunUiEvent) {

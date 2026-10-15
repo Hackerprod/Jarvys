@@ -199,6 +199,6 @@ class WorkspaceInputIncorporationDeliveryTest {
         // Deletion may remove the checkpoint entirely; either rejection or no candidate is honest.
         runCatching { reconcile() }
         assertNull(runCatching { receipt(binding) }.getOrNull())
-        assertTrue(ConversationMetadataStore(app.filesDir).read(scope.executionSessionId).deleted)
+        assertTrue(ConversationMetadataAccess(app.filesDir).read(scope.executionSessionId).deleted)
     }
 }

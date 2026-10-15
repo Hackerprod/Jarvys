@@ -2,10 +2,9 @@ package com.jarvys.agent;
 
 import com.jarvys.agent.chatdb.ChatDatabaseBridge;
 import com.jarvys.agent.chatdb.ConversationMetadataValue;
-import org.json.JSONObject;
 
-/** Compatibility adapter for conversation metadata now owned by Room. */
-public final class ConversationMetadataStore {
+/** DB-backed conversation metadata access and identity policy. */
+public final class ConversationMetadataAccess {
   static final Object LOCK = new Object();
   private final java.io.File filesDirectory;
 
@@ -16,12 +15,6 @@ public final class ConversationMetadataStore {
     public final boolean deleted;
     public final boolean privateCode;
 
-    Snapshot(JSONObject row) {
-      this(row.optString("title", "").isEmpty() ? null : row.optString("title"),
-          row.optBoolean("pinned"), row.optBoolean("archived"), row.optBoolean("deleted"),
-          row.optBoolean("privateCode"));
-    }
-
     Snapshot(String title, boolean pinned, boolean archived, boolean deleted, boolean privateCode) {
       this.title = title;
       this.pinned = pinned;
@@ -31,7 +24,7 @@ public final class ConversationMetadataStore {
     }
   }
 
-  ConversationMetadataStore(java.io.File filesDirectory) {
+  ConversationMetadataAccess(java.io.File filesDirectory) {
     this.filesDirectory = filesDirectory.getAbsoluteFile();
   }
 

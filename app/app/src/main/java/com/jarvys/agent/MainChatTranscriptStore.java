@@ -27,6 +27,7 @@ final class MainChatTranscriptStore {
     private final String sessionId;
     private final CrewContextArtifacts artifacts;
     private final JSONObject ownership = new JSONObject();
+    private final ThreadLocal<List<JSONObject>> pendingCheckpointRows = new ThreadLocal<>();
     private long retainedBytes;
 
     MainChatTranscriptStore(File files, String sessionId, LocalRunStore store) {
@@ -69,6 +70,9 @@ final class MainChatTranscriptStore {
         int messageIndex = store.latestUserMessageIndex(sessionId);
         loop.setCheckpointListener(checkpoint -> {
             try {
+                List<JSONObject> checkpointRows = new ArrayList<>();
+                pendingCheckpointRows.set(checkpointRows);
+                try {
                 String batch = null;
                 for (ConversationTurn turn : checkpoint.transcript) {
                     if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) {
@@ -137,11 +141,10 @@ final class MainChatTranscriptStore {
                         batch = null;
                     }
                 }
-                // TODO(M4c): build one ConversationModelTurnInput and commit this variable-size
-                // checkpoint plus input ACK through appendModelTurnSync. The DB route currently
-                // persists each normalized transcript row separately; ACK remains last so a
-                // failed row never acknowledges a partially persisted checkpoint.
-                store.markConversationMessagesIncorporated(sessionId, checkpoint.appliedIncomingIds);
+                store.appendModelTranscriptCheckpoint(sessionId, checkpointRows, checkpoint.appliedIncomingIds);
+                } finally {
+                    pendingCheckpointRows.remove();
+                }
             } catch (RuntimeException failure) { throw failure; }
             catch (Exception failure) { throw new IllegalStateException("Could not retain tool transcript", failure); }
         });
@@ -228,6 +231,11 @@ final class MainChatTranscriptStore {
     private void append(JSONObject row) throws Exception {
         row.put("schemaVersion", 1);
         row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        List<JSONObject> checkpointRows = pendingCheckpointRows.get();
+        if (checkpointRows != null) {
+            checkpointRows.add(row);
+            return;
+        }
         store.appendModelTranscriptRow(sessionId, row);
     }
 

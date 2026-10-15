@@ -358,7 +358,7 @@ public class HtmlThumbnailStoreTest {
             assertTrue(opened.await(3, TimeUnit.SECONDS));
             Future<Boolean> deletion = executor.submit(() -> new LocalRunStore(files).deleteConversation(session));
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-            ConversationMetadataStore metadata = new ConversationMetadataStore(files);
+            ConversationMetadataAccess metadata = new ConversationMetadataAccess(files);
             while (!metadata.read(session).deleted && System.nanoTime() < deadline) Thread.sleep(5);
             assertTrue(metadata.read(session).deleted);
             resume.countDown();

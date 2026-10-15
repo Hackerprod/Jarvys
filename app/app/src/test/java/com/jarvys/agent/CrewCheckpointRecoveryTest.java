@@ -42,7 +42,7 @@ public class CrewCheckpointRecoveryTest {
         assertEquals(7, saved.loop.transcript.get(0).originalMessageIndex);
         assertTrue(saved.loop.appliedIncomingIds.contains("message-one"));
         assertFalse(saved.loop.transcript.get(1).content.contains("transcript-secret"));
-        assertTrue(new ConversationMetadataStore(root).read("chat-one").privateCode);
+        assertTrue(new ConversationMetadataAccess(root).read("chat-one").privateCode);
         assertEquals(1, store.list("chat-one").size());
         assertTrue(store.listIssues("chat-one").isEmpty());
     }
@@ -124,7 +124,7 @@ public class CrewCheckpointRecoveryTest {
         File root = temporary.newFolder();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
-        new ConversationMetadataStore(root).update("chat-one", "deleted", true);
+        new ConversationMetadataAccess(root).update("chat-one", "deleted", true);
         assertThrows(IllegalStateException.class, ()->store.load("chat-one", "bot-one"));
         assertThrows(IllegalStateException.class, ()->saveEmpty(store));
         assertThrows(IOException.class, ()->CrewCheckpointStore.estimatedSize("too large", 1));

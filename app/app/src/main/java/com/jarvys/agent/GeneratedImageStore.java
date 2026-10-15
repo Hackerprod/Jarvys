@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Locale;
 
-/** Private per-conversation generated images; paths stored in JSONL are session-relative filenames. */
+/** Private per-conversation generated images addressed by session-relative filenames. */
 public final class GeneratedImageStore {
     private static final String SESSION_PATTERN = "[A-Za-z0-9_.-]{1,100}";
     private static final String IMAGE_PATTERN = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.png";

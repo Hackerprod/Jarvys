@@ -3,7 +3,7 @@ package com.jarvys.agent;
 import android.content.Context;
 
 /** Best-effort local diagnostic metadata. There is no automatic telemetry transport. */
-final class AgentErrorReporter {
+public final class AgentErrorReporter {
     private static final ThreadLocal<Integer> PRIVATE_ATTACHMENT_RUNS = new ThreadLocal<Integer>() {
         @Override protected Integer initialValue() { return 0; }
     };
@@ -69,5 +69,11 @@ final class AgentErrorReporter {
         if (attachmentReportsSuppressed() || context == null) return;
         // Compatibility callers may still supply private strings. Never read, retain or transmit them.
         LocalDiagnostics.compatibility(context, httpStatus);
+    }
+
+    /** Records only the sanitized structural projection for a chat database open failure. */
+    public static void reportChatDatabaseFailure(Context context, Throwable failure) {
+        if (attachmentReportsSuppressed() || context == null || failure == null) return;
+        LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.ACTIVITY, failure);
     }
 }

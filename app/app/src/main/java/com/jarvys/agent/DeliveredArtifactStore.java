@@ -446,7 +446,7 @@ public final class DeliveredArtifactStore {
             // Do not recreate a session directory removed by deleteSession, even without a ledger.
             if (!sessionDirectory.isDirectory()) throw new IOException("The delivered conversation is unavailable");
             try {
-                if (new ConversationMetadataStore(root.getParentFile().getParentFile()).read(session).deleted)
+                if (new ConversationMetadataAccess(root.getParentFile().getParentFile()).read(session).deleted)
                     throw new IOException("The conversation has been deleted");
             } catch (IllegalStateException invalid) { throw new IOException("Conversation ownership is unavailable", invalid); }
         }

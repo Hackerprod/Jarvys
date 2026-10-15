@@ -106,6 +106,7 @@
     <string name="chat_footer_translating">Translating…</string>
     <string name="chat_footer_translation_error">Translation failed. Try again.</string>
     <string name="chat_history_load_error">Could not load older messages. Try again.</string>
+    <string name="chat_database_unavailable">Chat storage could not be opened. Your conversation data was not deleted. Check device storage and restart the app.</string>
     <string name="chat_history_load_retry">Retry</string>
     <string name="chat_footer_translation_empty">The provider returned an empty translation.</string>
     <string name="chat_footer_tts_unavailable">Text-to-speech is unavailable on this device.</string>

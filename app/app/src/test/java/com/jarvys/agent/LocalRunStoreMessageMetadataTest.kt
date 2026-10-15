@@ -46,7 +46,7 @@ class LocalRunStoreMessageMetadataTest {
         store.appendConversationMessage(session, "assistant", "New answer")
         store.appendAssistantDeleted(session, oldAssistantId)
 
-        val newest = store.readConversationTimelinePage(session, ConversationLedgerPager.NO_CURSOR, 1)
+        val newest = store.readConversationTimelinePage(session, LocalRunStore.NO_TIMELINE_CURSOR, 1)
         val older = store.readConversationTimelinePage(session, newest.olderCursor, 1,
             newest.invalidatedToolTurnMessageIds)
 

@@ -134,7 +134,7 @@ public final class WorkspaceArtifactDelivery {
         admission.run();
         token.throwIfCancelled();
         WorkspaceRecord source = requireOwnedWorkspace(registry, workspaceId);
-        ConversationMetadataStore metadata = new ConversationMetadataStore(files);
+        ConversationMetadataAccess metadata = new ConversationMetadataAccess(files);
         Runnable validate = () -> {
             token.throwIfCancelled();
             admission.run();

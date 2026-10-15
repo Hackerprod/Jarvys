@@ -2,6 +2,7 @@ package com.jarvys.agent.chatdb
 
 import android.content.Context
 import android.os.Looper
+import com.jarvys.agent.AgentErrorReporter
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ConversationReader
 import com.jarvys.agent.ConversationTurn
@@ -22,6 +23,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /** Java callback used for cancellation/admission checks immediately before a strict journal write. */
 fun interface BeforeChatWrite {
@@ -46,15 +48,27 @@ data class ChatTimelineEventPage(
  * from database initialization and unexpected repository failures are propagated to Java.
  */
 class ChatDatabaseBridge private constructor(context: Context) {
+    @Volatile
+    private var executorThread: Thread? = null
+
     private val applicationContext = context.applicationContext
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "chatdb-java-bridge").apply { isDaemon = true }
+        Thread(task, "chatdb-java-bridge").apply {
+            isDaemon = true
+            this@ChatDatabaseBridge.executorThread = this
+        }
     }
+    private val lifecycleLock = Any()
+    private var closingForTests = false
 
     @Volatile
     private var repositories: Repositories? = null
 
+    @Volatile
+    private var initializationFailure: Exception? = null
+
     private data class Repositories(
+        val database: JarvysChatDatabase,
         val conversations: ConversationRepository,
         val transcript: ModelTranscriptRepository,
         val memory: MemoryTimelineRepository,
@@ -84,6 +98,17 @@ class ChatDatabaseBridge private constructor(context: Context) {
             return synchronized(instances) { instances[key] }
         }
 
+        /** Closes one isolated test bridge and its Room/provider resources by application filesDir. */
+        @JvmStatic
+        fun closeInstanceForTests(filesDirectory: File) {
+            check(Looper.myLooper() != Looper.getMainLooper()) {
+                "ChatDatabaseBridge test cleanup must not block the main thread"
+            }
+            val key = File(filesDirectory, "jarvys").canonicalPath
+            val instance = synchronized(instances) { instances.remove(key) }
+            instance?.closeForTests()
+        }
+
         /** Converts typed repository failures to an exception for legacy Java-facing facades. */
         @JvmStatic
         fun <T> requireSuccessSync(result: ChatDbResult<T>, operation: String): T = when (result) {
@@ -102,13 +127,18 @@ class ChatDatabaseBridge private constructor(context: Context) {
     private fun repositories(): Repositories {
         repositories?.let { return it }
         return synchronized(this) {
-            repositories ?: run {
+            repositories?.let { return@synchronized it }
+            initializationFailure?.let {
+                throw IllegalStateException("Chat database is unavailable after a failed open", it)
+            }
+            try {
                 // This method only runs from execute()'s background task. Provider initialization
                 // and its schema preflight therefore cannot block the caller's main thread.
                 val database = JarvysChatDatabaseProvider.getInstance(applicationContext)
                 val conversations = ConversationRepository(database)
                 val transcript = ModelTranscriptRepository(database)
                 Repositories(
+                    database,
                     conversations,
                     transcript,
                     MemoryTimelineRepository(database),
@@ -117,6 +147,13 @@ class ChatDatabaseBridge private constructor(context: Context) {
                     ConversationReader(database),
                     ConversationModelTurnWriter(database, conversations, transcript),
                 ).also { repositories = it }
+            } catch (failure: Exception) {
+                // A corrupt or inaccessible database must not trigger an open/retry loop. Keep the
+                // original files intact, record one sanitized diagnostic, and fail later requests
+                // quickly with the cached cause until the process is restarted.
+                initializationFailure = failure
+                AgentErrorReporter.reportChatDatabaseFailure(applicationContext, failure)
+                throw IllegalStateException("Could not open the chat database", failure)
             }
         }
     }
@@ -130,16 +167,69 @@ class ChatDatabaseBridge private constructor(context: Context) {
             "ChatDatabaseBridge blocking methods must not be called from the main thread"
         }
         return try {
-            executor.submit(Callable {
-                val repos = repositories()
-                runBlocking { block(repos) }
-            }).get()
+            val pending = synchronized(lifecycleLock) {
+                check(!closingForTests) { "ChatDatabaseBridge test instance is closed" }
+                executor.submit(Callable {
+                    val repos = repositories()
+                    runBlocking { block(repos) }
+                })
+            }
+            pending.get()
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
             throw IllegalStateException("Interrupted while waiting for the chat database", interrupted)
         } catch (failure: ExecutionException) {
             throw (failure.cause ?: failure)
         }
+    }
+
+    private fun closeForTests() {
+        check(Thread.currentThread() !== executorThread) {
+            "ChatDatabaseBridge test cleanup cannot run on its executor thread"
+        }
+        var closeFailure: Throwable? = null
+        var interrupted = false
+        try {
+            val closeTask: Future<*> = synchronized(lifecycleLock) {
+                closingForTests = true
+                executor.submit(Callable {
+                    val opened = repositories
+                    repositories = null
+                    opened?.let { JarvysChatDatabaseProvider.closeDatabaseFileForTests(it.database) }
+                })
+            }
+            var finished = false
+            while (!finished) {
+                try {
+                    closeTask.get()
+                    finished = true
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                } catch (failure: ExecutionException) {
+                    closeFailure = failure.cause ?: failure
+                    finished = true
+                }
+            }
+        } catch (failure: Throwable) {
+            closeFailure = failure
+        } finally {
+            synchronized(lifecycleLock) {
+                closingForTests = true
+                executor.shutdown()
+            }
+            val thread = executorThread
+            if (thread != null && thread !== Thread.currentThread()) {
+                while (thread.isAlive) {
+                    try {
+                        thread.join()
+                    } catch (_: InterruptedException) {
+                        interrupted = true
+                    }
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+        closeFailure?.let { throw IllegalStateException("Could not close the chat database test instance", it) }
     }
 
     // Conversation metadata, messages, and immutable deletion state.

@@ -1,13 +1,27 @@
 package com.jarvys.agent.chatdb
 
-/** One model response incorporation spanning transcript rows and optional input acknowledgement. */
+/** One persisted transcript row in original checkpoint order. */
+sealed interface ModelTranscriptWrite
+
+data class ModelTranscriptBatchWrite(val input: ModelToolBatchInput) : ModelTranscriptWrite
+data class ModelTranscriptLifecycleWrite(val input: ToolCallLifecycleWrite) : ModelTranscriptWrite
+data class ModelTranscriptResultWrite(val input: ModelToolResultInput) : ModelTranscriptWrite
+data class ModelTranscriptErrorWrite(val input: ModelErrorWrite) : ModelTranscriptWrite
+data class ModelTranscriptProviderOutputWrite(val input: ProviderOutputItemsWrite) : ModelTranscriptWrite
+data class ModelArtifactWrite(
+    val artifactId: String,
+    val relativePath: String,
+    val sha256: String,
+    val chars: Long,
+    val bytes: Long,
+    val mimeType: String = "text/plain",
+)
+data class ModelTranscriptArtifactWrite(val input: ModelArtifactWrite) : ModelTranscriptWrite
+
+/** One model response incorporation spanning ordered transcript rows and optional input ACK. */
 data class ConversationModelTurnInput(
     val conversationId: String,
-    val toolBatch: ModelToolBatchInput? = null,
-    val lifecycles: List<ToolCallLifecycleWrite> = emptyList(),
-    val toolResults: List<ModelToolResultInput> = emptyList(),
-    val modelErrors: List<ModelErrorWrite> = emptyList(),
-    val providerOutputs: List<ProviderOutputItemsWrite> = emptyList(),
+    val writes: List<ModelTranscriptWrite> = emptyList(),
     val inputMessageIds: List<String> = emptyList(),
     val inputState: String? = null,
 )
@@ -35,30 +49,46 @@ internal class ConversationModelTurnWriter(
 ) {
     suspend fun append(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> {
         if (input.conversationId.isBlank()) return ChatDbResult.Invalid("conversation id is required")
-        if (input.toolBatch?.conversationId?.let { it != input.conversationId } == true ||
-            input.toolResults.any { it.conversationId != input.conversationId }) {
-            return ChatDbResult.Invalid("all model turn writes must name the same conversation")
-        }
         if ((input.inputState == null) != input.inputMessageIds.isEmpty()) {
             return ChatDbResult.Invalid("input state and message IDs must be supplied together")
         }
 
         return try {
             database.withChatWriteTransaction {
-                val batch = input.toolBatch?.let { requireSuccess(transcript.appendToolBatch(it)) }
-                val lifecycleSequences = input.lifecycles.map { value ->
-                    requireSuccess(transcript.setCallLifecycle(input.conversationId, value.batchId, value.callId, value.lifecycle))
-                }
-                val results = input.toolResults.map { requireSuccess(transcript.appendToolResult(it)) }
-                val errors = input.modelErrors.map { value ->
-                    requireSuccess(transcript.appendModelError(
-                        input.conversationId, value.ownerUserMessageId, value.messageIndex, value.errorCode,
-                    ))
-                }
-                val providerOutputs = input.providerOutputs.map { value ->
-                    requireSuccess(transcript.appendProviderOutputItems(
-                        input.conversationId, value.ownerUserMessageId, value.messageIndex, value.itemsJson,
-                    ))
+                var batch: ModelToolBatchSnapshot? = null
+                val lifecycleSequences = mutableListOf<Long>()
+                val results = mutableListOf<ToolResult?>()
+                val errors = mutableListOf<Long>()
+                val providerOutputs = mutableListOf<Long>()
+                input.writes.forEach { write ->
+                    when (write) {
+                        is ModelTranscriptBatchWrite -> {
+                            if (write.input.conversationId != input.conversationId)
+                                throw CompositeWriteAbort(ChatDbResult.Invalid("all model turn writes must name the same conversation"))
+                            batch = requireSuccess(transcript.appendToolBatch(write.input))
+                        }
+                        is ModelTranscriptLifecycleWrite -> lifecycleSequences += requireSuccess(
+                            transcript.setCallLifecycle(input.conversationId, write.input.batchId,
+                                write.input.callId, write.input.lifecycle),
+                        )
+                        is ModelTranscriptResultWrite -> {
+                            if (write.input.conversationId != input.conversationId)
+                                throw CompositeWriteAbort(ChatDbResult.Invalid("all model turn writes must name the same conversation"))
+                            results += requireSuccess(transcript.appendToolResult(write.input))
+                        }
+                        is ModelTranscriptErrorWrite -> errors += requireSuccess(transcript.appendModelError(
+                            input.conversationId, write.input.ownerUserMessageId,
+                            write.input.messageIndex, write.input.errorCode,
+                        ))
+                        is ModelTranscriptProviderOutputWrite -> providerOutputs += requireSuccess(
+                            transcript.appendProviderOutputItems(input.conversationId,
+                                write.input.ownerUserMessageId, write.input.messageIndex, write.input.itemsJson),
+                        )
+                        is ModelTranscriptArtifactWrite -> requireSuccess(transcript.appendModelArtifact(
+                            input.conversationId, write.input.artifactId, write.input.relativePath,
+                            write.input.sha256, write.input.chars, write.input.bytes, write.input.mimeType,
+                        ))
+                    }
                 }
                 val incorporated = input.inputState?.let { state ->
                     requireSuccess(conversations.markInputState(input.conversationId, input.inputMessageIds, state))

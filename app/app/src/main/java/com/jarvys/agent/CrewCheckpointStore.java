@@ -37,7 +37,7 @@ import org.json.JSONObject;
 public final class CrewCheckpointStore {
     private static final long MAX_CHECKPOINT_BYTES = 2147483639;
     public static final int SCHEMA_VERSION = 1;
-    private final ConversationMetadataStore conversationMetadata;
+    private final ConversationMetadataAccess conversationMetadata;
     private final File filesDirectory;
     private final DirectorySyncFaultInjector directorySyncFaultInjector;
 
@@ -135,7 +135,7 @@ public final class CrewCheckpointStore {
         try {
             this.filesDirectory = filesDirectory.getCanonicalFile();
             verify(this.filesDirectory);
-            this.conversationMetadata = new ConversationMetadataStore(this.filesDirectory);
+            this.conversationMetadata = new ConversationMetadataAccess(this.filesDirectory);
             this.directorySyncFaultInjector = directorySyncFaultInjector;
         } catch (IOException failure) {
             throw new IllegalStateException("Unsafe Crew checkpoint directory", failure);
@@ -143,7 +143,7 @@ public final class CrewCheckpointStore {
     }
 
     public void save(String conversationId, String botId, JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
-        synchronized (ConversationMetadataStore.LOCK) {
+        synchronized (ConversationMetadataAccess.LOCK) {
             requireActive(conversationId);
             try {
                 if (scopeIdentity == null || scopeIdentity.isEmpty() || loop == null || metadata == null || artifactOwnership == null) {
@@ -188,9 +188,6 @@ public final class CrewCheckpointStore {
                 }
                 verify(directory);
                 this.conversationMetadata.update(conversationId, "privateCode", true);
-                File metadataDirectory = new File(this.filesDirectory, "jarvys/conversations");
-                verify(metadataDirectory);
-                syncDirectory(metadataDirectory);
                 File pending = File.createTempFile("checkpoint-pending-", ".json", directory);
                 verify(pending);
                 try (FileOutputStream output = new FileOutputStream(pending);) {
@@ -213,7 +210,7 @@ public final class CrewCheckpointStore {
     }
 
     public Snapshot load(String conversationId, String botId) {
-        synchronized (ConversationMetadataStore.LOCK) {
+        synchronized (ConversationMetadataAccess.LOCK) {
             requireActive(conversationId);
             try {
                 File target = file(conversationId, botId);
@@ -235,7 +232,7 @@ public final class CrewCheckpointStore {
      * save may have renamed it before failing directory sync. No file or receipt is created.
      */
     public ConfirmedSnapshot confirmDurable(String conversationId, String botId, String expectedScopeIdentity) {
-        synchronized (ConversationMetadataStore.LOCK) {
+        synchronized (ConversationMetadataAccess.LOCK) {
             requireActive(conversationId);
             try {
                 if (expectedScopeIdentity == null || expectedScopeIdentity.isEmpty()) {
@@ -277,7 +274,7 @@ public final class CrewCheckpointStore {
     }
 
     private Listing scan(String conversationId) {
-        synchronized (ConversationMetadataStore.LOCK) {
+        synchronized (ConversationMetadataAccess.LOCK) {
             requireActive(conversationId);
             Listing result = new Listing();
             File directory = new File(this.filesDirectory, "jarvys/crew-context/" + digest(conversationId.getBytes(StandardCharsets.UTF_8)));
@@ -508,7 +505,7 @@ public final class CrewCheckpointStore {
     }
 
     private File file(String conversationId, String botId) throws IOException {
-        ConversationMetadataStore.validateSessionId(conversationId);
+        ConversationMetadataAccess.validateSessionId(conversationId);
         if (botId == null || botId.trim().isEmpty()) {
             throw new IllegalArgumentException("Bot identity is required");
         }

@@ -3,7 +3,7 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import android.database.Cursor
 import android.os.Looper
-import com.jarvys.agent.ConversationMetadataStore
+import com.jarvys.agent.ConversationMetadataAccess
 import com.jarvys.agent.ConversationTitle
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.UserDecisionOption
@@ -310,7 +310,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     /**
      * Idempotent counterpart of the implicit conversation creation in
      * `role=user`/`role=assistant` rows (`LocalRunStore.java:appendConversationMessage`); ID validation
-     * matches the existing `ConversationMetadataStore.validateSessionId` contract. A tombstone
+     * matches the existing `ConversationMetadataAccess.validateSessionId` contract. A tombstone
      * always wins and an existing conversation retains its original kind and creation time.
      */
     suspend fun ensureConversation(id: String, kind: String = "chat"): ChatDbResult<Conversation> =
@@ -329,7 +329,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         }
 
     /**
-     * Replaces `.meta.json` title/pinned/archived/privateCode updates (`LocalRunStore.java:renameConversation`,
+     * Provides title/pinned/archived/privateCode updates formerly handled by the file-backed store (`LocalRunStore.java:renameConversation`,
      * `setConversationPinned`, `setConversationArchived`, `markConversationHasPrivateCode`) and the
      * first-wins `role=session_title` row (`LocalRunStore.java:appendConversationTitleIfAbsent`).
      */
@@ -388,7 +388,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         ChatDbResult.Success(inserted)
     }
 
-    /** Updates conversation metadata (`.meta.json` / title), replacing `LocalRunStore.java:renameConversation`. */
+    /** Updates conversation metadata in Room, replacing `LocalRunStore.java:renameConversation`. */
     suspend fun renameConversation(conversationId: String, title: String?): ChatDbResult<Conversation> = transactionResult {
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         val cleanTitle = title?.let(::normalizeManualTitle)
@@ -398,7 +398,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     /**
-     * Counterpart of deleted `.meta.json` and `LocalRunStore.java:deleteConversation`: preserve a
+     * Replaces `LocalRunStore.java:deleteConversation`: preserve a
      * tombstone even when the ledger did not yet contain a conversation, then let FK CASCADE clear it.
      */
     suspend fun deleteConversation(conversationId: String, deletedAtMillis: Long = System.currentTimeMillis()): ChatDbResult<Boolean> =
@@ -1633,7 +1633,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     private fun isTombstonedRaw(id: String): Boolean = sql.query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)", arrayOf(id)).use { c -> c.moveToFirst(); c.getInt(0)!=0 }
 
     private fun normalizeManualTitle(value: String): String? = runCatching {
-        ConversationMetadataStore.normalizeTitle(value)
+        ConversationMetadataAccess.normalizeTitle(value)
     }.getOrNull()
 
     private fun findInterrupt(conversationId: String, requestId: String): InterruptRequestValue? = sql.query(

@@ -74,7 +74,7 @@ public final class HtmlThumbnailStore {
     }
 
     public Key prepare(String session, String token, int width, int height, String policyVersion) throws IOException {
-        ConversationMetadataStore.validateSessionId(session);
+        ConversationMetadataAccess.validateSessionId(session);
         if (!HtmlPreviewDescriptor.isSnapshotToken(token) || width < 1 || height < 1
                 || width > 2048 || height > 2048 || (long) width * height * 4 > MAX_DECODED_BYTES
                 || policyVersion == null || policyVersion.length() < 1 || policyVersion.length() > 256

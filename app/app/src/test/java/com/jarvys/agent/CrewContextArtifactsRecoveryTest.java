@@ -105,7 +105,7 @@ public class CrewContextArtifactsRecoveryTest {
         cancelled.cancel();
         assertThrows(CancellationException.class, () -> artifacts.save("new evidence", cancelled));
         assertThrows(CancellationException.class, () -> artifacts.recoveryTool(ignored -> 4096).execute(Collections.singletonMap("artifact_id", id), cancelled));
-        new ConversationMetadataStore(root).update("chat-one", "deleted", true);
+        new ConversationMetadataAccess(root).update("chat-one", "deleted", true);
         assertFalse(read(artifacts, id).success);
         assertThrows(IllegalStateException.class, artifacts::snapshotOwnership);
         assertThrows(IllegalStateException.class, () -> artifacts.save("new evidence", token));

@@ -124,6 +124,7 @@
     <string name="chat_footer_translating">Traduciendo…</string>
     <string name="chat_footer_translation_error">Falló la traducción. Inténtalo de nuevo.</string>
     <string name="chat_history_load_error">No se pudieron cargar los mensajes anteriores. Inténtalo de nuevo.</string>
+    <string name="chat_database_unavailable">No se pudo abrir el almacenamiento de chats. No se borraron tus conversaciones. Comprueba el almacenamiento del dispositivo y reinicia la app.</string>
     <string name="chat_history_load_retry">Reintentar</string>
     <string name="chat_footer_translation_empty">El proveedor devolvió una traducción vacía.</string>
     <string name="chat_footer_tts_unavailable">La lectura en voz alta no está disponible en este dispositivo.</string>

@@ -2,6 +2,10 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 import android.app.Application;
+import android.content.Context;
+import android.content.ContextWrapper;
+import androidx.test.core.app.ApplicationProvider;
+import com.jarvys.agent.chatdb.ChatDatabaseBridge;
 import com.jarvys.agent.crew.CrewCoordinationEvidence;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReply;
@@ -9,8 +13,6 @@ import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceInputIncorporation;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -20,19 +22,36 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
+import org.junit.rules.TestRule;
+import org.junit.runners.model.Statement;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
-/** Local metadata journal only. Checkpoint authenticity and native SQL source admission are tested by delivery. */
+/** Room-backed incorporation receipts. Checkpoint authenticity and native SQL source admission are tested by delivery. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, application = Application.class)
 public class WorkspaceInputIncorporationLedgerTest {
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public TestRule databaseThread = (base, description) -> new Statement() {
+        @Override public void evaluate() throws Throwable {
+            java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
+                base.evaluate(); return null;
+            });
+            Thread worker = new Thread(task, "workspace-input-room-test");
+            worker.start();
+            try { task.get(); }
+            catch (java.util.concurrent.ExecutionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof Exception) throw (Exception) cause;
+                if (cause instanceof Error) throw (Error) cause;
+                throw new AssertionError(cause);
+            }
+        }
+    };
     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
     private static final String SOURCE = WorkspaceIdentity.executionSessionId(WORKSPACE);
     private static final String CENTRAL = WorkspaceIdentity.CENTRAL_SESSION;
@@ -43,23 +62,41 @@ public class WorkspaceInputIncorporationLedgerTest {
     private static final String FIRST_CYCLE = id("first-incorporation-cycle");
     private static final String HASH_A = String.join("", Collections.nCopies(64, "a"));
     private static final String HASH_B = String.join("", Collections.nCopies(64, "b"));
-    private File files;
+    private Context context;
     private LocalRunStore store;
+    private boolean centralCreated;
 
     @Before public void setup() {
-        files = temporary.getRoot(); store = new LocalRunStore(files);
+        Context base = ApplicationProvider.getApplicationContext();
+        File databaseFiles = new File(base.getCacheDir(), "chat-db-input-" + UUID.randomUUID());
+        assertTrue(databaseFiles.mkdirs());
+        context = new ContextWrapper(base) {
+            @Override public File getFilesDir() { return databaseFiles; }
+            @Override public Context getApplicationContext() { return this; }
+        };
+        store = new LocalRunStore(context);
         store.appendConversationMessage(SOURCE, "user", "Synthetic execution chat");
-        store.appendConversationMessage(CENTRAL, "user", "Synthetic Central chat");
+    }
+    @After public void teardown() {
+        if (context != null) ChatDatabaseBridge.closeInstanceForTests(context.getFilesDir());
     }
     private static String id(String value) { return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8)).toString(); }
-    private File ledger(String session) { return new File(files, "jarvys/conversations/" + session + ".jsonl"); }
-    private byte[] bytes(String session) throws Exception { return Files.readAllBytes(ledger(session).toPath()); }
-    private void append(String session, String value) throws Exception {
-        Files.write(ledger(session).toPath(), value.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+    private LocalRunStore reopened() { return new LocalRunStore(context); }
+    private List<String> inputState() {
+        List<String> state = new ArrayList<>();
+        for (WorkspaceInputIncorporation value : store.listWorkspaceInputIncorporations(CENTRAL, 100, null))
+            state.add(value.toJson().toString());
+        return state;
     }
-    private void appendRow(String session, JSONObject row) throws Exception { append(session, row.toString() + "\n"); }
+    private void ensureCentral() {
+        if (!centralCreated) {
+            store.appendConversationMessage(CENTRAL, "user", "Synthetic Central chat");
+            centralCreated = true;
+        }
+    }
     private void deny() { throw new CancellationException("Synthetic final admission revoked"); }
     private WorkspaceCoordinationReply reply(boolean started) {
+        ensureCentral();
         CrewCoordinationEvidence evidence = CrewCoordinationEvidence.create(SOURCE, MISSION, "bot-1", CYCLE,
                 "question-1", "QUESTION", "Exact untrusted question", Collections.emptyList(), 100L);
         store.appendCrewCoordinationEvidence(evidence);
@@ -75,7 +112,9 @@ public class WorkspaceInputIncorporationLedgerTest {
                 reply.reference.referenceId, reply.mailboxMessageId, CENTRAL, WORKSPACE, SOURCE, ASSIGNMENT, REQUEST,
                 MISSION, "bot-1", CYCLE, FIRST_CYCLE, reply.payloadSha256, HASH_A, "INBOX", HASH_B, HASH_A, 300L, 400L);
     }
-    private WorkspaceInputIncorporation nativeReceipt(String sourceId) {
+    private WorkspaceInputIncorporation nativeReceipt(String sourceId) { return nativeReceipt(sourceId, true); }
+    private WorkspaceInputIncorporation nativeReceipt(String sourceId, boolean createCentral) {
+        if (createCentral) ensureCentral();
         return WorkspaceInputIncorporation.create(WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, sourceId,
                 sourceId, id("mailbox-" + sourceId), CENTRAL, WORKSPACE, SOURCE, ASSIGNMENT, REQUEST,
                 MISSION, "bot-1", CYCLE, FIRST_CYCLE, HASH_A, HASH_B, "USER", HASH_A, HASH_B, 300L, 400L);
@@ -121,7 +160,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         store.appendWorkspaceInputIncorporationIfAbsent(original, () -> { });
         assertEquals(WorkspaceCoordinationReply.State.STARTED,
                 store.readWorkspaceCoordinationReply(CENTRAL, reply.reference.referenceId).state);
-        assertEquals(original.receiptId, new LocalRunStore(files).readWorkspaceInputIncorporation(
+        assertEquals(original.receiptId, reopened().readWorkspaceInputIncorporation(
                 CENTRAL, original.sourceKind, original.sourceId).receiptId);
         store.markWorkspaceCoordinationReplyAccepted(reply, () -> { });
         assertEquals(original.recordedAtMillis, read(original).recordedAtMillis);
@@ -130,7 +169,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         store.requireWorkspaceInputIncorporationDisclosureLive(original);
     }
 
-    @Test public void directReplyIdentityLookupAppliesTransitionsAndValidatesEntireTail() throws Exception {
+    @Test public void directReplyIdentityLookupAppliesTransitionsAndValidatesPersistedRows() throws Exception {
         WorkspaceCoordinationReply prepared = reply(false);
         assertEquals(WorkspaceCoordinationReply.State.PREPARED,
                 store.readWorkspaceCoordinationReplyById(CENTRAL, prepared.replyId).state);
@@ -138,58 +177,61 @@ public class WorkspaceInputIncorporationLedgerTest {
         assertEquals(WorkspaceCoordinationReply.State.STARTED,
                 store.readWorkspaceCoordinationReplyById(CENTRAL, prepared.replyId).state);
         store.markWorkspaceCoordinationReplyAccepted(started, () -> { });
-        WorkspaceCoordinationReply found = new LocalRunStore(files).readWorkspaceCoordinationReplyById(CENTRAL, prepared.replyId);
+        WorkspaceCoordinationReply found = reopened().readWorkspaceCoordinationReplyById(CENTRAL, prepared.replyId);
         assertTrue(found.samePayload(prepared)); assertEquals(WorkspaceCoordinationReply.State.ACCEPTED_LOCAL, found.state);
         assertNull(store.readWorkspaceCoordinationReplyById(CENTRAL, "workspace-coordination-reply-" + HASH_A));
         assertThrows(IllegalArgumentException.class, () -> store.readWorkspaceCoordinationReplyById(SOURCE, prepared.replyId));
         assertThrows(IllegalArgumentException.class, () -> store.readWorkspaceCoordinationReplyById(CENTRAL, "bad-id"));
-        append(CENTRAL, "broken-tail\n");
-        assertThrows(IllegalStateException.class, () -> store.readWorkspaceCoordinationReplyById(CENTRAL, prepared.replyId));
-        assertThrows(IllegalStateException.class, () -> store.readWorkspaceCoordinationReplyById(CENTRAL,
-                "workspace-coordination-reply-" + HASH_A));
     }
 
     @Test public void preparedOrMissingReplySourceCannotGainPositiveReceipt() throws Exception {
         WorkspaceCoordinationReply prepared = reply(false); WorkspaceInputIncorporation value = receipt(prepared);
-        byte[] before = bytes(CENTRAL);
+        List<String> before = inputState();
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertArrayEquals(before, bytes(CENTRAL));
+        assertEquals(before, inputState());
         assertNull(read(value));
-        // A hand-written row also cannot evade the common causal scanner.
-        appendRow(CENTRAL, value.toJson());
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 1, null));
-        assertThrows(IllegalStateException.class, () -> read(value));
+        assertTrue(store.listWorkspaceInputIncorporations(CENTRAL, 10, null).isEmpty());
+        assertEquals(1, store.listWorkspaceCoordinationNotices(CENTRAL, 10, null).size());
     }
 
-    @Test public void missingReplyIntentCannotBeReplacedByMetadata() throws Exception {
-        WorkspaceInputIncorporation value = receipt(reply(true));
-        Files.write(ledger(CENTRAL).toPath(), "{}\n".getBytes(StandardCharsets.UTF_8));
+    @Test public void missingReplyIntentCannotBeReplacedByMetadata() {
+        ensureCentral();
+        CrewCoordinationEvidence evidence = CrewCoordinationEvidence.create(SOURCE, MISSION, "bot-1", CYCLE,
+                "question-1", "QUESTION", "Exact untrusted question", Collections.emptyList(), 100L);
+        store.appendCrewCoordinationEvidence(evidence);
+        WorkspaceCoordinationReference ref = WorkspaceCoordinationReference.create(evidence, CENTRAL, WORKSPACE,
+                ASSIGNMENT, REQUEST, 7L);
+        store.appendWorkspaceCoordinationReferenceIfAbsent(ref, () -> { });
+        store.appendWorkspaceCoordinationNoticeIfAbsent(ref, () -> { });
+        WorkspaceCoordinationReply proposal = WorkspaceCoordinationReply.create(ref, "reply-1", "exact answer",
+                "central-request", "Original user request", 200L);
+        WorkspaceInputIncorporation value = receipt(proposal);
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        appendRow(CENTRAL, value.toJson());
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 1, null));
+        assertNull(read(value));
+        assertTrue(store.listWorkspaceInputIncorporations(CENTRAL, 10, null).isEmpty());
+        assertEquals(1, store.listWorkspaceCoordinationNotices(CENTRAL, 10, null).size());
     }
+
 
     @Test public void laterCheckpointPreservesFirstReceiptAndBothCyclesAcrossReopen() throws Exception {
         WorkspaceInputIncorporation original = receipt(reply(true));
-        store.appendWorkspaceInputIncorporationIfAbsent(original, () -> { }); byte[] before = bytes(CENTRAL);
+        store.appendWorkspaceInputIncorporationIfAbsent(original, () -> { }); List<String> before = inputState();
         WorkspaceInputIncorporation later = changed(changed(changed(original, "checkpointPayloadSha256", HASH_B),
                 "checkpointSavedAtMillis", 700L), "recordedAtMillis", 800L);
-        WorkspaceInputIncorporation repeated = new LocalRunStore(files).appendWorkspaceInputIncorporationIfAbsent(later, this::deny);
+        WorkspaceInputIncorporation repeated = reopened().appendWorkspaceInputIncorporationIfAbsent(later, this::deny);
         assertEquals(original.checkpointPayloadSha256, repeated.checkpointPayloadSha256);
         assertEquals(original.checkpointSavedAtMillis, repeated.checkpointSavedAtMillis);
         assertEquals(original.recordedAtMillis, repeated.recordedAtMillis);
         assertEquals(CYCLE, repeated.admissionCycleId); assertEquals(FIRST_CYCLE, repeated.firstIncorporationCycleId);
-        assertArrayEquals(before, bytes(CENTRAL));
+        assertEquals(before, inputState());
         assertThrows(IllegalStateException.class, () -> store.requireWorkspaceInputIncorporationDisclosureLive(later));
-        // Even duplicate historical rows must retain the first observation when scanned.
-        appendRow(CENTRAL, later.toJson());
         assertEquals(original.recordedAtMillis, read(original).recordedAtMillis);
         assertEquals(1, store.listWorkspaceInputIncorporations(CENTRAL, 10, null).size());
     }
 
     @Test public void changedMailboxContentCycleAndScopeAreConflictsNotNewIdentities() throws Exception {
         WorkspaceInputIncorporation original = nativeReceipt("control-1");
-        store.appendWorkspaceInputIncorporationIfAbsent(original, () -> { }); byte[] before = bytes(CENTRAL);
+        store.appendWorkspaceInputIncorporationIfAbsent(original, () -> { }); List<String> before = inputState();
         for (String field : new String[] {"mailboxMessageId", "admissionCycleId", "firstIncorporationCycleId", "assignmentId"}) {
             WorkspaceInputIncorporation conflicting = changed(original, field, id("changed-" + field));
             assertEquals(original.receiptId, conflicting.receiptId);
@@ -201,10 +243,8 @@ public class WorkspaceInputIncorporationLedgerTest {
         }
         WorkspaceInputIncorporation wrongBot = changed(original, "botId", "bot-2");
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(wrongBot, () -> { }));
-        assertArrayEquals(before, bytes(CENTRAL));
-        appendRow(CENTRAL, wrongBot.toJson());
-        assertThrows(IllegalStateException.class, () -> read(original));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 1, null));
+        assertEquals(before, inputState());
+        assertEquals(original.receiptId, read(original).receiptId);
     }
 
     @Test public void sourceSpecificTransportAndCanonicalOwnershipAreStrict() throws Exception {
@@ -225,16 +265,15 @@ public class WorkspaceInputIncorporationLedgerTest {
 
     @Test public void mailboxCannotBeReclaimedByAnotherSourceAndTransportCannotChange() throws Exception {
         WorkspaceInputIncorporation first = nativeReceipt("control-1");
-        store.appendWorkspaceInputIncorporationIfAbsent(first, () -> { }); byte[] before = bytes(CENTRAL);
+        store.appendWorkspaceInputIncorporationIfAbsent(first, () -> { }); List<String> before = inputState();
         WorkspaceInputIncorporation second = changed(nativeReceipt("control-2"), "mailboxMessageId", first.mailboxMessageId);
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(second, () -> { }));
-        assertArrayEquals(before, bytes(CENTRAL));
+        assertEquals(before, inputState());
         WorkspaceInputIncorporation reply = receipt(reply(true));
         store.appendWorkspaceInputIncorporationIfAbsent(reply, () -> { });
         WorkspaceInputIncorporation differentTransport = changed(reply, "transportKind", "ASK_CHIEF");
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(differentTransport, () -> { }));
-        appendRow(CENTRAL, second.toJson());
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 1, null));
+        assertEquals(1, store.listWorkspaceInputIncorporations(CENTRAL, 10, null).size());
     }
 
     @Test public void validForeignWorkspaceCannotReuseExactSourceClaim() throws Exception {
@@ -249,108 +288,78 @@ public class WorkspaceInputIncorporationLedgerTest {
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(foreign, () -> { }));
     }
 
-    @Test public void deletedOrMissingExecutionLedgerNeverCreatesOrDisclosesReceipt() throws Exception {
+    @Test public void deletedExecutionConversationNeverCreatesOrDisclosesReceipt() {
         WorkspaceInputIncorporation value = nativeReceipt("control-1");
         store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { });
-        assertTrue(store.deleteConversation(SOURCE)); byte[] before = bytes(CENTRAL);
+        assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> read(value));
         assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 1, null));
         assertThrows(IllegalStateException.class, () -> store.requireWorkspaceInputIncorporationDisclosureLive(value));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertFalse(ledger(SOURCE).exists()); assertArrayEquals(before, bytes(CENTRAL));
     }
 
-    @Test public void missingNativeExecutionLedgerCannotBeCreatedByNewReceipt() throws Exception {
+
+    @Test public void tombstonedNativeExecutionConversationCannotBeCreatedByNewReceipt() {
         WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        assertTrue(ledger(SOURCE).delete()); byte[] before = bytes(CENTRAL);
+        assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertFalse(ledger(SOURCE).exists()); assertArrayEquals(before, bytes(CENTRAL));
+        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
     }
 
-    @Test public void missingAndDeletedCentralAreNeverCreatedByReceipt() throws Exception {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1"); assertTrue(ledger(CENTRAL).delete());
-        assertNull(read(value));
+
+    @Test public void missingAndDeletedCentralAreNeverCreatedByReceipt() {
+        WorkspaceInputIncorporation value = nativeReceipt("control-1", false);
+        assertThrows(IllegalStateException.class, () -> read(value));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertFalse(ledger(CENTRAL).exists());
+        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
+        ensureCentral();
         assertTrue(store.deleteConversation(CENTRAL));
         assertThrows(IllegalStateException.class, () -> read(value));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertFalse(ledger(CENTRAL).exists());
     }
 
-    @Test public void finalAdmissionAndDeletionBoundariesCannotCreateFalseSuccess() throws Exception {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1"); byte[] before = bytes(CENTRAL);
+
+    @Test public void finalAdmissionAndTombstoneBoundariesCannotCreateFalseSuccess() {
+        WorkspaceInputIncorporation value = nativeReceipt("control-1");
+        List<String> before = inputState();
         assertThrows(CancellationException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, this::deny));
-        assertArrayEquals(before, bytes(CENTRAL)); assertNull(read(value));
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value,
-                () -> store.deleteConversation(SOURCE)));
-        assertArrayEquals(before, bytes(CENTRAL)); assertFalse(ledger(SOURCE).exists());
-    }
-
-    @Test public void centralDeletionAtAdmissionCannotResurrectIt() {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value,
-                () -> store.deleteConversation(CENTRAL)));
-        assertFalse(ledger(CENTRAL).exists());
-    }
-
-    @Test public void removedReplySourceReferencePreventsPositiveReadAndNewAppend() throws Exception {
-        WorkspaceInputIncorporation value = receipt(reply(true));
-        store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { });
-        Files.write(ledger(SOURCE).toPath(), "{}\n".getBytes(StandardCharsets.UTF_8));
-        assertThrows(IllegalStateException.class, () -> read(value));
+        assertEquals(before, inputState()); assertNull(read(value));
+        assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
+        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
     }
 
-    @Test public void malformedAndTornReceiptsFailOldAndNewScannersWithoutRepair() throws Exception {
+
+    @Test public void tombstonedCentralCannotBeResurrectedAtReceiptAdmission() {
         WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { });
-        append(CENTRAL, "{\"type\":\"workspace_input_incorporation\""); byte[] before = bytes(CENTRAL);
-        assertThrows(IllegalStateException.class, () -> read(value));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 1, null));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 1, null));
+        assertTrue(store.deleteConversation(CENTRAL));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertArrayEquals(before, bytes(CENTRAL));
+        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
     }
 
-    @Test public void corruptNativeExecutionSourceAndDuplicateJsonFieldsFailClosed() throws Exception {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        append(SOURCE, "not-json\n"); byte[] before = bytes(CENTRAL);
+
+    @Test public void missingReplySourceReferenceCannotGainPositiveReceipt() {
+        ensureCentral();
+        CrewCoordinationEvidence evidence = CrewCoordinationEvidence.create(SOURCE, MISSION, "bot-1", CYCLE,
+                "question-missing-source", "QUESTION", "Exact untrusted question", Collections.emptyList(), 100L);
+        store.appendCrewCoordinationEvidence(evidence);
+        WorkspaceCoordinationReference missingReference = WorkspaceCoordinationReference.create(evidence, CENTRAL,
+                WORKSPACE, ASSIGNMENT, REQUEST, 7L);
+        WorkspaceCoordinationReply proposal = WorkspaceCoordinationReply.create(missingReference, "reply-missing-source",
+                "Exact answer", "central-request", "Original user request", 200L);
+        WorkspaceInputIncorporation value = receipt(proposal);
+        assertNull(store.readWorkspaceCoordinationReference(SOURCE, missingReference.referenceId));
+        assertNull(store.readWorkspaceCoordinationNotice(CENTRAL, missingReference.referenceId));
+        assertNull(read(value));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertArrayEquals(before, bytes(CENTRAL));
-        append(CENTRAL, "{\"type\":\"safe\",\"type\":\"workspace_input_incorporation\"}\n");
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 1, null));
+        assertTrue(store.listWorkspaceInputIncorporations(CENTRAL, 10, null).isEmpty());
     }
 
-    @Test public void symlinkedExecutionLedgerCannotGainReceiptOrModifyTarget() throws Exception {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        File foreign = temporary.newFile("foreign-ledger.jsonl");
-        Files.write(foreign.toPath(), "{}\n".getBytes(StandardCharsets.UTF_8));
-        assertTrue(ledger(SOURCE).delete()); Files.createSymbolicLink(ledger(SOURCE).toPath(), foreign.toPath());
-        assertThrows(IllegalArgumentException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertEquals("{}\n", new String(Files.readAllBytes(foreign.toPath()), StandardCharsets.UTF_8));
-    }
-
-    @Test public void unknownReceiptSchemaAndMisplacedOwnerFailOldScanners() throws Exception {
-        WorkspaceInputIncorporation value = nativeReceipt("control-1");
-        appendRow(SOURCE, value.toJson());
-        assertThrows(IllegalStateException.class, () -> store.listCrewResultEvidence(SOURCE, 1, null));
-        assertThrows(IllegalStateException.class, () -> store.listCrewCoordinationEvidence(SOURCE, 1, null));
-        appendRow(CENTRAL, value.toJson().put("workspaceInputIncorporationSchemaVersion", 999));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceResultNotices(CENTRAL, 1, null));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 1, null));
-    }
-
-    @Test public void validAndMalformedReceiptRowsAreInvisibleToEveryHistoryPath() throws Exception {
+    @Test public void validReceiptIsInvisibleToEveryHistoryPath() {
         store.appendWorkspaceInputIncorporationIfAbsent(nativeReceipt("control-1"), () -> { });
         assertEquals(1, store.readConversationMessages(CENTRAL).size());
         assertTrue(store.readModelTranscriptRows(CENTRAL).isEmpty());
         assertEquals(1, store.readConversationTimeline(CENTRAL).size());
-        for (JSONObject injected : new JSONObject[] {
-                new JSONObject().put("type", "workspace_input_future").put("role", "user").put("content", "HIDDEN_BODY"),
-                new JSONObject().put("type", "model_tool_result").put("workspaceInputIncorporationSchemaVersion", 999).put("content", "HIDDEN_BODY"),
-                new JSONObject().put("type", "compaction").put("receiptId", "forged").put("summary", "HIDDEN_BODY").put("firstKept", 1),
-                new JSONObject().put("role", "assistant").put("receiptId", "forged").put("content", "HIDDEN_BODY") }) appendRow(CENTRAL, injected);
         assertEquals(1, store.readConversationMessages(CENTRAL).size());
         assertTrue(store.readModelTranscriptRows(CENTRAL).isEmpty());
         assertEquals(1, store.readActiveConversationMessages(CENTRAL).size());
@@ -360,6 +369,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         assertFalse(store.readConversationContext(CENTRAL).contains("HIDDEN_BODY"));
         assertFalse(store.hasPendingCompactionReflection(CENTRAL));
     }
+
 
     @Test public void boundedPagesAreImmutableAndDoNotLeakIntoOldResultOrCoordinationLists() {
         List<String> expected = new ArrayList<>();
@@ -390,7 +400,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         for (int i = 0; i < 8; i++) {
             Thread thread = new Thread(() -> {
                 try {
-                    LocalRunStore instance = new LocalRunStore(files); start.await();
+                    LocalRunStore instance = reopened(); start.await();
                     instance.appendWorkspaceInputIncorporationIfAbsent(value, commits::incrementAndGet);
                 } catch (Throwable failure) { error.compareAndSet(null, failure); }
             });

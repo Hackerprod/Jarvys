@@ -83,7 +83,7 @@ public class ToolTimelinePersistenceTest {
         String oldUser = store.appendConversationMessage(session, "user", "Old turn");
         store.appendReflectionToolEvent(session, oldUser, "Old Tool", "mcp", "tool_result", "call_0");
         List<AgentRunUiEvent> oldPage = store.readConversationTimelinePage(
-                session, ConversationLedgerPager.NO_CURSOR, 1).events;
+                session, LocalRunStore.NO_TIMELINE_CURSOR, 1).events;
         assertEquals(1, oldPage.stream().filter(event -> "tool".equals(event.getKind())).count());
         AgentRunUiState.resetSession(session);
         AgentRunUiState.restoreSession(session, oldPage);
@@ -91,7 +91,7 @@ public class ToolTimelinePersistenceTest {
         String newUser = store.appendConversationMessage(session, "user", "New turn");
         store.appendReflectionToolEvent(session, newUser, "New Tool", "mcp", "tool_result", "call_0");
         List<AgentRunUiEvent> refreshedWindow = store.readConversationTimelinePage(
-                session, ConversationLedgerPager.NO_CURSOR, 1).events;
+                session, LocalRunStore.NO_TIMELINE_CURSOR, 1).events;
         AgentRunUiState.refreshPersistedSession(session, refreshedWindow);
 
         List<AgentRunUiEvent> tools = AgentRunUiState.INSTANCE.getState().getValue().getEvents().stream()
@@ -109,9 +109,9 @@ public class ToolTimelinePersistenceTest {
         store.appendConversationMessage(session, "user", "Open this conversation");
         long before = LocalRunStore.timelinePagePagerCallCountForTests();
 
-        store.readConversationTimelinePage(session, ConversationLedgerPager.NO_CURSOR, 20);
+        store.readConversationTimelinePage(session, LocalRunStore.NO_TIMELINE_CURSOR, 20);
         long afterFirstRead = LocalRunStore.timelinePagePagerCallCountForTests();
-        store.readConversationTimelinePage(session, ConversationLedgerPager.NO_CURSOR, 20);
+        store.readConversationTimelinePage(session, LocalRunStore.NO_TIMELINE_CURSOR, 20);
 
         assertEquals(before + 1L, afterFirstRead);
         assertEquals(afterFirstRead, LocalRunStore.timelinePagePagerCallCountForTests());

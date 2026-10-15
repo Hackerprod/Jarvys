@@ -163,6 +163,66 @@ class ConversationReaderDatabaseTest {
         assertEquals(listOf("first result", "first result"), resultEntries.map { it.firstResult!!.output })
     }
 
+    @Test fun timelineProjectsPersistedActivityWithPhysicalSeqIdsAndKeysetPages() = onDatabaseThread {
+        val id = "reader-timeline-events"
+        success(conversations.ensureConversation(id))
+        val user = append(id, ConversationRepository.ROLE_USER, "find a source")
+        val batchId = "timeline-batch"
+        success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = id,
+            batchId = batchId,
+            ownerUserMessageId = user.messageId,
+            messageIndex = 0,
+            assistantText = "Checking sources",
+            calls = listOf(
+                ModelCallInput("completed-call", "lookup", "{}"),
+                ModelCallInput("running-call", "inspect", "{}"),
+            ),
+        )))
+        success(model.setCallLifecycle(id, batchId, "running-call", "STARTED"))
+        success(model.appendToolResult(ModelToolResultInput(
+            id, batchId, "completed-call", "lookup", "RESULT", "source found",
+        )))
+        val batchSeq = reader.readModelTranscript(id).entries
+            .filterIsInstance<ModelTranscriptEntry.Batch>().single().seq
+        val resultSeq = reader.readModelTranscript(id).entries
+            .filterIsInstance<ModelTranscriptEntry.ResultActivity>().single().seq
+
+        val compaction = success(memory.appendCompaction(CompactionInput(
+            conversationId = id, summary = "Earlier context", firstKept = 1,
+            summarizedMessages = 1, createdAtSeconds = 20.0,
+        )))
+        val decisionSeq = success(conversations.appendDecisionRequest(
+            id, "timeline-choice", "Choose", "Select a source", true,
+            listOf(DecisionOptionInput("open", "Open")),
+        ))
+        val interrupt = success(conversations.appendInterruptRequest(id, "add another source", emptyList(), false))
+
+        val initial = reader.readRecentConversationTimeline(id, 10)
+        val progressAndPending = initial.events.single { it.id == batchSeq }
+        assertEquals("tool", progressAndPending.kind)
+        assertEquals("tool_interrupted", progressAndPending.stage)
+        assertEquals("running-call", progressAndPending.toolCallId)
+        assertTrue(progressAndPending.detail!!.contains("Checking sources"))
+        assertTrue(progressAndPending.detail!!.contains("effects may have occurred"))
+        val completed = initial.events.single { it.id == resultSeq }
+        assertEquals("tool_result", completed.stage)
+        assertEquals("source found", completed.detail)
+        assertEquals(compaction.seq, initial.events.single { it.kind == "compaction" }.id)
+        assertEquals(decisionSeq, initial.events.single { it.kind == "user_decision" }.id)
+        assertEquals(interrupt.seq, initial.events.single { it.messageId == "pending-${interrupt.requestId}" }.id)
+        assertEquals(initial.events.size, initial.events.map { it.id }.toSet().size)
+
+        val nextUser = append(id, ConversationRepository.ROLE_USER, "another question")
+        val newest = reader.readRecentConversationTimeline(id, 1)
+        assertTrue(newest.events.any { it.messageId == nextUser.messageId })
+        val cursor = newest.olderCursorSeq!!
+        val older = reader.readConversationTimelineBefore(id, cursor, 1)
+        assertTrue(older.events.any { it.id == batchSeq })
+        assertTrue(older.events.none { it.messageId == nextUser.messageId })
+        assertTrue(older.events.all { olderEvent -> newest.events.none { it.id == olderEvent.id } })
+    }
+
     @Test fun readerUsesCompactionSummaryAcknowledgementsAndUtf16ContextLimits() = onDatabaseThread {
         val id = "reader-compaction"
         success(conversations.ensureConversation(id))
