@@ -2,6 +2,7 @@ package com.jarvys.agent.chatdb
 
 import android.database.Cursor
 import android.database.MatrixCursor
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.PooledConnection
 import androidx.room.Transactor
 import androidx.room.useReaderConnection
@@ -15,6 +16,7 @@ import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
@@ -26,13 +28,61 @@ internal interface ChatSqlDatabase {
     fun compileStatement(sql: String): SupportSQLiteStatement
 }
 
+/** Test-only observer for bounded-query assertions; the callback follows SQL across Room dispatchers. */
+internal object ChatSqlInstrumentation {
+    private val observer = AtomicReference<((String) -> Unit)?>(null)
+
+    internal suspend fun <T> observeStatements(
+        onStatement: (String) -> Unit,
+        block: suspend () -> T,
+    ): T {
+        val callback: (String) -> Unit = onStatement
+        check(observer.compareAndSet(null, callback)) { "A chat SQL observer is already active" }
+        return try {
+            block()
+        } finally {
+            check(observer.compareAndSet(callback, null)) { "Chat SQL observer changed while active" }
+        }
+    }
+
+    internal fun statementPrepared(sql: String) {
+        observer.get()?.invoke(sql)
+    }
+}
+
+/** Fail fast when a synchronous StrictJournalRepository hook tries to re-enter chat storage. */
+internal object ChatSqlBeforeWriteGuard {
+    private val inCallback = ThreadLocal.withInitial { false }
+
+    internal fun <T> invoke(callback: () -> T): T {
+        val previous = inCallback.get()
+        inCallback.set(true)
+        return try {
+            callback()
+        } finally {
+            if (previous) inCallback.set(true) else inCallback.remove()
+        }
+    }
+
+    internal fun checkRepositoryAccess() {
+        check(!inCallback.get()) {
+            "beforeWrite callbacks cannot call chat repositories or blocking facades"
+        }
+    }
+}
+
 internal class SupportChatSqlDatabase(private val database: SupportSQLiteDatabase) : ChatSqlDatabase {
     override fun execSQL(sql: String, bindArgs: Array<out Any?>) {
+        ChatSqlInstrumentation.statementPrepared(sql)
         if (bindArgs.isEmpty()) database.execSQL(sql) else database.execSQL(sql, bindArgs)
     }
 
-    override fun query(sql: String, bindArgs: Array<out Any?>): Cursor = database.query(sql, bindArgs)
-    override fun queryOnWriter(sql: String, bindArgs: Array<out Any?>): Cursor = database.query(sql, bindArgs)
+    override fun query(sql: String, bindArgs: Array<out Any?>): Cursor {
+        ChatSqlInstrumentation.statementPrepared(sql)
+        return database.query(sql, bindArgs)
+    }
+
+    override fun queryOnWriter(sql: String, bindArgs: Array<out Any?>): Cursor = query(sql, bindArgs)
 
     override fun compileStatement(sql: String): SupportSQLiteStatement = database.compileStatement(sql)
 }
@@ -41,12 +91,14 @@ internal class SupportChatSqlDatabase(private val database: SupportSQLiteDatabas
 internal class DriverChatSqlDatabase(private val connection: SQLiteConnection) : ChatSqlDatabase {
     override fun execSQL(sql: String, bindArgs: Array<out Any?>) {
         connection.prepare(sql).use { statement ->
+            ChatSqlInstrumentation.statementPrepared(sql)
             bind(statement, bindArgs)
-            while (statement.step()) Unit
+            statement.executeAndConsumeRows()
         }
     }
 
     override fun query(sql: String, bindArgs: Array<out Any?>): Cursor = connection.prepare(sql).use { statement ->
+        ChatSqlInstrumentation.statementPrepared(sql)
         bind(statement, bindArgs)
         statement.toMatrixCursor()
     }
@@ -57,6 +109,7 @@ internal class DriverChatSqlDatabase(private val connection: SQLiteConnection) :
 
     internal fun <T> useStatement(sql: String, args: Array<out Any?>, block: (SQLiteStatement) -> T): T =
         connection.prepare(sql).use { statement ->
+            ChatSqlInstrumentation.statementPrepared(sql)
             bind(statement, args)
             block(statement)
         }
@@ -74,7 +127,9 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
         write: Boolean,
         block: (SQLiteStatement) -> T,
     ): T = runBlocking {
+        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
         suspend fun use(connection: PooledConnection): T = connection.usePrepared(sql) { statement ->
+            ChatSqlInstrumentation.statementPrepared(sql)
             bind(statement, args)
             block(statement)
         }
@@ -90,14 +145,48 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
     }
 
     override fun execSQL(sql: String, bindArgs: Array<out Any?>) {
-        withStatement(sql, bindArgs, write = true) { statement -> while (statement.step()) Unit }
+        withStatement(sql, bindArgs, write = true) { statement -> statement.executeAndConsumeRows() }
     }
 
-    override fun query(sql: String, bindArgs: Array<out Any?>): Cursor =
-        withStatement(sql, bindArgs, write = false) { it.toMatrixCursor() }
+    override fun query(sql: String, bindArgs: Array<out Any?>): Cursor {
+        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+        if (sql.trimStart().startsWith("EXPLAIN", ignoreCase = true)) {
+            ChatSqlInstrumentation.statementPrepared(sql)
+            return explainQueryThroughAndroidCursor(sql, bindArgs)
+        }
+        return withStatement(sql, bindArgs, write = false) { it.toMatrixCursor() }
+    }
 
     override fun queryOnWriter(sql: String, bindArgs: Array<out Any?>): Cursor =
         withStatement(sql, bindArgs, write = true) { it.toMatrixCursor() }
+
+    /** API 28's Android statement path treats EXPLAIN as exec SQL despite its result columns. */
+    private fun explainQueryThroughAndroidCursor(sql: String, bindArgs: Array<out Any?>): Cursor {
+        val file = JarvysChatDatabaseProvider.databaseFileForRawQuery(database)
+        val handle = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        try {
+            val stringArgs = Array<String?>(bindArgs.size) { index -> bindArgs[index]?.toString() }
+            return handle.rawQuery(sql, stringArgs).use { source ->
+                val names = Array(source.columnCount) { source.getColumnName(it) }
+                val detached = MatrixCursor(names)
+                while (source.moveToNext()) {
+                    val values = Array<Any?>(names.size) { index ->
+                        when (source.getType(index)) {
+                            Cursor.FIELD_TYPE_INTEGER -> source.getLong(index)
+                            Cursor.FIELD_TYPE_FLOAT -> source.getDouble(index)
+                            Cursor.FIELD_TYPE_STRING -> source.getString(index)
+                            Cursor.FIELD_TYPE_BLOB -> source.getBlob(index)
+                            else -> null
+                        }
+                    }
+                    detached.addRow(values)
+                }
+                detached
+            }
+        } finally {
+            handle.close()
+        }
+    }
 
     override fun compileStatement(sql: String): SupportSQLiteStatement = DriverChatSqlStatement(this, sql)
 
@@ -120,24 +209,26 @@ private class DriverChatSqlStatement(
     override fun clearBindings() { bindings.clear() }
     override fun close() { closed.set(true) }
 
-    override fun execute() = statement { statement -> while (statement.step()) Unit }
+    override fun execute() = statement { statement -> statement.executeAndConsumeRows() }
 
     override fun executeInsert(): Long = statement { statement ->
-        while (statement.step()) Unit
+        statement.executeAndConsumeRows()
         Unit
     }.let { database.queryOnWriter("SELECT last_insert_rowid()").use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else -1L } }
 
     override fun executeUpdateDelete(): Int = statement { statement ->
-        while (statement.step()) Unit
+        statement.executeAndConsumeRows()
         Unit
     }.let { database.queryOnWriter("SELECT changes()").use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 } }
 
     override fun simpleQueryForLong(): Long = statement { statement ->
+        check(statement.getColumnCount() > 0) { "Statement returned no columns" }
         check(statement.step()) { "Statement returned no row" }
         statement.getLong(0)
     }
 
     override fun simpleQueryForString(): String? = statement { statement ->
+        check(statement.getColumnCount() > 0) { "Statement returned no columns" }
         if (!statement.step() || statement.isNull(0)) null else statement.getText(0)
     }
 
@@ -164,6 +255,17 @@ private fun bind(statement: SQLiteStatement, args: Array<out Any?>) {
             is Float, is Double -> statement.bindDouble(index, (value as Number).toDouble())
             else -> error("Unsupported SQLite bind value ${value::class.java.name}")
         }
+    }
+}
+
+/** Android's driver requires row-returning statements to be stepped through to exhaustion. */
+private fun SQLiteStatement.executeAndConsumeRows() {
+    if (getColumnCount() > 0) {
+        while (step()) Unit
+    } else {
+        // DML and DDL statements have no result set; one step executes them. A loop here can
+        // re-enter Android's statement execution path after the write has already completed.
+        step()
     }
 }
 
@@ -211,6 +313,7 @@ internal val JarvysChatDatabase.chatSql: ChatSqlDatabase
     get() = PooledChatSqlDatabase(this)
 
 internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: suspend () -> T): T {
+    ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
         check(active.isWriter) { "Cannot start a chat database write inside a reader lease" }
@@ -224,7 +327,12 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
 }
 
 internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspend () -> T): T {
-    if (LeasedConnectionElement.current() != null) return block()
+    ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+    val active = LeasedConnectionElement.current()
+    if (active != null) {
+        check(!active.isWriter) { "Cannot start a chat read inside a write transaction" }
+        return block()
+    }
     return useReaderConnection { reader ->
         reader.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
             withContext(LeasedConnectionElement(reader, isWriter = false)) { block() }

@@ -159,36 +159,38 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     /** `hasReflectionCommit` equivalent, scoped to this conversation (`LocalRunStore.java:3460-3465`). */
-    suspend fun hasReflectionCommit(conversationId: String, reflectionId: String): Boolean = database.withChatReadTransaction {
+    suspend fun hasReflectionCommit(conversationId: String, reflectionId: String): Boolean = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         sql.query("SELECT EXISTS(SELECT 1 FROM reflections WHERE conversation_id=? AND reflection_id=? AND kind='reflection_commit')",
             arrayOf(conversationId, reflectionId)).use { it.moveToFirst(); it.getInt(0) != 0 }
-    }
+    } }
 
     /** Reads compaction IDs still awaiting reflection, in source order (`LocalRunStore.java:3468-3484`). */
-    suspend fun pendingCompactionIds(conversationId: String): List<String> = database.withChatReadTransaction {
+    suspend fun pendingCompactionIds(conversationId: String): List<String> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val pending = LinkedHashSet<String>()
-        sql.query("SELECT item_kind,item_key,seq FROM conversation_items WHERE conversation_id=? AND item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') ORDER BY sort_seq,sort_sub,seq",
+        sql.query("SELECT i.item_kind,i.item_key,i.seq,a.compaction_id FROM conversation_items i " +
+            "LEFT JOIN compaction_reflection_acks a ON a.conversation_id=i.conversation_id AND a.seq=i.seq " +
+            "WHERE i.conversation_id=? AND i.item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') " +
+            "ORDER BY i.sort_seq,i.sort_sub,i.seq,a.compaction_id",
             arrayOf(conversationId)).use { c ->
             while (c.moveToNext()) {
                 when (c.getString(0)) {
                     "compaction" -> pending.add(c.getString(1))
                     "reflection_checkpoint", "reflection_commit", "compaction_reflection_consumed" ->
-                        sql.query("SELECT compaction_id FROM compaction_reflection_acks WHERE conversation_id=? AND seq=?",
-                            arrayOf(conversationId, c.getLong(2))).use { a -> while (a.moveToNext()) pending.remove(a.getString(0)) }
+                        c.getStringOrNullMemory("compaction_id")?.let(pending::remove)
                 }
             }
         }
         pending.toList()
-    }
+    } }
 
     /** Returns the latest active `compaction` as `loadConversationContext` does (`LocalRunStore.java:2879-2896`). */
-    suspend fun activeCompaction(conversationId: String): Compaction? = database.withChatReadTransaction { latestActiveCompaction(conversationId) }
+    suspend fun activeCompaction(conversationId: String): Compaction? = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction { latestActiveCompaction(conversationId) } }
 
     /**
      * SQL-backed equivalent of `LocalRunStore.buildReflectionPayload`
      * (`LocalRunStore.java:3239-3368`), including its `reflection_tool` trust markers and checkpoint boundary.
      */
-    suspend fun buildReflectionPayload(conversationId: String, throughMessageId: String? = null, replayAll: Boolean = false): ReflectionPayloadSnapshot = database.withChatReadTransaction {
+    suspend fun buildReflectionPayload(conversationId: String, throughMessageId: String? = null, replayAll: Boolean = false): ReflectionPayloadSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val rows = readTimelineRows(conversationId)
         val messages = rows.mapIndexedNotNull { index, row ->
             if (row.role == "user" || row.role == "assistant") row.messageId?.let { id ->
@@ -215,6 +217,9 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             arrayOf(conversationId, conversationId, (maxRowIndex + 1).coerceAtLeast(0))).use { c ->
             buildSet { while (c.moveToNext()) { val source = c.getString(1); if (source.startsWith("connector") || source in setOf("mcp", "delegate", "web")) c.getStringOrNullMemory("owner_user_message_id")?.let(::add) } }
         }
+        val reflectionMarkers = sql.query("SELECT * FROM reflection_tool_markers WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+            buildMap { while (c.moveToNext()) { val marker = readReflectionMarker(c); put(marker.seq, marker) } }
+        }
         val transcript = ArrayList<ReflectionTranscriptBuilder.Entry>()
         rows.forEachIndexed { rowIndex, row ->
             if (rowIndex > maxRowIndex) return@forEachIndexed
@@ -227,7 +232,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
                 transcript += ReflectionTranscriptBuilder.Entry(row.role, text,
                     if (row.role == "assistant") "context_only" else "user_authored", id, reflectionTimestamp(row.createdAt), "", "", true)
             } else if (row.kind == "reflection_tool") {
-                val marker = readReflectionMarker(conversationId, row.seq) ?: return@forEachIndexed
+                val marker = reflectionMarkers[row.seq] ?: return@forEachIndexed
                 val userIndex = indexById[marker.owner_user_message_id] ?: -1
                 if (userIndex <= checkpointIndex || userIndex > end) return@forEachIndexed
                 transcript += ReflectionTranscriptBuilder.Entry("tool_call", marker.marker, marker.source,
@@ -254,7 +259,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val boundary = if (hasMore) includedRowIndex + 1 else maxRowIndex + 1
         val compacted = pendingCompactionIdsBefore(conversationId, rows, boundary)
         ReflectionPayloadSnapshot(serialized, includedEnd, compacted, completedSteps, userCharacters, messageCount, hasMore)
-    }
+    } }
 
     /** Appends a `crew_snapshot`, replacing `LocalRunStore.appendCrewMissionSnapshot` (`LocalRunStore.java:175-198`); identical digest is a no-op and a later digest replaces that mission's normalized children. */
     suspend fun appendCrewSnapshot(conversationId: String, row: JSONObject): ChatDbResult<CrewMissionSnapshot> = transaction {
@@ -362,18 +367,24 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     /** Returns current snapshots in `LinkedHashMap` first-insertion order (`LocalRunStore.java:1056-1094`). */
-    suspend fun readCrewMissionSnapshots(conversationId: String): List<CrewMissionSnapshot> = database.withChatReadTransaction {
+    suspend fun readCrewMissionSnapshots(conversationId: String): List<CrewMissionSnapshot> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val ids = sql.query("SELECT mission_id FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq",
             arrayOf(conversationId)).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        ids.mapNotNull { readCrewSnapshot(conversationId, it) }
-    }
+        readCrewSnapshots(conversationId, ids)
+    } }
 
-    /** Active snapshots from another process are persisted as interrupted, matching `LocalRunStore.recoverCrewMissions` (`LocalRunStore.java:1167-1173`). */
-    suspend fun recoverCrewMissions(conversationId: String, currentProcessId: String = com.jarvys.agent.crew.CrewProcessIdentity.ID): List<CrewMissionSnapshot> {
+    /**
+     * Active snapshots from another process are persisted as interrupted, matching
+     * `LocalRunStore.recoverCrewMissions` (`LocalRunStore.java:1167-1173`). The supplied process ID
+     * is used only to decide whether recovery is needed. When recovery writes a changed snapshot,
+     * `CrewMissionSnapshot.interrupted()` persists the current `CrewProcessIdentity.ID`, matching
+     * the legacy path; this parameter never becomes the persisted process ID.
+     */
+    suspend fun recoverCrewMissions(conversationId: String, processIdForComparison: String = com.jarvys.agent.crew.CrewProcessIdentity.ID): List<CrewMissionSnapshot> {
         val snapshots = readCrewMissionSnapshots(conversationId)
         val recovered = ArrayList<CrewMissionSnapshot>(snapshots.size)
         for (snapshot in snapshots) {
-            val value = if (snapshot.processId != currentProcessId) snapshot.interrupted() else snapshot
+            val value = if (snapshot.processId != processIdForComparison) snapshot.interrupted() else snapshot
             if (value !== snapshot) appendCrewSnapshot(conversationId, value.toJson()).requireSuccess()
             recovered += value
         }
@@ -387,7 +398,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
      * `LocalRunStore.readPendingInterruptRequests()` (`LocalRunStore.java:2816-2819`), in SQL without
      * scanning timeline pages.
      */
-    suspend fun readGlobalTimelineMarkers(): GlobalTimelineMarkers = database.withChatReadTransaction {
+    suspend fun readGlobalTimelineMarkers(): GlobalTimelineMarkers = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val decisions = LinkedHashMap<Pair<String, String>, DecisionResolutionMarker>()
         sql.query("SELECT conversation_id,decision_id,status,option_id,option_label FROM user_decisions WHERE status IS NOT NULL ORDER BY resolved_seq",
             emptyArray()).use { c -> while (c.moveToNext()) decisions[c.getString(0) to c.getString(1)] = DecisionResolutionMarker(
@@ -400,12 +411,14 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             .use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
         val crew = sql.query("SELECT conversation_id,mission_id,first_snapshot_seq,last_snapshot_seq FROM crew_missions ORDER BY first_snapshot_seq", emptyArray())
             .use { c -> buildList { while (c.moveToNext()) add(CrewSnapshotMarker(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3))) } }
-        val interrupts = pendingInterruptRequestsInternal()
+        val interrupts = readPendingInterruptRows(sql).map { it.toPendingInterrupt() }
         GlobalTimelineMarkers(decisions, reactions, usedReplies, crew, interrupts)
-    }
+    } }
 
     /** Reads pending `main_interrupt_request` rows across conversations, replacing `LocalRunStore.readPendingInterruptRequests()` (`LocalRunStore.java:2816-2819`). */
-    suspend fun pendingInterruptRequests(): List<PendingInterrupt> = database.withChatReadTransaction { pendingInterruptRequestsInternal() }
+    suspend fun pendingInterruptRequests(): List<PendingInterrupt> = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction { readPendingInterruptRows(sql).map { it.toPendingInterrupt() } }
+    }
 
     private fun latestActiveCompaction(conversationId: String): Compaction? = sql.query(
         "SELECT c.* FROM compactions c JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
@@ -451,73 +464,50 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
 
     private fun pendingCompactionIdsBefore(conversationId: String, rows: List<TimelineRow>, rowBoundaryExclusive: Int): List<String> {
         val ids = LinkedHashSet<String>()
-        rows.take(rowBoundaryExclusive.coerceAtLeast(0)).forEach { row ->
-            if (row.kind == "compaction") ids.add(row.itemKey)
-            else if (row.kind in setOf("reflection_checkpoint", "reflection_commit", "compaction_reflection_consumed")) {
-                sql.query("SELECT compaction_id FROM compaction_reflection_acks WHERE conversation_id=? AND seq=?", arrayOf(conversationId, row.seq))
-                    .use { c -> while (c.moveToNext()) ids.remove(c.getString(0)) }
+        val limit = rowBoundaryExclusive.coerceIn(0, rows.size)
+        if (limit == 0) return emptyList()
+        sql.query(
+            "SELECT i.item_kind,i.item_key,a.compaction_id FROM conversation_items i " +
+                "LEFT JOIN compaction_reflection_acks a ON a.conversation_id=i.conversation_id AND a.seq=i.seq " +
+                "WHERE i.conversation_id=? AND i.item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') " +
+                "AND i.seq IN (SELECT eligible.seq FROM conversation_items eligible WHERE eligible.conversation_id=? " +
+                "AND eligible.item_kind NOT IN $RESULT_ONLY_KINDS ORDER BY eligible.sort_seq,eligible.sort_sub,eligible.seq LIMIT ?) " +
+                "ORDER BY i.sort_seq,i.sort_sub,i.seq,a.compaction_id",
+            arrayOf(conversationId, conversationId, limit),
+        ).use { c -> while (c.moveToNext()) {
+            when (c.getString(0)) {
+                "compaction" -> ids.add(c.getString(1))
+                else -> c.getStringOrNullMemory("compaction_id")?.let(ids::remove)
             }
-        }
+        } }
         return ids.toList()
     }
 
     private fun readTimelineRows(conversationId: String): List<TimelineRow> = sql.query(
-        "SELECT i.seq,i.item_kind,i.item_key,i.sort_seq,i.sort_sub,i.created_at,m.message_id,m.role,m.status,m.owner_user_message_id " +
+        "SELECT i.seq,i.item_kind,i.item_key,i.sort_seq,i.sort_sub,i.created_at,m.message_id,m.role,m.status,m.owner_user_message_id," +
+            "(SELECT group_concat(payload,'') FROM (SELECT p.payload FROM message_parts p " +
+            "WHERE p.conversation_id=i.conversation_id AND p.message_id=m.message_id AND p.kind='text' ORDER BY p.ordinal)) AS message_text " +
             "FROM conversation_items i LEFT JOIN messages m ON m.conversation_id=i.conversation_id AND m.seq=i.seq " +
             "WHERE i.conversation_id=? AND i.item_kind NOT IN $RESULT_ONLY_KINDS " +
             "ORDER BY i.sort_seq,i.sort_sub,i.seq", arrayOf(conversationId),
     ).use { c -> buildList {
         while (c.moveToNext()) add(TimelineRow(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4),
             c.getDouble(5), c.getStringOrNullMemory("message_id"), c.getStringOrNullMemory("role"),
-            c.getStringOrNullMemory("status"), c.getStringOrNullMemory("owner_user_message_id"),
-            c.getStringOrNullMemory("message_id")?.let { readMessageText(conversationId, it) }))
+            c.getStringOrNullMemory("status"), c.getStringOrNullMemory("owner_user_message_id"), c.getStringOrNullMemory("message_text")))
     } }
 
-    private fun readMessageText(conversationId: String, messageId: String): String = sql.query(
-        "SELECT payload FROM message_parts WHERE conversation_id=? AND message_id=? AND kind='text' ORDER BY ordinal",
-        arrayOf(conversationId, messageId),
-    ).use { c -> buildString { while (c.moveToNext()) append(c.getString(0)) } }
-
-    private fun readReflectionMarker(conversationId: String, seq: Long): ReflectionToolMarker? = sql.query(
-        "SELECT * FROM reflection_tool_markers WHERE conversation_id=? AND seq=?", arrayOf(conversationId, seq),
-    ).use { if (it.moveToFirst()) ReflectionToolMarker(it.getString(0), it.getLong(1), it.getStringOrNullMemory("owner_user_message_id"),
-        it.getStringOrNullMemory("batch_id"), it.getStringOrNullMemory("call_id"), it.getString(5), it.getString(6), it.getString(7), it.getString(8), it.getDouble(9)) else null }
+    private fun readReflectionMarker(c: android.database.Cursor) = ReflectionToolMarker(c.getString(0), c.getLong(1), c.getStringOrNullMemory("owner_user_message_id"),
+        c.getStringOrNullMemory("batch_id"), c.getStringOrNullMemory("call_id"), c.getString(5), c.getString(6), c.getString(7), c.getString(8), c.getDouble(9))
 
     private fun sanitizeForReflection(text: String): String {
         val entry = ReflectionTranscriptBuilder.Entry("user", text, "user_authored")
         return JSONArray(ReflectionTranscriptBuilder.build(listOf(entry))).optJSONObject(0)?.optString("text", text) ?: text
     }
 
-    private fun pendingInterruptRequestsInternal(): List<PendingInterrupt> {
-        val pending = sql.query(
-            "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
-                "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
-                "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
-                "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
-                "WHERE r.seq<=c.next_seq-1 ORDER BY r.conversation_id,r.seq",
-            emptyArray(),
-        ).use { c -> buildList {
-            while (c.moveToNext()) {
-                val dispatched = c.getLongOrNullMemory("dispatched_seq")
-                val inputState = c.getStringOrNullMemory("input_state")
-                val ackRequired = c.getInt(c.getColumnIndexOrThrow("ack_required")) != 0
-                if (inputState == "main_chat_input_resolved" || inputState == "main_chat_input_incorporated") continue
-                if (dispatched != null && !ackRequired) continue
-                add(PendingInterrupt(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getInt(4) != 0,
-                    emptyList(), c.getStringOrNullMemory("dispatched_message_id"), dispatched, inputState, dispatched != null, ackRequired))
-            }
-        } }
-        if (pending.isEmpty()) return emptyList()
-        val skills = mutableMapOf<Pair<String, String>, MutableList<String>>()
-        pending.forEach { request ->
-            sql.query("SELECT skill_id FROM interrupt_request_skills WHERE conversation_id=? AND request_id=? ORDER BY ordinal",
-                arrayOf(request.conversationId, request.requestId)).use { c -> while (c.moveToNext()) skills.getOrPut(request.conversationId to request.requestId) { ArrayList() }.add(c.getString(0)) }
-        }
-        return pending.map { it.copy(skills = skills[it.conversationId to it.requestId].orEmpty()) }
-    }
+    private fun InterruptRequestValue.toPendingInterrupt() = PendingInterrupt(
+        conversationId, requestId, seq, content, memoryDisabled, skills, dispatchedMessageId,
+        dispatchedSeq, inputState, alreadyDispatched, acknowledgementRequired,
+    )
 
     private fun readCompaction(conversationId: String, id: String): Compaction? = sql.query(
         "SELECT * FROM compactions WHERE conversation_id=? AND compaction_id=?", arrayOf(conversationId, id),
@@ -525,67 +515,110 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
 
     private fun readCompaction(c: android.database.Cursor) = Compaction(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getLong(4), c.getLong(5), c.getString(6), c.getString(7), c.getDouble(8))
 
-    private fun readMissionHeader(conversationId: String, missionId: String): CrewMission? = sql.query(
-        "SELECT * FROM crew_missions WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, missionId),
-    ).use { if (it.moveToFirst()) CrewMission(it.getString(0), it.getString(1), it.getLong(2), it.getLong(3), it.getInt(4),
-        it.getStringOrNullMemory("process_id"), it.getString(6), it.getString(7), it.getString(8), it.getStringOrNullMemory("title_source"),
-        it.getString(10), it.getBlobOrNullMemory("synthesis"), it.getLong(12), it.getLongOrNullMemory("finished_at_ms")) else null }
+    private fun readCrewSnapshot(conversationId: String, missionId: String): CrewMissionSnapshot? =
+        readCrewSnapshots(conversationId, listOf(missionId)).firstOrNull()
 
-    private fun readCrewSnapshot(conversationId: String, missionId: String): CrewMissionSnapshot? {
-        val mission = readMissionHeader(conversationId, missionId) ?: return null
-        val bots = sql.query("SELECT * FROM crew_bots WHERE conversation_id=? AND mission_id=? ORDER BY ordinal", arrayOf(conversationId, missionId)).use { c ->
+    /** Hydrates every mission and child collection with a fixed number of set queries, not per bot/message. */
+    private fun readCrewSnapshots(conversationId: String, missionIds: List<String>? = null): List<CrewMissionSnapshot> {
+        val missions = sql.query("SELECT * FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq", arrayOf(conversationId)).use { c ->
             buildList {
-                while (c.moveToNext()) {
-                    val botId = c.getString(c.getColumnIndexOrThrow("bot_id"))
-                    val tools = sql.query("SELECT tool FROM crew_bot_tools WHERE conversation_id=? AND mission_id=? AND bot_id=? ORDER BY ordinal",
-                        arrayOf(conversationId, missionId, botId)).use { t -> buildList { while (t.moveToNext()) add(t.getString(0)) } }
-                    val evidenceId = c.getStringOrNullMemory("result_evidence_id")
-                    add(CrewBotSnapshot(botId, c.getStringOrNullMemory("role_id"), c.getStringOrNullMemory("role_name"), c.getString(c.getColumnIndexOrThrow("name")),
-                        c.getStringOrNullMemory("color_key"), c.getStringOrNullMemory("mission"), c.getString(c.getColumnIndexOrThrow("status")),
-                        c.getBlobOrNullMemory("error")?.let(ExactUtf16::decode), c.getBlobOrNullMemory("result")?.let(ExactUtf16::decode),
-                        c.getStringOrNullMemory("waiting_reason"), tools, c.getLongOrNullMemory("started_at_ms") ?: 0L,
-                        c.getLongOrNullMemory("finished_at_ms") ?: 0L, c.getInt(c.getColumnIndexOrThrow("can_resume")) != 0,
-                        c.getStringOrNullMemory("recovery_note"), c.getInt(c.getColumnIndexOrThrow("resume_required")) != 0,
-                        c.getStringOrNullMemory("phase"), c.getStringOrNullMemory("last_progress"),
-                        c.getLongOrNullMemory("last_progress_at_ms") ?: 0L, c.getStringOrNullMemory("cycle_id"),
-                        evidenceId?.let { readCrewResultEvidenceJson(conversationId, it) }))
-                }
+                while (c.moveToNext()) add(CrewMission(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4),
+                    c.getStringOrNullMemory("process_id"), c.getString(6), c.getString(7), c.getString(8), c.getStringOrNullMemory("title_source"),
+                    c.getString(10), c.getBlobOrNullMemory("synthesis"), c.getLong(12), c.getLongOrNullMemory("finished_at_ms")))
+            }
+        }.filter { missionIds == null || it.mission_id in missionIds }
+        if (missions.isEmpty()) return emptyList()
+        val byMission = missions.associateBy { it.mission_id }
+        val tools = mutableMapOf<Pair<String, String>, MutableList<String>>()
+        sql.query("SELECT mission_id,bot_id,tool FROM crew_bot_tools WHERE conversation_id=? ORDER BY mission_id,bot_id,ordinal", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) tools.getOrPut(c.getString(0) to c.getString(1)) { mutableListOf() }.add(c.getString(2))
+        }
+        val evidence = mutableMapOf<String, com.jarvys.agent.crew.CrewResultEvidence>()
+        sql.query("SELECT * FROM crew_result_evidence WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) {
+                val id = c.getString(c.getColumnIndexOrThrow("evidence_id"))
+                val row = JSONObject().put("type", "crew_result_evidence").put("crewResultSchemaVersion", c.getInt(c.getColumnIndexOrThrow("schema_version")))
+                    .put("evidenceId", id).put("conversationId", conversationId).put("missionId", c.getString(c.getColumnIndexOrThrow("mission_id")))
+                    .put("botId", c.getString(c.getColumnIndexOrThrow("bot_id"))).put("cycleId", c.getString(c.getColumnIndexOrThrow("cycle_id")))
+                    .put("reportedStatus", c.getString(c.getColumnIndexOrThrow("reported_status")))
+                    .put("resultText", ExactUtf16.decode(c.getBlob(c.getColumnIndexOrThrow("result_text"))))
+                    .put("producedAtMillis", c.getLong(c.getColumnIndexOrThrow("produced_at_ms")))
+                    .put("contentSha256", c.getString(c.getColumnIndexOrThrow("content_sha256")))
+                evidence[id] = com.jarvys.agent.crew.CrewResultEvidence.fromJsonStrict(row)
             }
         }
-        val messages = sql.query("SELECT * FROM crew_messages WHERE conversation_id=? AND mission_id=? ORDER BY ordinal", arrayOf(conversationId, missionId)).use { c ->
-            buildList {
-                while (c.moveToNext()) {
-                    val messageId = c.getString(c.getColumnIndexOrThrow("message_id"))
-                    val json = JSONObject().put("id", messageId).put("conversationId", conversationId)
-                        .put("from", c.getStringOrNullMemory("from_bot") ?: "").put("to", c.getStringOrNullMemory("to_bot") ?: "")
-                        .put("type", c.getString(c.getColumnIndexOrThrow("type"))).put("text", ExactUtf16.decode(c.getBlob(c.getColumnIndexOrThrow("text"))))
-                        .put("timestampMillis", c.getLong(c.getColumnIndexOrThrow("timestamp_ms")))
-                    val refs = JSONArray()
-                    sql.query("SELECT ref FROM crew_message_refs WHERE conversation_id=? AND mission_id=? AND message_id=? ORDER BY ordinal",
-                        arrayOf(conversationId, missionId, messageId)).use { r -> while (r.moveToNext()) refs.put(r.getString(0)) }
-                    json.put("refs", refs)
-                    c.getStringOrNullMemory("coordination_evidence_id")?.let { id -> json.put("coordination", readCoordinationReferenceJson(conversationId, id)) }
-                    sql.query("SELECT * FROM crew_message_input_bindings WHERE conversation_id=? AND mission_id=? AND message_id=?",
-                        arrayOf(conversationId, missionId, messageId)).use { b -> if (b.moveToFirst()) json.put("inputBinding", inputBindingJson(b)) }
-                    sql.query("SELECT * FROM crew_message_activities WHERE conversation_id=? AND mission_id=? AND message_id=?",
-                        arrayOf(conversationId, missionId, messageId)).use { a -> if (a.moveToFirst()) {
-                        json.put("origin", "local_activity")
-                        json.put("activity", JSONObject().put("schemaVersion", a.getInt(a.getColumnIndexOrThrow("schema_version")))
-                            .put("eventId", a.getString(a.getColumnIndexOrThrow("event_id"))).put("executionId", a.getString(a.getColumnIndexOrThrow("execution_id")))
-                            .put("callId", a.getString(a.getColumnIndexOrThrow("call_id"))).put("toolName", a.getString(a.getColumnIndexOrThrow("tool_name")))
-                            .put("displayName", a.getString(a.getColumnIndexOrThrow("display_name"))).put("skillId", a.getString(a.getColumnIndexOrThrow("skill_id")))
-                            .put("skillName", a.getString(a.getColumnIndexOrThrow("skill_name"))).put("stage", a.getString(a.getColumnIndexOrThrow("stage")))
-                            .put("detail", a.getString(a.getColumnIndexOrThrow("detail"))).put("previewId", a.getString(a.getColumnIndexOrThrow("preview_id")))
-                            .put("auditDetail", a.getString(a.getColumnIndexOrThrow("audit_detail"))).put("reflectionSource", a.getString(a.getColumnIndexOrThrow("reflection_source")))
-                            .put("timestampMillis", a.getLong(a.getColumnIndexOrThrow("timestamp_millis"))))
-                    } }
-                    add(CrewMessage.fromJson(json))
-                }
+        val bots = mutableMapOf<String, MutableList<CrewBotSnapshot>>()
+        sql.query("SELECT * FROM crew_bots WHERE conversation_id=? ORDER BY mission_id,ordinal", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) {
+                val missionId = c.getString(c.getColumnIndexOrThrow("mission_id"))
+                if (missionId !in byMission) continue
+                val botId = c.getString(c.getColumnIndexOrThrow("bot_id"))
+                val evidenceId = c.getStringOrNullMemory("result_evidence_id")
+                if (evidenceId != null && evidence[evidenceId] == null) throw IllegalStateException("crew_snapshot_result_evidence_missing")
+                bots.getOrPut(missionId) { mutableListOf() }.add(CrewBotSnapshot(
+                    botId, c.getStringOrNullMemory("role_id"), c.getStringOrNullMemory("role_name"), c.getString(c.getColumnIndexOrThrow("name")),
+                    c.getStringOrNullMemory("color_key"), c.getStringOrNullMemory("mission"), c.getString(c.getColumnIndexOrThrow("status")),
+                    c.getBlobOrNullMemory("error")?.let(ExactUtf16::decode), c.getBlobOrNullMemory("result")?.let(ExactUtf16::decode),
+                    c.getStringOrNullMemory("waiting_reason"), tools[missionId to botId].orEmpty(), c.getLongOrNullMemory("started_at_ms") ?: 0L,
+                    c.getLongOrNullMemory("finished_at_ms") ?: 0L, c.getInt(c.getColumnIndexOrThrow("can_resume")) != 0,
+                    c.getStringOrNullMemory("recovery_note"), c.getInt(c.getColumnIndexOrThrow("resume_required")) != 0,
+                    c.getStringOrNullMemory("phase"), c.getStringOrNullMemory("last_progress"),
+                    c.getLongOrNullMemory("last_progress_at_ms") ?: 0L, c.getStringOrNullMemory("cycle_id"), evidenceId?.let(evidence::get),
+                ))
             }
         }
-        return CrewMissionSnapshot(mission.mission_id, mission.conversation_id, mission.process_id, mission.title,
+        val refs = mutableMapOf<Pair<String, String>, JSONArray>()
+        sql.query("SELECT mission_id,message_id,ref FROM crew_message_refs WHERE conversation_id=? ORDER BY mission_id,message_id,ordinal", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) refs.getOrPut(c.getString(0) to c.getString(1)) { JSONArray() }.put(c.getString(2))
+        }
+        val coordination = mutableMapOf<Pair<String, String>, JSONObject>()
+        sql.query("SELECT m.mission_id,m.message_id,m.coordination_evidence_id,m.reference_message_id,m.evidence_content_sha256,e.bot_id,e.cycle_id " +
+            "FROM crew_messages m LEFT JOIN crew_coordination_evidence e ON e.conversation_id=m.conversation_id AND e.evidence_id=m.coordination_evidence_id " +
+            "WHERE m.conversation_id=? AND m.coordination_evidence_id IS NOT NULL", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) {
+                val messageId = c.getStringOrNullMemory("reference_message_id") ?: throw IllegalStateException("crew_snapshot_coordination_reference_message_id_null")
+                val digest = c.getStringOrNullMemory("evidence_content_sha256") ?: throw IllegalStateException("crew_snapshot_coordination_reference_digest_null")
+                coordination[c.getString(0) to c.getString(1)] = JSONObject().put("schemaVersion", 1)
+                    .put("evidenceId", c.getString(2)).put("conversationId", conversationId).put("missionId", c.getString(0))
+                    .put("botId", c.getStringOrNullMemory("bot_id") ?: "").put("cycleId", c.getStringOrNullMemory("cycle_id") ?: "")
+                    .put("messageId", messageId).put("contentSha256", digest)
+            }
+        }
+        val bindings = mutableMapOf<Pair<String, String>, JSONObject>()
+        sql.query("SELECT * FROM crew_message_input_bindings WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) bindings[c.getString(c.getColumnIndexOrThrow("mission_id")) to c.getString(c.getColumnIndexOrThrow("message_id"))] = inputBindingJson(c)
+        }
+        val activities = mutableMapOf<Pair<String, String>, JSONObject>()
+        sql.query("SELECT * FROM crew_message_activities WHERE conversation_id=?", arrayOf(conversationId)).use { a ->
+            while (a.moveToNext()) activities[a.getString(a.getColumnIndexOrThrow("mission_id")) to a.getString(a.getColumnIndexOrThrow("message_id"))] =
+                JSONObject().put("schemaVersion", a.getInt(a.getColumnIndexOrThrow("schema_version")))
+                    .put("eventId", a.getString(a.getColumnIndexOrThrow("event_id"))).put("executionId", a.getString(a.getColumnIndexOrThrow("execution_id")))
+                    .put("callId", a.getString(a.getColumnIndexOrThrow("call_id"))).put("toolName", a.getString(a.getColumnIndexOrThrow("tool_name")))
+                    .put("displayName", a.getString(a.getColumnIndexOrThrow("display_name"))).put("skillId", a.getString(a.getColumnIndexOrThrow("skill_id")))
+                    .put("skillName", a.getString(a.getColumnIndexOrThrow("skill_name"))).put("stage", a.getString(a.getColumnIndexOrThrow("stage")))
+                    .put("detail", a.getString(a.getColumnIndexOrThrow("detail"))).put("previewId", a.getString(a.getColumnIndexOrThrow("preview_id")))
+                    .put("auditDetail", a.getString(a.getColumnIndexOrThrow("audit_detail"))).put("reflectionSource", a.getString(a.getColumnIndexOrThrow("reflection_source")))
+                    .put("timestampMillis", a.getLong(a.getColumnIndexOrThrow("timestamp_millis")))
+        }
+        val messages = mutableMapOf<String, MutableList<CrewMessage>>()
+        sql.query("SELECT * FROM crew_messages WHERE conversation_id=? ORDER BY mission_id,ordinal", arrayOf(conversationId)).use { c ->
+            while (c.moveToNext()) {
+                val missionId = c.getString(c.getColumnIndexOrThrow("mission_id"))
+                if (missionId !in byMission) continue
+                val id = c.getString(c.getColumnIndexOrThrow("message_id"))
+                val json = JSONObject().put("id", id).put("conversationId", conversationId)
+                    .put("from", c.getStringOrNullMemory("from_bot") ?: "").put("to", c.getStringOrNullMemory("to_bot") ?: "")
+                    .put("type", c.getString(c.getColumnIndexOrThrow("type"))).put("text", ExactUtf16.decode(c.getBlob(c.getColumnIndexOrThrow("text"))))
+                    .put("timestampMillis", c.getLong(c.getColumnIndexOrThrow("timestamp_ms"))).put("refs", refs[missionId to id] ?: JSONArray())
+                coordination[missionId to id]?.let { json.put("coordination", it) }
+                bindings[missionId to id]?.let { json.put("inputBinding", it) }
+                activities[missionId to id]?.let { json.put("origin", "local_activity").put("activity", it) }
+                messages.getOrPut(missionId) { mutableListOf() }.add(CrewMessage.fromJson(json))
+            }
+        }
+        return missions.map { mission -> CrewMissionSnapshot(mission.mission_id, mission.conversation_id, mission.process_id, mission.title,
             mission.original_instructions, mission.title_source, mission.status, mission.synthesis?.let(ExactUtf16::decode) ?: "",
-            mission.started_at_ms, mission.finished_at_ms ?: 0L, bots, messages)
+            mission.started_at_ms, mission.finished_at_ms ?: 0L, bots[mission.mission_id].orEmpty(), messages[mission.mission_id].orEmpty()) }
     }
 
     private fun insertCrewChildren(conversationId: String, snapshot: CrewMissionSnapshot) {

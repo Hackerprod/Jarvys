@@ -4,7 +4,6 @@ import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
-import androidx.room.withTransaction
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,7 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "ee888c15388481cc4ac92c629c0f8c38" // update after build; v1 is not published yet
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "69e03d71e91fdcb3649824a652bf777a" // M2 adds conversations.import_offset; schema v1 is not published yet
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -264,7 +263,7 @@ class JarvysChatDatabaseM0Test {
         database.conversationDao().insertIfNotTombstoned(conversation(id))
         val items = (1L..500L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq, created_at = seq.toDouble()) }
         val messages = (1L..500L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
-        database.withTransaction {
+        database.withChatWriteTransaction {
             database.conversationItemDao().insertAll(items)
             database.messageDao().insertAll(messages)
         }
@@ -976,7 +975,7 @@ class JarvysChatDatabaseM0Test {
         database.conversationDao().insertIfNotTombstoned(conversation(id))
         val items = (1L..50_000L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq, created_at = seq.toDouble()) }
         val messages = (1L..50_000L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
-        database.withTransaction {
+        database.withChatWriteTransaction {
             database.conversationItemDao().insertAll(items)
             database.messageDao().insertAll(messages)
         }

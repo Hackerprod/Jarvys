@@ -51,10 +51,6 @@ class GoldenLedgerImportTest {
 
         val ledgers = directory.listFiles { file -> file.isFile && file.name.endsWith(".jsonl") }?.toList().orEmpty()
         assertEquals("expected the local eight-ledger golden corpus", 8, ledgers.size)
-        ledgers.forEach { ledger ->
-            val sessionId = ledger.name.removeSuffix(".jsonl")
-            assertTrue("each JSONL source must have a sibling metadata file", File(directory, "$sessionId.meta.json").isFile)
-        }
 
         val progressEvents = AtomicInteger()
         val reports = databaseExecutor.submit<List<ImportReport>> {

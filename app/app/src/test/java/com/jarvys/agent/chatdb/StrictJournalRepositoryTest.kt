@@ -1,6 +1,8 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.crew.CrewResultEvidence
@@ -21,12 +23,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.rules.TemporaryFolder
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.UUID
+import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -37,11 +44,13 @@ class StrictJournalRepositoryTest {
     private lateinit var database: JarvysChatDatabase
     private lateinit var conversations: ConversationRepository
     private lateinit var repository: StrictJournalRepository
+    private lateinit var artifacts: ConversationArtifactsRepository
 
     @Before fun openDatabase() {
         database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, File(temporary.root, "strict-journal.db"))
         conversations = ConversationRepository(database)
         repository = StrictJournalRepository(database)
+        artifacts = ConversationArtifactsRepository(database)
     }
 
     @After fun closeDatabase() {
@@ -211,6 +220,211 @@ class StrictJournalRepositoryTest {
         assertEquals(beforeItems, count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf(fixture.execution)))
         assertEquals(0L, count("SELECT COUNT(*) FROM workspace_result_refs WHERE reference_id=?", arrayOf(ref.referenceId)))
         database.testChatSql.execSQL("DROP TRIGGER injected_workspace_ref_failure")
+    }
+
+    @Test fun strictAndArtifactReadSnapshotsRunWhileWriterTransactionIsHeld() {
+        val fixture = onDatabaseThread {
+            val value = resultFixture()
+            success(repository.appendCrewResultEvidence(value.result))
+            ensure("artifact-read")
+            success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+                conversationId = "artifact-read", artifactId = "artifact-read-1", name = "report.txt", mimeType = "text/plain",
+                sizeBytes = 4L, kind = "FILE", relativePath = "chats/artifact-read/report.txt", sha256 = "d".repeat(64),
+            )))
+            value
+        }
+        val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(
+            context, File(temporary.root, "strict-journal.db"),
+        )
+        val readerConversations = ConversationRepository(readerDatabase)
+        val readerModel = ModelTranscriptRepository(readerDatabase)
+        val readerMemory = MemoryTimelineRepository(readerDatabase)
+        val readerStrict = StrictJournalRepository(readerDatabase)
+        val readerArtifacts = ConversationArtifactsRepository(readerDatabase)
+        // Open the second Room instance's reader connection before holding the first instance's
+        // writer. Robolectric sdk28 can expose a one-connection pool per Room instance; this gives
+        // both tests a real, independent WAL handle to the same temporary SQLite file.
+        runBlocking {
+            readerConversations.messageCounts(fixture.execution)
+            readerModel.readModelTranscript(fixture.execution)
+            readerMemory.pendingCompactionIds(fixture.execution)
+            success(readerStrict.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
+            readerArtifacts.artifactsForConversation("artifact-read")
+        }
+        val writer = Executors.newSingleThreadExecutor()
+        val reader = Executors.newSingleThreadExecutor()
+        val writerEntered = CountDownLatch(1)
+        val releaseWriter = CountDownLatch(1)
+        try {
+            val write = writer.submit {
+                runBlocking {
+                    database.withChatWriteTransaction {
+                        database.chatSql.execSQL(
+                            "UPDATE conversations SET updated_at=updated_at+1 WHERE id=?", arrayOf(fixture.execution),
+                        )
+                        writerEntered.countDown()
+                        check(releaseWriter.await(10, TimeUnit.SECONDS))
+                    }
+                }
+            }
+            assertTrue("writer acquired its transaction", writerEntered.await(10, TimeUnit.SECONDS))
+            val strictRead = reader.submit(Callable {
+                runBlocking {
+                    assertEquals(fixture.result, success(readerStrict.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId)))
+                    assertEquals(0L, readerConversations.messageCounts(fixture.execution).total)
+                    assertTrue(readerModel.readModelTranscript(fixture.execution).entries.isEmpty())
+                    assertTrue(readerMemory.pendingCompactionIds(fixture.execution).isEmpty())
+                    readerArtifacts.artifactsForConversation("artifact-read").map { it.artifact_id }
+                }
+            })
+            assertEquals(listOf("artifact-read-1"), strictRead.get(3, TimeUnit.SECONDS))
+            releaseWriter.countDown()
+            write.get(10, TimeUnit.SECONDS)
+        } finally {
+            releaseWriter.countDown()
+            writer.shutdownNow()
+            reader.shutdownNow()
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(readerDatabase)
+        }
+    }
+
+    @Test fun emptyFileDigestMeansUnknownAndCanBeCompletedLater() = onDatabaseThread {
+        ensure("digest-compat")
+        val path = "chats/digest-compat/report.bin"
+        val unknown = success(artifacts.appendDeliveredArtifactImported(DeliveredArtifactInput(
+            conversationId = "digest-compat", artifactId = "unknown-digest", name = "report.bin", mimeType = null,
+            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = "",
+        )))
+        val knownSha = "e".repeat(64)
+        val completed = success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+            conversationId = "digest-compat", artifactId = "known-digest", name = "report.bin", mimeType = null,
+            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = knownSha,
+        )))
+        assertEquals(unknown.file_ref_id, completed.file_ref_id)
+        assertEquals(knownSha, database.testChatSql.query(
+            "SELECT sha256 FROM file_refs WHERE id=?", arrayOf(completed.file_ref_id),
+        ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
+
+        val laterUnknown = success(artifacts.appendDeliveredArtifactImported(DeliveredArtifactInput(
+            conversationId = "digest-compat", artifactId = "later-unknown", name = "report.bin", mimeType = null,
+            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = "",
+        )))
+        assertEquals(completed.file_ref_id, laterUnknown.file_ref_id)
+        assertEquals(knownSha, database.testChatSql.query(
+            "SELECT sha256 FROM file_refs WHERE id=?", arrayOf(laterUnknown.file_ref_id),
+        ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
+    }
+
+    @Test fun strictAndArtifactReadQueriesStayOnQueryExecutorAndUseBoundedStatements() {
+        val fixtures = onDatabaseThread {
+            val result = resultFixture()
+            success(repository.appendCrewResultEvidence(result.result))
+            val resultRef = WorkspaceResultReference.create(result.result, WorkspaceIdentity.CENTRAL_SESSION,
+                result.workspace, uuid(40), "request-a", 1L)
+            success(repository.appendWorkspaceResultReference(resultRef))
+            success(repository.appendWorkspaceResultNotice(resultRef))
+
+            val coordination = coordinationFixture()
+            success(repository.appendCrewCoordinationEvidence(coordination.evidence))
+            val coordinationRef = WorkspaceCoordinationReference.create(coordination.evidence, WorkspaceIdentity.CENTRAL_SESSION,
+                coordination.workspace, uuid(41), "request-a", 1L)
+            success(repository.appendWorkspaceCoordinationReference(coordinationRef))
+            success(repository.appendWorkspaceCoordinationNotice(coordinationRef))
+
+            ensure("artifact-batch")
+            success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+                conversationId = "artifact-batch", artifactId = "artifact-batch-1", name = "one.txt", mimeType = "text/plain",
+                sizeBytes = 1L, kind = "FILE", relativePath = "chats/artifact-batch/one.txt", sha256 = "f".repeat(64),
+            )))
+            val nativeWorkspace = workspaceId(42)
+            val nativeExecution = WorkspaceIdentity.executionSessionId(nativeWorkspace)
+            ensure(nativeExecution)
+            val nativeMission = missionId(nativeWorkspace, "request-a")
+            val sourceId = uuid(43)
+            val incorporation = WorkspaceInputIncorporation.create(
+                WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, sourceId, sourceId, uuid(44), WorkspaceIdentity.CENTRAL_SESSION,
+                nativeWorkspace, nativeExecution, uuid(45), "request-a", nativeMission, "bot-a", uuid(46), uuid(47),
+                "a".repeat(64), "b".repeat(64), "USER", "c".repeat(64), "d".repeat(64), 48_000L, 48_001L,
+            )
+            success(repository.appendWorkspaceInputIncorporation(incorporation))
+            Triple(result, coordination, incorporation)
+        }
+        val counts = mutableListOf<Int>()
+        fun recordRead(block: suspend () -> Unit) {
+            val count = AtomicInteger()
+            runBlocking { ChatSqlInstrumentation.observeStatements({ count.incrementAndGet() }, block) }
+            counts += count.get()
+        }
+
+        recordRead { repository.listWorkspaceResultReferences(fixtures.first.execution, isNotice = false, limit = 100) }
+        recordRead { repository.listWorkspaceResultReferences(WorkspaceIdentity.CENTRAL_SESSION, isNotice = true, limit = 100) }
+        recordRead { repository.listWorkspaceCoordinationReferences(fixtures.second.execution, isNotice = false, limit = 100) }
+        recordRead { repository.listWorkspaceCoordinationReferences(WorkspaceIdentity.CENTRAL_SESSION, isNotice = true, limit = 100) }
+        recordRead { repository.listWorkspaceInputIncorporations(WorkspaceIdentity.CENTRAL_SESSION, limit = 100) }
+        recordRead { artifacts.artifactsForConversation("artifact-batch") }
+        assertEquals("each list hydrates rows with a bounded SQL statement count", listOf(3, 3, 3, 3, 3, 1), counts)
+
+        val ranOffMainLooper = AtomicReference<Boolean?>()
+        val result = AtomicReference<CrewResultLedgerEvidence?>()
+        Handler(Looper.getMainLooper()).post {
+            result.set(runBlocking {
+                ChatSqlInstrumentation.observeStatements({ ranOffMainLooper.set(Looper.myLooper() != Looper.getMainLooper()) }) {
+                    success(repository.readCrewResultEvidence(fixtures.first.execution, fixtures.first.result.evidenceId))
+                }
+            })
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(fixtures.first.result, result.get())
+        assertEquals("suspend repository reads run off the main looper", true, ranOffMainLooper.get())
+    }
+
+    @Test fun strictReadCannotRunInsideWriterTransaction() = onDatabaseThread {
+        val fixture = resultFixture()
+        success(repository.appendCrewResultEvidence(fixture.result))
+        val failure = runCatching {
+            database.withChatWriteTransaction {
+                success(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
+            }
+        }.exceptionOrNull()
+        assertTrue("read APIs must use a reader lease, not a held writer transaction", failure is IllegalStateException)
+    }
+
+    @Test fun beforeWriteCallbackCannotReenterAnotherRepository() {
+        val fixture = onDatabaseThread { resultFixture() }
+        val nestedConversationId = uuid(98)
+        val readFailure = databaseExecutor.submit<Throwable?> {
+            runBlocking {
+                runCatching {
+                    repository.appendCrewResultEvidence(fixture.result) {
+                        runBlocking { conversations.isTombstoned(fixture.execution) }
+                    }
+                }.exceptionOrNull()
+            }
+        }.get(5, TimeUnit.SECONDS)
+        val secondResult = CrewResultEvidence.create(
+            fixture.execution, fixture.mission, "bot-a", uuid(99), "DONE", "second result", 21_002L,
+        )
+        val writeFailure = databaseExecutor.submit<Throwable?> {
+            runBlocking {
+                runCatching {
+                    repository.appendCrewResultEvidence(secondResult) {
+                        runBlocking { conversations.ensureConversation(nestedConversationId) }
+                    }
+                }.exceptionOrNull()
+            }
+        }.get(5, TimeUnit.SECONDS)
+
+        assertTrue("beforeWrite must reject repository reads before changing dispatcher", readFailure is IllegalStateException)
+        assertEquals("beforeWrite callbacks cannot call chat repositories or blocking facades", readFailure?.message)
+        assertTrue("beforeWrite must reject repository writes before waiting for their writer lease", writeFailure is IllegalStateException)
+        assertEquals("beforeWrite callbacks cannot call chat repositories or blocking facades", writeFailure?.message)
+        assertEquals(0L, onDatabaseThread {
+            count("SELECT COUNT(*) FROM crew_result_evidence WHERE conversation_id=? AND evidence_id IN (?,?)",
+                arrayOf(fixture.execution, fixture.result.evidenceId, secondResult.evidenceId))
+        })
+        assertEquals(0L, onDatabaseThread {
+            count("SELECT COUNT(*) FROM conversations WHERE id=?", arrayOf(nestedConversationId))
+        })
     }
 
     private suspend fun resultFixture(): ResultFixture {

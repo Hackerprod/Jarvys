@@ -8,7 +8,7 @@ Rutas abreviadas: `LRS` = `app/app/src/main/java/com/jarvys/agent/LocalRunStore.
 | Fichero | Escritor | Notas |
 |---|---|---|
 | `files/jarvys/conversations/<sessionId>.jsonl` | solo `LRS.appendSessionRowLocked` (LRS:4618-4661) y `LRS.appendResultRowLocked` (LRS:949-963) | append + `fsync` por fila; filas `crew_snapshot` y de resultados con `losslessResultRecord` (escapa surrogates sueltos, LRS:965-976) |
-| `files/jarvys/conversations/<sessionId>.meta.json` (+ `.new`, `.bak`) | `ConversationMetadataStore.update` (ConversationMetadataStore.java:124-161) | JSON único `{title,pinned,archived,deleted,privateCode}`; escritura atómica `.new`→rename; `deleted=true` resetea el resto (línea 132) = **tombstone** |
+| `files/jarvys/conversations/<sessionId>.meta.json` (opcional; + `.new`, `.bak`) | `ConversationMetadataStore.update` (ConversationMetadataStore.java:124-161) | JSON único `{title,pinned,archived,deleted,privateCode}`; escritura atómica `.new`→rename; si falta se usan valores por defecto; `deleted=true` resetea el resto (línea 132) = **tombstone** |
 | `files/jarvys/runs/<runId>/steps.jsonl` | `LRS.beginRun/appendJson/recordSummary/finishRun` (LRS:139-163, 4772-4855, 5162-5175) | ledger de runs de dispositivo (no es la conversación); `session_id` liga run→chat (LRS:1765-1790). Fuera del alcance principal pero lo usa `collectConversationHistory` y `deleteConversation` |
 | Fuera de alcance (otros JSONL): `proactive/events.jsonl`, `proactive/decisions.jsonl`, `tasks/*.jsonl` | ProactiveEventStore.kt:16, ProactiveDecisionAuditStore.kt:39, TaskStore.kt:23, TaskRunLedger.kt:47, TaskPendingActionStore.kt:52 | no son el ledger de conversaciones |
 
@@ -80,7 +80,7 @@ Leyenda semántica: **AO** = append-only con valor propio; **MK** = marcador que
 
 | `type` | Campos | Escribe | Lee | Semántica |
 |---|---|---|---|---|
-| `compaction` | `summary`, `firstKept` (índice de mensaje), `trigger`, `mode`, `summarizedMessages`, `timestamp`; **sin `compactionId`** | `appendCompaction` (LRS:4602-4616) ← ConversationCompactor.java:136 | `loadConversationContext` (última; LRS:2862-2879), timeline (LRS:4492-4496; oculta si hay invalidación posterior en la página), `pendingCompactionIds` | MK de frontera. Id derivado `legacy-<timestamp>-<rowIndex>` (LRS:3467-3470) con rowIndex en la lista filtrada y reordenada |
+| `compaction` | `summary`, `firstKept` (índice de mensaje), `trigger`, `mode`, `summarizedMessages`, `timestamp`; **sin `compactionId`** | `appendCompaction` (LRS:4602-4616) ← ConversationCompactor.java:136 | `loadConversationContext` (última; LRS:2862-2879), timeline (LRS:4492-4496; oculta si hay invalidación posterior en la página), `pendingCompactionIds` | MK de frontera. Id derivado `legacy-<timestamp>-<rowIndex>` (LRS:3467-3470). El índice es la posición en `readConversationRows` tras reordenar steering, omitiendo filas result-only estrictas y líneas no parseables. `session_title` sí ocupa una posición aunque no tenga `conversation_items`; cada marcador `messageIds[]` ocupa una posición aunque actualice varios mensajes. M2 conserva ese índice en el sufijo de `compaction_id` para lectores posteriores. |
 | `compaction_reflection_consumed` | `compactionIds` [] (legado: `compactionId` o nada = limpiar todo) | LRS:4591-4600 | `pendingCompactionIds` (LRS:3449-3455) | MK |
 | `reflection_checkpoint` | `throughMessageId`, `reflectionId`, `completedAssistantSteps`, `result`, `acknowledgedCompactionIds` | LRS:3353-3367 ← MemoryReflectionCoordinator.java:59,106 | `buildReflectionPayload` (último checkpoint/commit) | MK frontera |
 | `reflection_commit` | + `summary`, `status`, `trigger`, `revisionIds` [long] | LRS:3370-3389 ← MemoryReflectionCoordinator.java:132 | idem + timeline (LRS:4497-4506), `hasReflectionCommit` (LRS:3427-3433) | MK + AO |
@@ -285,7 +285,7 @@ Mapeo fila → tablas:
 | proactive_reply_used | `messages.suggested_replies_consumed_seq` |
 | user_decision_request / resolution | `user_decisions`+`user_decision_options` / columnas `status…resolved_seq` (última gana) |
 | main_interrupt_request | `interrupt_requests`(+skills); despacho = `dispatched_message_id` |
-| main_chat_input_incorporated/resolved | `messages.input_state(_seq)` (o para requestId aún no despachado: columna en `interrupt_requests`) |
+| main_chat_input_incorporated/resolved | `messages.input_state(_seq)` (o para requestId aún no despachado: columna en `interrupt_requests`); la columna conserva `incorporated`/`resolved`, mientras `conversation_items.item_kind` conserva el nombre de fila del ledger `main_chat_input_incorporated`/`main_chat_input_resolved` |
 | model_tool_calls / started / not_started / result | `tool_batches`+`tool_calls` / `tool_calls.lifecycle` / `tool_results` |
 | model_artifact, model_error, model_provider_output_items | tablas homónimas |
 | tool_activity, tool_presentation, reflection_tool | tablas homónimas |
@@ -295,12 +295,14 @@ Mapeo fila → tablas:
 | crew_snapshot | `crew_missions/bots/messages` (estado último; `last_snapshot_seq` conserva la posición de la tarjeta) |
 | filas J | tablas J |
 
+En `file_refs`, `sha256=''` representa un digest desconocido, compatible con un digest conocido cuando coinciden `relative_path` y `bytes`; un digest posterior completa el valor. Digests conocidos distintos o tamaños distintos para la misma ruta son conflicto. La recuperación de interrupciones y los marcadores globales comparten una sola proyección de solicitudes pendientes, filtrada por los estados `resolved`/`incorporated`.
+
 Índices clave: cola por conversación `(conversation_id, seq DESC)` en `conversation_items`; paginación hacia atrás = `SELECT seq FROM messages WHERE conversation_id=? AND role='user' AND seq<?cursor ORDER BY seq DESC LIMIT n` y luego rango de items; por messageId `PK(conversation_id,message_id)` y `UNIQUE(stable_id)`; por owner/batch/call los índices de `tool_*`. Repositorio transaccional: una transacción por operación lógica (p. ej. dispatch interrupt = insertar mensaje + marcar request; cierre de turno = resultados + input_state), `BEGIN IMMEDIATE`, WAL.
 
 ## F. Riesgos y casos límite
 
 1. **Filas corruptas/truncadas**: los lectores tolerantes saltan líneas no parseables (LRS:3028-3031); los estrictos fallan todo el ledger (LRS:926-927). Un append normal tras una cola rota **concatena** con la línea rota (appendSessionRowLocked no verifica la cola, LRS:4627-4630) → se pierde también la nueva fila. Migración: importar con informe de líneas descartadas, conservar el .jsonl original (no borrar) y decidir política distinta para sesiones J (fail-closed).
-2. **Ids legado**: filas sin `messageId` → persistir `stable_id` (`legacy-<uuid>` de reacciones) y el `legacy-<index>` de reflexión; `compactionId` **nunca se escribe** y se deriva de `timestamp`+índice de fila filtrada/reordenada (LRS:3467-3470): calcularlo exactamente como hoy y guardarlo, o los `acknowledgedCompactionIds` existentes dejarán compacciones "pendientes".
+2. **Ids legado**: filas sin `messageId` → persistir `stable_id` (`legacy-<uuid>` de reacciones) y el `legacy-<index>` de reflexión; `compactionId` **nunca se escribe** y se deriva de `timestamp`+posición en `readConversationRows` tras reordenar steering (LRS:3467-3470). La posición no es `conversation_items.seq`: `session_title` cuenta pese a no tener item y un marcador de entrada cuenta una vez pese a su lista de IDs; las filas result-only estrictas y las líneas inválidas no cuentan. M2 calcula y persiste el sufijo original dentro de `compaction_id`, para que el lector lo recupere sin reconstruir la posición desde el spine.
 3. **Dos índices de mensaje** (modelo reordenado vs timeline orden ledger, A.9.2): persistir `message_index` según la regla del modelo y verificar con tests de paridad que coincide con el del timeline para todos los ledgers existentes.
 4. **Ids de UI y cursor basados en offset de bytes** (LRS:4338, CLP `olderCursor`): cambiar a `seq`; AgentRunUiState deduplica por id (AgentRunUiState.kt:855) → riesgo de duplicados si conviven eventos de ambas fuentes durante la transición.
 5. **Volumen ~48 MB** (dato del encargo, no verificado aquí): la importación debe ser streaming, por conversación, en transacciones acotadas, reanudable (`legacy_ledger_bytes`/sha) y fuera del hilo UI; hoy varias rutas leen todos los ledgers (drawer, `readPendingInterruptRequests()`, `cleanupOrphanAttachments`, MA:924).

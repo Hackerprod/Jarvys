@@ -204,8 +204,9 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
 
     /**
      * Appends a `model_tool_result` row. Replaces `MainChatTranscriptStore.attach`
-     * (`MainChatTranscriptStore.java:128-137`): the first result per call wins, only an exact
-     * `toolName` match is accepted, and duplicate result attempts still advance `last_activity_seq`.
+     * (`MainChatTranscriptStore.java:128-137`): the first result per call wins, even when its
+     * `toolName` differs from the call. Legacy restoration interprets that mismatch as a placeholder;
+     * later result attempts still advance `last_activity_seq` without replacing the first row.
      */
     suspend fun appendToolResult(input: ModelToolResultInput): ChatDbResult<ToolResult?> = appendToolResultInternal(input, allowLargeOutput = false)
 
@@ -218,7 +219,6 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             return@transaction ChatDbResult.Invalid("tool output must be retained as an artifact reference before storage")
         ensureConversationExists(input.conversationId)
         val call = readCall(input.conversationId, input.batchId, input.callId) ?: return@transaction ChatDbResult.NotFound
-        if (call.name != input.toolName) return@transaction ChatDbResult.Conflict("model_tool_result toolName does not match its call")
         if (input.lifecycle !in setOf("RESULT", "INTERRUPTED_UNCERTAIN", "NEVER_LAUNCHED"))
             return@transaction ChatDbResult.Invalid("tool result lifecycle is unsupported")
         val time = input.createdAtSeconds ?: nowSeconds()
@@ -376,125 +376,148 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * `MainChatTranscriptStore.restore` (`MainChatTranscriptStore.java:238-325`): each batch stays
      * at its `model_tool_calls` position; calls expose the latest lifecycle, first matching result,
      * and completeness. Consumers synthesize interruption placeholders from these exact states.
-     * `compactionBoundaryRowIndex` counts the same filtered/reordered non-result-only projection used
-     * by `LocalRunStore.loadConversationContext` (`LocalRunStore.java:2879-2915`); M2 reproduces it by
-     * counting eligible imported `conversation_items` ordered by `(sort_seq,sort_sub,seq)` before the
-     * compaction item. New writes use that same count immediately before appending the boundary.
+     * `compactionBoundaryRowIndex` is the original legacy row index persisted in the suffix of
+     * `legacy-<timestamp>-<rowIndex>`. It is not the number of `conversation_items` before the
+     * compaction: `session_title` has no spine row and each input marker is expanded per ID. The
+     * original row index counts those ledger rows once and excludes result-only strict-journal rows.
+     * New writes persist that legacy count in the generated compaction ID.
      */
-    suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = database.withChatReadTransaction {
-        val rows = sql.query(
-            "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items WHERE conversation_id=? " +
-                "AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
-                "ORDER BY sort_seq,sort_sub,seq",
-            arrayOf(conversationId),
-        ).use { c -> buildList { while (c.moveToNext()) add(SpineEntry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4))) } }
-        val events = rows.mapNotNull { item ->
-            when (item.kind) {
-                "model_tool_calls" -> readBatchSnapshot(conversationId, item.key)?.let { ModelTranscriptEntry.Batch(item.seq, item.sortSeq, item.sortSub, it) }
-                "model_tool_started", "model_tool_not_started" -> {
-                    val parts = decodeCallItemKey(item.key)
-                    if (parts == null) null else readCall(conversationId, parts.first, parts.second)?.let {
-                        ModelTranscriptEntry.Lifecycle(item.seq, item.sortSeq, item.sortSub, parts.first, parts.second,
-                            if (item.kind == "model_tool_started") "STARTED" else "NEVER_LAUNCHED")
+    suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val rows = sql.query(
+                "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items WHERE conversation_id=? " +
+                    "AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
+                    "ORDER BY sort_seq,sort_sub,seq",
+                arrayOf(conversationId),
+            ).use { c -> buildList { while (c.moveToNext()) add(SpineEntry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4))) } }
+
+            val batchIds = rows.mapNotNull { item ->
+                when (item.kind) {
+                    "model_tool_calls" -> item.key
+                    "model_tool_started", "model_tool_not_started", "model_tool_result" -> decodeCallItemKey(item.key)?.first
+                    else -> null
+                }
+            }.distinct()
+            val batchSnapshots = loadBatchSnapshots(conversationId, batchIds)
+            val callsByKey = batchSnapshots.flatMap { (batchId, snapshot) ->
+                snapshot.calls.map { (batchId to it.call.call_id) to it }
+            }.toMap()
+            val errors = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_error" }.map { it.seq }, "model_errors", ::readModelError)
+            val providers = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_provider_output_items" }.map { it.seq }, "model_provider_outputs", ::readProviderOutput)
+            val artifacts = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_artifact" }.map { it.seq }, "model_artifacts", ::readModelArtifact)
+
+            val events = rows.mapNotNull { item ->
+                when (item.kind) {
+                    "model_tool_calls" -> batchSnapshots[item.key]?.let { ModelTranscriptEntry.Batch(item.seq, item.sortSeq, item.sortSub, it) }
+                    "model_tool_started", "model_tool_not_started" -> {
+                        val parts = decodeCallItemKey(item.key)
+                        if (parts == null || callsByKey[parts] == null) null else ModelTranscriptEntry.Lifecycle(
+                            item.seq, item.sortSeq, item.sortSub, parts.first, parts.second,
+                            if (item.kind == "model_tool_started") "STARTED" else "NEVER_LAUNCHED",
+                        )
                     }
+                    "model_tool_result" -> {
+                        val parts = decodeCallItemKey(item.key)
+                        if (parts == null || callsByKey[parts] == null) null else ModelTranscriptEntry.ResultActivity(
+                            item.seq, item.sortSeq, item.sortSub, parts.first, parts.second, callsByKey[parts]?.result,
+                        )
+                    }
+                    "model_error" -> errors[item.seq]?.let { ModelTranscriptEntry.Error(item.seq, item.sortSeq, item.sortSub, it) }
+                    "model_provider_output_items" -> providers[item.seq]?.let { ModelTranscriptEntry.ProviderOutput(item.seq, item.sortSeq, item.sortSub, it) }
+                    "model_artifact" -> artifacts[item.seq]?.let { ModelTranscriptEntry.Artifact(item.seq, item.sortSeq, item.sortSub, it) }
+                    else -> null
                 }
-                "model_tool_result" -> {
-                    val parts = decodeCallItemKey(item.key)
-                    if (parts == null) null else ModelTranscriptEntry.ResultActivity(item.seq, item.sortSeq, item.sortSub, parts.first, parts.second, readToolResult(conversationId, parts.first, parts.second))
-                }
-                "model_error" -> readModelError(conversationId, item.seq)?.let { ModelTranscriptEntry.Error(item.seq, item.sortSeq, item.sortSub, it) }
-                "model_provider_output_items" -> readProviderOutput(conversationId, item.seq)?.let { ModelTranscriptEntry.ProviderOutput(item.seq, item.sortSeq, item.sortSub, it) }
-                "model_artifact" -> readModelArtifactBySeq(conversationId, item.seq)?.let { ModelTranscriptEntry.Artifact(item.seq, item.sortSeq, item.sortSub, it) }
-                else -> null
             }
-        }
-        val boundary = sql.query(
-            "SELECT c.seq,c.first_kept FROM compactions c JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
-                "WHERE c.conversation_id=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
-                "ON hi.conversation_id=m.conversation_id AND hi.seq=m.hidden_seq WHERE m.conversation_id=c.conversation_id " +
-                "AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
-                "(hi.sort_seq>ci.sort_seq OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub>ci.sort_sub) " +
-                "OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub=ci.sort_sub AND hi.seq>ci.seq))) " +
-                "ORDER BY ci.sort_seq DESC,ci.sort_sub DESC,ci.seq DESC LIMIT 1",
-            arrayOf(conversationId),
-        ).use { if (it.moveToFirst()) it.getLong(0) to it.getLong(1) else null }
-        val boundaryPosition = boundary?.let { value ->
-            sql.query("SELECT sort_seq,sort_sub,seq FROM conversation_items WHERE conversation_id=? AND seq=?",
-                arrayOf(conversationId, value.first)).use { c ->
-                if (c.moveToFirst()) Triple(c.getLong(0), c.getInt(1), c.getLong(2)) else null
+
+            val boundary = sql.query(
+                "SELECT c.seq,c.compaction_id,c.first_kept,ci.sort_seq,ci.sort_sub FROM compactions c " +
+                    "JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
+                    "WHERE c.conversation_id=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
+                    "ON hi.conversation_id=m.conversation_id AND hi.seq=m.hidden_seq WHERE m.conversation_id=c.conversation_id " +
+                    "AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
+                    "(hi.sort_seq>ci.sort_seq OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub>ci.sort_sub) " +
+                    "OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub=ci.sort_sub AND hi.seq>ci.seq))) " +
+                    "ORDER BY ci.sort_seq DESC,ci.sort_sub DESC,ci.seq DESC LIMIT 1",
+                arrayOf(conversationId),
+            ).use { c ->
+                if (c.moveToFirst()) CompactionBoundary(c.getLong(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)) else null
             }
-        }
-        val latestProviders = linkedMapOf<String, ModelProviderOutput>()
-        val providerRows = sql.query(
-            "SELECT p.*,i.sort_seq AS item_sort_seq,i.sort_sub AS item_sort_sub,i.seq AS item_seq " +
-                "FROM model_provider_outputs p JOIN conversation_items i ON i.conversation_id=p.conversation_id AND i.seq=p.seq " +
-                "WHERE p.conversation_id=? ORDER BY i.sort_seq,i.sort_sub,i.seq",
-            arrayOf(conversationId),
-        )
-        providerRows.use { c ->
-            while (c.moveToNext()) {
-                val provider = readProviderOutput(c)
-                if (boundary != null && provider.message_index < boundary.second) continue
+            val boundaryPosition = boundary?.let { Triple(it.sortSeq, it.sortSub, it.seq) }
+            val latestProviders = linkedMapOf<String, ModelProviderOutput>()
+            rows.asSequence().filter { it.kind == "model_provider_output_items" }.forEach { item ->
+                val provider = providers[item.seq] ?: return@forEach
+                if (boundary != null && provider.message_index < boundary.firstKept) return@forEach
                 if (boundary != null) {
-                    val providerPosition = Triple(c.getLong(c.getColumnIndexOrThrow("item_sort_seq")),
-                        c.getInt(c.getColumnIndexOrThrow("item_sort_sub")), c.getLong(c.getColumnIndexOrThrow("item_seq")))
                     val afterBoundary = boundaryPosition?.let { position ->
-                        providerPosition.first > position.first ||
-                            (providerPosition.first == position.first && providerPosition.second > position.second) ||
-                            (providerPosition.first == position.first && providerPosition.second == position.second && providerPosition.third >= position.third)
+                        item.sortSeq > position.first ||
+                            (item.sortSeq == position.first && item.sortSub > position.second) ||
+                            (item.sortSeq == position.first && item.sortSub == position.second && item.seq >= position.third)
                     } ?: false
-                    if (!afterBoundary) continue
+                    if (!afterBoundary) return@forEach
                 }
                 latestProviders[provider.owner_user_message_id] = provider
             }
+            val boundaryIndex = boundary?.let { value ->
+                legacyCompactionRowIndex(value.compactionId) ?: sql.query(
+                    "SELECT COUNT(*) FROM conversation_items i JOIN conversation_items boundary " +
+                        "ON boundary.conversation_id=i.conversation_id AND boundary.seq=? " +
+                        "WHERE i.conversation_id=? AND i.item_kind NOT IN " + eligibleTimelineExclusionSql() +
+                        " AND (i.sort_seq<boundary.sort_seq OR (i.sort_seq=boundary.sort_seq AND i.sort_sub<boundary.sort_sub) " +
+                        "OR (i.sort_seq=boundary.sort_seq AND i.sort_sub=boundary.sort_sub AND i.seq<boundary.seq))",
+                    arrayOf(value.seq, conversationId),
+                ).use { it.moveToFirst(); it.getLong(0) }
+            }
+            ModelTranscriptSnapshot(conversationId, events, latestProviders, boundary?.seq, boundaryIndex, boundary?.firstKept)
         }
-        val boundaryIndex = boundary?.let { (seq, _) ->
-            sql.query(
-                "SELECT COUNT(*) FROM conversation_items i JOIN conversation_items boundary " +
-                    "ON boundary.conversation_id=i.conversation_id AND boundary.seq=? " +
-                    "WHERE i.conversation_id=? AND i.item_kind NOT IN " + eligibleTimelineExclusionSql() +
-                    " AND (i.sort_seq<boundary.sort_seq OR (i.sort_seq=boundary.sort_seq AND i.sort_sub<boundary.sort_sub) " +
-                    "OR (i.sort_seq=boundary.sort_seq AND i.sort_sub=boundary.sort_sub AND i.seq<boundary.seq))",
-                arrayOf(seq, conversationId),
-            ).use { it.moveToFirst(); it.getLong(0) }
-        }
-        ModelTranscriptSnapshot(conversationId, events, latestProviders, boundary?.first, boundaryIndex, boundary?.second)
     }
 
     /**
      * Resolves a `tool_activity` batch by indexed execution/call history or newest matching call,
      * replacing `LocalRunStore.toolActivitySourceBatch` (`LocalRunStore.java:1925-1996`) without a ledger scan.
      */
-    suspend fun resolveActivitySourceBatch(conversationId: String, ownerUserMessageId: String?, executionId: String?, callId: String?): ToolBatchResolution = database.withChatReadTransaction {
-        resolveActivityBatch(conversationId, ownerUserMessageId, executionId, callId)
-    }
+    suspend fun resolveActivitySourceBatch(conversationId: String, ownerUserMessageId: String?, executionId: String?, callId: String?): ToolBatchResolution =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { resolveActivityBatch(conversationId, ownerUserMessageId, executionId, callId) }
+        }
 
     /** Indexed activity rows replacing the owner/execution grouping in `LocalRunStore.projectConversationTimeline` (`LocalRunStore.java:4275-4286`). */
-    suspend fun readToolActivities(conversationId: String, ownerUserMessageId: String, executionId: String): List<ToolActivity> = database.withChatReadTransaction {
-        sql.query("SELECT * FROM tool_activities WHERE conversation_id=? AND owner_user_message_id=? AND execution_id=? ORDER BY seq",
-            arrayOf(conversationId, ownerUserMessageId, executionId)).use { c -> buildList { while (c.moveToNext()) add(readToolActivity(c)) } }
-    }
+    suspend fun readToolActivities(conversationId: String, ownerUserMessageId: String, executionId: String): List<ToolActivity> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                sql.query("SELECT * FROM tool_activities WHERE conversation_id=? AND owner_user_message_id=? AND execution_id=? ORDER BY seq",
+                    arrayOf(conversationId, ownerUserMessageId, executionId)).use { c -> buildList { while (c.moveToNext()) add(readToolActivity(c)) } }
+            }
+        }
 
     /** Most recent batch for an owner, backed by `idx_tool_batches_owner`; replaces `LocalRunStore.readAssistantProgress` (`LocalRunStore.java:2803-2848`). */
-    suspend fun latestBatchForOwner(conversationId: String, ownerUserMessageId: String): ModelToolBatchSnapshot? = database.withChatReadTransaction {
-        val id = sql.query("SELECT batch_id FROM tool_batches WHERE conversation_id=? AND owner_user_message_id=? ORDER BY seq DESC LIMIT 1",
-            arrayOf(conversationId, ownerUserMessageId)).use { if (it.moveToFirst()) it.getString(0) else null }
-        id?.let { readBatchSnapshot(conversationId, it) }
-    }
+    suspend fun latestBatchForOwner(conversationId: String, ownerUserMessageId: String): ModelToolBatchSnapshot? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                val id = sql.query("SELECT batch_id FROM tool_batches WHERE conversation_id=? AND owner_user_message_id=? ORDER BY seq DESC LIMIT 1",
+                    arrayOf(conversationId, ownerUserMessageId)).use { if (it.moveToFirst()) it.getString(0) else null }
+                id?.let { readBatchSnapshot(conversationId, it) }
+            }
+        }
 
     /** Reads first-wins `model_tool_result` rows for an owner, replacing `MainChatTranscriptStore.restore` (`MainChatTranscriptStore.java:238-325`). */
-    suspend fun toolResultsForOwner(conversationId: String, ownerUserMessageId: String): List<ToolResult> = database.withChatReadTransaction {
-        sql.query("SELECT r.* FROM tool_results r JOIN tool_batches b ON b.conversation_id=r.conversation_id AND b.batch_id=r.batch_id " +
-            "WHERE r.conversation_id=? AND b.owner_user_message_id=? ORDER BY r.seq", arrayOf(conversationId, ownerUserMessageId)).use { c ->
-            buildList { while (c.moveToNext()) add(readToolResult(c)) }
+    suspend fun toolResultsForOwner(conversationId: String, ownerUserMessageId: String): List<ToolResult> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                sql.query("SELECT r.* FROM tool_results r JOIN tool_batches b ON b.conversation_id=r.conversation_id AND b.batch_id=r.batch_id " +
+                    "WHERE r.conversation_id=? AND b.owner_user_message_id=? ORDER BY r.seq", arrayOf(conversationId, ownerUserMessageId)).use { c ->
+                    buildList { while (c.moveToNext()) add(readToolResult(c)) }
+                }
+            }
         }
-    }
 
     /** Reads latest `tool_presentation` for `(batch,call)`, replacing timeline presentation projection in `LocalRunStore.projectConversationTimeline` (`LocalRunStore.java:4275-4286`). */
-    suspend fun latestToolPresentation(conversationId: String, batchId: String, callId: String): ToolPresentation? = database.withChatReadTransaction {
-        sql.query("SELECT * FROM tool_presentations WHERE conversation_id=? AND batch_id=? AND call_id=? ORDER BY seq DESC LIMIT 1",
-            arrayOf(conversationId, batchId, callId)).use { if (it.moveToFirst()) readToolPresentation(it) else null }
-    }
+    suspend fun latestToolPresentation(conversationId: String, batchId: String, callId: String): ToolPresentation? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                sql.query("SELECT * FROM tool_presentations WHERE conversation_id=? AND batch_id=? AND call_id=? ORDER BY seq DESC LIMIT 1",
+                    arrayOf(conversationId, batchId, callId)).use { if (it.moveToFirst()) readToolPresentation(it) else null }
+            }
+        }
 
     private fun resolveActivityBatch(conversationId: String, owner: String?, executionId: String?, callId: String?): ToolBatchResolution {
         if (owner.isNullOrEmpty() || callId.isNullOrEmpty()) return ToolBatchResolution(null, false)
@@ -517,13 +540,52 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         ).use { if (it.moveToFirst()) it.getString(0) else null }
     }
 
-    private fun readBatchSnapshot(conversationId: String, batchId: String): ModelToolBatchSnapshot? {
-        val batch = readBatch(conversationId, batchId) ?: return null
-        val calls = readCalls(conversationId, batchId).map { call ->
-            val result = readToolResult(conversationId, batchId, call.call_id)
-            ModelCallState(call, result)
+    private fun readBatchSnapshot(conversationId: String, batchId: String): ModelToolBatchSnapshot? =
+        loadBatchSnapshots(conversationId, listOf(batchId))[batchId]
+
+    /** Loads batch headers, calls, and first-wins results in one query per table and SQLite-sized ID chunk. */
+    private fun loadBatchSnapshots(conversationId: String, batchIds: Collection<String>): Map<String, ModelToolBatchSnapshot> {
+        val distinctIds = batchIds.distinct()
+        if (distinctIds.isEmpty()) return emptyMap()
+        val batches = linkedMapOf<String, ToolBatch>()
+        val calls = linkedMapOf<String, MutableList<ToolCall>>()
+        val results = mutableMapOf<Pair<String, String>, ToolResult>()
+        distinctIds.chunked(MAX_IN_QUERY_IDS).forEach { ids ->
+            val inClause = ids.joinToString(",") { "?" }
+            val args = arrayOf<Any?>(conversationId, *ids.toTypedArray())
+            sql.query("SELECT * FROM tool_batches WHERE conversation_id=? AND batch_id IN ($inClause)", args).use { c ->
+                while (c.moveToNext()) readBatch(c).also { batches[it.batch_id] = it }
+            }
+            sql.query("SELECT * FROM tool_calls WHERE conversation_id=? AND batch_id IN ($inClause) ORDER BY batch_id,ordinal", args).use { c ->
+                while (c.moveToNext()) readCall(c).also { calls.getOrPut(it.batch_id) { mutableListOf() }.add(it) }
+            }
+            sql.query("SELECT * FROM tool_results WHERE conversation_id=? AND batch_id IN ($inClause)", args).use { c ->
+                while (c.moveToNext()) readToolResult(c).also { results[it.batch_id to it.call_id] = it }
+            }
         }
-        return ModelToolBatchSnapshot(batch, calls, batch.calls_decode_error == null && calls.isNotEmpty() && calls.all { it.result != null })
+        return batches.mapValues { (batchId, batch) ->
+            val states = calls[batchId].orEmpty().map { call -> ModelCallState(call, results[batchId to call.call_id]) }
+            ModelToolBatchSnapshot(batch, states, batch.calls_decode_error == null && states.isNotEmpty() && states.all { it.result != null })
+        }
+    }
+
+    private fun <T> loadRowsBySeq(
+        conversationId: String,
+        sequences: Collection<Long>,
+        table: String,
+        read: (android.database.Cursor) -> T,
+    ): Map<Long, T> {
+        val distinctSequences = sequences.distinct()
+        if (distinctSequences.isEmpty()) return emptyMap()
+        val rows = linkedMapOf<Long, T>()
+        distinctSequences.chunked(MAX_IN_QUERY_IDS).forEach { ids ->
+            val inClause = ids.joinToString(",") { "?" }
+            val args = arrayOf<Any?>(conversationId, *ids.map { it as Any? }.toTypedArray())
+            sql.query("SELECT * FROM $table WHERE conversation_id=? AND seq IN ($inClause)", args).use { c ->
+                while (c.moveToNext()) rows[c.getLong(c.getColumnIndexOrThrow("seq"))] = read(c)
+            }
+        }
+        return rows
     }
 
     private fun readBatch(conversationId: String, batchId: String): ToolBatch? = sql.query(
@@ -583,14 +645,18 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     private fun readModelArtifact(c: android.database.Cursor) = ModelArtifact(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getLong(5), c.getLong(6), c.getStringOrNullM1b("file_ref_id"))
 
     private fun ensureFileRef(relativePath: String, sha256: String, bytes: Long, mimeType: String, nowMillis: Long): String {
-        val id = sql.query("SELECT id FROM file_refs WHERE relative_path=?", arrayOf(relativePath)).use { if (it.moveToFirst()) it.getString(0) else null }
-        if (id != null) {
-            val sameContent = sql.query("SELECT sha256,bytes FROM file_refs WHERE id=?", arrayOf(id)).use { c ->
-                c.moveToFirst() && c.getString(0) == sha256 && c.getLong(1) == bytes
-            }
-            if (!sameContent) throw M1bAbort("file_reference_content_conflict")
-            sql.execSQL("UPDATE file_refs SET sha256=?,bytes=?,mime_type=?,last_referenced_at=?,not_before=NULL,attempts=0,generation=generation+1 WHERE id=?",
-                arrayOf(sha256, bytes, mimeType, nowMillis, id))
+        val existing = sql.query("SELECT id,sha256,bytes FROM file_refs WHERE relative_path=?", arrayOf(relativePath)).use { c ->
+            if (c.moveToFirst()) Triple(c.getString(0), c.getString(1).orEmpty(), c.getLong(2)) else null
+        }
+        if (existing != null) {
+            val (id, storedSha256, storedBytes) = existing
+            if (storedBytes != bytes || (storedSha256.isNotEmpty() && sha256.isNotEmpty() && storedSha256 != sha256))
+                throw M1bAbort("file_reference_content_conflict")
+            // Empty means the existing owner did not know the digest; preserve a known digest or
+            // complete the unknown value when this artifact supplies one.
+            val resolvedSha256 = if (storedSha256.isEmpty()) sha256 else storedSha256
+            sql.execSQL("UPDATE file_refs SET sha256=?,mime_type=?,last_referenced_at=?,not_before=NULL,attempts=0,generation=generation+1 WHERE id=?",
+                arrayOf(resolvedSha256, mimeType, nowMillis, id))
             return id
         }
         val created = UUID.randomUUID().toString()
@@ -626,6 +692,13 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         it.getStringOrNullM1b("batch_id"), it.getStringOrNullM1b("call_id"), it.getString(5), it.getString(6), it.getString(7), it.getString(8), it.getDouble(9)) else null }
 
     private data class SpineEntry(val seq: Long, val kind: String, val key: String, val sortSeq: Long, val sortSub: Int)
+    private data class CompactionBoundary(
+        val seq: Long,
+        val compactionId: String,
+        val firstKept: Long,
+        val sortSeq: Long,
+        val sortSub: Int,
+    )
 
     private fun isUuid(value: String): Boolean = runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)
 
@@ -644,6 +717,14 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     companion object {
         private const val INLINE_TOOL_OUTPUT_CHARS = 8_000
         private const val MAX_MODEL_ARTIFACT_BYTES = 16L * 1024L * 1024L
+        /** Keep the conversation bind plus the IN values under SQLite's conservative variable limit. */
+        private const val MAX_IN_QUERY_IDS = 900
+
+        private fun legacyCompactionRowIndex(compactionId: String): Long? {
+            if (!compactionId.startsWith("legacy-")) return null
+            val rowIndex = compactionId.substringAfterLast('-', missingDelimiterValue = "")
+            return rowIndex.toLongOrNull()?.takeIf { it >= 0L }
+        }
 
         /** Result-only strict-journal rows never contribute to the filtered legacy rowIndex. */
         private fun eligibleTimelineExclusionSql() = "('crew_result_evidence','workspace_result_reference','workspace_result_notice','crew_coordination_evidence','crew_coordination_evidence_ref','workspace_coordination_reference','workspace_coordination_notice','workspace_coordination_reply_intent','workspace_coordination_reply_state','workspace_input_incorporation')"

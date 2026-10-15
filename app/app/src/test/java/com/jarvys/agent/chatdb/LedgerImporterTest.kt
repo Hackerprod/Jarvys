@@ -236,20 +236,57 @@ class LedgerImporterTest {
         ).use { it.moveToFirst(); it.getString(0) })
     }
 
-    @Test fun legacyCompactionIdentityIncludesExactTimestampTokenAndFilteredRowIndex() = onDatabaseThread {
+    @Test fun legacyCompactionIdentityCountsLegacyRowsRatherThanSpineItems() = onDatabaseThread {
+        val workspaceId = "42345678-1234-1234-1234-123456789abc"
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val evidence = CrewResultEvidence.create(
+            sessionId,
+            "52345678-1234-1234-1234-123456789abc",
+            "bot-compaction",
+            "62345678-1234-1234-1234-123456789abc",
+            "DONE",
+            "strict result excluded from legacy conversation rows",
+            1_700_000_000_125L,
+        )
         val ledger = File(temporary.root, "compaction-identity.jsonl").apply {
             writeText(
-                """{"role":"user","content":"u","messageId":"u","timestamp":1.0}""" + "\n" +
-                    """{"role":"assistant","content":"a","messageId":"a","timestamp":2.0}""" + "\n" +
-                    """{"type":"compaction","summary":"s","firstKept":0,"summarizedMessages":1,"timestamp":123.5}""" + "\n",
+                listOf(
+                    jsonRow(null, "user", "content" to "u", "messageId" to "u", "timestamp" to 1.0),
+                    jsonRow("session_title", "content" to "title", "timestamp" to 1.5),
+                    jsonRow("main_chat_input_resolved", "messageIds" to JSONArray().put("u"), "timestamp" to 2.0),
+                    evidence.toJson(),
+                    jsonRow("compaction", "summary" to "s", "firstKept" to 0, "summarizedMessages" to 1, "timestamp" to 123.5),
+                ).joinToString(separator = "\n", postfix = "\n") { it.toString() },
                 StandardCharsets.UTF_8,
             )
         }
-        val report = importer().importConversation("compaction-identity", ledger, writeMeta("compaction-identity.meta.json"))
+        val report = importer().importConversation(sessionId, ledger, writeMeta("compaction-identity.meta.json"))
         assertEquals("done", report.state)
-        assertEquals("legacy-123.5-2", database.testChatSql.query(
-            "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf("compaction-identity"),
+        // Legacy readConversationRows counts user, session_title, and the whole input marker once;
+        // strict evidence is result-only. Room's spine has no session_title row, so its item count
+        // cannot be used as this legacy identity's index.
+        assertEquals("legacy-123.5-3", database.testChatSql.query(
+            "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(sessionId),
         ).use { assertTrue(it.moveToFirst()); it.getString(0) })
+        assertEquals("resolved", database.testChatSql.query(
+            "SELECT input_state FROM messages WHERE conversation_id=? AND message_id='u'", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) })
+    }
+
+    @Test fun importWithoutMetadataUsesDefaultConversationMetadata() = onDatabaseThread {
+        val sessionId = "no-metadata-chat"
+        val ledger = writeLedger(sessionId, listOf(jsonRow(null, "user", "content" to "hello", "messageId" to "no-meta-user")))
+        val absentMetadata = File(temporary.root, "$sessionId.meta.json")
+        assertFalse(absentMetadata.exists())
+
+        val report = importer().importConversation(sessionId, ledger, absentMetadata)
+        assertEquals("done", report.state)
+        assertEquals(listOf(null, 0, 0, 0), database.testChatSql.query(
+            "SELECT title,pinned,archived,private_code FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            listOf(if (cursor.isNull(0)) null else cursor.getString(0), cursor.getInt(1), cursor.getInt(2), cursor.getInt(3))
+        })
     }
 
     @Test fun strictCrewResultPreservesUnpairedUtf16CodeUnitsInBlob() = onDatabaseThread {
@@ -424,7 +461,6 @@ class LedgerImporterTest {
         val ledger = writeLedger("interrupted-reader", (1..40).map { jsonRow(null, "user", "content" to "row-$it", "messageId" to "i-$it") })
         val meta = writeMeta("interrupted-reader.meta.json")
         val result = databaseExecutor.submit<Pair<ImportReport, Long>> {
-            Thread.currentThread().interrupt()
             val interruptedDuringStreaming = AtomicBoolean(false)
             try {
                 val report = runBlocking {

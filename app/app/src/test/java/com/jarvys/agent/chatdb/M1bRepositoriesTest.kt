@@ -1,6 +1,8 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.workspaces.WorkspaceIdentity
@@ -20,12 +22,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.rules.TemporaryFolder
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -77,9 +83,6 @@ class M1bRepositoriesTest {
             conversationId = "protocol", batchId = completeId, ownerUserMessageId = owner, messageIndex = 0,
             assistantText = "checking", calls = listOf(ModelCallInput("complete-call", "reader", "{\"path\":\"one\"}")),
         )))
-        assertTrue(model.appendToolResult(ModelToolResultInput(
-            "protocol", completeId, "complete-call", "other-tool", "RESULT", "must conflict",
-        )) is ChatDbResult.Conflict)
         val first = success(model.appendToolResult(ModelToolResultInput(
             "protocol", completeId, "complete-call", "reader", "RESULT", "first result", artifactId = modelArtifact.artifact_id,
         )))!!
@@ -163,6 +166,98 @@ class M1bRepositoriesTest {
             arrayOf("protocol", owner, "execution-1", "incomplete-call"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("detail"))) } }.joinToString(" ")
         assertTrue(plan.contains("idx_tool_activities_execution_call"))
+    }
+
+    @Test fun mismatchedFirstToolResultIsRetainedForLegacyRestorePlaceholder() = onDatabaseThread {
+        success(conversations.ensureConversation("first-result"))
+        val owner = success(conversations.appendMessage(AppendMessageInput(
+            conversationId = "first-result", role = "user", parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "run tool")),
+        ))).messageId
+        val batchId = UUID.randomUUID().toString()
+        success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = "first-result", batchId = batchId, ownerUserMessageId = owner, messageIndex = 0,
+            assistantText = "call", calls = listOf(ModelCallInput("call-1", "expected-tool", "{}")),
+        )))
+
+        val first = success(model.appendToolResult(ModelToolResultInput(
+            "first-result", batchId, "call-1", "different-tool", "RESULT", "legacy payload",
+        )))!!
+        val later = success(model.appendToolResult(ModelToolResultInput(
+            "first-result", batchId, "call-1", "expected-tool", "RESULT", "later payload",
+        )))!!
+        assertEquals("first result row is retained even when legacy toolName mismatches", first, later)
+        assertEquals("different-tool", later.tool_name)
+        assertEquals("legacy payload", later.output)
+
+        val transcript = model.readModelTranscript("first-result")
+        val restoredCall = transcript.entries.filterIsInstance<ModelTranscriptEntry.Batch>().single()
+            .value.calls.single()
+        assertEquals("expected-tool", restoredCall.call.name)
+        assertEquals("different-tool", restoredCall.result?.tool_name)
+    }
+
+    @Test fun unknownAttachmentDigestCanBeCompletedByOwnedArtifact() = onDatabaseThread {
+        success(conversations.ensureConversation("digest-shared"))
+        val relativePath = "chats/digest-shared/shared.bin"
+        val message = success(conversations.appendMessage(AppendMessageInput(
+            conversationId = "digest-shared",
+            role = "user",
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "attached file")),
+            attachments = listOf(MessageAttachmentInput(
+                attachmentId = "attachment-unknown-digest", name = "shared.bin", mimeType = "application/octet-stream",
+                sizeBytes = 4L, kind = "document", relativePath = relativePath, sha256 = null,
+            )),
+        )))
+        val attachmentFileRef = database.testChatSql.query(
+            "SELECT file_ref_id FROM message_attachments WHERE conversation_id=? AND message_id=?",
+            arrayOf("digest-shared", message.messageId),
+        ).use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getString(0) }
+
+        val knownDigest = "f".repeat(64)
+        val artifact = success(model.appendModelArtifact(
+            "digest-shared", "shared-model-artifact", relativePath, knownDigest, chars = 4L, bytes = 4L,
+        ))
+        assertEquals("unknown and known owners share one path identity", attachmentFileRef, artifact.file_ref_id)
+        assertEquals(knownDigest, database.testChatSql.query(
+            "SELECT sha256 FROM file_refs WHERE id=?", arrayOf(attachmentFileRef),
+        ).use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getString(0) })
+
+        assertTrue("a conflicting known digest is rejected", model.appendModelArtifact(
+            "digest-shared", "shared-model-artifact-conflict", relativePath, "e".repeat(64), chars = 4L, bytes = 4L,
+        ) is ChatDbResult.Conflict)
+    }
+
+    @Test fun suspendReadsAcrossM1bRepositoriesDispatchSqlOffTheMainLooper() = onDatabaseThread {
+        success(conversations.ensureConversation("repository-main-read"))
+        val executionSession = WorkspaceIdentity.executionSessionId("a1234567-b123-c123-d123-e123456789ab")
+        success(conversations.ensureConversation(executionSession, "workspace_exec"))
+        val strict = StrictJournalRepository(database)
+        val sqlRanOnMain = AtomicBoolean(false)
+        val failure = AtomicReference<Throwable?>()
+        val finished = CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            try {
+                runBlocking {
+                    ChatSqlInstrumentation.observeStatements({
+                        if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
+                    }) {
+                        conversations.messageCounts("repository-main-read")
+                        model.readModelTranscript("repository-main-read")
+                        memory.pendingCompactionIds("repository-main-read")
+                        artifacts.artifactsForConversation("repository-main-read")
+                        success(strict.readCrewResultEvidence(executionSession, UUID.randomUUID().toString()))
+                    }
+                }
+            } catch (caught: Throwable) {
+                failure.set(caught)
+            } finally {
+                finished.countDown()
+            }
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("all repository reads complete when invoked from the main looper", finished.await(5, TimeUnit.SECONDS))
+        assertNull("repository reads do not fail when invoked from the main looper", failure.get())
+        assertFalse("SQL for Conversation, ModelTranscript, MemoryTimeline, Artifacts, and StrictJournal runs off-main", sqlRanOnMain.get())
     }
 
     @Test fun providerOutputsAreLastWinsWhenNoCompactionBoundaryExists() = onDatabaseThread {

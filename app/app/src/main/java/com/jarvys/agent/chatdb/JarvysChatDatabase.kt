@@ -155,6 +155,7 @@ internal object JarvysChatDatabaseProvider {
 
     private val isolatedExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
     private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
+    private val databaseFiles = IdentityHashMap<JarvysChatDatabase, File>()
 
     /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
@@ -177,6 +178,7 @@ internal object JarvysChatDatabaseProvider {
                 throw error
             }
             opened.also {
+                synchronized(databaseFiles) { databaseFiles[it] = databaseFile }
                 synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
                 instance = it
             }
@@ -196,6 +198,7 @@ internal object JarvysChatDatabaseProvider {
                 kotlinx.coroutines.runBlocking { database.useWriterConnection { } }
                 synchronized(isolatedExecutors) { isolatedExecutors[database] = executorSet }
                 synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
+            synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
             }
         } catch (error: Throwable) {
             executorSet.forEach(ExecutorService::shutdown)
@@ -208,15 +211,23 @@ internal object JarvysChatDatabaseProvider {
         database.close()
         val executors = synchronized(isolatedExecutors) { isolatedExecutors.remove(database) }.orEmpty()
         synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
+        synchronized(databaseFiles) { databaseFiles.remove(database) }
         executors.forEach(ExecutorService::shutdown)
     }
 
+    /** Physical file for the narrow rawQuery fallback used by Android for row-returning EXPLAIN. */
+    internal fun databaseFileForRawQuery(database: JarvysChatDatabase): File =
+        synchronized(databaseFiles) { databaseFiles[database] }
+            ?: throw IllegalStateException("No database file is registered for the chat database")
+
     /** Runs a read projection on the query pool belonging to this exact Room database instance. */
-    internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T =
-        withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
+    internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T {
+        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+        return withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
             ?: throw IllegalStateException("No Jarvys chat query executor is registered for this database")) {
             operation()
         }
+    }
 
     private fun buildDatabase(
         context: Context,

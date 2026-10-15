@@ -1,13 +1,14 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.sqlite.driver.AndroidSQLiteDriver
+import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.runBlocking
+import com.jarvys.agent.crew.CrewBotSnapshot
+import com.jarvys.agent.crew.CrewMessage
+import com.jarvys.agent.crew.CrewMissionSnapshot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -320,26 +321,32 @@ class ConversationRepositoryTest {
             "SELECT option_id,label FROM user_decision_options WHERE conversation_id=? AND decision_id=? ORDER BY ordinal",
             arrayOf("decisions", "choice"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
-        assertEquals("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <options> to equal <listOf(\"yes\" to \"Yes\", \"no\" to \"No\")>", listOf("yes" to "Yes", "no" to "No"), options)
+        assertEquals("decision options preserve their ordinal order", listOf("yes" to "Yes", "no" to "No"), options)
         val firstResolution = success(repository.resolveDecision("decisions", "choice", "selected", "yes", "Yes"))
         val lastResolution = success(repository.resolveDecision("decisions", "choice", "dismissed", null, null))
-        assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <lastResolution > firstResolution> to be true", lastResolution > firstResolution)
+        assertTrue("each resolution receives a later ledger sequence", lastResolution > firstResolution)
 
         val reopenedSeq = success(repository.appendDecisionRequest(
             "decisions", "choice", "Choose again", "Retry", false, listOf(DecisionOptionInput("retry", "Retry")),
         ))
-        assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <reopenedSeq > lastResolution> to be true", reopenedSeq > lastResolution)
-        assertTrue("a legacy resolution append does not require an existing request row", success(repository.resolveDecision("decisions", "orphan-choice", "dismissed", null, null)) > reopenedSeq)
+        assertTrue("reopening a decision appends after its prior resolution", reopenedSeq > lastResolution)
+        assertTrue("resolving a nonexistent decision fails closed", repository.resolveDecision("decisions", "orphan-choice", "dismissed", null, null) is ChatDbResult.NotFound)
+        assertEquals("rejected resolutions do not consume a sequence", reopenedSeq + 1L,
+            database.testChatSql.query("SELECT next_seq FROM conversations WHERE id='decisions'").use { c -> assertTrue(c.moveToFirst()); c.getLong(0) })
+        success(repository.ensureConversation("deleted-decision"))
+        success(repository.appendDecisionRequest("deleted-decision", "choice", "Choose", "Pick", true, emptyList()))
+        success(repository.deleteConversation("deleted-decision"))
+        assertTrue("tombstoned conversations reject decision resolution", repository.resolveDecision("deleted-decision", "choice", "dismissed", null, null) is ChatDbResult.Tombstoned)
         val row = database.testChatSql.query(
             "SELECT seq,title,status,option_id,resolved_seq FROM user_decisions WHERE conversation_id=? AND decision_id=?",
             arrayOf("decisions", "choice"),
-        ).use { c -> assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <c.moveToFirst()> to be true", c.moveToFirst()); listOf(c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), if (c.isNull(3)) null else c.getString(3), if (c.isNull(4)) null else c.getLong(4)) }
-        assertEquals("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <row[0]> to equal <reopenedSeq>", reopenedSeq, row[0])
-        assertEquals("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <row[1]> to equal <\"Choose again\">", "Choose again", row[1])
-        assertNull("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <row[2]> to be null", row[2])
-        assertNull("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <row[3]> to be null", row[3])
-        assertNull("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <row[4]> to be null", row[4])
-        assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <repository.appendDecisionRequest(\"missing\", \"choice\", \"\", \"\", false, emptyList()) is Ch...> to be true", repository.appendDecisionRequest("missing", "choice", "", "", false, emptyList()) is ChatDbResult.NotFound)
+        ).use { c -> assertTrue("the reopened decision row is present", c.moveToFirst()); listOf(c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), if (c.isNull(3)) null else c.getString(3), if (c.isNull(4)) null else c.getLong(4)) }
+        assertEquals("the reopened request becomes the active decision row", reopenedSeq, row[0])
+        assertEquals("the latest decision prompt is retained", "Choose again", row[1])
+        assertNull("reopening clears the prior decision status", row[2])
+        assertNull("reopening clears the prior selected option", row[3])
+        assertNull("reopening clears the prior resolution sequence", row[4])
+        assertTrue("a decision request cannot be appended to a missing conversation", repository.appendDecisionRequest("missing", "choice", "", "", false, emptyList()) is ChatDbResult.NotFound)
     }
 
     @Test fun snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap() = onDatabaseThread {
@@ -452,6 +459,34 @@ class ConversationRepositoryTest {
             ).use { c -> c.moveToFirst(); c.getString(0) }
             assertEquals("file references retain attachment MIME", attachment.mimeType, fileMime)
         }
+    }
+
+    @Test fun unknownAttachmentDigestCanBeCompletedButConflictingFileContentIsRejected() = onDatabaseThread {
+        success(repository.ensureConversation("attachment-digest"))
+        val path = "attachment-digest/shared.bin"
+        success(repository.appendMessage(AppendMessageInput(
+            conversationId = "attachment-digest", role = "user",
+            attachments = listOf(MessageAttachmentInput("unknown-digest", "shared.bin", "application/octet-stream", 23, "document", path)),
+        )))
+        val artifacts = ConversationArtifactsRepository(database)
+        val knownDigest = "known-content-sha256"
+        success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+            conversationId = "attachment-digest", artifactId = "same-file", name = "shared.bin",
+            mimeType = "application/octet-stream", sizeBytes = 23, kind = "document", relativePath = path, sha256 = knownDigest,
+        )))
+        val resolvedRef = database.testChatSql.query(
+            "SELECT sha256,bytes FROM file_refs WHERE relative_path=?", arrayOf(path),
+        ).use { c -> assertTrue("the shared file reference remains present", c.moveToFirst()); c.getString(0) to c.getLong(1) }
+        assertEquals("a later known digest fills the earlier unknown digest", knownDigest, resolvedRef.first)
+        assertEquals("byte count remains the original content size", 23L, resolvedRef.second)
+
+        val conflict = artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+            conversationId = "attachment-digest", artifactId = "different-file", name = "shared.bin",
+            mimeType = "application/octet-stream", sizeBytes = 23, kind = "document", relativePath = path, sha256 = "different-content-sha256",
+        ))
+        assertEquals("same-path file owners with different known digests conflict", ChatDbResult.Conflict("file_reference_content_conflict"), conflict)
+        assertEquals("the conflicting owner cannot replace the stored digest", knownDigest,
+            database.testChatSql.query("SELECT sha256 FROM file_refs WHERE relative_path=?", arrayOf(path)).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
     }
 
     @Test fun hotReadQueryPlansUseConversationIndexesWithoutAvoidableSorts() = onDatabaseThread {
@@ -587,10 +622,18 @@ class ConversationRepositoryTest {
         val insertPattern = Regex("""(?is)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)""")
         val insertIntoPattern = Regex("""(?i)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b""")
         val concatBoundary = Regex("\"\\s*\\+\\s*\"")
+        // Importer preflight tables are runtime staging tables created by the importer; they are
+        // not part of the exported Room schema checked by this audit.
+        val importerStagingTables = setOf(
+            "chatdb_import_rows", "chatdb_import_issues", "chatdb_import_unknown_types",
+            "chatdb_import_messages", "chatdb_import_compactions", "chatdb_import_crews",
+            "chatdb_import_hidden", "chatdb_import_translations", "chatdb_import_translation_hidden",
+        )
         val db = database.testChatSql
         val sourceFiles = sourceDirectory!!.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue("the chatdb package must have Kotlin production files", sourceFiles.isNotEmpty())
         var auditedInsertCount = 0
+        var auditedRealTableInsertCount = 0
         sourceFiles.forEach { sourceFile ->
             // Join adjacent Kotlin string literals while preserving line numbers, so INSERT SQL
             // split for formatting and Room @Query literals are audited as executable SQL.
@@ -631,6 +674,12 @@ class ConversationRepositoryTest {
                 )
                 val insertedColumns = insertedColumnList.toSet()
                 assertEquals("${sourceFile.name}:$line INSERT INTO $table must not repeat explicit columns", insertedColumnList.size, insertedColumns.size)
+                if (table in importerStagingTables) {
+                    // The SQL shape is still audited above; runtime staging tables are outside the
+                    // exported Room schema, so they have no schema table to inspect here.
+                    auditedInsertCount++
+                    return@forEach
+                }
                 val tableInfo = db.query("PRAGMA table_info($table)").use { cursor ->
                     buildList {
                         while (cursor.moveToNext()) add(
@@ -659,9 +708,11 @@ class ConversationRepositoryTest {
                 val missingColumns = requiredColumns - insertedColumns
                 assertTrue("${sourceFile.name}:$line INSERT INTO $table omits required columns $missingColumns", missingColumns.isEmpty())
                 auditedInsertCount++
+                auditedRealTableInsertCount++
             }
         }
         assertTrue("raw INSERT audit must cover repository and Daos.kt @Query statements", auditedInsertCount > 0)
+        assertTrue("raw INSERT audit must continue validating real application tables", auditedRealTableInsertCount > 0)
     }
 
     @Test fun insertSelectProjectionAuditIgnoresNestedClausesAndQuotedCommas() {
@@ -782,75 +833,49 @@ class ConversationRepositoryTest {
         return -1
     }
 
-    @Test fun multiMessageHydrationUsesOneChildUnionQuery() {
-        val countedFile = File(temporary.root, "query-count.db")
-        val queryExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "chatdb-counted-query").apply { isDaemon = true } }
-        val transactionExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "chatdb-counted-transaction").apply { isDaemon = true } }
-        val callbackExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "chatdb-query-callback").apply { isDaemon = true } }
-        val childQueryCount = AtomicInteger()
-        val countedDatabase = Room.databaseBuilder(context, JarvysChatDatabase::class.java, countedFile.absolutePath)
-            .setDriver(AndroidSQLiteDriver())
-            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .setQueryExecutor(queryExecutor)
-            .setTransactionExecutor(transactionExecutor)
-            .setQueryCallback(RoomDatabase.QueryCallback { query, _ ->
-                if (query.contains("SELECT 'part' AS type")) childQueryCount.incrementAndGet()
-            }, callbackExecutor)
-            .addMigrations(*Migrations.ALL)
-            .addCallback(JarvysChatDatabaseProvider.connectionPragmasCallback())
-            .build()
-        try {
-            val countedRepository = ConversationRepository(countedDatabase)
-            onDatabaseThread {
-                success(countedRepository.ensureConversation("query-count"))
-                val rows = (0 until 4).map { index ->
-                    success(countedRepository.appendMessage(AppendMessageInput(
-                        conversationId = "query-count", role = "user",
-                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "body-$index")),
-                    )))
-                }
-                callbackExecutor.submit {}.get(10, TimeUnit.SECONDS)
-                childQueryCount.set(0)
-                val loaded = countedRepository.getMessagesByIds("query-count", rows.map { it.messageId })
-                callbackExecutor.submit {}.get(10, TimeUnit.SECONDS)
-                assertEquals("multiMessageHydrationUsesOneChildUnionQuery: expected <loaded.size> to equal <4>", 4, loaded.size)
-                assertEquals("multiMessageHydrationUsesOneChildUnionQuery: expected <childQueryCount.get()> to equal <1>", 1, childQueryCount.get())
-            }
-        } finally {
-            countedDatabase.close()
-            queryExecutor.shutdownNow()
-            transactionExecutor.shutdownNow()
-            callbackExecutor.shutdownNow()
+    @Test fun multiMessageHydrationUsesOneChildUnionQuery() = onDatabaseThread {
+        success(repository.ensureConversation("query-count"))
+        val rows = (0 until 4).map { index ->
+            success(repository.appendMessage(AppendMessageInput(
+                conversationId = "query-count", role = "user",
+                parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "body-$index")),
+            )))
         }
+        val childQueryCount = AtomicInteger()
+        val loaded = ChatSqlInstrumentation.observeStatements({ statement ->
+            if (statement.contains("SELECT 'part' AS type")) childQueryCount.incrementAndGet()
+        }) { repository.getMessagesByIds("query-count", rows.map { it.messageId }) }
+        assertEquals("all requested messages are hydrated", 4, loaded.size)
+        assertEquals("message children use one UNION query for the requested batch", 1, childQueryCount.get())
     }
 
     @Test fun inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive() = onDatabaseThread {
         success(repository.ensureConversation("input-state"))
         val first = success(repository.appendInterruptRequest("input-state", "first", listOf("skill-a")))
         val second = success(repository.appendInterruptRequest("input-state", "second", listOf("skill-b")))
-        assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <repository.pendingInterruptRequests(\"input-state\").flatMap { it.skills }> to equal <listOf(\"skill-a\", \"skill-b\")>", listOf("skill-a", "skill-b"), repository.pendingInterruptRequests("input-state").flatMap { it.skills })
+        assertEquals("both requests retain their ordered skill lists", listOf("skill-a", "skill-b"), repository.pendingInterruptRequests("input-state").flatMap { it.skills })
 
         assertTrue("requests without dispatched user rows cannot be incorporated", success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_INCORPORATED)).isEmpty())
         success(repository.dispatchInterruptRequest("input-state", first.requestId))
         success(repository.dispatchInterruptRequest("input-state", second.requestId))
         val marked = success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_INCORPORATED))
-        assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <marked> to equal <listOf(first.requestId, second.requestId)>", listOf(first.requestId, second.requestId), marked)
+        assertEquals("both dispatched receipts are incorporated", listOf(first.requestId, second.requestId), marked)
         val values = database.testChatSql.query(
             "SELECT request_id,input_state,input_state_seq FROM interrupt_requests WHERE conversation_id=? ORDER BY seq", arrayOf("input-state"),
         ).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getString(0), c.getString(1), c.getLong(2))) } }
-        assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <values.map { it.third }.distinct().size> to equal <2>", 2, values.map { it.third }.distinct().size)
+        assertEquals("each receipt gets its own input-state sequence", 2, values.map { it.third }.distinct().size)
         values.forEach { (requestId, state, markerSeq) ->
-            assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <state> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, state)
+            assertEquals("the request stores the incorporated input state", ConversationRepository.INPUT_INCORPORATED, state)
             val marker = database.testChatSql.query(
                 "SELECT item_kind FROM conversation_items WHERE conversation_id=? AND seq=?", arrayOf("input-state", markerSeq),
-            ).use { c -> assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <c.moveToFirst()> to be true", c.moveToFirst()); c.getString(0) }
-            assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <marker> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, marker)
-            assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <requestId == first.requestId || requestId == second.requestId> to be true", requestId == first.requestId || requestId == second.requestId)
+            ).use { c -> assertTrue("each input-state marker has a spine row", c.moveToFirst()); c.getString(0) }
+            assertEquals("ledger marker records the imported input-state row kind", "main_chat_input_incorporated", marker)
+            assertTrue("the marker belongs to one of the requested receipts", requestId == first.requestId || requestId == second.requestId)
         }
-        assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <success(repository.markInputState(\"input-state\", listOf(first.requestId, second.request...> to be true", success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_RESOLVED)).isEmpty())
-        assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <repository.dispatchInterruptRequest(\"input-state\", first.requestId) is ChatDbResult.Suc...> to be true", repository.dispatchInterruptRequest("input-state", first.requestId) is ChatDbResult.Success)
+        assertTrue("resolved state cannot be applied until a receipt has a dispatched message", success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_RESOLVED)).isEmpty())
+        assertTrue("dispatching the first receipt succeeds", repository.dispatchInterruptRequest("input-state", first.requestId) is ChatDbResult.Success)
         val dispatched = success(repository.dispatchInterruptRequest("input-state", second.requestId)).message
-        assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <dispatched.inputState> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, dispatched.inputState)
+        assertEquals("the dispatched user message keeps its incorporated state", ConversationRepository.INPUT_INCORPORATED, dispatched.inputState)
     }
 
     @Test fun pendingInterruptRecoveryIncludesDispatchedAcknowledgementsAndExcludesResolvedRequests() = onDatabaseThread {
@@ -871,6 +896,117 @@ class ConversationRepositoryTest {
         assertEquals(listOf(dispatchedRequest.requestId), repository.pendingInterruptRequests("pending-recovery").map { it.requestId })
         success(repository.markInputState("pending-recovery", listOf(dispatchedRequest.requestId), ConversationRepository.INPUT_RESOLVED))
         assertTrue(repository.pendingInterruptRequests("pending-recovery").isEmpty())
+    }
+
+    @Test fun resolvedAndAcknowledgedInterruptsStayExcludedAfterDatabaseReopen() = onDatabaseThread {
+        success(repository.ensureConversation("interrupt-reopen"))
+        val resolved = success(repository.appendInterruptRequest("interrupt-reopen", "resolved before dispatch"))
+        success(repository.markInputState("interrupt-reopen", listOf(resolved.requestId), ConversationRepository.INPUT_RESOLVED))
+
+        val acknowledged = success(repository.appendInterruptRequest("interrupt-reopen", "acknowledged steering"))
+        success(repository.dispatchInterruptRequest("interrupt-reopen", acknowledged.requestId))
+        success(repository.markInputState("interrupt-reopen", listOf(acknowledged.requestId), ConversationRepository.INPUT_INCORPORATED))
+
+        val beforeReopen = MemoryTimelineRepository(database).readGlobalTimelineMarkers().pendingInterrupts
+        assertTrue("resolved and incorporated receipts are omitted from the global timeline", beforeReopen.isEmpty())
+        assertTrue("resolved and incorporated receipts are omitted from recovery", repository.pendingInterruptRequests("interrupt-reopen").isEmpty())
+
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, File(temporary.root, "repository.db"))
+        repository = ConversationRepository(database)
+        assertTrue("resolved receipts remain excluded after reopening SQLite", repository.pendingInterruptRequests("interrupt-reopen").isEmpty())
+        assertTrue("incorporated receipts remain excluded from the timeline after reopening SQLite",
+            MemoryTimelineRepository(database).readGlobalTimelineMarkers().pendingInterrupts.isEmpty())
+    }
+
+    @Test fun largeCrewSnapshotHydratesWithBoundedQueries() = onDatabaseThread {
+        success(repository.ensureConversation("large-crew"))
+        val bots = (0 until 2_000).map { index ->
+            CrewBotSnapshot("bot-$index", "role", "Role", "Bot $index", "blue", "mission", "COMPLETED", "", "result-$index", "", emptyList(), 1L, 2L)
+        }
+        val messages = (0 until 2_000).map { index ->
+            CrewMessage("crew-message-$index", "large-crew", "bot-${index % 2_000}", "chief", CrewMessage.Type.FINDING,
+                "finding $index", emptyList(), index + 1L)
+        }
+        val snapshot = CrewMissionSnapshot("large-mission", "large-crew", "test-process", "Large mission", "Large mission", "legacy",
+            "COMPLETED", "summary", 1L, 2L, bots, messages)
+        val memory = MemoryTimelineRepository(database)
+        success(memory.appendCrewSnapshot("large-crew", snapshot.toJson()))
+
+        val statementCount = AtomicInteger()
+        val startedAt = System.nanoTime()
+        val loaded = ChatSqlInstrumentation.observeStatements({ statementCount.incrementAndGet() }) {
+            memory.readCrewMissionSnapshots("large-crew")
+        }.single()
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+        assertEquals("all crew bots are hydrated", 2_000, loaded.bots.size)
+        assertEquals("all crew messages are hydrated", 2_000, loaded.messages.size)
+        assertTrue("crew hydration uses a bounded set of SQL statements", statementCount.get() <= 12)
+        assertTrue("large crew snapshot hydration completes within the performance budget", elapsedMillis < 20_000L)
+    }
+
+    @Test fun reflectionTimelineReadsTwentyThousandRowsWithBoundedQueries() = onDatabaseThread {
+        success(repository.ensureConversation("large-timeline"))
+        val totalRows = 20_000
+        database.withChatWriteTransaction {
+            for (firstSeq in 1..totalRows step 100) {
+                val count = minOf(100, totalRows - firstSeq + 1)
+                val values = List(count) { "(?,?,?,?,?,?,?,?)" }.joinToString(",")
+                val args = ArrayList<Any?>(count * 8)
+                repeat(count) { offset ->
+                    val seq = firstSeq + offset
+                    args += "large-timeline"
+                    args += seq
+                    args += "synthetic_marker"
+                    args += "marker-$seq"
+                    args += seq
+                    args += 0
+                    args.add(null)
+                    args += seq.toDouble()
+                }
+                database.chatSql.execSQL(
+                    "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES $values",
+                    args.toTypedArray(),
+                )
+            }
+            database.chatSql.execSQL("UPDATE conversations SET next_seq=? WHERE id=?", arrayOf(totalRows + 1, "large-timeline"))
+        }
+
+        val statements = AtomicInteger()
+        val startedAt = System.nanoTime()
+        val payload = ChatSqlInstrumentation.observeStatements({ _ -> statements.incrementAndGet() }) {
+            MemoryTimelineRepository(database).buildReflectionPayload("large-timeline")
+        }
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+        assertEquals("a marker-only timeline produces an empty reflection transcript", "[]", payload.serialized)
+        assertTrue("timeline projection uses a bounded number of SQL statements", statements.get() <= 6)
+        assertTrue("timeline projection reads twenty thousand rows within the performance budget", elapsedMillis < 20_000L)
+    }
+
+    @Test fun suspendConversationReadsDispatchSqlOffTheMainLooper() {
+        val sqlRanOnMain = AtomicReference(false)
+        val finished = CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            runCatching {
+                runBlocking {
+                    ChatSqlInstrumentation.observeStatements({
+                        if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
+                    }) { repository.messageCounts("main-read") }
+                }
+            }.onFailure { sqlRanOnMain.set(true) }
+            finished.countDown()
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("the suspend read completes when invoked from the main looper", finished.await(5, TimeUnit.SECONDS))
+        assertFalse("repository read SQL runs on the Room query executor, never the main looper", sqlRanOnMain.get())
+    }
+
+    @Test fun suspendReadRejectsAnActiveWriterTransactionLease() = onDatabaseThread {
+        success(repository.ensureConversation("no-read-under-write"))
+        val failure = runCatching {
+            database.withChatWriteTransaction { repository.pendingInterruptRequests("no-read-under-write") }
+        }.exceptionOrNull()
+        assertTrue("read projections cannot reuse a writer transaction connection", failure is IllegalStateException)
     }
 
     @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {
@@ -1058,12 +1194,24 @@ class ConversationRepositoryTest {
     @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
         success(runBlocking { repository.ensureConversation("wal-reader") })
         runBlocking { append("wal-reader", "user", "committed page before writer") }
-        val visible = runBlocking { append("wal-reader", "user", "visible before writer") }
+        runBlocking { append("wal-reader", "user", "visible before writer") }
+        val databaseFile = File(temporary.root, "repository.db")
+        val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
+        val readerRepository = ConversationRepository(readerDatabase)
+        // Prime the independent Room instance so Robolectric's per-instance pool is already open.
+        successWindow(readerRepository.readTailWindow("wal-reader", turns = 1))
+        val externalReader = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         val writer = Executors.newSingleThreadExecutor()
         val reader = Executors.newSingleThreadExecutor()
         val writerEntered = CountDownLatch(1)
         val releaseWriter = CountDownLatch(1)
         try {
+            assertTrue("the second SQLite connection enables WAL", externalReader.enableWriteAheadLogging())
+            val journalMode = externalReader.rawQuery("PRAGMA journal_mode", null).use { cursor ->
+                assertTrue("journal_mode returns a row", cursor.moveToFirst())
+                cursor.getString(0)
+            }
+            assertEquals("wal", journalMode.lowercase())
             val write = writer.submit {
                 runBlocking {
                     database.withChatWriteTransaction {
@@ -1074,22 +1222,39 @@ class ConversationRepositoryTest {
                 }
             }
             assertTrue(writerEntered.await(10, TimeUnit.SECONDS))
-            val read = reader.submit(Callable { runBlocking { repository.readTailWindow("wal-reader", 1) } })
-            assertEquals("the read sees the committed prefix without waiting for the writer", "visible before writer", read.get(3, TimeUnit.SECONDS).slots.single { it.item.item_kind == "message" }.message?.text)
-            val previousPage = reader.submit(Callable { runBlocking { repository.readWindowBefore("wal-reader", visible.seq, 1) } })
-            assertEquals("paged reads use the query pool while the writer is held", "committed page before writer", previousPage.get(3, TimeUnit.SECONDS).slots.single { it.item.item_kind == "message" }.message?.text)
+            val repositoryRead = reader.submit(Callable {
+                successWindow(readerRepository.readTailWindow("wal-reader", turns = 1)).slots
+                    .single { it.message?.role == "user" }.message!!.text
+            })
+            assertEquals("the second Room connection reads committed rows while Room holds its writer",
+                "visible before writer", repositoryRead.get(3, TimeUnit.SECONDS))
+            // Keep a direct Android handle assertion as a check of the underlying WAL file behavior.
+            val read = reader.submit(Callable {
+                externalReader.rawQuery(
+                    "SELECT p.payload FROM messages m JOIN message_parts p ON p.conversation_id=m.conversation_id AND p.message_id=m.message_id " +
+                        "WHERE m.conversation_id='wal-reader' AND m.role='user' AND p.kind='text' ORDER BY m.seq DESC LIMIT 1",
+                    null,
+                ).use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getString(0) }
+            })
+            assertEquals("the second WAL connection reads committed rows while Room holds its writer", "visible before writer", read.get(3, TimeUnit.SECONDS))
             releaseWriter.countDown()
             write.get(10, TimeUnit.SECONDS)
         } finally {
             releaseWriter.countDown()
             writer.shutdownNow()
             reader.shutdownNow()
+            externalReader.close()
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(readerDatabase)
         }
     }
 
     @Test fun blockingJavaFacadeRejectsMainThreadAndWorksOnItsBackgroundExecutor() {
         val blocking = ConversationRepositoryBlocking(repository)
         try {
+            val callbackFailure = runCatching {
+                ChatSqlBeforeWriteGuard.invoke { blocking.pendingInterruptRequestsSync() }
+            }.exceptionOrNull()
+            assertTrue("blocking facade calls fail before re-entering a beforeWrite callback", callbackFailure is IllegalStateException)
             val failureRef = AtomicReference<Throwable?>()
             val mainCallFinished = CountDownLatch(1)
             Handler(Looper.getMainLooper()).post {

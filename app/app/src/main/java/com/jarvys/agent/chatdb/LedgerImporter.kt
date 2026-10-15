@@ -16,6 +16,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
+import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Locale
@@ -279,7 +280,7 @@ internal class LedgerImporter(
             return LineOutcome(LineOutcomeKind.SKIPPED, "", reason)
         }
         val row = try {
-            StrictLedgerJson.parseObject(StrictLedgerJson.decodeUtf8(line.bytes))
+            parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes))
         } catch (failure: Throwable) {
             val reason = when (failure) {
                 is DuplicateLedgerJsonKey -> "duplicate_key:${failure.key}"
@@ -506,6 +507,9 @@ internal class LedgerImporter(
                 row.optString("source", ""), row.getString("stage"), row.optString("marker", ""), position.createdAtSeconds,
             ))
             "compaction" -> {
+                // The staged projection index mirrors LocalRunStore.pendingCompactionIds: it counts
+                // valid non-result-only rows after steering, including session_title and each
+                // input marker once, even when those rows do not map one-to-one to spine items.
                 val rowIndex = readCompactionRowIndex(sessionId, line.startOffset) ?: error("missing legacy compaction row index")
                 memory.appendCompaction(CompactionInput(
                     sessionId, row.getString("summary"), row.optLong("firstKept", 0L), row.stringOrNull("trigger"), row.stringOrNull("mode"),
@@ -772,6 +776,8 @@ internal class LedgerImporter(
         var known = 0L
         var unknown = 0L
         var seq = 1L
+        // Mirrors the old readConversationRows list used by compactionId: malformed rows and
+        // result-only journal rows are omitted; session_title and input-marker JSONL rows count once.
         var logicalIndex = 0L
         var firstTitle: String? = null
         var firstTimestampMillis: Long? = null
@@ -786,7 +792,7 @@ internal class LedgerImporter(
                     if (isStrictLedger(sessionId) || likelyStrictRow(line.bytes)) strictFailure = "truncated strict ledger row at line ${line.lineNumber}"
                     continue
                 }
-                val row = try { StrictLedgerJson.parseObject(StrictLedgerJson.decodeUtf8(line.bytes)) }
+                val row = try { parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes)) }
                 catch (failure: Throwable) {
                     val reason = when (failure) {
                         is DuplicateLedgerJsonKey -> "duplicate_key:${failure.key}"
@@ -1142,7 +1148,7 @@ internal class LedgerImporter(
             val offset = staged[0]
             NonInterruptibleLedgerFile(ledger, offset).use { reader ->
                 val line = reader.readLine() ?: error("message source row disappeared")
-                val row = StrictLedgerJson.parseObject(StrictLedgerJson.decodeUtf8(line.bytes))
+                val row = parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes))
                 updateLengthPrefixed(digest, row.optString("content", ""))
             }
             previousIndex = staged[1]
@@ -1153,7 +1159,7 @@ internal class LedgerImporter(
 
     private fun readMetadata(file: File): ImportMetadata {
         if (!file.isFile) return ImportMetadata()
-        val value = StrictLedgerJson.parseObject(StrictLedgerJson.decodeUtf8(file.readBytes()))
+        val value = parseLedgerObject(StrictLedgerJson.decodeUtf8(file.readBytes()))
         return ImportMetadata(
             deleted = value.optBoolean("deleted", false),
             title = value.stringOrNull("title")?.trim()?.takeIf(String::isNotEmpty),
@@ -1428,6 +1434,42 @@ internal class LedgerImporter(
 
     private fun JSONObject.stringOrNull(name: String): String? = if (!has(name) || isNull(name)) null else getString(name)
     private fun JSONObject.longOrNull(name: String): Long? = if (!has(name) || isNull(name)) null else getLong(name)
+
+    /**
+     * The strict line parser keeps every JSON number as BigDecimal to avoid precision loss. The
+     * legacy JSONObject reader used Integer/Long for plain integer tokens, which strict journal
+     * validators intentionally require. Restore that representation without accepting decimal or
+     * out-of-range values as integers.
+     */
+    private fun parseLedgerObject(text: String): JSONObject =
+        normalizeIntegralJsonNumbers(StrictLedgerJson.parseObject(text)) as JSONObject
+
+    private fun normalizeIntegralJsonNumbers(value: Any): Any = when (value) {
+        is JSONObject -> {
+            val keys = value.keys().asSequence().toList()
+            keys.forEach { key ->
+                val child = value.get(key)
+                if (child !== JSONObject.NULL) value.put(key, normalizeIntegralJsonNumbers(child))
+            }
+            value
+        }
+        is JSONArray -> {
+            for (index in 0 until value.length()) {
+                val child = value.get(index)
+                if (child !== JSONObject.NULL) value.put(index, normalizeIntegralJsonNumbers(child))
+            }
+            value
+        }
+        is BigDecimal -> if (value.scale() == 0) {
+            val integer = runCatching { value.longValueExact() }.getOrNull()
+            when {
+                integer == null -> value
+                integer >= Int.MIN_VALUE.toLong() && integer <= Int.MAX_VALUE.toLong() -> integer.toInt()
+                else -> integer
+            }
+        } else value
+        else -> value
+    }
 
     private fun updateLengthPrefixed(digest: MessageDigest, value: String) {
         val bytes = value.toByteArray(StandardCharsets.UTF_8)

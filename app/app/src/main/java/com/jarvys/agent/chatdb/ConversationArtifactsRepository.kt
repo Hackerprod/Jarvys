@@ -101,9 +101,10 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     ): ChatDbResult<GeneratedImage> = transaction {
         if (input.conversationId.isBlank() || input.status.isBlank() || input.bytes?.let { it < 0L } == true)
             return@transaction ChatDbResult.Invalid("generated image fields are invalid")
+        val hasAnyFileMetadata = input.imagePath != null || input.sha256 != null || input.bytes != null
         val hasCompleteFileMetadata = input.imagePath != null && input.sha256 != null && input.bytes != null
-        val hasPartialFileMetadata = (input.sha256 != null || input.bytes != null) && !hasCompleteFileMetadata
-        if (hasPartialFileMetadata || (!allowUnknownDigest && (input.imagePath == null) != hasCompleteFileMetadata))
+        val legacyPathWithoutDigestOrSize = allowUnknownDigest && input.imagePath != null && input.sha256 == null && input.bytes == null
+        if (hasAnyFileMetadata && !hasCompleteFileMetadata && !legacyPathWithoutDigestOrSize)
             return@transaction ChatDbResult.Invalid("generated image path, digest, and byte count must be supplied together")
         ensureConversationExists(input.conversationId)
         val time = input.createdAtSeconds ?: nowSeconds()
@@ -125,7 +126,7 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
         appendGeneratedImageInternal(input, allowUnknownDigest = true)
 
     /** Indexed equivalent of `LocalRunStore.findChatFile` (`LocalRunStore.java:findChatFile`) for delivered and message-attachment ownership. */
-    suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = database.withChatReadTransaction {
+    suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = readSnapshot {
         when (kind) {
             "delivered" -> readArtifact(conversationId, id)?.let { ChatFileOwnership.Delivered(it) }
             "attachment" -> sql.query(
@@ -149,14 +150,14 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     }
 
     /** Lists `delivered_file` artifacts in ledger order, backed by `LocalRunStore.findChatFile` ownership data and `idx_artifacts_seq`. */
-    suspend fun artifactsForConversation(conversationId: String): List<ConversationArtifact> = database.withChatReadTransaction {
-        sql.query("SELECT artifact_id FROM artifacts WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId)).use { c ->
-            buildList { while (c.moveToNext()) readArtifact(conversationId, c.getString(0))?.let(::add) }
+    suspend fun artifactsForConversation(conversationId: String): List<ConversationArtifact> = readSnapshot {
+        sql.query("SELECT * FROM artifacts WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId)).use { c ->
+            buildList { while (c.moveToNext()) add(c.toConversationArtifact()) }
         }
     }
 
     /** Indexed equivalent of `LocalRunStore.ownsGeneratedFile` (`LocalRunStore.java:ownsGeneratedFile`); failed or pathless generations are never owned images. */
-    suspend fun ownsGeneratedFile(conversationId: String, relativePath: String): Boolean = database.withChatReadTransaction {
+    suspend fun ownsGeneratedFile(conversationId: String, relativePath: String): Boolean = readSnapshot {
         sql.query(
             "SELECT EXISTS(SELECT 1 FROM generated_images WHERE conversation_id=? AND image_path=? AND status='COMPLETED')",
             arrayOf(conversationId, relativePath),
@@ -164,13 +165,13 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     }
 
     /** Equivalent to `LocalRunStore.conversationHasAttachments` (`LocalRunStore.java:1645-1654`). */
-    suspend fun conversationHasAttachments(conversationId: String): Boolean = database.withChatReadTransaction {
+    suspend fun conversationHasAttachments(conversationId: String): Boolean = readSnapshot {
         sql.query("SELECT EXISTS(SELECT 1 FROM message_attachments WHERE conversation_id=?)", arrayOf(conversationId))
             .use { it.moveToFirst(); it.getInt(0) != 0 }
     }
 
     /** Equivalent to `LocalRunStore.conversationHasPrivateImagesOrAttachments`; delivered files count with generated images. */
-    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean = database.withChatReadTransaction {
+    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean = readSnapshot {
         sql.query(
             "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE conversation_id=? UNION ALL " +
                 "SELECT 1 FROM artifacts WHERE conversation_id=? UNION ALL " +
@@ -186,12 +187,29 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
 
     private fun readArtifact(conversationId: String, artifactId: String): ConversationArtifact? = sql.query(
         "SELECT * FROM artifacts WHERE conversation_id=? AND artifact_id=?", arrayOf(conversationId, artifactId),
-    ).use { if (it.moveToFirst()) ConversationArtifact(
-        it.getString(0), it.getString(1), it.getLong(2), it.getString(3), it.getStringOrNullM1b("mime_type"), it.getLong(5),
-        it.getString(6), it.getString(7), it.getStringOrNullM1b("sha256"), it.getStringOrNullM1b("file_ref_id"),
-        it.getString(10), it.getStringOrNullM1b("module_id"), it.getStringOrNullM1b("manifest_json"),
-        it.getStringOrNullM1b("title"), it.getStringOrNullM1b("thumbnail_ref"), it.getDouble(15),
-    ) else null }
+    ).use { if (it.moveToFirst()) it.toConversationArtifact() else null }
+
+    private fun android.database.Cursor.toConversationArtifact() = ConversationArtifact(
+        getString(requiredColumnIndex("conversation_id")),
+        getString(requiredColumnIndex("artifact_id")),
+        getLong(requiredColumnIndex("seq")),
+        getString(requiredColumnIndex("name")),
+        getStringOrNullM1b("mime_type"),
+        getLong(requiredColumnIndex("size_bytes")),
+        getString(requiredColumnIndex("kind")),
+        getString(requiredColumnIndex("relative_path")),
+        getStringOrNullM1b("sha256"),
+        getStringOrNullM1b("file_ref_id"),
+        getString(requiredColumnIndex("artifact_type")),
+        getStringOrNullM1b("module_id"),
+        getStringOrNullM1b("manifest_json"),
+        getStringOrNullM1b("title"),
+        getStringOrNullM1b("thumbnail_ref"),
+        getDouble(requiredColumnIndex("created_at")),
+    )
+
+    private fun android.database.Cursor.requiredColumnIndex(name: String): Int =
+        getColumnIndex(name).also { check(it >= 0) { "Missing artifact query column: $name" } }
 
     private fun readGeneratedImage(conversationId: String, seq: Long): GeneratedImage? = sql.query(
         "SELECT * FROM generated_images WHERE conversation_id=? AND seq=?", arrayOf(conversationId, seq),
@@ -209,10 +227,15 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             if (c.moveToFirst()) listOf(c.getString(0), c.getString(1), c.getLong(2).toString(), c.getStringOrNullM1b("mime_type")) else null
         }
         if (existing != null) {
-            if (existing[1] != sha256 || existing[2] != bytes.toString()) throw M1bAbort("file_reference_content_conflict")
+            val storedSha256 = existing[1].orEmpty()
+            if (storedSha256.isNotEmpty() && sha256.isNotEmpty() && storedSha256 != sha256 || existing[2] != bytes.toString())
+                throw M1bAbort("file_reference_content_conflict")
             val id = existing[0]!!
-            sql.execSQL("UPDATE file_refs SET mime_type=?,last_referenced_at=?,not_before=NULL,attempts=0,generation=generation+1 WHERE id=?",
-                arrayOf(mimeType, nowMillis, id))
+            // An empty digest means the source did not know it. It is compatible with a known
+            // digest and can be completed later without changing the file identity.
+            val resolvedSha256 = if (storedSha256.isEmpty()) sha256 else storedSha256
+            sql.execSQL("UPDATE file_refs SET sha256=?,mime_type=?,last_referenced_at=?,not_before=NULL,attempts=0,generation=generation+1 WHERE id=?",
+                arrayOf(resolvedSha256, mimeType, nowMillis, id))
             return id
         }
         val id = UUID.randomUUID().toString()
@@ -220,4 +243,9 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             arrayOf(id, sha256, path, bytes, mimeType, nowMillis))
         return id
     }
+
+    private suspend fun <T> readSnapshot(block: suspend () -> T): T =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { block() }
+        }
 }

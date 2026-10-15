@@ -13,8 +13,10 @@ import com.jarvys.agent.workspaces.WorkspaceResultReference as ResultReference
 /**
  * Normalized persistence for the fail-closed workspace and crew journals. It validates the same
  * source bindings as LocalRunStore's strict whole-ledger scan while keeping ledger identities
- * conversation-scoped in SQLite. Calls are synchronous DB work inside Room transactions and must
- * be made off the main thread, like ConversationRepository.
+ * conversation-scoped in SQLite. Reads use the query executor and a deferred reader transaction;
+ * writes use Room's writer transaction. The synchronous `beforeWrite` callbacks below execute
+ * while the writer transaction is held. They may perform cancellation/admission checks only: they
+ * must not call a repository or a blocking facade, which can wait for the writer lease they hold.
  */
 internal class StrictJournalRepository(private val database: JarvysChatDatabase) {
     private val sql get() = database.chatSql
@@ -35,7 +37,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!sameResult(old, evidence)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         val seq = appendItem(evidence.conversationId, CrewResultLedgerEvidence.ROW_TYPE, evidence.evidenceId)
         sql.execSQL(
             "INSERT INTO crew_result_evidence(conversation_id,evidence_id,seq,schema_version,mission_id,bot_id,cycle_id,reported_status,result_text,produced_at_ms,content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -53,7 +55,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun readCrewResultEvidence(
         executionSessionId: String,
         evidenceId: String,
-    ): ChatDbResult<CrewResultLedgerEvidence?> = transaction {
+    ): ChatDbResult<CrewResultLedgerEvidence?> = readTransaction {
         requireExecutionConversation(executionSessionId)
         ResultReference.requireEvidenceId(evidenceId)
         ChatDbResult.Success(findCrewResult(executionSessionId, evidenceId))
@@ -68,7 +70,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         executionSessionId: String,
         limit: Int,
         afterEvidenceId: String? = null,
-    ): ChatDbResult<List<String>> = transaction {
+    ): ChatDbResult<List<String>> = readTransaction {
         requireExecutionConversation(executionSessionId)
         requirePage(limit)
         val rows = mutableListOf<String>()
@@ -100,7 +102,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         insertResultRef(reference.executionSessionId, reference, false)
         ChatDbResult.Success(reference)
     }
@@ -127,7 +129,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         insertResultRef(reference.ownerCentralSessionId, reference, true)
         ChatDbResult.Success(reference)
     }
@@ -141,7 +143,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         conversationId: String,
         referenceId: String,
         isNotice: Boolean,
-    ): ChatDbResult<ResultReference?> = transaction {
+    ): ChatDbResult<ResultReference?> = readTransaction {
         if (isNotice) requireCentralConversation(conversationId) else requireExecutionConversation(conversationId)
         ResultReference.requireReferenceId(referenceId)
         ChatDbResult.Success(findResultRef(conversationId, referenceId, isNotice))
@@ -156,19 +158,49 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         isNotice: Boolean,
         limit: Int,
         afterReferenceId: String? = null,
-    ): ChatDbResult<List<ResultReference>> = transaction {
+    ): ChatDbResult<List<ResultReference>> = readTransaction {
         if (isNotice) requireCentralConversation(conversationId) else requireExecutionConversation(conversationId)
         requirePage(limit)
         val after = afterReferenceId?.also { ResultReference.requireReferenceId(it) }
-        val where = if (after == null) "" else " AND reference_id>?"
+        val where = if (after == null) "" else " AND r.reference_id>?"
         val noticeFlag = if (isNotice) 1 else 0
         val args = if (after == null) arrayOf<Any?>(conversationId, noticeFlag, limit)
             else arrayOf(conversationId, noticeFlag, after, limit)
-        val ids = sql.query(
-            "SELECT reference_id FROM workspace_result_refs WHERE conversation_id=? AND is_notice=?$where ORDER BY reference_id LIMIT ?", args,
-        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        val values = ids.mapNotNull { findResultRef(conversationId, it, isNotice) }
-        ChatDbResult.Success(values)
+        val rows = sql.query(
+            "SELECT r.schema_version,r.evidence_id,r.content_sha256,r.owner_central_session_id,r.workspace_id,r.execution_session_id," +
+                "r.assignment_id,r.request_id,r.mission_id,r.bot_id,r.cycle_id,r.observed_assignment_revision,r.reported_status,r.produced_at_ms," +
+                "r.reference_id,e.schema_version,e.mission_id,e.bot_id,e.cycle_id,e.reported_status,e.result_text,e.produced_at_ms,e.evidence_id,e.content_sha256," +
+                "CASE WHEN r.is_notice=0 THEN 1 WHEN s.reference_id IS NOT NULL AND s.schema_version=r.schema_version AND " +
+                "s.evidence_id=r.evidence_id AND s.content_sha256=r.content_sha256 AND s.owner_central_session_id=r.owner_central_session_id AND " +
+                "s.workspace_id=r.workspace_id AND s.execution_session_id=r.execution_session_id AND s.assignment_id=r.assignment_id AND " +
+                "s.request_id=r.request_id AND s.mission_id=r.mission_id AND s.bot_id=r.bot_id AND s.cycle_id=r.cycle_id AND " +
+                "s.observed_assignment_revision=r.observed_assignment_revision AND s.reported_status=r.reported_status AND " +
+                "s.produced_at_ms=r.produced_at_ms THEN 1 ELSE 0 END AS source_matches " +
+                "FROM workspace_result_refs r LEFT JOIN crew_result_evidence e ON e.conversation_id=r.execution_session_id AND e.evidence_id=r.evidence_id " +
+                "LEFT JOIN workspace_result_refs s ON r.is_notice=1 AND s.conversation_id=r.execution_session_id AND s.reference_id=r.reference_id AND s.is_notice=0 " +
+                "WHERE r.conversation_id=? AND r.is_notice=?$where ORDER BY r.reference_id LIMIT ?", args,
+        ).use { c -> buildList {
+            while (c.moveToNext()) {
+                check(!c.isNull(15)) { "Corrupt workspace_result_refs: execution evidence is missing" }
+                val row = ResultRefRow(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5),
+                    c.getString(6), c.getString(7), c.getString(8), c.getString(9), c.getString(10), c.getLong(11), c.getString(12), c.getLong(13))
+                val referenceId = c.getString(14)
+                val evidence = CrewResultLedgerEvidence.create(row.executionSessionId, c.getString(16), c.getString(17), c.getString(18),
+                    c.getString(19), ExactUtf16.decode(c.getBlob(20)), c.getLong(21))
+                check(c.getInt(15) == CrewResultLedgerEvidence.SCHEMA_VERSION && evidence.evidenceId == c.getString(22) &&
+                    evidence.contentSha256 == c.getString(23)) { "Corrupt crew_result_evidence payload" }
+                val value = ResultReference.create(evidence, row.ownerCentralSessionId, row.workspaceId, row.assignmentId, row.requestId, row.revision)
+                check(row.schemaVersion == ResultReference.SCHEMA_VERSION && row.evidenceId == evidence.evidenceId &&
+                    (if (isNotice) conversationId == row.ownerCentralSessionId else conversationId == row.executionSessionId) &&
+                    value.referenceId == referenceId && value.contentSha256 == row.contentSha256 &&
+                    value.missionId == row.missionId && value.botId == row.botId && value.cycleId == row.cycleId &&
+                    value.reportedStatus == row.status && value.producedAtMillis == row.producedAtMillis && c.getInt(24) == 1) {
+                    "Corrupt workspace_result_refs payload"
+                }
+                add(value)
+            }
+        } }
+        ChatDbResult.Success(rows)
     }
 
     /**
@@ -179,19 +211,19 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun requireWorkspaceResultDisclosureLive(
         reference: ResultReference,
         noticeRequired: Boolean,
-    ): ChatDbResult<Unit> = transaction {
+    ): ChatDbResult<Unit> = readTransaction {
         ResultReference.fromJsonStrict(reference.toJson())
         requireExecutionConversation(reference.executionSessionId)
         val source = findResultRef(reference.executionSessionId, reference.referenceId, false)
-            ?: return@transaction ChatDbResult.Conflict("durable execution reference is unavailable")
-        if (!source.samePayload(reference)) return@transaction ChatDbResult.Conflict("durable execution reference differs")
-        if (isTombstoned(reference.ownerCentralSessionId)) return@transaction ChatDbResult.Tombstoned
+            ?: return@readTransaction ChatDbResult.Conflict("durable execution reference is unavailable")
+        if (!source.samePayload(reference)) return@readTransaction ChatDbResult.Conflict("durable execution reference differs")
+        if (isTombstoned(reference.ownerCentralSessionId)) return@readTransaction ChatDbResult.Tombstoned
         val centralExists = sql.query("SELECT 1 FROM conversations WHERE id=?", arrayOf(reference.ownerCentralSessionId)).use { it.moveToFirst() }
-        if (noticeRequired && !centralExists) return@transaction ChatDbResult.Conflict("Central receipt is unavailable")
+        if (noticeRequired && !centralExists) return@readTransaction ChatDbResult.Conflict("Central receipt is unavailable")
         if (centralExists) {
             val notice = findResultRef(reference.ownerCentralSessionId, reference.referenceId, true)
-            if (notice != null && !notice.samePayload(reference)) return@transaction ChatDbResult.Conflict("Central receipt differs")
-            if (noticeRequired && notice == null) return@transaction ChatDbResult.Conflict("Central receipt is unavailable")
+            if (notice != null && !notice.samePayload(reference)) return@readTransaction ChatDbResult.Conflict("Central receipt differs")
+            if (noticeRequired && notice == null) return@readTransaction ChatDbResult.Conflict("Central receipt is unavailable")
         }
         ChatDbResult.Success(Unit)
     }
@@ -212,7 +244,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!sameCoordination(old, evidence)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         val seq = appendItem(evidence.conversationId, CrewCoordinationLedgerEvidence.ROW_TYPE, evidence.evidenceId)
         sql.execSQL(
             "INSERT INTO crew_coordination_evidence(conversation_id,evidence_id,seq,schema_version,mission_id,bot_id,cycle_id,message_id,kind,text,produced_at_ms,content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -236,7 +268,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun readCrewCoordinationEvidence(
         executionSessionId: String,
         evidenceId: String,
-    ): ChatDbResult<CrewCoordinationLedgerEvidence?> = transaction {
+    ): ChatDbResult<CrewCoordinationLedgerEvidence?> = readTransaction {
         requireExecutionConversation(executionSessionId)
         CoordinationReference.requireEvidenceId(evidenceId)
         ChatDbResult.Success(findCrewCoordinationEvidence(executionSessionId, evidenceId))
@@ -250,7 +282,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         executionSessionId: String,
         limit: Int,
         afterEvidenceId: String? = null,
-    ): ChatDbResult<List<String>> = transaction {
+    ): ChatDbResult<List<String>> = readTransaction {
         requireExecutionConversation(executionSessionId)
         requirePage(limit)
         val after = afterEvidenceId?.also { CoordinationReference.requireEvidenceId(it) }
@@ -280,7 +312,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         insertCoordinationRef(reference.executionSessionId, reference, false)
         ChatDbResult.Success(reference)
     }
@@ -306,7 +338,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         insertCoordinationRef(reference.ownerCentralSessionId, reference, true)
         ChatDbResult.Success(reference)
     }
@@ -319,7 +351,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         conversationId: String,
         referenceId: String,
         isNotice: Boolean,
-    ): ChatDbResult<CoordinationReference?> = transaction {
+    ): ChatDbResult<CoordinationReference?> = readTransaction {
         if (isNotice) requireCentralConversation(conversationId) else requireExecutionConversation(conversationId)
         CoordinationReference.requireReferenceId(referenceId)
         ChatDbResult.Success(findCoordinationRef(conversationId, referenceId, isNotice))
@@ -334,7 +366,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         isNotice: Boolean,
         limit: Int,
         afterReferenceId: String? = null,
-    ): ChatDbResult<List<CoordinationReference>> = transaction {
+    ): ChatDbResult<List<CoordinationReference>> = readTransaction {
         if (isNotice) requireCentralConversation(conversationId) else requireExecutionConversation(conversationId)
         requirePage(limit)
         val after = afterReferenceId?.also { CoordinationReference.requireReferenceId(it) }
@@ -342,10 +374,71 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val noticeFlag = if (isNotice) 1 else 0
         val args = if (after == null) arrayOf<Any?>(conversationId, noticeFlag, limit)
             else arrayOf(conversationId, noticeFlag, after, limit)
-        val ids = sql.query(
-            "SELECT reference_id FROM workspace_coordination_refs WHERE conversation_id=? AND is_notice=?$where ORDER BY reference_id LIMIT ?", args,
-        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        ChatDbResult.Success(ids.mapNotNull { findCoordinationRef(conversationId, it, isNotice) })
+        val values = mutableListOf<CoordinationReference>()
+        sql.query(
+            "WITH page AS (SELECT * FROM workspace_coordination_refs WHERE conversation_id=? AND is_notice=?$where ORDER BY reference_id LIMIT ?) " +
+                "SELECT r.schema_version,r.evidence_id,r.content_sha256,r.owner_central_session_id,r.workspace_id,r.execution_session_id," +
+                "r.assignment_id,r.request_id,r.mission_id,r.bot_id,r.cycle_id,r.message_id,r.kind,r.observed_assignment_revision,r.produced_at_ms," +
+                "r.reference_id,e.schema_version,e.mission_id,e.bot_id,e.cycle_id,e.message_id,e.kind,e.text,e.produced_at_ms,e.evidence_id,e.content_sha256," +
+                "er.ordinal,er.ref,CASE WHEN r.is_notice=0 THEN 1 WHEN s.reference_id IS NOT NULL AND s.schema_version=r.schema_version AND " +
+                "s.evidence_id=r.evidence_id AND s.content_sha256=r.content_sha256 AND s.owner_central_session_id=r.owner_central_session_id AND " +
+                "s.workspace_id=r.workspace_id AND s.execution_session_id=r.execution_session_id AND s.assignment_id=r.assignment_id AND " +
+                "s.request_id=r.request_id AND s.mission_id=r.mission_id AND s.bot_id=r.bot_id AND s.cycle_id=r.cycle_id AND " +
+                "s.message_id=r.message_id AND s.kind=r.kind AND s.observed_assignment_revision=r.observed_assignment_revision AND " +
+                "s.produced_at_ms=r.produced_at_ms THEN 1 ELSE 0 END AS source_matches " +
+                "FROM page r LEFT JOIN crew_coordination_evidence e ON e.conversation_id=r.execution_session_id AND e.evidence_id=r.evidence_id " +
+                "LEFT JOIN crew_coordination_evidence_refs er ON er.conversation_id=e.conversation_id AND er.evidence_id=e.evidence_id " +
+                "LEFT JOIN workspace_coordination_refs s ON r.is_notice=1 AND s.conversation_id=r.execution_session_id AND s.reference_id=r.reference_id AND s.is_notice=0 " +
+                "ORDER BY r.reference_id,er.ordinal", args,
+        ).use { c ->
+            var activeReferenceId: String? = null
+            var refRow: CoordinationRefRow? = null
+            var evidenceRow: CoordinationEvidenceRow? = null
+            var evidenceRefs = mutableListOf<String>()
+            var sourceMatches = false
+            fun emit() {
+                val ref = refRow ?: return
+                val evidenceData = checkNotNull(evidenceRow) { "Corrupt crew_coordination_evidence payload" }
+                check(evidenceData.schemaVersion == CrewCoordinationLedgerEvidence.SCHEMA_VERSION) {
+                    "Unsupported crew_coordination_evidence schema"
+                }
+                val evidence = CrewCoordinationLedgerEvidence.create(ref.executionSessionId, evidenceData.missionId, evidenceData.botId,
+                    evidenceData.cycleId, evidenceData.messageId, evidenceData.kind, ExactUtf16.decode(evidenceData.text), evidenceRefs,
+                    evidenceData.producedAtMillis)
+                check(evidence.evidenceId == evidenceData.evidenceId && evidence.contentSha256 == evidenceData.contentSha256) {
+                    "Corrupt crew_coordination_evidence payload"
+                }
+                val value = CoordinationReference.create(evidence, ref.ownerCentralSessionId, ref.workspaceId, ref.assignmentId,
+                    ref.requestId, ref.revision)
+                check(ref.schemaVersion == CoordinationReference.SCHEMA_VERSION && ref.evidenceId == evidence.evidenceId &&
+                    (if (isNotice) conversationId == ref.ownerCentralSessionId else conversationId == ref.executionSessionId) &&
+                    value.referenceId == activeReferenceId && value.contentSha256 == ref.contentSha256 && value.messageId == ref.messageId &&
+                    value.kind == ref.kind && value.missionId == ref.missionId && value.botId == ref.botId && value.cycleId == ref.cycleId &&
+                    value.producedAtMillis == ref.producedAtMillis && sourceMatches) { "Corrupt workspace_coordination_refs payload" }
+                values += value
+            }
+            while (c.moveToNext()) {
+                val referenceId = c.getString(15)
+                if (activeReferenceId != referenceId) {
+                    emit()
+                    check(!c.isNull(16)) { "Corrupt workspace_coordination_refs: execution evidence is missing" }
+                    activeReferenceId = referenceId
+                    refRow = CoordinationRefRow(c)
+                    evidenceRow = CoordinationEvidenceRow(
+                        c.getInt(16), c.getString(17), c.getString(18), c.getString(19), c.getString(20), c.getString(21),
+                        c.getBlob(22), c.getLong(23), c.getString(24), c.getString(25),
+                    )
+                    evidenceRefs = mutableListOf()
+                    sourceMatches = c.getInt(28) == 1
+                }
+                if (!c.isNull(26)) {
+                    check(c.getInt(26) == evidenceRefs.size) { "Corrupt crew_coordination_evidence_refs ordering" }
+                    evidenceRefs += c.getString(27)
+                }
+            }
+            emit()
+        }
+        ChatDbResult.Success(values)
     }
 
     /**
@@ -356,19 +449,19 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun requireWorkspaceCoordinationDisclosureLive(
         reference: CoordinationReference,
         noticeRequired: Boolean,
-    ): ChatDbResult<Unit> = transaction {
+    ): ChatDbResult<Unit> = readTransaction {
         CoordinationReference.fromJsonStrict(reference.toJson())
         requireExecutionConversation(reference.executionSessionId)
         val source = findCoordinationRef(reference.executionSessionId, reference.referenceId, false)
-            ?: return@transaction ChatDbResult.Conflict("durable execution coordination reference is unavailable")
-        if (!source.samePayload(reference)) return@transaction ChatDbResult.Conflict("durable execution coordination reference differs")
-        if (isTombstoned(reference.ownerCentralSessionId)) return@transaction ChatDbResult.Tombstoned
+            ?: return@readTransaction ChatDbResult.Conflict("durable execution coordination reference is unavailable")
+        if (!source.samePayload(reference)) return@readTransaction ChatDbResult.Conflict("durable execution coordination reference differs")
+        if (isTombstoned(reference.ownerCentralSessionId)) return@readTransaction ChatDbResult.Tombstoned
         val centralExists = sql.query("SELECT 1 FROM conversations WHERE id=?", arrayOf(reference.ownerCentralSessionId)).use { it.moveToFirst() }
-        if (noticeRequired && !centralExists) return@transaction ChatDbResult.Conflict("Central coordination receipt is unavailable")
+        if (noticeRequired && !centralExists) return@readTransaction ChatDbResult.Conflict("Central coordination receipt is unavailable")
         if (centralExists) {
             val notice = findCoordinationRef(reference.ownerCentralSessionId, reference.referenceId, true)
-            if (notice != null && !notice.samePayload(reference)) return@transaction ChatDbResult.Conflict("Central coordination receipt differs")
-            if (noticeRequired && notice == null) return@transaction ChatDbResult.Conflict("Central coordination receipt is unavailable")
+            if (notice != null && !notice.samePayload(reference)) return@readTransaction ChatDbResult.Conflict("Central coordination receipt differs")
+            if (noticeRequired && notice == null) return@readTransaction ChatDbResult.Conflict("Central coordination receipt is unavailable")
         }
         ChatDbResult.Success(Unit)
     }
@@ -396,7 +489,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             arrayOf(proposed.reference.ownerCentralSessionId, proposed.reference.evidenceId),
         ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         if (evidenceClaim != null) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         val seq = appendItem(proposed.reference.ownerCentralSessionId, CoordinationReply.INTENT_TYPE, proposed.reference.referenceId)
         sql.execSQL(
             "INSERT INTO workspace_coordination_replies(conversation_id,reference_id,is_notice,schema_version,reply_id,evidence_id,reply_key,text,central_request_id,original_user_request,mailbox_message_id,payload_sha256,prepared_at_ms,state,state_at_ms,seq) VALUES(?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -435,13 +528,13 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         centralSessionId: String,
         referenceId: String,
         replyKey: String? = null,
-    ): ChatDbResult<CoordinationReply?> = transaction {
+    ): ChatDbResult<CoordinationReply?> = readTransaction {
         requireCentralConversation(centralSessionId)
         CoordinationReference.requireReferenceId(referenceId)
         if (replyKey != null && !replyKey.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")))
-            return@transaction ChatDbResult.Invalid("invalid coordination reply key")
+            return@readTransaction ChatDbResult.Invalid("invalid coordination reply key")
         val reply = findCoordinationReply(centralSessionId, referenceId)
-        if (replyKey != null && reply != null && reply.replyKey != replyKey) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
+        if (replyKey != null && reply != null && reply.replyKey != replyKey) return@readTransaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
         ChatDbResult.Success(reply)
     }
 
@@ -452,10 +545,10 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun readWorkspaceCoordinationReplyById(
         centralSessionId: String,
         replyId: String,
-    ): ChatDbResult<CoordinationReply?> = transaction {
+    ): ChatDbResult<CoordinationReply?> = readTransaction {
         requireCentralConversation(centralSessionId)
         if (!replyId.matches(Regex("workspace-coordination-reply-[0-9a-f]{64}")))
-            return@transaction ChatDbResult.Invalid("invalid coordination reply id")
+            return@readTransaction ChatDbResult.Invalid("invalid coordination reply id")
         val referenceId = sql.query(
             "SELECT reference_id FROM workspace_coordination_replies WHERE conversation_id=? AND reply_id=? LIMIT 1",
             arrayOf(centralSessionId, replyId),
@@ -485,7 +578,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             arrayOf(proposed.ownerCentralSessionId, proposed.mailboxMessageId),
         ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         if (mailboxClaim != null) return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         val seq = appendItem(proposed.ownerCentralSessionId, InputIncorporation.ROW_TYPE, proposed.receiptId)
         sql.execSQL(
             "INSERT INTO workspace_input_incorporations(conversation_id,receipt_id,seq,schema_version,source_kind,source_id,source_reference_id,mailbox_message_id,owner_central_session_id,workspace_id,execution_session_id,assignment_id,request_id,mission_id,bot_id,admission_cycle_id,first_incorporation_cycle_id,source_payload_sha256,delivered_content_sha256,transport_kind,transport_sha256,checkpoint_payload_sha256,checkpoint_saved_at_ms,recorded_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -508,7 +601,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         centralSessionId: String,
         sourceKind: InputIncorporation.SourceKind,
         sourceId: String,
-    ): ChatDbResult<InputIncorporation?> = transaction {
+    ): ChatDbResult<InputIncorporation?> = readTransaction {
         requireCentralConversation(centralSessionId)
         val receiptId = InputIncorporation.receiptId(sourceKind, sourceId)
         val value = findInputIncorporation(centralSessionId, receiptId)
@@ -523,12 +616,12 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
      */
     suspend fun requireWorkspaceInputIncorporationDisclosureLive(
         value: InputIncorporation,
-    ): ChatDbResult<Unit> = transaction {
+    ): ChatDbResult<Unit> = readTransaction {
         InputIncorporation.fromJsonStrict(value.toJson())
         requireCentralConversation(value.ownerCentralSessionId)
         val durable = findInputIncorporation(value.ownerCentralSessionId, value.receiptId)
-            ?: return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
-        if (!durable.samePayload(value)) return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
+            ?: return@readTransaction ChatDbResult.Conflict(INPUT_CONFLICT)
+        if (!durable.samePayload(value)) return@readTransaction ChatDbResult.Conflict(INPUT_CONFLICT)
         requireIncorporationSource(durable)
         ChatDbResult.Success(Unit)
     }
@@ -541,17 +634,124 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         centralSessionId: String,
         limit: Int,
         afterReceiptId: String? = null,
-    ): ChatDbResult<List<InputIncorporation>> = transaction {
+    ): ChatDbResult<List<InputIncorporation>> = readTransaction {
         requireCentralConversation(centralSessionId)
         requirePage(limit)
         val after = afterReceiptId?.also { InputIncorporation.requireReceiptId(it) }
         val where = if (after == null) "" else " AND receipt_id>?"
         val args = if (after == null) arrayOf<Any?>(centralSessionId, limit) else arrayOf(centralSessionId, after, limit)
-        val ids = sql.query(
-            "SELECT receipt_id FROM workspace_input_incorporations WHERE conversation_id=?$where ORDER BY receipt_id LIMIT ?", args,
-        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        val values = ids.mapNotNull { findInputIncorporation(centralSessionId, it) }
-        values.forEach(::requireIncorporationSource)
+        val values = mutableListOf<InputIncorporation>()
+        sql.query(
+            "WITH page AS (SELECT * FROM workspace_input_incorporations WHERE conversation_id=?$where ORDER BY receipt_id LIMIT ?) " +
+                "SELECT i.schema_version,i.source_kind,i.source_id,i.source_reference_id,i.mailbox_message_id,i.owner_central_session_id," +
+                "i.workspace_id,i.execution_session_id,i.assignment_id,i.request_id,i.mission_id,i.bot_id,i.admission_cycle_id," +
+                "i.first_incorporation_cycle_id,i.source_payload_sha256,i.delivered_content_sha256,i.transport_kind,i.transport_sha256," +
+                "i.checkpoint_payload_sha256,i.checkpoint_saved_at_ms,i.recorded_at_ms,i.receipt_id,ec.id,CASE WHEN et.entity_id IS NULL THEN 0 ELSE 1 END," +
+                "reply.schema_version,reply.reply_id,reply.evidence_id,reply.reply_key,reply.text,reply.central_request_id," +
+                "reply.original_user_request,reply.mailbox_message_id,reply.payload_sha256,reply.prepared_at_ms,reply.state,reply.state_at_ms," +
+                "n.schema_version,n.evidence_id,n.content_sha256,n.owner_central_session_id,n.workspace_id,n.execution_session_id," +
+                "n.assignment_id,n.request_id,n.mission_id,n.bot_id,n.cycle_id,n.message_id,n.kind,n.observed_assignment_revision,n.produced_at_ms," +
+                "CASE WHEN i.source_kind!='REPLY' THEN 1 WHEN s.reference_id IS NOT NULL AND s.schema_version=n.schema_version AND " +
+                "s.evidence_id=n.evidence_id AND s.content_sha256=n.content_sha256 AND s.owner_central_session_id=n.owner_central_session_id AND " +
+                "s.workspace_id=n.workspace_id AND s.execution_session_id=n.execution_session_id AND s.assignment_id=n.assignment_id AND " +
+                "s.request_id=n.request_id AND s.mission_id=n.mission_id AND s.bot_id=n.bot_id AND s.cycle_id=n.cycle_id AND " +
+                "s.message_id=n.message_id AND s.kind=n.kind AND s.observed_assignment_revision=n.observed_assignment_revision AND " +
+                "s.produced_at_ms=n.produced_at_ms THEN 1 ELSE 0 END AS source_matches," +
+                "e.schema_version,e.mission_id,e.bot_id,e.cycle_id,e.message_id,e.kind,e.text,e.produced_at_ms,e.evidence_id,e.content_sha256," +
+                "er.ordinal,er.ref,tr.seq,tr.schema_version,tr.state,tr.state_at_ms " +
+                "FROM page i LEFT JOIN conversations ec ON ec.id=i.execution_session_id " +
+                "LEFT JOIN tombstones et ON et.scope='conversation' AND et.entity_id=i.execution_session_id " +
+                "LEFT JOIN workspace_coordination_replies reply ON i.source_kind='REPLY' AND reply.conversation_id=i.owner_central_session_id AND reply.reference_id=i.source_reference_id " +
+                "LEFT JOIN workspace_coordination_refs n ON i.source_kind='REPLY' AND n.conversation_id=i.owner_central_session_id AND n.reference_id=i.source_reference_id AND n.is_notice=1 " +
+                "LEFT JOIN workspace_coordination_refs s ON i.source_kind='REPLY' AND s.conversation_id=i.execution_session_id AND s.reference_id=i.source_reference_id AND s.is_notice=0 " +
+                "LEFT JOIN crew_coordination_evidence e ON e.conversation_id=i.execution_session_id AND e.evidence_id=n.evidence_id " +
+                "LEFT JOIN crew_coordination_evidence_refs er ON er.conversation_id=e.conversation_id AND er.evidence_id=e.evidence_id " +
+                "LEFT JOIN workspace_coordination_reply_transitions tr ON tr.conversation_id=i.owner_central_session_id AND tr.reply_id=reply.reply_id " +
+                "ORDER BY i.receipt_id,er.ordinal,tr.seq", args,
+        ).use { c ->
+            var activeReceiptId: String? = null
+            var value: InputIncorporation? = null
+            var replyRow: ReplyRow? = null
+            var noticeRow: CoordinationRefRow? = null
+            var evidenceRow: CoordinationEvidenceRow? = null
+            var evidenceRefs = sortedMapOf<Int, String>()
+            var transitions = sortedMapOf<Long, Triple<Int, String, Long>>()
+            var sourceMatches = false
+
+            fun emit() {
+                val current = value ?: return
+                check(!current.executionSessionId.isBlank() && WorkspaceIdentity.isExecutionSession(current.executionSessionId)) {
+                    "invalid_execution_session"
+                }
+                if (replyRow != null || current.sourceKind == InputIncorporation.SourceKind.REPLY) {
+                    val durableReply = checkNotNull(replyRow) { "Incorporation has no exact admitted reply source" }
+                    val storedNotice = checkNotNull(noticeRow) { "Reply has no exact Central coordination notice" }
+                    val evidenceData = checkNotNull(evidenceRow) { "Corrupt workspace_coordination_refs: execution evidence is missing" }
+                    check(evidenceData.schemaVersion == CrewCoordinationLedgerEvidence.SCHEMA_VERSION) {
+                        "Unsupported crew_coordination_evidence schema"
+                    }
+                    check(evidenceRefs.keys.withIndex().all { (index, ordinal) -> index == ordinal }) {
+                        "Corrupt crew_coordination_evidence_refs ordering"
+                    }
+                    val evidence = CrewCoordinationLedgerEvidence.create(current.executionSessionId, evidenceData.missionId,
+                        evidenceData.botId, evidenceData.cycleId, evidenceData.messageId, evidenceData.kind,
+                        ExactUtf16.decode(evidenceData.text), evidenceRefs.values.toList(), evidenceData.producedAtMillis)
+                    check(evidence.evidenceId == evidenceData.evidenceId && evidence.contentSha256 == evidenceData.contentSha256) {
+                        "Corrupt crew_coordination_evidence payload"
+                    }
+                    val notice = CoordinationReference.create(evidence, storedNotice.ownerCentralSessionId, storedNotice.workspaceId,
+                        storedNotice.assignmentId, storedNotice.requestId, storedNotice.revision)
+                    check(storedNotice.schemaVersion == CoordinationReference.SCHEMA_VERSION && storedNotice.evidenceId == evidence.evidenceId &&
+                        notice.referenceId == current.sourceReferenceId && notice.contentSha256 == storedNotice.contentSha256 &&
+                        notice.messageId == storedNotice.messageId && notice.kind == storedNotice.kind &&
+                        notice.missionId == storedNotice.missionId && notice.botId == storedNotice.botId &&
+                        notice.cycleId == storedNotice.cycleId && notice.producedAtMillis == storedNotice.producedAtMillis && sourceMatches) {
+                        "Corrupt workspace_coordination_refs payload"
+                    }
+                    val reply = CoordinationReply.create(notice, durableReply.replyKey, ExactUtf16.decode(durableReply.text),
+                        durableReply.centralRequestId, ExactUtf16.decode(durableReply.originalRequest), durableReply.preparedAtMillis)
+                        .withState(CoordinationReply.State.valueOf(durableReply.state), durableReply.stateAtMillis)
+                    check(durableReply.schemaVersion == CoordinationReply.SCHEMA_VERSION && reply.replyId == durableReply.replyId &&
+                        reply.reference.evidenceId == durableReply.evidenceId && reply.mailboxMessageId == durableReply.mailboxMessageId &&
+                        reply.payloadSha256 == durableReply.payloadSha256) { "Corrupt workspace_coordination_replies payload" }
+                    if (!current.matchesReply(reply)) error("Incorporation has no exact admitted reply source")
+                    validateReplyTransitions(reply, transitions.values.toList())
+                }
+                values += current
+            }
+
+            while (c.moveToNext()) {
+                val identity = c.getString(21)
+                if (activeReceiptId != identity) {
+                    emit()
+                    activeReceiptId = identity
+                    value = readInputIncorporation(c)
+                    check(checkNotNull(value).receiptId == identity) { "Corrupt workspace_input_incorporations identity" }
+                    if (!WorkspaceIdentity.isExecutionSession(checkNotNull(value).executionSessionId))
+                        throw JournalAbort("invalid_execution_session")
+                    if (c.isNull(22)) throw JournalAbort(if (c.getInt(23) != 0) "conversation_tombstoned" else "conversation_not_found")
+                    if (c.getInt(23) != 0) throw JournalAbort("conversation_tombstoned")
+                    replyRow = if (c.isNull(24)) null else ReplyRow(c, 24)
+                    noticeRow = if (c.isNull(36)) null else CoordinationRefRow(c, 36)
+                    evidenceRow = if (c.isNull(52)) null else CoordinationEvidenceRow(c, 52)
+                    evidenceRefs = sortedMapOf()
+                    transitions = sortedMapOf()
+                    sourceMatches = c.getInt(51) == 1
+                }
+                if (!c.isNull(62)) {
+                    val ordinal = c.getInt(62)
+                    val ref = c.getString(63)
+                    val old = evidenceRefs.putIfAbsent(ordinal, ref)
+                    check(old == null || old == ref) { "Corrupt crew_coordination_evidence_refs ordering" }
+                }
+                if (!c.isNull(64)) {
+                    val transition = Triple(c.getInt(65), c.getString(66), c.getLong(67))
+                    val old = transitions.putIfAbsent(c.getLong(64), transition)
+                    check(old == null || old == transition) { "Corrupt workspace_coordination_reply_state ordering" }
+                }
+            }
+            emit()
+        }
         ChatDbResult.Success(values)
     }
 
@@ -578,7 +778,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             CoordinationReply.State.PREPARED -> return@transaction ChatDbResult.Invalid("PREPARED is an intent, not a transition")
         }
         requireExactCoordinationSource(durable.reference)
-        beforeWrite()
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
         val transitionAtMillis = importedNowMillis() ?: maxOf(System.currentTimeMillis(), durable.stateAtMillis)
         val transitioned = durable.withState(target, transitionAtMillis)
         val seq = appendItem(durable.reference.ownerCentralSessionId, CoordinationReply.STATE_TYPE, durable.reference.referenceId)
@@ -715,12 +915,16 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             "SELECT schema_version,state,state_at_ms FROM workspace_coordination_reply_transitions WHERE conversation_id=? AND reply_id=? ORDER BY seq",
             arrayOf(central, reply.replyId),
         ).use { c -> buildList { while (c.moveToNext()) {
-            check(c.getInt(0) == CoordinationReply.SCHEMA_VERSION) { "Unsupported workspace_coordination_reply_state schema" }
-            add(c.getString(1) to c.getLong(2))
+            add(Triple(c.getInt(0), c.getString(1), c.getLong(2)))
         } } }
+        validateReplyTransitions(reply, states)
+    }
+
+    private fun validateReplyTransitions(reply: CoordinationReply, states: List<Triple<Int, String, Long>>) {
         var state = CoordinationReply.State.PREPARED
         var at = reply.preparedAtMillis
-        for ((name, nextAt) in states) {
+        for ((schemaVersion, name, nextAt) in states) {
+            check(schemaVersion == CoordinationReply.SCHEMA_VERSION) { "Unsupported workspace_coordination_reply_state schema" }
             val next = CoordinationReply.State.valueOf(name)
             check((state == CoordinationReply.State.PREPARED && next == CoordinationReply.State.STARTED) ||
                 (state == CoordinationReply.State.STARTED && next == CoordinationReply.State.ACCEPTED_LOCAL)) {
@@ -737,18 +941,23 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         "SELECT schema_version,source_kind,source_id,source_reference_id,mailbox_message_id,owner_central_session_id,workspace_id,execution_session_id,assignment_id,request_id,mission_id,bot_id,admission_cycle_id,first_incorporation_cycle_id,source_payload_sha256,delivered_content_sha256,transport_kind,transport_sha256,checkpoint_payload_sha256,checkpoint_saved_at_ms,recorded_at_ms FROM workspace_input_incorporations WHERE conversation_id=? AND receipt_id=?",
         arrayOf(central, receiptId),
     ).use { c ->
-        if (!c.moveToFirst()) null else {
-            val schemaVersion = c.getInt(0)
-            val sourceReferenceId = if (c.isNull(3)) {
-                throw IllegalStateException("Corrupt workspace_input_incorporations row: source_reference_id is null")
-            } else c.getString(3)
-            val value = InputIncorporation.create(InputIncorporation.SourceKind.valueOf(c.getString(1)), c.getString(2),
-                sourceReferenceId, c.getString(4), c.getString(5), c.getString(6), c.getString(7), c.getString(8),
-                c.getString(9), c.getString(10), c.getString(11), c.getString(12), c.getString(13), c.getString(14),
-                c.getString(15), c.getString(16), c.getString(17), c.getString(18), c.getLong(19), c.getLong(20))
-            check(schemaVersion == InputIncorporation.SCHEMA_VERSION && value.receiptId == receiptId) { "Corrupt workspace_input_incorporations identity" }
-            value
+        if (!c.moveToFirst()) null else readInputIncorporation(c).also {
+            check(it.receiptId == receiptId) { "Corrupt workspace_input_incorporations identity" }
         }
+    }
+
+    private fun readInputIncorporation(c: Cursor, offset: Int = 0): InputIncorporation {
+        val schemaVersion = c.getInt(offset)
+        val sourceReferenceId = if (c.isNull(offset + 3)) {
+            throw IllegalStateException("Corrupt workspace_input_incorporations row: source_reference_id is null")
+        } else c.getString(offset + 3)
+        val value = InputIncorporation.create(InputIncorporation.SourceKind.valueOf(c.getString(offset + 1)), c.getString(offset + 2),
+            sourceReferenceId, c.getString(offset + 4), c.getString(offset + 5), c.getString(offset + 6), c.getString(offset + 7),
+            c.getString(offset + 8), c.getString(offset + 9), c.getString(offset + 10), c.getString(offset + 11), c.getString(offset + 12),
+            c.getString(offset + 13), c.getString(offset + 14), c.getString(offset + 15), c.getString(offset + 16),
+            c.getString(offset + 17), c.getString(offset + 18), c.getLong(offset + 19), c.getLong(offset + 20))
+        check(schemaVersion == InputIncorporation.SCHEMA_VERSION) { "Corrupt workspace_input_incorporations schema" }
+        return value
     }
 
     private fun requireExactCoordinationSource(reference: CoordinationReference) {
@@ -842,6 +1051,25 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         ChatDbResult.Conflict(constraint.message ?: "strict journal constraint conflict")
     }
 
+    private suspend fun <T> readTransaction(block: suspend () -> ChatDbResult<T>): ChatDbResult<T> = try {
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { block() }
+        }
+    } catch (abort: JournalAbort) {
+        when (abort.reason) {
+            "conversation_not_found" -> ChatDbResult.NotFound
+            "conversation_tombstoned" -> ChatDbResult.Tombstoned
+            "invalid_page_limit" -> ChatDbResult.Invalid("page limit must be 1..100")
+            "invalid_execution_session" -> ChatDbResult.Invalid("canonical workspace execution session required")
+            "invalid_central_session" -> ChatDbResult.Invalid("canonical Central owner required")
+            else -> ChatDbResult.Invalid(abort.reason)
+        }
+    } catch (invalid: IllegalArgumentException) {
+        ChatDbResult.Invalid(invalid.message ?: "invalid strict journal row")
+    } catch (constraint: SQLiteConstraintException) {
+        ChatDbResult.Conflict(constraint.message ?: "strict journal constraint conflict")
+    }
+
     private data class ResultRefRow(
         val schemaVersion: Int,
         val evidenceId: String,
@@ -867,8 +1095,9 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val missionId: String, val botId: String, val cycleId: String, val messageId: String, val kind: String,
         val text: ByteArray, val producedAtMillis: Long, val evidenceId: String, val contentSha256: String,
     ) {
-        constructor(c: Cursor) : this(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5),
-            c.getBlob(6), c.getLong(7), c.getString(8), c.getString(9))
+        constructor(c: Cursor, offset: Int = 0) : this(c.getInt(offset), c.getString(offset + 1), c.getString(offset + 2),
+            c.getString(offset + 3), c.getString(offset + 4), c.getString(offset + 5), c.getBlob(offset + 6), c.getLong(offset + 7),
+            c.getString(offset + 8), c.getString(offset + 9))
     }
 
     private data class CoordinationRefRow(
@@ -878,9 +1107,10 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val botId: String, val cycleId: String, val messageId: String, val kind: String, val revision: Long,
         val producedAtMillis: Long,
     ) {
-        constructor(c: Cursor) : this(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4),
-            c.getString(5), c.getString(6), c.getString(7), c.getString(8), c.getString(9), c.getString(10), c.getString(11),
-            c.getString(12), c.getLong(13), c.getLong(14))
+        constructor(c: Cursor, offset: Int = 0) : this(c.getInt(offset), c.getString(offset + 1), c.getString(offset + 2),
+            c.getString(offset + 3), c.getString(offset + 4), c.getString(offset + 5), c.getString(offset + 6), c.getString(offset + 7),
+            c.getString(offset + 8), c.getString(offset + 9), c.getString(offset + 10), c.getString(offset + 11), c.getString(offset + 12),
+            c.getLong(offset + 13), c.getLong(offset + 14))
     }
 
     private data class ReplyRow(
@@ -889,8 +1119,9 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val centralRequestId: String, val originalRequest: ByteArray, val mailboxMessageId: String,
         val payloadSha256: String, val preparedAtMillis: Long, val state: String, val stateAtMillis: Long,
     ) {
-        constructor(c: Cursor) : this(c.getInt(0), c.getString(1), c.getString(2), c.getString(3), c.getBlob(4), c.getString(5),
-            c.getBlob(6), c.getString(7), c.getString(8), c.getLong(9), c.getString(10), c.getLong(11))
+        constructor(c: Cursor, offset: Int = 0) : this(c.getInt(offset), c.getString(offset + 1), c.getString(offset + 2),
+            c.getString(offset + 3), c.getBlob(offset + 4), c.getString(offset + 5), c.getBlob(offset + 6), c.getString(offset + 7),
+            c.getString(offset + 8), c.getLong(offset + 9), c.getString(offset + 10), c.getLong(offset + 11))
     }
 
     private class JournalAbort(val reason: String) : RuntimeException(reason)

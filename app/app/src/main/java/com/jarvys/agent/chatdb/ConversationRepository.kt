@@ -128,6 +128,59 @@ data class InterruptRequestValue(
     val acknowledgementRequired: Boolean = false,
 )
 
+/** One authoritative projection of pending interrupt receipts, shared by the repository and timeline. */
+private const val MAX_PENDING_INTERRUPT_SKILL_BIND_PARAMETERS = 500
+
+internal fun readPendingInterruptRows(sql: ChatSqlDatabase, conversationId: String? = null): List<InterruptRequestValue> {
+    val scope = if (conversationId == null) "" else "AND r.conversation_id=?"
+    val args = if (conversationId == null) emptyArray() else arrayOf<Any?>(conversationId)
+    val pending = sql.query(
+        "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+            "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
+            "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
+            "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
+            "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state_seq END AS input_state_seq," +
+            "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
+            "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
+            "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
+            "WHERE r.seq<=c.next_seq-1 $scope ORDER BY r.conversation_id,r.seq",
+        args,
+    ).use { cursor -> buildList {
+        while (cursor.moveToNext()) {
+            val state = cursor.getStringOrNull("input_state")
+            val dispatchedSeq = cursor.getLongOrNull("dispatched_seq")
+            val ackRequired = cursor.getInt(cursor.getColumnIndexOrThrow("ack_required")) != 0
+            // input_state stores the CHECK-constrained values "resolved" / "incorporated";
+            // those are the same states represented by the legacy marker rows.
+            if (state == ConversationRepository.INPUT_RESOLVED || state == ConversationRepository.INPUT_INCORPORATED) continue
+            if (dispatchedSeq != null && !ackRequired) continue
+            add(InterruptRequestValue(
+                conversationId = cursor.getString(0), requestId = cursor.getString(1), seq = cursor.getLong(2),
+                content = cursor.getString(3), memoryDisabled = cursor.getInt(4) != 0, skills = emptyList(),
+                dispatchedMessageId = cursor.getStringOrNull("dispatched_message_id"), dispatchedSeq = dispatchedSeq,
+                inputState = state, inputStateSeq = cursor.getLongOrNull("input_state_seq"),
+                alreadyDispatched = dispatchedSeq != null, acknowledgementRequired = ackRequired,
+            ))
+        }
+    } }
+    if (pending.isEmpty()) return emptyList()
+    val skills = mutableMapOf<Pair<String, String>, MutableList<String>>()
+    pending.map { it.conversationId to it.requestId }.distinct().chunked(MAX_PENDING_INTERRUPT_SKILL_BIND_PARAMETERS / 2).forEach { pairs ->
+        val requested = pairs.joinToString(",") { "(?,?)" }
+        val args = pairs.flatMap { listOf(it.first, it.second) }.toTypedArray()
+        sql.query(
+            "WITH requested(conversation_id,request_id) AS (VALUES $requested) " +
+                "SELECT s.conversation_id,s.request_id,s.skill_id FROM interrupt_request_skills s " +
+                "JOIN requested r ON r.conversation_id=s.conversation_id AND r.request_id=s.request_id " +
+                "ORDER BY s.conversation_id,s.request_id,s.ordinal",
+            args,
+        ).use { cursor -> while (cursor.moveToNext()) {
+            skills.getOrPut(cursor.getString(0) to cursor.getString(1)) { mutableListOf() }.add(cursor.getString(2))
+        } }
+    }
+    return pending.map { it.copy(skills = skills[it.conversationId to it.requestId].orEmpty()) }
+}
+
 data class DispatchedInterrupt(val request: InterruptRequestValue, val message: StoredMessage, val inserted: Boolean)
 
 data class GenerationRunValue(
@@ -214,8 +267,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     /** Reads the persisted importer state/byte offset without opening the single writer lease. */
-    internal suspend fun readImportConversation(conversationId: String): Conversation? = database.withChatReadTransaction {
-        findConversation(conversationId)
+    internal suspend fun readImportConversation(conversationId: String): Conversation? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction { findConversation(conversationId) }
     }
 
     internal suspend fun isImported(conversationId: String): Boolean =
@@ -352,9 +405,11 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         }
 
     /** Reads tombstone state replacing the deletion check through `LocalRunStore.java:readConversationMetadata`. */
-    suspend fun isTombstoned(conversationId: String): Boolean = database.withChatReadTransaction {
-        sql.query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)", arrayOf(conversationId))
-            .use { it.moveToFirst(); it.getInt(0) != 0 }
+    suspend fun isTombstoned(conversationId: String): Boolean = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            sql.query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)", arrayOf(conversationId))
+                .use { it.moveToFirst(); it.getInt(0) != 0 }
+        }
     }
 
     /**
@@ -714,51 +769,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * captured `next_seq-1` bounds rows and state markers so an active WAL writer cannot block it.
      */
     suspend fun pendingInterruptRequests(conversationId: String? = null): List<InterruptRequestValue> {
-        return database.withChatReadTransaction {
-        val where = if (conversationId == null) "" else "AND r.conversation_id=?"
-        val args = if (conversationId == null) emptyArray() else arrayOf<Any?>(conversationId)
-        val pending = sql.query(
-            "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS snapshot_dispatched_message_id," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS snapshot_dispatched_seq," +
-                "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS snapshot_input_state," +
-                "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state_seq END AS snapshot_input_state_seq," +
-                "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS snapshot_ack_required " +
-                "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
-                "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
-                "WHERE r.seq<=c.next_seq-1 $where ORDER BY r.conversation_id,r.seq",
-            args,
-        ).use { cursor -> buildList {
-            while (cursor.moveToNext()) {
-                val dispatchedSeq = cursor.getLongOrNull("snapshot_dispatched_seq")
-                val state = cursor.getStringOrNull("snapshot_input_state")
-                val acknowledgementRequired = cursor.getInt(cursor.getColumnIndexOrThrow("snapshot_ack_required")) != 0
-                val alreadyDispatched = dispatchedSeq != null
-                if (state == INPUT_RESOLVED || state == INPUT_INCORPORATED) continue
-                if (alreadyDispatched && !acknowledgementRequired) continue
-                add(InterruptRequestValue(
-                    conversationId = cursor.getString(0), requestId = cursor.getString(1), seq = cursor.getLong(2),
-                    content = cursor.getString(3), memoryDisabled = cursor.getInt(4) != 0, skills = emptyList(),
-                    dispatchedMessageId = cursor.getStringOrNull("snapshot_dispatched_message_id"), dispatchedSeq = dispatchedSeq,
-                    inputState = state, inputStateSeq = cursor.getLongOrNull("snapshot_input_state_seq"),
-                    alreadyDispatched = alreadyDispatched, acknowledgementRequired = acknowledgementRequired,
-                ))
-            }
-        } }
-        if (pending.isEmpty()) return@withChatReadTransaction emptyList()
-        val skills = mutableMapOf<Pair<String, String>, MutableList<String>>()
-        pending.groupBy { it.conversationId }.forEach { (id, requests) ->
-            requests.map { it.requestId }.distinct().chunked(MAX_SQL_BIND_PARAMETERS).forEach { chunk ->
-                val placeholders = chunk.joinToString(",") { "?" }
-                sql.query(
-                    "SELECT request_id,skill_id FROM interrupt_request_skills WHERE conversation_id=? AND request_id IN ($placeholders) ORDER BY request_id,ordinal",
-                    arrayOf<Any?>(id, *chunk.toTypedArray()),
-                ).use { cursor -> while (cursor.moveToNext()) {
-                    skills.getOrPut(id to cursor.getString(0)) { mutableListOf() }.add(cursor.getString(1))
-                } }
-            }
-        }
-        pending.map { it.copy(skills = skills[it.conversationId to it.requestId].orEmpty()) }
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { readPendingInterruptRows(sql, conversationId) }
         }
     }
 
@@ -784,7 +796,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (message == null && requestState != null) continue
             if (message != null && requestState != null && requestState != NO_INPUT_STATE_ROW) continue
             val seq = allocateSequence(conversationId)
-            insertItem(conversationId, seq, state, id, seq, 0, latestTurnAnchor(conversationId), epochSeconds())
+            insertItem(conversationId, seq, itemKindForInputState(state), id, seq, 0, latestTurnAnchor(conversationId), epochSeconds())
             if (message != null) {
                 sql.execSQL("UPDATE messages SET input_state=?,input_state_seq=? WHERE conversation_id=? AND message_id=? AND input_state IS NULL", arrayOf(state, seq, conversationId, id))
                 sql.execSQL("UPDATE interrupt_requests SET input_state=?,input_state_seq=? WHERE conversation_id=? AND dispatched_message_id=? AND input_state IS NULL", arrayOf(state, seq, conversationId, id))
@@ -822,7 +834,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         }
         val seq = allocateSequence(conversationId)
         insertItem(
-            conversationId, seq, state, requestedIds.joinToString("\u001f"), seq, 0,
+            conversationId, seq, itemKindForInputState(state), requestedIds.joinToString("\u001f"), seq, 0,
             latestTurnAnchor(conversationId), epochSeconds(),
         )
         for ((id, message) in targets) {
@@ -875,6 +887,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     /** Appends a last-wins `user_decision_resolution`, replacing `LocalRunStore.java:appendUserDecisionResolution`. */
     suspend fun resolveDecision(conversationId: String, decisionId: String, status: String, optionId: String?, optionLabel: String?): ChatDbResult<Long> = transactionResult {
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
+        if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
+        if (decisionId.isBlank() || !findDecision(conversationId, decisionId)) return@transactionResult ChatDbResult.NotFound
         val seq = allocateSequence(conversationId)
         insertItem(conversationId, seq, ITEM_DECISION_RESOLUTION, decisionId, seq, 0, latestTurnAnchor(conversationId), epochSeconds())
         sql.execSQL("UPDATE user_decisions SET status=?,option_id=?,option_label=?,resolved_seq=? WHERE conversation_id=? AND decision_id=?", arrayOf(status, optionId, optionLabel, seq, conversationId, decisionId))
@@ -891,7 +905,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * and `LocalRunStore.java:readConversationAttachments` without N+1 hydration.
      */
     suspend fun getMessagesByIds(conversationId: String, messageIds: List<String>): List<StoredMessage> {
-        return database.withChatReadTransaction {
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         if (messageIds.isEmpty()) return@withChatReadTransaction emptyList()
         val highWater = maxSeq(conversationId)
         val byId = mutableMapOf<String, StoredMessage>()
@@ -907,7 +921,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (byId.isEmpty()) return@withChatReadTransaction emptyList()
         val loaded = hydrateChildren(conversationId, byId, highWater)
         messageIds.mapNotNull(loaded::get)
-        }
+        } }
     }
 
     /**
@@ -932,29 +946,29 @@ class ConversationRepository internal constructor(private val database: JarvysCh
 
     /** Returns the latest `role=user` ID derived from `LocalRunStore.java:readConversationMessages`. */
     suspend fun latestUserMessageId(conversationId: String): String? {
-        return database.withChatReadTransaction {
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val highWater = maxSeq(conversationId)
         sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq DESC LIMIT 1", arrayOf(conversationId, highWater))
             .use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        }
+        } }
     }
 
     /** Returns the first `role=user` row, replacing `LocalRunStore.java:readFirstUserMessage` and `LocalRunStore.java:loadConversationContext`. */
     suspend fun firstUserMessage(conversationId: String): StoredMessage? {
-        return database.withChatReadTransaction {
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val highWater = maxSeq(conversationId)
         val id = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND seq<=? ORDER BY seq LIMIT 1", arrayOf(conversationId, highWater)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         id?.let { hydrateMessages(conversationId, listOf(it), highWater).firstOrNull() }
-        }
+        } }
     }
 
     /** Counts `role=user`/`role=assistant` rows from `LocalRunStore.java:readConversationMessages`. */
-    suspend fun messageCounts(conversationId: String): MessageCounts = database.withChatReadTransaction {
+    suspend fun messageCounts(conversationId: String): MessageCounts = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         sql.query(
             "SELECT message_count,(SELECT COUNT(*) FROM messages WHERE conversation_id=? AND role='user') FROM conversations WHERE id=?",
             arrayOf(conversationId, conversationId),
         ).use { c -> if (c.moveToFirst()) MessageCounts(c.getLong(0), c.getLong(1)) else MessageCounts(0, 0) }
-    }
+    } }
 
     /**
      * One WAL-friendly projection for the drawer. Rows are timestamp-ordered like the legacy
@@ -963,7 +977,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun listConversations(
         limit: Int,
         excludedKinds: Set<String> = DEFAULT_EXCLUDED_KINDS,
-    ): List<ConversationSummary> = database.withChatReadTransaction {
+    ): List<ConversationSummary> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         require(limit > 0) { "limit must be positive" }
         val excluded = excludedKinds.toList()
         val hasActiveMessages = "EXISTS(SELECT 1 FROM messages active WHERE active.conversation_id=c.id AND active.seq<c.next_seq AND " +
@@ -995,7 +1009,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 ConversationSummary(c.getString(0), c.getString(1), title, c.getStringOrNull(5), c.getStringOrNull(6), c.getLong(7), c.getLong(8), createdAt, activeAt ?: createdAt, activeAt, c.getInt(11) != 0, c.getInt(12) != 0, c.getInt(13) != 0)
             },
         ) } }
-    }
+    } }
 
     /** Creates a `generation_run` for a streaming `role=assistant` row from `LocalRunStore.java:appendConversationMessage`; run revision locking is new to SQLite. */
     suspend fun createGenerationRun(runId: String, conversationId: String, messageId: String, state: String = RUN_PREPARING): ChatDbResult<GenerationRunValue> = transactionResult {
@@ -1178,6 +1192,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         return null
     }
 
+    private fun itemKindForInputState(state: String): String = when (state) {
+        INPUT_INCORPORATED -> ITEM_INPUT_INCORPORATED
+        INPUT_RESOLVED -> ITEM_INPUT_RESOLVED
+        else -> error("unsupported input state: $state")
+    }
+
     private fun allocateSequence(conversationId: String): Long {
         val imported = importedPositionFor(conversationId)
         val current = sql.query("SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId)).use { c ->
@@ -1247,7 +1267,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (owner.role != ROLE_USER || owner.inputState != null) return
         val seq = allocateSequence(conversationId)
         val now = epochSeconds()
-        insertItem(conversationId, seq, INPUT_RESOLVED, ownerUserMessageId, seq, 0, latestTurnAnchor(conversationId), now)
+        insertItem(conversationId, seq, ITEM_INPUT_RESOLVED, ownerUserMessageId, seq, 0, latestTurnAnchor(conversationId), now)
         sql.execSQL(
             "UPDATE messages SET input_state=?,input_state_seq=? WHERE conversation_id=? AND message_id=? AND input_state IS NULL",
             arrayOf(INPUT_RESOLVED, seq, conversationId, ownerUserMessageId),
@@ -1262,7 +1282,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val message = findMessage(conversationId, messageId) ?: return
         if (message.role != ROLE_USER || message.inputState != null) return
         val seq = allocateSequence(conversationId)
-        insertItem(conversationId, seq, INPUT_RESOLVED, messageId, seq, 0, latestTurnAnchor(conversationId), epochSeconds())
+        insertItem(conversationId, seq, ITEM_INPUT_RESOLVED, messageId, seq, 0, latestTurnAnchor(conversationId), epochSeconds())
         sql.execSQL(
             "UPDATE messages SET input_state=?,input_state_seq=? WHERE conversation_id=? AND message_id=? AND input_state IS NULL",
             arrayOf(INPUT_RESOLVED, seq, conversationId, messageId),
@@ -1307,14 +1327,26 @@ class ConversationRepository internal constructor(private val database: JarvysCh
 
     private fun insertAttachments(conversationId: String, messageId: String, attachments: List<MessageAttachmentInput>, now: Double) {
         attachments.forEachIndexed { index, attachment ->
-            val fileId = sql.query("SELECT id FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
-            val resolvedFileId = fileId ?: UUID.randomUUID().toString().also { id ->
-                sql.execSQL("INSERT INTO file_refs(id,sha256,relative_path,bytes,mime_type,last_referenced_at,attempts,generation) VALUES(?,?,?,?,?,?,0,0)", arrayOf(id, attachment.sha256.orEmpty(), attachment.relativePath, attachment.sizeBytes, attachment.mimeType, (now * 1000).toLong()))
+            val existingFile = sql.query("SELECT id,sha256,bytes FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath)).use { c ->
+                if (c.moveToFirst()) Triple(c.getString(0), c.getString(1), c.getLong(2)) else null
             }
-            if (fileId != null) sql.execSQL(
-                "UPDATE file_refs SET sha256=COALESCE(NULLIF(?,''),sha256),bytes=?,mime_type=?,last_referenced_at=? WHERE id=?",
-                arrayOf(attachment.sha256.orEmpty(), attachment.sizeBytes, attachment.mimeType, (now * 1000).toLong(), fileId),
-            )
+            val inputDigest = attachment.sha256.orEmpty()
+            val resolvedFileId = existingFile?.first ?: UUID.randomUUID().toString().also { id ->
+                sql.execSQL("INSERT INTO file_refs(id,sha256,relative_path,bytes,mime_type,last_referenced_at,attempts,generation) VALUES(?,?,?,?,?,?,0,0)", arrayOf(id, inputDigest, attachment.relativePath, attachment.sizeBytes, attachment.mimeType, (now * 1000).toLong()))
+            }
+            if (existingFile != null) {
+                val storedDigest = existingFile.second.orEmpty()
+                if (existingFile.third != attachment.sizeBytes ||
+                    storedDigest.isNotEmpty() && inputDigest.isNotEmpty() && storedDigest != inputDigest
+                ) throw RepositoryAbort("file_reference_content_conflict")
+                // An empty digest means unknown; preserve a known digest or complete it when a
+                // later owner supplies one. Byte count remains strict because it is always known.
+                val resolvedDigest = if (storedDigest.isEmpty()) inputDigest else storedDigest
+                sql.execSQL(
+                    "UPDATE file_refs SET sha256=?,mime_type=?,last_referenced_at=? WHERE id=?",
+                    arrayOf(resolvedDigest, attachment.mimeType, (now * 1000).toLong(), resolvedFileId),
+                )
+            }
             sql.execSQL(
                 "INSERT INTO message_attachments(conversation_id,message_id,ordinal,attachment_id,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 arrayOf(conversationId, messageId, index, attachment.attachmentId, attachment.name, attachment.mimeType, attachment.sizeBytes, attachment.kind, attachment.relativePath, attachment.sha256, resolvedFileId),
@@ -1502,6 +1534,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         private const val ITEM_INTERRUPT_REQUEST = "main_interrupt_request"
         private const val ITEM_DECISION_REQUEST = "user_decision_request"
         private const val ITEM_DECISION_RESOLUTION = "user_decision_resolution"
+        private const val ITEM_INPUT_INCORPORATED = "main_chat_input_incorporated"
+        private const val ITEM_INPUT_RESOLVED = "main_chat_input_resolved"
         private const val NO_INPUT_STATE_ROW = "\u0001"
         private const val MAX_SQL_BIND_PARAMETERS = 500
         private const val MAX_WINDOW_ITEMS = 500
@@ -1594,6 +1628,7 @@ class ConversationRepositoryBlocking(private val repository: ConversationReposit
         execute { repository.listConversations(limit) }
 
     private fun <T> execute(block: suspend () -> T): T {
+        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "ConversationRepositoryBlocking must not be called from the main thread"
         }
