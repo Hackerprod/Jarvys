@@ -401,13 +401,9 @@ internal data class ActiveChatDbConnection(
             else -> null
         } ?: return
 
-        // Android's SQLiteSession is thread-bound. Route only the rejection through the owning
-        // dispatcher so Room's transaction cleanup remains on its transaction thread; never use
-        // the connection from the rejected context.
-        val ownerContext = ownerDispatcher
-        if (ownerContext != null) {
-            withContext(ownerContext) { throw IllegalStateException(rejection) }
-        }
+        // Android's SQLiteSession is thread-bound. This rejection path never touches the
+        // connection; let the surrounding withContext unwind to the writer transaction, where
+        // withChatWriteTransaction rethrows it after restoring the owning lease context.
         throw IllegalStateException(rejection)
     }
 }
@@ -462,7 +458,20 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
         useWriterConnection { writer ->
             writer.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
                 val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
-                withContext(LeasedConnectionElement(writer, isWriter = true, ownerDispatcher = dispatcher)) { block() }
+                // Capture ordinary failures before leaving the lease context. A dispatcher-hop
+                // rejection can originate in a nested withContext(IO); returning it as a value
+                // first guarantees that Room receives it back on the transaction owner thread,
+                // where withTransaction can roll back before useWriterConnection releases lease.
+                val outcome: Result<T> = withContext(LeasedConnectionElement(writer, isWriter = true, ownerDispatcher = dispatcher)) {
+                    try {
+                        Result.success(block())
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Throwable) {
+                        Result.failure(failure)
+                    }
+                }
+                outcome.getOrThrow()
             }
         }
     }

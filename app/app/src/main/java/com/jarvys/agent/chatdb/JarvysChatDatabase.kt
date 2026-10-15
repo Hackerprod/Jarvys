@@ -627,12 +627,10 @@ internal object DatabaseTriggers {
                         borrowed.add(database)
                         return database
                     }
-                    try {
-                        lock.wait()
-                    } catch (interrupted: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        throw IllegalStateException("Interrupted while waiting for a Jarvys chat read handle", interrupted)
-                    }
+                    // Let InterruptedException escape. The suspend acquisition wraps this wait
+                    // in runInterruptible, which translates a coroutine cancellation into a
+                    // CancellationException once the blocked worker is interrupted.
+                    lock.wait()
                 }
             }
         }

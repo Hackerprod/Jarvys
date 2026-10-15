@@ -228,10 +228,15 @@ class ChatReadProgressTest {
         val borrowed = (1..4).map { JarvysChatDatabaseProvider.acquireReadDatabaseBlocking(database) }
         try {
             coroutineScope {
-                val waiting = async(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+                val waitingThread = AtomicReference<Thread?>()
+                val waiting = async(Dispatchers.IO, start = CoroutineStart.DEFAULT) {
+                    waitingThread.set(Thread.currentThread())
                     database.withChatReadTransaction { Unit }
                 }
-                delay(100L)
+                withTimeout(5_000L) {
+                    while (waitingThread.get()?.state != Thread.State.WAITING) delay(10L)
+                }
+                assertEquals("the read worker is blocked waiting for a pool handle", Thread.State.WAITING, waitingThread.get()?.state)
                 assertFalse("all raw handles are borrowed, so the projection is still waiting", waiting.isCompleted)
                 waiting.cancel()
                 withTimeout(5_000L) { waiting.join() }

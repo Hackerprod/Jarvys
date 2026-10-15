@@ -224,6 +224,7 @@ class StrictJournalRepositoryTest {
     }
 
     @Test fun strictAndArtifactReadSnapshotsRunWhileWriterTransactionIsHeld() {
+        val transcripts = ModelTranscriptRepository(database)
         val fixture = onDatabaseThread {
             val value = resultFixture()
             success(repository.appendCrewResultEvidence(value.result))
@@ -232,6 +233,12 @@ class StrictJournalRepositoryTest {
                 conversationId = "artifact-read", artifactId = "artifact-read-1", name = "report.txt", mimeType = "text/plain",
                 sizeBytes = 4L, kind = "FILE", relativePath = "chats/artifact-read/report.txt", sha256 = "d".repeat(64),
             )))
+            val confirmedMessage = success(conversations.appendMessage(AppendMessageInput(
+                conversationId = value.execution,
+                role = "user",
+                parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "confirmed message")),
+            )))
+            success(transcripts.appendModelError(value.execution, confirmedMessage.messageId, 0, "confirmed_error"))
             value
         }
         val writerEntered = CountDownLatch(1)
@@ -245,11 +252,12 @@ class StrictJournalRepositoryTest {
             runBlocking {
                 database.withChatWriteTransaction {
                     success(repository.appendCrewResultEvidence(uncommittedEvidence))
-                    success(conversations.appendMessage(AppendMessageInput(
+                    val uncommittedMessage = success(conversations.appendMessage(AppendMessageInput(
                         conversationId = fixture.execution,
                         role = "user",
                         parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "uncommitted message")),
                     )))
+                    success(transcripts.appendModelError(fixture.execution, uncommittedMessage.messageId, 1, "uncommitted_error"))
                     success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
                         conversationId = "artifact-read", artifactId = "artifact-uncommitted", name = "pending.txt", mimeType = "text/plain",
                         sizeBytes = 7L, kind = "FILE", relativePath = "chats/artifact-read/pending.txt", sha256 = "e".repeat(64),
@@ -266,18 +274,24 @@ class StrictJournalRepositoryTest {
                 val evidence = success(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
                 val uncommitted = success(repository.readCrewResultEvidence(fixture.execution, uncommittedEvidence.evidenceId))
                 val counts = conversations.messageCounts(fixture.execution)
-                val transcript = ModelTranscriptRepository(database).readModelTranscript(fixture.execution)
+                val transcript = transcripts.readModelTranscript(fixture.execution)
+                val transcriptErrors = transcript.entries.filterIsInstance<ModelTranscriptEntry.Error>()
+                    .map { it.value.error_code }
                 val pendingCompactions = MemoryTimelineRepository(database).pendingCompactionIds(fixture.execution)
                 val artifactIds = artifacts.artifactsForConversation("artifact-read").map { it.artifact_id }
-                listOf<Any?>(evidence!!.contentSha256, uncommitted, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
+                listOf<Any?>(
+                    evidence!!.contentSha256, uncommitted, counts.total, transcript.entries.size, transcriptErrors,
+                    pendingCompactions.size, artifactIds,
+                )
             }
             assertTrue("the real projections finish with the writer held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000L)
             assertEquals(fixture.result.contentSha256, snapshots[0])
             assertNull("an evidence row held only by the uncommitted writer is invisible", snapshots[1])
-            assertEquals("the uncommitted user message is excluded from counts", 0L, snapshots[2])
-            assertEquals("the uncommitted user message is excluded from the transcript", 0, snapshots[3])
-            assertEquals(0, snapshots[4])
-            assertEquals(listOf("artifact-read-1"), snapshots[5])
+            assertEquals("the confirmed user message remains in counts", 1L, snapshots[2])
+            assertEquals("only the confirmed transcript event remains visible", 1, snapshots[3])
+            assertEquals(listOf("confirmed_error"), snapshots[4])
+            assertEquals(0, snapshots[5])
+            assertEquals(listOf("artifact-read-1"), snapshots[6])
         } finally {
             releaseWriter.countDown()
             writer.get(10, TimeUnit.SECONDS)
@@ -286,8 +300,11 @@ class StrictJournalRepositoryTest {
         onDatabaseThread {
             assertEquals(uncommittedEvidence.contentSha256,
                 success(repository.readCrewResultEvidence(fixture.execution, uncommittedEvidence.evidenceId))?.contentSha256)
-            assertEquals(1L, conversations.messageCounts(fixture.execution).total)
-            assertEquals(1, ModelTranscriptRepository(database).readModelTranscript(fixture.execution).entries.size)
+            assertEquals("both messages are visible after commit", 2L, conversations.messageCounts(fixture.execution).total)
+            val committedErrors = transcripts.readModelTranscript(fixture.execution).entries
+                .filterIsInstance<ModelTranscriptEntry.Error>().map { it.value.error_code }
+            assertEquals("both confirmed transcript events are visible after commit",
+                listOf("confirmed_error", "uncommitted_error"), committedErrors)
         }
     }
 

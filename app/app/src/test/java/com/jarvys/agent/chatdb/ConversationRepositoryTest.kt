@@ -44,6 +44,7 @@ class ConversationRepositoryTest {
     private val testExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "chatdb-repository-test").apply { isDaemon = true } }
     private lateinit var database: JarvysChatDatabase
     private lateinit var repository: ConversationRepository
+    private var databaseClosed = false
 
     @Before fun openDatabase() {
         database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, File(temporary.root, "repository.db"))
@@ -55,7 +56,7 @@ class ConversationRepositoryTest {
         check(testExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
             "Database test worker remained active during @After; refusing to close Room under its operation"
         }
-        if (::database.isInitialized) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        if (::database.isInitialized && !databaseClosed) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
     }
 
     private fun <T> onDatabaseThread(block: suspend () -> T): T {
@@ -641,7 +642,7 @@ class ConversationRepositoryTest {
         // The drawer orders by a computed latest-message timestamp; SQLite's final sort is expected.
     }
 
-    @Test fun rawRepositoryInsertsProvideEveryRequiredSchemaColumn() {
+    @Test fun rawRepositoryInsertsProvideEveryRequiredSchemaColumn() = onDatabaseThread {
         var directory: File? = File(System.getProperty("user.dir")).absoluteFile
         var sourceDirectory: File? = null
         while (directory != null && sourceDirectory == null) {
@@ -746,6 +747,66 @@ class ConversationRepositoryTest {
         }
         assertTrue("raw INSERT audit must cover repository and Daos.kt @Query statements", auditedInsertCount > 0)
         assertTrue("raw INSERT audit must continue validating real application tables", auditedRealTableInsertCount > 0)
+    }
+
+    @Test fun failedTransactionsLeaveDatabaseUsableAndClosable() {
+        onDatabaseThread {
+            success(repository.ensureConversation("failure-close"))
+
+            val ordinaryFailure = runCatching {
+                database.withChatWriteTransaction {
+                    success(repository.appendMessage(AppendMessageInput(
+                        conversationId = "failure-close", role = "user",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "ordinary rollback")),
+                    )))
+                    throw IllegalArgumentException("injected transaction failure")
+                }
+            }.exceptionOrNull()
+            assertTrue("an ordinary transaction failure propagates", ordinaryFailure is IllegalArgumentException)
+            assertEquals("the ordinary transaction write rolls back", 0L, repository.messageCounts("failure-close").total)
+
+            val cancelledFailure = runCatching {
+                database.withChatWriteTransaction {
+                    success(repository.appendMessage(AppendMessageInput(
+                        conversationId = "failure-close", role = "user",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "cancelled rollback")),
+                    )))
+                    throw kotlinx.coroutines.CancellationException("injected transaction cancellation")
+                }
+            }.exceptionOrNull()
+            assertTrue("transaction cancellation propagates", cancelledFailure is kotlinx.coroutines.CancellationException)
+            assertEquals("the cancelled transaction write rolls back", 0L, repository.messageCounts("failure-close").total)
+
+            val affinityFailure = runCatching {
+                database.withChatWriteTransaction {
+                    success(repository.appendMessage(AppendMessageInput(
+                        conversationId = "failure-close", role = "user",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "affinity rollback")),
+                    )))
+                    withContext(Dispatchers.IO) { repository.messageCounts("failure-close") }
+                }
+            }.exceptionOrNull()
+            assertTrue("a dispatcher hop under the writer lease is rejected", affinityFailure is IllegalStateException)
+            assertEquals("the rejected transaction write rolls back", 0L, repository.messageCounts("failure-close").total)
+
+            val committed = success(repository.appendMessage(AppendMessageInput(
+                conversationId = "failure-close", role = "user",
+                parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "database remains usable")),
+            )))
+            assertEquals(committed.messageId, repository.getMessage("failure-close", committed.messageId)?.messageId)
+            assertEquals(1L, repository.messageCounts("failure-close").total)
+        }
+
+        val close = FutureTask<Unit> { JarvysChatDatabaseProvider.closeDatabaseFileForTests(database) }
+        Thread(close, "chatdb-failure-close-test").apply { isDaemon = true }.start()
+        try {
+            close.get(5, TimeUnit.SECONDS)
+        } finally {
+            // A timed-out close may still be unwinding on the daemon thread. Avoid a second,
+            // unbounded close from @After; the bounded assertion above owns this regression.
+            databaseClosed = true
+            if (!close.isDone) close.cancel(true)
+        }
     }
 
     @Test fun insertSelectProjectionAuditIgnoresNestedClausesAndQuotedCommas() {
