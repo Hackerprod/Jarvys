@@ -39,7 +39,7 @@ public class WorkspaceResultLedgerTest {
     @Rule public TestRule databaseThread = (base, description) -> new Statement() {
         @Override public void evaluate() throws Throwable {
             java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
-                base.evaluate(); return null;
+                try { base.evaluate(); } catch (Exception e) { throw e; } catch (Throwable t) { throw new RuntimeException(t); } return null;
             });
             Thread worker = new Thread(task, "workspace-result-room-test");
             worker.start();
@@ -333,7 +333,7 @@ public class WorkspaceResultLedgerTest {
         }
     }
 
-    @Test public void legitimateNoticeIsProjectedWithoutWorkerChatContent() {
+    @Test public void legitimateNoticeIsProjectedWithoutWorkerChatContent() throws Exception {
         WorkspaceResultReference legitimate = persistReference(evidence("forged-parity", "legitimate result"));
         store.appendWorkspaceResultNoticeIfAbsent(legitimate, () -> { });
         store.appendConversationMessage(CENTRAL, "user", "ordinary central chat");

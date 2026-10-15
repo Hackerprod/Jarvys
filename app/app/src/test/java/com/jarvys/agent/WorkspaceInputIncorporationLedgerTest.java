@@ -39,7 +39,7 @@ public class WorkspaceInputIncorporationLedgerTest {
     @Rule public TestRule databaseThread = (base, description) -> new Statement() {
         @Override public void evaluate() throws Throwable {
             java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
-                base.evaluate(); return null;
+                try { base.evaluate(); } catch (Exception e) { throw e; } catch (Throwable t) { throw new RuntimeException(t); } return null;
             });
             Thread worker = new Thread(task, "workspace-input-room-test");
             worker.start();
