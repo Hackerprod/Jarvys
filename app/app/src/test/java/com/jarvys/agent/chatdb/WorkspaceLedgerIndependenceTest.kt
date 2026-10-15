@@ -53,7 +53,7 @@ class WorkspaceLedgerIndependenceTest {
         database.conversationDao().insertIfNotTombstoned(Conversation(id = central, created_at = 1L, updated_at = 1L))
         database.conversationDao().insertIfNotTombstoned(Conversation(id = execution, created_at = 1L, updated_at = 1L))
         val sqlite = database.openHelper.writableDatabase
-        (1L..5L).forEach { seq ->
+        (1L..6L).forEach { seq ->
             sqlite.execSQL(
                 "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
                 arrayOf(central, seq, "workspace", "central-$seq", seq, 0, seq + 0.25),

@@ -3,13 +3,12 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
-import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
-import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.platform.app.InstrumentationRegistry
 import androidx.room.withTransaction
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -572,23 +571,35 @@ class JarvysChatDatabaseM0Test {
         assertArrayEquals(before, futureFile.readBytes())
     }
 
+    /**
+     * Checks the versioned Room export against a real database created by Room. When the first
+     * real migration to v2 is added, use MigrationTestHelper's schema-path constructor there;
+     * this guard catches drift between the versioned JSON and the current database code meanwhile.
+     */
     @Test
-    fun migrationTestHelperCanCreateAndValidateExportedV1Schema() {
-        val schemaAsset = "${JarvysChatDatabase::class.java.name}/1.json"
-        val schemaSize = context.assets.open(schemaAsset).use { it.readBytes().size }
-        assertTrue("Test assets must contain generated schema $schemaAsset", schemaSize > 0)
+    fun exportedSchemaV1MatchesRealDatabaseStructure() = onDatabaseThreadBlocking {
+        val schemaDirectory = System.getProperty("room.schemaDir")
+        assertTrue(
+            "Missing required system property room.schemaDir; configure it to the Room schemas directory",
+            !schemaDirectory.isNullOrBlank(),
+        )
+        val schemaFile = File(
+            File(schemaDirectory!!, JarvysChatDatabase::class.java.name),
+            "1.json",
+        )
+        assertTrue("Exported Room schema JSON is missing: ${schemaFile.absolutePath}", schemaFile.isFile)
 
-        onDatabaseThreadBlocking {
-            val helper = MigrationTestHelper(
-                InstrumentationRegistry.getInstrumentation(),
-                JarvysChatDatabase::class.java,
-                emptyList(),
-                FrameworkSQLiteOpenHelperFactory()
-            )
-            val name = File(temporary.root, "migration-v1.db").absolutePath
-            helper.createDatabase(name, 1).close()
-            helper.runMigrationsAndValidate(name, 1, true).close()
-        }
+        val exportedDatabase = JSONObject(schemaFile.readText(Charsets.UTF_8)).getJSONObject("database")
+        assertEquals("Exported schema version", 1, exportedDatabase.getInt("version"))
+
+        val sqlite = database.openHelper.writableDatabase
+        assertEquals("Room database version", 1L, pragmaLong(sqlite, "user_version"))
+        assertEquals(
+            "Room identity hash",
+            exportedDatabase.getString("identityHash"),
+            scalarString(sqlite, "SELECT identity_hash FROM room_master_table WHERE id=42"),
+        )
+        assertExportedSchemaMatchesDatabase(exportedDatabase, sqlite)
     }
 
     @Test
@@ -680,6 +691,230 @@ class JarvysChatDatabaseM0Test {
             assertTrue(cursor.moveToFirst())
             cursor.getLong(0)
         }
+
+    private data class SchemaColumn(
+        val name: String,
+        val affinity: String,
+        val notNull: Boolean,
+        val primaryKeyPosition: Int,
+        val defaultValue: String?,
+    )
+
+    private data class SchemaIndex(val name: String, val unique: Boolean, val columns: List<String>)
+
+    private data class SchemaForeignKey(
+        val table: String,
+        val columns: List<String>,
+        val referencedColumns: List<String>,
+        val onDelete: String,
+        val onUpdate: String,
+    )
+
+    private data class SchemaForeignKeyPart(
+        val sequence: Int,
+        val column: String,
+        val referencedColumn: String,
+    )
+
+    private data class SchemaForeignKeyRows(
+        val table: String,
+        val onDelete: String,
+        val onUpdate: String,
+        val parts: MutableList<SchemaForeignKeyPart> = mutableListOf(),
+    )
+
+    private fun assertExportedSchemaMatchesDatabase(
+        exportedDatabase: JSONObject,
+        sqlite: SupportSQLiteDatabase,
+    ) {
+        val expectedEntities = linkedMapOf<String, JSONObject>()
+        val entities = exportedDatabase.getJSONArray("entities")
+        for (index in 0 until entities.length()) {
+            val entity = entities.getJSONObject(index)
+            val table = entity.getString("tableName")
+            assertTrue("Duplicate exported entity table $table", expectedEntities.put(table, entity) == null)
+        }
+
+        val actualTables = sqlite.query(
+            "SELECT name FROM sqlite_master WHERE type='table' " +
+                "AND name NOT LIKE 'sqlite_%' AND name NOT IN ('android_metadata', 'room_master_table')",
+        ).use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+            }
+        }
+        assertEquals("Exported entity tables differ from the Room-created database", expectedEntities.keys, actualTables)
+
+        expectedEntities.forEach { (table, entity) ->
+            assertEquals("Column definitions for $table", exportedColumns(entity), databaseColumns(sqlite, table))
+            assertEquals("Indexes for $table", exportedIndexes(entity), databaseIndexes(sqlite, table))
+            assertEquals("Foreign keys for $table", exportedForeignKeys(entity), databaseForeignKeys(sqlite, table))
+        }
+    }
+
+    private fun exportedColumns(entity: JSONObject): List<SchemaColumn> {
+        val primaryKeyColumns = entity.getJSONObject("primaryKey").getJSONArray("columnNames")
+        val primaryKeyPositions = (0 until primaryKeyColumns.length()).associate { index ->
+            primaryKeyColumns.getString(index) to (index + 1)
+        }
+        val fields = entity.getJSONArray("fields")
+        return (0 until fields.length()).map { index ->
+            val field = fields.getJSONObject(index)
+            val name = field.getString("columnName")
+            SchemaColumn(
+                name = name,
+                affinity = sqliteAffinity(field.getString("affinity")),
+                notNull = field.optBoolean("notNull", false),
+                primaryKeyPosition = primaryKeyPositions[name] ?: 0,
+                defaultValue = normalizeSqlDefault(
+                    if (field.has("defaultValue") && !field.isNull("defaultValue")) field.getString("defaultValue") else null,
+                ),
+            )
+        }
+    }
+
+    private fun databaseColumns(sqlite: SupportSQLiteDatabase, table: String): List<SchemaColumn> =
+        sqlite.query("PRAGMA table_info(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val defaultColumn = cursor.getColumnIndexOrThrow("dflt_value")
+                    add(
+                        SchemaColumn(
+                            name = cursor.getString(cursor.getColumnIndexOrThrow("name")),
+                            affinity = sqliteAffinity(cursor.getString(cursor.getColumnIndexOrThrow("type"))),
+                            notNull = cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) != 0,
+                            primaryKeyPosition = cursor.getInt(cursor.getColumnIndexOrThrow("pk")),
+                            defaultValue = normalizeSqlDefault(
+                                if (cursor.isNull(defaultColumn)) null else cursor.getString(defaultColumn),
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+
+    private fun exportedIndexes(entity: JSONObject): Set<SchemaIndex> {
+        val indices = entity.optJSONArray("indices") ?: JSONArray()
+        return buildSet {
+            for (index in 0 until indices.length()) {
+                val exportedIndex = indices.getJSONObject(index)
+                add(
+                    SchemaIndex(
+                        name = exportedIndex.getString("name"),
+                        unique = exportedIndex.getBoolean("unique"),
+                        columns = exportedIndex.getJSONArray("columnNames").stringValues(),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun databaseIndexes(sqlite: SupportSQLiteDatabase, table: String): Set<SchemaIndex> {
+        val indexNames = sqlite.query("PRAGMA index_list(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    // SQLite creates these implementation indexes for primary/unique constraints;
+                    // Room's exported indices describe the named indexes declared by the entity.
+                    if (!name.startsWith("sqlite_autoindex_")) {
+                        add(name to (cursor.getInt(cursor.getColumnIndexOrThrow("unique")) != 0))
+                    }
+                }
+            }
+        }
+        return indexNames.mapTo(mutableSetOf()) { (name, unique) ->
+            val columns = sqlite.query("PRAGMA index_info(`$name`)").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(cursor.getInt(cursor.getColumnIndexOrThrow("seqno")) to
+                            cursor.getString(cursor.getColumnIndexOrThrow("name")))
+                    }
+                }.sortedBy { it.first }.map { it.second }
+            }
+            SchemaIndex(name, unique, columns)
+        }
+    }
+
+    private fun exportedForeignKeys(entity: JSONObject): Set<SchemaForeignKey> {
+        val foreignKeys = entity.optJSONArray("foreignKeys") ?: JSONArray()
+        return buildSet {
+            for (index in 0 until foreignKeys.length()) {
+                val foreignKey = foreignKeys.getJSONObject(index)
+                add(
+                    SchemaForeignKey(
+                        table = foreignKey.getString("table"),
+                        columns = foreignKey.getJSONArray("columns").stringValues(),
+                        referencedColumns = foreignKey.getJSONArray("referencedColumns").stringValues(),
+                        onDelete = foreignKey.getString("onDelete").uppercase(),
+                        onUpdate = foreignKey.getString("onUpdate").uppercase(),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun databaseForeignKeys(sqlite: SupportSQLiteDatabase, table: String): Set<SchemaForeignKey> {
+        val grouped = linkedMapOf<Int, SchemaForeignKeyRows>()
+        sqlite.query("PRAGMA foreign_key_list(`$table`)").use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.getInt(cursor.getColumnIndexOrThrow("id"))
+                val foreignKey = grouped.getOrPut(id) {
+                    SchemaForeignKeyRows(
+                        table = cursor.getString(cursor.getColumnIndexOrThrow("table")),
+                        onDelete = cursor.getString(cursor.getColumnIndexOrThrow("on_delete")).uppercase(),
+                        onUpdate = cursor.getString(cursor.getColumnIndexOrThrow("on_update")).uppercase(),
+                    )
+                }
+                foreignKey.parts += SchemaForeignKeyPart(
+                    sequence = cursor.getInt(cursor.getColumnIndexOrThrow("seq")),
+                    column = cursor.getString(cursor.getColumnIndexOrThrow("from")),
+                    referencedColumn = cursor.getString(cursor.getColumnIndexOrThrow("to")),
+                )
+            }
+        }
+        return grouped.values.mapTo(mutableSetOf()) { foreignKey ->
+            val parts = foreignKey.parts.sortedBy { it.sequence }
+            SchemaForeignKey(
+                table = foreignKey.table,
+                columns = parts.map { it.column },
+                referencedColumns = parts.map { it.referencedColumn },
+                onDelete = foreignKey.onDelete,
+                onUpdate = foreignKey.onUpdate,
+            )
+        }
+    }
+
+    private fun JSONArray.stringValues(): List<String> =
+        List(length()) { index -> getString(index) }
+
+    private fun sqliteAffinity(declaredType: String): String {
+        val type = declaredType.trim().uppercase()
+        return when {
+            "INT" in type -> "INTEGER"
+            "CHAR" in type || "CLOB" in type || "TEXT" in type -> "TEXT"
+            type.isEmpty() || "BLOB" in type -> "BLOB"
+            "REAL" in type || "FLOA" in type || "DOUB" in type -> "REAL"
+            else -> "NUMERIC"
+        }
+    }
+
+    private fun normalizeSqlDefault(value: String?): String? {
+        var normalized = value?.trim() ?: return null
+        while (normalized.length >= 2 && normalized.first() == '(' && normalized.last() == ')') {
+            var depth = 0
+            var enclosesWholeExpression = true
+            normalized.forEachIndexed { index, character ->
+                when (character) {
+                    '(' -> depth++
+                    ')' -> depth--
+                }
+                if (depth == 0 && index != normalized.lastIndex) enclosesWholeExpression = false
+            }
+            if (!enclosesWholeExpression) break
+            normalized = normalized.substring(1, normalized.lastIndex).trim()
+        }
+        return if (normalized.startsWith("'") || normalized.startsWith("X'")) normalized else normalized.uppercase()
+    }
 
     private data class SqlColumn(val type: String, val notNull: Int, val primaryKeyPosition: Int)
     private data class SqlForeignKey(
