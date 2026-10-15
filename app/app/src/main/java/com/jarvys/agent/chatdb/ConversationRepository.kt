@@ -314,19 +314,32 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * always wins and an existing conversation retains its original kind and creation time.
      */
     suspend fun ensureConversation(id: String, kind: String = "chat"): ChatDbResult<Conversation> =
-        transactionResult {
-            if (!isValidConversationId(id) || kind.isBlank()) return@transactionResult ChatDbResult.Invalid("conversation id and kind are required")
-            if (isTombstonedRaw(id)) return@transactionResult ChatDbResult.Tombstoned
-            val existing = findConversation(id)
-            if (existing != null) return@transactionResult ChatDbResult.Success(existing)
-            val now = System.currentTimeMillis()
-            sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
-                arrayOf(id, kind, now, now, id),
-            )
-            findConversation(id)?.let { ChatDbResult.Success(it) } ?: ChatDbResult.Conflict("conversation insert lost a concurrent race")
-        }
+        transactionResult { ensureConversationInTransaction(id, kind) }
+
+    /** Shared by first-write append operations so row creation and the ledger append stay atomic. */
+    private fun ensureConversationInTransaction(id: String, kind: String): ChatDbResult<Conversation> {
+        if (!isValidConversationId(id) || kind.isBlank()) return ChatDbResult.Invalid("conversation id and kind are required")
+        if (isTombstonedRaw(id)) return ChatDbResult.Tombstoned
+        val existing = findConversation(id)
+        if (existing != null) return ChatDbResult.Success(existing)
+        val now = System.currentTimeMillis()
+        sql.execSQL(
+            "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+            arrayOf(id, kind, now, now, id),
+        )
+        return findConversation(id)?.let { ChatDbResult.Success(it) }
+            ?: if (isTombstonedRaw(id)) ChatDbResult.Tombstoned
+            else ChatDbResult.Conflict("conversation insert lost a concurrent race")
+    }
+
+    private fun ensureFailure(result: ChatDbResult<Conversation>): ChatDbResult<Nothing> = when (result) {
+        is ChatDbResult.Success -> error("ensureFailure called for a successful conversation")
+        ChatDbResult.NotFound -> ChatDbResult.NotFound
+        ChatDbResult.Tombstoned -> ChatDbResult.Tombstoned
+        is ChatDbResult.Conflict -> ChatDbResult.Conflict(result.reason)
+        is ChatDbResult.Invalid -> ChatDbResult.Invalid(result.reason)
+    }
 
     /**
      * Provides title/pinned/archived/privateCode updates formerly handled by the file-backed store (`LocalRunStore.java:renameConversation`,
@@ -802,7 +815,11 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         memoryDisabled: Boolean,
     ): ChatDbResult<InterruptRequestValue> = transactionResult {
         if (content.isBlank() || content.length > 32000) return@transactionResult ChatDbResult.Invalid("interrupt content is invalid")
-        val conversation = findConversation(conversationId) ?: return@transactionResult missingConversation(conversationId)
+        val kind = findConversation(conversationId)?.kind ?: conversationKindForSession(conversationId)
+        if (!isOrdinaryChat(kind)) return@transactionResult ChatDbResult.Invalid("interrupts require an ordinary chat")
+        val ensured = ensureConversationInTransaction(conversationId, conversationKindForSession(conversationId))
+        val conversation = (ensured as? ChatDbResult.Success)?.value
+            ?: return@transactionResult ensureFailure(ensured)
         if (!isOrdinaryChat(conversation.kind)) return@transactionResult ChatDbResult.Invalid("interrupts require an ordinary chat")
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
         val id = UUID.randomUUID().toString()
@@ -922,7 +939,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         options: List<DecisionOptionInput>,
     ): ChatDbResult<Long> = transactionResult {
         if (decisionId.isBlank()) return@transactionResult ChatDbResult.Invalid("decision id is required")
-        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
+        val ensured = ensureConversationInTransaction(conversationId, conversationKindForSession(conversationId))
+        if (ensured !is ChatDbResult.Success) return@transactionResult ensureFailure(ensured)
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
         val now = epochSeconds()
         val seq = allocateSequence(conversationId)

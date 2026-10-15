@@ -63,6 +63,57 @@ class M1bRepositoriesTest {
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
         databaseExecutor.submit<T> { runBlocking { block() } }.get(60, TimeUnit.SECONDS)
 
+    @Test fun firstLedgerWritesCreateTheirConversationInTheSameTransaction() = onDatabaseThread {
+        fun assertCreated(conversationId: String, result: ChatDbResult<*>) {
+            assertTrue("$conversationId write should succeed: $result", result is ChatDbResult.Success)
+            assertNotNull(conversations.readConversation(conversationId))
+            assertEquals("$conversationId should contain exactly one committed ledger row", 2L, nextSeq(conversationId))
+        }
+
+        assertCreated("first-compaction", memory.appendCompaction(CompactionInput(
+            "first-compaction", "summary", 0, summarizedMessages = 0,
+        )))
+        assertCreated("first-crew-snapshot", memory.appendCrewSnapshot("first-crew-snapshot", crewSnapshot(
+            "first-crew-snapshot", "mission", 1, "Worker", "DONE", "DONE", "result",
+        )))
+        assertCreated("first-generated-image", artifacts.appendGeneratedImage(GeneratedImageInput(
+            "first-generated-image", "draw a tree", status = "FAILED", error = "provider unavailable",
+        )))
+        assertCreated("first-decision", conversations.appendDecisionRequest(
+            "first-decision", "decision", "Choose", "Pick one", true, emptyList(),
+        ))
+        assertCreated("first-tool-batch", model.appendToolBatch(ModelToolBatchInput(
+            conversationId = "first-tool-batch", batchId = "batch:opaque", ownerUserMessageId = null,
+            messageIndex = 0, assistantText = "", calls = listOf(ModelCallInput("call", "search", "{}")),
+        )))
+        assertCreated("first-tool-activity", model.appendToolActivity(ToolActivityInput(
+            conversationId = "first-tool-activity", eventId = "event", ownerUserMessageId = null,
+            executionId = null, callId = null, toolName = "search", stage = "tool_call", timestampMillis = 1L,
+        )))
+        assertCreated("first-provider-output", model.appendProviderOutputItems(
+            "first-provider-output", "owner", 0, "[]",
+        ))
+        assertCreated("first-model-error", model.appendModelError("first-model-error", null, 0, "provider_error"))
+        assertCreated("first-reflection", memory.appendReflectionCheckpoint(ReflectionInput(
+            conversationId = "first-reflection", kind = "reflection_checkpoint", throughMessageId = "unpersisted-user",
+            completedAssistantSteps = 0, result = "checkpoint",
+        )))
+        assertCreated("first-model-artifact", model.appendModelArtifact(
+            "first-model-artifact", "artifact", "chats/model.txt", "a".repeat(64), 1, 1,
+        ))
+        assertCreated("first-delivered-artifact", artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+            "first-delivered-artifact", "artifact", "note.txt", "text/plain", 1, "FILE",
+            "chats/note.txt", "b".repeat(64),
+        )))
+        assertCreated("first-interrupt", conversations.appendInterruptRequest("first-interrupt", "Please continue"))
+
+        success(conversations.deleteConversation("first-tombstone", 1L))
+        assertTrue(memory.appendCompaction(CompactionInput(
+            "first-tombstone", "summary", 0, summarizedMessages = 0,
+        )) === ChatDbResult.Tombstoned)
+        assertNull(conversations.readConversation("first-tombstone"))
+    }
+
     @Test fun modelProtocolUsesFirstResultsAndExcludesPreBoundaryProviderOutputsAfterCompaction() = onDatabaseThread {
         success(conversations.ensureConversation("protocol"))
         val user = success(conversations.appendMessage(AppendMessageInput(

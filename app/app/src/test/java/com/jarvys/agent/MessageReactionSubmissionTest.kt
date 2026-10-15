@@ -19,6 +19,7 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = ReactionFailingStartApplication::class)
 class MessageReactionSubmissionTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Test fun failedServiceStartStillBindsPersistedMessageForALaterLiveReaction() {
         val app = ApplicationProvider.getApplicationContext<ReactionFailingStartApplication>()
         val session = "reaction-interrupted-${UUID.randomUUID()}"

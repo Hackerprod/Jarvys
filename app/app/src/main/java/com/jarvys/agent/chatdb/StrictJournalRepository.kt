@@ -31,7 +31,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<CrewResultLedgerEvidence> = transaction {
         CrewResultLedgerEvidence.fromJsonStrict(evidence.toJson())
-        requireExecutionConversation(evidence.conversationId)
+        ensureExecutionConversationForWrite(evidence.conversationId)
         val old = findCrewResult(evidence.conversationId, evidence.evidenceId)
         if (old != null) {
             if (!sameResult(old, evidence)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
@@ -92,7 +92,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<ResultReference> = transaction {
         ResultReference.fromJsonStrict(reference.toJson())
-        requireExecutionConversation(reference.executionSessionId)
+        ensureExecutionConversationForWrite(reference.executionSessionId)
         if (reference.ownerCentralSessionId != WorkspaceIdentity.CENTRAL_SESSION) return@transaction ChatDbResult.Invalid("non-canonical Central owner")
         val evidence = findCrewResult(reference.executionSessionId, reference.evidenceId)
             ?: return@transaction ChatDbResult.Conflict("Reference has no matching durable evidence")
@@ -117,7 +117,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<ResultReference> = transaction {
         ResultReference.fromNoticeJsonStrict(reference.toNoticeJson())
-        requireCentralConversation(reference.ownerCentralSessionId)
+        ensureCentralConversationForWrite(reference.ownerCentralSessionId)
         val source = findResultRef(reference.executionSessionId, reference.referenceId, false)
             ?: return@transaction ChatDbResult.Conflict("Notice has no exact durable source reference")
         if (!source.samePayload(reference)) return@transaction ChatDbResult.Conflict("Notice has no exact durable source reference")
@@ -238,7 +238,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<CrewCoordinationLedgerEvidence> = transaction {
         CrewCoordinationLedgerEvidence.fromJsonStrict(evidence.toJson())
-        requireExecutionConversation(evidence.conversationId)
+        ensureExecutionConversationForWrite(evidence.conversationId)
         val old = findCrewCoordinationEvidence(evidence.conversationId, evidence.evidenceId)
         if (old != null) {
             if (!sameCoordination(old, evidence)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
@@ -302,7 +302,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<CoordinationReference> = transaction {
         CoordinationReference.fromJsonStrict(reference.toJson())
-        requireExecutionConversation(reference.executionSessionId)
+        ensureExecutionConversationForWrite(reference.executionSessionId)
         if (reference.ownerCentralSessionId != WorkspaceIdentity.CENTRAL_SESSION) return@transaction ChatDbResult.Invalid("non-canonical Central owner")
         val evidence = findCrewCoordinationEvidence(reference.executionSessionId, reference.evidenceId)
             ?: return@transaction ChatDbResult.Conflict("Coordination reference has no matching durable evidence")
@@ -326,7 +326,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<CoordinationReference> = transaction {
         CoordinationReference.fromNoticeJsonStrict(reference.toNoticeJson())
-        requireCentralConversation(reference.ownerCentralSessionId)
+        ensureCentralConversationForWrite(reference.ownerCentralSessionId)
         val source = findCoordinationRef(reference.executionSessionId, reference.referenceId, false)
             ?: return@transaction ChatDbResult.Conflict("Coordination notice has no exact durable source reference")
         if (!source.samePayload(reference)) return@transaction ChatDbResult.Conflict("Coordination notice has no exact durable source reference")
@@ -477,7 +477,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     ): ChatDbResult<CoordinationReply> = transaction {
         CoordinationReply.fromJsonStrict(proposed.toJson())
         if (proposed.state != CoordinationReply.State.PREPARED) return@transaction ChatDbResult.Invalid("a new reply must be PREPARED")
-        requireCentralConversation(proposed.reference.ownerCentralSessionId)
+        ensureCentralConversationForWrite(proposed.reference.ownerCentralSessionId)
         requireExactCoordinationSource(proposed.reference)
         val existing = findCoordinationReply(proposed.reference.ownerCentralSessionId, proposed.reference.referenceId)
         if (existing != null) {
@@ -566,8 +566,12 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<InputIncorporation> = transaction {
         InputIncorporation.fromJsonStrict(proposed.toJson())
-        requireCentralConversation(proposed.ownerCentralSessionId)
-        requireIncorporationSource(proposed)
+        ensureCentralConversationForWrite(proposed.ownerCentralSessionId)
+        if (proposed.sourceKind == InputIncorporation.SourceKind.REPLY) {
+            requireIncorporationSource(proposed)
+        } else {
+            ensureExecutionConversationForWrite(proposed.executionSessionId)
+        }
         val old = findInputIncorporation(proposed.ownerCentralSessionId, proposed.receiptId)
         if (old != null) {
             if (!old.sameBinding(proposed)) return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
@@ -579,6 +583,8 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         if (mailboxClaim != null) return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
         ChatSqlBeforeWriteGuard.invoke(beforeWrite)
+        if (proposed.sourceKind == InputIncorporation.SourceKind.NATIVE_CORRECT)
+            ensureWritableConversation(proposed.executionSessionId, "workspace_exec")
         val seq = appendItem(proposed.ownerCentralSessionId, InputIncorporation.ROW_TYPE, proposed.receiptId)
         sql.execSQL(
             "INSERT INTO workspace_input_incorporations(conversation_id,receipt_id,seq,schema_version,source_kind,source_id,source_reference_id,mailbox_message_id,owner_central_session_id,workspace_id,execution_session_id,assignment_id,request_id,mission_id,bot_id,admission_cycle_id,first_incorporation_cycle_id,source_payload_sha256,delivered_content_sha256,transport_kind,transport_sha256,checkpoint_payload_sha256,checkpoint_saved_at_ms,recorded_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -761,7 +767,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit,
     ): ChatDbResult<CoordinationReply> = transaction {
         CoordinationReply.fromJsonStrict(proposed.toJson())
-        requireCentralConversation(proposed.reference.ownerCentralSessionId)
+        ensureCentralConversationForWrite(proposed.reference.ownerCentralSessionId)
         val durable = findCoordinationReply(proposed.reference.ownerCentralSessionId, proposed.reference.referenceId)
             ?: return@transaction ChatDbResult.Conflict("Coordination reply intent is missing")
         if (!durable.samePayload(proposed)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
@@ -993,6 +999,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     }
 
     private fun appendItem(conversationId: String, kind: String, key: String): Long {
+        ensureWritableConversation(conversationId, conversationKindForSession(conversationId))
         val current = sql.query("SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId)).use { c ->
             if (!c.moveToFirst()) throw JournalAbort("conversation_not_found")
             c.getLong(0)
@@ -1019,9 +1026,33 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         requireWritableConversation(id)
     }
 
+    private fun ensureExecutionConversationForWrite(id: String) {
+        if (!WorkspaceIdentity.isExecutionSession(id)) throw JournalAbort("invalid_execution_session")
+        if (isTombstoned(id)) throw JournalAbort("conversation_tombstoned")
+    }
+
     private fun requireCentralConversation(id: String) {
         if (id != WorkspaceIdentity.CENTRAL_SESSION) throw JournalAbort("invalid_central_session")
         requireWritableConversation(id)
+    }
+
+    private fun ensureCentralConversationForWrite(id: String) {
+        if (id != WorkspaceIdentity.CENTRAL_SESSION) throw JournalAbort("invalid_central_session")
+        if (isTombstoned(id)) throw JournalAbort("conversation_tombstoned")
+    }
+
+    private fun ensureWritableConversation(id: String, kind: String) {
+        if (isTombstoned(id)) throw JournalAbort("conversation_tombstoned")
+        val exists = sql.query("SELECT 1 FROM conversations WHERE id=?", arrayOf(id)).use { it.moveToFirst() }
+        if (exists) return
+        val now = System.currentTimeMillis()
+        sql.execSQL(
+            "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+            arrayOf(id, kind, now, now, id),
+        )
+        if (!sql.query("SELECT 1 FROM conversations WHERE id=?", arrayOf(id)).use { it.moveToFirst() })
+            throw JournalAbort(if (isTombstoned(id)) "conversation_tombstoned" else "conversation_not_found")
     }
 
     private fun requireWritableConversation(id: String) {

@@ -667,7 +667,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     ).use { it.moveToFirst(); it.getInt(0) != 0 }
 
     private fun nextSequence(conversationId: String): Long = sql.query("SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId))
-        .use { if (it.moveToFirst()) it.getLong(0) else throw M1bAbort("conversation_not_found") }
+        .use { if (it.moveToFirst()) it.getLong(0) else 1L }
 
     private fun jsonNumberToken(value: Double): String {
         val serialized = JSONObject().put("timestamp", value).toString()

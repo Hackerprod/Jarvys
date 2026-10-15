@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
+import com.jarvys.agent.ChatTestStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -15,6 +16,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ProactiveActionReceiverTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Test fun receiverIsPrivateAndRejectsUnknownMessageAndThreadBeforeWritingOrLaunching() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val appReceiver = context.packageManager.getReceiverInfo(ComponentName(context, ProactiveActionReceiver::class.java), 0)

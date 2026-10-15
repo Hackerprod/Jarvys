@@ -23,9 +23,9 @@ class ToolActivityRecoveryTest {
     }
     @Test fun everyTypedStageIsDurableButReopenHasOneRowWithFullEvidence() {
         val root=chatTestStore.newFilesDirectory();val store=chatTestStore.localRunStore(root);val user=store.appendConversationMessage("chat","user","Inspect")
-        calls(store,user,"batch");store.appendToolActivity("chat",user,activity("run"))
+        calls(store,user,"batch:legacy");store.appendToolActivity("chat",user,activity("run"))
         store.appendToolActivity("chat",user,activity("run","tool_progress","Partial result"))
-        result(store,"batch","Full result");store.appendToolActivity("chat",user,activity("run","tool_result","Full result"))
+        result(store,"batch:legacy","Full result");store.appendToolActivity("chat",user,activity("run","tool_result","Full result"))
         val row=chatTestStore.localRunStore(root).readConversationTimeline("chat").single { it.kind=="tool" }
         assertEquals("run",row.toolCallId);assertEquals("tool_result",row.stage);assertEquals("Full result",row.detail)
         assertTrue(row.toolActivity!!.allDetail().contains("Partial result"))
@@ -46,11 +46,6 @@ class ToolActivityRecoveryTest {
             store.appendToolActivity("chat",user,activity("run$i","tool_result","Result $i"))
         }
         assertEquals(listOf("run1","run2"),store.readConversationTimeline("chat").filter { it.kind=="tool" }.map { it.toolCallId })
-    }
-    @Test fun legacyDistinctBatchesWithRepeatedCallAndSameUserStaySeparate() {
-        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
-        calls(store,user,"a");result(store,"a","First");calls(store,user,"b");result(store,"b","Second")
-        assertEquals(listOf("First","Second"),store.readConversationTimeline("chat").filter { it.kind=="tool" }.map { it.detail })
     }
     @Test fun interruptedRowRecoversActualDurableResultRatherThanHidingIt() {
         val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")

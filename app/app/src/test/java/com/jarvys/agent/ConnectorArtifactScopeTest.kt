@@ -14,6 +14,7 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class ConnectorArtifactScopeTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private fun tool(): CoreConnectorTool {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "connector-scope-${UUID.randomUUID()}"

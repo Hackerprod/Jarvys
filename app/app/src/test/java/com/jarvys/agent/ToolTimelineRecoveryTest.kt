@@ -37,6 +37,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ToolTimelineRecoveryTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     // Real Markdown/preview background work must resume composition through the test clock.
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(

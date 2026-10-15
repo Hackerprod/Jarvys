@@ -2,6 +2,7 @@ package com.jarvys.agent.workspaces
 
 import android.app.Application
 import com.jarvys.agent.CoreAgentRuntime
+import com.jarvys.agent.ChatTestStore
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -14,6 +15,7 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceCatalogPageTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Test fun catalogHasTwoBoundedPagesWithoutPreparingAnyCrewRuntime() {
         val context = RuntimeEnvironment.getApplication()
         WorkspaceRegistry(context).use { store ->

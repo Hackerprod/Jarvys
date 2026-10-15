@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [ContinuousMissionServiceTest.LocalErrorReporter::class])
 class ContinuousMissionServiceTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     /** Capture synthetic failures locally instead of invoking the diagnostic HTTP endpoint. */
     @Implements(value = AgentErrorReporter::class, isInAndroidSdk = false)
     class LocalErrorReporter {

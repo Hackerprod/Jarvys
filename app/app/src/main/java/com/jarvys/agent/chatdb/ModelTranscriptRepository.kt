@@ -127,7 +127,8 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * `MainChatTranscriptStore.boundedArguments` (`MainChatTranscriptStore.java:141-156`).
      */
     suspend fun appendToolBatch(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> = transaction {
-        if (input.conversationId.isBlank() || input.batchId.isBlank() || !isUuid(input.batchId) || input.messageIndex < 0L || input.calls.any {
+        // Legacy transcript rows treated batch IDs as opaque strings; only blank IDs are unusable.
+        if (input.conversationId.isBlank() || input.batchId.isBlank() || input.messageIndex < 0L || input.calls.any {
                 it.callId.isBlank() || it.toolName.isBlank() || it.argumentsJson.isBlank() ||
                     it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS
             }) return@transaction ChatDbResult.Invalid("batch, owner index, call IDs, names, and opaque arguments are required")
@@ -150,14 +151,6 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         if (input.ownerUserMessageId != null) {
             if (ownerMessageSeq(input.conversationId, input.ownerUserMessageId) == null)
                 return@transaction ChatDbResult.Invalid("tool batch owner must name a user message in this conversation")
-            for (call in input.calls) {
-                val reused = sql.query(
-                    "SELECT EXISTS(SELECT 1 FROM tool_calls c JOIN tool_batches b ON b.conversation_id=c.conversation_id AND b.batch_id=c.batch_id " +
-                        "WHERE c.conversation_id=? AND b.owner_user_message_id=? AND c.call_id=?)",
-                    arrayOf(input.conversationId, input.ownerUserMessageId, call.callId),
-                ).use { it.moveToFirst(); it.getInt(0) != 0 }
-                if (reused) return@transaction ChatDbResult.Conflict("tool call ID was already used by this owner")
-            }
         }
         val time = input.createdAtSeconds ?: nowSeconds()
         val seq = insertLedgerItem(input.conversationId, "model_tool_calls", input.batchId, time, ownerMessageSeq(input.conversationId, input.ownerUserMessageId))
@@ -704,11 +697,27 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         val sortSub: Int,
     )
 
-    private fun isUuid(value: String): Boolean = runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)
-
-    private fun encodeCallItemKey(batchId: String, callId: String): String = "$batchId:${callId.length}:$callId"
+    private fun encodeCallItemKey(batchId: String, callId: String): String =
+        "v2|${batchId.length}:$batchId:${callId.length}:$callId"
 
     private fun decodeCallItemKey(value: String): Pair<String, String>? {
+        if (value.startsWith("v2|")) {
+            val batchLengthEnd = value.indexOf(':', 3)
+            if (batchLengthEnd <= 3) return null
+            val batchLength = value.substring(3, batchLengthEnd).toIntOrNull() ?: return null
+            val batchStart = batchLengthEnd + 1
+            if (batchLength < 0 || batchLength > value.length - batchStart) return null
+            val batchEnd = batchStart + batchLength
+            if (batchEnd >= value.length || value[batchEnd] != ':') return null
+            val callLengthEnd = value.indexOf(':', batchEnd + 1)
+            if (callLengthEnd <= batchEnd + 1) return null
+            val callLength = value.substring(batchEnd + 1, callLengthEnd).toIntOrNull() ?: return null
+            val callStart = callLengthEnd + 1
+            if (callLength < 0 || callLength != value.length - callStart) return null
+            return value.substring(batchStart, batchEnd) to value.substring(callStart)
+        }
+
+        // Rows written before the opaque-ID format used a delimiter-only batch prefix.
         val batchEnd = value.indexOf(':')
         val lengthEnd = if (batchEnd < 0) -1 else value.indexOf(':', batchEnd + 1)
         if (batchEnd <= 0 || lengthEnd <= batchEnd + 1) return null

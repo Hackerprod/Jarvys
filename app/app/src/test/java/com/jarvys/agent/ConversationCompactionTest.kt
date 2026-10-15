@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import com.jarvys.agent.chatdb.ChatDatabaseWaitInterruptedException
 import com.jarvys.agent.device.ScreenData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -192,10 +193,13 @@ class ConversationCompactionTest {
         }
         val compactor = ConversationCompactor(session, CoreAgentModel(provider, session), store)
         try {
-            runCatching {
+            val interrupted = runCatching {
                 compactor.compact(messages(4), 32_768, "manual", ConversationCompactionPolicy.Mode.ALL,
                     CancellationToken.uncancellable(), null)
-            }.onSuccess { error("STOP should cancel before the compaction checkpoint") }
+            }.exceptionOrNull()
+            assertTrue("an interrupted DB wait is a cancellation signal", interrupted is ChatDatabaseWaitInterruptedException)
+            assertTrue("the caller interrupt flag is restored", Thread.currentThread().isInterrupted)
+            Thread.interrupted()
             assertEquals(4, store.readConversationMessages(session).size)
             assertTrue(store.readConversationTimeline(session).none { it.kind == "compaction" })
         } finally {

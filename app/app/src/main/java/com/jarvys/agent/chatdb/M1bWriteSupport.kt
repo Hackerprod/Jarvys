@@ -1,5 +1,8 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.proactive.ProactiveConversation
+import com.jarvys.agent.tasks.ScheduledTaskConversation
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 
 /** Shared M1b transaction and sequence primitives. M1a remains the owner of message writes. */
 internal abstract class M1bWriteSupport(protected val database: JarvysChatDatabase) {
@@ -12,6 +15,7 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         when (failure.reason) {
             "conversation_not_found" -> ChatDbResult.NotFound
             "conversation_tombstoned" -> ChatDbResult.Tombstoned
+            "conversation_id_invalid" -> ChatDbResult.Invalid("conversation id and kind are required")
             else -> ChatDbResult.Conflict(failure.reason)
         }
     } catch (failure: android.database.sqlite.SQLiteConstraintException) {
@@ -32,6 +36,7 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         sortSeq: Long? = null,
         sortSub: Int = 0,
     ): Long {
+        ensureConversationForAppend(conversationId)
         if (sql.query(
                 "SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId),
@@ -65,14 +70,35 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         ).use { if (it.moveToFirst()) it.getLong(0) else null }
     }
 
-    protected fun ensureConversationExists(conversationId: String) {
+    /** Validates the target before an append; insertLedgerItem creates it at the commit point. */
+    protected fun ensureConversationExists(
+        conversationId: String,
+        kind: String = conversationKindForSession(conversationId),
+    ) {
+        if (!conversationId.matches(Regex("[A-Za-z0-9_.-]{1,100}")) || conversationId == "." || conversationId == ".." || kind.isBlank())
+            throw M1bAbort("conversation_id_invalid")
         if (sql.query(
                 "SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId),
             ).use { it.moveToFirst(); it.getInt(0) != 0 }) throw M1bAbort("conversation_tombstoned")
+    }
+
+    /** Creates the conversation in the active transaction only after the append is ready to commit. */
+    private fun ensureConversationForAppend(conversationId: String) {
+        val kind = conversationKindForSession(conversationId)
+        ensureConversationExists(conversationId, kind)
         val exists = sql.query("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?)", arrayOf(conversationId))
             .use { it.moveToFirst(); it.getInt(0) != 0 }
-        if (!exists) throw M1bAbort("conversation_not_found")
+        if (exists) return
+        val now = System.currentTimeMillis()
+        sql.execSQL(
+            "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+            arrayOf(conversationId, kind, now, now, conversationId),
+        )
+        val created = sql.query("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?)", arrayOf(conversationId))
+            .use { it.moveToFirst(); it.getInt(0) != 0 }
+        if (!created) throw M1bAbort("conversation_not_found")
     }
 
     protected fun nowSeconds(): Double = System.currentTimeMillis() / 1000.0
@@ -80,4 +106,13 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
     protected fun nowMillis(): Long = System.currentTimeMillis()
 
     protected class M1bAbort(val reason: String) : RuntimeException(reason)
+}
+
+/** Kind used when a non-message ledger row is the first durable write for a session. */
+internal fun conversationKindForSession(conversationId: String): String = when {
+    ProactiveConversation.SESSION_ID == conversationId -> "proactive"
+    ScheduledTaskConversation.SESSION_ID == conversationId -> "tasks"
+    WorkspaceIdentity.isCentral(conversationId) -> "central"
+    WorkspaceIdentity.isExecutionSession(conversationId) -> "workspace_exec"
+    else -> "chat"
 }

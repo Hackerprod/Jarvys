@@ -12,6 +12,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28, 34])
 class AgentResultPresentationTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     @After fun resetLanguage() { AppLanguageRuntime.select(context, AppLanguageChoice.ENGLISH) }
 

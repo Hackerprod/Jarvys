@@ -32,6 +32,7 @@ import org.robolectric.annotation.GraphicsMode;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class AttachmentModelContextRecoveryTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
+    @Rule public ChatTestStore chatTestStore = new ChatTestStore(false);
     private final java.lang.reflect.Field[] serviceFields = new java.lang.reflect.Field[3];
     private final Object[] previousServices = new Object[3];
 
@@ -60,6 +61,7 @@ public class AttachmentModelContextRecoveryTest {
 
     private Context context() {
         Context base = ApplicationProvider.getApplicationContext();
+        chatTestStore.localRunStore(temp.getRoot());
         return new ContextWrapper(base) {
             @Override public File getFilesDir() { return temp.getRoot(); }
             @Override public Context getApplicationContext() { return this; }

@@ -62,6 +62,7 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ReactionMagnifierShadow::class])
 class AssistantTextSelectionTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     // Match MessageReactionUiTest: parser completion must enqueue View work on the
     // test clock instead of resuming owner observation through an unconfined worker.
     @OptIn(ExperimentalTestApi::class)

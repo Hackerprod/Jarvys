@@ -62,6 +62,26 @@ class StrictJournalRepositoryTest {
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
         databaseExecutor.submit<T> { runBlocking { block() } }.get(45, TimeUnit.SECONDS)
 
+    @Test fun firstStrictJournalAppendsCreateExecutionAndCentralConversations() = onDatabaseThread {
+        val workspace = workspaceId(40)
+        val execution = WorkspaceIdentity.executionSessionId(workspace)
+        val mission = missionId(workspace, "request-a")
+        val evidence = CrewCoordinationEvidence.create(
+            execution, mission, "bot-a", uuid(41), "message-a", "QUESTION", "coordination", emptyList(), 41_001L,
+        )
+        success(repository.appendCrewCoordinationEvidence(evidence))
+        assertEquals("workspace_exec", conversations.readConversation(execution)?.kind)
+        assertEquals(2L, conversationNextSeq(execution))
+
+        val reference = WorkspaceCoordinationReference.create(
+            evidence, WorkspaceIdentity.CENTRAL_SESSION, workspace, uuid(42), "request-a", 1L,
+        )
+        success(repository.appendWorkspaceCoordinationReference(reference))
+        success(repository.appendWorkspaceCoordinationNotice(reference))
+        assertEquals("central", conversations.readConversation(WorkspaceIdentity.CENTRAL_SESSION)?.kind)
+        assertEquals(2L, conversationNextSeq(WorkspaceIdentity.CENTRAL_SESSION))
+    }
+
     @Test fun resultEvidenceIsIdempotentImmutableExactUtf16AndConversationScoped() = onDatabaseThread {
         val workspace = workspaceId(1)
         val execution = WorkspaceIdentity.executionSessionId(workspace)
@@ -222,7 +242,7 @@ class StrictJournalRepositoryTest {
         val receipt = WorkspaceInputIncorporation.create(
             WorkspaceInputIncorporation.SourceKind.REPLY, accepted.replyId, ref.referenceId,
             accepted.mailboxMessageId, WorkspaceIdentity.CENTRAL_SESSION, fixture.workspace, fixture.execution,
-            uuid(14), "request-a", fixture.mission, "bot-a", fixture.cycle, uuid(15),
+            ref.assignmentId, "request-a", fixture.mission, "bot-a", fixture.cycle, uuid(15),
             accepted.payloadSha256, "a".repeat(64), "INBOX", "b".repeat(64), "c".repeat(64), 31_020L, 31_021L,
         )
         success(repository.appendWorkspaceInputIncorporation(receipt))

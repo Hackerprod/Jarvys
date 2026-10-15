@@ -20,6 +20,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
 import java.util.concurrent.Callable
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -28,6 +29,12 @@ import java.util.concurrent.Future
 /** Java callback used for cancellation/admission checks immediately before a strict journal write. */
 fun interface BeforeChatWrite {
     fun check()
+}
+
+/** The caller stopped waiting; a submitted Room operation is allowed to finish atomically. */
+class ChatDatabaseWaitInterruptedException(cause: InterruptedException) :
+    CancellationException("Interrupted while waiting for the chat database") {
+    init { initCause(cause) }
 }
 
 /** Public timeline projection that does not expose the app-internal ConversationReader type. */
@@ -183,7 +190,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
             pending.get()
         } catch (interrupted: InterruptedException) {
             Thread.currentThread().interrupt()
-            throw IllegalStateException("Interrupted while waiting for the chat database", interrupted)
+            throw ChatDatabaseWaitInterruptedException(interrupted)
         } catch (failure: ExecutionException) {
             throw (failure.cause ?: failure)
         }

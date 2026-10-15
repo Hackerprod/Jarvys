@@ -9,6 +9,7 @@ import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import org.json.JSONObject;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -17,6 +18,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class ConnectorArtifactAccessTest {
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
     private Context context;
     private String session;
     private final byte[] binary = new byte[] {0, 1, 2, (byte) 0x80, (byte) 0xff, 13, 10};

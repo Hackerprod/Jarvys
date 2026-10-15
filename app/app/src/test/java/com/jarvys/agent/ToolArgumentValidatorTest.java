@@ -25,6 +25,7 @@ import org.robolectric.annotation.Config;
 @Config(sdk = 34)
 public class ToolArgumentValidatorTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
     @Test public void omitsNullOptionalFieldsAndKeepsOpenClawCoercionForRequiredFields() {
         Map<String, Object> schema = objectSchema(properties(
@@ -137,6 +138,7 @@ public class ToolArgumentValidatorTest {
     @Test public void realWorkspaceAndCodingSchemasOmitOptionalNullsAndKeepDefaultBehavior() throws Exception {
         String session = "tool-schema-validation";
         File appFiles = temporary.newFolder("app-files");
+        chatTestStore.localRunStore(appFiles);
         File workspacesRoot = new File(new File(appFiles, "jarvys"), "workspaces");
         String projectId = WorkspaceStore.projectIdForSession(session);
         WorkspaceStore workspace = new WorkspaceStore(workspacesRoot, projectId, null, null, null, session, true);

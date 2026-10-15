@@ -11,6 +11,7 @@ import android.os.Bundle
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.jarvys.agent.WorkManagerTestCleanup
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.ChatTestStore
 import com.jarvys.agent.AppLanguageChoice
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.CoreAgentLoop
@@ -55,6 +56,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ProactiveAgentProcessorTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private lateinit var context: Application
 
     @Before fun setUp() {
