@@ -48,6 +48,7 @@ class ChatTestStore(
         return object : Statement() {
             override fun evaluate() {
                 try {
+                    if (!runTestOnWorker) ChatDatabaseBridge.mainThreadGuardDisabledForTests = true
                     if (registerApplicationFilesDirectory) {
                         onWorker {
                             registerBridge(ApplicationProvider.getApplicationContext<Context>().filesDir)
@@ -56,6 +57,7 @@ class ChatTestStore(
                     if (runTestOnWorker) onWorker { withTemporaryFolder.evaluate() }
                     else withTemporaryFolder.evaluate()
                 } finally {
+                    ChatDatabaseBridge.mainThreadGuardDisabledForTests = false
                     worker.shutdown()
                     var interrupted = false
                     val thread = workerThreadHandle

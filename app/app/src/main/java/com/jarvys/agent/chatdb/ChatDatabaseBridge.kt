@@ -81,6 +81,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     companion object {
         private val instances = mutableMapOf<String, ChatDatabaseBridge>()
 
+        /** Test-only: Robolectric runs UI tests ON the main looper; production keeps the guard on. */
+        @Volatile @JvmField internal var mainThreadGuardDisabledForTests = false
+
         /** Returns the per-filesDir facade. Creating it does not open SQLite. */
         @JvmStatic
         fun getInstance(context: Context): ChatDatabaseBridge {
@@ -166,7 +169,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
         check(Thread.currentThread() !== executorThread) {
             "ChatDatabaseBridge cannot be re-entered from its own executor thread"
         }
-        check(Looper.myLooper() != Looper.getMainLooper()) {
+        check(mainThreadGuardDisabledForTests || Looper.myLooper() != Looper.getMainLooper()) {
             "ChatDatabaseBridge blocking methods must not be called from the main thread"
         }
         return try {
