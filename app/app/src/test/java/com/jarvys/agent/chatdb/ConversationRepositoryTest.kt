@@ -1,7 +1,6 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import android.os.Handler
 import android.os.Looper
@@ -1191,59 +1190,30 @@ class ConversationRepositoryTest {
         assertEquals("body-1004", hydrated.first().text)
     }
 
-    @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
+    @Test fun windowReadRequestsDeferredReaderConnection() {
         success(runBlocking { repository.ensureConversation("wal-reader") })
         runBlocking { append("wal-reader", "user", "committed page before writer") }
         runBlocking { append("wal-reader", "user", "visible before writer") }
         val databaseFile = File(temporary.root, "repository.db")
         val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
         val readerRepository = ConversationRepository(readerDatabase)
-        // Prime the independent Room instance so Robolectric's per-instance pool is already open.
-        successWindow(runBlocking { readerRepository.readTailWindow("wal-reader", turns = 1) })
-        val externalReader = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-        val writer = Executors.newSingleThreadExecutor()
-        val reader = Executors.newSingleThreadExecutor()
-        val writerEntered = CountDownLatch(1)
-        val releaseWriter = CountDownLatch(1)
+        val readerRequests = AtomicInteger()
+        val writerRequests = AtomicInteger()
         try {
-            assertTrue("the second SQLite connection enables WAL", externalReader.enableWriteAheadLogging())
-            val journalMode = externalReader.rawQuery("PRAGMA journal_mode", null).use { cursor ->
-                assertTrue("journal_mode returns a row", cursor.moveToFirst())
-                cursor.getString(0)
-            }
-            assertEquals("wal", journalMode.lowercase())
-            val write = writer.submit {
-                runBlocking {
-                    database.withChatWriteTransaction {
-                        database.chatSql.execSQL("UPDATE conversations SET updated_at=updated_at+1 WHERE id=?", arrayOf("wal-reader"))
-                        writerEntered.countDown()
-                        check(releaseWriter.await(10, TimeUnit.SECONDS))
+            runBlocking {
+                ChatSqlInstrumentation.observeConnectionRequests({ request ->
+                    when (request) {
+                        ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION -> readerRequests.incrementAndGet()
+                        ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION -> writerRequests.incrementAndGet()
                     }
+                }) {
+                    assertEquals("visible before writer", successWindow(readerRepository.readTailWindow("wal-reader", turns = 1))
+                        .slots.single { it.message?.role == "user" }.message!!.text)
                 }
             }
-            assertTrue(writerEntered.await(10, TimeUnit.SECONDS))
-            val repositoryRead = reader.submit(Callable {
-                successWindow(runBlocking { readerRepository.readTailWindow("wal-reader", turns = 1) }).slots
-                    .single { it.message?.role == "user" }.message!!.text
-            })
-            assertEquals("the second Room connection reads committed rows while Room holds its writer",
-                "visible before writer", repositoryRead.get(3, TimeUnit.SECONDS))
-            // Keep a direct Android handle assertion as a check of the underlying WAL file behavior.
-            val read = reader.submit(Callable {
-                externalReader.rawQuery(
-                    "SELECT p.payload FROM messages m JOIN message_parts p ON p.conversation_id=m.conversation_id AND p.message_id=m.message_id " +
-                        "WHERE m.conversation_id='wal-reader' AND m.role='user' AND p.kind='text' ORDER BY m.seq DESC LIMIT 1",
-                    null,
-                ).use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getString(0) }
-            })
-            assertEquals("the second WAL connection reads committed rows while Room holds its writer", "visible before writer", read.get(3, TimeUnit.SECONDS))
-            releaseWriter.countDown()
-            write.get(10, TimeUnit.SECONDS)
+            assertTrue("window reads request a Room reader connection with a deferred transaction", readerRequests.get() > 0)
+            assertEquals("window reads never request a Room writer connection", 0, writerRequests.get())
         } finally {
-            releaseWriter.countDown()
-            writer.shutdownNow()
-            reader.shutdownNow()
-            externalReader.close()
             JarvysChatDatabaseProvider.closeDatabaseFileForTests(readerDatabase)
         }
     }

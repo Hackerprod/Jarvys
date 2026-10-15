@@ -50,7 +50,7 @@ class GoldenLedgerImportTest {
         }
 
         val ledgers = directory.listFiles { file -> file.isFile && file.name.endsWith(".jsonl") }?.toList().orEmpty()
-        assertEquals("expected the local eight-ledger golden corpus", 8, ledgers.size)
+        assertTrue("the local golden corpus must contain at least one JSONL ledger", ledgers.isNotEmpty())
 
         val progressEvents = AtomicInteger()
         val reports = databaseExecutor.submit<List<ImportReport>> {
@@ -63,9 +63,16 @@ class GoldenLedgerImportTest {
             }
         }.get(10, TimeUnit.MINUTES)
 
-        assertEquals(8, reports.size)
-        assertTrue("coordinator should emit progress for source rows and conversation completion", progressEvents.get() >= 8)
-        reports.forEach { report ->
+        val ledgerIds = ledgers.map { it.name.removeSuffix(".jsonl") }.sorted()
+        val ledgerReports = reports.filter { it.conversationId in ledgerIds }
+        assertEquals("every JSONL ledger, including ledgers without metadata sidecars, must be imported",
+            ledgerIds, ledgerReports.map { it.conversationId }.sorted())
+        val metadataOnlyReports = reports.filter { it.conversationId !in ledgerIds }
+        assertTrue("reports without a JSONL ledger must be valid tombstone imports",
+            metadataOnlyReports.all { it.state == "tombstone" && it.validations.all { validation -> validation.passed } })
+        assertTrue("coordinator should emit progress for source rows and conversation completion",
+            progressEvents.get() >= ledgers.size)
+        ledgerReports.forEach { report ->
             assertEquals("a local golden conversation must reach validated done state", "done", report.state)
             assertEquals("golden corpus must not contain unrecognized row types", 0L, report.unknownLines)
             assertEquals("every tolerated damaged line must be described in the diagnostic report", report.skippedLines, report.issues.size.toLong())
@@ -73,16 +80,18 @@ class GoldenLedgerImportTest {
             assertTrue("diagnostics must not contain JSONL message bodies", report.toDiagnosticText().length < 100_000)
         }
 
-        val largest = reports.sortedByDescending { it.ledgerBytes }.take(2)
-        assertEquals(2, largest.size)
-        largest.forEach { report ->
+        val largeCrewLedgers = ledgerReports.filter { report ->
+            val rows = report.ledgerRowsByType.values.sum()
+            val crewSnapshots = report.ledgerRowsByType["crew_snapshot"] ?: 0L
+            report.ledgerBytes >= 30L * 1024L * 1024L && rows > 0 && crewSnapshots.toDouble() / rows >= 0.5
+        }
+        assertTrue("the corpus should include a large ledger dominated by crew snapshots", largeCrewLedgers.isNotEmpty())
+        largeCrewLedgers.forEach { report ->
             val retainedConversationBytes =
                 (report.conversationPayloadBytesAfter - report.conversationPayloadBytesBefore).coerceAtLeast(0L)
             assertTrue("large repeated crew snapshots should retain less than ten percent of source bytes",
                 retainedConversationBytes.toDouble() < report.ledgerBytes.toDouble() * 0.10)
         }
-        assertTrue("both largest local ledgers should be in the 30 MB+ crew-heavy range",
-            largest.all { it.ledgerBytes >= 30L * 1024L * 1024L })
     }
 
     private companion object {

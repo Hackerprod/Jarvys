@@ -31,6 +31,12 @@ internal interface ChatSqlDatabase {
 /** Test-only observer for bounded-query assertions; the callback follows SQL across Room dispatchers. */
 internal object ChatSqlInstrumentation {
     private val observer = AtomicReference<((String) -> Unit)?>(null)
+    private val connectionRequestObserver = AtomicReference<((ChatSqlConnectionRequest) -> Unit)?>(null)
+
+    internal enum class ChatSqlConnectionRequest {
+        READER_DEFERRED_TRANSACTION,
+        WRITER_IMMEDIATE_TRANSACTION,
+    }
 
     internal suspend fun <T> observeStatements(
         onStatement: (String) -> Unit,
@@ -45,8 +51,24 @@ internal object ChatSqlInstrumentation {
         }
     }
 
+    internal suspend fun <T> observeConnectionRequests(
+        onRequest: (ChatSqlConnectionRequest) -> Unit,
+        block: suspend () -> T,
+    ): T {
+        check(connectionRequestObserver.compareAndSet(null, onRequest)) { "A chat SQL connection observer is already active" }
+        return try {
+            block()
+        } finally {
+            check(connectionRequestObserver.compareAndSet(onRequest, null)) { "Chat SQL connection observer changed while active" }
+        }
+    }
+
     internal fun statementPrepared(sql: String) {
         observer.get()?.invoke(sql)
+    }
+
+    internal fun connectionRequested(request: ChatSqlConnectionRequest) {
+        connectionRequestObserver.get()?.invoke(request)
     }
 }
 
@@ -319,6 +341,7 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
         check(active.isWriter) { "Cannot start a chat database write inside a reader lease" }
         return block()
     }
+    ChatSqlInstrumentation.connectionRequested(ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION)
     return useWriterConnection { writer ->
         writer.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
             withContext(LeasedConnectionElement(writer, isWriter = true)) { block() }
@@ -330,9 +353,10 @@ internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspe
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
-        check(!active.isWriter) { "Cannot start a chat read inside a write transaction" }
+        // Reuse the current lease. A read inside a writer must see that transaction's own writes.
         return block()
     }
+    ChatSqlInstrumentation.connectionRequested(ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION)
     return useReaderConnection { reader ->
         reader.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
             withContext(LeasedConnectionElement(reader, isWriter = false)) { block() }

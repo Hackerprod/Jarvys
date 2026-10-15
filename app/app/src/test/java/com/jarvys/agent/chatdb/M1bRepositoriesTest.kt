@@ -227,10 +227,10 @@ class M1bRepositoriesTest {
         ) is ChatDbResult.Conflict)
     }
 
-    @Test fun suspendReadsAcrossM1bRepositoriesDispatchSqlOffTheMainLooper() = onDatabaseThread {
-        success(conversations.ensureConversation("repository-main-read"))
+    @Test fun suspendReadsAcrossM1bRepositoriesDispatchSqlOffTheMainLooper() {
+        onDatabaseThread { success(conversations.ensureConversation("repository-main-read")) }
         val executionSession = WorkspaceIdentity.executionSessionId("a1234567-b123-c123-d123-e123456789ab")
-        success(conversations.ensureConversation(executionSession, "workspace_exec"))
+        onDatabaseThread { success(conversations.ensureConversation(executionSession, "workspace_exec")) }
         val strict = StrictJournalRepository(database)
         val sqlRanOnMain = AtomicBoolean(false)
         val failure = AtomicReference<Throwable?>()
