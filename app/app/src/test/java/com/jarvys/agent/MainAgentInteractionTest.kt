@@ -893,6 +893,92 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun stoppedSteeringReadIOExceptionRetriesAsFailedInsteadOfLaunchingRun() =
+        assertStoppedSteeringRecoveryRetriesOnce(java.io.IOException("synthetic transient read failure"))
+
+    @Test fun stoppedSteeringClosedByInterruptRetriesAsFailedInsteadOfLaunchingRun() =
+        assertStoppedSteeringRecoveryRetriesOnce(java.nio.channels.ClosedByInterruptException())
+
+    private fun assertStoppedSteeringRecoveryRetriesOnce(readFailure: Throwable) {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "stopped-steering-read-retry-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "original")
+        val service = startManagedService(context)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val recoveryAttempts = AtomicInteger()
+        val runCalls = AtomicInteger()
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, _, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, session, skills, CorePromptBudget.standard(), memoryDisabled)
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+            runCalls.incrementAndGet()
+            entered.countDown()
+            while (release.count > 0) {
+                try { release.await() } catch (_: InterruptedException) { }
+            }
+            CoreAgentLoop.Result("stopped-owner", "owner stopped", 1, "PARTIAL")
+        }
+        service.beforePendingInputFailureRecoveryForTesting = Runnable {
+            if (recoveryAttempts.incrementAndGet() == 1)
+                throw IllegalStateException("synthetic pending follow-up read failure", readFailure)
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("The owner run starts", entered.await(5, TimeUnit.SECONDS))
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "pending steering", arrayListOf(), false))
+            AgentForegroundService.stopRun(session)
+            release.countDown()
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+
+            val steering = store.readConversationMessages(session).single {
+                it.optString("role") == "user" && it.optString("content") == "pending steering"
+            }
+            val failures = store.readConversationMessages(session).filter {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+                    && it.optString("userMessageId") == steering.optString("messageId")
+            }
+            assertEquals("The failed first read gets exactly one deferred retry", 2, recoveryAttempts.get())
+            assertEquals("STOP never starts a new run for the steering input", 1, runCalls.get())
+            assertEquals(1, failures.size)
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+        } finally {
+            service.beforePendingInputFailureRecoveryForTesting = null
+            release.countDown()
+            AgentForegroundService.stopRun(session)
+            if (!worker(service).isShutdown) service.awaitSessionIdleForTesting(session).get(5, TimeUnit.SECONDS)
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun persistentStoppedRecoveryInterruptionGetsOneDeferredAttemptWithoutPropagation() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val service = startManagedService(context)
+        val attempts = AtomicInteger()
+        val interruptedRead = java.nio.channels.ClosedByInterruptException()
+        service.beforePendingInputFailureRecoveryForTesting = Runnable {
+            attempts.incrementAndGet()
+            throw IllegalStateException("persistent interrupted pending-input read", interruptedRead)
+        }
+        val recovery = AgentForegroundService::class.java.getDeclaredMethod(
+            "failPendingInputRecovery", String::class.java, java.lang.Boolean.TYPE, java.lang.Boolean.TYPE
+        ).apply { isAccessible = true }
+        try {
+            assertTrue(recovery.invoke(service, "persistent-stopped-recovery", true, true) as Boolean)
+            assertFalse(recovery.invoke(service, "persistent-stopped-recovery", true, false) as Boolean)
+            assertEquals("The STOP recovery is bounded to the initial pass plus one retry", 2, attempts.get())
+        } finally {
+            Thread.interrupted()
+            service.beforePendingInputFailureRecoveryForTesting = null
+            stopManagedService(context)
+        }
+    }
+
     @Test fun deterministicRuntimeFactoryFailureWritesOneFailedResponseAndDoesNotRetry() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()

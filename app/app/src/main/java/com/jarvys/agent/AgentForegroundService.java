@@ -290,7 +290,7 @@ public final class AgentForegroundService extends Service {
         boolean retryPendingInputRecovery = false;
         RuntimeException recoveryFailure = null;
         if (stoppedByUser) {
-          try { retryPendingInputRecovery = failPendingInputRecovery(sessionId); }
+          try { retryPendingInputRecovery = failPendingInputRecovery(sessionId, true, true); }
           catch (RuntimeException failure) { recoveryFailure = failure; }
           finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
         }
@@ -313,7 +313,7 @@ public final class AgentForegroundService extends Service {
         releaseFollowUpClaim(sessionId, request.followUpClaimId);
         AgentRunUiState.finishPendingGeneration(sessionId, active.generation);
         refreshForegroundNotification();
-        if (retryPendingInputRecovery) enqueuePendingInputRecovery(sessionId);
+        if (retryPendingInputRecovery) enqueuePendingInputRecovery(sessionId, stoppedByUser);
         stopServiceIfIdle();
         if (recoveryFailure != null) throw recoveryFailure;
       }
@@ -697,10 +697,17 @@ public final class AgentForegroundService extends Service {
   }
 
   private boolean enqueuePendingInputRecovery(String sessionId) {
+    return enqueuePendingInputRecovery(sessionId, false);
+  }
+
+  private boolean enqueuePendingInputRecovery(String sessionId, boolean stoppedByUser) {
     if (worker.isShutdown()) return false;
     if (sessionId == null) {
       try {
-        worker.execute(() -> recoverPendingInputs(null));
+        worker.execute(() -> {
+          if (stoppedByUser) failPendingInputRecovery(null, true, false);
+          else recoverPendingInputs(null);
+        });
         return true;
       } catch (java.util.concurrent.RejectedExecutionException rejected) {
         return false;
@@ -710,8 +717,10 @@ public final class AgentForegroundService extends Service {
       CancellationToken ownerToken = activeRunTokens.get(sessionId);
       try {
         worker.execute(() -> {
-          if (ownerToken != null && ownerToken.wasStoppedByUser()) {
-            failPendingInputRecovery(sessionId);
+          if (stoppedByUser || ownerToken != null && ownerToken.wasStoppedByUser()) {
+            // A STOP-owned retry must resolve the durable follow-up as FAILED. The owner token
+            // may already have been removed by the time this queued task runs.
+            failPendingInputRecovery(sessionId, true, false);
             return;
           }
           recoverPendingInputs(sessionId);
@@ -724,6 +733,11 @@ public final class AgentForegroundService extends Service {
   }
 
   private boolean failPendingInputRecovery(String onlySessionId) {
+    return failPendingInputRecovery(onlySessionId, false, true);
+  }
+
+  private boolean failPendingInputRecovery(String onlySessionId, boolean stoppedByUser,
+      boolean allowDeferredRetry) {
     try {
       Runnable hook = beforePendingInputFailureRecoveryForTesting;
       if (hook != null) hook.run();
@@ -735,7 +749,8 @@ public final class AgentForegroundService extends Service {
           if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
         }
         boolean retry = false;
-        for (String sessionId : pendingSessions) retry |= failPendingInputRecovery(sessionId);
+        for (String sessionId : pendingSessions)
+          retry |= failPendingInputRecovery(sessionId, stoppedByUser, allowDeferredRetry);
         return retry;
       }
       synchronized (interruptAdmissionLock(onlySessionId)) {
@@ -750,9 +765,15 @@ public final class AgentForegroundService extends Service {
       return false;
     } catch (RuntimeException failure) {
       LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
-      if (Thread.currentThread().isInterrupted() || isInterruptedRecoveryFailure(failure)) {
+      if (isInterruptedRecoveryFailure(failure)) {
         Thread.currentThread().interrupt();
-        // Keep the durable request pending; the owning drain retries after releasing this run.
+        // Keep the durable request pending. The initial STOP pass may schedule one deferred
+        // attempt; an interruption on that attempt is logged but never propagated or requeued.
+        return allowDeferredRetry;
+      }
+      if (stoppedByUser && allowDeferredRetry) {
+        // A transient read failure during STOP must not turn a pending steering message into a
+        // normal follow-up run. The one queued pass below retries the FAILED resolution.
         return true;
       }
       // A non-interruption ledger failure remains visible to the existing fatal-diagnostics path.
@@ -761,9 +782,10 @@ public final class AgentForegroundService extends Service {
   }
 
   private static boolean isInterruptedRecoveryFailure(Throwable failure) {
-    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-      if (cause instanceof ClosedByInterruptException || cause instanceof InterruptedIOException) return true;
-      if (cause.getCause() == cause) break;
+    Set<Throwable> visited = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    for (Throwable cause = failure; cause != null && visited.add(cause); cause = cause.getCause()) {
+      if (cause instanceof ClosedByInterruptException || cause instanceof InterruptedIOException
+          || cause instanceof InterruptedException) return true;
     }
     return false;
   }

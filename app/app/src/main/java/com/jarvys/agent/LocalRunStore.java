@@ -1137,9 +1137,7 @@ public final class LocalRunStore {
     private static void readCrewSnapshotsFromSnapshot(String sessionId, LedgerSnapshot snapshot, long startOffset,
                                                        LinkedHashMap<String, CrewMissionSnapshot> latest) {
         if (startOffset < 0L || startOffset > snapshot.length) throw new IllegalArgumentException("Invalid Crew snapshot offset");
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                NonInterruptibleLedgerFile.open(snapshot.ledger)
-                        .inputStream(startOffset, snapshot.length - startOffset), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = snapshotReader(snapshot, startOffset)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 // Normal ledger rows are minified JSON. This cheap substring test avoids a
@@ -3190,8 +3188,18 @@ public final class LocalRunStore {
     private static BufferedReader snapshotReader(LedgerSnapshot snapshot, long startOffset) throws IOException {
         if (startOffset < 0L || startOffset > snapshot.length)
             throw new IllegalArgumentException("Invalid conversation ledger offset");
-        return new BufferedReader(new InputStreamReader(NonInterruptibleLedgerFile.open(snapshot.ledger)
-                .inputStream(startOffset, snapshot.length - startOffset), StandardCharsets.UTF_8));
+        NonInterruptibleLedgerFile source = NonInterruptibleLedgerFile.open(snapshot.ledger);
+        try {
+            return new BufferedReader(new InputStreamReader(
+                    source.inputStream(startOffset, snapshot.length - startOffset), StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException | Error failure) {
+            try {
+                source.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
     }
 
     private static List<Integer> timelineMessageIndices(List<JSONObject> rows, int firstMessageIndex) {
@@ -5296,16 +5304,15 @@ public final class LocalRunStore {
     private List<JSONObject> collectConversationHistory(int boundedLimit) {
         List<JSONObject> recent = new ArrayList<>();
         if (boundedLimit == 0) return recent;
-        // Keep every ledger's progress for this call. The process-wide LRU is only a warm-start
-        // optimization; exceeding it must not make a retry re-read earlier ledgers from byte zero.
-        Map<String, RunHistoryCache> invocationRunHistory = new HashMap<>();
-        Map<String, ConversationHistoryCache> invocationConversationHistory = new HashMap<>();
 
         File[] runs = root.listFiles(File::isDirectory);
         if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
         if (runs != null) for (File run : runs) {
             File ledger = new File(run, "steps.jsonl");
             try {
+                // Keep retry progress only while processing this ledger. The process-wide LRU
+                // remains a warm-start optimization for later calls.
+                Map<String, RunHistoryCache> invocationRunHistory = new HashMap<>();
                 verifyRunPath(ledger);
                 int unstableRetries = 0;
                 while (true) {
@@ -5338,6 +5345,8 @@ public final class LocalRunStore {
         List<String> sessionIds = listConversationLedgerIds();
         for (String sessionId : sessionIds) {
             try {
+                // Retain progress across unstable-snapshot retries of this file only.
+                Map<String, ConversationHistoryCache> invocationConversationHistory = new HashMap<>();
                 File ledger = conversationFile(sessionId);
                 int unstableRetries = 0;
                 while (true) {

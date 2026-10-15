@@ -164,8 +164,29 @@ public class LocalRunStoreInterruptReadParityTest {
         T get() throws Exception;
     }
 
-    /** Event payloads such as ToolActivity and CrewMissionSnapshot have identity-based toString; compare content only. */
+    /** Compare timeline event payloads by durable content instead of their identity-based toString values. */
     private static String stable(Object value) {
+        if (value instanceof Iterable<?>) {
+            StringBuilder values = new StringBuilder("[");
+            for (Object item : (Iterable<?>) value) {
+                if (values.length() > 1) values.append(',');
+                values.append(stable(item));
+            }
+            return values.append(']').toString();
+        }
+        if (value instanceof AgentRunUiEvent) {
+            AgentRunUiEvent event = (AgentRunUiEvent) value;
+            return String.valueOf(event).replaceAll("@[0-9a-fA-F]+", "@obj")
+                    + "|toolActivity=" + stable(event.getToolActivity())
+                    + "|toolActivityEvents=" + stable(event.getToolActivityEvents())
+                    + "|crewMissionSnapshot=" + stable(event.getCrewMissionSnapshot());
+        }
+        if (value instanceof ToolActivity) {
+            ToolActivity activity = (ToolActivity) value;
+            return activity.toJson().toString() + "|allDetail=" + activity.allDetail();
+        }
+        if (value instanceof CrewMissionSnapshot)
+            return ((CrewMissionSnapshot) value).toJson().toString();
         return String.valueOf(value).replaceAll("@[0-9a-fA-F]+","@obj");
     }
 }
