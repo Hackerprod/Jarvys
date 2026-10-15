@@ -170,7 +170,7 @@ data class ToolResult(
     val created_at: Double,
 )
 
-/** Append-only lifecycle rows; duplicate global event_id import is first-wins (`INSERT OR IGNORE`). */
+/** Append-only lifecycle rows; duplicate event_id imports within one conversation are first-wins (`INSERT OR IGNORE`). */
 @Entity(
     tableName = "tool_activities",
     primaryKeys = ["conversation_id", "seq"],
@@ -180,7 +180,7 @@ data class ToolResult(
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
-        Index(name = "idx_tool_activities_event", value = ["event_id"], unique = true),
+        Index(name = "idx_tool_activities_event", value = ["conversation_id", "event_id"], unique = true),
         Index(name = "idx_tool_activities_owner_execution", value = ["conversation_id", "owner_user_message_id", "execution_id", "seq"]),
         Index(name = "idx_tool_activities_batch_call", value = ["conversation_id", "source_batch_id", "call_id", "seq"]),
     ],

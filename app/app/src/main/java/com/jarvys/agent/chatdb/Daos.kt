@@ -9,10 +9,11 @@ import androidx.room.Transaction
 /** Conversation writes preserve tombstones even though deleting the conversation cascades its children. */
 @Dao
 interface ConversationDao {
+    /** SOLO para el repositorio (M1); callers must prefer [insertIfNotTombstoned]. */
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertConversationRow(conversation: Conversation): Long
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertTombstoneRow(tombstone: Tombstone)
 
     @Query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope = 'conversation' AND entity_id = :id)")
@@ -28,15 +29,15 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): Conversation?
 
+    /** SOLO para el repositorio (M1); deletion must go through [deleteById] to keep the tombstone transaction. */
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversationRow(id: String): Int
 
     /** Deletes all conversation rows by CASCADE and preserves the permanent tombstone atomically. */
     @Transaction
     suspend fun deleteById(id: String, deletedAt: Long = System.currentTimeMillis()): Int {
-        val deleted = deleteConversationRow(id)
-        if (deleted > 0) insertTombstoneRow(Tombstone("conversation", id, deletedAt))
-        return deleted
+        insertTombstoneRow(Tombstone("conversation", id, deletedAt))
+        return deleteConversationRow(id)
     }
 
     /** Compatibility name; marking deleted always removes the content in the same transaction. */

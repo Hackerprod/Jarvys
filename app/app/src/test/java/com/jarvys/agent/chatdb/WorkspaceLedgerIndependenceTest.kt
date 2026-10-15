@@ -190,6 +190,12 @@ class WorkspaceLedgerIndependenceTest {
 
         // Removing the execution ledger cascades its evidence but must not erase central history.
         sqlite.execSQL("DELETE FROM conversations WHERE id=?", arrayOf(execution))
+        assertEquals(1L, rowCount(sqlite, "tombstones"))
+        assertEquals(1L, scalarLong(
+            sqlite,
+            "SELECT COUNT(*) FROM tombstones WHERE scope='conversation' AND entity_id=?",
+            arrayOf(execution),
+        ))
         assertEquals(0L, rowCount(sqlite, "crew_result_evidence"))
         assertEquals(0L, rowCount(sqlite, "crew_coordination_evidence"))
         assertEquals(1L, rowCount(sqlite, "workspace_result_refs"))

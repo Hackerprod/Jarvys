@@ -3,7 +3,10 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
+import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.test.core.app.ApplicationProvider
 import androidx.room.withTransaction
 import kotlinx.coroutines.runBlocking
@@ -27,6 +30,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
+
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1a8a023da4d829faee43ef185a7bba69" // update after final schema
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -156,9 +161,9 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun declaredPrimaryAndUniqueKeysRejectDuplicates() = onDatabaseThread {
         database.conversationDao().insertIfNotTombstoned(conversation("unique"))
-        database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "m1", 1))
+        database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "m1", 1, created_at = 1.0))
         assertSuspendConstraint {
-            database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "other", 1))
+            database.conversationItemDao().insert(ConversationItem("unique", 1, "message", "other", 1, created_at = 1.0))
         }
 
         database.messageDao().insert(message("unique", "m1", "stable-1", 1, 0))
@@ -175,15 +180,18 @@ class JarvysChatDatabaseM0Test {
                 arrayOf("unique", "m1", 0, MessagePartKinds.TEXT, "duplicate ordinal")
             )
         }
-        database.conversationItemDao().insert(ConversationItem("unique", 2, "message", "m2", 2))
+        database.conversationItemDao().insert(ConversationItem("unique", 2, "message", "m2", 2, created_at = 2.0))
         assertSuspendConstraint {
             database.messageDao().insert(message("unique", "m2", "stable-1", 2, 1))
         }
         database.messageDao().insert(message("unique", "m2", "stable-2", 2, 1, proactiveDecisionId = "decision-1"))
-        database.conversationItemDao().insert(ConversationItem("unique", 3, "message", "m3", 3))
+        database.conversationItemDao().insert(ConversationItem("unique", 3, "message", "m3", 3, created_at = 3.0))
         assertSuspendConstraint {
             database.messageDao().insert(message("unique", "m3", "stable-3", 3, 2, proactiveDecisionId = "decision-1"))
         }
+        database.conversationDao().insertIfNotTombstoned(conversation("unique-other"))
+        database.conversationItemDao().insert(ConversationItem("unique-other", 1, "message", "m1", 1, created_at = 1.0))
+        database.messageDao().insert(message("unique-other", "m1", "stable-other", 1, 0, proactiveDecisionId = "decision-1"))
     }
 
     @Test
@@ -191,7 +199,7 @@ class JarvysChatDatabaseM0Test {
         val conversationId = "active-runs"
         val messageId = "m1"
         database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
-        database.conversationItemDao().insert(ConversationItem(conversationId, 1, "message", messageId, 1))
+        database.conversationItemDao().insert(ConversationItem(conversationId, 1, "message", messageId, 1, created_at = 1.0))
         database.messageDao().insert(message(conversationId, messageId, "stable-m1", 1, 0))
         val sqlite = database.openHelper.writableDatabase
         val activeTargetKey = "${conversationId.length}:$conversationId${messageId.length}:$messageId"
@@ -223,8 +231,8 @@ class JarvysChatDatabaseM0Test {
         val conversationId = "pending-interrupts"
         database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
         database.conversationItemDao().insertAll(listOf(
-            ConversationItem(conversationId, 1, "interrupt", "pending-1", 1),
-            ConversationItem(conversationId, 2, "interrupt", "pending-2", 2),
+            ConversationItem(conversationId, 1, "interrupt", "pending-1", 1, created_at = 1.0),
+            ConversationItem(conversationId, 2, "interrupt", "pending-2", 2, created_at = 2.0),
         ))
         val sqlite = database.openHelper.writableDatabase
         sqlite.execSQL(
@@ -257,7 +265,7 @@ class JarvysChatDatabaseM0Test {
     fun itemKeysetPagesCoverFiveHundredRowsWithoutGapsOrDuplicates() = onDatabaseThread {
         val id = "pages"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
-        val items = (1L..500L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq) }
+        val items = (1L..500L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq, created_at = seq.toDouble()) }
         val messages = (1L..500L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
         database.withTransaction {
             database.conversationItemDao().insertAll(items)
@@ -297,6 +305,55 @@ class JarvysChatDatabaseM0Test {
             database.openHelper.writableDatabase,
             "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
             arrayOf(id),
+        ))
+    }
+
+    @Test
+    fun deletingConversationThatWasNeverImportedLeavesPermanentTombstone() = onDatabaseThread {
+        val id = "not-imported-yet"
+        assertEquals(0, database.conversationDao().deleteById(id, 77L))
+        assertTrue(database.conversationDao().isTombstoned(id))
+        assertEquals(77L, scalarLong(
+            database.openHelper.writableDatabase,
+            "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
+            arrayOf(id),
+        ))
+        assertTrue(runCatching {
+            database.conversationDao().insertIfNotTombstoned(conversation(id))
+        }.isFailure)
+    }
+
+    @Test
+    fun tombstonesRejectUpdateAndDelete() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        database.conversationDao().deleteById("immutable-tombstone", 55L)
+
+        assertConstraint("tombstone UPDATE") {
+            sqlite.execSQL("UPDATE tombstones SET deleted_at=56 WHERE scope='conversation' AND entity_id='immutable-tombstone'")
+        }
+        assertConstraint("tombstone DELETE") {
+            sqlite.execSQL("DELETE FROM tombstones WHERE scope='conversation' AND entity_id='immutable-tombstone'")
+        }
+        assertEquals(1L, rowCount(sqlite, "tombstones"))
+    }
+
+    @Test
+    fun onOpenRecreatesMissingDatabaseTriggers() = onDatabaseThreadBlocking {
+        val sqlite = database.openHelper.writableDatabase
+        sqlite.execSQL("DROP TRIGGER trg_tombstones_no_update")
+        assertEquals(0L, scalarLong(
+            sqlite,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tombstones_no_update'",
+            emptyArray(),
+        ))
+
+        JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
+        val reopened = database.openHelper.writableDatabase
+        assertEquals(1L, scalarLong(
+            reopened,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tombstones_no_update'",
+            emptyArray(),
         ))
     }
 
@@ -362,14 +419,91 @@ class JarvysChatDatabaseM0Test {
             val row = seeded.getValue(table)
             assertConstraint("duplicate $table") { insertRow(sqlite, table, row) }
         }
-        assertTrue("ToolActivity event identities are global", "event_id" in uniqueIndexColumns(sqlite, "tool_activities"))
+
+        val eventId = seeded.getValue("tool_activities").getValue("event_id") as String
+        fun insertActivity(conversationId: String, seq: Long, batchId: String) {
+            database.conversationItemDao().insert(
+                ConversationItem(conversationId, seq, "tool_activity", "activity-$seq", seq, created_at = seq.toDouble()),
+            )
+            sqlite.execSQL(
+                "INSERT INTO tool_batches(conversation_id,batch_id,seq,message_index,assistant_text,assistant_progress,created_at) VALUES(?,?,?,?,?,?,?)",
+                arrayOf(conversationId, batchId, seq, 0L, "", 0, seq.toDouble()),
+            )
+            sqlite.execSQL(
+                "INSERT INTO tool_activities(conversation_id,seq,event_id,source_batch_id,tool_name,stage,timestamp_millis,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                arrayOf(conversationId, seq, eventId, batchId, "tool", "complete", seq, seq.toDouble()),
+            )
+        }
+
+        insertActivity("unique-journal", 2L, "same-ledger-batch")
+        assertConstraint("event_id remains unique within one conversation") {
+            insertActivity("unique-journal", 3L, "same-ledger-batch-duplicate")
+        }
+        database.conversationDao().insertIfNotTombstoned(conversation("unique-journal-other"))
+        insertActivity("unique-journal-other", 1L, "other-ledger-batch")
+
+        val inputReceipt = seeded.getValue("workspace_input_incorporations")
+        val duplicateMailboxInSameLedger = inputReceipt.toMutableMap().apply {
+            put("receipt_id", "same-ledger-second-receipt")
+        }
+        assertConstraint("mailbox message remains unique within one conversation") {
+            insertRow(sqlite, "workspace_input_incorporations", duplicateMailboxInSameLedger)
+        }
+        val duplicateMailboxInOtherLedger = inputReceipt.toMutableMap().apply {
+            put("receipt_id", "other-ledger-receipt")
+            put("conversation_id", "unique-journal-other")
+        }
+        insertRow(sqlite, "workspace_input_incorporations", duplicateMailboxInOtherLedger)
+    }
+
+    @Test
+    fun workspaceReplyAndEvidenceIdsAreUniqueWithinConversationOnly() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        fun insertReference(conversationId: String, seq: Long, referenceId: String, evidenceId: String) {
+            database.conversationItemDao().insert(
+                ConversationItem(conversationId, seq, "workspace_coordination_ref", referenceId, seq, created_at = seq.toDouble()),
+            )
+            sqlite.execSQL(
+                "INSERT INTO workspace_coordination_refs(schema_version,conversation_id,reference_id,is_notice,seq,evidence_id,content_sha256,owner_central_session_id,workspace_id,execution_session_id,assignment_id,request_id,mission_id,bot_id,cycle_id,message_id,kind,observed_assignment_revision,reported_status,produced_at_ms) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf(1, conversationId, referenceId, 1, seq, evidenceId, "digest-$evidenceId", "central", "workspace",
+                    "execution", "assignment", "request", "mission", "bot", "cycle", "message", "RESULT", 1L, "completed", seq),
+            )
+        }
+        fun insertReply(conversationId: String, seq: Long, referenceId: String, replyId: String, evidenceId: String) {
+            sqlite.execSQL(
+                "INSERT INTO workspace_coordination_replies(conversation_id,reference_id,is_notice,schema_version,reply_id,evidence_id,reply_key,text,central_request_id,original_user_request,mailbox_message_id,payload_sha256,prepared_at_ms,state,state_at_ms,seq) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf(conversationId, referenceId, 1, 1, replyId, evidenceId, "key-$replyId", byteArrayOf(65), "request",
+                    "original".toByteArray(), "mailbox-$replyId", "payload-$replyId", seq, "PREPARED", seq, seq),
+            )
+        }
+
+        val firstConversation = "workspace-reply-a"
+        database.conversationDao().insertIfNotTombstoned(conversation(firstConversation))
+        insertReference(firstConversation, 1L, "ref-a-1", "evidence-shared")
+        insertReply(firstConversation, 1L, "ref-a-1", "reply-shared", "evidence-shared")
+
+        insertReference(firstConversation, 2L, "ref-a-2", "evidence-other")
+        assertConstraint("reply_id remains unique within one conversation") {
+            insertReply(firstConversation, 2L, "ref-a-2", "reply-shared", "evidence-other")
+        }
+        insertReference(firstConversation, 3L, "ref-a-3", "evidence-shared")
+        assertConstraint("evidence_id remains unique within one conversation") {
+            insertReply(firstConversation, 3L, "ref-a-3", "reply-other", "evidence-shared")
+        }
+
+        val secondConversation = "workspace-reply-b"
+        database.conversationDao().insertIfNotTombstoned(conversation(secondConversation))
+        insertReference(secondConversation, 1L, "ref-b-1", "evidence-shared")
+        insertReply(secondConversation, 1L, "ref-b-1", "reply-shared", "evidence-shared")
     }
 
     @Test
     fun messagePartsHaveNoRevisionAndOrdinalIsUniqueWithinTheMessage() = onDatabaseThread {
         val id = "message-part-shape"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
-        database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1, created_at = 1.0))
         database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
         val sqlite = database.openHelper.writableDatabase
         val columns = tableColumns(sqlite, "message_parts").keys
@@ -416,7 +550,7 @@ class JarvysChatDatabaseM0Test {
     fun crewMessageActivityBindingAndLosslessTextRoundTripAsTypedRows() = onDatabaseThread {
         val id = "crew-round-trip"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
-        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_snapshot", "mission-1", 1))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_snapshot", "mission-1", 1, created_at = 1.0))
         val sqlite = database.openHelper.writableDatabase
         val synthesis = ExactUtf16.encode(String(charArrayOf('S', '\uD800', 'Y')))
         val error = ExactUtf16.encode(String(charArrayOf('E', '\uDC00', 'R')))
@@ -521,7 +655,28 @@ class JarvysChatDatabaseM0Test {
     }
 
     @Test
-    fun foreignKeysAreConfiguredForConcurrentReaderConnections() {
+    fun foreignKeysAreEnforcedOnASecondWriterConnection() {
+        val secondDatabase = Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .addCallback(JarvysChatDatabaseProvider.connectionPragmasCallback())
+            .build()
+        try {
+            val secondHelper: SupportSQLiteOpenHelper = secondDatabase.openHelper
+            val secondWriter = secondHelper.writableDatabase
+            assertEquals(1L, pragmaLong(secondWriter, "foreign_keys"))
+            assertConstraint("foreign key on second writer") {
+                secondWriter.execSQL(
+                    "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
+                    arrayOf("missing-parent", 1L, "message", "orphan", 1L, 0, 1.25),
+                )
+            }
+        } finally {
+            secondDatabase.close()
+        }
+    }
+
+    @Test
+    fun databaseSupportsConcurrentReadersUnderWal() {
         val sqlite = database.openHelper.writableDatabase
         val start = CountDownLatch(1)
         val readers = Executors.newFixedThreadPool(4)
@@ -541,12 +696,6 @@ class JarvysChatDatabaseM0Test {
             futures.forEach { assertEquals(20_000_100_000L, it.get(30, TimeUnit.SECONDS)) }
         } finally {
             readers.shutdownNow()
-        }
-        assertConstraint {
-            sqlite.execSQL(
-                "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
-                arrayOf("missing-parent", 1L, "message", "orphan", 1L, 0, 1.25),
-            )
         }
     }
 
@@ -572,9 +721,9 @@ class JarvysChatDatabaseM0Test {
     }
 
     /**
-     * Checks the versioned Room export against a real database created by Room. When the first
-     * real migration to v2 is added, use MigrationTestHelper's schema-path constructor there;
-     * this guard catches drift between the versioned JSON and the current database code meanwhile.
+     * Pins v1's identity hash and checks it against both Room's export and the opened database.
+     * Any v1 schema change requires a version bump plus an explicit migration; after the final
+     * schema export, update the pinned constant deliberately because KSP regenerates the JSON.
      */
     @Test
     fun exportedSchemaV1MatchesRealDatabaseStructure() = onDatabaseThreadBlocking {
@@ -591,22 +740,42 @@ class JarvysChatDatabaseM0Test {
 
         val exportedDatabase = JSONObject(schemaFile.readText(Charsets.UTF_8)).getJSONObject("database")
         assertEquals("Exported schema version", 1, exportedDatabase.getInt("version"))
+        assertEquals("Pinned v1 identity hash", EXPECTED_SCHEMA_V1_IDENTITY_HASH, exportedDatabase.getString("identityHash"))
 
         val sqlite = database.openHelper.writableDatabase
         assertEquals("Room database version", 1L, pragmaLong(sqlite, "user_version"))
         assertEquals(
             "Room identity hash",
-            exportedDatabase.getString("identityHash"),
+            EXPECTED_SCHEMA_V1_IDENTITY_HASH,
             scalarString(sqlite, "SELECT identity_hash FROM room_master_table WHERE id=42"),
         )
         assertExportedSchemaMatchesDatabase(exportedDatabase, sqlite)
     }
 
     @Test
+    fun entityInsertsDoNotUseReplaceConflictStrategy() {
+        val schemaDirectory = System.getProperty("room.schemaDir")
+        assertTrue("Missing room.schemaDir", !schemaDirectory.isNullOrBlank())
+        val sourceDirectory = File(File(schemaDirectory!!).parentFile, "src/main/java/com/jarvys/agent/chatdb")
+        assertTrue("Missing chat database source directory: ${sourceDirectory.absolutePath}", sourceDirectory.isDirectory)
+        val insertAnnotation = Regex("""@Insert(?:\s*\((?:[^()]|\([^()]*\))*\))?""")
+        val violations = sourceDirectory.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { sourceFile ->
+                val source = sourceFile.readText(Charsets.UTF_8)
+                insertAnnotation.findAll(source)
+                    .filter { it.value.contains("OnConflictStrategy.REPLACE") }
+                    .map { "${sourceFile.name}:${source.substring(0, it.range.first).count { ch -> ch == '\n' } + 1}" }
+            }
+            .toList()
+        assertTrue("Entity @Insert must not use REPLACE because it can delete a parent and cascade: $violations", violations.isEmpty())
+    }
+
+    @Test
     fun strictJournalTextRoundTripsUnpairedUtf16CodeUnitsAsBlob() = onDatabaseThread {
         val id = "utf16"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
-        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_result_evidence", "e1", 1))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "crew_result_evidence", "e1", 1, created_at = 1.0))
         val exactText = String(charArrayOf('A', '\uD800', 'B', '\uDC00', 'Z'))
         val expectedBytes = ExactUtf16.encode(exactText)
         database.openHelper.writableDatabase.execSQL(
@@ -637,7 +806,7 @@ class JarvysChatDatabaseM0Test {
     fun indexedTailReadStaysWithinHalfSecondAfterFiftyThousandMessages() = onDatabaseThread {
         val id = "bench-50k"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
-        val items = (1L..50_000L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq) }
+        val items = (1L..50_000L).map { seq -> ConversationItem(id, seq, "message", "m$seq", seq, created_at = seq.toDouble()) }
         val messages = (1L..50_000L).map { seq -> message(id, "m$seq", "stable-$seq", seq, seq - 1) }
         database.withTransaction {
             database.conversationItemDao().insertAll(items)
@@ -672,6 +841,7 @@ class JarvysChatDatabaseM0Test {
         role = "user",
         proactive_decision_id = proactiveDecisionId,
         created_at = seq.toDouble(),
+        updated_at = seq.toDouble(),
     )
 
     private fun pragmaLong(database: SupportSQLiteDatabase, name: String): Long =

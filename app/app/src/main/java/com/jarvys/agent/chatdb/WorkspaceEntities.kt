@@ -153,7 +153,8 @@ data class WorkspaceCoordinationRef(
 /**
  * Replaces `workspace_coordination_reply_intent`; free-form text is preserved as exact UTF-16 BLOBs.
  * Reply intents belong to the central ledger and reference execution evidence logically, while their
- * `(conversation_id, reference_id, is_notice)` FK points to the local central notice row.
+ * `(conversation_id, reference_id, is_notice)` FK points to the local central notice row. Reply and
+ * evidence IDs are unique within this conversation ledger; the schema makes no cross-ledger claim.
  */
 @Entity(
     tableName = "workspace_coordination_replies",
@@ -166,8 +167,7 @@ data class WorkspaceCoordinationRef(
     indices = [
         Index(name = "idx_workspace_replies_reference", value = ["conversation_id", "reference_id", "is_notice"]),
         Index(name = "idx_workspace_replies_conversation_reply", value = ["conversation_id", "reply_id"], unique = true),
-        Index(name = "idx_workspace_replies_reply_id", value = ["reply_id"], unique = true),
-        Index(name = "idx_workspace_replies_evidence", value = ["evidence_id"], unique = true),
+        Index(name = "idx_workspace_replies_evidence", value = ["conversation_id", "evidence_id"], unique = true),
         Index(name = "idx_workspace_replies_seq", value = ["conversation_id", "seq"]),
         Index(name = "idx_workspace_replies_state", value = ["conversation_id", "state", "seq"]),
     ],
@@ -249,6 +249,8 @@ data class WorkspaceCoordinationReplyTransition(
 /**
  * Replaces `workspace_input_incorporation` receipts proving that workspace input was incorporated. First-seen
  * receipt identities are immutable; M1 repository writes use first-wins `INSERT OR IGNORE` semantics.
+ * Mailbox-message deduplication is scoped to this conversation ledger; the legacy strict scan reads the
+ * canonical Central ledger and makes no global cross-ledger uniqueness claim.
  */
 @Entity(
     tableName = "workspace_input_incorporations",
@@ -257,7 +259,7 @@ data class WorkspaceCoordinationReplyTransition(
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
-        Index(name = "idx_workspace_input_mailbox", value = ["mailbox_message_id"], unique = true),
+        Index(name = "idx_workspace_input_mailbox", value = ["conversation_id", "mailbox_message_id"], unique = true),
         Index(name = "idx_workspace_input_source", value = ["conversation_id", "source_kind", "source_id"]),
         Index(name = "idx_workspace_input_seq", value = ["conversation_id", "seq"]),
     ],

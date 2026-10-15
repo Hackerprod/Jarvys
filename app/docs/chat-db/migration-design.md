@@ -1,6 +1,8 @@
 # Diseño: migración del ledger de conversaciones a SQLite (patrón Kelivo)
 
-Fuentes: `kelivo-db-report.md` (arquitectura de referencia) y `ledger-inventory.md` (46 tipos de fila de Jarvys, escritores/lectores, esquema propuesto, riesgos, tests). Este documento fija decisiones; nada se implementa hasta aprobarlo.
+> **Estado del esquema M0 (2026-10-14):** la v1 de Room está implementada y sus tests base pasaron; los ajustes de M0 de esta entrega cambian columnas e índices y quedan pendientes de regenerar por el build del arquitecto. M1 (repositorio) todavía no empieza. Cualquier cambio estructural futuro requiere subir la versión, añadir una migración explícita y actualizar deliberadamente el identityHash fijado por el test.
+
+Fuentes: `kelivo-db-report.md` (arquitectura de referencia) y `ledger-inventory.md` (46 tipos de fila de Jarvys, escritores/lectores, esquema propuesto, riesgos, tests). Este documento fija las decisiones que guían la implementación y el contrato de migración.
 
 ## 1. Alcance
 - DENTRO: el ledger por conversación `files/jarvys/conversations/<id>.jsonl` + `.meta.json` (mensajes, marcadores, herramientas, protocolo del modelo, compactación/reflexión, crew snapshots, diarios estrictos de workspace/crew, interrupts, decisiones, reacciones, traducciones, imágenes/archivos entregados).
@@ -43,7 +45,7 @@ Historial que ve el modelo idéntico (orden tras steering, índice de mensaje in
 - Se construye en archivo temporal/tablas de staging y se publica al validar: conteos por tipo, DIGEST del texto de mensajes, `integrity_check`/`foreign_key_check`, comparación de paridad de `loadConversationContext` (JSONL vs DB) y de proyección de timeline.
 - Reparaciones y reporte: filas corruptas/truncadas (se cuentan y reportan, no se pierden en silencio), ids legado, snapshots de crew duplicados (se importa el último por misión conservando su `seq`), tombstones (`.meta.json deleted` gana; M2 importa tombstones a la tabla sin FK y no resucita ids).
 - M2 expande el `compaction_reflection_consumed` legado sin ids a todos los ids de compactacion anteriores en esa conversacion.
-- Los triggers instalados al crear la BD deben recrearse en cada migracion futura que reconstruya sus tablas. La primera-gana de incorporations/resultados usa `INSERT OR IGNORE` en M1; el test de import idempotente se implementa junto al repositorio M1.
+- Los triggers se instalan al crear la BD y se reaplican idempotentemente en `onOpen`; cada migracion futura que reconstruya sus tablas tambien debe llamar `DatabaseTriggers.create`. La primera-gana de incorporations/resultados usa `INSERT OR IGNORE` en M1; el test de import idempotente se implementa junto al repositorio M1.
 - El JSONL original NO se borra: queda como respaldo de solo lectura hasta que el dueño lo apruebe expresamente. Una vez migrada, la DB es la única fuente de verdad (sin doble escritura).
 - Datos reales para prueba: los 4 ledgers del teléfono (48 MB, 36 MB, 9+9 MB) se copian al PC por adb y sirven de golden test local.
 

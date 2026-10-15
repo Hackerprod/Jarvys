@@ -195,7 +195,7 @@ conversation_items(conversation_id, seq, item_kind TEXT, item_key TEXT,
 messages(conversation_id, message_id TEXT, stable_id TEXT, seq INT, message_index INT,
   role TEXT CHECK(role IN('user','assistant')), content TEXT, status TEXT, run_id TEXT,
   owner_user_message_id TEXT, duration_ms INT, before_message_id TEXT,
-  proactive_thread_key TEXT, proactive_reply_to_message_id TEXT, proactive_decision_id TEXT UNIQUE,
+  proactive_thread_key TEXT, proactive_reply_to_message_id TEXT, proactive_decision_id TEXT,
   interrupt_request_id TEXT, ack_required INT, legacy_id INT, created_at REAL,
   hidden_kind TEXT NULL, hidden_seq INT NULL,               -- regenerated/deleted (columna, no fila)
   translation_hidden_seq INT NULL, suggested_replies_consumed_seq INT NULL,
@@ -203,6 +203,7 @@ messages(conversation_id, message_id TEXT, stable_id TEXT, seq INT, message_inde
   PK(conversation_id, message_id))
   IDX(conversation_id, seq) ; IDX(conversation_id, role, seq) ; IDX(conversation_id, owner_user_message_id)
   IDX(conversation_id, message_index) ; UNIQUE(conversation_id, stable_id)
+  UNIQUE(conversation_id, proactive_decision_id)
 message_attachments(conversation_id, message_id, ordinal, attachment_id, name, mime_type, size_bytes, kind, relative_path, PK(...,ordinal))
   IDX(conversation_id, attachment_id)
 message_translations(conversation_id, message_id, seq, language, content)  IDX(conversation_id, message_id, seq)
@@ -222,7 +223,7 @@ tool_calls(conversation_id, batch_id, ordinal, call_id, name, arguments_json TEX
 tool_results(conversation_id, batch_id, call_id, seq, tool_name, lifecycle, output, PK(conversation_id,batch_id,call_id)) -- primera gana
 tool_activities(conversation_id, seq, event_id, owner_user_message_id, source_batch_id, execution_id, call_id, tool_name,
   display_name, skill_id, skill_name, stage, detail, preview_id, audit_detail, reflection_source, timestamp_millis)
-  IDX(conversation_id, owner_user_message_id, execution_id, seq)
+  UNIQUE(conversation_id, event_id) ; IDX(conversation_id, owner_user_message_id, execution_id, seq)
 tool_presentations(conversation_id, seq, owner_user_message_id, batch_id, call_id, tool_name, stage, detail, audit_detail, preview_expected, preview_id)
   IDX(conversation_id, batch_id, call_id, seq)
 reflection_tool_markers(conversation_id, seq, owner_user_message_id, batch_id, call_id, tool_name, source, stage, marker)
@@ -241,10 +242,15 @@ crew_missions(conversation_id, mission_id, last_snapshot_seq, schema_version, pr
   title_source, status, synthesis, started_at_ms, finished_at_ms, PK(conversation_id,mission_id))
 crew_bots(conversation_id, mission_id, ordinal, bot_id, cycle_id, role_id, role_name, name, color_key, mission, status, error,
   result, waiting_reason, phase, last_progress, last_progress_at_ms, resume_required, can_resume, recovery_note,
-  started_at_ms, finished_at_ms, result_evidence_id NULL)
+  started_at_ms, finished_at_ms, result_evidence_id NULL, evidence_content_sha256 NULL)
 crew_bot_tools(conversation_id, mission_id, bot_id, ordinal, tool)
 crew_messages(conversation_id, mission_id, ordinal, message_id, from_bot, to_bot, type, text, timestamp_ms, origin,
-  coordination_evidence_id NULL, input_binding_json NULL /*no verificado: estructura de inputBinding*/, activity_event_id NULL)
+  coordination_evidence_id NULL, reference_message_id NULL, evidence_content_sha256 NULL)
+crew_message_input_bindings(conversation_id, mission_id, message_id, schema_version, source_kind, source_id,
+  owner_central_session_id, workspace_id, execution_session_id, assignment_id, input_mission_id, bot_id,
+  mailbox_message_id, source_payload_sha256, delivery_sha256, admission_cycle_id)
+crew_message_activities(conversation_id, mission_id, message_id, schema_version, event_id, execution_id, call_id,
+  tool_name, display_name, skill_id, skill_name, stage, detail, preview_id, audit_detail, reflection_source, timestamp_millis)
 crew_message_refs(conversation_id, mission_id, message_id, ordinal, ref)
 -- Diarios J (UNIQUE/FK sustituyen las validaciones del scan estricto)
 crew_result_evidence(evidence_id PK, conversation_id, seq, mission_id, bot_id, cycle_id, reported_status, result_text BLOB /*UTF-16 sin pérdida*/, produced_at_ms, content_sha256)
@@ -254,13 +260,15 @@ workspace_result_refs(conversation_id /*ledger dueño*/, reference_id, is_notice
 crew_coordination_evidence(evidence_id PK, conversation_id, seq, mission_id, bot_id, cycle_id, message_id, kind, text BLOB, produced_at_ms, content_sha256)
 crew_coordination_evidence_refs(evidence_id, ordinal, ref)
 workspace_coordination_refs(... igual que result_refs + message_id, kind)
-workspace_coordination_replies(conversation_id, reference_id PK, reply_id UNIQUE, evidence_id UNIQUE, reply_key, text BLOB,
+workspace_coordination_replies(conversation_id, reference_id PK, reply_id, evidence_id, reply_key, text BLOB,
   central_request_id, original_user_request, mailbox_message_id, payload_sha256, prepared_at_ms, state, state_at_ms, seq)
+  UNIQUE(conversation_id, reply_id) ; UNIQUE(conversation_id, evidence_id)
 workspace_coordination_reply_transitions(reply_id, seq, state, state_at_ms)
 workspace_input_incorporations(receipt_id PK, conversation_id, seq, source_kind, source_id, source_reference_id,
-  mailbox_message_id UNIQUE, owner_central_session_id, workspace_id, execution_session_id, assignment_id, request_id,
+  mailbox_message_id, owner_central_session_id, workspace_id, execution_session_id, assignment_id, request_id,
   mission_id, bot_id, admission_cycle_id, first_incorporation_cycle_id, source_payload_sha256, delivered_content_sha256,
   transport_kind, transport_sha256, checkpoint_payload_sha256, checkpoint_saved_at_ms, recorded_at_ms)
+  UNIQUE(conversation_id, mailbox_message_id) -- dedupe por ledger; no implica unicidad cross-ledger
 ```
 
 Mapeo fila → tablas:

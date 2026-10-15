@@ -60,7 +60,7 @@ data class ConversationItem(
     val sort_sub: Int = 0,
     val turn_anchor_seq: Long? = null,
     /** Original ledger timestamp in seconds; seq remains the only ordering key. */
-    val created_at: Double = 0.0,
+    val created_at: Double,
 )
 
 /** `role=user`, `role=assistant`, and `proactive_message` rows plus positional message markers; body lives only in message_parts. */
@@ -88,7 +88,7 @@ data class ConversationItem(
         Index(name = "idx_messages_message_index", value = ["conversation_id", "message_index"]),
         Index(name = "idx_messages_message_id", value = ["message_id"]),
         Index(name = "idx_messages_stable_id", value = ["conversation_id", "stable_id"], unique = true),
-        Index(name = "idx_messages_proactive_decision", value = ["proactive_decision_id"], unique = true),
+        Index(name = "idx_messages_proactive_decision", value = ["conversation_id", "proactive_decision_id"], unique = true),
         Index(name = "idx_messages_interrupt", value = ["conversation_id", "interrupt_request_id"]),
     ],
 )
@@ -106,13 +106,14 @@ data class Message(
     val before_message_id: String? = null,
     val proactive_thread_key: String? = null,
     val proactive_reply_to_message_id: String? = null,
+    /** Legacy decision identity is deduplicated within this conversation, not across ledgers. */
     val proactive_decision_id: String? = null,
     val interrupt_request_id: String? = null,
     val ack_required: Boolean = false,
     /** Optional source integer retained from the proposed legacy schema; M2 will define its importer mapping. */
     val legacy_id: Long? = null,
     val created_at: Double,
-    val updated_at: Double = 0.0,
+    val updated_at: Double,
     val hidden_kind: String? = null,
     val hidden_seq: Long? = null,
     val translation_hidden_seq: Long? = null,
@@ -211,7 +212,7 @@ data class MessageReaction(
     val target_stable_id: String,
     val emoji: String,
     val seq: Long,
-    val created_at: Double = 0.0,
+    val created_at: Double,
 )
 
 /** `proactive_message.suggestedReplies` rows attached to proactive assistant messages. */

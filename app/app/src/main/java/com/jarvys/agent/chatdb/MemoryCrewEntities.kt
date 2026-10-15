@@ -165,8 +165,9 @@ data class CrewBot(
     val recovery_note: String? = null,
     val started_at_ms: Long? = null,
     val finished_at_ms: Long? = null,
-    /** Logical evidence identity; snapshot and evidence may live in separate central/execution ledgers. */
+    /** Evidence identity and digest let M2 verify this snapshot copy against evidence in the same conversation. */
     val result_evidence_id: String? = null,
+    val evidence_content_sha256: String? = null,
 ) {
     override fun equals(other: Any?): Boolean = this === other || other is CrewBot &&
         conversation_id == other.conversation_id && mission_id == other.mission_id && bot_id == other.bot_id &&
@@ -175,11 +176,13 @@ data class CrewBot(
         nullableBytesEqual(error, other.error) && nullableBytesEqual(result, other.result) && waiting_reason == other.waiting_reason &&
         phase == other.phase && last_progress == other.last_progress && last_progress_at_ms == other.last_progress_at_ms &&
         resume_required == other.resume_required && can_resume == other.can_resume && recovery_note == other.recovery_note &&
-        started_at_ms == other.started_at_ms && finished_at_ms == other.finished_at_ms && result_evidence_id == other.result_evidence_id
+        started_at_ms == other.started_at_ms && finished_at_ms == other.finished_at_ms &&
+        result_evidence_id == other.result_evidence_id && evidence_content_sha256 == other.evidence_content_sha256
 
     override fun hashCode(): Int = 31 * listOf(conversation_id, mission_id, bot_id, ordinal, cycle_id, role_id,
         role_name, name, color_key, mission, status, waiting_reason, phase, last_progress, last_progress_at_ms,
-        resume_required, can_resume, recovery_note, started_at_ms, finished_at_ms, result_evidence_id).hashCode() +
+        resume_required, can_resume, recovery_note, started_at_ms, finished_at_ms, result_evidence_id,
+        evidence_content_sha256).hashCode() +
         31 * (error?.contentHashCode() ?: 0) + (result?.contentHashCode() ?: 0)
 }
 
@@ -224,17 +227,21 @@ data class CrewMessage(
     val text: ByteArray,
     val timestamp_ms: Long,
     val origin: String? = null,
-    /** Logical evidence identity because central crew messages can precede execution-ledger evidence import. */
+    /** Evidence identity, referenced message, and digest let M2 verify the snapshot copy in this conversation. */
     val coordination_evidence_id: String? = null,
+    val reference_message_id: String? = null,
+    val evidence_content_sha256: String? = null,
 ) {
     override fun equals(other: Any?): Boolean = this === other || other is CrewMessage &&
         conversation_id == other.conversation_id && mission_id == other.mission_id && ordinal == other.ordinal &&
         message_id == other.message_id && from_bot == other.from_bot && to_bot == other.to_bot && type == other.type &&
         text.contentEquals(other.text) && timestamp_ms == other.timestamp_ms && origin == other.origin &&
-        coordination_evidence_id == other.coordination_evidence_id
+        coordination_evidence_id == other.coordination_evidence_id &&
+        reference_message_id == other.reference_message_id && evidence_content_sha256 == other.evidence_content_sha256
 
     override fun hashCode(): Int = 31 * listOf(conversation_id, mission_id, ordinal, message_id, from_bot, to_bot,
-        type, timestamp_ms, origin, coordination_evidence_id).hashCode() + text.contentHashCode()
+        type, timestamp_ms, origin, coordination_evidence_id, reference_message_id, evidence_content_sha256).hashCode() +
+        text.contentHashCode()
 }
 
 /** Full CrewInputBinding identity, normalized because every field has a validated schema. */

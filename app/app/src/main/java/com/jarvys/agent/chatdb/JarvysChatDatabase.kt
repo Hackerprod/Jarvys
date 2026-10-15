@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Normalized Room store for the conversation ledger (M0 schema version). Room entities do not emit
  * SQL CHECK constraints; triggers install the invariants SQLite can enforce. Remaining payload,
  * enum, bounds, optional sequence-marker, and first-wins import checks are M1 repository responsibilities.
+ * Do not call [clearAllTables]: permanent tombstones are immutable and intentionally reject deletion.
  */
 @Database(
     entities = [
@@ -248,7 +249,7 @@ object JarvysChatDatabaseProvider {
         }
     }
 
-    private fun connectionPragmasCallback(): Callback = object : Callback() {
+    internal fun connectionPragmasCallback(): Callback = object : Callback() {
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
             DatabaseTriggers.create(db)
@@ -256,20 +257,26 @@ object JarvysChatDatabaseProvider {
 
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
-            // Applies to the whole connection pool (including reader connections opened later), unlike a plain PRAGMA.
-            db.setForeignKeyConstraintsEnabled(true)
-            setPragma(db, "foreign_keys=ON")
-            setPragma(db, "busy_timeout=$BUSY_TIMEOUT_MILLIS")
-            setPragma(db, "synchronous=NORMAL")
-            setPragma(db, "wal_autocheckpoint=$WAL_AUTOCHECKPOINT_PAGES")
-            setPragma(db, "journal_size_limit=$JOURNAL_SIZE_LIMIT_BYTES")
-            verifyPragma(db, "journal_mode", "wal")
-            verifyPragma(db, "foreign_keys", "1")
-            verifyPragma(db, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
-            verifyPragma(db, "synchronous", "1")
-            verifyPragma(db, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES.toString())
-            verifyPragma(db, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
+            configureOpenedConnection(db)
         }
+    }
+
+    /** Shared Room/test-helper connection setup; each opened connection gets triggers and PRAGMAs. */
+    internal fun configureOpenedConnection(db: SupportSQLiteDatabase) {
+        DatabaseTriggers.create(db)
+        // Applies to each connection (including readers opened later), unlike a one-time PRAGMA.
+        db.setForeignKeyConstraintsEnabled(true)
+        setPragma(db, "foreign_keys=ON")
+        setPragma(db, "busy_timeout=$BUSY_TIMEOUT_MILLIS")
+        setPragma(db, "synchronous=NORMAL")
+        setPragma(db, "wal_autocheckpoint=$WAL_AUTOCHECKPOINT_PAGES")
+        setPragma(db, "journal_size_limit=$JOURNAL_SIZE_LIMIT_BYTES")
+        verifyPragma(db, "journal_mode", "wal")
+        verifyPragma(db, "foreign_keys", "1")
+        verifyPragma(db, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
+        verifyPragma(db, "synchronous", "1")
+        verifyPragma(db, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES.toString())
+        verifyPragma(db, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
     }
 
 /** Invariants Room cannot encode. Every future migration that rebuilds these tables must call [create]. */
@@ -280,6 +287,12 @@ internal object DatabaseTriggers {
                 "BEFORE INSERT ON conversations " +
                 "WHEN EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=NEW.id) " +
                 "BEGIN SELECT RAISE(ABORT,'conversation_tombstoned'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_conversation_tombstone_after_delete " +
+                "AFTER DELETE ON conversations " +
+                "BEGIN INSERT OR IGNORE INTO tombstones(scope,entity_id,deleted_at) " +
+                "VALUES('conversation',OLD.id,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)); END",
         )
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_tombstones_no_update " +
