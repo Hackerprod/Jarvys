@@ -88,8 +88,20 @@ El módulo = `connectorId`; cada tool = operación. Las filas Permitir/Preguntar
 
 ### 4.6 Tarjeta y visor
 
-- La tarjeta en el chat muestra miniatura + título + icono de tipo + acciones (Abrir, Descargar, Compartir). **No** montar WebViews vivos en la lista perezosa: miniatura hasta tocar (como ya hace `HtmlArtifactThumbnail`). El visor se abre en pantalla completa.
+- La tarjeta en el chat muestra miniatura + título + icono de tipo + acciones (Abrir, Descargar, Compartir). **Mientras la lista sea Compose** no se montan WebViews vivos dentro de ella: miniatura hasta tocar (como ya hace `HtmlArtifactThumbnail`). El visor se abre en pantalla completa. Si se adopta el lienzo de chat (4.7), la tarjeta se dibuja en el propio lienzo y esta restricción desaparece para ella.
 - Descargar/compartir reutilizan los flujos existentes (`ChatFileTransfers`, `ChatFileProvider`).
+
+### 4.7 Lienzo de chat: la lista de mensajes como UN solo WebView (fase 0, con puerta de decisión)
+
+**Decisión del dueño (2026-10-15):** evaluar que la vista de chat pase a ser WebView para aprovechar toda la capacidad visual de la web y dar soporte natural a los módulos. Propuesta aprobada: **híbrido**, no todo WebView.
+
+- **WebView (lienzo único):** solo la lista de mensajes y sus tarjetas (markdown, código, gráficas, diagramas, canvas, previews de presentaciones, tarjetas de herramientas, tarjetas de artefacto de módulo). Hoy hay un WebView por tarjeta dentro de Compose (reciclado pesado, conflicto de scroll, presión de memoria que ya causó OOM); un lienzo único lo sustituye.
+- **Nativo (Compose):** compositor y teclado, drawer, barra superior, menús, diálogos, permisos, toasts, selección de modelo, adjuntos.
+- **Contrato de datos:** el timeline de la base de datos ya sale en páginas JSON por `seq` con cursor keyset (`ConversationReader`, ids de UI = `seq`). El lienzo recibe eventos (`AgentRunUiEvent` serializados) y pide páginas más antiguas al subir; Kotlin sigue siendo el dueño del estado y de la persistencia, el JS solo pinta e informa de acciones (puente con lista blanca: copiar, reintentar, abrir visor, descargar, compartir, resolver decisión, responder).
+- **Streaming:** Kotlin envía deltas de texto/tool al lienzo; el lienzo mantiene un modelo de mensajes por `seq` y aplica parches (sin repintar todo); el scroll-anclado y "saltar al final" los decide el lienzo con señales de Kotlin.
+- **Seguridad:** el HTML/markdown del modelo y de módulos se sanea y corre con CSP estricta, sin acceso a archivos fuera del bundle y de los artefactos de la conversación, sin red salvo capacidad declarada; el puente valida cada acción en el anfitrión. Se reutiliza `PreviewResponsePolicy` como base.
+- **Riesgos que la puerta debe medir:** rendimiento en chats largos en el TCL de 3,7 GB (virtualización en JS), selección/copia de texto y accesibilidad (TalkBack) frente a Compose, sincronización del streaming sin parpadeo, memoria del proceso WebView, y coste de reescribir tarjetas y sus tests.
+- **Despliegue:** detrás de un flag por conversación, con la vista Compose actual como respaldo hasta que el lienzo pase la puerta; sin doble fuente de verdad (ambas leen el mismo timeline de la DB).
 
 ## 5. Refactors previos en el core (fase 1)
 
@@ -112,6 +124,7 @@ El módulo = `connectorId`; cada tool = operación. Las filas Permitir/Preguntar
 
 | Fase | Entregable | Aceptación (lo que Opus valida) |
 |---|---|---|
+| 0 | **Spike del lienzo de chat** (4.7): un WebView único que pinta el timeline de la DB, con streaming, selección/copia, imágenes y tarjetas de herramientas; puente mínimo; medición | **Puerta de decisión (se mide, no se opina):** 5 000 mensajes virtualizados con scroll fluido y memoria acotada en TCL (3,7 GB) y S23; streaming sin parpadeo ni pérdida de ancla; selección y copia de texto funcionales; TalkBack lee los mensajes; abrir un chat grande y paginar hacia arriba sin saltos. Resultado documentado con cifras. Si falla, la lista sigue en Compose y los módulos usan tarjeta+visor (4.6). Si pasa, se migra la lista por fases tras un flag por conversación. |
 | 1 | `PolicyGatedTool`, evento `artifact`, `ModuleRegistry`, `ModuleTool`; HTML/imagen/archivo migrados a módulos internos | Comportamiento idéntico al actual (tests existentes de preview, `ToolTimeline*`, MCP y políticas pasan sin debilitarse); `grep` no encuentra nombres de tools de módulos en el core; el `when(kind)` del timeline ya no enumera formatos. |
 | 2 | Host de WebView (fuera de pantalla y visible) con puente y capacidades; cargador de manifiestos con validación | Un handler solo puede lo que declaró; test de intentos denegados (red, ruta fuera de ámbito, otro chat); aislamiento verificado. |
 | 3 | Primeros módulos: **gráficas**, **diagramas (Mermaid)**, **presentaciones** | Un agente crea una presentación solo con las tools declaradas por el módulo, sin Linux; la tarjeta muestra miniatura; el visor abre; descargar/compartir funcionan; política Permitir/Preguntar/Denegar aparece en Conectores sin código específico. |
@@ -128,7 +141,8 @@ Pruebas mínimas por fase: unitarias del registro/validación de manifiestos, de
 
 ## 10. Riesgos
 
-- WebViews pesan: nunca vivos en la lista; límite de WebViews fuera de pantalla simultáneos controlado por el anfitrión.
+- WebViews pesan: mientras la lista sea Compose, nunca vivos en la lista (miniatura hasta tocar); con el lienzo único (4.7) hay un solo WebView de chat más, como máximo, los visores fuera de pantalla que controle el anfitrión.
+- Política de tests (dueño, 2026-10-15): pocos tests y significativos por fase, solo propios de la tarea más los ajenos cuyo código toque el diff; eliminar los innecesarios. La validación por impacto (`impacted-tests.ps1`) reemplaza a la suite completa.
 - Crecimiento del catálogo de tools visible al modelo con muchos módulos: mismo problema que MCP; mitigar con ámbito de skills.
 - Alcance sin fin: respetar las fases; cada formato nuevo es un módulo, no una excepción en el core.
 
