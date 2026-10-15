@@ -403,10 +403,10 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             val lifecycleAtHighWater = rows.mapNotNull { item ->
                 if (item.kind != "model_tool_started" && item.kind != "model_tool_not_started") return@mapNotNull null
                 decodeCallItemKey(item.key)?.let { key ->
-                    key to (if (item.kind == "model_tool_started") "STARTED" else "NEVER_LAUNCHED") to item.seq
+                    Triple(key, if (item.kind == "model_tool_started") "STARTED" else "NEVER_LAUNCHED", item.seq)
                 }
-            }.groupBy({ it.first.first }, { it.first.second to it.second })
-                .mapValues { (_, revisions) -> revisions.maxBy { it.second }.first }
+            }.groupBy({ it.first }, { it.second to it.third })
+                .mapValues { (_, revisions) -> revisions.maxBy { it.second } }
             val lastActivityAtHighWater = rows.mapNotNull { item ->
                 val batchId = if (item.kind == "model_tool_calls") item.key else decodeCallItemKey(item.key)?.first
                 batchId?.let { it to item.seq }

@@ -333,7 +333,7 @@ internal class LedgerImporter(
                 arrayOf(sessionId),
             ).use { cursor ->
                 if (!cursor.moveToFirst()) null else arrayOf<Any?>(
-                    cursor.getString(0), cursor.getStringOrNullM1b(1), cursor.getInt(2), cursor.getInt(3),
+                    cursor.getString(0), if (cursor.isNull(1)) null else cursor.getString(1), cursor.getInt(2), cursor.getInt(3),
                     cursor.getInt(4), cursor.getLong(5), cursor.getLong(6),
                 )
             } ?: return@withChatWriteTransaction ChatDbResult.NotFound
@@ -347,7 +347,7 @@ internal class LedgerImporter(
                     "VALUES(?,?,?,NULL,?,?,?,?,?,NULL,0,1,'not_started',NULL,NULL,NULL,0)",
                 arrayOf(sessionId, metadata[0], metadata[1], metadata[2], metadata[3], metadata[4], metadata[5], metadata[6]),
             )
-            DatabaseTriggers.create(database.chatSql)
+            JarvysChatDatabaseProvider.DatabaseTriggers.create(database.chatSql)
             clearPreflightStageRows(sessionId)
             ChatDbResult.Success(true)
         }
@@ -919,7 +919,8 @@ internal class LedgerImporter(
                         val timestamp = timestampSeconds(row, type)
                         if (timestamp.isFinite()) {
                             val millis = (timestamp * 1000.0).toLong()
-                            if (firstTimestampMillis == null || millis < firstTimestampMillis) firstTimestampMillis = millis
+                            val currentFirst = firstTimestampMillis
+                            if (currentFirst == null || millis < currentFirst) firstTimestampMillis = millis
                         }
                         if (type == "session_title" && firstTitle == null) row.optString("content", "").trim().takeIf(String::isNotEmpty)?.let { firstTitle = it }
                         when (type) {

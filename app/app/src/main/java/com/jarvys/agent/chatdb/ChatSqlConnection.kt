@@ -188,18 +188,18 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
 
     internal fun executeInsert(sql: String, args: Array<out Any?>): Long = useStatement(sql, args) { statement, connection ->
         statement.executeAndConsumeRows()
-        connection!!.usePrepared("SELECT last_insert_rowid()") { result ->
+        kotlinx.coroutines.runBlocking { connection!!.usePrepared("SELECT last_insert_rowid()") { result ->
             check(result.step()) { "last_insert_rowid() returned no row" }
             result.getLong(0)
-        }
+        } }
     }
 
     internal fun executeUpdateDelete(sql: String, args: Array<out Any?>): Int = useStatement(sql, args) { statement, connection ->
         statement.executeAndConsumeRows()
-        connection!!.usePrepared("SELECT changes()") { result ->
+        kotlinx.coroutines.runBlocking { connection!!.usePrepared("SELECT changes()") { result ->
             check(result.step()) { "changes() returned no row" }
             result.getLong(0).toInt()
-        }
+        } }
     }
 
     private fun <T> withRawReadConnection(block: (SQLiteDatabase) -> T): T {
@@ -341,7 +341,7 @@ private fun SQLiteStatement.toMatrixCursor(): Cursor {
     return cursor
 }
 
-private data class ActiveChatDbConnection(
+internal data class ActiveChatDbConnection(
     val connection: PooledConnection,
     val isWriter: Boolean,
 )

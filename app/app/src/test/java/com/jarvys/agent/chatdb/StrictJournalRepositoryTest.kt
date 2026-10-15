@@ -261,7 +261,7 @@ class StrictJournalRepositoryTest {
                 val transcript = ModelTranscriptRepository(database).readModelTranscript(fixture.execution)
                 val pendingCompactions = MemoryTimelineRepository(database).pendingCompactionIds(fixture.execution)
                 val artifactIds = artifacts.artifactsForConversation("artifact-read").map { it.artifact_id }
-                listOf<Any>(evidence.contentSha256, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
+                listOf<Any>(evidence!!.contentSha256, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
             }
             assertTrue("the real projections finish with the writer held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000L)
             assertEquals(fixture.result.contentSha256, snapshots[0])
