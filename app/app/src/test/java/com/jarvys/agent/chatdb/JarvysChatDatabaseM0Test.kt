@@ -783,7 +783,7 @@ class JarvysChatDatabaseM0Test {
     }
 
     @Test
-    fun foreignKeysAreEnforcedOnASecondWriterConnection() {
+    fun foreignKeysAreEnforcedOnASecondWriterConnection() { onDatabaseThreadBlocking {
         val secondDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
         try {
             assertEquals(1L, pragmaLong(secondDatabase.testChatSql, "foreign_keys"))
@@ -796,7 +796,8 @@ class JarvysChatDatabaseM0Test {
         } finally {
             JarvysChatDatabaseProvider.closeDatabaseFileForTests(secondDatabase)
         }
-    }
+        Unit
+    } }
 
     @Test
     fun databaseSupportsConcurrentReadersUnderWal() {
@@ -1045,7 +1046,7 @@ class JarvysChatDatabaseM0Test {
     )
 
     private fun pragmaLong(database: ChatSqlDatabase, name: String): Long =
-        database.query("PRAGMA $name").use { cursor ->
+        database.queryOnWriter("PRAGMA $name").use { cursor ->
             assertTrue("PRAGMA $name returned no row", cursor.moveToFirst())
             cursor.getLong(0)
         }

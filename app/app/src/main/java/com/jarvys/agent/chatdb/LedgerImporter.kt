@@ -229,7 +229,7 @@ internal class LedgerImporter(
                                 digestAtOffset(sourceDigest, ledgerFile, sourceOffset),
                             ))
                             batchNumber++
-                            options.beforeBatchCommit?.invoke(batchNumber)
+                            if (completedInBatch > 0) options.beforeBatchCommit?.invoke(batchNumber)
                     }
                     if (completedInBatch == 0) break
                     options.onProgress?.invoke(ImportProgress(sessionId, "in_progress", sourceOffset, bytes))

@@ -676,7 +676,7 @@ class ConversationRepositoryTest {
                 )
                 val insertedColumns = insertedColumnList.toSet()
                 assertEquals("${sourceFile.name}:$line INSERT INTO $table must not repeat explicit columns", insertedColumnList.size, insertedColumns.size)
-                if (table in importerStagingTables) {
+                if (table in importerStagingTables || table.startsWith("chatdb_import_")) {
                     // The SQL shape is still audited above; runtime staging tables are outside the
                     // exported Room schema, so they have no schema table to inspect here.
                     auditedInsertCount++
@@ -1285,6 +1285,7 @@ class ConversationRepositoryTest {
             assertEquals("the mixed first attempt is discarded and retried", 2, attempts.get())
             assertEquals(2L to 2L, snapshot)
             writer.get(10, TimeUnit.SECONDS)
+            Unit
         } finally {
             firstReadFinished.countDown()
             writerCommitted.countDown()
