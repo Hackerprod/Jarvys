@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1a8a023da4d829faee43ef185a7bba69" // update after final schema
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1d164226228e34a4641fd5671cb3b4c3" // pinned to the v1 schema; changing v1 requires a version bump + migration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -192,6 +192,7 @@ class JarvysChatDatabaseM0Test {
         database.conversationDao().insertIfNotTombstoned(conversation("unique-other"))
         database.conversationItemDao().insert(ConversationItem("unique-other", 1, "message", "m1", 1, created_at = 1.0))
         database.messageDao().insert(message("unique-other", "m1", "stable-other", 1, 0, proactiveDecisionId = "decision-1"))
+        Unit
     }
 
     @Test
@@ -421,7 +422,7 @@ class JarvysChatDatabaseM0Test {
         }
 
         val eventId = seeded.getValue("tool_activities").getValue("event_id") as String
-        fun insertActivity(conversationId: String, seq: Long, batchId: String) {
+        suspend fun insertActivity(conversationId: String, seq: Long, batchId: String) {
             database.conversationItemDao().insert(
                 ConversationItem(conversationId, seq, "tool_activity", "activity-$seq", seq, created_at = seq.toDouble()),
             )
@@ -435,7 +436,9 @@ class JarvysChatDatabaseM0Test {
             )
         }
 
-        insertActivity("unique-journal", 2L, "same-ledger-batch")
+        assertConstraint("event_id of the seeded activity is already taken in this conversation") {
+            insertActivity("unique-journal", 2L, "same-ledger-batch")
+        }
         assertConstraint("event_id remains unique within one conversation") {
             insertActivity("unique-journal", 3L, "same-ledger-batch-duplicate")
         }
@@ -459,7 +462,7 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun workspaceReplyAndEvidenceIdsAreUniqueWithinConversationOnly() = onDatabaseThread {
         val sqlite = database.openHelper.writableDatabase
-        fun insertReference(conversationId: String, seq: Long, referenceId: String, evidenceId: String) {
+        suspend fun insertReference(conversationId: String, seq: Long, referenceId: String, evidenceId: String) {
             database.conversationItemDao().insert(
                 ConversationItem(conversationId, seq, "workspace_coordination_ref", referenceId, seq, created_at = seq.toDouble()),
             )
@@ -1262,7 +1265,7 @@ class JarvysChatDatabaseM0Test {
         }
     }
 
-    private fun assertConstraint(label: String, block: () -> Unit) {
+    private inline fun assertConstraint(label: String, block: () -> Unit) {
         val failure = runCatching(block).exceptionOrNull()
         assertConstraintFailure(label, failure)
     }
