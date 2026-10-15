@@ -118,7 +118,7 @@ data class ToolBatchResolution(val batchId: String?, val exactExecutionMatch: Bo
  * rows. Arguments/provider item payloads stay opaque; normalized keys and lifecycle state remain
  * indexed by conversation, batch, call, owner, and execution.
  */
-class ModelTranscriptRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
+internal class ModelTranscriptRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /**
      * Appends a `model_tool_calls` row as a batch plus ordered calls. Replaces
      * `MainChatTranscriptStore.attach` (`MainChatTranscriptStore.java:91-105`); arguments larger than
@@ -620,5 +620,5 @@ class ModelTranscriptRepository internal constructor(database: JarvysChatDatabas
     }
 }
 
-private fun android.database.Cursor.getStringOrNullM1b(name: String): String? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getString(it) }
+internal fun android.database.Cursor.getStringOrNullM1b(name: String): String? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getString(it) }
 private fun android.database.Cursor.getLongOrNullM1b(name: String): Long? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getLong(it) }

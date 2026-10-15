@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "a9b00a7c2f3131bbabf2a1526ce58184",
+    "identityHash": "ee888c15388481cc4ac92c629c0f8c38",
     "entities": [
       {
         "tableName": "conversations",
@@ -1599,7 +1599,7 @@
       },
       {
         "tableName": "tool_results",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `batch_id` TEXT NOT NULL, `call_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `tool_name` TEXT NOT NULL, `lifecycle` TEXT NOT NULL, `output` TEXT NOT NULL, `created_at` REAL NOT NULL, PRIMARY KEY(`conversation_id`, `batch_id`, `call_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `batch_id`, `call_id`) REFERENCES `tool_calls`(`conversation_id`, `batch_id`, `call_id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `batch_id` TEXT NOT NULL, `call_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `tool_name` TEXT NOT NULL, `lifecycle` TEXT NOT NULL, `output` TEXT NOT NULL, `created_at` REAL NOT NULL, `file_artifact_id` TEXT, PRIMARY KEY(`conversation_id`, `batch_id`, `call_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `batch_id`, `call_id`) REFERENCES `tool_calls`(`conversation_id`, `batch_id`, `call_id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -1648,6 +1648,11 @@
             "columnName": "created_at",
             "affinity": "REAL",
             "notNull": true
+          },
+          {
+            "fieldPath": "file_artifact_id",
+            "columnName": "file_artifact_id",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -1668,6 +1673,16 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `idx_tool_results_seq` ON `${TABLE_NAME}` (`conversation_id`, `seq`)"
+          },
+          {
+            "name": "idx_tool_results_artifact",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "file_artifact_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_tool_results_artifact` ON `${TABLE_NAME}` (`conversation_id`, `file_artifact_id`)"
           }
         ],
         "foreignKeys": [
@@ -1855,6 +1870,18 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `idx_tool_activities_batch_call` ON `${TABLE_NAME}` (`conversation_id`, `source_batch_id`, `call_id`, `seq`)"
+          },
+          {
+            "name": "idx_tool_activities_execution_call",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "execution_id",
+              "call_id",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_tool_activities_execution_call` ON `${TABLE_NAME}` (`conversation_id`, `execution_id`, `call_id`, `seq`)"
           }
         ],
         "foreignKeys": [
@@ -2452,8 +2479,8 @@
         ]
       },
       {
-        "tableName": "delivered_files",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `artifact_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `name` TEXT NOT NULL, `mime_type` TEXT, `size_bytes` INTEGER NOT NULL, `kind` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `sha256` TEXT, `file_ref_id` TEXT, `created_at` REAL NOT NULL, PRIMARY KEY(`conversation_id`, `artifact_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`file_ref_id`) REFERENCES `file_refs`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "tableName": "artifacts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `artifact_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `name` TEXT NOT NULL, `mime_type` TEXT, `size_bytes` INTEGER NOT NULL, `kind` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `sha256` TEXT, `file_ref_id` TEXT, `artifact_type` TEXT NOT NULL, `module_id` TEXT, `manifest_json` TEXT, `title` TEXT, `thumbnail_ref` TEXT, `created_at` REAL NOT NULL, PRIMARY KEY(`conversation_id`, `artifact_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`file_ref_id`) REFERENCES `file_refs`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL , FOREIGN KEY(`thumbnail_ref`) REFERENCES `file_refs`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -2513,6 +2540,32 @@
             "affinity": "TEXT"
           },
           {
+            "fieldPath": "artifact_type",
+            "columnName": "artifact_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "module_id",
+            "columnName": "module_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "manifest_json",
+            "columnName": "manifest_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "thumbnail_ref",
+            "columnName": "thumbnail_ref",
+            "affinity": "TEXT"
+          },
+          {
             "fieldPath": "created_at",
             "columnName": "created_at",
             "affinity": "REAL",
@@ -2528,23 +2581,54 @@
         },
         "indices": [
           {
-            "name": "idx_delivered_files_seq",
+            "name": "idx_artifacts_seq",
             "unique": false,
             "columnNames": [
               "conversation_id",
               "seq"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_delivered_files_seq` ON `${TABLE_NAME}` (`conversation_id`, `seq`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_artifacts_seq` ON `${TABLE_NAME}` (`conversation_id`, `seq`)"
           },
           {
-            "name": "idx_delivered_files_file",
+            "name": "idx_artifacts_file",
             "unique": false,
             "columnNames": [
               "file_ref_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_delivered_files_file` ON `${TABLE_NAME}` (`file_ref_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_artifacts_file` ON `${TABLE_NAME}` (`file_ref_id`)"
+          },
+          {
+            "name": "idx_artifacts_thumbnail",
+            "unique": false,
+            "columnNames": [
+              "thumbnail_ref"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_artifacts_thumbnail` ON `${TABLE_NAME}` (`thumbnail_ref`)"
+          },
+          {
+            "name": "idx_artifacts_type",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "artifact_type",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_artifacts_type` ON `${TABLE_NAME}` (`conversation_id`, `artifact_type`, `seq`)"
+          },
+          {
+            "name": "idx_artifacts_module",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "module_id",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_artifacts_module` ON `${TABLE_NAME}` (`conversation_id`, `module_id`, `seq`)"
           }
         ],
         "foreignKeys": [
@@ -2578,6 +2662,17 @@
             "onUpdate": "NO ACTION",
             "columns": [
               "file_ref_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "file_refs",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "thumbnail_ref"
             ],
             "referencedColumns": [
               "id"
@@ -3109,7 +3204,7 @@
       },
       {
         "tableName": "crew_missions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `first_snapshot_seq` INTEGER NOT NULL, `last_snapshot_seq` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, `process_id` TEXT, `title` TEXT NOT NULL, `original_instructions` TEXT NOT NULL, `title_source` TEXT, `status` TEXT NOT NULL, `synthesis` BLOB, `started_at_ms` INTEGER NOT NULL, `finished_at_ms` INTEGER, PRIMARY KEY(`conversation_id`, `mission_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `first_snapshot_seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `last_snapshot_seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `first_snapshot_seq` INTEGER NOT NULL, `last_snapshot_seq` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, `process_id` TEXT, `snapshot_digest` TEXT NOT NULL, `title` TEXT NOT NULL, `original_instructions` TEXT NOT NULL, `title_source` TEXT, `status` TEXT NOT NULL, `synthesis` BLOB, `started_at_ms` INTEGER NOT NULL, `finished_at_ms` INTEGER, PRIMARY KEY(`conversation_id`, `mission_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `first_snapshot_seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `last_snapshot_seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -3145,6 +3240,12 @@
             "fieldPath": "process_id",
             "columnName": "process_id",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "snapshot_digest",
+            "columnName": "snapshot_digest",
+            "affinity": "TEXT",
+            "notNull": true
           },
           {
             "fieldPath": "title",
@@ -3412,10 +3513,11 @@
             "name": "idx_crew_bots_evidence",
             "unique": false,
             "columnNames": [
+              "conversation_id",
               "result_evidence_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_crew_bots_evidence` ON `${TABLE_NAME}` (`result_evidence_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_crew_bots_evidence` ON `${TABLE_NAME}` (`conversation_id`, `result_evidence_id`)"
           }
         ],
         "foreignKeys": [
@@ -3619,10 +3721,11 @@
             "name": "idx_crew_messages_coordination",
             "unique": false,
             "columnNames": [
+              "conversation_id",
               "coordination_evidence_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_crew_messages_coordination` ON `${TABLE_NAME}` (`coordination_evidence_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_crew_messages_coordination` ON `${TABLE_NAME}` (`conversation_id`, `coordination_evidence_id`)"
           }
         ],
         "foreignKeys": [
@@ -4252,10 +4355,11 @@
             "name": "idx_workspace_result_refs_evidence",
             "unique": false,
             "columnNames": [
+              "conversation_id",
               "evidence_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_workspace_result_refs_evidence` ON `${TABLE_NAME}` (`evidence_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_workspace_result_refs_evidence` ON `${TABLE_NAME}` (`conversation_id`, `evidence_id`)"
           },
           {
             "name": "idx_workspace_result_refs_seq",
@@ -4506,7 +4610,7 @@
       },
       {
         "tableName": "workspace_coordination_refs",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `conversation_id` TEXT NOT NULL, `reference_id` TEXT NOT NULL, `is_notice` INTEGER NOT NULL, `seq` INTEGER NOT NULL, `evidence_id` TEXT NOT NULL, `content_sha256` TEXT NOT NULL, `owner_central_session_id` TEXT NOT NULL, `workspace_id` TEXT NOT NULL, `execution_session_id` TEXT NOT NULL, `assignment_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `observed_assignment_revision` INTEGER NOT NULL, `reported_status` TEXT NOT NULL, `produced_at_ms` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`, `reference_id`, `is_notice`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `conversation_id` TEXT NOT NULL, `reference_id` TEXT NOT NULL, `is_notice` INTEGER NOT NULL, `seq` INTEGER NOT NULL, `evidence_id` TEXT NOT NULL, `content_sha256` TEXT NOT NULL, `owner_central_session_id` TEXT NOT NULL, `workspace_id` TEXT NOT NULL, `execution_session_id` TEXT NOT NULL, `assignment_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `observed_assignment_revision` INTEGER NOT NULL, `reported_status` TEXT, `produced_at_ms` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`, `reference_id`, `is_notice`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "schema_version",
@@ -4619,8 +4723,7 @@
           {
             "fieldPath": "reported_status",
             "columnName": "reported_status",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "produced_at_ms",
@@ -4642,10 +4745,11 @@
             "name": "idx_workspace_coord_refs_evidence",
             "unique": false,
             "columnNames": [
+              "conversation_id",
               "evidence_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_workspace_coord_refs_evidence` ON `${TABLE_NAME}` (`evidence_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_workspace_coord_refs_evidence` ON `${TABLE_NAME}` (`conversation_id`, `evidence_id`)"
           },
           {
             "name": "idx_workspace_coord_refs_seq",
@@ -5229,7 +5333,7 @@
       },
       {
         "tableName": "file_refs",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sha256` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `bytes` INTEGER NOT NULL, `last_referenced_at` INTEGER NOT NULL, `not_before` INTEGER, `attempts` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sha256` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `bytes` INTEGER NOT NULL, `mime_type` TEXT, `last_referenced_at` INTEGER NOT NULL, `not_before` INTEGER, `attempts` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -5254,6 +5358,11 @@
             "columnName": "bytes",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "mime_type",
+            "columnName": "mime_type",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "last_referenced_at",
@@ -5466,7 +5575,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a9b00a7c2f3131bbabf2a1526ce58184')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ee888c15388481cc4ac92c629c0f8c38')"
     ]
   }
 }

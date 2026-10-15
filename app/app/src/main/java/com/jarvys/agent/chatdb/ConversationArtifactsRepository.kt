@@ -49,7 +49,7 @@ sealed interface ChatFileOwnership {
  * presentation module defines their fields; the shared artifact identity, type, module, file,
  * thumbnail and privacy lookups remain indexed.
  */
-class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
+internal class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /** Stores one `delivered_file`; duplicate `(conversation_id,artifact_id)` content is idempotent, differing content conflicts. */
     suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||

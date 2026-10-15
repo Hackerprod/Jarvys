@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "a9b00a7c2f3131bbabf2a1526ce58184" // update after build; v1 is not published yet
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "ee888c15388481cc4ac92c629c0f8c38" // update after build; v1 is not published yet
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -739,7 +739,7 @@ class JarvysChatDatabaseM0Test {
         assertEquals(crewMessageA, crewMessageB)
         assertEquals(crewMessageA.hashCode(), crewMessageB.hashCode())
 
-        val missionA = CrewMission(id, "mission-1", 1L, 1L, 4, "process-1", "title", "instructions", "user", "completed", synthesis, 10L, 20L)
+        val missionA = CrewMission(id, "mission-1", 1L, 1L, 4, "process-1", "digest", "title", "instructions", "user", "completed", synthesis, 10L, 20L)
         val missionB = missionA.copy(synthesis = synthesis.copyOf())
         assertEquals(missionA, missionB)
         assertEquals(missionA.hashCode(), missionB.hashCode())

@@ -78,7 +78,7 @@ data class PendingInterrupt(
  * accept the same source schemas 1–4 through `CrewMissionSnapshot.fromJson`; messages, refs,
  * activities, bindings, bots and tools are stored in typed child tables.
  */
-class MemoryTimelineRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
+internal class MemoryTimelineRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /**
      * Adds one `compaction` row (`LocalRunStore.appendCompaction`, `LocalRunStore.java:4635-4654`) and
      * persists `legacy-<timestamp>-<rowIndex>` exactly as `LocalRunStore.compactionId`
@@ -465,8 +465,8 @@ class MemoryTimelineRepository internal constructor(database: JarvysChatDatabase
                     val tools = sql.query("SELECT tool FROM crew_bot_tools WHERE conversation_id=? AND mission_id=? AND bot_id=? ORDER BY ordinal",
                         arrayOf(conversationId, missionId, botId)).use { t -> buildList { while (t.moveToNext()) add(t.getString(0)) } }
                     val evidenceId = c.getStringOrNullMemory("result_evidence_id")
-                    add(CrewBotSnapshot(botId, c.getStringOrNullMemory("role_id"), c.getStringOrNullMemory("role_name"), c.getString("name"),
-                        c.getStringOrNullMemory("color_key"), c.getStringOrNullMemory("mission"), c.getString("status"),
+                    add(CrewBotSnapshot(botId, c.getStringOrNullMemory("role_id"), c.getStringOrNullMemory("role_name"), c.getString(c.getColumnIndexOrThrow("name")),
+                        c.getStringOrNullMemory("color_key"), c.getStringOrNullMemory("mission"), c.getString(c.getColumnIndexOrThrow("status")),
                         c.getBlobOrNullMemory("error")?.let(ExactUtf16::decode), c.getBlobOrNullMemory("result")?.let(ExactUtf16::decode),
                         c.getStringOrNullMemory("waiting_reason"), tools, c.getLongOrNullMemory("started_at_ms") ?: 0L,
                         c.getLongOrNullMemory("finished_at_ms") ?: 0L, c.getInt(c.getColumnIndexOrThrow("can_resume")) != 0,

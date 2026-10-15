@@ -930,7 +930,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         }
         // The cursor is inclusive on the next page's lower boundary; using the first item lets
         // even conversations with no user-turn anchors page through their entire item history.
-        MessageWindow(conversationId, slots, first.seq.takeIf { hasOlderItems })
+        return MessageWindow(conversationId, slots, first.seq.takeIf { hasOlderItems })
     }
 
     private data class SortPosition(val sortSeq: Long, val sortSub: Int, val seq: Long)

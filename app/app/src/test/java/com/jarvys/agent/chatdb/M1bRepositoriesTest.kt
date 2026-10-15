@@ -100,7 +100,7 @@ class M1bRepositoriesTest {
         val activity = ToolActivityInput("protocol", "event-1", owner, "execution-1", "incomplete-call", "writer", stage = "tool_call", timestampMillis = 10L)
         val firstResolution = success(model.appendToolActivity(activity))!!
         assertEquals(incompleteId, firstResolution.source_batch_id)
-        val exactResolution = success(model.resolveActivitySourceBatch("protocol", owner, "execution-1", "incomplete-call"))
+        val exactResolution = model.resolveActivitySourceBatch("protocol", owner, "execution-1", "incomplete-call")
         assertEquals(incompleteId, exactResolution.batchId)
         assertTrue(exactResolution.exactExecutionMatch)
         success(model.appendToolActivity(activity.copy(eventId = "event-2", stage = "tool_progress", timestampMillis = 11L)))
@@ -153,7 +153,7 @@ class M1bRepositoriesTest {
         assertEquals(16L, transcript.compactionBoundaryRowIndex)
         assertEquals(compaction.seq, transcript.compactionBoundarySeq)
         assertEquals(1L, transcript.firstKeptMessageIndex)
-        assertEquals(incompleteId, success(model.latestBatchForOwner("protocol", owner))!!.batch.batch_id)
+        assertEquals(incompleteId, model.latestBatchForOwner("protocol", owner)!!.batch.batch_id)
         assertEquals(listOf(first), model.toolResultsForOwner("protocol", owner))
 
         val plan = database.openHelper.writableDatabase.query(
