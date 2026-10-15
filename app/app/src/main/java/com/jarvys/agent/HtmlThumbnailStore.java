@@ -58,7 +58,11 @@ public final class HtmlThumbnailStore {
         }
     }
 
-    public HtmlThumbnailStore(Context context) { this(context.getApplicationContext().getFilesDir()); }
+    public HtmlThumbnailStore(Context context) {
+        this(new LocalRunStore(context),
+                new DeliveredArtifactStore(new File(context.getApplicationContext().getFilesDir(), "jarvys")),
+                MAX_DISK_BYTES, MAX_DISK_ENTRIES);
+    }
     HtmlThumbnailStore(File filesDirectory) {
         this(new LocalRunStore(filesDirectory), new DeliveredArtifactStore(new File(filesDirectory, "jarvys")),
                 MAX_DISK_BYTES, MAX_DISK_ENTRIES);

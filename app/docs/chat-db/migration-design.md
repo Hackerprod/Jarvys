@@ -25,7 +25,7 @@ El alcance de `chatdb` incluye mensajes, marcadores, protocolo del modelo, compa
 
 ## Repositorios y lector
 
-Los repositorios M1 (`ConversationRepository`, `ModelTranscriptRepository`, `MemoryTimelineRepository`, `ConversationArtifactsRepository`, `StrictJournalRepository`) implementan escrituras y lecturas tipadas. `ConversationReader` compone esas lecturas bajo una cerca de lectura y ofrece la superficie que se conectará desde la fachada de la app en M4b. Sus métodos proyectan contexto del modelo, mensajes activos, ventanas/timeline UI, decisiones, interrupciones, reflexiones, compactaciones, crew y ownership de artefactos. La semántica directa de repositorios se mantiene en sus tests M1; `ConversationReaderDatabaseTest` cubre las proyecciones del lector sobre una DB real.
+Los repositorios M1 (`ConversationRepository`, `ModelTranscriptRepository`, `MemoryTimelineRepository`, `ConversationArtifactsRepository`, `StrictJournalRepository`) implement escrituras y lecturas tipadas. `ConversationReader` compone esas lecturas bajo una cerca de lectura. M4b añadió `ChatDatabaseBridge` y conectó varios grupos de `LocalRunStore`; la fachada aún conserva código legacy JSONL y rutas conversacionales pendientes, que ahora fallan cerradas. Véase [`cutover-inventory.md`](cutover-inventory.md). El timeline DB proyecta mensajes y traducciones; faltan eventos de tools/progreso, reflexión, decisiones, crew, artefactos y notices de workspace. `ConversationReaderDatabaseTest` cubre las proyecciones existentes sobre una DB real.
 
 ## Etapas
 
@@ -37,3 +37,13 @@ Los repositorios M1 (`ConversationRepository`, `ModelTranscriptRepository`, `Mem
 - **M4c — pruebas y medición:** reescribir pruebas dependientes del JSONL con fixtures de DB, limpiar código que quede sin uso y medir en teléfono apertura, envío con historial grande y memoria.
 
 La sustitución de almacenes de `runs`, `proactive` y `tasks` queda fuera de esta etapa.
+
+## Estado de M4b — corte de conversaciones (2026-10-15)
+
+El inventario de corte está en [`cutover-inventory.md`](cutover-inventory.md). Estado de esta revisión: cableado parcial; M4b no está completo. `ChatDatabaseBridge` abre Room perezosamente en su executor y rechaza llamadas bloqueantes desde main/lease. `LocalRunStore(Context)` enruta a DB metadata/tombstones, mensajes/contexto/timeline keyset, historial de conversaciones, model transcript tipado, memoria/compaction/reflection, operaciones proactive/crew, diarios estrictos workspace/crew, artifacts/imágenes, translations/decisions/reactions, interrupts y hide/delete/regenerate. `conversationFile()` falla cerrado para impedir que se abran ledgers históricos; siguen parsers/helpers/cachés legacy y falta la transacción compuesta de model checkpoint+ACK. Los estados incorporated/resolved, sus lecturas auxiliares y `claimProactiveSuggestedReply` ya usan DB. No se han retirado Pager ni cachés. La pantalla informa errores de DB en ciertos caminos y puede restaurar timeline vacío; la recuperación de fallo de apertura no se ha verificado de extremo a extremo.
+
+En la revisión actual se reescribieron cero tests y se eliminaron cero tests. La clasificación concreta para el trabajo pendiente de M4c está en `cutover-inventory.md`; no se considera que el formato JSONL histórico sea necesario para la fuente nueva.
+
+No se importan conversaciones del almacenamiento anterior. Room parte vacío; los archivos históricos `conversations/*.jsonl` y `*.meta.json` se dejan sin leer ni borrar. Las columnas de `conversations` y `tombstones` pasan a ser autoridad para título, fijado, archivado, privacidad y borrado. Los bytes de adjuntos y artefactos siguen en disco, con su referencia y metadatos en SQLite.
+
+Los `.jsonl` que pertenecen a los diarios de conversación de `jarvys-central`, `jarvys-workspace-*`, `jarvys-proactive` y `jarvys-tasks` entran al corte aunque esos IDs representen workspaces, conversaciones proactivas o tareas programadas. Los diarios de runs (`runs/*/steps.jsonl`), los eventos/decisiones proactivos que no son mensajes, los estados de tareas y los almacenes de memoria no conversacionales quedan fuera.

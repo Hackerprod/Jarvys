@@ -145,7 +145,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
     }
 }
 
-/** One app-process database instance at filesDir/jarvys/jarvys-chat.db. */
+/** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
     private const val DATABASE_VERSION = 1
     private const val DATABASE_NAME = "jarvys-chat.db"
@@ -154,8 +154,7 @@ internal object JarvysChatDatabaseProvider {
     private const val WAL_AUTOCHECKPOINT_PAGES = 1_000
     private const val JOURNAL_SIZE_LIMIT_BYTES = 16_777_216
 
-    @Volatile
-    private var instance: JarvysChatDatabase? = null
+    private val instances = mutableMapOf<String, JarvysChatDatabase>()
 
     private val databaseExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
     private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
@@ -169,9 +168,10 @@ internal object JarvysChatDatabaseProvider {
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "JarvysChatDatabaseProvider.getInstance must be called off the main thread"
         }
-        return instance ?: synchronized(this) {
-            instance ?: run {
-            val databaseFile = File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME)
+        val databaseFile = File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME)
+        val key = databaseFile.canonicalPath
+        return synchronized(this) {
+            instances[key] ?: run {
             databaseFile.parentFile?.mkdirs()
             check(databaseFile.parentFile?.isDirectory == true) {
                 "Could not create Jarvys chat database directory: ${databaseFile.parentFile}"
@@ -198,7 +198,7 @@ internal object JarvysChatDatabaseProvider {
                 synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
                 synchronized(writerDispatchers) { writerDispatchers[it] = executorSet[1].asCoroutineDispatcher() }
                 synchronized(readPools) { readPools[it] = checkNotNull(readPool) }
-                instance = it
+                instances[key] = it
             }
             }
         }
@@ -243,21 +243,24 @@ internal object JarvysChatDatabaseProvider {
             synchronized(readPools) {
                 if (readPools[database] === readPool) readPools.remove(database)
             }
+            val file = synchronized(databaseFiles) { databaseFiles.remove(database) }
             try {
                 database.close()
             } finally {
                 val executors = synchronized(databaseExecutors) { databaseExecutors.remove(database) }.orEmpty()
                 synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
                 synchronized(writerDispatchers) { writerDispatchers.remove(database) }?.close()
-                synchronized(databaseFiles) { databaseFiles.remove(database) }
                 executors.forEach(ExecutorService::shutdown)
-                synchronized(this) { if (instance === database) instance = null }
+                if (file != null) synchronized(this) {
+                    val key = file.canonicalPath
+                    if (instances[key] === database) instances.remove(key)
+                }
             }
         }
     }
 
-    /** Closes the process singleton and its read pool when the owning application is shutting down. */
-    internal fun closeInstance() = synchronized(this) { instance?.let(::closeDatabase) }
+    /** Closes every database opened by this process when the owning application is shutting down. */
+    internal fun closeInstance() = synchronized(this) { instances.values.toList().forEach(::closeDatabase) }
 
     /** Closes an isolated database opened for tests, with a bounded and diagnostic Room close. */
     internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) {

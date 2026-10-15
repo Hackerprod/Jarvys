@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -20,6 +21,8 @@ import com.jarvys.agent.proactive.ProactiveTextSanitizer
 import com.jarvys.agent.proactive.ProactiveRedactor
 import com.jarvys.agent.proactive.ProactiveThreadMessage
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 interface ScheduledTaskNotifications {
     fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
@@ -256,11 +259,38 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
         val taskId = intent.getStringExtra(EXTRA_TASK_ID)?.takeIf(String::isNotBlank) ?: return
         val text = intent.getStringExtra(EXTRA_REPLY_TEXT)?.trim()?.takeIf(String::isNotBlank) ?: return
         val app = context.applicationContext
-        val store = com.jarvys.agent.LocalRunStore(app)
-        val sessionId = ScheduledTaskConversation.SESSION_ID
-        val messageId = runCatching { store.appendConversationMessage(sessionId, "user", text) }.getOrNull() ?: return
-        runCatching { store.appendConversationTitleIfAbsent(sessionId, ScheduledTaskConversation.title(app)) }
-        runCatching { com.jarvys.agent.AgentForegroundService.startRealAgentFromStoredChatMessage(app, sessionId, messageId) }
+        val pendingResult = goAsync()
+        try {
+            TaskReplyReceiverExecutor.execute {
+                try {
+                    val store = com.jarvys.agent.LocalRunStore(app)
+                    val sessionId = ScheduledTaskConversation.SESSION_ID
+                    val messageId = try {
+                        store.appendConversationMessage(sessionId, "user", text)
+                    } catch (failure: RuntimeException) {
+                        Log.e("JarvysTasks", "Could not persist suggested task reply", failure)
+                        return@execute
+                    }
+                    try {
+                        store.appendConversationTitleIfAbsent(sessionId, ScheduledTaskConversation.title(app))
+                    } catch (failure: RuntimeException) {
+                        Log.e("JarvysTasks", "Could not persist scheduled task chat title", failure)
+                    }
+                    runCatching {
+                        com.jarvys.agent.AgentForegroundService.startRealAgentFromStoredChatMessage(
+                            app, sessionId, messageId,
+                        )
+                    }
+                } catch (failure: RuntimeException) {
+                    Log.e("JarvysTasks", "Could not handle suggested task reply", failure)
+                } finally {
+                    pendingResult.finish()
+                }
+            }
+        } catch (failure: RuntimeException) {
+            pendingResult.finish()
+            Log.e("JarvysTasks", "Could not queue suggested task reply", failure)
+        }
     }
 
     companion object {
@@ -268,6 +298,14 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
         const val EXTRA_TASK_ID = "scheduled_task_id"
         const val EXTRA_REPLY_TEXT = "scheduled_task_reply_text"
     }
+}
+
+private object TaskReplyReceiverExecutor {
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "JarvysTaskReplies").apply { isDaemon = true }
+    }
+
+    fun execute(task: Runnable) = executor.execute(task)
 }
 
 fun interface TaskPendingActionHandler {

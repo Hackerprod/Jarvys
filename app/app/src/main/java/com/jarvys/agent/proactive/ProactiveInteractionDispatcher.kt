@@ -1,9 +1,12 @@
 package com.jarvys.agent.proactive
 
 import android.content.Context
+import android.util.Log
 import com.jarvys.agent.AgentForegroundService
 import com.jarvys.agent.AgentRunUiState
 import com.jarvys.agent.LocalRunStore
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /** Routes a user-selected reply into the ordinary chat/service run path, never the silent review loop. */
 object ProactiveInteractionDispatcher {
@@ -77,20 +80,38 @@ object ProactiveInteractionDispatcher {
 
 class ProactiveActionReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: android.content.Intent) {
-        when (intent.action) {
-            ACTION_SUGGESTED_REPLY -> {
-                val messageId = intent.getStringExtra(EXTRA_MESSAGE_ID).orEmpty()
-                val index = intent.getIntExtra(EXTRA_REPLY_INDEX, -1)
-                ProactiveInteractionDispatcher.submitSuggestedReply(context, messageId, index)
-            }
-            ACTION_INLINE_REPLY -> {
-                val threadToken = intent.getStringExtra(EXTRA_THREAD_TOKEN).orEmpty()
-                val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
-                    ?.getCharSequence(EXTRA_INLINE_REPLY)?.toString().orEmpty()
-                if (threadToken.isNotBlank()) {
-                    ProactiveInteractionDispatcher.submitInlineReply(context, threadToken, text)
+        val action = intent.action
+        if (action != ACTION_SUGGESTED_REPLY && action != ACTION_INLINE_REPLY) return
+        val messageId = intent.getStringExtra(EXTRA_MESSAGE_ID).orEmpty()
+        val index = intent.getIntExtra(EXTRA_REPLY_INDEX, -1)
+        val threadToken = intent.getStringExtra(EXTRA_THREAD_TOKEN).orEmpty()
+        val text = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
+            ?.getCharSequence(EXTRA_INLINE_REPLY)?.toString().orEmpty()
+        val pendingResult = goAsync()
+        try {
+            ProactiveReplyReceiverExecutor.execute {
+                try {
+                    when (action) {
+                        ACTION_SUGGESTED_REPLY -> {
+                            ProactiveInteractionDispatcher.submitSuggestedReply(
+                                context.applicationContext, messageId, index,
+                            )
+                        }
+                        ACTION_INLINE_REPLY -> {
+                            if (threadToken.isNotBlank()) {
+                                ProactiveInteractionDispatcher.submitInlineReply(context.applicationContext, threadToken, text)
+                            }
+                        }
+                    }
+                } catch (failure: RuntimeException) {
+                    Log.e("JarvysProactive", "Could not handle notification reply", failure)
+                } finally {
+                    pendingResult.finish()
                 }
             }
+        } catch (failure: RuntimeException) {
+            pendingResult.finish()
+            Log.e("JarvysProactive", "Could not queue notification reply", failure)
         }
     }
 
@@ -102,4 +123,12 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
         const val EXTRA_THREAD_TOKEN = "proactive_thread_token"
         const val EXTRA_INLINE_REPLY = "proactive_inline_reply"
     }
+}
+
+private object ProactiveReplyReceiverExecutor {
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "JarvysProactiveReplies").apply { isDaemon = true }
+    }
+
+    fun execute(task: Runnable) = executor.execute(task)
 }

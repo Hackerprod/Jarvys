@@ -8,6 +8,7 @@ import com.jarvys.agent.ConversationTitle
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionRole
+import com.jarvys.agent.proactive.ProactiveReplyClaim
 import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
@@ -54,6 +55,8 @@ data class AppendMessageInput(
     val attachments: List<MessageAttachmentInput> = emptyList(),
     val suggestedReplies: List<SuggestedReplyInput> = emptyList(),
     val createdAtSeconds: Double? = null,
+    /** Kind used when this first message creates a new conversation in the same transaction. */
+    val conversationKind: String = "chat",
 )
 
 data class StoredMessage(
@@ -97,6 +100,12 @@ data class MessageSlot(val item: ConversationItem, val message: StoredMessage?)
 /** A hydrated message together with its globally sorted ledger position. */
 data class ConversationMessageAt(val message: StoredMessage, val sortSeq: Long, val sortSub: Int)
 
+/** User prompt paired with a regeneration marker that was durably appended in the same transaction. */
+data class RegenerationPromptValue(val text: String, val userMessageId: String)
+
+/** Marker identity and assistant owner captured together by one writer transaction. */
+data class AssistantMarkerValue(val seq: Long, val ownerUserMessageId: String?)
+
 data class MessageWindow(val conversationId: String, val slots: List<MessageSlot>, val olderCursorSeq: Long?)
 
 data class MessageCounts(val total: Long, val users: Long)
@@ -129,6 +138,21 @@ data class ConversationSummary(
     val pinned: Boolean,
     val archived: Boolean,
     val deleted: Boolean,
+)
+
+/** Metadata lookup retaining deletion state after the conversation row has been cascaded away. */
+data class ConversationMetadataValue(
+    val id: String,
+    val kind: String?,
+    val title: String?,
+    val generatedTitle: String?,
+    val pinned: Boolean,
+    val archived: Boolean,
+    val privateCode: Boolean,
+    val deleted: Boolean,
+    val createdAtMillis: Long?,
+    val updatedAtMillis: Long?,
+    val deletedAtMillis: Long?,
 )
 
 data class InterruptRequestValue(
@@ -230,6 +254,44 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun readInterruptRequest(conversationId: String, requestId: String): InterruptRequestValue? =
         JarvysChatDatabaseProvider.onQueryExecutor(database) {
             database.withChatReadTransaction { findInterrupt(conversationId, requestId) }
+        }
+
+    /** Reads all live metadata columns for one conversation; tombstoned IDs return null. */
+    suspend fun readConversation(conversationId: String): Conversation? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { findConversation(conversationId) }
+        }
+
+    /** Reads live metadata or the immutable metadata snapshot retained by a conversation tombstone. */
+    suspend fun readConversationMetadata(conversationId: String): ConversationMetadataValue? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                val live = findConversation(conversationId)
+                if (live != null) return@withChatReadTransaction ConversationMetadataValue(
+                    live.id, live.kind, live.title, live.generated_title, live.pinned, live.archived,
+                    live.private_code, false, live.created_at, live.updated_at, null,
+                )
+                sql.query(
+                    "SELECT deleted_at,payload FROM tombstones WHERE scope='conversation' AND entity_id=?",
+                    arrayOf(conversationId),
+                ).use { cursor ->
+                    if (!cursor.moveToFirst()) return@withChatReadTransaction null
+                    val payload = cursor.getStringOrNull(1)?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+                    ConversationMetadataValue(
+                        conversationId,
+                        payload?.optString("kind")?.takeIf(String::isNotEmpty),
+                        payload?.optString("title")?.takeIf(String::isNotEmpty),
+                        payload?.optString("generated_title")?.takeIf(String::isNotEmpty),
+                        payload?.optBoolean("pinned") ?: false,
+                        payload?.optBoolean("archived") ?: false,
+                        payload?.optBoolean("private_code") ?: false,
+                        true,
+                        payload?.optLong("created_at")?.takeIf { it > 0L },
+                        payload?.optLong("updated_at")?.takeIf { it > 0L },
+                        cursor.getLong(0),
+                    )
+                }
+            }
         }
 
     internal suspend fun readConversationKind(conversationId: String): String? =
@@ -342,13 +404,26 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun deleteConversation(conversationId: String, deletedAtMillis: Long = System.currentTimeMillis()): ChatDbResult<Boolean> =
         transactionResult {
             if (conversationId.isBlank()) return@transactionResult ChatDbResult.Invalid("conversation id is required")
+            val current = findConversation(conversationId)
+            val metadataPayload = current?.let {
+                JSONObject()
+                    .put("kind", it.kind)
+                    .put("title", it.title)
+                    .put("generated_title", it.generated_title)
+                    .put("pinned", it.pinned)
+                    .put("archived", it.archived)
+                    .put("private_code", it.private_code)
+                    .put("created_at", it.created_at)
+                    .put("updated_at", it.updated_at)
+                    .toString()
+            }
             sql.execSQL(
                 "INSERT INTO tombstones(scope,entity_id,deleted_at,payload) " +
-                    "SELECT 'conversation',?,?,NULL WHERE NOT EXISTS(" +
+                    "SELECT 'conversation',?,?,? WHERE NOT EXISTS(" +
                     "SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
-                arrayOf(conversationId, deletedAtMillis, conversationId),
+                arrayOf(conversationId, deletedAtMillis, metadataPayload, conversationId),
             )
-            val existed = findConversation(conversationId) != null
+            val existed = current != null
             sql.execSQL("DELETE FROM conversations WHERE id=?", arrayOf(conversationId))
             ChatDbResult.Success(existed)
         }
@@ -368,7 +443,19 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      */
     suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = transactionResult {
         validateMessageInput(input)?.let { return@transactionResult ChatDbResult.Invalid(it) }
-        val conversation = findConversation(input.conversationId) ?: return@transactionResult missingConversation(input.conversationId)
+        if (input.conversationKind.isBlank()) return@transactionResult ChatDbResult.Invalid("conversation kind is required")
+        var conversation = findConversation(input.conversationId)
+        if (conversation == null) {
+            if (isTombstonedRaw(input.conversationId)) return@transactionResult ChatDbResult.Tombstoned
+            val nowMillis = System.currentTimeMillis()
+            sql.execSQL(
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
+                arrayOf(input.conversationId, input.conversationKind, nowMillis, nowMillis, input.conversationId),
+            )
+            conversation = findConversation(input.conversationId)
+        }
+        conversation = conversation ?: return@transactionResult missingConversation(input.conversationId)
         if (isTombstonedRaw(input.conversationId)) return@transactionResult ChatDbResult.Tombstoned
         if (input.attachments.isNotEmpty() && (!isOrdinaryChat(conversation.kind) || !input.proactiveThreadKey.isNullOrEmpty())) {
             return@transactionResult ChatDbResult.Invalid("attachments are supported only in ordinary user messages")
@@ -430,8 +517,18 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         replies: List<SuggestedReplyInput>,
     ): ChatDbResult<StoredMessage> = transactionResult {
         if (decisionId.isBlank()) return@transactionResult ChatDbResult.Invalid("decision id is required")
-        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
+        if (findConversation(conversationId) == null) {
+            val nowMillis = System.currentTimeMillis()
+            sql.execSQL(
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'proactive',0,0,0,?,?,0,1 WHERE NOT EXISTS(" +
+                    "SELECT 1 FROM conversations WHERE id=? OR EXISTS(" +
+                    "SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?))",
+                arrayOf(conversationId, nowMillis, nowMillis, conversationId, conversationId),
+            )
+        }
+        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         val existing = findMessageByDecision(conversationId, decisionId)
         if (existing != null) return@transactionResult ChatDbResult.Success(hydrateMessages(conversationId, listOf(existing.messageId)).single())
         val id = UUID.randomUUID().toString()
@@ -529,6 +626,86 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun hideAssistant(conversationId: String, messageId: String, kind: String): ChatDbResult<Long> =
         setMessageMarker(conversationId, messageId, kind, "hidden_kind", "hidden_seq")
 
+    /** Appends one hide marker and returns the assistant owner read under that same transaction. */
+    suspend fun hideAssistantWithOwner(
+        conversationId: String,
+        messageId: String,
+        kind: String,
+    ): ChatDbResult<AssistantMarkerValue> = transactionResult {
+        if (kind !in setOf("assistant_regenerated", "assistant_deleted"))
+            return@transactionResult ChatDbResult.Invalid("unknown assistant marker")
+        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
+        val target = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
+        if (target.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("assistant marker target must be an assistant message")
+        val seq = allocateSequence(conversationId)
+        val now = epochSeconds()
+        insertItem(conversationId, seq, kind, messageId, seq, 0, latestTurnAnchor(conversationId), now)
+        sql.execSQL(
+            "UPDATE messages SET hidden_kind=?,hidden_seq=? WHERE conversation_id=? AND message_id=?",
+            arrayOf(kind, seq, conversationId, messageId),
+        )
+        ChatDbResult.Success(AssistantMarkerValue(seq, target.ownerUserMessageId))
+    }
+
+    /**
+     * Atomically verifies the target is the last visible assistant, resolves its user prompt, and
+     * appends `assistant_regenerated`. A successful null means the target was already hidden or a
+     * later active assistant won the race. The marker changes visibility only; status and body are
+     * retained exactly as for the standalone hide marker.
+     */
+    suspend fun regenerateIfLatestAssistant(
+        conversationId: String,
+        messageId: String,
+    ): ChatDbResult<RegenerationPromptValue?> = transactionResult {
+        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
+        val target = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
+        if (target.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("regeneration target must be an assistant message")
+        if (target.hiddenKind != null) return@transactionResult ChatDbResult.Success(null)
+
+        val latestActiveAssistantId = sql.query(
+            "SELECT m.message_id FROM messages m " +
+                "JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
+                "WHERE m.conversation_id=? AND m.role='assistant' AND m.hidden_kind IS NULL " +
+                "ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1",
+            arrayOf(conversationId),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        if (latestActiveAssistantId != messageId) return@transactionResult ChatDbResult.Success(null)
+
+        val targetPosition = sql.query(
+            "SELECT sort_seq,sort_sub,seq FROM conversation_items WHERE conversation_id=? AND seq=?",
+            arrayOf(conversationId, target.seq),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) SortPosition(cursor.getLong(0), cursor.getInt(1), cursor.getLong(2)) else null
+        } ?: return@transactionResult ChatDbResult.NotFound
+
+        val owner = target.ownerUserMessageId?.let { ownerId ->
+            findMessage(conversationId, ownerId)?.takeIf { it.role == ROLE_USER }
+        } ?: sql.query(
+            "SELECT m.message_id FROM messages m " +
+                "JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
+                "WHERE m.conversation_id=? AND m.role='user' AND " +
+                "(i.sort_seq<? OR (i.sort_seq=? AND i.sort_sub<?) OR " +
+                "(i.sort_seq=? AND i.sort_sub=? AND i.seq<?)) " +
+                "ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1",
+            arrayOf(conversationId, targetPosition.sortSeq, targetPosition.sortSeq, targetPosition.sortSub,
+                targetPosition.sortSeq, targetPosition.sortSub, targetPosition.seq),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) findMessage(conversationId, cursor.getString(0)) else null
+        }
+        if (owner == null) return@transactionResult ChatDbResult.NotFound
+        val prompt = hydrateMessages(conversationId, listOf(owner.messageId)).singleOrNull()
+            ?: return@transactionResult ChatDbResult.NotFound
+
+        val seq = allocateSequence(conversationId)
+        val now = epochSeconds()
+        insertItem(conversationId, seq, "assistant_regenerated", messageId, seq, 0, latestTurnAnchor(conversationId), now)
+        sql.execSQL(
+            "UPDATE messages SET hidden_kind='assistant_regenerated',hidden_seq=? WHERE conversation_id=? AND message_id=? AND hidden_kind IS NULL",
+            arrayOf(seq, conversationId, messageId),
+        )
+        ChatDbResult.Success(RegenerationPromptValue(prompt.text, prompt.messageId))
+    }
+
     /** Stores the positional `assistant_translation_hidden` marker, replacing `LocalRunStore.java:appendAssistantTranslationHidden`. */
     suspend fun hideTranslation(conversationId: String, messageId: String): ChatDbResult<Long> =
         setMessageMarker(conversationId, messageId, "assistant_translation_hidden", "translation_hidden_seq", null)
@@ -564,7 +741,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         ChatDbResult.Success(ReactionUpdate(seq, true))
     }
 
-    /** Consumes all `proactive_message.suggestedReplies`, replacing `LocalRunStore.java:claimProactiveSuggestedReply`. */
+    /** Marks all suggestions consumed when an external caller does not need to claim one by index. */
     suspend fun consumeSuggestedReplies(conversationId: String, messageId: String): ChatDbResult<Long> = transactionResult {
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         val message = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
@@ -574,6 +751,37 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         insertItem(conversationId, seq, ITEM_PROACTIVE_REPLY_USED, messageId, seq, 0, message.seq, epochSeconds())
         sql.execSQL("UPDATE messages SET suggested_replies_consumed_seq=? WHERE conversation_id=? AND message_id=? AND suggested_replies_consumed_seq IS NULL", arrayOf(seq, conversationId, messageId))
         ChatDbResult.Success(seq)
+    }
+
+    /** Replaces `LocalRunStore.claimProactiveSuggestedReply`, validating and consuming atomically. */
+    suspend fun claimProactiveSuggestedReply(
+        conversationId: String,
+        messageId: String,
+        index: Int,
+    ): ChatDbResult<ProactiveReplyClaim?> = transactionResult {
+        if (index < 0) return@transactionResult ChatDbResult.Success<ProactiveReplyClaim?>(null)
+        if (findConversation(conversationId) == null) return@transactionResult ChatDbResult.Success<ProactiveReplyClaim?>(null)
+        val message = findMessage(conversationId, messageId)
+            ?: return@transactionResult ChatDbResult.Success<ProactiveReplyClaim?>(null)
+        if (message.role != ROLE_ASSISTANT || message.proactiveDecisionId == null ||
+            message.suggestedRepliesConsumedSeq != null) {
+            return@transactionResult ChatDbResult.Success<ProactiveReplyClaim?>(null)
+        }
+        val selectedText = sql.query(
+            "SELECT text FROM proactive_suggested_replies WHERE conversation_id=? AND message_id=? AND ordinal=?",
+            arrayOf(conversationId, messageId, index),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0).trim() else "" }
+        val threadKey = message.proactiveThreadKey?.trim().orEmpty()
+        if (selectedText.isEmpty() || threadKey.isEmpty())
+            return@transactionResult ChatDbResult.Success<ProactiveReplyClaim?>(null)
+
+        val seq = allocateSequence(conversationId)
+        insertItem(conversationId, seq, ITEM_PROACTIVE_REPLY_USED, messageId, seq, 0, message.seq, epochSeconds())
+        sql.execSQL(
+            "UPDATE messages SET suggested_replies_consumed_seq=? WHERE conversation_id=? AND message_id=? AND suggested_replies_consumed_seq IS NULL",
+            arrayOf(seq, conversationId, messageId),
+        )
+        ChatDbResult.Success(ProactiveReplyClaim(selectedText, threadKey, ""))
     }
 
     /**
@@ -937,8 +1145,20 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     suspend fun listConversations(
         limit: Int,
         excludedKinds: Set<String> = DEFAULT_EXCLUDED_KINDS,
-    ): List<ConversationSummary> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+    ): List<ConversationSummary> {
         require(limit > 0) { "limit must be positive" }
+        return readConversationSummaries(excludedKinds, limit)
+    }
+
+    /** Returns every matching live conversation without an arbitrary product limit. */
+    suspend fun listAllConversations(
+        excludedKinds: Set<String> = DEFAULT_EXCLUDED_KINDS,
+    ): List<ConversationSummary> = readConversationSummaries(excludedKinds, null)
+
+    private suspend fun readConversationSummaries(
+        excludedKinds: Set<String>,
+        limit: Int?,
+    ): List<ConversationSummary> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
         val excluded = excludedKinds.toList()
         val hasActiveMessages = "EXISTS(SELECT 1 FROM messages active WHERE active.conversation_id=c.id AND active.seq<c.next_seq AND " +
             "(active.role='user' OR (active.role='assistant' AND active.hidden_kind IS NULL)))"
@@ -954,11 +1174,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val latestPreview = orderedText(latestActiveId)
         val latestActiveAt = "(SELECT CAST(m.created_at*1000 AS INTEGER) FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND " +
             "(m.role='user' OR (m.role='assistant' AND m.hidden_kind IS NULL)) ORDER BY m.seq DESC LIMIT 1)"
+        val limitClause = if (limit == null) "" else " LIMIT ?"
         val sqlText = "SELECT c.id,c.kind,NULLIF(TRIM(c.title),''),NULLIF(TRIM(c.generated_title),''),$firstUser,$latestPreview,$latestGoal," +
             "((SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND (m.role='user' OR (m.role='assistant' AND m.hidden_kind IS NULL)))+1)/2 AS turns," +
             "c.message_count,c.created_at,$latestActiveAt AS latest_active_at,c.pinned,c.archived,0 AS deleted " +
-            "FROM conversations c $exclusionSql ORDER BY latest_active_at DESC,c.id LIMIT ?"
-        val args = arrayOf<Any?>(*excluded.toTypedArray(), limit)
+            "FROM conversations c $exclusionSql ORDER BY latest_active_at DESC,c.id$limitClause"
+        val args: Array<out Any?> = if (limit == null) excluded.toTypedArray() else arrayOf<Any?>(*excluded.toTypedArray(), limit)
         sql.query(sqlText, args).use { c -> buildList { while (c.moveToNext()) add(
             run {
                 val createdAt = c.getLong(9)

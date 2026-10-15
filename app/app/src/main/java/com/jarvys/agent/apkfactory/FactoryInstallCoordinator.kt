@@ -409,6 +409,8 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
 
     override fun onCreate() {
         super.onCreate()
+        // Register only the lazy facade here; SQLite opens on its first background use.
+        com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
         clearRetiredOperationPolicyState()
         com.jarvys.agent.LocalDiagnostics.install(this)
         FactoryDataBackupCoordinator.get(this)

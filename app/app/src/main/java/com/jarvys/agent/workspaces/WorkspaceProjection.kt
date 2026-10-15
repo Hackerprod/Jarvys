@@ -58,7 +58,7 @@ object WorkspaceProjection {
         } else detail(context, id)
         val sessionId = WorkspaceIdentity.executionSessionId(detail.id)
         val page = LocalRunStore(context).readConversationTimelinePage(
-            sessionId, com.jarvys.agent.ConversationLedgerPager.NO_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
+            sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
         return workspaceChatUiState(detail, page)
     }
 

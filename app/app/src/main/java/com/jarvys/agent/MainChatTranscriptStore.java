@@ -137,7 +137,10 @@ final class MainChatTranscriptStore {
                         batch = null;
                     }
                 }
-                // Acknowledge only after the checkpoint's durable transcript writes have succeeded.
+                // TODO(M4c): build one ConversationModelTurnInput and commit this variable-size
+                // checkpoint plus input ACK through appendModelTurnSync. The DB route currently
+                // persists each normalized transcript row separately; ACK remains last so a
+                // failed row never acknowledges a partially persisted checkpoint.
                 store.markConversationMessagesIncorporated(sessionId, checkpoint.appliedIncomingIds);
             } catch (RuntimeException failure) { throw failure; }
             catch (Exception failure) { throw new IllegalStateException("Could not retain tool transcript", failure); }

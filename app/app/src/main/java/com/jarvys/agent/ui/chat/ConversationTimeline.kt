@@ -111,6 +111,10 @@ import com.jarvys.agent.connectors.approveAndAllowAlways
 import com.jarvys.agent.crew.CrewApprovalAttribution
 import com.jarvys.agent.crew.CrewMissionCard
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Jarvys transcript renderer: a readable response stream with a narrow intent trail. */
 @Composable
@@ -916,7 +920,10 @@ private fun CompactionLine(event: AgentRunUiEvent) {
 @Composable
 internal fun UserDecisionEventCard(
     event: AgentRunUiEvent,
-    onResolve: (String, UserDecisionResult) -> Boolean = UserDecisionRequests::resolve,
+    onResolve: (String, UserDecisionResult) -> Boolean = { id, result ->
+        UserDecisionResolutionDispatcher.resolve(id, result)
+        true
+    },
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
@@ -1028,6 +1035,16 @@ internal fun UserDecisionEventCard(
                 }
             }
         }
+    }
+}
+
+private object UserDecisionResolutionDispatcher {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun resolve(id: String, result: UserDecisionResult) {
+        // Resolve and persist on the same worker call. UserDecisionGate releases its model latch
+        // only after presenter.update returns, which follows the synchronous repository write.
+        scope.launch { UserDecisionRequests.resolve(id, result) }
     }
 }
 

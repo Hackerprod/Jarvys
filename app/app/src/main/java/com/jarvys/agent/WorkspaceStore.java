@@ -86,7 +86,7 @@ public final class WorkspaceStore {
     WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed,
                    MemoryStore sharedMemoryStore, MemoryStore.Actor memoryActor,
                    String reflectionGroupId, boolean memoryOnly) {
-        this(new File(context.getApplicationContext().getFilesDir(), "jarvys/workspaces"), projectId,
+        this(workspaceRoot(context), projectId,
                 new File(context.getApplicationContext().getFilesDir(), "skills"),
                 SkillRepository.Companion.get(context.getApplicationContext()),
                 sharedMemoryStore, conversationId, memoryAccessAllowed, memoryActor, reflectionGroupId, memoryOnly);
@@ -176,6 +176,7 @@ public final class WorkspaceStore {
 
     public static WorkspaceStore forCrewBoard(Context context, String sessionId) {
         Context app = context.getApplicationContext();
+        com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app);
         return new WorkspaceStore(new File(new File(app.getFilesDir(), "jarvys"), "workspaces"),
                 projectIdForSession(sessionId), null, null, null, sessionId, false,
                 MemoryStore.Actor.AGENT, null, false).withoutAttachments();
@@ -197,6 +198,14 @@ public final class WorkspaceStore {
         }
         new LocalRunStore(appFiles).markConversationHasPrivateCode(conversationId);
         return new ProjectScopeStore(appFiles).open(conversationId);
+    }
+
+    private static File workspaceRoot(Context context) {
+        Context app = context.getApplicationContext();
+        // Register the lazy per-filesDir database bridge for tools that retain only this store's
+        // app-files anchor. The bridge opens SQLite only when a background DB method is used.
+        com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app);
+        return new File(app.getFilesDir(), "jarvys/workspaces");
     }
 
     /** Pins the same ordinary source boundaries used by delivery and bounded HTML capture. */

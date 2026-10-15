@@ -21,6 +21,20 @@ import com.jarvys.agent.proactive.ProactiveReplyClaim;
 import com.jarvys.agent.proactive.ProactiveSuggestedReply;
 import com.jarvys.agent.UserDecisionOption;
 import com.jarvys.agent.UserDecisionRole;
+import com.jarvys.agent.chatdb.AppendMessageInput;
+import com.jarvys.agent.chatdb.AssistantMarkerValue;
+import com.jarvys.agent.chatdb.ChatDatabaseBridge;
+import com.jarvys.agent.chatdb.ChatDbResult;
+import com.jarvys.agent.chatdb.ConversationMetadataValue;
+import com.jarvys.agent.chatdb.ConversationImageReferenceValue;
+import com.jarvys.agent.chatdb.ConversationSummary;
+import com.jarvys.agent.chatdb.DispatchedInterrupt;
+import com.jarvys.agent.chatdb.InterruptRequestValue;
+import com.jarvys.agent.chatdb.MessageAttachmentInput;
+import com.jarvys.agent.chatdb.MessagePartInput;
+import com.jarvys.agent.chatdb.ReactionUpdate;
+import com.jarvys.agent.chatdb.RegenerationPromptValue;
+import com.jarvys.agent.chatdb.StoredMessage;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -50,6 +64,8 @@ import java.util.function.Consumer;
 
 /** App-private append-only run records and notes for graph/history tools. */
 public final class LocalRunStore {
+    /** Sentinel used by keyset timeline pages when the caller wants the newest window. */
+    public static final long NO_TIMELINE_CURSOR = -1L;
     private static final Object SESSION_TITLE_LOCK = new Object();
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
     private static final Map<String, String> CREW_SNAPSHOT_DIGESTS = new LinkedHashMap<>();
@@ -85,9 +101,10 @@ public final class LocalRunStore {
     private final File root;
     private final String runBoundary;
     private final ConversationMetadataStore conversationMetadata;
+    /** Null only for the package-private file fixture; production instances always use Room. */
+    private final ChatDatabaseBridge chatDatabaseBridge;
     private final Map<String, String> runSessions = new LinkedHashMap<>();
     private final File notes;
-    private final File conversations;
     private final Map<String, File> runDirectories = new LinkedHashMap<>();
     private String activeRunId;
     private File activeRunDirectory;
@@ -114,22 +131,160 @@ public final class LocalRunStore {
     }
 
     public LocalRunStore(Context context) {
-        this(context.getFilesDir());
-    }
-
-    LocalRunStore(File filesDirectory) {
+        File filesDirectory = context.getFilesDir();
         File jarvys = new File(filesDirectory, "jarvys");
         root = new File(jarvys, "runs");
         notes = new File(jarvys, "notes");
-        conversations = new File(jarvys, "conversations");
         conversationMetadata = new ConversationMetadataStore(filesDirectory);
+        chatDatabaseBridge = ChatDatabaseBridge.getInstance(context);
         try {
             runBoundary = new File(new File(filesDirectory.getCanonicalFile(), "jarvys"), "runs").getPath();
             verifyRunPath(root);
         } catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
         ensureDirectory(root);
         ensureDirectory(notes);
-        ensureDirectory(conversations);
+    }
+
+    /** Non-production file fixture for run-store tests; conversation operations require a registered DB bridge. */
+    LocalRunStore(File filesDirectory) {
+        File jarvys = new File(filesDirectory, "jarvys");
+        root = new File(jarvys, "runs");
+        notes = new File(jarvys, "notes");
+        conversationMetadata = new ConversationMetadataStore(filesDirectory);
+        chatDatabaseBridge = ChatDatabaseBridge.findInstanceForFilesDirectory(filesDirectory);
+        try {
+            runBoundary = new File(new File(filesDirectory.getCanonicalFile(), "jarvys"), "runs").getPath();
+            verifyRunPath(root);
+        } catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
+        ensureDirectory(root);
+        ensureDirectory(notes);
+    }
+
+    private boolean isConversationDeleted(String sessionId) {
+        return chatDatabaseBridge != null
+                ? chatDatabaseBridge.isTombstonedSync(sessionId)
+                : conversationMetadata.read(sessionId).deleted;
+    }
+
+    private static IllegalStateException noChatDatabase() {
+        return new IllegalStateException(
+                "Conversation storage requires a registered ChatDatabaseBridge; file-only LocalRunStore is not production-ready");
+    }
+
+    private boolean deleteConversationOwnedFiles(String sessionId) {
+        synchronized (SESSION_TITLE_LOCK) { SESSION_TITLES_IN_PROGRESS.remove(sessionId); }
+        boolean complete = true;
+        try {
+            verifyRunPath(root);
+            File[] runs = root.listFiles();
+            if (runs == null) complete = false;
+            else for (File run : runs) {
+                try { if (sessionId.equals(sessionForRunDirectory(run))) complete &= deleteRunTree(run); }
+                catch (RuntimeException failure) { complete = false; }
+            }
+        } catch (IOException | RuntimeException failure) { complete = false; }
+        try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
+        catch (RuntimeException failure) { complete = false; }
+        try { complete &= new DeliveredArtifactStore(root.getParentFile()).deleteSession(sessionId); }
+        catch (RuntimeException failure) { complete = false; }
+        try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
+        catch (RuntimeException failure) { complete = false; }
+        try {
+            complete &= new WorkspaceStore(new File(root.getParentFile(), "workspaces"),
+                    WorkspaceStore.projectIdForSession(sessionId)).deleteImportedAttachments();
+        } catch (RuntimeException failure) { complete = false; }
+        try { complete &= CrewContextArtifacts.deleteConversation(root.getParentFile().getParentFile(), sessionId); }
+        catch (RuntimeException failure) { complete = false; }
+        return complete;
+    }
+
+    private static String conversationKindFor(String sessionId) {
+        if (ProactiveConversation.SESSION_ID.equals(sessionId)) return "proactive";
+        if (ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return "tasks";
+        if (WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)) return "central";
+        if (WorkspaceIdentity.isExecutionSession(sessionId)) return "workspace_exec";
+        return "chat";
+    }
+
+    private static <T> T requireChatDbSuccess(ChatDbResult<T> result, String operation) {
+        if (result instanceof ChatDbResult.Success) {
+            @SuppressWarnings("unchecked")
+            ChatDbResult.Success<T> success = (ChatDbResult.Success<T>) result;
+            return success.getValue();
+        }
+        throw new IllegalStateException("Could not " + operation + ": " + result);
+    }
+
+    private static List<String> copyIds(Iterable<String> values) {
+        List<String> result = new ArrayList<>();
+        if (values != null) for (String value : values)
+            if (value != null && !value.isEmpty() && !result.contains(value)) result.add(value);
+        return result;
+    }
+
+    private static JSONObject interruptRequestJson(InterruptRequestValue request) {
+        try {
+            JSONObject row = new JSONObject().put("type", "main_interrupt_request")
+                    .put("sessionId", request.getConversationId()).put("requestId", request.getRequestId())
+                    .put("content", request.getContent()).put("skills", new JSONArray(request.getSkills()))
+                    .put("memoryDisabled", request.getMemoryDisabled())
+                    .put("alreadyDispatched", request.getAlreadyDispatched());
+            if (request.getDispatchedMessageId() != null) row.put("messageId", request.getDispatchedMessageId());
+            return row;
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not project chat replacement request", error);
+        }
+    }
+
+    private static JSONObject messageJson(StoredMessage message) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("role", message.getRole());
+            row.put("content", message.getText());
+            row.put("messageId", message.getMessageId());
+            row.put("stableId", message.getStableId());
+            row.put("timestamp", message.getCreatedAtSeconds());
+            if (message.getProactiveDecisionId() != null) {
+                row.put("type", "proactive_message");
+                row.put("proactiveDecisionId", message.getProactiveDecisionId());
+            }
+            if (message.getInputState() != null) row.put("inputState", message.getInputState());
+            if (message.getStatus() != null) row.put("status", message.getStatus());
+            if (message.getRunId() != null) row.put("runId", message.getRunId());
+            if (message.getOwnerUserMessageId() != null) row.put("userMessageId", message.getOwnerUserMessageId());
+            if (message.getDurationMillis() != null) row.put("durationMs", message.getDurationMillis());
+            if (message.getProactiveThreadKey() != null) row.put("proactiveThreadKey", message.getProactiveThreadKey());
+            if (message.getProactiveReplyToMessageId() != null)
+                row.put("proactiveReplyToMessageId", message.getProactiveReplyToMessageId());
+            if (message.getInterruptRequestId() != null) row.put("interruptRequestId", message.getInterruptRequestId());
+            if (message.getAcknowledgementRequired()) row.put("mainChatAcknowledgementRequired", true);
+            if (!message.getAttachments().isEmpty()) {
+                JSONArray attachments = new JSONArray();
+                for (MessageAttachmentInput attachment : message.getAttachments()) {
+                    ChatAttachment.Kind kind;
+                    if ("IMAGE".equals(attachment.getKind())) kind = ChatAttachment.Kind.IMAGE;
+                    else if ("FILE".equals(attachment.getKind())) kind = ChatAttachment.Kind.FILE;
+                    else throw new IllegalStateException("Unknown chat attachment kind");
+                    attachments.put(new ChatAttachment(attachment.getAttachmentId(), attachment.getName(),
+                            attachment.getMimeType(), attachment.getSizeBytes(),
+                            kind, attachment.getRelativePath()).toJson());
+                }
+                row.put("attachments", attachments);
+            }
+            if (message.getTranslation() != null) {
+                row.put("translation", message.getTranslation().getContent());
+                row.put("translationLanguage", message.getTranslation().getLanguage());
+            }
+            if (!message.getSuggestedReplies().isEmpty()) {
+                JSONArray replies = new JSONArray();
+                for (com.jarvys.agent.chatdb.SuggestedReplyInput reply : message.getSuggestedReplies())
+                    replies.put(new JSONObject().put("label", reply.getLabel()).put("text", reply.getText()));
+                row.put("suggestedReplies", replies);
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not project database conversation message", error);
+        }
+        return row;
     }
 
     public synchronized String beginRun(String goal) {
@@ -138,7 +293,7 @@ public final class LocalRunStore {
 
     public synchronized String beginRun(String goal, String sessionId) {
         synchronized (SESSION_TITLE_LOCK) {
-            if (sessionId != null && !sessionId.trim().isEmpty() && conversationMetadata.read(sessionId).deleted) {
+            if (sessionId != null && !sessionId.trim().isEmpty() && isConversationDeleted(sessionId)) {
                 throw new IllegalStateException("This chat has been deleted");
             }
             String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
@@ -171,10 +326,15 @@ public final class LocalRunStore {
         return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, "");
     }
 
-    /** Append a versioned, recoverable Crew snapshot to the existing per-conversation JSONL ledger. */
+    /** Append a versioned, recoverable Crew snapshot to this conversation. */
     public synchronized void appendCrewMissionSnapshot(CrewMissionSnapshot snapshot) {
         if (snapshot == null || snapshot.conversationId == null || snapshot.conversationId.trim().isEmpty()) {
             throw new IllegalArgumentException("Crew snapshot requires a conversation id");
+        }
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendCrewSnapshotSync(
+                    snapshot.conversationId, snapshot.toJson()), "append Crew snapshot");
+            return;
         }
         JSONObject row = snapshot.toJson();
         String digest;
@@ -207,6 +367,8 @@ public final class LocalRunStore {
     public synchronized CrewResultEvidence appendCrewResultEvidence(CrewResultEvidence evidence, Runnable beforeWrite) {
         if (evidence == null || beforeWrite == null) throw new IllegalArgumentException("Evidence and admission are required");
         CrewResultEvidence.fromJsonStrict(evidence.toJson());
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendCrewResultEvidenceSync(
+                evidence, beforeWrite::run), "append Crew result evidence");
         requireResultSource(evidence.conversationId);
         synchronized (SESSION_TITLE_LOCK) {
             CrewResultEvidence existing = readCrewResultEvidence(evidence.conversationId, evidence.evidenceId);
@@ -225,7 +387,10 @@ public final class LocalRunStore {
 
     /** Exact raw evidence retrieval; callers must page resultText before exposing it to a model/UI. */
     public synchronized CrewResultEvidence readCrewResultEvidence(String sourceSessionId, String evidenceId) {
-        requireResultSource(sourceSessionId); WorkspaceResultReference.requireEvidenceId(evidenceId);
+        WorkspaceResultReference.requireEvidenceId(evidenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readCrewResultEvidenceSync(
+                sourceSessionId, evidenceId), "read Crew result evidence");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             final CrewResultEvidence[] found = {null};
             scanResultLedgerLocked(sourceSessionId, false, (evidence, reference, notice) -> {
@@ -237,8 +402,11 @@ public final class LocalRunStore {
 
     /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
     public synchronized List<String> listCrewResultEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
-        requireResultSource(sourceSessionId); resultPage(limit);
+        resultPage(limit);
         if (afterEvidenceId != null) WorkspaceResultReference.requireEvidenceId(afterEvidenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listCrewResultEvidenceIdsSync(
+                sourceSessionId, limit, afterEvidenceId), "list Crew result evidence");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             java.util.TreeSet<String> found = new java.util.TreeSet<>();
             scanResultLedgerLocked(sourceSessionId, false, (evidence, reference, notice) -> {
@@ -254,6 +422,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceResultReference appendWorkspaceResultReferenceIfAbsent(
             WorkspaceResultReference reference, Runnable beforeWrite) {
         requireResultReference(reference, beforeWrite);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultReferenceSync(
+                reference, beforeWrite::run), "append workspace result reference");
         synchronized (SESSION_TITLE_LOCK) {
             CrewResultEvidence evidence = readCrewResultEvidence(reference.executionSessionId, reference.evidenceId);
             if (!reference.matchesEvidence(evidence)) throw new IllegalStateException("Reference has no matching durable evidence");
@@ -269,7 +439,10 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultReference(String sourceSessionId, String referenceId) {
-        requireResultSource(sourceSessionId); WorkspaceResultReference.requireReferenceId(referenceId);
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceResultReferenceSync(
+                sourceSessionId, referenceId, false), "read workspace result reference");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             return findResultReferenceLocked(sourceSessionId, referenceId, false);
         }
@@ -277,6 +450,8 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceResultReference> listWorkspaceResultReferences(
             String sourceSessionId, int limit, String afterReferenceId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceResultReferencesSync(
+                sourceSessionId, false, limit, afterReferenceId), "list workspace result references");
         requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             return listResultReferencesLocked(sourceSessionId, limit, afterReferenceId, false);
@@ -287,6 +462,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceResultReference appendWorkspaceResultNoticeIfAbsent(
             WorkspaceResultReference reference, Runnable beforeWrite) {
         requireResultReference(reference, beforeWrite);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeSync(
+                reference, beforeWrite::run), "append workspace result notice");
         synchronized (SESSION_TITLE_LOCK) {
             WorkspaceResultReference durable = readWorkspaceResultReference(reference.executionSessionId, reference.referenceId);
             if (durable == null || !durable.samePayload(reference))
@@ -302,12 +479,17 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultNotice(String centralSessionId, String referenceId) {
-        requireResultCentral(centralSessionId); WorkspaceResultReference.requireReferenceId(referenceId);
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceResultReferenceSync(
+                centralSessionId, referenceId, true), "read workspace result notice");
+        requireResultCentral(centralSessionId);
         synchronized (SESSION_TITLE_LOCK) { return findResultReferenceLocked(centralSessionId, referenceId, true); }
     }
 
     public synchronized List<WorkspaceResultReference> listWorkspaceResultNotices(
             String centralSessionId, int limit, String afterReferenceId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceResultReferencesSync(
+                centralSessionId, true, limit, afterReferenceId), "list workspace result notices");
         requireResultCentral(centralSessionId);
         synchronized (SESSION_TITLE_LOCK) { return listResultReferencesLocked(centralSessionId, limit, afterReferenceId, true); }
     }
@@ -336,6 +518,8 @@ public final class LocalRunStore {
     public synchronized CrewCoordinationEvidence appendCrewCoordinationEvidence(CrewCoordinationEvidence evidence, Runnable beforeWrite) {
         if (evidence == null || beforeWrite == null) throw new IllegalArgumentException("Evidence and admission are required");
         CrewCoordinationEvidence.fromJsonStrict(evidence.toJson());
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendCrewCoordinationEvidenceSync(
+                evidence, beforeWrite::run), "append Crew coordination evidence");
         requireResultSource(evidence.conversationId);
         synchronized (SESSION_TITLE_LOCK) {
             CrewCoordinationEvidence existing = readCrewCoordinationEvidence(evidence.conversationId, evidence.evidenceId);
@@ -354,7 +538,10 @@ public final class LocalRunStore {
 
     /** Exact raw evidence retrieval; callers must page text before exposing it to a model/UI. */
     public synchronized CrewCoordinationEvidence readCrewCoordinationEvidence(String sourceSessionId, String evidenceId) {
-        requireResultSource(sourceSessionId); WorkspaceCoordinationReference.requireEvidenceId(evidenceId);
+        WorkspaceCoordinationReference.requireEvidenceId(evidenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readCrewCoordinationEvidenceSync(
+                sourceSessionId, evidenceId), "read Crew coordination evidence");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             final CrewCoordinationEvidence[] found = {null};
             scanCoordinationLedgerLocked(sourceSessionId, false, (evidence, reference, notice, reply, transition) -> {
@@ -366,8 +553,11 @@ public final class LocalRunStore {
 
     /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
     public synchronized List<String> listCrewCoordinationEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
-        requireResultSource(sourceSessionId); resultPage(limit);
+        resultPage(limit);
         if (afterEvidenceId != null) WorkspaceCoordinationReference.requireEvidenceId(afterEvidenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listCrewCoordinationEvidenceIdsSync(
+                sourceSessionId, limit, afterEvidenceId), "list Crew coordination evidence");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             java.util.TreeSet<String> found = new java.util.TreeSet<>();
             scanCoordinationLedgerLocked(sourceSessionId, false, (evidence, reference, notice, reply, transition) -> {
@@ -383,6 +573,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceCoordinationReference appendWorkspaceCoordinationReferenceIfAbsent(
             WorkspaceCoordinationReference reference, Runnable beforeWrite) {
         requireCoordinationReference(reference, beforeWrite);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceCoordinationReferenceSync(
+                reference, beforeWrite::run), "append workspace coordination reference");
         synchronized (SESSION_TITLE_LOCK) {
             CrewCoordinationEvidence evidence = readCrewCoordinationEvidence(reference.executionSessionId, reference.evidenceId);
             if (!reference.matchesEvidence(evidence)) throw new IllegalStateException("Reference has no matching durable evidence");
@@ -398,7 +590,10 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationReference(String sourceSessionId, String referenceId) {
-        requireResultSource(sourceSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReferenceSync(
+                sourceSessionId, referenceId, false), "read workspace coordination reference");
+        requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             return findCoordinationReferenceLocked(sourceSessionId, referenceId, false);
         }
@@ -406,6 +601,8 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationReferences(
             String sourceSessionId, int limit, String afterReferenceId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceCoordinationReferencesSync(
+                sourceSessionId, false, limit, afterReferenceId), "list workspace coordination references");
         requireResultSource(sourceSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             return listCoordinationReferencesLocked(sourceSessionId, limit, afterReferenceId, false);
@@ -416,6 +613,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceCoordinationReference appendWorkspaceCoordinationNoticeIfAbsent(
             WorkspaceCoordinationReference reference, Runnable beforeWrite) {
         requireCoordinationReference(reference, beforeWrite);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceCoordinationNoticeSync(
+                reference, beforeWrite::run), "append workspace coordination notice");
         synchronized (SESSION_TITLE_LOCK) {
             WorkspaceCoordinationReference durable = readWorkspaceCoordinationReference(reference.executionSessionId, reference.referenceId);
             if (durable == null || !durable.samePayload(reference))
@@ -431,12 +630,17 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationNotice(String centralSessionId, String referenceId) {
-        requireResultCentral(centralSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReferenceSync(
+                centralSessionId, referenceId, true), "read workspace coordination notice");
+        requireResultCentral(centralSessionId);
         synchronized (SESSION_TITLE_LOCK) { return findCoordinationReferenceLocked(centralSessionId, referenceId, true); }
     }
 
     public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationNotices(
             String centralSessionId, int limit, String afterReferenceId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceCoordinationReferencesSync(
+                centralSessionId, true, limit, afterReferenceId), "list workspace coordination notices");
         requireResultCentral(centralSessionId);
         synchronized (SESSION_TITLE_LOCK) { return listCoordinationReferencesLocked(centralSessionId, limit, afterReferenceId, true); }
     }
@@ -466,6 +670,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceCoordinationReply prepareWorkspaceCoordinationReply(
             WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
         requireCoordinationReply(proposed, finalAdmission);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.prepareWorkspaceCoordinationReplySync(
+                proposed, finalAdmission::run), "prepare workspace coordination reply");
         synchronized (SESSION_TITLE_LOCK) {
             WorkspaceCoordinationReply existing = readWorkspaceCoordinationReply(
                     proposed.reference.ownerCentralSessionId, proposed.reference.referenceId);
@@ -490,6 +696,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceCoordinationReply markWorkspaceCoordinationReplyStarted(
             WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
         requireCoordinationReply(proposed, finalAdmission);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.markWorkspaceCoordinationReplyStartedSync(
+                proposed, finalAdmission::run), "mark workspace coordination reply started");
         synchronized (SESSION_TITLE_LOCK) {
             WorkspaceCoordinationReply durable = requireExistingCoordinationReply(proposed);
             if (durable.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) return durable;
@@ -507,6 +715,8 @@ public final class LocalRunStore {
     public synchronized WorkspaceCoordinationReply markWorkspaceCoordinationReplyAccepted(
             WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
         requireCoordinationReply(proposed, finalAdmission);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.markWorkspaceCoordinationReplyAcceptedSync(
+                proposed, finalAdmission::run), "mark workspace coordination reply accepted");
         synchronized (SESSION_TITLE_LOCK) {
             WorkspaceCoordinationReply durable = requireExistingCoordinationReply(proposed);
             if (durable.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) return durable;
@@ -522,7 +732,10 @@ public final class LocalRunStore {
 
     /** Historical receipt only. STARTED means UNCERTAIN, including after reopening; never resume or replay. */
     public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReply(String centralSessionId, String referenceId) {
-        requireResultCentral(centralSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReplySync(
+                centralSessionId, referenceId, null), "read workspace coordination reply");
+        requireResultCentral(centralSessionId);
         synchronized (SESSION_TITLE_LOCK) {
             final WorkspaceCoordinationReply[] found = {null};
             scanCoordinationLedgerLocked(centralSessionId, true, (evidence, reference, notice, reply, transition) -> {
@@ -538,6 +751,8 @@ public final class LocalRunStore {
             String centralSessionId, String referenceId, String replyKey) {
         if (replyKey == null || !replyKey.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}"))
             throw new IllegalArgumentException("Invalid coordination reply key");
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReplySync(
+                centralSessionId, referenceId, replyKey), "read keyed workspace coordination reply");
         WorkspaceCoordinationReply reply = readWorkspaceCoordinationReply(centralSessionId, referenceId);
         if (reply != null && !reply.replyKey.equals(replyKey)) coordinationConflict();
         return reply;
@@ -545,6 +760,8 @@ public final class LocalRunStore {
 
     /** Exact bounded identity lookup; at most two strict scans, with no retained reply bodies or new index. */
     public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReplyById(String centralSessionId, String replyId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReplyByIdSync(
+                centralSessionId, replyId), "read workspace coordination reply by ID");
         requireResultCentral(centralSessionId);
         if (replyId == null || !replyId.matches("workspace-coordination-reply-[0-9a-f]{64}"))
             throw new IllegalArgumentException("Invalid coordination reply id");
@@ -563,6 +780,11 @@ public final class LocalRunStore {
     public synchronized void requireWorkspaceCoordinationDisclosureLive(
             WorkspaceCoordinationReference reference, boolean noticeRequired) {
         requireCoordinationReference(reference, () -> { });
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.requireWorkspaceCoordinationDisclosureLiveSync(reference, noticeRequired),
+                    "check workspace coordination disclosure");
+            return;
+        }
         synchronized (SESSION_TITLE_LOCK) {
             requireResultLedgerLocked(reference.executionSessionId, false);
             File central = requireResultLedgerLocked(reference.ownerCentralSessionId, true);
@@ -581,6 +803,8 @@ public final class LocalRunStore {
         if (proposed == null || finalAdmission == null)
             throw new IllegalArgumentException("Incorporation and admission are required");
         WorkspaceInputIncorporation.fromJsonStrict(proposed.toJson());
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceInputIncorporationSync(
+                proposed, finalAdmission::run), "append workspace input incorporation");
         synchronized (SESSION_TITLE_LOCK) {
             requireIncorporationCentralLocked(proposed.ownerCentralSessionId);
             requireIncorporationSourceLocked(proposed);
@@ -605,6 +829,8 @@ public final class LocalRunStore {
     /** Exact metadata only; current registry ownership and READ policy remain the caller's responsibility. */
     public synchronized WorkspaceInputIncorporation readWorkspaceInputIncorporation(String centralSessionId,
             WorkspaceInputIncorporation.SourceKind sourceKind, String sourceId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceInputIncorporationSync(
+                centralSessionId, sourceKind, sourceId), "read workspace input incorporation");
         requireResultCentral(centralSessionId);
         String receiptId = WorkspaceInputIncorporation.receiptId(sourceKind, sourceId);
         synchronized (SESSION_TITLE_LOCK) {
@@ -617,6 +843,8 @@ public final class LocalRunStore {
     /** Bounded lexical pages, never raw source bodies or an unbounded receipt collection. */
     public synchronized List<WorkspaceInputIncorporation> listWorkspaceInputIncorporations(
             String centralSessionId, int limit, String afterReceiptId) {
+        if (chatDatabaseBridge != null) return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceInputIncorporationsSync(
+                centralSessionId, limit, afterReceiptId), "list workspace input incorporations");
         requireResultCentral(centralSessionId); resultPage(limit);
         if (afterReceiptId != null) WorkspaceInputIncorporation.requireReceiptId(afterReceiptId);
         synchronized (SESSION_TITLE_LOCK) {
@@ -636,6 +864,11 @@ public final class LocalRunStore {
     public synchronized void requireWorkspaceInputIncorporationDisclosureLive(WorkspaceInputIncorporation value) {
         if (value == null) throw new IllegalArgumentException("Incorporation is required");
         WorkspaceInputIncorporation.fromJsonStrict(value.toJson());
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.requireWorkspaceInputIncorporationDisclosureLiveSync(value),
+                    "check workspace input incorporation disclosure");
+            return;
+        }
         synchronized (SESSION_TITLE_LOCK) {
             requireIncorporationCentralLocked(value.ownerCentralSessionId);
             WorkspaceInputIncorporation durable = findInputIncorporationLocked(value.ownerCentralSessionId, value.receiptId);
@@ -930,6 +1163,11 @@ public final class LocalRunStore {
 
     /** Lightweight last disclosure boundary; no evidence content or callbacks under this lock. */
     public synchronized void requireWorkspaceResultDisclosureLive(WorkspaceResultReference reference, boolean noticeRequired) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.requireWorkspaceResultDisclosureLiveSync(reference, noticeRequired),
+                    "check workspace result disclosure");
+            return;
+        }
         synchronized (SESSION_TITLE_LOCK) {
             requireResultLedgerLocked(reference.executionSessionId, false);
             File central = requireResultLedgerLocked(reference.ownerCentralSessionId, true);
@@ -1054,6 +1292,7 @@ public final class LocalRunStore {
 
     /** Reads the latest schema-supported Crew snapshot for each mission, preserving insertion order. */
     public List<CrewMissionSnapshot> readCrewMissionSnapshots(String sessionId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.readCrewMissionSnapshotsSync(sessionId);
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1165,6 +1404,8 @@ public final class LocalRunStore {
 
     /** Legacy conversations have no Crew rows and remain untouched. Active rows from an older process are interrupted, never resumed. */
     public synchronized List<CrewMissionSnapshot> recoverCrewMissions(String sessionId) {
+        if (chatDatabaseBridge != null)
+            return chatDatabaseBridge.recoverCrewMissionsSync(sessionId, CrewProcessIdentity.ID);
         List<CrewMissionSnapshot> recovered = new ArrayList<>();
         for (CrewMissionSnapshot snapshot : readCrewMissionSnapshots(sessionId)) {
             CrewMissionSnapshot value = snapshot.processId.equals(CrewProcessIdentity.ID) ? snapshot : snapshot.interrupted();
@@ -1201,10 +1442,32 @@ public final class LocalRunStore {
                 || ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId))) {
             throw new IllegalArgumentException("Attachments are supported only in main-chat user messages");
         }
-        File ledger = conversationFile(sessionId);
         if (!"user".equals(role) && !"assistant".equals(role)) {
             throw new IllegalArgumentException("Conversation role must be user or assistant");
         }
+        if (chatDatabaseBridge != null) {
+            List<MessageAttachmentInput> storedAttachments = new ArrayList<>();
+            AttachmentStore attachmentStore = attachments == null || attachments.isEmpty()
+                    ? null : new AttachmentStore(root.getParentFile());
+            if (attachments != null) for (ChatAttachment attachment : attachments) {
+                if (attachment != null) try {
+                    File file = attachmentStore.resolve(sessionId, attachment);
+                    storedAttachments.add(new MessageAttachmentInput(
+                            attachment.id, attachment.name, attachment.mimeType, attachment.sizeBytes,
+                            attachment.kind.name(), attachment.relativePath, fileSha256(file)));
+                } catch (IOException error) {
+                    throw new IllegalStateException("Could not verify conversation attachment", error);
+                }
+            }
+            StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendMessageSync(new AppendMessageInput(
+                    sessionId, role, Collections.singletonList(new MessagePartInput("text", content == null ? "" : content)),
+                    status, runId, userMessageId, durationMs, null, proactiveThreadKey, null, null,
+                    null, false, storedAttachments, Collections.emptyList(),
+                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId)),
+                    "append conversation message"));
+            return saved.getMessageId();
+        }
+        File ledger = conversationFile(sessionId);
         JSONObject row = new JSONObject();
         String messageId = java.util.UUID.randomUUID().toString();
         try {
@@ -1239,6 +1502,15 @@ public final class LocalRunStore {
             String content, List<ProactiveSuggestedReply> replies, String threadKey) {
         if (decisionId == null || decisionId.trim().isEmpty()) {
             throw new IllegalArgumentException("A proactive decision id is required");
+        }
+        if (chatDatabaseBridge != null) {
+            List<com.jarvys.agent.chatdb.SuggestedReplyInput> storedReplies = new ArrayList<>();
+            if (replies != null) for (ProactiveSuggestedReply reply : replies)
+                storedReplies.add(new com.jarvys.agent.chatdb.SuggestedReplyInput(reply.getLabel(), reply.getText()));
+            StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendProactiveAssistantMessageIfAbsentSync(
+                    sessionId, decisionId, content == null ? "" : content, threadKey, storedReplies),
+                    "append proactive message");
+            return saved.getMessageId();
         }
         File ledger = conversationFile(sessionId);
         while (true) {
@@ -1289,6 +1561,14 @@ public final class LocalRunStore {
         if (content == null || content.trim().isEmpty() || threadKey == null || threadKey.trim().isEmpty()) {
             throw new IllegalArgumentException("A proactive user reply and thread key are required");
         }
+        if (chatDatabaseBridge != null) {
+            StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendMessageSync(new AppendMessageInput(
+                    sessionId, "user", Collections.singletonList(new MessagePartInput("text", content)), null,
+                    null, null, null, null, threadKey, replyToMessageId, null, null, false,
+                    Collections.emptyList(), Collections.emptyList(), System.currentTimeMillis() / 1000.0,
+                    conversationKindFor(sessionId)), "append proactive reply"));
+            return saved.getMessageId();
+        }
         String messageId = java.util.UUID.randomUUID().toString();
         JSONObject row = new JSONObject();
         try {
@@ -1307,6 +1587,11 @@ public final class LocalRunStore {
 
     /** Atomically consumes every quick reply on a proactive message and returns only the selected text. */
     public ProactiveReplyClaim claimProactiveSuggestedReply(String sessionId, String messageId, int index) {
+        if (chatDatabaseBridge != null) {
+            return requireChatDbSuccess(chatDatabaseBridge.claimProactiveSuggestedReplySync(sessionId, messageId, index),
+                    "claim proactive suggested reply");
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1348,6 +1633,12 @@ public final class LocalRunStore {
 
     public String proactiveThreadKeyForUserMessage(String sessionId, String userMessageId) {
         if (userMessageId == null || userMessageId.isEmpty()) return null;
+        if (chatDatabaseBridge != null) {
+            StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, userMessageId);
+            if (message == null || !"user".equals(message.getRole())) return null;
+            String key = message.getProactiveThreadKey();
+            return key == null || key.isEmpty() ? null : key;
+        }
         JSONObject row = readConversationRowByMessageId(sessionId, userMessageId);
         if (row == null || !"user".equals(row.optString("role"))) return null;
         String key = row.optString("proactiveThreadKey", "");
@@ -1356,6 +1647,10 @@ public final class LocalRunStore {
 
     public String readConversationMessage(String sessionId, String messageId) {
         if (messageId == null || messageId.isEmpty()) return null;
+        if (chatDatabaseBridge != null) {
+            StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+            return message != null && "user".equals(message.getRole()) ? message.getText() : null;
+        }
         JSONObject row = readConversationRowByMessageId(sessionId, messageId);
         return row != null && "user".equals(row.optString("role"))
                 ? row.optString("content", "") : null;
@@ -1363,6 +1658,10 @@ public final class LocalRunStore {
 
     private JSONObject readConversationRowByMessageId(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || messageId.isEmpty()) return null;
+        if (chatDatabaseBridge != null) {
+            StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+            return message == null ? null : messageJson(message);
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1392,6 +1691,12 @@ public final class LocalRunStore {
 
     public synchronized void appendAssistantTranslation(String sessionId, String messageId,
                                                          String language, String translation) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.setTranslationSync(
+                    sessionId, messageId, language, translation == null ? "" : translation),
+                    "store assistant translation");
+            return;
+        }
         JSONObject row = new JSONObject();
         try {
             row.put("type", "assistant_translation");
@@ -1409,6 +1714,16 @@ public final class LocalRunStore {
     public synchronized void appendUserDecisionRequest(String sessionId, String decisionId, String title,
                                                         String body, List<UserDecisionOption> options,
                                                         boolean allowDismiss) {
+        if (chatDatabaseBridge != null) {
+            List<com.jarvys.agent.chatdb.DecisionOptionInput> storedOptions = new ArrayList<>();
+            if (options != null) for (UserDecisionOption option : options) storedOptions.add(
+                    new com.jarvys.agent.chatdb.DecisionOptionInput(option.getId(), option.getLabel(),
+                            option.getDescription(), option.getRole().name().toLowerCase(Locale.ROOT)));
+            requireChatDbSuccess(chatDatabaseBridge.appendDecisionRequestSync(
+                    sessionId, decisionId, title == null ? "" : title, body == null ? "" : body,
+                    allowDismiss, storedOptions), "store decision request");
+            return;
+        }
         JSONObject row = new JSONObject();
         JSONArray choices = new JSONArray();
         try {
@@ -1435,6 +1750,11 @@ public final class LocalRunStore {
 
     public synchronized void appendUserDecisionResolution(String sessionId, String decisionId, String status,
                                                            String optionId, String optionLabel) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.resolveDecisionSync(
+                    sessionId, decisionId, status, optionId, optionLabel), "store decision resolution");
+            return;
+        }
         JSONObject row = new JSONObject();
         try {
             row.put("type", "user_decision_resolution");
@@ -1450,20 +1770,58 @@ public final class LocalRunStore {
     }
 
     public void appendAssistantRegenerated(String sessionId, String messageId) {
+        if (chatDatabaseBridge != null) {
+            regenerateAssistantIfLatest(sessionId, messageId);
+            return;
+        }
         appendMessageMarker(sessionId, "assistant_regenerated", messageId);
     }
 
     public void appendAssistantDeleted(String sessionId, String messageId) {
+        if (chatDatabaseBridge != null) {
+            hideAssistantWithOwner(sessionId, messageId, "assistant_deleted");
+            return;
+        }
         appendMessageMarker(sessionId, "assistant_deleted", messageId);
     }
 
     public void appendAssistantTranslationHidden(String sessionId, String messageId) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.hideTranslationSync(sessionId, messageId), "hide assistant translation");
+            return;
+        }
         appendMessageMarker(sessionId, "assistant_translation_hidden", messageId);
+    }
+
+    /** Atomically checks the latest active assistant, resolves its prompt owner, and hides it for regeneration. */
+    public RegenerationPromptValue regenerateAssistantIfLatest(String sessionId, String messageId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.regenerateIfLatestAssistantSync(sessionId, messageId),
+                "regenerate assistant response");
+    }
+
+    /** One transaction captures the assistant's owner and appends its hidden marker. */
+    public AssistantMarkerValue hideAssistantWithOwner(String sessionId, String messageId, String kind) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.hideAssistantWithOwnerSync(sessionId, messageId, kind),
+                "hide assistant response");
     }
 
     /** Commits ownership before the runtime reports a successful native attachment. Repeats are idempotent. */
     public void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
-        new DeliveredArtifactStore(root.getParentFile()).resolve(sessionId, artifact);
+        DeliveredArtifactStore store = new DeliveredArtifactStore(root.getParentFile());
+        store.resolve(sessionId, artifact);
+        if (chatDatabaseBridge != null) {
+            try {
+                requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
+                        new com.jarvys.agent.chatdb.DeliveredArtifactInput(sessionId, artifact.id, artifact.name,
+                                artifact.mimeType, artifact.sizeBytes, artifact.kind.name(), artifact.relativePath,
+                                store.sha256(sessionId, artifact), null, null, null, null, null,
+                                System.currentTimeMillis() / 1000.0)), "append delivered artifact");
+                return;
+            } catch (IOException error) { throw new IllegalStateException("Could not verify delivered artifact", error); }
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1488,6 +1846,23 @@ public final class LocalRunStore {
     public ChatAttachment findChatFile(String sessionId, String kind, String id) {
         if (sessionId == null || id == null || id.isEmpty()
                 || !"delivered".equals(kind) && !"attachment".equals(kind)) return null;
+        if (chatDatabaseBridge != null) {
+            com.jarvys.agent.chatdb.ChatFileOwnership ownership = chatDatabaseBridge.findChatFileSync(sessionId, kind, id);
+            if (ownership instanceof com.jarvys.agent.chatdb.ChatFileOwnership.Attachment)
+                return ((com.jarvys.agent.chatdb.ChatFileOwnership.Attachment) ownership).getValue();
+            if (ownership instanceof com.jarvys.agent.chatdb.ChatFileOwnership.Delivered) {
+                com.jarvys.agent.chatdb.ConversationArtifact artifact =
+                        ((com.jarvys.agent.chatdb.ChatFileOwnership.Delivered) ownership).getValue();
+                try {
+                    ChatAttachment.Kind attachmentKind = "IMAGE".equalsIgnoreCase(artifact.getKind())
+                            ? ChatAttachment.Kind.IMAGE : ChatAttachment.Kind.FILE;
+                    return new ChatAttachment(artifact.getArtifact_id(), artifact.getName(), artifact.getMime_type(),
+                            artifact.getSize_bytes(), attachmentKind, artifact.getRelative_path());
+                } catch (IllegalArgumentException malformedAttachmentProjection) { return null; }
+            }
+            return null;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1530,6 +1905,8 @@ public final class LocalRunStore {
 
     public boolean ownsGeneratedFile(String sessionId, String path) {
         if (sessionId == null || path == null) return false;
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.ownsGeneratedFileSync(sessionId, path);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1562,7 +1939,19 @@ public final class LocalRunStore {
     public synchronized void appendGeneratedImageEvent(String sessionId, String relativePath,
                                                         String prompt, String revisedPrompt,
                                                         String size, String mimeType) {
-        new GeneratedImageStore(root.getParentFile()).resolve(sessionId, relativePath);
+        File image = new GeneratedImageStore(root.getParentFile()).resolve(sessionId, relativePath);
+        if (chatDatabaseBridge != null) {
+            try {
+                requireChatDbSuccess(chatDatabaseBridge.appendGeneratedImageSync(
+                        new com.jarvys.agent.chatdb.GeneratedImageInput(sessionId, prompt == null ? "" : prompt,
+                                revisedPrompt == null ? "" : revisedPrompt, size == null ? "" : size,
+                                mimeType == null ? "image/png" : mimeType, "COMPLETED", relativePath,
+                                fileSha256(image), image.length(), null, System.currentTimeMillis() / 1000.0)),
+                        "append generated image");
+                return;
+            } catch (IOException error) { throw new IllegalStateException("Could not verify generated image", error); }
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "generated_image");
@@ -1580,6 +1969,15 @@ public final class LocalRunStore {
     }
 
     public synchronized void appendGeneratedImageFailure(String sessionId, String prompt, String error) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendGeneratedImageSync(
+                    new com.jarvys.agent.chatdb.GeneratedImageInput(sessionId, prompt == null ? "" : prompt,
+                            "", "", "image/png", "FAILED", null, null, null,
+                            error == null ? "Image generation failed." : error,
+                            System.currentTimeMillis() / 1000.0)), "append generated image failure");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "generated_image");
@@ -1596,61 +1994,71 @@ public final class LocalRunStore {
         }
     }
 
-    /** Removes a conversation ledger and only that conversation's generated image directory. */
+    private static String fileSha256(File file) throws IOException {
+        try (java.io.InputStream input = new FileInputStream(file)) {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) >= 0) if (count > 0) digest.update(buffer, 0, count);
+            StringBuilder hex = new StringBuilder();
+            for (byte value : digest.digest()) hex.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
+    }
+
+    /** Tombstones the database row, then best-effort collects files no longer owned by any row. */
     public synchronized boolean deleteConversation(String sessionId) {
-        File ledger = conversationFile(sessionId);
-        synchronized (SESSION_TITLE_LOCK) {
-            conversationMetadata.update(sessionId, "deleted", true);
-            invalidateTimelinePageCache(ledger);
-            ConversationLedgerPager.invalidateFile(ledger);
-            TOOL_BATCH_CACHES.remove(ledger.getAbsolutePath());
-            TOOL_ACTIVITY_BATCH_CACHES.remove(ledger.getAbsolutePath());
-            SESSION_TITLES_IN_PROGRESS.remove(sessionId);
-            boolean complete = true;
-            try { complete &= !ledger.exists() || ledger.delete(); }
-            catch (RuntimeException failure) { complete = false; }
-            try {
-                verifyRunPath(root);
-                File[] runs = root.listFiles();
-                if (runs == null) complete = false;
-                else for (File run : runs) {
-                    try { if (sessionId.equals(sessionForRunDirectory(run))) complete &= deleteRunTree(run); }
-                    catch (RuntimeException failure) { complete = false; }
-                }
-            } catch (IOException | RuntimeException failure) { complete = false; }
-            try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
-            catch (RuntimeException failure) { complete = false; }
-            try { complete &= new DeliveredArtifactStore(root.getParentFile()).deleteSession(sessionId); }
-            catch (RuntimeException failure) { complete = false; }
-            try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
-            catch (RuntimeException failure) { complete = false; }
-            try {
-                complete &= new WorkspaceStore(new File(root.getParentFile(), "workspaces"),
-                        WorkspaceStore.projectIdForSession(sessionId)).deleteImportedAttachments();
-            } catch (RuntimeException failure) { complete = false; }
-            try { complete &= CrewContextArtifacts.deleteConversation(root.getParentFile().getParentFile(), sessionId); }
-            catch (RuntimeException failure) { complete = false; }
-            return complete;
-        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        boolean tombstoned = requireChatDbSuccess(chatDatabaseBridge.deleteConversationSync(sessionId),
+                "tombstone conversation");
+        boolean filesRemoved = deleteConversationOwnedFiles(sessionId);
+        return tombstoned && filesRemoved;
     }
 
     public ConversationMetadataStore.Snapshot readConversationMetadata(String sessionId) {
+        if (chatDatabaseBridge != null) {
+            ConversationMetadataValue value = chatDatabaseBridge.readConversationMetadataSync(sessionId);
+            return value == null
+                    ? new ConversationMetadataStore.Snapshot(null, false, false, false, false)
+                    : new ConversationMetadataStore.Snapshot(value.getTitle(), value.getPinned(),
+                            value.getArchived(), value.getDeleted(), value.getPrivateCode());
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         return conversationMetadata.read(sessionId);
     }
 
     public void renameConversation(String sessionId, String title) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.renameConversationSync(
+                    sessionId, ConversationMetadataStore.normalizeTitle(title)), "rename conversation");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         conversationMetadata.update(sessionId, "title", ConversationMetadataStore.normalizeTitle(title));
     }
 
     public void setConversationPinned(String sessionId, boolean pinned) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, pinned, null, null),
+                    "update conversation pinned state");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         conversationMetadata.update(sessionId, "pinned", pinned);
     }
 
     public void setConversationArchived(String sessionId, boolean archived) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, null, archived, null),
+                    "update conversation archived state");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         conversationMetadata.update(sessionId, "archived", archived);
     }
 
     public List<ChatAttachment> readConversationAttachments(String sessionId, String messageId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.readMessageAttachmentsSync(sessionId, messageId);
         JSONObject row = readConversationRowByMessageId(sessionId, messageId);
         return row == null ? Collections.emptyList() : attachmentsForRow(sessionId, row);
     }
@@ -1664,6 +2072,9 @@ public final class LocalRunStore {
     }
 
     private boolean conversationContainsPrivateData(String sessionId, boolean includeGeneratedArtifacts) {
+        if (chatDatabaseBridge != null) return includeGeneratedArtifacts
+                ? chatDatabaseBridge.conversationHasPrivateImagesOrAttachmentsSync(sessionId)
+                : chatDatabaseBridge.conversationHasAttachmentsSync(sessionId);
         if (sessionId == null || conversationMetadata.read(sessionId).deleted) return false;
         File ledger = conversationFile(sessionId);
         while (true) {
@@ -1706,6 +2117,16 @@ public final class LocalRunStore {
         List<ConversationImageReference> empty = Collections.emptyList();
         if (sessionId == null || ProactiveConversation.SESSION_ID.equals(sessionId)
                 || ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return empty;
+        if (chatDatabaseBridge != null) {
+            List<ConversationImageReference> result = new ArrayList<>();
+            for (ConversationImageReferenceValue value : chatDatabaseBridge.readConversationImageReferencesSync(sessionId)) {
+                ConversationImageReference reference = value.getAttachment() != null
+                        ? ConversationImageReference.attachment(value.getMessageId(), value.getAttachment())
+                        : ConversationImageReference.generated(value.getMessageId(), value.getGeneratedPath(), value.getPrompt());
+                if (reference != null) result.add(reference);
+            }
+            return Collections.unmodifiableList(result);
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -1747,43 +2168,21 @@ public final class LocalRunStore {
     }
 
     public void cleanupOrphanAttachments() {
-        while (true) {
-            Map<String, Set<String>> references = new LinkedHashMap<>();
-            Map<String, LedgerSnapshot> snapshots = new LinkedHashMap<>();
-            List<String> ledgerIds = listConversationLedgerIds();
-            for (String sessionId : ledgerIds) {
+        if (chatDatabaseBridge != null) {
+            Map<String, Set<String>> persistedReferences = new LinkedHashMap<>();
+            for (ConversationSummary summary : chatDatabaseBridge.listAllConversationsSync(Collections.emptySet())) {
+                if (summary.getDeleted()) continue;
                 Set<String> paths = new HashSet<>();
-                File ledger = conversationFile(sessionId);
-                while (true) {
-                    LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
-                    if (snapshot == null) break;
-                    paths.clear();
-                    streamConversationRowsFromSnapshot(snapshot, false, row -> {
-                        for (ChatAttachment attachment : attachmentsForRow(sessionId, row))
-                            paths.add(attachment.relativePath);
-                    });
-                    synchronized (SESSION_TITLE_LOCK) {
-                        if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
-                    }
-                    snapshots.put(sessionId, snapshot);
-                    break;
+                for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(summary.getId())) {
+                    for (MessageAttachmentInput attachment : message.getAttachments())
+                        paths.add(attachment.getRelativePath());
                 }
-                if (snapshots.containsKey(sessionId)) references.put(sessionId, paths);
+                persistedReferences.put(summary.getId(), paths);
             }
-            synchronized (SESSION_TITLE_LOCK) {
-                boolean current = new HashSet<>(ledgerIds).equals(new HashSet<>(listConversationLedgerIds()));
-                for (Map.Entry<String, LedgerSnapshot> entry : snapshots.entrySet()) {
-                    if (!current) break;
-                    if (!entry.getValue().matches(entry.getKey(), conversationFile(entry.getKey()), conversationMetadata)) {
-                        current = false;
-                        break;
-                    }
-                }
-                if (!current) continue;
-                new AttachmentStore(root.getParentFile()).cleanupOrphans(references);
-                return;
-            }
+            new AttachmentStore(root.getParentFile()).cleanupOrphans(persistedReferences);
+            return;
         }
+        throw noChatDatabase();
     }
 
     private boolean runWasDeleted(String runId) {
@@ -1889,6 +2288,15 @@ public final class LocalRunStore {
                 row.put("previewExpected", true);
                 if (verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
             }
+            if (chatDatabaseBridge != null) {
+                requireChatDbSuccess(chatDatabaseBridge.appendToolPresentationSync(
+                        new com.jarvys.agent.chatdb.ToolPresentationInput(sessionId,
+                                emptyToNull(userMessageId), null, callId,
+                                displayName == null ? "tool" : displayName, stage, row.optString("detail"),
+                                row.optString("auditDetail"), previewId != null, row.optString("previewId", ""),
+                                row.optDouble("timestamp"))), "append tool presentation");
+                return;
+            }
             appendToolEventWithLatestBatch(sessionId, userMessageId, callId, row);
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
@@ -1898,6 +2306,17 @@ public final class LocalRunStore {
             JSONObject value = activity.toJson();
             value.put("detail", new MainChatTranscriptStore(filesDirectory(),sessionId,this).retain(activity.detail));
             value.put("auditDetail", MainChatTranscriptStore.shortText(CrewCheckpointStore.sanitizeText(activity.auditDetail),4000));
+            if (chatDatabaseBridge != null) {
+                com.jarvys.agent.chatdb.ToolActivityInput input = new com.jarvys.agent.chatdb.ToolActivityInput(
+                        sessionId, activity.eventId, emptyToNull(userMessageId), activity.executionId,
+                        emptyToNull(activity.callId), activity.toolName, activity.displayName, emptyToNull(activity.skillId),
+                        emptyToNull(activity.skillName), activity.stage, value.optString("detail"),
+                        emptyToNull(activity.previewId), value.optString("auditDetail"),
+                        emptyToNull(activity.reflectionSource), activity.timestampMillis, activity.timestampMillis / 1000.0,
+                        null);
+                requireChatDbSuccess(chatDatabaseBridge.appendToolActivitySync(input), "append tool activity");
+                return;
+            }
             File ledger = conversationFile(sessionId);
             JSONObject row = new JSONObject().put("type","tool_activity").put("schemaVersion",1)
                     .put("userMessageId",userMessageId).put("batchId","").put("activity",value)
@@ -2141,6 +2560,14 @@ public final class LocalRunStore {
                         : "[tool result omitted; only user-confirmed facts may be reflected]");
             row.put("timestamp", System.currentTimeMillis() / 1000.0);
         } catch (Exception error) { throw new IllegalStateException("Could not create reflection tool marker", error); }
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendReflectionToolSync(
+                    new com.jarvys.agent.chatdb.ReflectionToolInput(sessionId, emptyToNull(userMessageId), null,
+                            emptyToNull(callId), row.optString("toolName"), row.optString("source"),
+                            row.optString("stage"), row.optString("marker"), row.optDouble("timestamp"))),
+                    "append reflection tool marker");
+            return;
+        }
         appendToolEventWithLatestBatch(sessionId, userMessageId, callId, row);
     }
 
@@ -2290,6 +2717,7 @@ public final class LocalRunStore {
     }
 
     public RegenerationPrompt findUserMessageBeforeAssistant(String sessionId, String messageId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         List<JSONObject> messages = readConversationMessages(sessionId);
         int assistantIndex = -1;
         for (int index = 0; index < messages.size(); index++) {
@@ -2312,6 +2740,7 @@ public final class LocalRunStore {
     /** Returns the owner recorded on an assistant row, which is the same owner copied to its tombstone. */
     public String assistantOwnerUserMessageId(String sessionId, String messageId) {
         if (messageId == null || messageId.isEmpty()) return "";
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         for (JSONObject row : readConversationMessages(sessionId)) {
             if ("assistant".equals(row.optString("role"))
                     && messageId.equals(row.optString("messageId")))
@@ -2321,24 +2750,14 @@ public final class LocalRunStore {
     }
 
     public boolean isLatestActiveAssistant(String sessionId, String messageId) {
-        File ledger = conversationFile(sessionId);
-        while (true) {
-            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
-            if (snapshot == null) return false;
-            List<JSONObject> rows = readConversationRowsFromSnapshot(snapshot);
-            Set<String> hidden = hiddenAssistantIds(rows);
-            String latestId = null;
-            for (JSONObject row : rows) {
-                if ("assistant".equals(row.optString("role")) && row.has("content")
-                        && !hidden.contains(row.optString("messageId"))) {
-                    latestId = row.optString("messageId", "");
-                }
-            }
-            synchronized (SESSION_TITLE_LOCK) {
-                if (snapshot.matches(sessionId, ledger, conversationMetadata))
-                    return messageId != null && messageId.equals(latestId);
-            }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        List<JSONObject> active = readActiveConversationMessages(sessionId);
+        for (int index = active.size() - 1; index >= 0; index--) {
+            JSONObject row = active.get(index);
+            if ("assistant".equals(row.optString("role")))
+                return messageId != null && messageId.equals(row.optString("messageId", ""));
         }
+        return false;
     }
 
     /** Append-only reaction state; original message rows, indices and compaction boundaries stay intact. */
@@ -2346,6 +2765,11 @@ public final class LocalRunStore {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || emoji == null
                 || !emoji.isEmpty() && !MessageReactionEmoji.isValid(emoji))
             throw new IllegalArgumentException("Invalid chat reaction");
+        if (chatDatabaseBridge != null) {
+            ReactionUpdate update = requireChatDbSuccess(
+                    chatDatabaseBridge.setReactionSync(sessionId, messageId, emoji), "store message reaction");
+            return update.getChanged();
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2398,6 +2822,12 @@ public final class LocalRunStore {
     }
 
     public List<JSONObject> readConversationMessages(String sessionId) {
+        if (chatDatabaseBridge != null) {
+            List<JSONObject> messages = new ArrayList<>();
+            for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
+                messages.add(messageJson(message));
+            return messages;
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2420,6 +2850,12 @@ public final class LocalRunStore {
             List<String> skills, boolean memoryDisabled) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || text == null || text.trim().isEmpty()
                 || text.length() > 32000) throw new IllegalArgumentException("Invalid replacement message");
+        if (chatDatabaseBridge != null) {
+            InterruptRequestValue request = requireChatDbSuccess(chatDatabaseBridge.appendInterruptRequestSync(
+                    sessionId, text, skills == null ? Collections.emptyList() : skills, memoryDisabled),
+                    "append replacement request");
+            return request.getRequestId();
+        }
         if (conversationMetadata.read(sessionId).deleted)
             throw new IllegalStateException("This conversation was deleted");
         String id = java.util.UUID.randomUUID().toString();
@@ -2434,6 +2870,17 @@ public final class LocalRunStore {
 
     /** Called only after the old worker has unwound. Duplicate IDs never replay a started turn. */
     JSONObject dispatchInterruptRequest(String sessionId, String requestId) {
+        if (chatDatabaseBridge != null) {
+            ChatDbResult<DispatchedInterrupt> outcome = chatDatabaseBridge.dispatchInterruptRequestSync(sessionId, requestId);
+            if (!(outcome instanceof ChatDbResult.Success)) return null;
+            DispatchedInterrupt dispatched = ((ChatDbResult.Success<DispatchedInterrupt>) outcome).getValue();
+            InterruptRequestValue request = dispatched.getRequest();
+            try {
+                return interruptRequestJson(request)
+                        .put("messageId", dispatched.getMessage().getMessageId())
+                        .put("alreadyDispatched", !dispatched.getInserted());
+            } catch (Exception error) { throw new IllegalStateException("Could not project dispatched replacement", error); }
+        }
         if (sessionId == null || requestId == null || conversationMetadata.read(sessionId).deleted) return null;
         File ledger = conversationFile(sessionId);
         while (true) {
@@ -2488,6 +2935,12 @@ public final class LocalRunStore {
 
     /** Durable acknowledgement that an existing user row entered a run transcript. */
     public void markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
+        if (chatDatabaseBridge != null) {
+            if (sessionId == null || messageIds == null) return;
+            requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
+                    sessionId, copyIds(messageIds), "incorporated"), "acknowledge incorporated chat inputs");
+            return;
+        }
         if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
         List<String> requested = nonEmptyIds(messageIds);
         if (requested.isEmpty()) return;
@@ -2520,6 +2973,12 @@ public final class LocalRunStore {
 
     /** Resolves durable chat inputs that will not enter a run transcript. */
     public void markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
+        if (chatDatabaseBridge != null) {
+            if (sessionId == null || messageIds == null) return;
+            requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
+                    sessionId, copyIds(messageIds), "resolved"), "resolve chat inputs");
+            return;
+        }
         if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
         List<String> requested = nonEmptyIds(messageIds);
         if (requested.isEmpty()) return;
@@ -2683,6 +3142,20 @@ public final class LocalRunStore {
     /** Acknowledges user rows already present in the loaded context through its current owner. */
     public void markConversationMessagesIncorporatedThrough(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || messageId.isEmpty()) return;
+        if (chatDatabaseBridge != null) {
+            List<StoredMessage> messages = chatDatabaseBridge.readConversationMessagesSync(sessionId);
+            long throughSeq = -1L;
+            for (StoredMessage message : messages)
+                if (messageId.equals(message.getMessageId())) { throughSeq = message.getSeq(); break; }
+            if (throughSeq < 0L) return;
+            List<String> idsThrough = new ArrayList<>();
+            for (StoredMessage message : messages)
+                if (message.getSeq() <= throughSeq && "user".equals(message.getRole()))
+                    idsThrough.add(message.getMessageId());
+            if (!idsThrough.isEmpty()) markConversationMessagesIncorporated(sessionId, idsThrough);
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2698,6 +3171,8 @@ public final class LocalRunStore {
 
     Set<String> incorporatedConversationMessageIds(String sessionId) {
         if (sessionId == null) return Collections.emptySet();
+        if (chatDatabaseBridge != null) return inputStateMessageIds(sessionId, "incorporated", null);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2712,6 +3187,8 @@ public final class LocalRunStore {
 
     Set<String> resolvedConversationMessageIds(String sessionId) {
         if (sessionId == null) return Collections.emptySet();
+        if (chatDatabaseBridge != null) return inputStateMessageIds(sessionId, "resolved", null);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2727,6 +3204,11 @@ public final class LocalRunStore {
     /** Returns only resolved/incorporated state for the supplied recent message identities. */
     Set<String> handledConversationMessageIds(String sessionId, Iterable<String> messageIds) {
         if (sessionId == null || messageIds == null) return Collections.emptySet();
+        if (chatDatabaseBridge != null) {
+            Set<String> requested = new HashSet<>(nonEmptyIds(messageIds));
+            return inputStateMessageIds(sessionId, null, requested);
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         Set<String> targets = new HashSet<>(nonEmptyIds(messageIds));
         if (targets.isEmpty()) return Collections.emptySet();
         File ledger = conversationFile(sessionId);
@@ -2742,11 +3224,32 @@ public final class LocalRunStore {
         }
     }
 
+    private Set<String> inputStateMessageIds(String sessionId, String wantedState, Set<String> requestedIds) {
+        Set<String> result = new HashSet<>();
+        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId)) {
+            if (!"user".equals(message.getRole())) continue;
+            if (requestedIds != null && !requestedIds.contains(message.getMessageId())) continue;
+            if (wantedState == null ? message.getInputState() != null : wantedState.equals(message.getInputState()))
+                result.add(message.getMessageId());
+        }
+        return Collections.unmodifiableSet(result);
+    }
+
     /** Persists an intermediate assistant turn at its logical point before the steering row already on disk. */
     public synchronized String appendAssistantMessageBefore(String sessionId, String content,
             String runId, String userMessageId, String beforeMessageId) {
         if (beforeMessageId == null || beforeMessageId.isEmpty())
             throw new IllegalArgumentException("An intermediate assistant turn needs its following user message");
+        if (chatDatabaseBridge != null) {
+            StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendMessageSync(new AppendMessageInput(
+                    sessionId, "assistant", Collections.singletonList(new MessagePartInput("text", content == null ? "" : content)),
+                    "COMPLETED", emptyToNull(runId), emptyToNull(userMessageId), null, beforeMessageId,
+                    null, null, null, null, false, Collections.emptyList(), Collections.emptyList(),
+                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId)),
+                    "append assistant message before steering input"));
+            return saved.getMessageId();
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         String messageId = java.util.UUID.randomUUID().toString();
         try {
@@ -2767,6 +3270,12 @@ public final class LocalRunStore {
 
     /** Unincorporated durable follow-ups, in ledger order, for service recovery after a worker exit. */
     public List<JSONObject> readPendingInterruptRequests(String sessionId) {
+        if (chatDatabaseBridge != null) {
+            List<JSONObject> pending = new ArrayList<>();
+            for (InterruptRequestValue value : chatDatabaseBridge.pendingInterruptRequestsSync(sessionId))
+                pending.add(interruptRequestJson(value));
+            return Collections.unmodifiableList(pending);
+        }
         if (sessionId == null) return Collections.emptyList();
         File ledger = conversationFile(sessionId);
         while (true) {
@@ -2814,12 +3323,23 @@ public final class LocalRunStore {
 
     /** All undispatched follow-ups, in stable session and ledger order, for service startup recovery. */
     public synchronized List<JSONObject> readPendingInterruptRequests() {
+        if (chatDatabaseBridge != null) {
+            List<JSONObject> pending = new ArrayList<>();
+            for (InterruptRequestValue value : chatDatabaseBridge.pendingInterruptRequestsSync(null))
+                pending.add(interruptRequestJson(value));
+            return Collections.unmodifiableList(pending);
+        }
         List<JSONObject> pending = new ArrayList<>();
         for (String sessionId : listConversationSessionIds()) pending.addAll(readPendingInterruptRequests(sessionId));
         return Collections.unmodifiableList(pending);
     }
 
     public synchronized JSONObject readInterruptRequest(String sessionId, String requestId) {
+        if (chatDatabaseBridge != null) {
+            for (JSONObject value : readPendingInterruptRequests(sessionId))
+                if (requestId != null && requestId.equals(value.optString("requestId"))) return value;
+            return null;
+        }
         if (sessionId == null || requestId == null || conversationMetadata.read(sessionId).deleted) return null;
         for (JSONObject row : readConversationRows(sessionId)) {
             if ("main_interrupt_request".equals(row.optString("type"))
@@ -2832,6 +3352,17 @@ public final class LocalRunStore {
     public AgentRunUiEvent readAssistantProgress(String sessionId, String firstCallId) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId)) return null;
         if (firstCallId == null || firstCallId.isEmpty()) return null;
+        if (chatDatabaseBridge != null) {
+            for (JSONObject row : chatDatabaseBridge.readModelTranscriptRowsSync(sessionId)) {
+                JSONArray calls = row.optJSONArray("calls");
+                if ("model_tool_calls".equals(row.optString("type")) && calls != null
+                        && calls.length() > 0 && calls.optJSONObject(0) != null
+                        && firstCallId.equals(calls.optJSONObject(0).optString("id")))
+                    return assistantProgressEvent(row, 0L);
+            }
+            return null;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2877,6 +3408,7 @@ public final class LocalRunStore {
     }
 
     public List<ConversationTurn> loadConversationContext(String sessionId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.loadConversationContextSync(sessionId);
         List<JSONObject> rows = readConversationRowsFromValidatedSnapshot(sessionId);
         List<JSONObject> messages = new ArrayList<>();
         JSONObject latestCompaction = null;
@@ -2953,6 +3485,10 @@ public final class LocalRunStore {
 
     public String latestUserMessageId(String sessionId) {
         if (sessionId == null) return "";
+        if (chatDatabaseBridge != null) {
+            String id = chatDatabaseBridge.latestUserMessageIdSync(sessionId);
+            return id == null ? "" : id;
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -2983,6 +3519,7 @@ public final class LocalRunStore {
     File filesDirectory() { return root.getParentFile().getParentFile(); }
 
     synchronized List<JSONObject> readModelTranscriptRows(String sessionId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.readModelTranscriptRowsSync(sessionId);
         List<JSONObject> modelRows = new ArrayList<>();
         for (JSONObject row : readConversationRows(sessionId))
             if (row.optString("type").startsWith("model_")) modelRows.add(row);
@@ -2996,8 +3533,75 @@ public final class LocalRunStore {
                 || "model_tool_result".equals(type) || "model_artifact".equals(type)
                 || "model_error".equals(type) || "model_provider_output_items".equals(type)) || row.has("role"))
             throw new IllegalArgumentException("Invalid model transcript record");
+        if (chatDatabaseBridge != null) {
+            appendModelTranscriptRowToDatabase(sessionId, row, type);
+            return;
+        }
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }
+
+    private void appendModelTranscriptRowToDatabase(String sessionId, JSONObject row, String type) {
+        double time = row.optDouble("timestamp", System.currentTimeMillis() / 1000.0);
+        switch (type) {
+            case "model_tool_calls": {
+                JSONArray callsJson = row.optJSONArray("calls");
+                if (callsJson == null) throw new IllegalArgumentException("Tool batch requires calls");
+                List<com.jarvys.agent.chatdb.ModelCallInput> calls = new ArrayList<>();
+                for (int index = 0; index < callsJson.length(); index++) {
+                    JSONObject call = callsJson.optJSONObject(index);
+                    if (call == null) throw new IllegalArgumentException("Malformed tool call");
+                    JSONObject arguments = call.optJSONObject("arguments");
+                    if (arguments == null) arguments = new JSONObject();
+                    calls.add(new com.jarvys.agent.chatdb.ModelCallInput(
+                            call.optString("id"), call.optString("name"), arguments.toString()));
+                }
+                String provider = row.optString("providerOutputItems", "");
+                if (provider.isEmpty()) provider = null;
+                com.jarvys.agent.chatdb.ModelToolBatchInput batch = new com.jarvys.agent.chatdb.ModelToolBatchInput(
+                        sessionId, row.optString("batchId"), emptyToNull(row.optString("userMessageId")),
+                        row.optLong("messageIndex"), row.optString("assistantText", ""),
+                        row.optBoolean("assistantProgress", true), calls, null, null, provider, time);
+                requireChatDbSuccess(chatDatabaseBridge.appendToolBatchSync(batch), "append model tool batch");
+                return;
+            }
+            case "model_tool_started":
+            case "model_tool_not_started":
+                requireChatDbSuccess(chatDatabaseBridge.setCallLifecycleSync(sessionId, row.optString("batchId"),
+                        row.optString("callId"), "model_tool_started".equals(type) ? "STARTED" : "NEVER_LAUNCHED"),
+                        "store tool call lifecycle");
+                return;
+            case "model_tool_result": {
+                com.jarvys.agent.chatdb.ModelToolResultInput result = new com.jarvys.agent.chatdb.ModelToolResultInput(
+                        sessionId, row.optString("batchId"), row.optString("callId"), row.optString("toolName"),
+                        row.optString("lifecycle", "RESULT"), row.optString("output", ""),
+                        emptyToNull(row.optString("artifactId")), time);
+                requireChatDbSuccess(chatDatabaseBridge.appendToolResultSync(result), "append model tool result");
+                return;
+            }
+            case "model_error":
+                requireChatDbSuccess(chatDatabaseBridge.appendModelErrorSync(sessionId,
+                        emptyToNull(row.optString("userMessageId")), row.optLong("messageIndex"),
+                        row.optString("errorCode")), "append model error");
+                return;
+            case "model_provider_output_items":
+                requireChatDbSuccess(chatDatabaseBridge.appendProviderOutputItemsSync(sessionId,
+                        row.optString("userMessageId"), row.optLong("messageIndex"), row.optString("items")),
+                        "append provider output items");
+                return;
+            case "model_artifact": {
+                JSONObject artifact = row.optJSONObject("artifact");
+                if (artifact == null) throw new IllegalArgumentException("Model artifact metadata is required");
+                requireChatDbSuccess(chatDatabaseBridge.appendModelArtifactSync(sessionId,
+                        row.optString("artifactId"), artifact.optString("path"), artifact.optString("sha256"),
+                        artifact.optLong("chars"), artifact.optLong("bytes"), artifact.optString("mimeType", "text/plain")),
+                        "append model artifact");
+                return;
+            }
+            default: throw new IllegalArgumentException("Unsupported model transcript record");
+        }
+    }
+
+    private static String emptyToNull(String value) { return value == null || value.isEmpty() ? null : value; }
 
     static boolean isResultOnlyRow(JSONObject row) {
         String type = row.optString("type", "");
@@ -3184,6 +3788,12 @@ public final class LocalRunStore {
     }
 
     public synchronized List<JSONObject> readActiveConversationMessages(String sessionId) {
+        if (chatDatabaseBridge != null) {
+            List<JSONObject> active = new ArrayList<>();
+            for (StoredMessage message : chatDatabaseBridge.readActiveConversationMessagesSync(sessionId))
+                active.add(messageJson(message));
+            return active;
+        }
         List<JSONObject> rows = readConversationRows(sessionId);
         Set<String> hidden = hiddenAssistantIds(rows);
         List<JSONObject> active = new ArrayList<>();
@@ -3200,6 +3810,15 @@ public final class LocalRunStore {
     /** Durable steering inputs appended after the user message that started the active run. */
     public List<JSONObject> readUserMessagesAfter(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || messageId.isEmpty()) return Collections.emptyList();
+        if (chatDatabaseBridge != null) {
+            List<JSONObject> later = new ArrayList<>();
+            StoredMessage cursor = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+            if (cursor == null) return Collections.emptyList();
+            for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
+                if (message.getSeq() > cursor.getSeq() && "user".equals(message.getRole()))
+                    later.add(messageJson(message));
+            return Collections.unmodifiableList(later);
+        }
         File ledger = conversationFile(sessionId);
         while (true) {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
@@ -3249,6 +3868,14 @@ public final class LocalRunStore {
 
     public synchronized ReflectionPayload buildReflectionPayload(String sessionId, String throughMessageId,
                                                                   boolean replayAll) {
+        if (chatDatabaseBridge != null) {
+            com.jarvys.agent.chatdb.ReflectionPayloadSnapshot value =
+                    chatDatabaseBridge.buildReflectionPayloadSync(sessionId, emptyToNull(throughMessageId), replayAll);
+            return new ReflectionPayload(value.getText(), value.getEndMessageId(), value.getCompactionIds(),
+                    value.getCompletedAssistantSteps(), value.getUserCharacters(), value.getMessageCount(),
+                    value.getHasMoreMessages());
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         List<JSONObject> rows = readConversationRows(sessionId);
         List<JSONObject> messages = new ArrayList<>();
         Map<String, Integer> indexById = new LinkedHashMap<>();
@@ -3361,31 +3988,27 @@ public final class LocalRunStore {
     }
 
     public synchronized List<String> listConversationSessionIds() {
-        synchronized (SESSION_TITLE_LOCK) {
+        if (chatDatabaseBridge != null) {
             List<String> ids = new ArrayList<>();
-            for (String sessionId : listConversationLedgerIds()) {
-                try { if (!conversationMetadata.read(sessionId).deleted) ids.add(sessionId); }
-                catch (RuntimeException unsafeOrUnreadable) { }
-            }
+            for (ConversationSummary summary : chatDatabaseBridge.listAllConversationsSync(Collections.emptySet()))
+                if (!summary.getDeleted()) ids.add(summary.getId());
             return ids;
         }
-    }
-
-    private List<String> listConversationLedgerIds() {
-        File[] files = conversations.listFiles((directory, name) -> name.endsWith(".jsonl"));
-        if (files == null) return Collections.emptyList();
-        List<String> ids = new ArrayList<>();
-        for (File file : files) {
-            String id = file.getName().substring(0, file.getName().length() - ".jsonl".length());
-            try { conversationFile(id); ids.add(id); } catch (RuntimeException unsafe) { }
-        }
-        Collections.sort(ids);
-        return ids;
+        throw noChatDatabase();
     }
 
     public synchronized void appendReflectionCheckpoint(String sessionId, ReflectionPayload payload,
                                                         String reflectionId, String result) {
         if (payload == null || payload.endMessageId.isEmpty()) throw new IllegalArgumentException("Reflection checkpoint has no message boundary");
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendReflectionCheckpointSync(
+                    new com.jarvys.agent.chatdb.ReflectionInput(sessionId, "reflection_checkpoint", reflectionId,
+                            payload.endMessageId, (long) payload.completedAssistantSteps, result, null, null, null,
+                            Collections.emptyList(), payload.compactionIds, System.currentTimeMillis() / 1000.0)),
+                    "append reflection checkpoint");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "reflection_checkpoint");
@@ -3403,6 +4026,17 @@ public final class LocalRunStore {
     public synchronized void appendReflectionCommit(String sessionId, ReflectionPayload payload, String reflectionId,
                                                     String summary, List<Long> revisionIds, String status, String trigger) {
         if (payload == null || payload.endMessageId.isEmpty()) throw new IllegalArgumentException("Reflection checkpoint has no message boundary");
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendReflectionCommitSync(
+                    new com.jarvys.agent.chatdb.ReflectionInput(sessionId, "reflection_commit", reflectionId,
+                            payload.endMessageId, (long) payload.completedAssistantSteps, null,
+                            summary == null ? "" : summary, status == null ? "completed" : status,
+                            trigger == null ? "manual" : trigger,
+                            revisionIds == null ? Collections.emptyList() : revisionIds,
+                            payload.compactionIds, System.currentTimeMillis() / 1000.0)), "append reflection commit");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "reflection_commit");
@@ -3427,6 +4061,14 @@ public final class LocalRunStore {
 
     public synchronized void advanceReflectionCheckpoint(String sessionId, String reason, String throughMessageId) {
         ReflectionPayload payload = buildReflectionPayload(sessionId, throughMessageId);
+        if (chatDatabaseBridge != null) {
+            if (payload.endMessageId.isEmpty()) {
+                if (!payload.compactionIds.isEmpty()) appendCompactionReflectionAcknowledgement(sessionId, payload.compactionIds);
+                return;
+            }
+            appendReflectionCheckpoint(sessionId, payload, "skipped", reason);
+            return;
+        }
         if (payload.endMessageId.isEmpty()) {
             if (!payload.compactionIds.isEmpty()) appendCompactionReflectionAcknowledgement(sessionId, payload.compactionIds);
             return;
@@ -3436,6 +4078,16 @@ public final class LocalRunStore {
 
     public synchronized void appendReflectionEvent(String sessionId, String reflectionId, String summary,
                                                    List<Long> revisionIds, String status) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendReflectionEventSync(
+                    new com.jarvys.agent.chatdb.ReflectionInput(sessionId, "reflection_event", reflectionId,
+                            null, null, null, summary == null ? "" : summary,
+                            status == null ? "completed" : status, null,
+                            revisionIds == null ? Collections.emptyList() : revisionIds,
+                            Collections.emptyList(), System.currentTimeMillis() / 1000.0)), "append reflection event");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "reflection_event");
@@ -3451,6 +4103,12 @@ public final class LocalRunStore {
     }
 
     public synchronized void appendReflectionUndoEvent(String sessionId, String reflectionId) {
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendReflectionUndoSync(sessionId, reflectionId,
+                    System.currentTimeMillis() / 1000.0), "append reflection undo");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try { row.put("type", "reflection_undo"); row.put("reflectionId", reflectionId); row.put("timestamp", System.currentTimeMillis() / 1000.0); }
         catch (Exception error) { throw new IllegalStateException("Could not create reflection undo event", error); }
@@ -3458,6 +4116,8 @@ public final class LocalRunStore {
     }
 
     public synchronized boolean hasReflectionCommit(String sessionId, String reflectionId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.hasReflectionCommitSync(sessionId, reflectionId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         for (JSONObject row : readConversationRows(sessionId)) {
             if ("reflection_commit".equals(row.optString("type"))
                     && reflectionId.equals(row.optString("reflectionId"))) return true;
@@ -3466,6 +4126,8 @@ public final class LocalRunStore {
     }
 
     public synchronized List<String> pendingCompactionIds(String sessionId) {
+        if (chatDatabaseBridge != null) return chatDatabaseBridge.pendingCompactionIdsSync(sessionId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         return pendingCompactionIds(readConversationRows(sessionId));
     }
 
@@ -3942,6 +4604,21 @@ public final class LocalRunStore {
 
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
     public List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
+        if (chatDatabaseBridge != null) {
+            List<AgentRunUiEvent> all = new ArrayList<>();
+            ChatTimelineEventPage page = chatDatabaseBridge.readRecentConversationTimelineSync(
+                    sessionId, Math.max(INITIAL_TIMELINE_TURNS, OLDER_TIMELINE_TURNS));
+            all.addAll(page.getEvents());
+            Long cursor = page.getOlderCursorSeq();
+            while (cursor != null) {
+                ChatTimelineEventPage older = chatDatabaseBridge.readConversationTimelineBeforeSync(
+                        sessionId, cursor, Math.max(INITIAL_TIMELINE_TURNS, OLDER_TIMELINE_TURNS));
+                if (older.getEvents().isEmpty()) break;
+                all.addAll(0, older.getEvents());
+                cursor = older.getOlderCursorSeq();
+            }
+            return all;
+        }
         List<JSONObject> rows = readConversationRowsFromValidatedSnapshot(sessionId, true, false);
         java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
         List<Integer> messageIndices = timelineMessageIndices(rows, 0);
@@ -3974,6 +4651,23 @@ public final class LocalRunStore {
             String sessionId, long beforeOffset, int turnCount,
             Set<String> newerInvalidatedToolTurnMessageIds, TimelineProjectionMarkers newerProjectionMarkers) {
         if (turnCount < 1 || turnCount > 200) throw new IllegalArgumentException("Timeline page size must be 1..200");
+        if (chatDatabaseBridge != null) {
+            ChatTimelineEventPage dbPage = beforeOffset == NO_TIMELINE_CURSOR
+                    ? chatDatabaseBridge.readRecentConversationTimelineSync(sessionId, turnCount)
+                    : chatDatabaseBridge.readConversationTimelineBeforeSync(sessionId, beforeOffset, turnCount);
+            Set<String> invalidated = newerInvalidatedToolTurnMessageIds == null
+                    ? Collections.emptySet() : newerInvalidatedToolTurnMessageIds;
+            TimelineProjectionMarkers markers = newerProjectionMarkers == null
+                    ? new TimelineProjectionMarkers() : newerProjectionMarkers;
+            Set<String> translations = new HashSet<>();
+            for (AgentRunUiEvent event : dbPage.getEvents())
+                if ("assistant_translation".equals(event.getKind()) && event.getDetail() != null)
+                    translations.add(event.getDetail());
+            Long cursor = dbPage.getOlderCursorSeq();
+            return new ConversationTimelinePage(dbPage.getEvents(), cursor == null ? NO_TIMELINE_CURSOR : cursor,
+                    cursor != null, Collections.emptySet(), Collections.emptySet(), translations,
+                    invalidated, markers);
+        }
         Set<String> newerInvalidations = newerInvalidatedToolTurnMessageIds == null
                 ? Collections.emptySet() : newerInvalidatedToolTurnMessageIds;
         TimelineProjectionMarkers newerMarkers = newerProjectionMarkers == null
@@ -4059,6 +4753,8 @@ public final class LocalRunStore {
 
     /** Recent persisted UI events for run-service refreshes; the model transcript reader is separate. */
     public List<AgentRunUiEvent> readRecentConversationTimeline(String sessionId) {
+        if (chatDatabaseBridge != null)
+            return chatDatabaseBridge.readRecentConversationTimelineSync(sessionId, INITIAL_TIMELINE_TURNS).getEvents();
         return readConversationTimelinePage(sessionId, ConversationLedgerPager.NO_CURSOR, INITIAL_TIMELINE_TURNS).events;
     }
 
@@ -4583,19 +5279,9 @@ public final class LocalRunStore {
     }
 
     public int conversationMessageCount(String sessionId) {
-        File ledger = conversationFile(sessionId);
-        while (true) {
-            LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
-            if (snapshot == null) return 0;
-            int[] count = {0};
-            streamConversationRowsFromSnapshot(snapshot, false, row -> {
-                String role = row.optString("role");
-                if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) count[0]++;
-            });
-            synchronized (SESSION_TITLE_LOCK) {
-                if (snapshot.matches(sessionId, ledger, conversationMetadata)) return count[0];
-            }
-        }
+        if (chatDatabaseBridge != null)
+            return (int) chatDatabaseBridge.messageCountsSync(sessionId).getTotal();
+        throw noChatDatabase();
     }
 
     private static List<ProactiveSuggestedReply> proactiveSuggestedReplies(JSONObject row) {
@@ -4622,6 +5308,13 @@ public final class LocalRunStore {
     }
 
     private void appendCompactionReflectionAcknowledgement(String sessionId, List<String> compactionIds) {
+        if (chatDatabaseBridge != null) {
+            if (compactionIds == null || compactionIds.isEmpty()) return;
+            requireChatDbSuccess(chatDatabaseBridge.acknowledgeCompactionsSync(sessionId,
+                    new ArrayList<>(compactionIds), false), "acknowledge compaction reflection");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "compaction_reflection_consumed");
@@ -4635,6 +5328,15 @@ public final class LocalRunStore {
     public synchronized void appendCompaction(String sessionId, String summary, int firstKept,
                                                String trigger, String mode, int summarizedMessages) {
         if (summary == null || summary.trim().isEmpty()) throw new IllegalArgumentException("Compaction summary is empty");
+        if (chatDatabaseBridge != null) {
+            requireChatDbSuccess(chatDatabaseBridge.appendCompactionSync(
+                    new com.jarvys.agent.chatdb.CompactionInput(sessionId, summary, Math.max(0, firstKept),
+                            trigger == null ? "manual" : trigger, mode == null ? "all" : mode,
+                            Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0)),
+                    "append compaction");
+            return;
+        }
+        if (chatDatabaseBridge == null) throw noChatDatabase();
         JSONObject row = new JSONObject();
         try {
             row.put("type", "compaction");
@@ -4694,59 +5396,41 @@ public final class LocalRunStore {
     }
 
     public String readFirstUserMessage(String sessionId) {
-        File ledger = conversationFile(sessionId);
-        synchronized (SESSION_TITLE_LOCK) {
-            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return null;
-            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    try {
-                        JSONObject row = new JSONObject(line);
-                        if (isResultOnlyRow(row)) continue;
-                        if ("user".equals(row.optString("role")) && row.has("content")) {
-                            return row.optString("content", "");
-                        }
-                    } catch (Exception ignored) { }
-                }
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not read first conversation message", error);
-            }
+        if (chatDatabaseBridge != null) {
+            for (JSONObject row : readConversationMessages(sessionId))
+                if ("user".equals(row.optString("role"))) return row.optString("content", "");
+            return null;
         }
-        return null;
+        throw noChatDatabase();
     }
 
     public String readConversationTitle(String sessionId) {
-        synchronized (SESSION_TITLE_LOCK) {
-            ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(sessionId);
-            if (metadata.deleted) return null;
-            return metadata.title != null ? metadata.title : readConversationTitleLocked(conversationFile(sessionId));
+        if (chatDatabaseBridge != null) {
+            ConversationMetadataValue metadata = chatDatabaseBridge.readConversationMetadataSync(sessionId);
+            if (metadata == null || metadata.getDeleted()) return null;
+            return metadata.getTitle() != null ? metadata.getTitle() : metadata.getGeneratedTitle();
         }
+        throw noChatDatabase();
     }
 
     public boolean claimConversationTitleGeneration(String sessionId) {
-        File ledger = conversationFile(sessionId);
-        synchronized (SESSION_TITLE_LOCK) {
-            return !conversationMetadata.read(sessionId).deleted && readConversationTitle(sessionId) == null && SESSION_TITLES_IN_PROGRESS.add(sessionId);
+        if (chatDatabaseBridge != null) {
+            synchronized (SESSION_TITLE_LOCK) {
+                return !isConversationDeleted(sessionId) && readConversationTitle(sessionId) == null
+                        && SESSION_TITLES_IN_PROGRESS.add(sessionId);
+            }
         }
+        throw noChatDatabase();
     }
 
     public boolean appendConversationTitleIfAbsent(String sessionId, String title) {
-        File ledger = conversationFile(sessionId);
-        String normalizedTitle = title == null ? "" : title.trim();
-        if (normalizedTitle.isEmpty()) return false;
-        synchronized (SESSION_TITLE_LOCK) {
-            if (conversationMetadata.read(sessionId).deleted || readConversationTitle(sessionId) != null) return false;
-            JSONObject row = new JSONObject();
-            try {
-                row.put("role", "session_title");
-                row.put("content", normalizedTitle);
-                row.put("timestamp", System.currentTimeMillis() / 1000.0);
-                appendSessionRowLocked(ledger, row);
-                return true;
-            } catch (Exception error) {
-                throw new IllegalStateException("Could not persist conversation title", error);
-            }
+        if (chatDatabaseBridge != null) {
+            String normalized = title == null ? "" : ConversationMetadataStore.normalizeTitle(title);
+            if (normalized.isEmpty()) return false;
+            return requireChatDbSuccess(chatDatabaseBridge.appendConversationTitleIfAbsentSync(sessionId, normalized),
+                    "store generated conversation title");
         }
+        throw noChatDatabase();
     }
 
     public void releaseConversationTitleGeneration(String sessionId) {
@@ -4791,15 +5475,9 @@ public final class LocalRunStore {
 
     private File conversationFile(String sessionId) {
         ConversationMetadataStore.validateSessionId(sessionId);
-        File ledger = new File(conversations, sessionId + ".jsonl");
-        try {
-            String expectedRoot = new File(new File(runBoundary).getParentFile(), "conversations").getPath();
-            if (!conversations.getCanonicalPath().equals(expectedRoot)
-                    || !ledger.getCanonicalPath().equals(new File(expectedRoot, ledger.getName()).getPath())) {
-                throw new IOException("Conversation paths cannot use symbolic links");
-            }
-        } catch (IOException error) { throw new IllegalArgumentException("Unsafe conversation ledger", error); }
-        return ledger;
+        throw new IllegalStateException(chatDatabaseBridge == null
+                ? noChatDatabase().getMessage()
+                : "Conversation JSONL access is disabled; use ConversationRepository or ConversationReader");
     }
 
     public synchronized void beginStep(StepRecord step) {
@@ -4990,12 +5668,15 @@ public final class LocalRunStore {
     /** Recent run headers for the Compose navigation drawer; run ledgers remain append-only. */
     /** Recent run rows preserve the legacy all-conversations view, including archive metadata. */
     public synchronized List<JSONObject> listRecentRuns(int limit) {
-        return collectConversationHistory(Math.max(0, Math.min(limit, 100)));
+        List<JSONObject> result = collectConversationHistory();
+        result.sort(LocalRunStore::comparePinnedHistory);
+        int bounded = Math.max(0, Math.min(limit, 100));
+        return result.size() > bounded ? new ArrayList<>(result.subList(0, bounded)) : result;
     }
 
     public synchronized List<JSONObject> listRecentRuns(int limit, boolean includeArchived) {
         int bounded = Math.max(0, Math.min(limit, 100));
-        List<JSONObject> result = collectConversationHistory(Integer.MAX_VALUE);
+        List<JSONObject> result = collectConversationHistory();
         if (!includeArchived) result.removeIf(row -> row.optBoolean("archived"));
         result.sort(LocalRunStore::comparePinnedHistory);
         return result.size() > bounded ? new ArrayList<>(result.subList(0, bounded)) : result;
@@ -5003,7 +5684,7 @@ public final class LocalRunStore {
 
     public synchronized List<JSONObject> listConversations() {
         Map<String, JSONObject> sessions = new LinkedHashMap<>();
-        for (JSONObject row : collectConversationHistory(Integer.MAX_VALUE)) sessions.putIfAbsent(row.optString("session_id"), row);
+        for (JSONObject row : collectConversationHistory()) sessions.putIfAbsent(row.optString("session_id"), row);
         List<JSONObject> result = new ArrayList<>(sessions.values());
         result.sort(LocalRunStore::comparePinnedHistory);
         return result;
@@ -5014,85 +5695,71 @@ public final class LocalRunStore {
         return pinned != 0 ? pinned : Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp"));
     }
 
-    private List<JSONObject> collectConversationHistory(int boundedLimit) {
-        synchronized (SESSION_TITLE_LOCK) {
-            List<JSONObject> recent = new ArrayList<>();
-            if (boundedLimit == 0) return recent;
-            File[] runs = root.listFiles(File::isDirectory);
-            if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
-            if (runs != null) for (File run : runs) {
-                try {
-                    String sessionId = sessionForRunDirectory(run);
-                    if (sessionId == null || conversationMetadata.read(sessionId).deleted) continue;
-                    File ledger = new File(run, "steps.jsonl");
-                    JSONObject summary = null;
-                    try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            try {
-                                JSONObject row = new JSONObject(line);
-                                String event = row.optString("event");
-                                if ("run_start".equals(event) && summary == null) {
-                                    summary = new JSONObject().put("run_id", row.optString("run_id", run.getName()))
-                                            .put("session_id", sessionId).put("goal", row.optString("goal", ""))
-                                            .put("timestamp", row.optDouble("timestamp", 0)).put("outcome", "RUNNING")
-                                            .put("steps", 0).put("turns", 0);
-                                } else if (summary != null && "step_start".equals(event)) {
-                                    summary.put("steps", summary.optInt("steps") + 1);
-                                } else if (summary != null && "run_end".equals(event)) {
-                                    summary.put("outcome", row.optString("outcome", "UNKNOWN"));
-                                    summary.put("turns", row.optInt("turns", 0));
-                                }
-                            } catch (Exception incomplete) { }
-                        }
+    private List<JSONObject> collectConversationHistory() {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        List<JSONObject> history = new ArrayList<>();
+        Map<String, JSONObject> bySession = new LinkedHashMap<>();
+
+        // Run execution history remains in its existing, non-conversation steps.jsonl files.
+        File[] runs = root.listFiles(File::isDirectory);
+        if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
+        if (runs != null) for (File run : runs) {
+            try {
+                String sessionId = sessionForRunDirectory(run);
+                if (sessionId == null) continue;
+                File ledger = new File(run, "steps.jsonl");
+                JSONObject summary = null;
+                try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        try {
+                            JSONObject row = new JSONObject(line);
+                            String event = row.optString("event");
+                            if ("run_start".equals(event) && summary == null) {
+                                summary = new JSONObject().put("run_id", row.optString("run_id", run.getName()))
+                                        .put("session_id", sessionId).put("goal", row.optString("goal", ""))
+                                        .put("timestamp", row.optDouble("timestamp", 0)).put("outcome", "RUNNING")
+                                        .put("steps", 0).put("turns", 0);
+                            } else if (summary != null && "step_start".equals(event)) {
+                                summary.put("steps", summary.optInt("steps") + 1);
+                            } else if (summary != null && "run_end".equals(event)) {
+                                summary.put("outcome", row.optString("outcome", "UNKNOWN"));
+                                summary.put("turns", row.optInt("turns", 0));
+                            }
+                        } catch (Exception incomplete) { }
                     }
-                    if (summary != null) recent.add(summary);
-                } catch (Exception unsafeOrUnreadable) { }
-            }
-            for (String sessionId : listConversationLedgerIds()) {
-                try {
-                    if (conversationMetadata.read(sessionId).deleted) continue;
-                    String title = readConversationTitle(sessionId);
-                    if (title == null) title = ConversationTitle.fromFirstMessage(readFirstUserMessage(sessionId));
-                    List<JSONObject> messages = readActiveConversationMessages(sessionId);
-                    if (messages.isEmpty()) continue;
-                    JSONObject latest = messages.get(messages.size() - 1);
-                    String latestGoal = "";
-                    for (int index = messages.size() - 1; index >= 0; index--) {
-                        if ("user".equals(messages.get(index).optString("role"))) {
-                            latestGoal = messages.get(index).optString("content", "");
-                            break;
-                        }
-                    }
-                    boolean found = false;
-                    for (JSONObject summary : recent) {
-                        if (!sessionId.equals(summary.optString("session_id"))) continue;
-                        found = true;
-                        if (!latestGoal.isEmpty()) summary.put("goal", latestGoal);
-                        if (title != null) summary.put("title", title);
-                        summary.put("timestamp", latest.optDouble("timestamp", summary.optDouble("timestamp")));
-                        summary.put("turns", Math.max(summary.optInt("turns"), (messages.size() + 1) / 2));
-                        summary.put("outcome", "CHAT").put("steps", 0);
-                    }
-                    if (!found) recent.add(new JSONObject().put("run_id", "chat_" + sessionId)
-                            .put("session_id", sessionId).put("goal", latestGoal).put("title", title)
-                            .put("timestamp", latest.optDouble("timestamp", 0)).put("outcome", "CHAT")
-                            .put("steps", 0).put("turns", (messages.size() + 1) / 2));
-                } catch (Exception unsafeOrUnreadable) { }
-            }
-            java.util.Iterator<JSONObject> iterator = recent.iterator();
-            while (iterator.hasNext()) {
-                JSONObject row = iterator.next();
-                try {
-                    ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(row.optString("session_id"));
-                    if (metadata.deleted) { iterator.remove(); continue; }
-                    row.put("pinned", metadata.pinned).put("archived", metadata.archived);
-                    if (metadata.title != null) row.put("title", metadata.title);
-                } catch (Exception unsafeOrUnreadable) { iterator.remove(); }
-            }
-            recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
-            return recent.size() > boundedLimit ? new ArrayList<>(recent.subList(0, boundedLimit)) : recent;
+                }
+                if (summary != null) {
+                    bySession.putIfAbsent(sessionId, summary);
+                    history.add(summary);
+                }
+            } catch (Exception unsafeOrUnreadable) { }
         }
+
+        for (ConversationSummary summary : chatDatabaseBridge.listAllConversationsSync(Collections.emptySet())) {
+            if (summary.getDeleted()) continue;
+            try {
+                Long lastMessageAt = summary.getLastMessageAtMillis();
+                long timestampMillis = lastMessageAt == null ? summary.getUpdatedAtMillis() : lastMessageAt;
+                JSONObject row = bySession.get(summary.getId());
+                if (row == null) {
+                    row = new JSONObject().put("run_id", "chat_" + summary.getId())
+                            .put("session_id", summary.getId()).put("outcome", "CHAT").put("steps", 0);
+                    history.add(row);
+                    bySession.put(summary.getId(), row);
+                }
+                row.put("goal", summary.getGoal() == null ? row.optString("goal", "") : summary.getGoal())
+                        .put("timestamp", timestampMillis / 1000.0)
+                        .put("turns", Math.max(row.optLong("turns"), summary.getTurnCount()))
+                        .put("pinned", summary.getPinned()).put("archived", summary.getArchived());
+                if (summary.getTitle() != null) row.put("title", summary.getTitle());
+                if (summary.getPreview() != null) row.put("preview", summary.getPreview());
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not project conversation history", error);
+            }
+        }
+        history.sort(LocalRunStore::comparePinnedHistory);
+        return history;
     }
 
     public synchronized String searchHistory(String query, int startStep, int endStep, int maxResults) {

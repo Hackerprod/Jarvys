@@ -1,0 +1,743 @@
+package com.jarvys.agent.chatdb
+
+import android.content.Context
+import android.os.Looper
+import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.ConversationReader
+import com.jarvys.agent.ConversationTurn
+import com.jarvys.agent.proactive.ProactiveReplyClaim
+import com.jarvys.agent.crew.CrewCoordinationEvidence as CrewCoordinationJournalEvidence
+import com.jarvys.agent.crew.CrewMissionSnapshot
+import com.jarvys.agent.crew.CrewResultEvidence as CrewResultJournalEvidence
+import com.jarvys.agent.workspaces.WorkspaceCoordinationReference
+import com.jarvys.agent.workspaces.WorkspaceCoordinationReply as WorkspaceCoordinationReplyJournal
+import com.jarvys.agent.workspaces.WorkspaceInputIncorporation as WorkspaceInputIncorporationJournal
+import com.jarvys.agent.workspaces.WorkspaceResultReference
+import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
+import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
+/** Java callback used for cancellation/admission checks immediately before a strict journal write. */
+fun interface BeforeChatWrite {
+    fun check()
+}
+
+/** Public timeline projection that does not expose the app-internal ConversationReader type. */
+data class ChatTimelineEventPage(
+    val events: List<AgentRunUiEvent>,
+    val olderCursorSeq: Long?,
+) {
+    val hasOlder: Boolean get() = olderCursorSeq != null
+}
+
+/**
+ * Blocking Java facade over the normalized chat database. Instances are shared by canonical
+ * application files directory and keep one daemon executor for their process lifetime. Database
+ * opening is lazy: the provider is first called from that executor on the first `*Sync` method.
+ *
+ * Every entry rejects the main looper, active Room/read leases, and strict-journal callback
+ * re-entry before submitting work. Results retain their typed [ChatDbResult] state; exceptions
+ * from database initialization and unexpected repository failures are propagated to Java.
+ */
+class ChatDatabaseBridge private constructor(context: Context) {
+    private val applicationContext = context.applicationContext
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "chatdb-java-bridge").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var repositories: Repositories? = null
+
+    private data class Repositories(
+        val conversations: ConversationRepository,
+        val transcript: ModelTranscriptRepository,
+        val memory: MemoryTimelineRepository,
+        val artifacts: ConversationArtifactsRepository,
+        val strictJournals: StrictJournalRepository,
+        val reader: ConversationReader,
+        val modelTurnWriter: ConversationModelTurnWriter,
+    )
+
+    companion object {
+        private val instances = mutableMapOf<String, ChatDatabaseBridge>()
+
+        /** Returns the per-filesDir facade. Creating it does not open SQLite. */
+        @JvmStatic
+        fun getInstance(context: Context): ChatDatabaseBridge {
+            val appContext = context.applicationContext
+            val key = File(appContext.filesDir, "jarvys").canonicalPath
+            return synchronized(instances) {
+                instances.getOrPut(key) { ChatDatabaseBridge(appContext) }
+            }
+        }
+
+        /** Returns an already registered bridge without constructing a Context or opening SQLite. */
+        @JvmStatic
+        fun findInstanceForFilesDirectory(filesDirectory: File): ChatDatabaseBridge? {
+            val key = File(filesDirectory, "jarvys").canonicalPath
+            return synchronized(instances) { instances[key] }
+        }
+
+        /** Converts typed repository failures to an exception for legacy Java-facing facades. */
+        @JvmStatic
+        fun <T> requireSuccessSync(result: ChatDbResult<T>, operation: String): T = when (result) {
+            is ChatDbResult.Success -> result.value
+            ChatDbResult.NotFound -> throw IllegalStateException("$operation: record not found")
+            ChatDbResult.Tombstoned -> throw IllegalStateException("$operation: conversation was deleted")
+            is ChatDbResult.Conflict -> throw IllegalStateException("$operation: ${result.reason}")
+            is ChatDbResult.Invalid -> throw IllegalArgumentException("$operation: ${result.reason}")
+        }
+
+        /** Java-friendly factory alias for [getInstance]. */
+        @JvmStatic
+        fun create(context: Context): ChatDatabaseBridge = getInstance(context)
+    }
+
+    private fun repositories(): Repositories {
+        repositories?.let { return it }
+        return synchronized(this) {
+            repositories ?: run {
+                // This method only runs from execute()'s background task. Provider initialization
+                // and its schema preflight therefore cannot block the caller's main thread.
+                val database = JarvysChatDatabaseProvider.getInstance(applicationContext)
+                val conversations = ConversationRepository(database)
+                val transcript = ModelTranscriptRepository(database)
+                Repositories(
+                    conversations,
+                    transcript,
+                    MemoryTimelineRepository(database),
+                    ConversationArtifactsRepository(database),
+                    StrictJournalRepository(database),
+                    ConversationReader(database),
+                    ConversationModelTurnWriter(database, conversations, transcript),
+                ).also { repositories = it }
+            }
+        }
+    }
+
+    private fun <T> execute(block: suspend (Repositories) -> T): T {
+        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+        check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
+            "ChatDatabaseBridge cannot be called inside an active chat database lease"
+        }
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "ChatDatabaseBridge blocking methods must not be called from the main thread"
+        }
+        return try {
+            executor.submit(Callable {
+                val repos = repositories()
+                runBlocking { block(repos) }
+            }).get()
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("Interrupted while waiting for the chat database", interrupted)
+        } catch (failure: ExecutionException) {
+            throw (failure.cause ?: failure)
+        }
+    }
+
+    // Conversation metadata, messages, and immutable deletion state.
+    @JvmOverloads
+    fun ensureConversationSync(id: String, kind: String = "chat"): ChatDbResult<Conversation> =
+        execute { it.conversations.ensureConversation(id, kind) }
+
+    fun updateMetadataSync(
+        conversationId: String,
+        title: String?,
+        generatedTitle: String?,
+        pinned: Boolean?,
+        archived: Boolean?,
+        privateCode: Boolean?,
+    ): ChatDbResult<Conversation> = execute {
+        it.conversations.updateMetadata(conversationId, title, generatedTitle, pinned, archived, privateCode)
+    }
+
+    fun appendConversationTitleIfAbsentSync(conversationId: String, title: String?): ChatDbResult<Boolean> =
+        execute { it.conversations.appendConversationTitleIfAbsent(conversationId, title) }
+
+    fun renameConversationSync(conversationId: String, title: String?): ChatDbResult<Conversation> =
+        execute { it.conversations.renameConversation(conversationId, title) }
+
+    @JvmOverloads
+    fun deleteConversationSync(
+        conversationId: String,
+        deletedAtMillis: Long = System.currentTimeMillis(),
+    ): ChatDbResult<Boolean> =
+        execute { it.conversations.deleteConversation(conversationId, deletedAtMillis) }
+
+    fun isTombstonedSync(conversationId: String): Boolean = execute { it.conversations.isTombstoned(conversationId) }
+
+    fun readConversationSync(conversationId: String): Conversation? =
+        execute { it.conversations.readConversation(conversationId) }
+
+    fun readConversationMetadataSync(conversationId: String): ConversationMetadataValue? =
+        execute { it.conversations.readConversationMetadata(conversationId) }
+
+    fun appendMessageSync(input: AppendMessageInput): ChatDbResult<StoredMessage> =
+        execute { it.conversations.appendMessage(input) }
+
+    fun updateMessageSnapshotSync(
+        conversationId: String,
+        messageId: String,
+        parts: List<MessagePartInput>,
+        status: String?,
+        runId: String?,
+        ownerUserMessageId: String?,
+        durationMillis: Long?,
+        updatedAtSeconds: Double,
+    ): ChatDbResult<StoredMessage> = execute {
+        it.conversations.updateMessageSnapshot(
+            conversationId, messageId, parts, status, runId, ownerUserMessageId, durationMillis, updatedAtSeconds,
+        )
+    }
+
+    fun finalizeMessageSync(
+        conversationId: String,
+        messageId: String,
+        parts: List<MessagePartInput>,
+        finalStatus: String,
+        durationMillis: Long?,
+        updatedAtSeconds: Double,
+    ): ChatDbResult<StoredMessage> = execute {
+        it.conversations.finalizeMessage(conversationId, messageId, parts, finalStatus, durationMillis, updatedAtSeconds)
+    }
+
+    fun appendProactiveAssistantMessageIfAbsentSync(
+        conversationId: String,
+        decisionId: String,
+        content: String,
+        threadKey: String?,
+        replies: List<SuggestedReplyInput>,
+    ): ChatDbResult<StoredMessage> = execute {
+        it.conversations.appendProactiveAssistantMessageIfAbsent(conversationId, decisionId, content, threadKey, replies)
+    }
+
+    fun setTranslationSync(conversationId: String, messageId: String, language: String, content: String): ChatDbResult<Long> =
+        execute { it.conversations.setTranslation(conversationId, messageId, language, content) }
+
+    fun hideAssistantSync(conversationId: String, messageId: String, kind: String): ChatDbResult<Long> =
+        execute { it.conversations.hideAssistant(conversationId, messageId, kind) }
+
+    fun hideAssistantWithOwnerSync(
+        conversationId: String,
+        messageId: String,
+        kind: String,
+    ): ChatDbResult<AssistantMarkerValue> =
+        execute { it.conversations.hideAssistantWithOwner(conversationId, messageId, kind) }
+
+    fun regenerateIfLatestAssistantSync(
+        conversationId: String,
+        messageId: String,
+    ): ChatDbResult<RegenerationPromptValue?> =
+        execute { it.conversations.regenerateIfLatestAssistant(conversationId, messageId) }
+
+    fun hideTranslationSync(conversationId: String, messageId: String): ChatDbResult<Long> =
+        execute { it.conversations.hideTranslation(conversationId, messageId) }
+
+    fun setReactionSync(conversationId: String, stableMessageId: String, emoji: String): ChatDbResult<ReactionUpdate> =
+        execute { it.conversations.setReaction(conversationId, stableMessageId, emoji) }
+
+    fun consumeSuggestedRepliesSync(conversationId: String, messageId: String): ChatDbResult<Long> =
+        execute { it.conversations.consumeSuggestedReplies(conversationId, messageId) }
+
+    fun claimProactiveSuggestedReplySync(
+        conversationId: String,
+        messageId: String,
+        index: Int,
+    ): ChatDbResult<ProactiveReplyClaim?> =
+        execute { it.conversations.claimProactiveSuggestedReply(conversationId, messageId, index) }
+
+    // Input, interrupt, and decision rows are transactionally appended by the conversation repository.
+    @JvmOverloads
+    fun appendInterruptRequestSync(
+        conversationId: String,
+        content: String,
+        skills: List<String> = emptyList(),
+        memoryDisabled: Boolean = false,
+    ): ChatDbResult<InterruptRequestValue> = execute {
+        it.conversations.appendInterruptRequest(conversationId, content, skills, memoryDisabled)
+    }
+
+    fun dispatchInterruptRequestSync(conversationId: String, requestId: String): ChatDbResult<DispatchedInterrupt> =
+        execute { it.conversations.dispatchInterruptRequest(conversationId, requestId) }
+
+    @JvmOverloads
+    fun pendingInterruptRequestsSync(conversationId: String? = null): List<InterruptRequestValue> =
+        execute { it.conversations.pendingInterruptRequests(conversationId) }
+
+    fun markInputStateSync(conversationId: String, messageIds: List<String>, state: String): ChatDbResult<List<String>> =
+        execute { it.conversations.markInputState(conversationId, messageIds, state) }
+
+    fun appendDecisionRequestSync(
+        conversationId: String,
+        decisionId: String,
+        title: String,
+        body: String,
+        allowDismiss: Boolean,
+        options: List<DecisionOptionInput>,
+    ): ChatDbResult<Long> = execute {
+        it.conversations.appendDecisionRequest(conversationId, decisionId, title, body, allowDismiss, options)
+    }
+
+    fun resolveDecisionSync(
+        conversationId: String,
+        decisionId: String,
+        status: String,
+        optionId: String?,
+        optionLabel: String?,
+    ): ChatDbResult<Long> = execute {
+        it.conversations.resolveDecision(conversationId, decisionId, status, optionId, optionLabel)
+    }
+
+    // UI and model readers keep projections under ConversationReader's shared read fence.
+    fun readConversationMessagesSync(conversationId: String): List<StoredMessage> =
+        execute { it.reader.readConversationMessages(conversationId) }
+
+    fun readActiveConversationMessagesSync(conversationId: String): List<StoredMessage> =
+        execute { it.reader.readActiveConversationMessages(conversationId) }
+
+    fun readMessageSync(conversationId: String, messageId: String): StoredMessage? =
+        execute { it.reader.readMessage(conversationId, messageId) }
+
+    fun readConversationMessageSync(conversationId: String, messageId: String): String? =
+        execute { it.reader.readConversationMessage(conversationId, messageId) }
+
+    fun readMessageAttachmentsSync(conversationId: String, messageId: String): List<com.jarvys.agent.ChatAttachment> =
+        execute { it.reader.readMessageAttachments(conversationId, messageId) }
+
+    fun readTailWindowSync(conversationId: String, turns: Int): MessageWindow =
+        execute { it.reader.readTailWindow(conversationId, turns) }
+
+    fun readWindowBeforeSync(conversationId: String, cursorSeq: Long, turns: Int): MessageWindow =
+        execute { it.reader.readWindowBefore(conversationId, cursorSeq, turns) }
+
+    fun readRecentConversationTimelineSync(conversationId: String, turns: Int): ChatTimelineEventPage =
+        execute { it.reader.readRecentConversationTimeline(conversationId, turns).toPublicPage() }
+
+    fun readConversationTimelineBeforeSync(
+        conversationId: String,
+        cursorSeq: Long,
+        turns: Int,
+    ): ChatTimelineEventPage = execute {
+        it.reader.readConversationTimelineBefore(conversationId, cursorSeq, turns).toPublicPage()
+    }
+
+    fun loadConversationContextSync(conversationId: String): List<ConversationTurn> =
+        execute { it.reader.loadConversationContext(conversationId) }
+
+    fun readConversationContextSync(conversationId: String): String =
+        execute { it.reader.readConversationContext(conversationId) }
+
+    fun latestUserMessageIdSync(conversationId: String): String? = execute { it.reader.latestUserMessageId(conversationId) }
+
+    @JvmOverloads
+    fun listConversationsSync(
+        limit: Int,
+        excludedKinds: Set<String> = setOf("proactive", "tasks"),
+    ): List<ConversationSummary> =
+        execute { it.reader.listConversations(limit, excludedKinds) }
+
+    @JvmOverloads
+    fun listAllConversationsSync(
+        excludedKinds: Set<String> = setOf("proactive", "tasks"),
+    ): List<ConversationSummary> = execute { it.conversations.listAllConversations(excludedKinds) }
+
+    fun messageCountsSync(conversationId: String): MessageCounts = execute { it.reader.messageCounts(conversationId) }
+
+    fun readDecisionsSync(conversationId: String): List<ConversationDecisionValue> =
+        execute { it.reader.readDecisions(conversationId) }
+
+    fun readModelTranscriptSync(conversationId: String): ModelTranscriptSnapshot =
+        execute { it.reader.readModelTranscript(conversationId) }
+
+    /** Model ledger rows in legacy restore() shape, projected from normalized transcript entries. */
+    fun readModelTranscriptRowsSync(conversationId: String): List<JSONObject> = execute { repos ->
+        repos.reader.readModelTranscript(conversationId).entries.mapNotNull { it.toRestoreRow() }
+    }
+
+    fun readConversationImageReferencesSync(conversationId: String): List<ConversationImageReferenceValue> =
+        execute { it.artifacts.readImageReferences(conversationId) }
+
+    fun readCrewMissionSnapshotsSync(conversationId: String): List<CrewMissionSnapshot> =
+        execute { it.reader.readCrewMissionSnapshots(conversationId) }
+
+    fun recoverCrewMissionsSync(conversationId: String, processIdForComparison: String?): List<CrewMissionSnapshot> =
+        execute { it.reader.recoverCrewMissions(conversationId, processIdForComparison) }
+
+    fun pendingCompactionIdsSync(conversationId: String): List<String> =
+        execute { it.reader.pendingCompactionIds(conversationId) }
+
+    fun buildReflectionPayloadSync(
+        conversationId: String,
+        throughMessageId: String?,
+        replayAll: Boolean,
+    ): ReflectionPayloadSnapshot = execute {
+        it.reader.buildReflectionPayload(conversationId, throughMessageId, replayAll)
+    }
+
+    // Model transcript persistence and restart restoration.
+    fun appendToolBatchSync(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> =
+        execute { it.transcript.appendToolBatch(input) }
+
+    /** Commits tool-call, result, provider-output, error, and optional incorporated-input rows atomically. */
+    fun appendModelTurnSync(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> =
+        execute { it.modelTurnWriter.append(input) }
+
+    fun setCallLifecycleSync(conversationId: String, batchId: String, callId: String, lifecycle: String): ChatDbResult<Long> =
+        execute { it.transcript.setCallLifecycle(conversationId, batchId, callId, lifecycle) }
+
+    fun appendToolResultSync(input: ModelToolResultInput): ChatDbResult<ToolResult?> =
+        execute { it.transcript.appendToolResult(input) }
+
+    fun appendModelErrorSync(
+        conversationId: String,
+        ownerUserMessageId: String?,
+        messageIndex: Long,
+        errorCode: String,
+    ): ChatDbResult<Long> = execute {
+        it.transcript.appendModelError(conversationId, ownerUserMessageId, messageIndex, errorCode)
+    }
+
+    fun appendProviderOutputItemsSync(
+        conversationId: String,
+        ownerUserMessageId: String,
+        messageIndex: Long,
+        itemsJson: String,
+    ): ChatDbResult<Long> = execute {
+        it.transcript.appendProviderOutputItems(conversationId, ownerUserMessageId, messageIndex, itemsJson)
+    }
+
+    @JvmOverloads
+    fun appendModelArtifactSync(
+        conversationId: String,
+        artifactId: String,
+        relativePath: String,
+        sha256: String,
+        chars: Long,
+        bytes: Long,
+        mimeType: String = "text/plain",
+    ): ChatDbResult<ModelArtifact> = execute {
+        it.transcript.appendModelArtifact(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType)
+    }
+
+    fun appendToolActivitySync(input: ToolActivityInput): ChatDbResult<ToolActivity?> =
+        execute { it.transcript.appendToolActivity(input) }
+
+    fun appendToolPresentationSync(input: ToolPresentationInput): ChatDbResult<ToolPresentation> =
+        execute { it.transcript.appendToolPresentation(input) }
+
+    fun appendReflectionToolSync(input: ReflectionToolInput): ChatDbResult<ReflectionToolMarker> =
+        execute { it.transcript.appendReflectionTool(input) }
+
+    fun readToolActivitiesSync(conversationId: String, ownerUserMessageId: String, executionId: String): List<ToolActivity> =
+        execute { it.transcript.readToolActivities(conversationId, ownerUserMessageId, executionId) }
+
+    fun resolveActivitySourceBatchSync(
+        conversationId: String,
+        ownerUserMessageId: String?,
+        executionId: String?,
+        callId: String?,
+    ): ToolBatchResolution = execute {
+        it.transcript.resolveActivitySourceBatch(conversationId, ownerUserMessageId, executionId, callId)
+    }
+
+    // Attachments, generated images, and delivered artifacts remain file-backed; the DB owns their metadata.
+    fun appendDeliveredArtifactSync(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> =
+        execute { it.artifacts.appendDeliveredArtifact(input) }
+
+    fun appendGeneratedImageSync(input: GeneratedImageInput): ChatDbResult<GeneratedImage> =
+        execute { it.artifacts.appendGeneratedImage(input) }
+
+    fun findChatFileSync(conversationId: String, kind: String, id: String): ChatFileOwnership? =
+        execute { it.reader.findChatFile(conversationId, kind, id) }
+
+    fun artifactsForConversationSync(conversationId: String): List<ConversationArtifact> =
+        execute { it.reader.artifactsForConversation(conversationId) }
+
+    fun ownsGeneratedFileSync(conversationId: String, relativePath: String): Boolean =
+        execute { it.reader.ownsGeneratedFile(conversationId, relativePath) }
+
+    fun conversationHasAttachmentsSync(conversationId: String): Boolean =
+        execute { it.reader.conversationHasAttachments(conversationId) }
+
+    fun conversationHasPrivateImagesOrAttachmentsSync(conversationId: String): Boolean =
+        execute { it.reader.conversationHasPrivateImagesOrAttachments(conversationId) }
+
+    fun unreferencedFileRefsSync(): List<FileRef> = execute { it.reader.unreferencedFileRefs() }
+
+    // Compaction, reflection, and crew snapshot writes.
+    fun appendCompactionSync(input: CompactionInput): ChatDbResult<Compaction> =
+        execute { it.memory.appendCompaction(input) }
+
+    fun acknowledgeCompactionsSync(
+        conversationId: String,
+        compactionIds: List<String>?,
+        clearAll: Boolean,
+    ): ChatDbResult<Long> = execute { it.memory.acknowledgeCompactions(conversationId, compactionIds, clearAll) }
+
+    fun appendReflectionCheckpointSync(input: ReflectionInput): ChatDbResult<Long> =
+        execute { it.memory.appendReflectionCheckpoint(input) }
+
+    fun appendReflectionCommitSync(input: ReflectionInput): ChatDbResult<Long> =
+        execute { it.memory.appendReflectionCommit(input) }
+
+    fun appendReflectionEventSync(input: ReflectionInput): ChatDbResult<Long> =
+        execute { it.memory.appendReflectionEvent(input) }
+
+    fun appendReflectionUndoSync(conversationId: String, reflectionId: String, createdAtSeconds: Double?): ChatDbResult<Long> =
+        execute { it.memory.appendReflectionUndo(conversationId, reflectionId, createdAtSeconds) }
+
+    fun hasReflectionCommitSync(conversationId: String, reflectionId: String): Boolean =
+        execute { it.reader.hasReflectionCommit(conversationId, reflectionId) }
+
+    fun appendCrewSnapshotSync(conversationId: String, row: JSONObject): ChatDbResult<CrewMissionSnapshot> =
+        execute { it.memory.appendCrewSnapshot(conversationId, row) }
+
+    // Typed strict journals preserve their conflict/invalid/not-found outcomes for Java callers.
+    @JvmOverloads
+    fun appendCrewResultEvidenceSync(
+        evidence: CrewResultJournalEvidence,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<CrewResultJournalEvidence> = execute {
+        it.strictJournals.appendCrewResultEvidence(evidence) { beforeWrite?.check() }
+    }
+
+    fun readCrewResultEvidenceSync(executionSessionId: String, evidenceId: String): ChatDbResult<CrewResultJournalEvidence?> =
+        execute { it.strictJournals.readCrewResultEvidence(executionSessionId, evidenceId) }
+
+    @JvmOverloads
+    fun listCrewResultEvidenceIdsSync(
+        executionSessionId: String,
+        limit: Int,
+        afterEvidenceId: String? = null,
+    ): ChatDbResult<List<String>> = execute {
+        it.strictJournals.listCrewResultEvidenceIds(executionSessionId, limit, afterEvidenceId)
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceResultReferenceSync(
+        reference: WorkspaceResultReference,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceResultReference> = execute {
+        it.strictJournals.appendWorkspaceResultReference(reference) { beforeWrite?.check() }
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceResultNoticeSync(
+        reference: WorkspaceResultReference,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceResultReference> = execute {
+        it.strictJournals.appendWorkspaceResultNotice(reference) { beforeWrite?.check() }
+    }
+
+    fun readWorkspaceResultReferenceSync(
+        conversationId: String,
+        referenceId: String,
+        isNotice: Boolean,
+    ): ChatDbResult<WorkspaceResultReference?> = execute {
+        it.strictJournals.readWorkspaceResultReference(conversationId, referenceId, isNotice)
+    }
+
+    @JvmOverloads
+    fun listWorkspaceResultReferencesSync(
+        conversationId: String,
+        isNotice: Boolean,
+        limit: Int,
+        afterReferenceId: String? = null,
+    ): ChatDbResult<List<WorkspaceResultReference>> = execute {
+        it.strictJournals.listWorkspaceResultReferences(conversationId, isNotice, limit, afterReferenceId)
+    }
+
+    fun requireWorkspaceResultDisclosureLiveSync(
+        reference: WorkspaceResultReference,
+        noticeRequired: Boolean,
+    ): ChatDbResult<Unit> = execute {
+        it.strictJournals.requireWorkspaceResultDisclosureLive(reference, noticeRequired)
+    }
+
+    @JvmOverloads
+    fun appendCrewCoordinationEvidenceSync(
+        evidence: CrewCoordinationJournalEvidence,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<CrewCoordinationJournalEvidence> = execute {
+        it.strictJournals.appendCrewCoordinationEvidence(evidence) { beforeWrite?.check() }
+    }
+
+    fun readCrewCoordinationEvidenceSync(
+        executionSessionId: String,
+        evidenceId: String,
+    ): ChatDbResult<CrewCoordinationJournalEvidence?> = execute {
+        it.strictJournals.readCrewCoordinationEvidence(executionSessionId, evidenceId)
+    }
+
+    @JvmOverloads
+    fun listCrewCoordinationEvidenceIdsSync(
+        executionSessionId: String,
+        limit: Int,
+        afterEvidenceId: String? = null,
+    ): ChatDbResult<List<String>> = execute {
+        it.strictJournals.listCrewCoordinationEvidenceIds(executionSessionId, limit, afterEvidenceId)
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceCoordinationReferenceSync(
+        reference: WorkspaceCoordinationReference,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceCoordinationReference> = execute {
+        it.strictJournals.appendWorkspaceCoordinationReference(reference) { beforeWrite?.check() }
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceCoordinationNoticeSync(
+        reference: WorkspaceCoordinationReference,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceCoordinationReference> = execute {
+        it.strictJournals.appendWorkspaceCoordinationNotice(reference) { beforeWrite?.check() }
+    }
+
+    fun readWorkspaceCoordinationReferenceSync(
+        conversationId: String,
+        referenceId: String,
+        isNotice: Boolean,
+    ): ChatDbResult<WorkspaceCoordinationReference?> = execute {
+        it.strictJournals.readWorkspaceCoordinationReference(conversationId, referenceId, isNotice)
+    }
+
+    @JvmOverloads
+    fun listWorkspaceCoordinationReferencesSync(
+        conversationId: String,
+        isNotice: Boolean,
+        limit: Int,
+        afterReferenceId: String? = null,
+    ): ChatDbResult<List<WorkspaceCoordinationReference>> = execute {
+        it.strictJournals.listWorkspaceCoordinationReferences(conversationId, isNotice, limit, afterReferenceId)
+    }
+
+    fun requireWorkspaceCoordinationDisclosureLiveSync(
+        reference: WorkspaceCoordinationReference,
+        noticeRequired: Boolean,
+    ): ChatDbResult<Unit> = execute {
+        it.strictJournals.requireWorkspaceCoordinationDisclosureLive(reference, noticeRequired)
+    }
+
+    @JvmOverloads
+    fun prepareWorkspaceCoordinationReplySync(
+        reply: WorkspaceCoordinationReplyJournal,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceCoordinationReplyJournal> = execute {
+        it.strictJournals.prepareWorkspaceCoordinationReply(reply) { beforeWrite?.check() }
+    }
+
+    @JvmOverloads
+    fun markWorkspaceCoordinationReplyStartedSync(
+        reply: WorkspaceCoordinationReplyJournal,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceCoordinationReplyJournal> = execute {
+        it.strictJournals.markWorkspaceCoordinationReplyStarted(reply) { beforeWrite?.check() }
+    }
+
+    @JvmOverloads
+    fun markWorkspaceCoordinationReplyAcceptedSync(
+        reply: WorkspaceCoordinationReplyJournal,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceCoordinationReplyJournal> = execute {
+        it.strictJournals.markWorkspaceCoordinationReplyAccepted(reply) { beforeWrite?.check() }
+    }
+
+    fun readWorkspaceCoordinationReplySync(
+        centralSessionId: String,
+        referenceId: String,
+        replyKey: String?,
+    ): ChatDbResult<WorkspaceCoordinationReplyJournal?> = execute {
+        it.strictJournals.readWorkspaceCoordinationReply(centralSessionId, referenceId, replyKey)
+    }
+
+    fun readWorkspaceCoordinationReplyByIdSync(
+        centralSessionId: String,
+        replyId: String,
+    ): ChatDbResult<WorkspaceCoordinationReplyJournal?> = execute {
+        it.strictJournals.readWorkspaceCoordinationReplyById(centralSessionId, replyId)
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceInputIncorporationSync(
+        value: WorkspaceInputIncorporationJournal,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceInputIncorporationJournal> = execute {
+        it.strictJournals.appendWorkspaceInputIncorporation(value) { beforeWrite?.check() }
+    }
+
+    fun readWorkspaceInputIncorporationSync(
+        centralSessionId: String,
+        sourceKind: WorkspaceInputIncorporationJournal.SourceKind,
+        sourceId: String,
+    ): ChatDbResult<WorkspaceInputIncorporationJournal?> = execute {
+        it.strictJournals.readWorkspaceInputIncorporation(centralSessionId, sourceKind, sourceId)
+    }
+
+    fun requireWorkspaceInputIncorporationDisclosureLiveSync(
+        value: WorkspaceInputIncorporationJournal,
+    ): ChatDbResult<Unit> = execute {
+        it.strictJournals.requireWorkspaceInputIncorporationDisclosureLive(value)
+    }
+
+    @JvmOverloads
+    fun listWorkspaceInputIncorporationsSync(
+        centralSessionId: String,
+        limit: Int,
+        afterReceiptId: String? = null,
+    ): ChatDbResult<List<WorkspaceInputIncorporationJournal>> = execute {
+        it.strictJournals.listWorkspaceInputIncorporations(centralSessionId, limit, afterReceiptId)
+    }
+
+    private fun ConversationReader.TimelineEventPage.toPublicPage() = ChatTimelineEventPage(events, olderCursorSeq)
+
+    private fun ModelTranscriptEntry.toRestoreRow(): JSONObject? = when (this) {
+        is ModelTranscriptEntry.Batch -> {
+            val batch = value.batch
+            val calls = if (batch.raw_calls != null) {
+                runCatching { JSONTokener(batch.raw_calls).nextValue() }.getOrNull() ?: JSONObject.NULL
+            } else JSONArray().also { encoded -> value.calls.forEach { callState ->
+                val call = callState.call
+                encoded.put(JSONObject().put("id", call.call_id).put("name", call.name)
+                    .put("arguments", runCatching { JSONTokener(call.arguments_json).nextValue() }.getOrNull() ?: JSONObject.NULL))
+            } }
+            val row = JSONObject()
+                .put("type", "model_tool_calls")
+                .put("batchId", batch.batch_id)
+                .put("userMessageId", batch.owner_user_message_id.orEmpty())
+                .put("messageIndex", batch.message_index)
+                .put("assistantText", batch.assistant_text)
+                .put("assistantProgress", batch.assistant_progress)
+                .put("calls", calls)
+            batch.provider_output_items_json?.let { encoded -> runCatching { JSONArray(encoded) }.getOrNull() }?.let {
+                row.put("providerOutputItems", it)
+            }
+            row
+        }
+        is ModelTranscriptEntry.Lifecycle -> JSONObject()
+            .put("type", if (state == "STARTED") "model_tool_started" else "model_tool_not_started")
+            .put("batchId", batchId).put("callId", callId)
+        is ModelTranscriptEntry.ResultActivity -> firstResult?.let { result -> JSONObject()
+            .put("type", "model_tool_result")
+            .put("batchId", batchId).put("callId", callId).put("toolName", result.tool_name)
+            .put("lifecycle", result.lifecycle).put("output", result.output)
+        }
+        is ModelTranscriptEntry.Error -> JSONObject()
+            .put("type", "model_error")
+            .put("userMessageId", value.owner_user_message_id.orEmpty())
+            .put("messageIndex", value.message_index).put("errorCode", value.error_code)
+        is ModelTranscriptEntry.ProviderOutput -> JSONObject()
+            .put("type", "model_provider_output_items")
+            .put("userMessageId", value.owner_user_message_id)
+            .put("messageIndex", value.message_index)
+            .put("items", runCatching { JSONArray(value.items_json) }.getOrElse { JSONArray() })
+        is ModelTranscriptEntry.Artifact -> JSONObject().put("type", "model_artifact")
+    }
+}

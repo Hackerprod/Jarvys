@@ -121,7 +121,7 @@ class WorkspaceChatUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val hasOlderHistory: Boolean = false,
-    val olderHistoryCursor: Long = com.jarvys.agent.ConversationLedgerPager.NO_CURSOR,
+    val olderHistoryCursor: Long = LocalRunStore.NO_TIMELINE_CURSOR,
     hiddenAssistantMessageIds: Set<String> = emptySet(),
     hiddenTranslationMessageIds: Set<String> = emptySet(),
     translationMessageIds: Set<String> = emptySet(),
