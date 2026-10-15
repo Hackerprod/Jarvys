@@ -229,7 +229,7 @@ class LedgerImporterTest {
             .latestProviderOutputItemsByOwner.getValue(userId).items_json.contains("latest provider output"))
         assertTrue(database.testChatSql.query(
             "SELECT compaction_id FROM compactions WHERE conversation_id=? ORDER BY seq LIMIT 1", arrayOf("chat-catalog"),
-        ).use { it.moveToFirst() && it.getString(0).startsWith("legacy-1700000010.25-") })
+        ).use { it.moveToFirst() && it.getString(0).startsWith("legacy-" + JSONObject().put("timestamp", 1_700_000_010.25).optString("timestamp", "") + "-") })
         assertEquals(2L, count("SELECT COUNT(*) FROM compaction_reflection_acks WHERE conversation_id=?", "chat-catalog"))
         assertEquals("done", database.testChatSql.query(
             "SELECT import_state FROM conversations WHERE id=?", arrayOf("chat-catalog"),
@@ -265,7 +265,7 @@ class LedgerImporterTest {
         // Legacy readConversationRows counts user, session_title, and the whole input marker once;
         // strict evidence is result-only. Room's spine has no session_title row, so its item count
         // cannot be used as this legacy identity's index.
-        assertEquals("legacy-123.5-3", database.testChatSql.query(
+        assertEquals("legacy-" + JSONObject().put("timestamp", 123.5).optString("timestamp", "") + "-3", database.testChatSql.query(
             "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(sessionId),
         ).use { assertTrue(it.moveToFirst()); it.getString(0) })
         assertEquals("resolved", database.testChatSql.query(

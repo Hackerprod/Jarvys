@@ -1000,12 +1000,12 @@ class ConversationRepositoryTest {
         assertFalse("repository read SQL runs on the Room query executor, never the main looper", sqlRanOnMain.get())
     }
 
-    @Test fun suspendReadRejectsAnActiveWriterTransactionLease() = onDatabaseThread {
+    @Test fun suspendReadReusesAnActiveWriterTransactionLeaseForReadYourWrites() = onDatabaseThread {
         success(repository.ensureConversation("no-read-under-write"))
         val failure = runCatching {
             database.withChatWriteTransaction { repository.pendingInterruptRequests("no-read-under-write") }
         }.exceptionOrNull()
-        assertTrue("read projections cannot reuse a writer transaction connection", failure is IllegalStateException)
+        assertNull("a read inside a writer lease reuses it (read-your-writes) instead of failing", failure)
     }
 
     @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {

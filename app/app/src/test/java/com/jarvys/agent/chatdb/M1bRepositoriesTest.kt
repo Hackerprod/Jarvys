@@ -245,7 +245,7 @@ class M1bRepositoriesTest {
                         model.readModelTranscript("repository-main-read")
                         memory.pendingCompactionIds("repository-main-read")
                         artifacts.artifactsForConversation("repository-main-read")
-                        success(strict.readCrewResultEvidence(executionSession, UUID.randomUUID().toString()))
+                        strict.readCrewResultEvidence(executionSession, UUID.randomUUID().toString())
                     }
                 }
             } catch (caught: Throwable) {
