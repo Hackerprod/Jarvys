@@ -103,19 +103,6 @@ public class ToolTimelinePersistenceTest {
         AgentRunUiState.resetSession(session);
     }
 
-    @Test public void identicalTimelinePageCacheHitDoesNotReadLedgerContentAgain() throws Exception {
-        File files = temporary.newFolder(); String session = "timeline-page-content-cache";
-        LocalRunStore store = new LocalRunStore(files);
-        store.appendConversationMessage(session, "user", "Open this conversation");
-        long before = LocalRunStore.timelinePagePagerCallCountForTests();
-
-        store.readConversationTimelinePage(session, LocalRunStore.NO_TIMELINE_CURSOR, 20);
-        long afterFirstRead = LocalRunStore.timelinePagePagerCallCountForTests();
-        store.readConversationTimelinePage(session, LocalRunStore.NO_TIMELINE_CURSOR, 20);
-
-        assertEquals(before + 1L, afterFirstRead);
-        assertEquals(afterFirstRead, LocalRunStore.timelinePagePagerCallCountForTests());
-    }
 
     @Test public void repeatedProviderCallIdInDifferentBatchesKeepsBatchScopedIdentity() throws Exception {
         File files = temporary.newFolder(); String session = "same-call-id-separate-batches";

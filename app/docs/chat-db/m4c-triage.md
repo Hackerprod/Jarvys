@@ -130,3 +130,6 @@ No se ejecutaron compilaciones ni tests. Los casos de formato C se retiraron sol
 - No se ejecutó compilación ni suite por instrucción; la revisión de firmas/imports fue estática.
 
 - Limite semantico pendiente: deletionDuringAdmissionCannotResurrectSourceOrCentral y deletionAtReplyBoundaryLeavesNoFalseReceiptOrResurrection ya comprueban tombstone antes de entrega/transicion; no simulan el borrado dentro de beforeWrite, porque el guard DB prohibe reentrada SQL desde callbacks. No se redujeron los asserts de no-resurreccion ni de receipt falsa, pero falta una prueba concurrente por dos conexiones si se quiere cubrir esa carrera exacta.
+- WorkspaceChatTimelinePagingTest eliminado (categoria C: probaba el pager/cachés JSONL con un ledger de 30 000 lineas; la paginacion DB queda cubierta por ConversationReaderPerfTest y ConversationReaderDatabaseTest).
+- LocalRunStoreHotPathTest y LocalRunStoreCrewSnapshotReadTest eliminados (categoria C: probaban escaneos de cola/cachés/contadores del ledger JSONL; la semantica de actividad de herramientas, steering y proyeccion de crew snapshots queda en los tests de repositorios M1/M3 sobre la base).
+- ToolTimelinePersistenceTest: eliminado solo el caso de cache de pagina del pager JSONL.
