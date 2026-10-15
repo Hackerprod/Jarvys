@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.ConversationReader
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.ChatAttachment
@@ -302,6 +303,7 @@ class ReaderParityTest {
         marker: Any? = null,
         note: Any? = null,
         summary: Any? = null,
+        items: Any? = null,
     ): JSONObject = JSONObject().apply {
         if (type != null) put("type", type)
         if (role != null) put("role", role)
@@ -318,7 +320,7 @@ class ReaderParityTest {
             "memoryDisabled" to memoryDisabled, "interruptRequestId" to interruptRequestId,
             "mainChatAcknowledgementRequired" to acknowledgementRequired, "messageIds" to messageIds,
             "errorCode" to errorCode, "source" to source, "stage" to stage, "marker" to marker,
-            "note" to note, "summary" to summary,
+            "note" to note, "summary" to summary, "items" to items,
         )
         fields.forEach { (key, value) -> if (value != null) put(key, value) }
     }

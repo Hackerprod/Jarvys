@@ -404,7 +404,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         is ModelTranscriptEntry.Lifecycle -> JSONObject()
             .put("type", if (state == "STARTED") "model_tool_started" else "model_tool_not_started")
             .put("batchId", batchId).put("callId", callId)
-        is ModelTranscriptEntry.ResultActivity -> value.firstResult?.let { result -> JSONObject()
+        is ModelTranscriptEntry.ResultActivity -> firstResult?.let { result -> JSONObject()
             .put("type", "model_tool_result")
             .put("batchId", batchId).put("callId", callId).put("toolName", result.tool_name)
             .put("lifecycle", result.lifecycle).put("output", result.output)

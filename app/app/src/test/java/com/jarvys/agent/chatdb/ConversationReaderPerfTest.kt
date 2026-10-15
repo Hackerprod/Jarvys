@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.ConversationReader
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking

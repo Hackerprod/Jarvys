@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.ConversationReader
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.ChatAttachment
@@ -144,7 +145,7 @@ class GoldenReaderParityTest {
         .apply { isAccessible = true }
         .newInstance(filesDirectory)
 
-    private fun <T> measure(block: () -> T): Measurement<T> {
+    private inline fun <T> measure(block: () -> T): Measurement<T> {
         val runtime = Runtime.getRuntime()
         val before = runtime.totalMemory() - runtime.freeMemory()
         val started = System.nanoTime()
