@@ -7,6 +7,7 @@ import android.os.Looper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
@@ -990,9 +991,11 @@ class ConversationRepositoryTest {
         Handler(Looper.getMainLooper()).post {
             runCatching {
                 runBlocking {
-                    ChatSqlInstrumentation.observeStatements({
-                        if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
-                    }) { repository.messageCounts("main-read") }
+                    withTimeout(60_000L) {
+                        ChatSqlInstrumentation.observeStatements({
+                            if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
+                        }) { repository.messageCounts("main-read") }
+                    }
                 }
             }.onFailure { sqlRanOnMain.set(true) }
             finished.countDown()
@@ -1214,9 +1217,9 @@ class ConversationRepositoryTest {
     }
 
     @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
-        success(runBlocking { repository.ensureConversation("wal-reader") })
-        val earlier = runBlocking { append("wal-reader", "user", "committed earlier") }
-        val latest = runBlocking { append("wal-reader", "user", "visible committed value") }
+        success(runBlocking { withTimeout(60_000L) { repository.ensureConversation("wal-reader") } })
+        val earlier = runBlocking { withTimeout(60_000L) { append("wal-reader", "user", "committed earlier") } }
+        val latest = runBlocking { withTimeout(60_000L) { append("wal-reader", "user", "visible committed value") } }
         val writerEntered = CountDownLatch(1)
         val releaseWriter = CountDownLatch(1)
         val writerExecutor = Executors.newSingleThreadExecutor()
@@ -1224,10 +1227,12 @@ class ConversationRepositoryTest {
         try {
             writer = writerExecutor.submit {
                 runBlocking {
-                    database.withChatWriteTransaction {
-                        append("wal-reader", "user", "uncommitted value")
-                        writerEntered.countDown()
-                        check(releaseWriter.await(10, TimeUnit.SECONDS)) { "timed out waiting to release the Room writer" }
+                    withTimeout(60_000L) {
+                        database.withChatWriteTransaction {
+                            append("wal-reader", "user", "uncommitted value")
+                            writerEntered.countDown()
+                            check(releaseWriter.await(10, TimeUnit.SECONDS)) { "timed out waiting to release the Room writer" }
+                        }
                     }
                 }
             }
@@ -1259,7 +1264,7 @@ class ConversationRepositoryTest {
         val attempts = AtomicInteger()
         val writer = writerExecutor.submit {
             check(firstReadFinished.await(10, TimeUnit.SECONDS)) { "the first projection did not reach its read barrier" }
-            runBlocking { append("read-version-fence", "user", "second") }
+            runBlocking { withTimeout(60_000L) { append("read-version-fence", "user", "second") } }
             writerCommitted.countDown()
         }
         try {
@@ -1314,6 +1319,18 @@ class ConversationRepositoryTest {
             }
         } finally {
             blocking.close()
+        }
+    }
+
+    @Test fun blockingJavaFacadeFailsFastInsideAnActiveDatabaseLease() = onDatabaseThread {
+        ConversationRepositoryBlocking(repository).use { blocking ->
+            val failure = runCatching {
+                database.withChatWriteTransaction {
+                    blocking.ensureConversationSync("blocking-inside-lease")
+                }
+            }.exceptionOrNull()
+            assertTrue(failure is IllegalStateException)
+            assertTrue(failure?.message.orEmpty().contains("inside an active chat database lease"))
         }
     }
 

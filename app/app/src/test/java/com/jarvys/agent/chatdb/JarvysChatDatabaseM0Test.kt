@@ -5,6 +5,8 @@ import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -24,6 +26,8 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.system.measureNanoTime
 
 private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "69e03d71e91fdcb3649824a652bf777a" // M2 adds conversations.import_offset; schema v1 is not published yet
@@ -55,10 +59,14 @@ class JarvysChatDatabaseM0Test {
     }
 
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
-        testExecutor.submit<T> { runBlocking { block() } }.get(30, TimeUnit.SECONDS)
+        testExecutor.submit<T> { runBlocking { block() } }.get(60, TimeUnit.SECONDS)
 
     private fun <T> onDatabaseThreadBlocking(block: () -> T): T =
-        testExecutor.submit<T> { block() }.get(30, TimeUnit.SECONDS)
+        testExecutor.submit<T> { block() }.get(60, TimeUnit.SECONDS)
+
+    private class NestedContextElement(val level: Int) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<NestedContextElement>
+    }
 
     @Test
     fun createsEveryDeclaredEntityTableAndEnforcesPragmaContract() = onDatabaseThreadBlocking {
@@ -967,6 +975,31 @@ class JarvysChatDatabaseM0Test {
         }
         assertArrayEquals(expectedBytes, storedBytes)
         assertEquals(exactText.toCharArray().map(Char::code), ExactUtf16.decode(storedBytes).toCharArray().map(Char::code))
+    }
+
+    @Test
+    fun nestedContextElementsKeepWriterLeaseAndReadTheirOwnWrites() = onDatabaseThread {
+        withTimeout(60_000L) {
+            database.withChatWriteTransaction {
+                val sql = database.testChatSql
+                sql.execSQL("CREATE TEMP TABLE nested_context_probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+
+                withContext(NestedContextElement(1)) {
+                    sql.execSQL("INSERT INTO nested_context_probe(id, value) VALUES(1, 'first')")
+                    withContext(NestedContextElement(2)) {
+                        sql.execSQL("UPDATE nested_context_probe SET value = value || '-second' WHERE id = 1")
+                        withContext(NestedContextElement(3)) {
+                            sql.execSQL("UPDATE nested_context_probe SET value = value || '-third' WHERE id = 1")
+                            val value = sql.query("SELECT value FROM nested_context_probe WHERE id = 1").use { cursor ->
+                                assertTrue(cursor.moveToFirst())
+                                cursor.getString(0)
+                            }
+                            assertEquals("first-second-third", value)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Test

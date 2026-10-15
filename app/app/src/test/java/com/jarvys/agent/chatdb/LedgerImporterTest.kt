@@ -56,7 +56,7 @@ class LedgerImporterTest {
     }
 
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
-        databaseExecutor.submit<T> { runBlocking { block() } }.get(90, TimeUnit.SECONDS)
+        databaseExecutor.submit<T> { runBlocking { block() } }.get(60, TimeUnit.SECONDS)
 
     @Test fun syntheticCatalogImportsEveryDocumentedRowFormAndKeepsProjectionInvariants() = onDatabaseThread {
         val workspaceId = "a1234567-b123-c123-d123-e123456789ab"
@@ -641,7 +641,7 @@ class LedgerImporterTest {
                 report to messageCount
             }
             finally { Thread.interrupted() }
-        }.get(90, TimeUnit.SECONDS)
+        }.get(60, TimeUnit.SECONDS)
         assertEquals("done", result.first.state)
         assertEquals(40L, result.second)
     }

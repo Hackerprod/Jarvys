@@ -144,24 +144,28 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
         args: Array<out Any?>,
         write: Boolean,
         block: (SQLiteStatement, PooledConnection?) -> T,
-    ): T = runBlocking {
-        check(Looper.myLooper() != Looper.getMainLooper()) {
-            "Chat SQL statements must not block the main thread"
-        }
-        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
-        suspend fun use(connection: PooledConnection): T = connection.usePrepared(sql) { statement ->
-            ChatSqlInstrumentation.statementPrepared(sql)
-            bind(statement, args)
-            block(statement, connection)
-        }
-        val leased = LeasedConnectionElement.current()
-        when {
-            leased != null -> {
-                check(!write || leased.isWriter) { "Cannot execute a write statement inside a reader lease" }
-                use(leased.connection)
+    ): T {
+        LeasedConnectionElement.current()?.assertCanUseFromInstalledContext()
+        return runBlocking {
+            check(Looper.myLooper() != Looper.getMainLooper()) {
+                "Chat SQL statements must not block the main thread"
             }
-            write -> database.useWriterConnection { use(it) }
-            else -> database.useReaderConnection { use(it) }
+            ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+            suspend fun use(connection: PooledConnection): T = connection.usePrepared(sql) { statement ->
+                ChatSqlInstrumentation.statementPrepared(sql)
+                bind(statement, args)
+                block(statement, connection)
+            }
+            val leased = LeasedConnectionElement.current()
+            when {
+                leased != null -> {
+                    leased.assertCanUseFromInstalledContext()
+                    check(!write || leased.isWriter) { "Cannot execute a write statement inside a reader lease" }
+                    use(leased.connection)
+                }
+                write -> database.useWriterConnection { use(it) }
+                else -> database.useReaderConnection { use(it) }
+            }
         }
     }
 
@@ -344,7 +348,29 @@ private fun SQLiteStatement.toMatrixCursor(): Cursor {
 internal data class ActiveChatDbConnection(
     val connection: PooledConnection,
     val isWriter: Boolean,
-)
+    private val ownerThread: Thread,
+    private val ownerDispatcher: ContinuationInterceptor?,
+    private val installedDispatcher: ContinuationInterceptor?,
+) {
+    fun assertCanUseFromInstalledContext() {
+        if (!isWriter) return
+        check(Thread.currentThread() === ownerThread) {
+            "A chat writer lease cannot resume on a different thread; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+        }
+        check(installedDispatcher === ownerDispatcher) {
+            "A chat writer lease cannot resume with a different dispatcher; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+        }
+    }
+
+    fun assertCanUse(currentDispatcher: ContinuationInterceptor?) {
+        assertCanUseFromInstalledContext()
+        if (isWriter) {
+            check(currentDispatcher === ownerDispatcher) {
+                "A chat writer lease cannot resume with a different dispatcher; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+            }
+        }
+    }
+}
 
 internal class LeasedConnectionElement(
     val connection: PooledConnection,
@@ -356,24 +382,13 @@ internal class LeasedConnectionElement(
         fun current(): ActiveChatDbConnection? = active.get()
     }
 
-    private val lease = ActiveChatDbConnection(connection, isWriter)
     private val ownerThread = Thread.currentThread()
-    private var contextInstallCount = 0
+    private val lease = ActiveChatDbConnection(connection, isWriter, ownerThread, ownerDispatcher, ownerDispatcher)
 
     override fun updateThreadContext(context: CoroutineContext): ActiveChatDbConnection? {
-        check(!isWriter || Thread.currentThread() === ownerThread) {
-            "A chat writer lease cannot resume on a different thread; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+        return active.get().also {
+            active.set(lease.copy(installedDispatcher = context[ContinuationInterceptor]))
         }
-        check(!isWriter || context[ContinuationInterceptor] === ownerDispatcher) {
-            "A chat writer lease cannot resume with a different dispatcher; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
-        }
-        if (isWriter) {
-            contextInstallCount++
-            check(contextInstallCount == 1) {
-                "A chat writer lease cannot suspend and resume; its SQLiteSession must stay on the owning thread until commit"
-            }
-        }
-        return active.get().also { active.set(lease) }
     }
     override fun restoreThreadContext(context: CoroutineContext, oldState: ActiveChatDbConnection?) { active.set(oldState) }
 }
@@ -399,6 +414,7 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
+        active.assertCanUse(currentCoroutineContext()[ContinuationInterceptor])
         check(active.isWriter) { "Cannot start a chat database write inside a reader lease" }
         return block()
     }
@@ -416,6 +432,7 @@ internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspe
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
+        active.assertCanUse(currentCoroutineContext()[ContinuationInterceptor])
         // Reuse the current lease. A read inside a writer must see that transaction's own writes.
         return block()
     }

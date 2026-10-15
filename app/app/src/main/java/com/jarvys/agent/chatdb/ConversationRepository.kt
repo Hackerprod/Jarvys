@@ -1629,6 +1629,9 @@ class ConversationRepositoryBlocking(private val repository: ConversationReposit
 
     private fun <T> execute(block: suspend () -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+        check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
+            "ConversationRepositoryBlocking cannot be called inside an active chat database lease"
+        }
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "ConversationRepositoryBlocking must not be called from the main thread"
         }

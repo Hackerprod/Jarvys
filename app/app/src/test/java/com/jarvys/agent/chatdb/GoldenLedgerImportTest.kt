@@ -17,6 +17,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Local-only migration acceptance test; it reports identities and sizes, never ledger payloads. */
@@ -53,7 +54,7 @@ class GoldenLedgerImportTest {
         assertTrue("the local golden corpus must contain at least one JSONL ledger", ledgers.isNotEmpty())
 
         val progressEvents = AtomicInteger()
-        val reports = databaseExecutor.submit<List<ImportReport>> {
+        val importFuture = databaseExecutor.submit<List<ImportReport>> {
             runBlocking {
                 ImportCoordinator(database).importAll(directory) { progress ->
                     progressEvents.incrementAndGet()
@@ -61,7 +62,21 @@ class GoldenLedgerImportTest {
                     assertTrue(progress.totalBytes >= progress.bytesProcessed)
                 }
             }
-        }.get(10, TimeUnit.MINUTES)
+        }
+        val reports = try {
+            importFuture.get(5, TimeUnit.MINUTES)
+        } catch (timeout: TimeoutException) {
+            val threadDump = Thread.getAllStackTraces().entries
+                .sortedBy { it.key.name }
+                .joinToString("\n\n") { (thread, stack) ->
+                    buildString {
+                        append("Thread \"").append(thread.name).append("\" (").append(thread.state).append("):")
+                        stack.forEach { frame -> append("\n    at ").append(frame) }
+                    }
+                }
+            importFuture.cancel(true)
+            throw AssertionError("Golden-ledger import exceeded 5 minutes. Thread dump:\n$threadDump", timeout)
+        }
 
         val ledgerIds = ledgers.map { it.name.removeSuffix(".jsonl") }.sorted()
         val ledgerReports = reports.filter { it.conversationId in ledgerIds }

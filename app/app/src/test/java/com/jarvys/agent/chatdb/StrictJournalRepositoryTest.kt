@@ -12,6 +12,7 @@ import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceInputIncorporation
 import com.jarvys.agent.workspaces.WorkspaceResultReference
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -340,7 +341,11 @@ class StrictJournalRepositoryTest {
         val counts = mutableListOf<Int>()
         fun recordRead(block: suspend () -> Unit) {
             val count = AtomicInteger()
-            runBlocking { ChatSqlInstrumentation.observeStatements({ count.incrementAndGet() }, block) }
+            runBlocking {
+                withTimeout(60_000L) {
+                    ChatSqlInstrumentation.observeStatements({ count.incrementAndGet() }, block)
+                }
+            }
             counts += count.get()
         }
 
@@ -356,8 +361,10 @@ class StrictJournalRepositoryTest {
         val result = AtomicReference<CrewResultEvidence?>()
         Handler(Looper.getMainLooper()).post {
             result.set(runBlocking {
-                ChatSqlInstrumentation.observeStatements({ ranOffMainLooper.set(Looper.myLooper() != Looper.getMainLooper()) }) {
-                    success(repository.readCrewResultEvidence(fixtures.first.execution, fixtures.first.result.evidenceId))
+                withTimeout(60_000L) {
+                    ChatSqlInstrumentation.observeStatements({ ranOffMainLooper.set(Looper.myLooper() != Looper.getMainLooper()) }) {
+                        success(repository.readCrewResultEvidence(fixtures.first.execution, fixtures.first.result.evidenceId))
+                    }
                 }
             })
         }

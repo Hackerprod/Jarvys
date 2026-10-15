@@ -8,6 +8,7 @@ import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -243,14 +244,16 @@ class M1bRepositoriesTest {
         Handler(Looper.getMainLooper()).post {
             try {
                 runBlocking {
-                    ChatSqlInstrumentation.observeStatements({
-                        if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
-                    }) {
-                        conversations.messageCounts("repository-main-read")
-                        model.readModelTranscript("repository-main-read")
-                        memory.pendingCompactionIds("repository-main-read")
-                        artifacts.artifactsForConversation("repository-main-read")
-                        strictRead.set(success(strict.readCrewResultEvidence(executionSession, evidence.evidenceId)))
+                    withTimeout(60_000L) {
+                        ChatSqlInstrumentation.observeStatements({
+                            if (Looper.myLooper() == Looper.getMainLooper()) sqlRanOnMain.set(true)
+                        }) {
+                            conversations.messageCounts("repository-main-read")
+                            model.readModelTranscript("repository-main-read")
+                            memory.pendingCompactionIds("repository-main-read")
+                            artifacts.artifactsForConversation("repository-main-read")
+                            strictRead.set(success(strict.readCrewResultEvidence(executionSession, evidence.evidenceId)))
+                        }
                     }
                 }
             } catch (caught: Throwable) {
@@ -379,8 +382,8 @@ class M1bRepositoriesTest {
                 Callable {
                     runBlocking { model.appendModelError("concurrent-model", null, index.toLong(), "error-$index") }
                 }
-            })
-            futures.forEach { future -> assertTrue(future.get() is ChatDbResult.Success) }
+            }, 45, TimeUnit.SECONDS)
+            futures.forEach { future -> assertTrue(future.get(45, TimeUnit.SECONDS) is ChatDbResult.Success) }
         } finally {
             workers.shutdownNow()
         }
