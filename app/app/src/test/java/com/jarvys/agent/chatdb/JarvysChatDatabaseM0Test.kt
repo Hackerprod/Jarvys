@@ -30,7 +30,7 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "<update after build>" // update after build
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "59dbb821b38fbe0c3db6d6adfac48897"
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])

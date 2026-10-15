@@ -178,7 +178,7 @@ class ConversationReaderDatabaseTest {
 
         val context = reader.loadConversationContext(id)
         assertEquals(ConversationTurn.Kind.COMPACTION_SUMMARY, context.first().kind)
-        assertEquals("earlier messages summarized", context.first().content)
+        assertTrue("the summary keeps the legacy safety framing around the stored text", context.first().content.endsWith("earlier messages summarized"))
         assertFalse(context.any { it.content.contains("summarized question") })
         assertTrue(context.any { it.content == "retained answer" })
         assertEquals(listOf(compaction.compaction_id), reader.pendingCompactionIds(id))

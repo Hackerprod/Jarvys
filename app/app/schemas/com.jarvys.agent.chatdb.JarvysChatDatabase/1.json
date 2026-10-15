@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "69e03d71e91fdcb3649824a652bf777a",
+    "identityHash": "59dbb821b38fbe0c3db6d6adfac48897",
     "entities": [
       {
         "tableName": "conversations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `private_code` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, `import_state` TEXT NOT NULL, `legacy_ledger_bytes` INTEGER, `legacy_ledger_sha256` TEXT, `imported_at` INTEGER, `import_offset` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `private_code` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -76,34 +76,6 @@
             "columnName": "next_seq",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "import_state",
-            "columnName": "import_state",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "legacy_ledger_bytes",
-            "columnName": "legacy_ledger_bytes",
-            "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "legacy_ledger_sha256",
-            "columnName": "legacy_ledger_sha256",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "imported_at",
-            "columnName": "imported_at",
-            "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "import_offset",
-            "columnName": "import_offset",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -248,7 +220,7 @@
       },
       {
         "tableName": "messages",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `stable_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `message_index` INTEGER NOT NULL, `role` TEXT NOT NULL, `status` TEXT, `run_id` TEXT, `owner_user_message_id` TEXT, `duration_ms` INTEGER, `before_message_id` TEXT, `proactive_thread_key` TEXT, `proactive_reply_to_message_id` TEXT, `proactive_decision_id` TEXT, `interrupt_request_id` TEXT, `ack_required` INTEGER NOT NULL, `legacy_id` INTEGER, `created_at` REAL NOT NULL, `updated_at` REAL NOT NULL, `hidden_kind` TEXT, `hidden_seq` INTEGER, `translation_hidden_seq` INTEGER, `suggested_replies_consumed_seq` INTEGER, `input_state` TEXT, `input_state_seq` INTEGER, PRIMARY KEY(`conversation_id`, `message_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `stable_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `message_index` INTEGER NOT NULL, `role` TEXT NOT NULL, `status` TEXT, `run_id` TEXT, `owner_user_message_id` TEXT, `duration_ms` INTEGER, `before_message_id` TEXT, `proactive_thread_key` TEXT, `proactive_reply_to_message_id` TEXT, `proactive_decision_id` TEXT, `interrupt_request_id` TEXT, `ack_required` INTEGER NOT NULL, `created_at` REAL NOT NULL, `updated_at` REAL NOT NULL, `hidden_kind` TEXT, `hidden_seq` INTEGER, `translation_hidden_seq` INTEGER, `suggested_replies_consumed_seq` INTEGER, `input_state` TEXT, `input_state_seq` INTEGER, PRIMARY KEY(`conversation_id`, `message_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -336,11 +308,6 @@
             "columnName": "ack_required",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "legacy_id",
-            "columnName": "legacy_id",
-            "affinity": "INTEGER"
           },
           {
             "fieldPath": "created_at",
@@ -5582,7 +5549,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '69e03d71e91fdcb3649824a652bf777a')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '59dbb821b38fbe0c3db6d6adfac48897')"
     ]
   }
 }
