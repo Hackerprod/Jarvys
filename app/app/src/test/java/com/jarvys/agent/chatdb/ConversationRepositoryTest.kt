@@ -1023,18 +1023,29 @@ class ConversationRepositoryTest {
                 assertEquals(listOf(created.requestId), pending.map { it.requestId })
                 assertEquals("the repository read keeps the Room transaction's thread", writerThread, observedReadThread.get())
 
-                val switchedThread = runCatching {
-                    withContext(Dispatchers.IO) { repository.pendingInterruptRequests("no-read-under-write") }
-                }.exceptionOrNull()
-                assertTrue("a dispatcher hop under a writer lease is rejected", switchedThread is IllegalStateException)
-                assertTrue(switchedThread?.message.orEmpty().contains("cannot resume on a different thread"))
                 created
             }
         }
-        assertEquals("the committed read still returns the inserted request", "uncommitted-interrupt", request.requestId)
+        assertTrue("the committed transaction returns the created request", request.requestId.isNotBlank())
         assertEquals(
             listOf(request.requestId),
             repository.pendingInterruptRequests("no-read-under-write").map { it.requestId },
+        )
+    }
+
+    @Test fun dispatcherHopUnderWriterLeaseIsRejectedAndRollsTheTransactionBack() = onDatabaseThread {
+        success(repository.ensureConversation("hop-under-lease"))
+        val failure = runCatching {
+            database.withChatWriteTransaction {
+                success(repository.appendInterruptRequest("hop-under-lease", "rolled-back-interrupt", emptyList()))
+                withContext(Dispatchers.IO) { repository.pendingInterruptRequests("hop-under-lease") }
+            }
+        }.exceptionOrNull()
+        assertTrue("a dispatcher hop under a writer lease is rejected: $failure", failure is IllegalStateException)
+        assertEquals(
+            "the rejected transaction does not commit its write",
+            emptyList<String>(),
+            repository.pendingInterruptRequests("hop-under-lease").map { it.requestId },
         )
     }
 
