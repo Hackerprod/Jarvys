@@ -1047,6 +1047,40 @@ class ConversationRepositoryTest {
             emptyList<String>(),
             repository.pendingInterruptRequests("hop-under-lease").map { it.requestId },
         )
+        val committed = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "hop-under-lease", role = "user",
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "writer is usable after rollback")),
+        )))
+        assertEquals(committed.messageId, repository.readTailWindow("hop-under-lease", turns = 1).slots
+            .single { it.item.item_kind == "message" }.item.item_key)
+        assertEquals(1L, repository.messageCounts("hop-under-lease").total)
+    }
+
+    @Test fun dispatcherHopThatAttemptsWriterMutationIsRejectedAndRollsBack() = onDatabaseThread {
+        success(repository.ensureConversation("hop-write-under-lease"))
+        val failure = runCatching {
+            database.withChatWriteTransaction {
+                success(repository.appendMessage(AppendMessageInput(
+                    conversationId = "hop-write-under-lease", role = "user",
+                    parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "rolled back")),
+                )))
+                withContext(Dispatchers.IO) {
+                    repository.appendMessage(AppendMessageInput(
+                        conversationId = "hop-write-under-lease", role = "assistant",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "must not commit")),
+                    ))
+                }
+            }
+        }.exceptionOrNull()
+        assertTrue("a dispatcher hop that attempts a repository write is rejected: $failure", failure is IllegalStateException)
+        assertEquals(0L, repository.messageCounts("hop-write-under-lease").total)
+
+        val committed = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "hop-write-under-lease", role = "user",
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "writer remains usable")),
+        )))
+        assertEquals(committed.messageId, repository.getMessage("hop-write-under-lease", committed.messageId)?.messageId)
+        assertEquals(1L, repository.messageCounts("hop-write-under-lease").total)
     }
 
     @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {

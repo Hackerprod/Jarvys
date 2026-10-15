@@ -228,9 +228,9 @@ class LedgerImporterTest {
         assertTrue(ModelTranscriptRepository(database).readModelTranscript("chat-catalog")
             .latestProviderOutputItemsByOwner.getValue(userId).items_json.contains("latest provider output"))
         // org.json emits the Double token 1.70000001025E9; this asserts the persisted legacy ID literally.
-        assertTrue(database.testChatSql.query(
+        assertEquals("legacy-1.70000001025E9-35", database.testChatSql.query(
             "SELECT compaction_id FROM compactions WHERE conversation_id=? ORDER BY seq LIMIT 1", arrayOf("chat-catalog"),
-        ).use { it.moveToFirst() && it.getString(0).startsWith("legacy-1.70000001025E9-") })
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) })
         assertEquals(2L, count("SELECT COUNT(*) FROM compaction_reflection_acks WHERE conversation_id=?", "chat-catalog"))
         assertEquals("done", database.testChatSql.query(
             "SELECT import_state FROM conversations WHERE id=?", arrayOf("chat-catalog"),
@@ -500,6 +500,137 @@ class LedgerImporterTest {
         } finally {
             coordinator.endCutover(sessionId)
         }
+    }
+
+    @Test fun truncatedFinalLineResumesFromItsStartBeforeCutover() = onDatabaseThread {
+        val sessionId = "cutover-truncated-tail"
+        val first = jsonRow(null, "user", "content" to "before-tail", "messageId" to "tail-1").toString()
+        val completedTail = jsonRow(null, "assistant", "content" to "completed-tail", "messageId" to "tail-2").toString()
+        val appended = jsonRow(null, "user", "content" to "after-tail", "messageId" to "tail-3").toString()
+        val partialTail = completedTail.substring(0, completedTail.length / 2)
+        val ledger = File(temporary.root, "$sessionId.jsonl").apply {
+            writeText("$first\n$partialTail", StandardCharsets.UTF_8)
+        }
+        val meta = writeMeta("$sessionId.meta.json")
+        val initialBytes = ledger.length()
+        val firstImport = importer().importConversation(sessionId, ledger, meta)
+
+        assertEquals("done", firstImport.state)
+        assertTrue(firstImport.issues.any { it.reason == "truncated_final_line" })
+        val initialCheckpoint = database.testChatSql.query(
+            "SELECT import_offset,legacy_ledger_bytes FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getLong(0) to cursor.getLong(1)
+        }
+        assertEquals(first.toByteArray(StandardCharsets.UTF_8).size.toLong() + 1L, initialCheckpoint.first)
+        assertEquals(initialBytes, initialCheckpoint.second)
+
+        val incompleteCutover = runCatching { ImportCoordinator(database).beginCutover(sessionId, ledger, meta) }.exceptionOrNull()
+        assertNotNull("a checkpoint before an unfinished tail is not cutover-ready", incompleteCutover)
+
+        FileOutputStream(ledger, true).bufferedWriter(StandardCharsets.UTF_8).use { writer ->
+            writer.append(completedTail.removePrefix(partialTail)).append('\n').append(appended).append('\n')
+        }
+        val coordinator = ImportCoordinator(database)
+        coordinator.beginCutover(sessionId, ledger, meta)
+        try {
+            val finalRows = listOf(
+                jsonRow(null, "user", "content" to "before-tail", "messageId" to "tail-1"),
+                jsonRow(null, "assistant", "content" to "completed-tail", "messageId" to "tail-2"),
+                jsonRow(null, "user", "content" to "after-tail", "messageId" to "tail-3"),
+            )
+            val cleanId = "$sessionId-clean"
+            val clean = importer().importConversation(cleanId, writeLedger(cleanId, finalRows), writeMeta("$cleanId.meta.json"))
+            assertEquals("done", clean.state)
+            assertEquals(messageDigest(cleanId), messageDigest(sessionId))
+
+            fun messageSeqs(conversationId: String) = database.testChatSql.query(
+                "SELECT seq,message_id FROM messages WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId),
+            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getLong(0) to cursor.getString(1)) } }
+            fun itemCounts(conversationId: String) = database.testChatSql.query(
+                "SELECT item_kind,COUNT(*) FROM conversation_items WHERE conversation_id=? GROUP BY item_kind", arrayOf(conversationId),
+            ).use { cursor -> buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getLong(1)) } }
+            assertEquals(messageSeqs(cleanId), messageSeqs(sessionId))
+            assertEquals(itemCounts(cleanId), itemCounts(sessionId))
+            assertEquals(3L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+        } finally {
+            coordinator.endCutover(sessionId)
+        }
+    }
+
+    @Test fun beginCutoverReappliesCurrentConversationMetadata() = onDatabaseThread {
+        val sessionId = "cutover-updated-metadata"
+        val ledger = writeLedger(sessionId, listOf(jsonRow(null, "user", "content" to "metadata", "messageId" to "metadata-1")))
+        val meta = File(temporary.root, "$sessionId.meta.json")
+        meta.writeText(JSONObject().put("title", "Before cutover").toString(), StandardCharsets.UTF_8)
+        assertEquals("done", importer().importConversation(sessionId, ledger, meta).state)
+
+        meta.writeText(JSONObject().put("title", "Renamed before cutover").put("pinned", true).toString(), StandardCharsets.UTF_8)
+        val coordinator = ImportCoordinator(database)
+        coordinator.beginCutover(sessionId, ledger, meta)
+        try {
+            val metadata = database.testChatSql.query(
+                "SELECT title,pinned FROM conversations WHERE id=?", arrayOf(sessionId),
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                cursor.getString(0) to cursor.getInt(1)
+            }
+            assertEquals("Renamed before cutover", metadata.first)
+            assertEquals(1, metadata.second)
+        } finally {
+            coordinator.endCutover(sessionId)
+        }
+    }
+
+    @Test fun deletedMetadataRejectsCutoverAndLeavesTombstone() = onDatabaseThread {
+        val sessionId = "cutover-deleted-metadata"
+        val ledger = writeLedger(sessionId, listOf(jsonRow(null, "user", "content" to "do not resurrect", "messageId" to "deleted-1")))
+        val meta = File(temporary.root, "$sessionId.meta.json")
+        meta.writeText("{}", StandardCharsets.UTF_8)
+        assertEquals("done", importer().importConversation(sessionId, ledger, meta).state)
+
+        meta.writeText(JSONObject().put("deleted", true).toString(), StandardCharsets.UTF_8)
+        val failure = runCatching { ImportCoordinator(database).beginCutover(sessionId, ledger, meta) }.exceptionOrNull()
+        assertNotNull("a deleted conversation cannot cut over", failure)
+        assertTrue(ConversationRepository(database).isTombstoned(sessionId))
+        assertEquals(0L, count("SELECT COUNT(*) FROM conversations WHERE id=?", sessionId))
+    }
+
+    @Test fun appendedSteeringAfterCompactionFailsWithExplicitIdentityValidation() = onDatabaseThread {
+        val sessionId = "resume-steering-compaction"
+        val ledger = File(temporary.root, "$sessionId.jsonl")
+        val meta = writeMeta("$sessionId.meta.json")
+        val target = jsonRow(null, "user", "content" to "target", "messageId" to "target-user")
+        val compaction = jsonRow("compaction", "summary" to "prefix compaction", "firstKept" to 0,
+            "summarizedMessages" to 1, "timestamp" to 1_700_000_020.25)
+        ledger.writeText(listOf(target, compaction).joinToString(separator = "\n", postfix = "\n") { it.toString() }, StandardCharsets.UTF_8)
+
+        val initial = importer().importConversation(sessionId, ledger, meta)
+        assertEquals("done", initial.state)
+        val oldId = database.testChatSql.query(
+            "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) }
+
+        val steering = jsonRow(null, "assistant", "content" to "steered before target", "messageId" to "steered-assistant",
+            "beforeMessageId" to "target-user", "status" to "COMPLETED")
+        FileOutputStream(ledger, true).bufferedWriter(StandardCharsets.UTF_8).use { it.append(steering.toString()).append('\n') }
+        val resumed = importer().importConversation(sessionId, ledger, meta)
+
+        assertEquals("failed", resumed.state)
+        assertTrue(resumed.validations.any { it.name == "compaction_identity_parity" && !it.passed })
+        assertEquals(oldId, database.testChatSql.query(
+            "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) })
+
+        val cleanId = "$sessionId-clean"
+        val cleanRows = listOf(target, compaction, steering)
+        val clean = importer().importConversation(cleanId, writeLedger(cleanId, cleanRows), writeMeta("$cleanId.meta.json"))
+        assertEquals("done", clean.state)
+        val cleanCompactionId = database.testChatSql.query(
+            "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(cleanId),
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) }
+        assertTrue("a clean import uses the compacted row's new legacy identity", oldId != cleanCompactionId)
     }
 
     @Test fun replyIntentAndStateInOneImportBatchReadTheUncommittedIntent() = onDatabaseThread {

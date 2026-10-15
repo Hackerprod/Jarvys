@@ -81,8 +81,9 @@ internal class ImportCoordinator(
     }
 
     /**
-     * Locks legacy writers, revalidates the actual file, and imports an append-only suffix before
-     * allowing the service to switch to SQLite. Call [endCutover] after the source switch.
+     * Locks legacy writers, reapplies current conversation metadata, revalidates the actual file,
+     * and imports an append-only suffix before allowing the service to switch to SQLite. Call
+     * [endCutover] after the source switch.
      */
     suspend fun beginCutover(sessionId: String) {
         val ledger = sourceFiles[sessionId]
@@ -102,14 +103,14 @@ internal class ImportCoordinator(
         try {
             sourceFiles[sessionId] = ledgerFile
             val importer = LedgerImporter(database, options)
-            if (!importer.isValidatedSourceCurrent(sessionId, ledgerFile)) {
-                val report = importer.importConversation(sessionId, ledgerFile, metaFile, options)
-                check(report.state == "done") {
-                    "conversation import is not cutover-ready: ${report.failureReason ?: report.state}"
-                }
+            // importConversation applies current metadata (including a deleted tombstone) even
+            // when the JSONL receipt is already current, so cutover must always run it under lock.
+            val report = importer.importConversation(sessionId, ledgerFile, metaFile, options)
+            check(report.state == "done") {
+                "conversation import is not cutover-ready: ${report.failureReason ?: report.state}"
             }
             check(importer.isValidatedSourceCurrent(sessionId, ledgerFile)) {
-                "conversation ledger changed while cutover was being validated"
+                "conversation ledger is not fully consumed or changed while cutover was being validated"
             }
             check(cutovers.putIfAbsent(sessionId, writerLock) == null) {
                 "cutover already held for this conversation"

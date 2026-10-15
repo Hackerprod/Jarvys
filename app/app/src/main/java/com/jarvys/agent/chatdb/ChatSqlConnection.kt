@@ -174,6 +174,9 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
     }
 
     override fun query(sql: String, bindArgs: Array<out Any?>): Cursor {
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "Chat SQL statements must not block the main thread"
+        }
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
         if (LeasedConnectionElement.current() == null) {
             ChatSqlInstrumentation.statementPrepared(sql)
@@ -209,7 +212,7 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
     private fun <T> withRawReadConnection(block: (SQLiteDatabase) -> T): T {
         val existing = RawReadConnectionElement.current()
         if (existing != null) return block(existing)
-        val raw = JarvysChatDatabaseProvider.acquireReadDatabase(database)
+        val raw = JarvysChatDatabaseProvider.acquireReadDatabaseBlocking(database)
         return try { block(raw) } finally { JarvysChatDatabaseProvider.releaseReadDatabase(database, raw) }
     }
 }
@@ -273,24 +276,25 @@ private class DriverChatSqlStatement(
 }
 
 private fun rawQuery(sql: String, args: Array<out Any?>, database: SQLiteDatabase): Cursor {
-    val stringArgs = Array(args.size) { index ->
-        when (val value = args[index]) {
-            null -> null
-            is ByteArray -> error("Read-pool queries cannot bind BLOB arguments through SQLiteDatabase.rawQuery")
-            is Boolean -> if (value) "1" else "0"
-            else -> value.toString()
-        }
-    }
-    return database.rawQuery(sql, stringArgs).use { source ->
-        val names = Array(source.columnCount) { source.getColumnName(it) }
+    val source = database.rawQueryWithFactory(
+        { _, driver, editTable, query ->
+            bind(query, args)
+            android.database.sqlite.SQLiteCursor(driver, editTable, query)
+        },
+        sql,
+        emptyArray(),
+        null,
+    )
+    return source.use {
+        val names = Array(it.columnCount) { index -> it.getColumnName(index) }
         val result = MatrixCursor(names)
-        while (source.moveToNext()) {
+        while (it.moveToNext()) {
             val values = Array<Any?>(names.size) { index ->
-                when (source.getType(index)) {
-                    Cursor.FIELD_TYPE_INTEGER -> source.getLong(index)
-                    Cursor.FIELD_TYPE_FLOAT -> source.getDouble(index)
-                    Cursor.FIELD_TYPE_STRING -> source.getString(index)
-                    Cursor.FIELD_TYPE_BLOB -> source.getBlob(index)
+                when (it.getType(index)) {
+                    Cursor.FIELD_TYPE_INTEGER -> it.getLong(index)
+                    Cursor.FIELD_TYPE_FLOAT -> it.getDouble(index)
+                    Cursor.FIELD_TYPE_STRING -> it.getString(index)
+                    Cursor.FIELD_TYPE_BLOB -> it.getBlob(index)
                     else -> null
                 }
             }
@@ -310,6 +314,22 @@ private fun bind(statement: SQLiteStatement, args: Array<out Any?>) {
             is Boolean -> statement.bindLong(index, if (value) 1L else 0L)
             is Byte, is Short, is Int, is Long -> statement.bindLong(index, (value as Number).toLong())
             is Float, is Double -> statement.bindDouble(index, (value as Number).toDouble())
+            else -> error("Unsupported SQLite bind value ${value::class.java.name}")
+        }
+    }
+}
+
+/** SQLiteQuery preserves the same storage classes as Room's driver-backed statements. */
+private fun bind(query: android.database.sqlite.SQLiteQuery, args: Array<out Any?>) {
+    args.forEachIndexed { offset, value ->
+        val index = offset + 1
+        when (value) {
+            null -> query.bindNull(index)
+            is ByteArray -> query.bindBlob(index, value)
+            is String -> query.bindString(index, value)
+            is Boolean -> query.bindLong(index, if (value) 1L else 0L)
+            is Byte, is Short, is Int, is Long -> query.bindLong(index, (value as Number).toLong())
+            is Float, is Double -> query.bindDouble(index, (value as Number).toDouble())
             else -> error("Unsupported SQLite bind value ${value::class.java.name}")
         }
     }
@@ -449,6 +469,9 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
 }
 
 internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspend () -> T): T {
+    check(Looper.myLooper() != Looper.getMainLooper()) {
+        "Chat read transactions must not block the main thread"
+    }
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
@@ -457,24 +480,26 @@ internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspe
         return block()
     }
     if (RawReadConnectionElement.current() != null) return block()
-    // Do not call beginTransaction()/withTransaction on android.database.sqlite.SQLiteDatabase:
-    // on the API levels used by Robolectric it maps to EXCLUSIVE. The projection's SQL uses a
-    // high-water sequence where applicable, and the per-handle data_version fence below retries
-    // if any other connection commits between statements. That gives the complete projection one
-    // stable committed view without taking a lock that would block the Room writer.
+    // Do not use Android SQLiteDatabase.beginTransaction() on the raw handles: on the supported
+    // API levels it can map to EXCLUSIVE. The first pass uses a data_version fence so ordinary
+    // reads do not block the Room writer. If that fence changes, retry exactly once under a Room
+    // writer transaction. That retry has a stable view by construction and guarantees progress
+    // even when unrelated conversations are committing continuously.
     val raw = JarvysChatDatabaseProvider.acquireReadDatabase(this)
+    var borrowed = true
     try {
-        while (true) {
-            val before = JarvysChatDatabaseProvider.readDataVersion(raw)
-            try {
-                val result = withContext(RawReadConnectionElement(raw)) { block() }
-                if (before == JarvysChatDatabaseProvider.readDataVersion(raw)) return result
-            } catch (failure: Throwable) {
-                if (failure is kotlinx.coroutines.CancellationException ||
-                    before == JarvysChatDatabaseProvider.readDataVersion(raw)) throw failure
-            }
+        val before = JarvysChatDatabaseProvider.readDataVersion(raw)
+        try {
+            val result = withContext(RawReadConnectionElement(raw)) { block() }
+            if (before == JarvysChatDatabaseProvider.readDataVersion(raw)) return result
+        } catch (failure: Throwable) {
+            if (failure is kotlinx.coroutines.CancellationException ||
+                before == JarvysChatDatabaseProvider.readDataVersion(raw)) throw failure
         }
-    } finally {
         JarvysChatDatabaseProvider.releaseReadDatabase(this, raw)
+        borrowed = false
+        return withChatWriteTransaction { block() }
+    } finally {
+        if (borrowed) JarvysChatDatabaseProvider.releaseReadDatabase(this, raw)
     }
 }

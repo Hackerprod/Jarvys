@@ -237,12 +237,18 @@ class StrictJournalRepositoryTest {
         val writerEntered = CountDownLatch(1)
         val releaseWriter = CountDownLatch(1)
         val writerExecutor = Executors.newSingleThreadExecutor()
+        val uncommittedEvidence = CrewResultEvidence.create(
+            fixture.execution, fixture.result.missionId, "bot-uncommitted", UUID.randomUUID().toString(),
+            "DONE", "uncommitted evidence", 1_800_000_000_001L,
+        )
         val writer = writerExecutor.submit {
             runBlocking {
                 database.withChatWriteTransaction {
-                    success(repository.appendCrewResultEvidence(CrewResultEvidence.create(
-                        fixture.execution, fixture.result.missionId, "bot-uncommitted", UUID.randomUUID().toString(),
-                        "DONE", "uncommitted evidence", 1_800_000_000_001L,
+                    success(repository.appendCrewResultEvidence(uncommittedEvidence))
+                    success(conversations.appendMessage(AppendMessageInput(
+                        conversationId = fixture.execution,
+                        role = "user",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "uncommitted message")),
                     )))
                     success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
                         conversationId = "artifact-read", artifactId = "artifact-uncommitted", name = "pending.txt", mimeType = "text/plain",
@@ -258,22 +264,30 @@ class StrictJournalRepositoryTest {
             val started = System.nanoTime()
             val snapshots = onDatabaseThread {
                 val evidence = success(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
+                val uncommitted = success(repository.readCrewResultEvidence(fixture.execution, uncommittedEvidence.evidenceId))
                 val counts = conversations.messageCounts(fixture.execution)
                 val transcript = ModelTranscriptRepository(database).readModelTranscript(fixture.execution)
                 val pendingCompactions = MemoryTimelineRepository(database).pendingCompactionIds(fixture.execution)
                 val artifactIds = artifacts.artifactsForConversation("artifact-read").map { it.artifact_id }
-                listOf<Any>(evidence!!.contentSha256, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
+                listOf<Any?>(evidence!!.contentSha256, uncommitted, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
             }
             assertTrue("the real projections finish with the writer held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000L)
             assertEquals(fixture.result.contentSha256, snapshots[0])
-            assertEquals(0L, snapshots[1])
-            assertEquals(0, snapshots[2])
-            assertEquals(0, snapshots[3])
-            assertEquals(listOf("artifact-read-1"), snapshots[4])
+            assertNull("an evidence row held only by the uncommitted writer is invisible", snapshots[1])
+            assertEquals("the uncommitted user message is excluded from counts", 0L, snapshots[2])
+            assertEquals("the uncommitted user message is excluded from the transcript", 0, snapshots[3])
+            assertEquals(0, snapshots[4])
+            assertEquals(listOf("artifact-read-1"), snapshots[5])
         } finally {
             releaseWriter.countDown()
-            runCatching { writer.get(10, TimeUnit.SECONDS) }
+            writer.get(10, TimeUnit.SECONDS)
             writerExecutor.shutdownNow()
+        }
+        onDatabaseThread {
+            assertEquals(uncommittedEvidence.contentSha256,
+                success(repository.readCrewResultEvidence(fixture.execution, uncommittedEvidence.evidenceId))?.contentSha256)
+            assertEquals(1L, conversations.messageCounts(fixture.execution).total)
+            assertEquals(1, ModelTranscriptRepository(database).readModelTranscript(fixture.execution).entries.size)
         }
     }
 

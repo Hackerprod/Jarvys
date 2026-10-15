@@ -15,6 +15,7 @@ internal class NonInterruptibleLedgerFile(
     startOffset: Long = 0L,
     private val bufferBytes: Int = DEFAULT_BUFFER_BYTES,
     startLineNumber: Long = 1L,
+    endOffset: Long? = null,
 ) : Closeable {
     data class Line(
         val lineNumber: Long,
@@ -27,6 +28,7 @@ internal class NonInterruptibleLedgerFile(
 
     private val input = RandomAccessFile(file, "r")
     private val buffer = ByteArray(bufferBytes.also { require(it > 0) })
+    private val limitOffset = endOffset ?: input.length()
     private var buffered = 0
     private var bufferIndex = 0
     private var byteOffset: Long
@@ -34,7 +36,8 @@ internal class NonInterruptibleLedgerFile(
     private var eof = false
 
     init {
-        require(startOffset >= 0L && startOffset <= input.length()) { "invalid ledger offset $startOffset" }
+        require(limitOffset >= 0L && limitOffset <= input.length()) { "invalid ledger end offset $limitOffset" }
+        require(startOffset >= 0L && startOffset <= limitOffset) { "invalid ledger offset $startOffset" }
         require(startLineNumber > 0L) { "invalid ledger line number $startLineNumber" }
         input.seek(startOffset)
         byteOffset = startOffset
@@ -43,10 +46,20 @@ internal class NonInterruptibleLedgerFile(
     fun readLine(): Line? {
         if (eof) return null
         val start = byteOffset
+        if (byteOffset >= limitOffset) {
+            eof = true
+            return null
+        }
         val bytes = ByteArrayOutputStream()
         while (true) {
+            if (byteOffset >= limitOffset) {
+                eof = true
+                if (bytes.size() == 0) return null
+                return finish(start, bytes.toByteArray(), terminated = false)
+            }
             if (bufferIndex >= buffered) {
-                buffered = input.read(buffer)
+                val remaining = limitOffset - byteOffset
+                buffered = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
                 bufferIndex = 0
                 if (buffered < 0) {
                     eof = true

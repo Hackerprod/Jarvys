@@ -25,7 +25,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.Collections
+import java.util.ArrayDeque
 import kotlin.coroutines.ContinuationInterceptor
 
 /**
@@ -233,7 +234,11 @@ internal object JarvysChatDatabaseProvider {
 
     /** Closes provider-owned handles and executors together with their Room database. */
     internal fun closeDatabase(database: JarvysChatDatabase) {
-        synchronized(readPools) { readPools.remove(database) }?.close()
+        val readPool = synchronized(readPools) { readPools[database] }
+        readPool?.close()
+        synchronized(readPools) {
+            if (readPools[database] === readPool) readPools.remove(database)
+        }
         database.close()
         val executors = synchronized(databaseExecutors) { databaseExecutors.remove(database) }.orEmpty()
         synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
@@ -277,15 +282,18 @@ internal object JarvysChatDatabaseProvider {
         return withContext(dispatcher) { operation() }
     }
 
-    internal fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase =
+    internal suspend fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase =
+        kotlinx.coroutines.runInterruptible { acquireReadDatabaseBlocking(database) }
+
+    /** Synchronous SQL facade fallback; its monitor wait responds to thread interruption. */
+    internal fun acquireReadDatabaseBlocking(database: JarvysChatDatabase): SQLiteDatabase =
         synchronized(readPools) { readPools[database] }
-            ?.acquire()
+            ?.acquireBlocking()
             ?: throw IllegalStateException("No Jarvys chat read pool is registered for this database")
 
     internal fun releaseReadDatabase(database: JarvysChatDatabase, handle: SQLiteDatabase) {
-        synchronized(readPools) { readPools[database] }
-            ?.release(handle)
-            ?: throw IllegalStateException("No Jarvys chat read pool is registered for this database")
+        val pool = synchronized(readPools) { readPools[database] }
+        if (pool != null) pool.release(handle) else runCatching { handle.close() }
     }
 
     /** Per-connection SQLite commit generation used to validate a multi-statement read projection. */
@@ -536,7 +544,10 @@ internal object DatabaseTriggers {
     /** Independent committed-read handles; Room's Android driver reader lease aliases the writer. */
     private class ReadDatabasePool(databaseFile: File) {
         private val all = mutableListOf<SQLiteDatabase>()
-        private val available = ArrayBlockingQueue<SQLiteDatabase>(READ_CONNECTION_POOL_SIZE)
+        private val lock = java.lang.Object()
+        private val available = ArrayDeque<SQLiteDatabase>()
+        private val borrowed = Collections.newSetFromMap(IdentityHashMap<SQLiteDatabase, Boolean>())
+        private var closed = false
 
         init {
             try {
@@ -549,7 +560,7 @@ internal object DatabaseTriggers {
                         verifyPragma(database, "query_only", "1")
                         verifyPragma(database, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
                         all += database
-                        check(available.offer(database))
+                        available.addLast(database)
                     } catch (error: Throwable) {
                         runCatching { database.close() }
                         throw error
@@ -561,15 +572,51 @@ internal object DatabaseTriggers {
             }
         }
 
-        fun acquire(): SQLiteDatabase = available.take()
+        fun acquireBlocking(): SQLiteDatabase {
+            synchronized(lock) {
+                while (true) {
+                    check(!closed) { "Jarvys chat read pool is closed" }
+                    val database = available.pollFirst()
+                    if (database != null) {
+                        borrowed.add(database)
+                        return database
+                    }
+                    try {
+                        lock.wait()
+                    } catch (interrupted: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw IllegalStateException("Interrupted while waiting for a Jarvys chat read handle", interrupted)
+                    }
+                }
+            }
+        }
 
         fun release(database: SQLiteDatabase) {
-            check(available.offer(database)) { "Returned chat read handle was not borrowed from this pool" }
+            val closeOnReturn = synchronized(lock) {
+                if (!borrowed.remove(database)) return
+                if (closed) {
+                    all.removeAll { it === database }
+                    true
+                } else {
+                    available.addLast(database)
+                    lock.notify()
+                    false
+                }
+            }
+            if (closeOnReturn) runCatching { database.close() }
         }
 
         fun close() {
-            all.forEach(SQLiteDatabase::close)
-            all.clear()
+            val availableToClose = synchronized(lock) {
+                if (closed) return
+                closed = true
+                val handles = available.toList()
+                available.clear()
+                all.removeAll { handle -> handles.any { it === handle } }
+                lock.notifyAll()
+                handles
+            }
+            availableToClose.forEach { runCatching { it.close() } }
         }
 
         private fun verifyPragma(database: SQLiteDatabase, pragma: String, expected: String) {
