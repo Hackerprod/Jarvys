@@ -13,14 +13,17 @@ import androidx.sqlite.SQLiteStatement
 import androidx.sqlite.db.SupportSQLiteStatement
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import android.os.Looper
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 
-/** Small synchronous SQL facade used by the M1 repositories inside a Room connection lease. */
+/** Small synchronous SQL facade used by the M1 repositories with Room leases and the read pool. */
 internal interface ChatSqlDatabase {
     fun execSQL(sql: String, bindArgs: Array<out Any?> = emptyArray())
     fun query(sql: String, bindArgs: Array<out Any?> = emptyArray()): Cursor
@@ -31,12 +34,6 @@ internal interface ChatSqlDatabase {
 /** Test-only observer for bounded-query assertions; the callback follows SQL across Room dispatchers. */
 internal object ChatSqlInstrumentation {
     private val observer = AtomicReference<((String) -> Unit)?>(null)
-    private val connectionRequestObserver = AtomicReference<((ChatSqlConnectionRequest) -> Unit)?>(null)
-
-    internal enum class ChatSqlConnectionRequest {
-        READER_DEFERRED_TRANSACTION,
-        WRITER_IMMEDIATE_TRANSACTION,
-    }
 
     internal suspend fun <T> observeStatements(
         onStatement: (String) -> Unit,
@@ -51,24 +48,8 @@ internal object ChatSqlInstrumentation {
         }
     }
 
-    internal suspend fun <T> observeConnectionRequests(
-        onRequest: (ChatSqlConnectionRequest) -> Unit,
-        block: suspend () -> T,
-    ): T {
-        check(connectionRequestObserver.compareAndSet(null, onRequest)) { "A chat SQL connection observer is already active" }
-        return try {
-            block()
-        } finally {
-            check(connectionRequestObserver.compareAndSet(onRequest, null)) { "Chat SQL connection observer changed while active" }
-        }
-    }
-
     internal fun statementPrepared(sql: String) {
         observer.get()?.invoke(sql)
-    }
-
-    internal fun connectionRequested(request: ChatSqlConnectionRequest) {
-        connectionRequestObserver.get()?.invoke(request)
     }
 }
 
@@ -135,25 +116,43 @@ internal class DriverChatSqlDatabase(private val connection: SQLiteConnection) :
             bind(statement, args)
             block(statement)
         }
+
+    internal fun executeInsert(sql: String, args: Array<out Any?>): Long = useStatement(sql, args) { statement ->
+        statement.executeAndConsumeRows()
+        connection.prepare("SELECT last_insert_rowid()").use { result ->
+            check(result.step()) { "last_insert_rowid() returned no row" }
+            result.getLong(0)
+        }
+    }
+
+    internal fun executeUpdateDelete(sql: String, args: Array<out Any?>): Int = useStatement(sql, args) { statement ->
+        statement.executeAndConsumeRows()
+        connection.prepare("SELECT changes()").use { result ->
+            check(result.step()) { "changes() returned no row" }
+            result.getLong(0).toInt()
+        }
+    }
 }
 
 /**
- * The legacy M1 repositories use synchronous Cursor-shaped helpers. Room 2.7 exposes its pooled
- * connection through suspend `useReaderConnection` / `useWriterConnection`; this adapter bridges
- * each short statement through that leased connection and closes it before returning a cursor.
+ * The legacy M1 repositories use synchronous Cursor-shaped helpers. Statements inside an active
+ * Room lease stay on that connection; independent reads use the provider's separate raw read pool.
  */
 private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : ChatSqlDatabase {
     private fun <T> withStatement(
         sql: String,
         args: Array<out Any?>,
         write: Boolean,
-        block: (SQLiteStatement) -> T,
+        block: (SQLiteStatement, PooledConnection?) -> T,
     ): T = runBlocking {
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "Chat SQL statements must not block the main thread"
+        }
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
         suspend fun use(connection: PooledConnection): T = connection.usePrepared(sql) { statement ->
             ChatSqlInstrumentation.statementPrepared(sql)
             bind(statement, args)
-            block(statement)
+            block(statement, connection)
         }
         val leased = LeasedConnectionElement.current()
         when {
@@ -167,53 +166,48 @@ private class PooledChatSqlDatabase(private val database: JarvysChatDatabase) : 
     }
 
     override fun execSQL(sql: String, bindArgs: Array<out Any?>) {
-        withStatement(sql, bindArgs, write = true) { statement -> statement.executeAndConsumeRows() }
+        withStatement(sql, bindArgs, write = true) { statement, _ -> statement.executeAndConsumeRows() }
     }
 
     override fun query(sql: String, bindArgs: Array<out Any?>): Cursor {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
-        if (sql.trimStart().startsWith("EXPLAIN", ignoreCase = true)) {
+        if (LeasedConnectionElement.current() == null) {
             ChatSqlInstrumentation.statementPrepared(sql)
-            return explainQueryThroughAndroidCursor(sql, bindArgs)
+            return withRawReadConnection { raw -> rawQuery(sql, bindArgs, raw) }
         }
-        return withStatement(sql, bindArgs, write = false) { it.toMatrixCursor() }
+        return withStatement(sql, bindArgs, write = false) { statement, _ -> statement.toMatrixCursor() }
     }
 
     override fun queryOnWriter(sql: String, bindArgs: Array<out Any?>): Cursor =
-        withStatement(sql, bindArgs, write = true) { it.toMatrixCursor() }
-
-    /** API 28's Android statement path treats EXPLAIN as exec SQL despite its result columns. */
-    private fun explainQueryThroughAndroidCursor(sql: String, bindArgs: Array<out Any?>): Cursor {
-        val file = JarvysChatDatabaseProvider.databaseFileForRawQuery(database)
-        val handle = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-        try {
-            val stringArgs = Array<String?>(bindArgs.size) { index -> bindArgs[index]?.toString() }
-            return handle.rawQuery(sql, stringArgs).use { source ->
-                val names = Array(source.columnCount) { source.getColumnName(it) }
-                val detached = MatrixCursor(names)
-                while (source.moveToNext()) {
-                    val values = Array<Any?>(names.size) { index ->
-                        when (source.getType(index)) {
-                            Cursor.FIELD_TYPE_INTEGER -> source.getLong(index)
-                            Cursor.FIELD_TYPE_FLOAT -> source.getDouble(index)
-                            Cursor.FIELD_TYPE_STRING -> source.getString(index)
-                            Cursor.FIELD_TYPE_BLOB -> source.getBlob(index)
-                            else -> null
-                        }
-                    }
-                    detached.addRow(values)
-                }
-                detached
-            }
-        } finally {
-            handle.close()
-        }
-    }
+        withStatement(sql, bindArgs, write = true) { statement, _ -> statement.toMatrixCursor() }
 
     override fun compileStatement(sql: String): SupportSQLiteStatement = DriverChatSqlStatement(this, sql)
 
-    internal fun <T> useStatement(sql: String, args: Array<out Any?>, block: (SQLiteStatement) -> T): T =
+    internal fun <T> useStatement(sql: String, args: Array<out Any?>, block: (SQLiteStatement, PooledConnection?) -> T): T =
         withStatement(sql, args, write = true, block = block)
+
+    internal fun executeInsert(sql: String, args: Array<out Any?>): Long = useStatement(sql, args) { statement, connection ->
+        statement.executeAndConsumeRows()
+        connection!!.usePrepared("SELECT last_insert_rowid()") { result ->
+            check(result.step()) { "last_insert_rowid() returned no row" }
+            result.getLong(0)
+        }
+    }
+
+    internal fun executeUpdateDelete(sql: String, args: Array<out Any?>): Int = useStatement(sql, args) { statement, connection ->
+        statement.executeAndConsumeRows()
+        connection!!.usePrepared("SELECT changes()") { result ->
+            check(result.step()) { "changes() returned no row" }
+            result.getLong(0).toInt()
+        }
+    }
+
+    private fun <T> withRawReadConnection(block: (SQLiteDatabase) -> T): T {
+        val existing = RawReadConnectionElement.current()
+        if (existing != null) return block(existing)
+        val raw = JarvysChatDatabaseProvider.acquireReadDatabase(database)
+        return try { block(raw) } finally { JarvysChatDatabaseProvider.releaseReadDatabase(database, raw) }
+    }
 }
 
 private class DriverChatSqlStatement(
@@ -233,15 +227,17 @@ private class DriverChatSqlStatement(
 
     override fun execute() = statement { statement -> statement.executeAndConsumeRows() }
 
-    override fun executeInsert(): Long = statement { statement ->
-        statement.executeAndConsumeRows()
-        Unit
-    }.let { database.queryOnWriter("SELECT last_insert_rowid()").use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else -1L } }
+    override fun executeInsert(): Long = withBindings { args -> when (database) {
+        is DriverChatSqlDatabase -> database.executeInsert(sql, args)
+        is PooledChatSqlDatabase -> database.executeInsert(sql, args)
+        else -> error("Unsupported SQL adapter")
+    } }
 
-    override fun executeUpdateDelete(): Int = statement { statement ->
-        statement.executeAndConsumeRows()
-        Unit
-    }.let { database.queryOnWriter("SELECT changes()").use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 } }
+    override fun executeUpdateDelete(): Int = withBindings { args -> when (database) {
+        is DriverChatSqlDatabase -> database.executeUpdateDelete(sql, args)
+        is PooledChatSqlDatabase -> database.executeUpdateDelete(sql, args)
+        else -> error("Unsupported SQL adapter")
+    } }
 
     override fun simpleQueryForLong(): Long = statement { statement ->
         check(statement.getColumnCount() > 0) { "Statement returned no columns" }
@@ -256,12 +252,47 @@ private class DriverChatSqlStatement(
 
     private fun <T> statement(block: (SQLiteStatement) -> T): T {
         check(!closed.get()) { "Statement is closed" }
-        val args = if (bindings.isEmpty()) emptyArray() else Array(bindings.lastKey()) { index -> bindings[index + 1] }
+        val args = bindingValues()
         return when (database) {
-            is DriverChatSqlDatabase -> database.useStatement(sql, args, block)
-            is PooledChatSqlDatabase -> database.useStatement(sql, args, block)
+            is DriverChatSqlDatabase -> database.useStatement(sql, args) { statement -> block(statement) }
+            is PooledChatSqlDatabase -> database.useStatement(sql, args) { statement, _ -> block(statement) }
             else -> error("Unsupported SQL adapter")
         }
+    }
+
+    private fun <T> withBindings(block: (Array<out Any?>) -> T): T {
+        check(!closed.get()) { "Statement is closed" }
+        return block(bindingValues())
+    }
+
+    private fun bindingValues(): Array<out Any?> = if (bindings.isEmpty()) emptyArray() else Array(bindings.lastKey()) { index -> bindings[index + 1] }
+}
+
+private fun rawQuery(sql: String, args: Array<out Any?>, database: SQLiteDatabase): Cursor {
+    val stringArgs = Array(args.size) { index ->
+        when (val value = args[index]) {
+            null -> null
+            is ByteArray -> error("Read-pool queries cannot bind BLOB arguments through SQLiteDatabase.rawQuery")
+            is Boolean -> if (value) "1" else "0"
+            else -> value.toString()
+        }
+    }
+    return database.rawQuery(sql, stringArgs).use { source ->
+        val names = Array(source.columnCount) { source.getColumnName(it) }
+        val result = MatrixCursor(names)
+        while (source.moveToNext()) {
+            val values = Array<Any?>(names.size) { index ->
+                when (source.getType(index)) {
+                    Cursor.FIELD_TYPE_INTEGER -> source.getLong(index)
+                    Cursor.FIELD_TYPE_FLOAT -> source.getDouble(index)
+                    Cursor.FIELD_TYPE_STRING -> source.getString(index)
+                    Cursor.FIELD_TYPE_BLOB -> source.getBlob(index)
+                    else -> null
+                }
+            }
+            result.addRow(values)
+        }
+        result
     }
 }
 
@@ -315,9 +346,10 @@ private data class ActiveChatDbConnection(
     val isWriter: Boolean,
 )
 
-private class LeasedConnectionElement(
+internal class LeasedConnectionElement(
     val connection: PooledConnection,
     val isWriter: Boolean,
+    private val ownerDispatcher: ContinuationInterceptor? = null,
 ) : ThreadContextElement<ActiveChatDbConnection?>, AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<LeasedConnectionElement> {
         private val active = ThreadLocal<ActiveChatDbConnection?>()
@@ -325,9 +357,38 @@ private class LeasedConnectionElement(
     }
 
     private val lease = ActiveChatDbConnection(connection, isWriter)
+    private val ownerThread = Thread.currentThread()
+    private var contextInstallCount = 0
 
-    override fun updateThreadContext(context: CoroutineContext): ActiveChatDbConnection? = active.get().also { active.set(lease) }
+    override fun updateThreadContext(context: CoroutineContext): ActiveChatDbConnection? {
+        check(!isWriter || Thread.currentThread() === ownerThread) {
+            "A chat writer lease cannot resume on a different thread; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+        }
+        check(!isWriter || context[ContinuationInterceptor] === ownerDispatcher) {
+            "A chat writer lease cannot resume with a different dispatcher; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+        }
+        if (isWriter) {
+            contextInstallCount++
+            check(contextInstallCount == 1) {
+                "A chat writer lease cannot suspend and resume; its SQLiteSession must stay on the owning thread until commit"
+            }
+        }
+        return active.get().also { active.set(lease) }
+    }
     override fun restoreThreadContext(context: CoroutineContext, oldState: ActiveChatDbConnection?) { active.set(oldState) }
+}
+
+/** Read-only raw SQLite handle held for one projection; no Android transaction is started on API 28. */
+internal class RawReadConnectionElement(
+    private val database: SQLiteDatabase,
+) : ThreadContextElement<SQLiteDatabase?>, AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<RawReadConnectionElement> {
+        private val active = ThreadLocal<SQLiteDatabase?>()
+        fun current(): SQLiteDatabase? = active.get()
+    }
+
+    override fun updateThreadContext(context: CoroutineContext): SQLiteDatabase? = active.get().also { active.set(database) }
+    override fun restoreThreadContext(context: CoroutineContext, oldState: SQLiteDatabase?) { active.set(oldState) }
 }
 
 /** Synchronous M1 SQL is available only while a Room read or write lease is active. */
@@ -341,10 +402,12 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
         check(active.isWriter) { "Cannot start a chat database write inside a reader lease" }
         return block()
     }
-    ChatSqlInstrumentation.connectionRequested(ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION)
-    return useWriterConnection { writer ->
-        writer.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
-            withContext(LeasedConnectionElement(writer, isWriter = true)) { block() }
+    return JarvysChatDatabaseProvider.onWriterExecutor(this) {
+        useWriterConnection { writer ->
+            writer.withTransaction(Transactor.SQLiteTransactionType.IMMEDIATE) {
+                val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
+                withContext(LeasedConnectionElement(writer, isWriter = true, ownerDispatcher = dispatcher)) { block() }
+            }
         }
     }
 }
@@ -356,10 +419,25 @@ internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspe
         // Reuse the current lease. A read inside a writer must see that transaction's own writes.
         return block()
     }
-    ChatSqlInstrumentation.connectionRequested(ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION)
-    return useReaderConnection { reader ->
-        reader.withTransaction(Transactor.SQLiteTransactionType.DEFERRED) {
-            withContext(LeasedConnectionElement(reader, isWriter = false)) { block() }
+    if (RawReadConnectionElement.current() != null) return block()
+    // Do not call beginTransaction()/withTransaction on android.database.sqlite.SQLiteDatabase:
+    // on the API levels used by Robolectric it maps to EXCLUSIVE. The projection's SQL uses a
+    // high-water sequence where applicable, and the per-handle data_version fence below retries
+    // if any other connection commits between statements. That gives the complete projection one
+    // stable committed view without taking a lock that would block the Room writer.
+    val raw = JarvysChatDatabaseProvider.acquireReadDatabase(this)
+    try {
+        while (true) {
+            val before = JarvysChatDatabaseProvider.readDataVersion(raw)
+            try {
+                val result = withContext(RawReadConnectionElement(raw)) { block() }
+                if (before == JarvysChatDatabaseProvider.readDataVersion(raw)) return result
+            } catch (failure: Throwable) {
+                if (failure is kotlinx.coroutines.CancellationException ||
+                    before == JarvysChatDatabaseProvider.readDataVersion(raw)) throw failure
+            }
         }
+    } finally {
+        JarvysChatDatabaseProvider.releaseReadDatabase(this, raw)
     }
 }

@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewCoordinationEvidence
+import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -232,8 +233,12 @@ class M1bRepositoriesTest {
         val executionSession = WorkspaceIdentity.executionSessionId("a1234567-b123-c123-d123-e123456789ab")
         onDatabaseThread { success(conversations.ensureConversation(executionSession, "workspace_exec")) }
         val strict = StrictJournalRepository(database)
+        val missionId = UUID.nameUUIDFromBytes("m1b-main-read-mission".toByteArray()).toString()
+        val evidence = CrewResultEvidence.create(executionSession, missionId, "bot-main-read", UUID.randomUUID().toString(), "DONE", "valid evidence", 1_800_000_000_000L)
+        onDatabaseThread { success(strict.appendCrewResultEvidence(evidence)) }
         val sqlRanOnMain = AtomicBoolean(false)
         val failure = AtomicReference<Throwable?>()
+        val strictRead = AtomicReference<CrewResultEvidence?>()
         val finished = CountDownLatch(1)
         Handler(Looper.getMainLooper()).post {
             try {
@@ -245,7 +250,7 @@ class M1bRepositoriesTest {
                         model.readModelTranscript("repository-main-read")
                         memory.pendingCompactionIds("repository-main-read")
                         artifacts.artifactsForConversation("repository-main-read")
-                        strict.readCrewResultEvidence(executionSession, UUID.randomUUID().toString())
+                        strictRead.set(success(strict.readCrewResultEvidence(executionSession, evidence.evidenceId)))
                     }
                 }
             } catch (caught: Throwable) {
@@ -257,6 +262,7 @@ class M1bRepositoriesTest {
         shadowOf(Looper.getMainLooper()).idle()
         assertTrue("all repository reads complete when invoked from the main looper", finished.await(5, TimeUnit.SECONDS))
         assertNull("repository reads do not fail when invoked from the main looper", failure.get())
+        assertEquals("the strict read returns the valid evidence created by this test", evidence.evidenceId, strictRead.get()?.evidenceId)
         assertFalse("SQL for Conversation, ModelTranscript, MemoryTimeline, Artifacts, and StrictJournal runs off-main", sqlRanOnMain.get())
     }
 

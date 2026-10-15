@@ -17,6 +17,7 @@ internal class ImportCoordinator(
     private val sessionLocks = sharedSessionLocks(database)
     private val locks = sessionLocks.locks
     private val cutovers = sessionLocks.cutovers
+    private val sourceFiles = sessionLocks.sourceFiles
 
     /** Imports workspace execution ledgers first, ordinary conversations next, then Central. */
     suspend fun importAll(
@@ -38,10 +39,10 @@ internal class ImportCoordinator(
         for (sessionId in sessionIds) {
             val ledger = ledgersBySession[sessionId]
             val meta = File(conversationsDir, "$sessionId.meta.json")
-            val mutex = locks.computeIfAbsent(sessionId) { Mutex() }
-            mutex.lock()
+            val writerLock = acquireLedgerWriterLock(sessionId)
             try {
                 val report = if (ledger != null) {
+                    sourceFiles[sessionId] = ledger
                     importer.importConversation(sessionId, ledger, meta, options.copy(onProgress = progress))
                 } else {
                     importer.importDeletedMetaIfPresent(sessionId, meta) ?: continue
@@ -50,7 +51,7 @@ internal class ImportCoordinator(
                 val size = ledger?.length() ?: 0L
                 progress(ImportProgress(sessionId, report.state, size, size))
             } finally {
-                mutex.unlock()
+                writerLock.release()
             }
         }
         reports
@@ -58,25 +59,71 @@ internal class ImportCoordinator(
 
     suspend fun isImported(sessionId: String): Boolean = conversations.isImported(sessionId)
 
-    /** M4 holds this lock while it stops JSONL writes and establishes the source-of-truth cutover. */
-    suspend fun beginCutover(sessionId: String) {
+    /** Clears partial import data and its checkpoint under the same lock used by legacy writers. */
+    suspend fun resetConversationImport(sessionId: String): ChatDbResult<Boolean> {
+        val writerLock = acquireLedgerWriterLock(sessionId)
+        return try {
+            LedgerImporter(database, options).resetConversationImport(sessionId)
+        } finally {
+            writerLock.release()
+        }
+    }
+
+    /**
+     * M4 must acquire this token before each legacy JSONL append and hold it until the file write
+     * is complete. Import and cutover use the same per-session lock. Releasing twice is an error.
+     */
+    suspend fun acquireLedgerWriterLock(sessionId: String): LedgerWriterLock {
         require(sessionId.isNotBlank())
         val lock = locks.computeIfAbsent(sessionId) { Mutex() }
         lock.lock()
+        return LedgerWriterLock(sessionId, lock)
+    }
+
+    /**
+     * Locks legacy writers, revalidates the actual file, and imports an append-only suffix before
+     * allowing the service to switch to SQLite. Call [endCutover] after the source switch.
+     */
+    suspend fun beginCutover(sessionId: String) {
+        val ledger = sourceFiles[sessionId]
+            ?: error("ledger path is unknown; call beginCutover(sessionId, ledgerFile, metaFile)")
+        beginCutover(sessionId, ledger)
+    }
+
+    suspend fun beginCutover(
+        sessionId: String,
+        ledgerFile: File,
+        metaFile: File = File(ledgerFile.parentFile ?: File("."), "$sessionId.meta.json"),
+    ) {
+        require(sessionId.isNotBlank())
+        check(!cutovers.containsKey(sessionId)) { "cutover already held for this conversation" }
+        require(ledgerFile.isFile) { "conversation ledger does not exist: $sessionId" }
+        val writerLock = acquireLedgerWriterLock(sessionId)
         try {
-            check(conversations.isImported(sessionId)) { "conversation import has not validated as done" }
-            check(cutovers.add(sessionId)) { "cutover already held for this conversation" }
+            sourceFiles[sessionId] = ledgerFile
+            val importer = LedgerImporter(database, options)
+            if (!importer.isValidatedSourceCurrent(sessionId, ledgerFile)) {
+                val report = importer.importConversation(sessionId, ledgerFile, metaFile, options)
+                check(report.state == "done") {
+                    "conversation import is not cutover-ready: ${report.failureReason ?: report.state}"
+                }
+            }
+            check(importer.isValidatedSourceCurrent(sessionId, ledgerFile)) {
+                "conversation ledger changed while cutover was being validated"
+            }
+            check(cutovers.putIfAbsent(sessionId, writerLock) == null) {
+                "cutover already held for this conversation"
+            }
         } catch (failure: Throwable) {
-            lock.unlock()
+            writerLock.release()
             throw failure
         }
     }
 
     /** Releases the lock acquired by [beginCutover] after the service has switched its readers/writers. */
     fun endCutover(sessionId: String) {
-        val lock = locks[sessionId] ?: error("cutover was not begun for this conversation")
-        check(cutovers.remove(sessionId)) { "cutover was not begun for this conversation" }
-        lock.unlock()
+        val writerLock = cutovers.remove(sessionId) ?: error("cutover was not begun for this conversation")
+        writerLock.release()
     }
 
     private fun sessionId(file: File): String = file.name.removeSuffix(".jsonl")
@@ -89,7 +136,23 @@ internal class ImportCoordinator(
 
     private class SessionLocks {
         val locks = ConcurrentHashMap<String, Mutex>()
-        val cutovers = ConcurrentHashMap.newKeySet<String>()
+        val cutovers = ConcurrentHashMap<String, LedgerWriterLock>()
+        val sourceFiles = ConcurrentHashMap<String, File>()
+    }
+
+    class LedgerWriterLock internal constructor(
+        val sessionId: String,
+        private val mutex: Mutex,
+    ) : AutoCloseable {
+        @Volatile private var released = false
+
+        @Synchronized fun release() {
+            check(!released) { "ledger writer lock already released: $sessionId" }
+            released = true
+            mutex.unlock()
+        }
+
+        override fun close() = release()
     }
 
     private companion object {

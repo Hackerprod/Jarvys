@@ -384,11 +384,13 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      */
     suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
         database.withChatReadTransaction {
+            val highWater = sql.query("SELECT COALESCE(next_seq-1,0) FROM conversations WHERE id=?", arrayOf(conversationId))
+                .use { if (it.moveToFirst()) it.getLong(0) else 0L }
             val rows = sql.query(
                 "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items WHERE conversation_id=? " +
-                    "AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
+                    "AND seq<=? AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
                     "ORDER BY sort_seq,sort_sub,seq",
-                arrayOf(conversationId),
+                arrayOf(conversationId, highWater),
             ).use { c -> buildList { while (c.moveToNext()) add(SpineEntry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4))) } }
 
             val batchIds = rows.mapNotNull { item ->
@@ -398,7 +400,18 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                     else -> null
                 }
             }.distinct()
-            val batchSnapshots = loadBatchSnapshots(conversationId, batchIds)
+            val lifecycleAtHighWater = rows.mapNotNull { item ->
+                if (item.kind != "model_tool_started" && item.kind != "model_tool_not_started") return@mapNotNull null
+                decodeCallItemKey(item.key)?.let { key ->
+                    key to (if (item.kind == "model_tool_started") "STARTED" else "NEVER_LAUNCHED") to item.seq
+                }
+            }.groupBy({ it.first.first }, { it.first.second to it.second })
+                .mapValues { (_, revisions) -> revisions.maxBy { it.second }.first }
+            val lastActivityAtHighWater = rows.mapNotNull { item ->
+                val batchId = if (item.kind == "model_tool_calls") item.key else decodeCallItemKey(item.key)?.first
+                batchId?.let { it to item.seq }
+            }.groupBy({ it.first }, { it.second }).mapValues { (_, sequences) -> sequences.maxOrNull()!! }
+            val batchSnapshots = loadBatchSnapshots(conversationId, batchIds, highWater, lifecycleAtHighWater, lastActivityAtHighWater)
             val callsByKey = batchSnapshots.flatMap { (batchId, snapshot) ->
                 snapshot.calls.map { (batchId to it.call.call_id) to it }
             }.toMap()
@@ -432,13 +445,13 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             val boundary = sql.query(
                 "SELECT c.seq,c.compaction_id,c.first_kept,ci.sort_seq,ci.sort_sub FROM compactions c " +
                     "JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
-                    "WHERE c.conversation_id=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
+                "WHERE c.conversation_id=? AND c.seq<=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
                     "ON hi.conversation_id=m.conversation_id AND hi.seq=m.hidden_seq WHERE m.conversation_id=c.conversation_id " +
-                    "AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
+                    "AND m.hidden_seq<=? AND hi.seq<=? AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
                     "(hi.sort_seq>ci.sort_seq OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub>ci.sort_sub) " +
                     "OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub=ci.sort_sub AND hi.seq>ci.seq))) " +
                     "ORDER BY ci.sort_seq DESC,ci.sort_sub DESC,ci.seq DESC LIMIT 1",
-                arrayOf(conversationId),
+                arrayOf(conversationId, highWater, highWater, highWater),
             ).use { c ->
                 if (c.moveToFirst()) CompactionBoundary(c.getLong(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)) else null
             }
@@ -461,10 +474,10 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                 legacyCompactionRowIndex(value.compactionId) ?: sql.query(
                     "SELECT COUNT(*) FROM conversation_items i JOIN conversation_items boundary " +
                         "ON boundary.conversation_id=i.conversation_id AND boundary.seq=? " +
-                        "WHERE i.conversation_id=? AND i.item_kind NOT IN " + eligibleTimelineExclusionSql() +
+                    "WHERE i.conversation_id=? AND i.seq<=? AND i.item_kind NOT IN " + eligibleTimelineExclusionSql() +
                         " AND (i.sort_seq<boundary.sort_seq OR (i.sort_seq=boundary.sort_seq AND i.sort_sub<boundary.sort_sub) " +
                         "OR (i.sort_seq=boundary.sort_seq AND i.sort_sub=boundary.sort_sub AND i.seq<boundary.seq))",
-                    arrayOf(value.seq, conversationId),
+                    arrayOf(value.seq, conversationId, highWater),
                 ).use { it.moveToFirst(); it.getLong(0) }
             }
             ModelTranscriptSnapshot(conversationId, events, latestProviders, boundary?.seq, boundaryIndex, boundary?.firstKept)
@@ -544,7 +557,13 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         loadBatchSnapshots(conversationId, listOf(batchId))[batchId]
 
     /** Loads batch headers, calls, and first-wins results in one query per table and SQLite-sized ID chunk. */
-    private fun loadBatchSnapshots(conversationId: String, batchIds: Collection<String>): Map<String, ModelToolBatchSnapshot> {
+    private fun loadBatchSnapshots(
+        conversationId: String,
+        batchIds: Collection<String>,
+        highWater: Long? = null,
+        lifecycleAtHighWater: Map<Pair<String, String>, Pair<String, Long>>? = null,
+        lastActivityAtHighWater: Map<String, Long>? = null,
+    ): Map<String, ModelToolBatchSnapshot> {
         val distinctIds = batchIds.distinct()
         if (distinctIds.isEmpty()) return emptyMap()
         val batches = linkedMapOf<String, ToolBatch>()
@@ -553,19 +572,31 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         distinctIds.chunked(MAX_IN_QUERY_IDS).forEach { ids ->
             val inClause = ids.joinToString(",") { "?" }
             val args = arrayOf<Any?>(conversationId, *ids.toTypedArray())
-            sql.query("SELECT * FROM tool_batches WHERE conversation_id=? AND batch_id IN ($inClause)", args).use { c ->
+            val batchWaterClause = if (highWater == null) "" else " AND seq<=?"
+            val batchArgs = if (highWater == null) args else arrayOf<Any?>(*args, highWater)
+            sql.query("SELECT * FROM tool_batches WHERE conversation_id=? AND batch_id IN ($inClause)$batchWaterClause", batchArgs).use { c ->
                 while (c.moveToNext()) readBatch(c).also { batches[it.batch_id] = it }
             }
             sql.query("SELECT * FROM tool_calls WHERE conversation_id=? AND batch_id IN ($inClause) ORDER BY batch_id,ordinal", args).use { c ->
                 while (c.moveToNext()) readCall(c).also { calls.getOrPut(it.batch_id) { mutableListOf() }.add(it) }
             }
-            sql.query("SELECT * FROM tool_results WHERE conversation_id=? AND batch_id IN ($inClause)", args).use { c ->
+            val resultWaterClause = if (highWater == null) "" else " AND seq<=?"
+            val resultArgs = if (highWater == null) args else arrayOf<Any?>(*args, highWater)
+            sql.query("SELECT * FROM tool_results WHERE conversation_id=? AND batch_id IN ($inClause)$resultWaterClause", resultArgs).use { c ->
                 while (c.moveToNext()) readToolResult(c).also { results[it.batch_id to it.call_id] = it }
             }
         }
         return batches.mapValues { (batchId, batch) ->
-            val states = calls[batchId].orEmpty().map { call -> ModelCallState(call, results[batchId to call.call_id]) }
-            ModelToolBatchSnapshot(batch, states, batch.calls_decode_error == null && states.isNotEmpty() && states.all { it.result != null })
+            val states = calls[batchId].orEmpty().map { storedCall ->
+                val revision = lifecycleAtHighWater?.get(batchId to storedCall.call_id)
+                val call = if (highWater == null) storedCall else storedCall.copy(
+                    lifecycle = revision?.first ?: "INTENT",
+                    lifecycle_seq = revision?.second ?: batch.seq,
+                )
+                ModelCallState(call, results[batchId to call.call_id])
+            }
+            val cappedBatch = if (highWater == null) batch else batch.copy(last_activity_seq = lastActivityAtHighWater?.get(batchId) ?: batch.seq)
+            ModelToolBatchSnapshot(cappedBatch, states, batch.calls_decode_error == null && states.isNotEmpty() && states.all { it.result != null })
         }
     }
 

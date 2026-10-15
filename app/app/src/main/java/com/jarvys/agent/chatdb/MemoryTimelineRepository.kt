@@ -191,7 +191,9 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
      * (`LocalRunStore.java:3239-3368`), including its `reflection_tool` trust markers and checkpoint boundary.
      */
     suspend fun buildReflectionPayload(conversationId: String, throughMessageId: String? = null, replayAll: Boolean = false): ReflectionPayloadSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
-        val rows = readTimelineRows(conversationId)
+        val highWater = sql.query("SELECT COALESCE(next_seq-1,0) FROM conversations WHERE id=?", arrayOf(conversationId))
+            .use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        val rows = readTimelineRows(conversationId, highWater)
         val messages = rows.mapIndexedNotNull { index, row ->
             if (row.role == "user" || row.role == "assistant") row.messageId?.let { id ->
                 ReflectionMessage(id, row.role, row.text.orEmpty(), row.status.orEmpty(), row.ownerUserMessageId.orEmpty(), index)
@@ -201,23 +203,23 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         messages.forEachIndexed { index, message -> indexById[message.id] = index }
         val latestCheckpoint = if (replayAll) null else sql.query(
             "SELECT r.through_message_id FROM reflections r JOIN conversation_items i ON i.conversation_id=r.conversation_id AND i.seq=r.seq " +
-                "WHERE r.conversation_id=? AND r.kind IN ('reflection_checkpoint','reflection_commit') " +
+                "WHERE r.conversation_id=? AND i.seq<=? AND r.kind IN ('reflection_checkpoint','reflection_commit') " +
                 "ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1",
-            arrayOf(conversationId),
+            arrayOf(conversationId, highWater),
         ).use { if (it.moveToFirst()) it.getStringOrNullMemory("through_message_id") else null }
         val checkpointIndex = latestCheckpoint?.let { indexById[it] } ?: -1
         val maxRowIndex = if (throughMessageId.isNullOrEmpty()) rows.lastIndex else rows.indexOfFirst { it.messageId == throughMessageId }
-        val hidden = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND hidden_kind IN ('assistant_regenerated','assistant_deleted')",
-            arrayOf(conversationId)).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
+        val hidden = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND hidden_seq<=? AND hidden_kind IN ('assistant_regenerated','assistant_deleted')",
+            arrayOf(conversationId, highWater)).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
         val end = messages.indices.reversed().firstOrNull { i -> messages[i].rowIndex <= maxRowIndex && !(messages[i].role == "assistant" && messages[i].id in hidden) } ?: -1
         val endMessageId = if (end < 0) "" else messages[end].id
         if (end <= checkpointIndex) return@withChatReadTransaction ReflectionPayloadSnapshot("[]", "", emptyList(), 0, 0, 0, false)
 
-        val connectorUsers = sql.query("SELECT owner_user_message_id,source FROM reflection_tool_markers WHERE conversation_id=? AND seq IN (SELECT seq FROM conversation_items WHERE conversation_id=? AND item_kind NOT IN $RESULT_ONLY_KINDS ORDER BY sort_seq,sort_sub,seq LIMIT ?)",
-            arrayOf(conversationId, conversationId, (maxRowIndex + 1).coerceAtLeast(0))).use { c ->
+        val connectorUsers = sql.query("SELECT owner_user_message_id,source FROM reflection_tool_markers WHERE conversation_id=? AND seq<=? AND seq IN (SELECT seq FROM conversation_items WHERE conversation_id=? AND seq<=? AND item_kind NOT IN $RESULT_ONLY_KINDS ORDER BY sort_seq,sort_sub,seq LIMIT ?)",
+            arrayOf(conversationId, highWater, conversationId, highWater, (maxRowIndex + 1).coerceAtLeast(0))).use { c ->
             buildSet { while (c.moveToNext()) { val source = c.getString(1); if (source.startsWith("connector") || source in setOf("mcp", "delegate", "web")) c.getStringOrNullMemory("owner_user_message_id")?.let(::add) } }
         }
-        val reflectionMarkers = sql.query("SELECT * FROM reflection_tool_markers WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+        val reflectionMarkers = sql.query("SELECT * FROM reflection_tool_markers WHERE conversation_id=? AND seq<=?", arrayOf(conversationId, highWater)).use { c ->
             buildMap { while (c.moveToNext()) { val marker = readReflectionMarker(c); put(marker.seq, marker) } }
         }
         val transcript = ArrayList<ReflectionTranscriptBuilder.Entry>()
@@ -257,7 +259,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         }
         val includedRowIndex = messages[includedIndex].rowIndex
         val boundary = if (hasMore) includedRowIndex + 1 else maxRowIndex + 1
-        val compacted = pendingCompactionIdsBefore(conversationId, rows, boundary)
+        val compacted = pendingCompactionIdsBefore(conversationId, rows, boundary, highWater)
         ReflectionPayloadSnapshot(serialized, includedEnd, compacted, completedSteps, userCharacters, messageCount, hasMore)
     } }
 
@@ -462,18 +464,18 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         }
     }
 
-    private fun pendingCompactionIdsBefore(conversationId: String, rows: List<TimelineRow>, rowBoundaryExclusive: Int): List<String> {
+    private fun pendingCompactionIdsBefore(conversationId: String, rows: List<TimelineRow>, rowBoundaryExclusive: Int, highWater: Long): List<String> {
         val ids = LinkedHashSet<String>()
         val limit = rowBoundaryExclusive.coerceIn(0, rows.size)
         if (limit == 0) return emptyList()
         sql.query(
             "SELECT i.item_kind,i.item_key,a.compaction_id FROM conversation_items i " +
-                "LEFT JOIN compaction_reflection_acks a ON a.conversation_id=i.conversation_id AND a.seq=i.seq " +
-                "WHERE i.conversation_id=? AND i.item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') " +
-                "AND i.seq IN (SELECT eligible.seq FROM conversation_items eligible WHERE eligible.conversation_id=? " +
+                "LEFT JOIN compaction_reflection_acks a ON a.conversation_id=i.conversation_id AND a.seq=i.seq AND a.seq<=? " +
+            "WHERE i.conversation_id=? AND i.seq<=? AND i.item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') " +
+                "AND i.seq IN (SELECT eligible.seq FROM conversation_items eligible WHERE eligible.conversation_id=? AND eligible.seq<=? " +
                 "AND eligible.item_kind NOT IN $RESULT_ONLY_KINDS ORDER BY eligible.sort_seq,eligible.sort_sub,eligible.seq LIMIT ?) " +
                 "ORDER BY i.sort_seq,i.sort_sub,i.seq,a.compaction_id",
-            arrayOf(conversationId, conversationId, limit),
+            arrayOf(highWater, conversationId, highWater, conversationId, highWater, limit),
         ).use { c -> while (c.moveToNext()) {
             when (c.getString(0)) {
                 "compaction" -> ids.add(c.getString(1))
@@ -483,13 +485,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         return ids.toList()
     }
 
-    private fun readTimelineRows(conversationId: String): List<TimelineRow> = sql.query(
+    private fun readTimelineRows(conversationId: String, highWater: Long): List<TimelineRow> = sql.query(
         "SELECT i.seq,i.item_kind,i.item_key,i.sort_seq,i.sort_sub,i.created_at,m.message_id,m.role,m.status,m.owner_user_message_id," +
             "(SELECT group_concat(payload,'') FROM (SELECT p.payload FROM message_parts p " +
             "WHERE p.conversation_id=i.conversation_id AND p.message_id=m.message_id AND p.kind='text' ORDER BY p.ordinal)) AS message_text " +
             "FROM conversation_items i LEFT JOIN messages m ON m.conversation_id=i.conversation_id AND m.seq=i.seq " +
-            "WHERE i.conversation_id=? AND i.item_kind NOT IN $RESULT_ONLY_KINDS " +
-            "ORDER BY i.sort_seq,i.sort_sub,i.seq", arrayOf(conversationId),
+            "WHERE i.conversation_id=? AND i.seq<=? AND i.item_kind NOT IN $RESULT_ONLY_KINDS " +
+            "ORDER BY i.sort_seq,i.sort_sub,i.seq", arrayOf(conversationId, highWater),
     ).use { c -> buildList {
         while (c.moveToNext()) add(TimelineRow(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4),
             c.getDouble(5), c.getStringOrNullMemory("message_id"), c.getStringOrNullMemory("role"),

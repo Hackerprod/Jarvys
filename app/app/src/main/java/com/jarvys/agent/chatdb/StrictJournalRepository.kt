@@ -731,7 +731,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
                         throw JournalAbort("invalid_execution_session")
                     if (c.isNull(22)) throw JournalAbort(if (c.getInt(23) != 0) "conversation_tombstoned" else "conversation_not_found")
                     if (c.getInt(23) != 0) throw JournalAbort("conversation_tombstoned")
-                    replyRow = if (c.isNull(24)) null else ReplyRow(c, 24)
+                    replyRow = if (c.isNull(24)) null else ReplyRow(c, 24, includeSeq = false)
                     noticeRow = if (c.isNull(36)) null else CoordinationRefRow(c, 36)
                     evidenceRow = if (c.isNull(52)) null else CoordinationEvidenceRow(c, 52)
                     evidenceRefs = sortedMapOf()
@@ -892,37 +892,47 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     }
 
     private fun findCoordinationReply(central: String, referenceId: String): CoordinationReply? {
+        val highWater = sql.query(
+            "SELECT COALESCE(next_seq-1,0) FROM conversations WHERE id=?",
+            arrayOf(central),
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else return null }
         val row = sql.query(
-            "SELECT schema_version,reply_id,evidence_id,reply_key,text,central_request_id,original_user_request,mailbox_message_id,payload_sha256,prepared_at_ms,state,state_at_ms FROM workspace_coordination_replies WHERE conversation_id=? AND reference_id=?",
-            arrayOf(central, referenceId),
+            "SELECT schema_version,reply_id,evidence_id,reply_key,text,central_request_id,original_user_request,mailbox_message_id,payload_sha256,prepared_at_ms,state,state_at_ms,seq FROM workspace_coordination_replies WHERE conversation_id=? AND reference_id=? AND seq<=?",
+            arrayOf(central, referenceId, highWater),
         ).use { c -> if (!c.moveToFirst()) null else ReplyRow(c) } ?: return null
+        val transitions = readReplyTransitions(central, row.replyId, highWater)
+        val (stateAtHighWater, stateTimeAtHighWater) = resolveReplyState(row.preparedAtMillis, transitions)
         val notice = findCoordinationRef(central, referenceId, true)
             ?: error("Corrupt workspace_coordination_replies: notice is missing")
         val reply = CoordinationReply.create(notice, row.replyKey, ExactUtf16.decode(row.text), row.centralRequestId,
-            ExactUtf16.decode(row.originalRequest), row.preparedAtMillis).withState(
-            CoordinationReply.State.valueOf(row.state), row.stateAtMillis,
-        )
+            ExactUtf16.decode(row.originalRequest), row.preparedAtMillis)
+            .withState(stateAtHighWater, stateTimeAtHighWater)
         check(row.schemaVersion == CoordinationReply.SCHEMA_VERSION && reply.replyId == row.replyId && reply.reference.evidenceId == row.evidenceId &&
             reply.mailboxMessageId == row.mailboxMessageId && reply.payloadSha256 == row.payloadSha256) {
             "Corrupt workspace_coordination_replies payload"
         }
-        validateReplyTransitions(central, reply)
+        validateReplyTransitions(reply, transitions)
         return reply
     }
 
-    private fun validateReplyTransitions(central: String, reply: CoordinationReply) {
-        val states = sql.query(
-            "SELECT schema_version,state,state_at_ms FROM workspace_coordination_reply_transitions WHERE conversation_id=? AND reply_id=? ORDER BY seq",
-            arrayOf(central, reply.replyId),
+    private fun readReplyTransitions(central: String, replyId: String, highWater: Long): List<Triple<Int, String, Long>> = sql.query(
+            "SELECT schema_version,state,state_at_ms FROM workspace_coordination_reply_transitions WHERE conversation_id=? AND reply_id=? AND seq<=? ORDER BY seq",
+            arrayOf(central, replyId, highWater),
         ).use { c -> buildList { while (c.moveToNext()) {
             add(Triple(c.getInt(0), c.getString(1), c.getLong(2)))
         } } }
-        validateReplyTransitions(reply, states)
-    }
 
     private fun validateReplyTransitions(reply: CoordinationReply, states: List<Triple<Int, String, Long>>) {
+        val (state, at) = resolveReplyState(reply.preparedAtMillis, states)
+        check(state == reply.state && at == reply.stateAtMillis) { "Reply state differs from its transition history" }
+    }
+
+    private fun resolveReplyState(
+        preparedAtMillis: Long,
+        states: List<Triple<Int, String, Long>>,
+    ): Pair<CoordinationReply.State, Long> {
         var state = CoordinationReply.State.PREPARED
-        var at = reply.preparedAtMillis
+        var at = preparedAtMillis
         for ((schemaVersion, name, nextAt) in states) {
             check(schemaVersion == CoordinationReply.SCHEMA_VERSION) { "Unsupported workspace_coordination_reply_state schema" }
             val next = CoordinationReply.State.valueOf(name)
@@ -934,7 +944,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             state = next
             at = nextAt
         }
-        check(state == reply.state && at == reply.stateAtMillis) { "Reply state differs from its transition history" }
+        return state to at
     }
 
     private fun findInputIncorporation(central: String, receiptId: String): InputIncorporation? = sql.query(
@@ -1118,10 +1128,12 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val replyId: String, val evidenceId: String, val replyKey: String, val text: ByteArray,
         val centralRequestId: String, val originalRequest: ByteArray, val mailboxMessageId: String,
         val payloadSha256: String, val preparedAtMillis: Long, val state: String, val stateAtMillis: Long,
+        val seq: Long,
     ) {
-        constructor(c: Cursor, offset: Int = 0) : this(c.getInt(offset), c.getString(offset + 1), c.getString(offset + 2),
+        constructor(c: Cursor, offset: Int = 0, includeSeq: Boolean = true) : this(c.getInt(offset), c.getString(offset + 1), c.getString(offset + 2),
             c.getString(offset + 3), c.getBlob(offset + 4), c.getString(offset + 5), c.getBlob(offset + 6), c.getString(offset + 7),
-            c.getString(offset + 8), c.getLong(offset + 9), c.getString(offset + 10), c.getLong(offset + 11))
+            c.getString(offset + 8), c.getLong(offset + 9), c.getString(offset + 10), c.getLong(offset + 11),
+            if (includeSeq) c.getLong(offset + 12) else 0L)
     }
 
     private class JournalAbort(val reason: String) : RuntimeException(reason)

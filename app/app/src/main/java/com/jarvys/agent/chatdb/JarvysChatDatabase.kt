@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ArrayBlockingQueue
 
 /**
  * Normalized Room store for the conversation ledger (M0 schema version). Room entities do not emit
@@ -153,9 +154,11 @@ internal object JarvysChatDatabaseProvider {
     @Volatile
     private var instance: JarvysChatDatabase? = null
 
-    private val isolatedExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
+    private val databaseExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
     private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
+    private val writerDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
     private val databaseFiles = IdentityHashMap<JarvysChatDatabase, File>()
+    private val readPools = IdentityHashMap<JarvysChatDatabase, ReadDatabasePool>()
 
     /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
@@ -171,15 +174,27 @@ internal object JarvysChatDatabaseProvider {
                 "Could not create Jarvys chat database directory: ${databaseFile.parentFile}"
             }
             val executorSet = createExecutors()
+            var openedDatabase: JarvysChatDatabase? = null
+            var readPool: ReadDatabasePool? = null
             val opened = try {
                 buildDatabase(context.applicationContext, databaseFile, executorSet)
+                    .also {
+                        openedDatabase = it
+                        kotlinx.coroutines.runBlocking { it.useWriterConnection { } }
+                        readPool = ReadDatabasePool(databaseFile)
+                    }
             } catch (error: Throwable) {
+                runCatching { readPool?.close() }
+                runCatching { openedDatabase?.close() }
                 executorSet.forEach(ExecutorService::shutdown)
                 throw error
             }
             opened.also {
+                synchronized(databaseExecutors) { databaseExecutors[it] = executorSet }
                 synchronized(databaseFiles) { databaseFiles[it] = databaseFile }
                 synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
+                synchronized(writerDispatchers) { writerDispatchers[it] = executorSet[1].asCoroutineDispatcher() }
+                synchronized(readPools) { readPools[it] = checkNotNull(readPool) }
                 instance = it
             }
             }
@@ -193,29 +208,46 @@ internal object JarvysChatDatabaseProvider {
     internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase {
         databaseFile.parentFile?.mkdirs()
         val executorSet = createExecutors()
+        var openedDatabase: JarvysChatDatabase? = null
+        var readPool: ReadDatabasePool? = null
         return try {
             buildDatabase(context.applicationContext, databaseFile, executorSet).also { database ->
+                openedDatabase = database
                 kotlinx.coroutines.runBlocking { database.useWriterConnection { } }
-                synchronized(isolatedExecutors) { isolatedExecutors[database] = executorSet }
+                readPool = ReadDatabasePool(databaseFile)
+                synchronized(databaseExecutors) { databaseExecutors[database] = executorSet }
                 synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
-            synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
+                synchronized(writerDispatchers) { writerDispatchers[database] = executorSet[1].asCoroutineDispatcher() }
+                synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
+                synchronized(readPools) { readPools[database] = checkNotNull(readPool) }
             }
         } catch (error: Throwable) {
+            runCatching { readPool?.close() }
+            runCatching { openedDatabase?.close() }
             executorSet.forEach(ExecutorService::shutdown)
             throw error
         }
     }
 
-    /** Closes a database opened by [openDatabaseFileForTests] and releases its private executors. */
-    internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) {
+    /** Closes provider-owned handles and executors together with their Room database. */
+    internal fun closeDatabase(database: JarvysChatDatabase) {
+        synchronized(readPools) { readPools.remove(database) }?.close()
         database.close()
-        val executors = synchronized(isolatedExecutors) { isolatedExecutors.remove(database) }.orEmpty()
+        val executors = synchronized(databaseExecutors) { databaseExecutors.remove(database) }.orEmpty()
         synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
+        synchronized(writerDispatchers) { writerDispatchers.remove(database) }?.close()
         synchronized(databaseFiles) { databaseFiles.remove(database) }
         executors.forEach(ExecutorService::shutdown)
+        synchronized(this) { if (instance === database) instance = null }
     }
 
-    /** Physical file for the narrow rawQuery fallback used by Android for row-returning EXPLAIN. */
+    /** Closes the process singleton and its read pool when the owning application is shutting down. */
+    internal fun closeInstance() = synchronized(this) { instance?.let(::closeDatabase) }
+
+    /** Closes an isolated database opened for tests. */
+    internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) = closeDatabase(database)
+
+    /** Physical file for raw, read-only projection handles owned by this provider. */
     internal fun databaseFileForRawQuery(database: JarvysChatDatabase): File =
         synchronized(databaseFiles) { databaseFiles[database] }
             ?: throw IllegalStateException("No database file is registered for the chat database")
@@ -223,10 +255,34 @@ internal object JarvysChatDatabaseProvider {
     /** Runs a read projection on the query pool belonging to this exact Room database instance. */
     internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+        if (LeasedConnectionElement.current() != null || RawReadConnectionElement.current() != null) return operation()
         return withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
             ?: throw IllegalStateException("No Jarvys chat query executor is registered for this database")) {
             operation()
         }
+    }
+
+    internal suspend fun <T> onWriterExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T {
+        val dispatcher = synchronized(writerDispatchers) { writerDispatchers[database] }
+            ?: throw IllegalStateException("No Jarvys chat writer executor is registered for this database")
+        return withContext(dispatcher) { operation() }
+    }
+
+    internal fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase =
+        synchronized(readPools) { readPools[database] }
+            ?.acquire()
+            ?: throw IllegalStateException("No Jarvys chat read pool is registered for this database")
+
+    internal fun releaseReadDatabase(database: JarvysChatDatabase, handle: SQLiteDatabase) {
+        synchronized(readPools) { readPools[database] }
+            ?.release(handle)
+            ?: throw IllegalStateException("No Jarvys chat read pool is registered for this database")
+    }
+
+    /** Per-connection SQLite commit generation used to validate a multi-statement read projection. */
+    internal fun readDataVersion(handle: SQLiteDatabase): Long = handle.rawQuery("PRAGMA data_version", null).use { cursor ->
+        check(cursor.moveToFirst()) { "PRAGMA data_version returned no value" }
+        cursor.getLong(0)
     }
 
     private fun buildDatabase(
@@ -236,8 +292,8 @@ internal object JarvysChatDatabaseProvider {
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
         return Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
-            // Room 2.7 supplies separate writer/reader leases; Android configures WAL pool size
-            // through its db_connection_pool_size platform resource (default 4 total connections).
+            // Room 2.7's Android driver uses one connection for writer and reader leases. The
+            // provider's separate read-only pool serves concurrent projections from WAL.
             .setDriver(AndroidSQLiteDriver())
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
             .setQueryExecutor(executors[0])
@@ -467,6 +523,58 @@ internal object DatabaseTriggers {
         Executors.newFixedThreadPool(4, NamedDaemonThreadFactory("jarvys-chat-read")),
         Executors.newSingleThreadExecutor(NamedDaemonThreadFactory("jarvys-chat-transaction")),
     )
+
+    /** Independent committed-read handles; Room's Android driver reader lease aliases the writer. */
+    private class ReadDatabasePool(databaseFile: File) {
+        private val all = mutableListOf<SQLiteDatabase>()
+        private val available = ArrayBlockingQueue<SQLiteDatabase>(READ_CONNECTION_POOL_SIZE)
+
+        init {
+            try {
+                repeat(READ_CONNECTION_POOL_SIZE) {
+                    val database = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                    try {
+                        database.rawQuery("PRAGMA query_only=ON", null).use { while (it.moveToNext()) Unit }
+                        database.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MILLIS", null).use { while (it.moveToNext()) Unit }
+                        verifyPragma(database, "journal_mode", "wal")
+                        verifyPragma(database, "query_only", "1")
+                        verifyPragma(database, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
+                        all += database
+                        check(available.offer(database))
+                    } catch (error: Throwable) {
+                        runCatching { database.close() }
+                        throw error
+                    }
+                }
+            } catch (error: Throwable) {
+                all.forEach { runCatching { it.close() } }
+                throw error
+            }
+        }
+
+        fun acquire(): SQLiteDatabase = available.take()
+
+        fun release(database: SQLiteDatabase) {
+            check(available.offer(database)) { "Returned chat read handle was not borrowed from this pool" }
+        }
+
+        fun close() {
+            all.forEach(SQLiteDatabase::close)
+            all.clear()
+        }
+
+        private fun verifyPragma(database: SQLiteDatabase, pragma: String, expected: String) {
+            val actual = database.rawQuery("PRAGMA $pragma", null).use { cursor ->
+                check(cursor.moveToFirst()) { "PRAGMA $pragma returned no value" }
+                cursor.getString(0)
+            }
+            check(actual.equals(expected, ignoreCase = true)) {
+                "Jarvys chat read pool PRAGMA contract failed: $pragma expected=$expected actual=$actual"
+            }
+        }
+    }
+
+    private const val READ_CONNECTION_POOL_SIZE = 4
 
     private class NamedDaemonThreadFactory(private val prefix: String) : ThreadFactory {
         private val sequence = AtomicInteger(0)

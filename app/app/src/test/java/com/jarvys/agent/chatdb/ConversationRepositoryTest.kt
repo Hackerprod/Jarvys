@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
@@ -1002,10 +1004,31 @@ class ConversationRepositoryTest {
 
     @Test fun suspendReadReusesAnActiveWriterTransactionLeaseForReadYourWrites() = onDatabaseThread {
         success(repository.ensureConversation("no-read-under-write"))
-        val failure = runCatching {
-            database.withChatWriteTransaction { repository.pendingInterruptRequests("no-read-under-write") }
-        }.exceptionOrNull()
-        assertNull("a read inside a writer lease reuses it (read-your-writes) instead of failing", failure)
+        val observedReadThread = AtomicReference<Thread?>()
+        val captureReadThread = AtomicReference(false)
+        val request = ChatSqlInstrumentation.observeStatements({ sql ->
+            if (captureReadThread.get() && sql.startsWith("SELECT", ignoreCase = true)) {
+                observedReadThread.compareAndSet(null, Thread.currentThread())
+            }
+        }) {
+            database.withChatWriteTransaction {
+                val writerThread = Thread.currentThread()
+                val created = success(repository.appendInterruptRequest("no-read-under-write", "uncommitted-interrupt", listOf("skill-a")))
+                captureReadThread.set(true)
+                val pending = repository.pendingInterruptRequests("no-read-under-write")
+                captureReadThread.set(false)
+                assertEquals(listOf(created.requestId), pending.map { it.requestId })
+                assertEquals("the repository read keeps the Room transaction's thread", writerThread, observedReadThread.get())
+
+                val switchedThread = runCatching {
+                    withContext(Dispatchers.IO) { repository.pendingInterruptRequests("no-read-under-write") }
+                }.exceptionOrNull()
+                assertTrue("a dispatcher hop under a writer lease is rejected", switchedThread is IllegalStateException)
+                assertTrue(switchedThread?.message.orEmpty().contains("cannot resume on a different thread"))
+                created
+            }
+        }
+        assertEquals("the committed read still returns the inserted request", "uncommitted-interrupt", request.requestId)
     }
 
     @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {
@@ -1190,31 +1213,77 @@ class ConversationRepositoryTest {
         assertEquals("body-1004", hydrated.first().text)
     }
 
-    @Test fun windowReadRequestsDeferredReaderConnection() {
+    @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
         success(runBlocking { repository.ensureConversation("wal-reader") })
-        runBlocking { append("wal-reader", "user", "committed page before writer") }
-        runBlocking { append("wal-reader", "user", "visible before writer") }
-        val databaseFile = File(temporary.root, "repository.db")
-        val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
-        val readerRepository = ConversationRepository(readerDatabase)
-        val readerRequests = AtomicInteger()
-        val writerRequests = AtomicInteger()
+        val earlier = runBlocking { append("wal-reader", "user", "committed earlier") }
+        val latest = runBlocking { append("wal-reader", "user", "visible committed value") }
+        val writerEntered = CountDownLatch(1)
+        val releaseWriter = CountDownLatch(1)
+        val writerExecutor = Executors.newSingleThreadExecutor()
+        var writer: java.util.concurrent.Future<*>? = null
         try {
-            runBlocking {
-                ChatSqlInstrumentation.observeConnectionRequests({ request ->
-                    when (request) {
-                        ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION -> readerRequests.incrementAndGet()
-                        ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION -> writerRequests.incrementAndGet()
+            writer = writerExecutor.submit {
+                runBlocking {
+                    database.withChatWriteTransaction {
+                        append("wal-reader", "user", "uncommitted value")
+                        writerEntered.countDown()
+                        check(releaseWriter.await(10, TimeUnit.SECONDS)) { "timed out waiting to release the Room writer" }
                     }
-                }) {
-                    assertEquals("visible before writer", successWindow(readerRepository.readTailWindow("wal-reader", turns = 1))
-                        .slots.single { it.message?.role == "user" }.message!!.text)
                 }
             }
-            assertTrue("window reads request a Room reader connection with a deferred transaction", readerRequests.get() > 0)
-            assertEquals("window reads never request a Room writer connection", 0, writerRequests.get())
+            assertTrue("the real Room writer is holding its uncommitted append", writerEntered.await(10, TimeUnit.SECONDS))
+
+            val started = System.nanoTime()
+            val tail = onDatabaseThread { repository.readTailWindow("wal-reader", turns = 1) }
+            assertTrue("tail projection returns while the writer is held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000L)
+            assertEquals("the tail read sees the last committed value", "visible committed value", tail.slots.single { it.message?.role == "user" }.message!!.text)
+
+            val beforeStarted = System.nanoTime()
+            val previous = onDatabaseThread { repository.readWindowBefore("wal-reader", latest.seq, turns = 1) }
+            assertTrue("the previous-window projection returns while the writer is held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - beforeStarted) < 3_000L)
+            assertEquals("readWindowBefore is also served by the concurrent read pool", "committed earlier", previous.slots.single { it.message?.role == "user" }.message!!.text)
+            assertEquals(earlier.seq, previous.slots.single().item.seq)
         } finally {
-            JarvysChatDatabaseProvider.closeDatabaseFileForTests(readerDatabase)
+            releaseWriter.countDown()
+            runCatching { writer?.get(10, TimeUnit.SECONDS) }
+            writerExecutor.shutdownNow()
+        }
+    }
+
+    @Test fun multiStatementReadRetriesWhenAnotherConnectionCommitsMidProjection() = onDatabaseThread {
+        success(repository.ensureConversation("read-version-fence"))
+        append("read-version-fence", "user", "first")
+        val firstReadFinished = CountDownLatch(1)
+        val writerCommitted = CountDownLatch(1)
+        val writerExecutor = Executors.newSingleThreadExecutor()
+        val attempts = AtomicInteger()
+        val writer = writerExecutor.submit {
+            check(firstReadFinished.await(10, TimeUnit.SECONDS)) { "the first projection did not reach its read barrier" }
+            runBlocking { append("read-version-fence", "user", "second") }
+            writerCommitted.countDown()
+        }
+        try {
+            val snapshot = database.withChatReadTransaction {
+                val attempt = attempts.incrementAndGet()
+                val before = database.chatSql.query(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf("read-version-fence"),
+                ).use { it.moveToFirst(); it.getLong(0) }
+                if (attempt == 1) {
+                    firstReadFinished.countDown()
+                    check(writerCommitted.await(10, TimeUnit.SECONDS)) { "the concurrent writer did not commit" }
+                }
+                val after = database.chatSql.query(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf("read-version-fence"),
+                ).use { it.moveToFirst(); it.getLong(0) }
+                before to after
+            }
+            assertEquals("the mixed first attempt is discarded and retried", 2, attempts.get())
+            assertEquals(2L to 2L, snapshot)
+            writer.get(10, TimeUnit.SECONDS)
+        } finally {
+            firstReadFinished.countDown()
+            writerCommitted.countDown()
+            writerExecutor.shutdownNow()
         }
     }
 

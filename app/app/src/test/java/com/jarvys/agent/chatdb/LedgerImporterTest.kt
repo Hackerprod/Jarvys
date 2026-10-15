@@ -227,9 +227,10 @@ class LedgerImporterTest {
         ).use { assertTrue(it.moveToFirst()); it.getString(0) })
         assertTrue(ModelTranscriptRepository(database).readModelTranscript("chat-catalog")
             .latestProviderOutputItemsByOwner.getValue(userId).items_json.contains("latest provider output"))
+        // org.json emits the Double token 1.70000001025E9; this asserts the persisted legacy ID literally.
         assertTrue(database.testChatSql.query(
             "SELECT compaction_id FROM compactions WHERE conversation_id=? ORDER BY seq LIMIT 1", arrayOf("chat-catalog"),
-        ).use { it.moveToFirst() && it.getString(0).startsWith("legacy-" + JSONObject().put("timestamp", 1_700_000_010.25).optString("timestamp", "") + "-") })
+        ).use { it.moveToFirst() && it.getString(0).startsWith("legacy-1.70000001025E9-") })
         assertEquals(2L, count("SELECT COUNT(*) FROM compaction_reflection_acks WHERE conversation_id=?", "chat-catalog"))
         assertEquals("done", database.testChatSql.query(
             "SELECT import_state FROM conversations WHERE id=?", arrayOf("chat-catalog"),
@@ -265,7 +266,8 @@ class LedgerImporterTest {
         // Legacy readConversationRows counts user, session_title, and the whole input marker once;
         // strict evidence is result-only. Room's spine has no session_title row, so its item count
         // cannot be used as this legacy identity's index.
-        assertEquals("legacy-" + JSONObject().put("timestamp", 123.5).optString("timestamp", "") + "-3", database.testChatSql.query(
+        // org.json serializes this Double timestamp as the literal token 123.5.
+        assertEquals("legacy-123.5-3", database.testChatSql.query(
             "SELECT compaction_id FROM compactions WHERE conversation_id=?", arrayOf(sessionId),
         ).use { assertTrue(it.moveToFirst()); it.getString(0) })
         assertEquals("resolved", database.testChatSql.query(
@@ -448,6 +450,170 @@ class LedgerImporterTest {
         assertEquals(17L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", "resume-chat"))
     }
 
+    @Test fun appendAfterDoneIsImportedBeforeCutover() = onDatabaseThread {
+        val sessionId = "cutover-append"
+        val directory = File(temporary.root, "cutover-source").apply { mkdirs() }
+        val ledger = File(directory, "$sessionId.jsonl")
+        val original = jsonRow(null, "user", "content" to "before-cutover", "messageId" to "cutover-1")
+        ledger.writeText(original.toString() + "\n", StandardCharsets.UTF_8)
+        val coordinator = ImportCoordinator(database)
+        assertEquals("done", coordinator.importAll(directory).single().state)
+
+        val appended = jsonRow(null, "assistant", "content" to "appended-before-switch", "messageId" to "cutover-2", "beforeMessageId" to "cutover-1")
+        FileOutputStream(ledger, true).bufferedWriter(StandardCharsets.UTF_8).use { it.append(appended.toString()).append('\n') }
+        coordinator.beginCutover(sessionId, ledger)
+        try {
+            assertEquals(2L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+            val checkpoint = database.testChatSql.query(
+                "SELECT import_state,import_offset,legacy_ledger_bytes FROM conversations WHERE id=?", arrayOf(sessionId),
+            ).use { assertTrue(it.moveToFirst()); Triple(it.getString(0), it.getLong(1), it.getLong(2)) }
+            assertEquals("done", checkpoint.first)
+            assertEquals(ledger.length(), checkpoint.second)
+            assertEquals(ledger.length(), checkpoint.third)
+            val messageIndexes = database.testChatSql.query(
+                "SELECT message_id,message_index FROM messages WHERE conversation_id=? ORDER BY message_index", arrayOf(sessionId),
+            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getLong(1)) } }
+            assertEquals(listOf("cutover-2" to 0L, "cutover-1" to 1L), messageIndexes)
+        } finally {
+            coordinator.endCutover(sessionId)
+        }
+    }
+
+    @Test fun replyIntentAndStateInOneImportBatchReadTheUncommittedIntent() = onDatabaseThread {
+        val workspaceId = "92345678-1234-1234-1234-123456789abc"
+        val executionSession = WorkspaceIdentity.executionSessionId(workspaceId)
+        val requestId = "reply-import-request"
+        val missionId = UUID.nameUUIDFromBytes(
+            "jarvys-workspace-mission-v1\u0000$workspaceId\u0000$requestId".toByteArray(StandardCharsets.UTF_8),
+        ).toString()
+        val cycleId = "a2345678-1234-1234-1234-123456789abc"
+        val assignmentId = "b2345678-1234-1234-1234-123456789abc"
+        val timestampMillis = 1_700_000_100_000L
+        val evidence = CrewCoordinationEvidence.create(
+            executionSession, missionId, "bot-reply", cycleId, "coordination-question", "QUESTION",
+            "How should I proceed?", emptyList(), timestampMillis,
+        )
+        val reference = WorkspaceCoordinationReference.create(
+            evidence, WorkspaceIdentity.CENTRAL_SESSION, workspaceId, assignmentId, requestId, 1L,
+        )
+        val reply = WorkspaceCoordinationReply.create(
+            reference, "reply-import-key", "Continue with the safe option.", "central-request", "How should I proceed?",
+            timestampMillis + 1,
+        )
+        val executionReport = importRows(executionSession, listOf(evidence.toJson(), reference.toJson()))
+        assertEquals("done", executionReport.state)
+
+        // Notice, immutable intent, then state are processed by one withImportBatch transaction.
+        val centralRows = listOf(
+            reference.toNoticeJson(),
+            reply.toJson(),
+            reply.withState(WorkspaceCoordinationReply.State.STARTED, timestampMillis + 2).toStateJson(),
+        )
+        val committedBatches = mutableListOf<Int>()
+        val centralLedger = writeLedger("reply-import-central", centralRows)
+        val centralReport = importer(LedgerImportOptions(
+            batchSize = centralRows.size,
+            beforeBatchCommit = { batch -> committedBatches += batch },
+        )).importConversation(WorkspaceIdentity.CENTRAL_SESSION, centralLedger, writeMeta("reply-import-central.meta.json"))
+
+        assertEquals("done", centralReport.state)
+        assertTrue(centralReport.validations.all { it.passed })
+        assertEquals(listOf(1), committedBatches)
+        val read = StrictJournalRepository(database).readWorkspaceCoordinationReply(
+            WorkspaceIdentity.CENTRAL_SESSION, reference.referenceId,
+        )
+        assertTrue("same-batch reply state must see its prepared intent: $read", read is ChatDbResult.Success<*>)
+        val persisted = requireNotNull(when (read) {
+            is ChatDbResult.Success -> read.value
+            else -> error("reply read did not succeed: $read")
+        })
+        assertEquals(reply.replyId, persisted.replyId)
+        assertEquals(reply.payloadSha256, persisted.payloadSha256)
+        assertEquals(WorkspaceCoordinationReply.State.STARTED, persisted.state)
+    }
+
+    @Test fun appendAfterInterruptedImportResumesFromCommittedPrefix() = onDatabaseThread {
+        val sessionId = "resume-append"
+        val rows = (1..6).map { index ->
+            jsonRow(null, if (index % 2 == 0) "assistant" else "user", "content" to "body-$index", "messageId" to "append-$index")
+        }
+        val ledger = writeLedger("resume-append-source", rows)
+        val meta = writeMeta("resume-append.meta.json")
+        val interrupted = importer(LedgerImportOptions(batchSize = 2, beforeBatchCommit = { batch ->
+            if (batch == 2) error("stop-after-first-committed-batch")
+        })).importConversation(sessionId, ledger, meta)
+        assertEquals("failed", interrupted.state)
+        val committedOffset = database.testChatSql.query(
+            "SELECT import_offset FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getLong(0) }
+        assertTrue(committedOffset > 0L && committedOffset < ledger.length())
+
+        val appended = jsonRow(null, "assistant", "content" to "appended-during-recovery", "messageId" to "append-7")
+        FileOutputStream(ledger, true).bufferedWriter(StandardCharsets.UTF_8).use { it.append(appended.toString()).append('\n') }
+        val resumed = importer(LedgerImportOptions(batchSize = 2)).importConversation(sessionId, ledger, meta)
+
+        assertEquals("done", resumed.state)
+        assertEquals(7L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+        assertEquals(ledger.length(), database.testChatSql.query(
+            "SELECT import_offset FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getLong(0) })
+    }
+
+    @Test fun changedCommittedPrefixFailsInsteadOfResumingOverDifferentRows() = onDatabaseThread {
+        val sessionId = "resume-prefix-change"
+        val rows = (1..4).map { index -> jsonRow(null, "user", "content" to "body-$index", "messageId" to "prefix-$index") }
+        val ledger = writeLedger("resume-prefix-source", rows)
+        val meta = writeMeta("resume-prefix.meta.json")
+        val interrupted = importer(LedgerImportOptions(batchSize = 1, beforeBatchCommit = { batch ->
+            if (batch == 2) error("stop-after-first-committed-row")
+        })).importConversation(sessionId, ledger, meta)
+        assertEquals("failed", interrupted.state)
+        val checkpoint = database.testChatSql.query(
+            "SELECT import_offset FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); it.getLong(0) }
+        assertTrue(checkpoint > 0L)
+
+        ledger.writeText(ledger.readText(StandardCharsets.UTF_8).replace("body-1", "evil-1"), StandardCharsets.UTF_8)
+        val resumed = importer().importConversation(sessionId, ledger, meta)
+
+        assertEquals("failed", resumed.state)
+        assertEquals("resume_source_prefix_changed", resumed.failureReason)
+        assertTrue(resumed.validations.any { it.name == "resume_source_prefix_matches_checkpoint" && !it.passed })
+        assertEquals(1L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+    }
+
+    @Test fun resetConversationImportPurgesPartialRowsAndAllowsCleanReimport() = onDatabaseThread {
+        val sessionId = "reset-import"
+        val rows = (1..5).map { index -> jsonRow(null, "user", "content" to "body-$index", "messageId" to "reset-$index") }
+        val ledger = writeLedger("reset-import-source", rows)
+        val meta = writeMeta("reset-import.meta.json")
+        val interrupted = importer(LedgerImportOptions(batchSize = 1, beforeBatchCommit = { batch ->
+            if (batch == 2) error("stop-before-reset")
+        })).importConversation(sessionId, ledger, meta)
+        assertEquals("failed", interrupted.state)
+        assertEquals(1L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+
+        assertTrue(ImportCoordinator(database).resetConversationImport(sessionId) is ChatDbResult.Success)
+        val resetState = database.testChatSql.query(
+            "SELECT import_state,import_offset,legacy_ledger_bytes,legacy_ledger_sha256 FROM conversations WHERE id=?", arrayOf(sessionId),
+        ).use { assertTrue(it.moveToFirst()); listOf(it.getString(0), it.getLong(1), it.getString(2), it.getString(3)) }
+        assertEquals("not_started", resetState[0])
+        assertEquals(0L, resetState[1])
+        assertEquals(null, resetState[2])
+        assertEquals(null, resetState[3])
+        assertEquals(0L, count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", sessionId))
+        assertEquals(0L, count("SELECT COUNT(*) FROM chatdb_import_rows WHERE session_id=?", sessionId))
+        assertEquals(0L, count("SELECT COUNT(*) FROM chatdb_import_message_sources WHERE session_id=?", sessionId))
+        assertFalse(ConversationRepository(database).isTombstoned(sessionId))
+
+        val reimported = importer().importConversation(sessionId, ledger, meta)
+        val clean = importRows("reset-clean", rows)
+        assertEquals("done", reimported.state)
+        assertEquals("done", clean.state)
+        assertEquals(messageDigest("reset-clean"), messageDigest(sessionId))
+        assertEquals(5L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))
+    }
+
     @Test fun validationDetectsDatabaseMutationAfterImport() = onDatabaseThread {
         val ledger = writeLedger("validate-source", listOf(jsonRow(null, "user", "content" to "original", "messageId" to "validate-1", "timestamp" to 12.5)))
         val meta = writeMeta("validate.meta.json")
@@ -502,6 +668,28 @@ class LedgerImporterTest {
         assertEquals("done", report.state)
         assertEquals(rows, report.unknownLines)
         assertTrue("streaming should not retain an input-sized heap after import", usedAfter - usedBefore < 40L * 1024L * 1024L)
+    }
+
+    @Test fun largeSyntheticMessageLedgerMeasuresSortValidationAndCompletes() = onDatabaseThread {
+        val messageCount = 10_000
+        val ledger = File(temporary.root, "large-sort-validation.jsonl")
+        ledger.bufferedWriter(StandardCharsets.UTF_8).use { writer ->
+            for (index in 0 until messageCount) {
+                val role = if (index % 2 == 0) "user" else "assistant"
+                writer.append(jsonRow(null, role, "content" to "large-body-$index", "messageId" to "large-sort-$index").toString())
+                    .append('\n')
+            }
+        }
+        val started = System.nanoTime()
+        val report = importer(LedgerImportOptions(batchSize = 500)).importConversation(
+            "large-sort-validation", ledger, writeMeta("large-sort-validation.meta.json"),
+        )
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+
+        assertEquals("done", report.state)
+        assertTrue(report.validations.single { it.name == "message_sort_and_index_coherence" }.passed)
+        assertEquals(messageCount.toLong(), count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", "large-sort-validation"))
+        println("large-sort-validation: $messageCount messages imported and sorted in ${elapsedMillis}ms")
     }
 
     @Test fun modelTranscriptMatchesLegacyRestoreProjectionForToolProtocol() = onDatabaseThread {

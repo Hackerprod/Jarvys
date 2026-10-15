@@ -14,6 +14,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
 import java.math.BigDecimal
@@ -89,7 +90,7 @@ internal class LedgerImporter(
             updated_at = firstTimestamp,
             import_state = "in_progress",
             legacy_ledger_bytes = bytes,
-            legacy_ledger_sha256 = sha256,
+            legacy_ledger_sha256 = sha256Prefix(ledgerFile, 0L),
             import_offset = 0L,
         )
         val ensure = conversations.ensureConversationForImport(conversation)
@@ -102,17 +103,27 @@ internal class LedgerImporter(
         }
         val existingImport = ensure.value
         val hasPriorImport = existingImport.import_state in setOf("in_progress", "failed", "done")
-        val priorSourceMatches = existingImport.legacy_ledger_bytes == bytes && existingImport.legacy_ledger_sha256 == sha256
+        val storedOffset = existingImport.import_offset
+        val prefixHash = if (storedOffset <= bytes) sha256Prefix(ledgerFile, storedOffset) else null
+        // New checkpoints store SHA-256([0, import_offset)). Accept legacy whole-snapshot hashes
+        // only when the corresponding old snapshot is still an exact prefix of the current file.
+        val priorSourceMatches = when {
+            existingImport.legacy_ledger_sha256 == null && storedOffset == 0L -> true
+            prefixHash != null && existingImport.legacy_ledger_sha256 == prefixHash -> true
+            existingImport.legacy_ledger_bytes != null && existingImport.legacy_ledger_bytes <= bytes &&
+                existingImport.legacy_ledger_sha256 == sha256Prefix(ledgerFile, existingImport.legacy_ledger_bytes) -> true
+            else -> false
+        }
         if (hasPriorImport && !priorSourceMatches) {
-            val reason = "resume_source_ledger_changed"
+            val reason = "resume_source_prefix_changed"
             runCatching {
                 conversations.setImportCheckpoint(
-                    sessionId, "failed", existingImport.import_offset, ledgerBytes = null, ledgerSha256 = null,
+                    sessionId, "failed", existingImport.import_offset,
                 )
             }
             val validations = preflight.validations + ImportValidation(
-                "resume_source_matches_checkpoint", false,
-                "storedBytes=${existingImport.legacy_ledger_bytes}, currentBytes=$bytes, sha256Matches=${existingImport.legacy_ledger_sha256 == sha256}",
+                "resume_source_prefix_matches_checkpoint", false,
+                "storedOffset=$storedOffset, currentBytes=$bytes, prefixSha256Matches=${existingImport.legacy_ledger_sha256 == prefixHash}",
             )
             return@withContext ImportReport(
                 sessionId, "failed", started, System.currentTimeMillis() - started, bytes,
@@ -127,13 +138,27 @@ internal class LedgerImporter(
         }
         database.chatSql.execSQL(
             "UPDATE chatdb_import_messages SET imported=1 WHERE session_id=? AND source_offset<? AND EXISTS(" +
-                "SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.message_index=chatdb_import_messages.message_index)",
+                "SELECT 1 FROM chatdb_import_message_sources src JOIN messages m ON m.conversation_id=? AND m.seq=src.source_seq " +
+                "WHERE src.session_id=chatdb_import_messages.session_id AND src.source_offset=chatdb_import_messages.source_offset)",
             arrayOf(sessionId, ensure.value.import_offset.coerceAtMost(bytes), sessionId),
         )
-        if (conversations.isImported(sessionId)) {
+        // Appended assistant rows may steer before an imported message. The staging source-seq map
+        // remains stable across a verified prefix, so reconcile indexes even when sort_seq moved.
+        database.chatSql.execSQL(
+            "UPDATE messages SET message_index=(SELECT s.message_index FROM chatdb_import_messages s " +
+                "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq) " +
+                "WHERE conversation_id=? AND EXISTS(SELECT 1 FROM chatdb_import_messages s " +
+                "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq)",
+            arrayOf(sessionId, sessionId, sessionId),
+        )
+        val exactDoneSource = existingImport.import_state == "done" && existingImport.import_offset == bytes &&
+            existingImport.legacy_ledger_bytes == bytes && existingImport.legacy_ledger_sha256 == sha256
+        if (exactDoneSource) {
             val previous = conversations.readImportConversation(sessionId)
             val storedSkips = databaseSkippedRows(sessionId)
-            val validations = validate(sessionId, ledgerFile, preflight, storedSkips.counts)
+            val validations = validate(sessionId, ledgerFile, preflight, storedSkips.counts, bytes, sha256)
             val allIssues = (stagedIssues(sessionId) + databaseSkippedIssues(sessionId)).distinctBy { it.lineNumber to it.reason }.sortedBy { it.lineNumber }
             val skipped = allIssues.size.toLong()
             val state = if (validations.all { it.passed }) "done" else "failed"
@@ -148,7 +173,9 @@ internal class LedgerImporter(
                 conversationPayloadBytesAfter = conversationPayloadBytes(sessionId))
         }
         if (preflight.strictFailure != null) {
-            requireSuccess(conversations.setImportCheckpoint(sessionId, "failed", ensure.value.import_offset, bytes, sha256))
+            requireSuccess(conversations.setImportCheckpoint(
+                sessionId, "failed", ensure.value.import_offset, bytes, prefixHash ?: sha256Prefix(ledgerFile, ensure.value.import_offset),
+            ))
             return@withContext reportFailure(
                 sessionId, started, bytes, databaseBefore, preflight.lines, 0, preflight.unknown,
                 preflight.lines - preflight.unknown, preflight.typeCounts, stagedIssues(sessionId),
@@ -168,7 +195,10 @@ internal class LedgerImporter(
         var unknownLines = 0L
         var batchNumber = 0
         var lastTurnAnchor = lastOrdinaryUserSeq(sessionId)
-        requireSuccess(conversations.setImportCheckpoint(sessionId, "in_progress", sourceOffset, bytes, sha256))
+        var sourceDigest = sha256DigestPrefix(ledgerFile, sourceOffset)
+        requireSuccess(conversations.setImportCheckpoint(
+            sessionId, "in_progress", sourceOffset, bytes, digestAtOffset(sourceDigest, ledgerFile, sourceOffset),
+        ))
 
         try {
             NonInterruptibleLedgerFile(ledgerFile, sourceOffset, startLineNumber = lineNumber).use { reader ->
@@ -177,6 +207,7 @@ internal class LedgerImporter(
                     conversations.withImportBatch(sessionId) {
                             while (completedInBatch < options.batchSize) {
                                 val line = reader.readLine() ?: break
+                                updateDigest(sourceDigest, line)
                                 sourceOffset = line.endOffset
                                 lineNumber = line.lineNumber + 1L
                                 completedInBatch++
@@ -193,7 +224,10 @@ internal class LedgerImporter(
                                     LineOutcomeKind.UNKNOWN -> unknownLines++
                                 }
                             }
-                            requireSuccess(conversations.setImportCheckpoint(sessionId, "in_progress", sourceOffset, bytes, sha256))
+                            requireSuccess(conversations.setImportCheckpoint(
+                                sessionId, "in_progress", sourceOffset, bytes,
+                                digestAtOffset(sourceDigest, ledgerFile, sourceOffset),
+                            ))
                             batchNumber++
                             options.beforeBatchCommit?.invoke(batchNumber)
                     }
@@ -205,7 +239,12 @@ internal class LedgerImporter(
             if (failure is kotlinx.coroutines.CancellationException) throw failure
             val stored = conversations.readImportConversation(sessionId)
             val committedOffset = stored?.import_offset ?: sourceOffset
-            runCatching { conversations.setImportCheckpoint(sessionId, "failed", committedOffset, bytes, sha256) }
+            runCatching {
+                conversations.setImportCheckpoint(
+                    sessionId, "failed", committedOffset, bytes,
+                    stored?.legacy_ledger_sha256 ?: sha256Prefix(ledgerFile, committedOffset),
+                )
+            }
             val committedSkips = databaseSkippedRows(sessionId)
             val strictFailure = failure as? StrictLedgerFailure
             val strictIssue = strictFailure?.let { ImportLineIssue(it.lineNumber, it.reason, it.bytes) }
@@ -246,7 +285,7 @@ internal class LedgerImporter(
             .distinctBy { it.lineNumber to it.reason }.sortedBy { it.lineNumber }
         skippedLines = finalIssues.size.toLong()
         unknownLines = preflight.unknown
-        val validations = validate(sessionId, ledgerFile, preflight, skippedByType)
+        val validations = validate(sessionId, ledgerFile, preflight, skippedByType, bytes, sha256)
         val state = if (validations.all { it.passed }) "done" else "failed"
         val databaseRowsByType = databaseRowsByType(sessionId)
         val report = ImportReport(sessionId, state, started, System.currentTimeMillis() - started, bytes,
@@ -258,12 +297,59 @@ internal class LedgerImporter(
             conversationPayloadBytesBefore = conversationPayloadBefore,
             conversationPayloadBytesAfter = conversationPayloadBytes(sessionId))
         requireSuccess(conversations.setImportCheckpoint(
-            sessionId, state, sourceOffset, bytes, sha256,
+            sessionId, state, sourceOffset, bytes, digestAtOffset(sourceDigest, ledgerFile, sourceOffset),
             importedAtMillis = if (state == "done") System.currentTimeMillis() else null,
         ))
         report
         } finally {
             clearPreflightStage(sessionId)
+        }
+    }
+
+    /** True only when the durable done receipt still describes the complete current JSONL file. */
+    internal suspend fun isValidatedSourceCurrent(sessionId: String, ledgerFile: File): Boolean = withContext(Dispatchers.IO) {
+        if (!ledgerFile.isFile) return@withContext false
+        val conversation = conversations.readImportConversation(sessionId) ?: return@withContext false
+        val bytes = ledgerFile.length()
+        conversation.import_state == "done" && conversation.import_offset == bytes &&
+            conversation.legacy_ledger_bytes == bytes && conversation.legacy_ledger_sha256 == sha256(ledgerFile)
+    }
+
+    /**
+     * Purges this conversation's partially imported domain and staging rows, preserving its
+     * identity/metadata and leaving an explicit not_started receipt for a clean reimport.
+     */
+    internal suspend fun resetConversationImport(sessionId: String): ChatDbResult<Boolean> = withContext(Dispatchers.IO) {
+        require(sessionId.isNotBlank())
+        createPreflightTables()
+        database.withChatWriteTransaction {
+            val tombstoned = database.chatSql.query(
+                "SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+                arrayOf(sessionId),
+            ).use { it.moveToFirst(); it.getInt(0) != 0 }
+            if (tombstoned) return@withChatWriteTransaction ChatDbResult.Tombstoned
+            val metadata = database.chatSql.query(
+                "SELECT kind,title,pinned,archived,private_code,created_at,updated_at FROM conversations WHERE id=?",
+                arrayOf(sessionId),
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) null else arrayOf<Any?>(
+                    cursor.getString(0), cursor.getStringOrNullM1b(1), cursor.getInt(2), cursor.getInt(3),
+                    cursor.getInt(4), cursor.getLong(5), cursor.getLong(6),
+                )
+            } ?: return@withChatWriteTransaction ChatDbResult.NotFound
+
+            // This is a migration reset, not a user delete: suppress only the delete-to-tombstone
+            // trigger while the parent row and all cascades are replaced in this same transaction.
+            database.chatSql.execSQL("DROP TRIGGER IF EXISTS trg_conversation_tombstone_after_delete")
+            database.chatSql.execSQL("DELETE FROM conversations WHERE id=?", arrayOf(sessionId))
+            database.chatSql.execSQL(
+                "INSERT INTO conversations(id,kind,title,generated_title,pinned,archived,private_code,created_at,updated_at,last_message_at,message_count,next_seq,import_state,legacy_ledger_bytes,legacy_ledger_sha256,imported_at,import_offset) " +
+                    "VALUES(?,?,?,NULL,?,?,?,?,?,NULL,0,1,'not_started',NULL,NULL,NULL,0)",
+                arrayOf(sessionId, metadata[0], metadata[1], metadata[2], metadata[3], metadata[4], metadata[5], metadata[6]),
+            )
+            DatabaseTriggers.create(database.chatSql)
+            clearPreflightStageRows(sessionId)
+            ChatDbResult.Success(true)
         }
     }
 
@@ -568,6 +654,7 @@ internal class LedgerImporter(
         database.chatSql.execSQL("CREATE TABLE IF NOT EXISTS chatdb_import_issues (session_id TEXT NOT NULL, source_offset INTEGER NOT NULL, line_number INTEGER NOT NULL, reason TEXT NOT NULL, bytes INTEGER NOT NULL, PRIMARY KEY(session_id,line_number))")
         database.chatSql.execSQL("CREATE TABLE IF NOT EXISTS chatdb_import_unknown_types (session_id TEXT NOT NULL, row_type TEXT NOT NULL, row_count INTEGER NOT NULL, PRIMARY KEY(session_id,row_type))")
         database.chatSql.execSQL("CREATE TABLE IF NOT EXISTS chatdb_import_messages (session_id TEXT NOT NULL, source_offset INTEGER NOT NULL, raw_message_id TEXT, before_message_id TEXT, is_assistant INTEGER NOT NULL, ordinary_user INTEGER NOT NULL, projection_index INTEGER NOT NULL, sort_seq INTEGER NOT NULL, sort_sub INTEGER NOT NULL, message_index INTEGER NOT NULL DEFAULT -1, imported INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_id,source_offset))")
+        database.chatSql.execSQL("CREATE TABLE IF NOT EXISTS chatdb_import_message_sources (session_id TEXT NOT NULL, source_offset INTEGER NOT NULL, source_seq INTEGER NOT NULL, PRIMARY KEY(session_id,source_offset))")
         database.chatSql.execSQL("CREATE INDEX IF NOT EXISTS chatdb_import_messages_projection ON chatdb_import_messages(session_id,projection_index,source_offset)")
         database.chatSql.execSQL("CREATE INDEX IF NOT EXISTS chatdb_import_messages_id ON chatdb_import_messages(session_id,raw_message_id,source_offset)")
         database.chatSql.execSQL("CREATE TABLE IF NOT EXISTS chatdb_import_compactions (session_id TEXT NOT NULL, source_offset INTEGER NOT NULL, logical_index INTEGER NOT NULL, PRIMARY KEY(session_id,source_offset))")
@@ -625,6 +712,7 @@ internal class LedgerImporter(
     private suspend fun stageMessage(
         sessionId: String,
         offset: Long,
+        sourceSeq: Long,
         rawMessageId: String?,
         beforeMessageId: String?,
         isAssistant: Boolean,
@@ -635,6 +723,10 @@ internal class LedgerImporter(
         database.chatSql.execSQL(
             "INSERT INTO chatdb_import_messages(session_id,source_offset,raw_message_id,before_message_id,is_assistant,ordinary_user,projection_index,sort_seq,sort_sub) VALUES(?,?,?,?,?,?,?,?,0)",
             arrayOf(sessionId, offset, rawMessageId, beforeMessageId, isAssistant, ordinaryUser, projectionIndex, sortSeq),
+        )
+        database.chatSql.execSQL(
+            "INSERT INTO chatdb_import_message_sources(session_id,source_offset,source_seq) VALUES(?,?,?)",
+            arrayOf(sessionId, offset, sourceSeq),
         )
     }
 
@@ -767,9 +859,11 @@ internal class LedgerImporter(
         clearPreflightStageRows(sessionId)
     }
 
-    private suspend fun preflight(sessionId: String, ledger: File): Preflight = database.withChatWriteTransaction {
-        createPreflightTables()
-        clearPreflightStageRows(sessionId)
+    private suspend fun preflight(sessionId: String, ledger: File): Preflight {
+        database.withChatWriteTransaction {
+            createPreflightTables()
+            clearPreflightStageRows(sessionId)
+        }
         val counts = linkedMapOf<String, Long>()
         val validations = mutableListOf<ImportValidation>()
         var lines = 0L
@@ -784,84 +878,94 @@ internal class LedgerImporter(
         var strictFailure: String? = null
         NonInterruptibleLedgerFile(ledger).use { reader ->
             while (true) {
-                val line = reader.readLine() ?: break
-                lines++
-                if (!line.terminated) {
-                    stageRow(sessionId, line.startOffset, "", "malformed")
-                    stageIssue(sessionId, line.startOffset, line.lineNumber, "truncated_final_line", line.bytesIncludingTerminator)
-                    if (isStrictLedger(sessionId) || likelyStrictRow(line.bytes)) strictFailure = "truncated strict ledger row at line ${line.lineNumber}"
-                    continue
-                }
-                val row = try { parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes)) }
-                catch (failure: Throwable) {
-                    val reason = when (failure) {
-                        is DuplicateLedgerJsonKey -> "duplicate_key:${failure.key}"
-                        is java.nio.charset.CharacterCodingException -> "invalid_utf8"
-                        else -> "invalid_json:${failure.javaClass.simpleName}"
+                var stagedInBatch = 0
+                database.withChatWriteTransaction {
+                    while (stagedInBatch < options.batchSize) {
+                        val line = reader.readLine() ?: break
+                        stagedInBatch++
+                        lines++
+                        if (!line.terminated) {
+                            stageRow(sessionId, line.startOffset, "", "malformed")
+                            stageIssue(sessionId, line.startOffset, line.lineNumber, "truncated_final_line", line.bytesIncludingTerminator)
+                            if (isStrictLedger(sessionId) || likelyStrictRow(line.bytes)) strictFailure = "truncated strict ledger row at line ${line.lineNumber}"
+                            continue
+                        }
+                        val row = try { parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes)) }
+                        catch (failure: Throwable) {
+                            val reason = when (failure) {
+                                is DuplicateLedgerJsonKey -> "duplicate_key:${failure.key}"
+                                is java.nio.charset.CharacterCodingException -> "invalid_utf8"
+                                else -> "invalid_json:${failure.javaClass.simpleName}"
+                            }
+                            stageRow(sessionId, line.startOffset, "", "malformed")
+                            stageIssue(sessionId, line.startOffset, line.lineNumber, reason, line.bytesIncludingTerminator)
+                            if ((isStrictLedger(sessionId) || likelyStrictRow(line.bytes)) && strictFailure == null)
+                                strictFailure = "invalid strict journal ledger row at line ${line.lineNumber}:$reason"
+                            continue
+                        }
+                        val type = ledgerType(row)
+                        if (type !in KNOWN_TYPES) {
+                            stageRow(sessionId, line.startOffset, type, "unknown")
+                            unknown++
+                            val unknownType = type.ifBlank { "(untyped)" }
+                            stageUnknownType(sessionId, unknownType)
+                            if (!isResultOnly(row)) logicalIndex++
+                            continue
+                        }
+                        stageRow(sessionId, line.startOffset, type, if (type == "session_title") "title" else "known")
+                        counts[type] = (counts[type] ?: 0L) + 1L
+                        known++
+                        if (type != "session_title") seq++
+                        val timestamp = timestampSeconds(row, type)
+                        if (timestamp.isFinite()) {
+                            val millis = (timestamp * 1000.0).toLong()
+                            if (firstTimestampMillis == null || millis < firstTimestampMillis) firstTimestampMillis = millis
+                        }
+                        if (type == "session_title" && firstTitle == null) row.optString("content", "").trim().takeIf(String::isNotEmpty)?.let { firstTitle = it }
+                        when (type) {
+                            "assistant_regenerated", "assistant_deleted" -> row.stringOrNull("messageId")?.let { stageHidden(sessionId, it, type) }
+                            "assistant_translation" -> {
+                                val id = row.stringOrNull("messageId")
+                                val language = row.stringOrNull("language")
+                                if (!id.isNullOrBlank() && !language.isNullOrBlank()) stageTranslation(sessionId, id, language)
+                            }
+                            "assistant_translation_hidden" -> row.stringOrNull("messageId")?.let { stageTranslationHidden(sessionId, it) }
+                        }
+                        if (type == "crew_snapshot") {
+                            val missionId = row.stringOrNull("missionId")
+                            if (!missionId.isNullOrBlank()) stageCrewSnapshot(sessionId, missionId, line.startOffset, crewSnapshotDigest(row))
+                        }
+                        if (type == "compaction") stageCompaction(sessionId, line.startOffset, logicalIndex)
+                        if (type in MESSAGE_TYPES) {
+                            val rawId = row.stringOrNull("messageId")?.takeIf(String::isNotBlank)
+                            stageMessage(
+                                sessionId,
+                                offset = line.startOffset,
+                                sourceSeq = seq - 1L,
+                                rawMessageId = rawId,
+                                beforeMessageId = row.stringOrNull("beforeMessageId"),
+                                isAssistant = type != "user",
+                                ordinaryUser = type == "user" && row.optString("interruptRequestId").isBlank(),
+                                projectionIndex = logicalIndex,
+                                sortSeq = seq - 1L,
+                            )
+                        }
+                        if (!isResultOnly(row)) logicalIndex++
                     }
-                    stageRow(sessionId, line.startOffset, "", "malformed")
-                    stageIssue(sessionId, line.startOffset, line.lineNumber, reason, line.bytesIncludingTerminator)
-                    if ((isStrictLedger(sessionId) || likelyStrictRow(line.bytes)) && strictFailure == null)
-                        strictFailure = "invalid strict journal ledger row at line ${line.lineNumber}:$reason"
-                    continue
                 }
-                val type = ledgerType(row)
-                if (type !in KNOWN_TYPES) {
-                    stageRow(sessionId, line.startOffset, type, "unknown")
-                    unknown++
-                    val unknownType = type.ifBlank { "(untyped)" }
-                    stageUnknownType(sessionId, unknownType)
-                    if (!isResultOnly(row)) logicalIndex++
-                    continue
-                }
-                stageRow(sessionId, line.startOffset, type, if (type == "session_title") "title" else "known")
-                counts[type] = (counts[type] ?: 0L) + 1L
-                known++
-                if (type != "session_title") seq++
-                val timestamp = timestampSeconds(row, type)
-                if (timestamp.isFinite()) {
-                    val millis = (timestamp * 1000.0).toLong()
-                    if (firstTimestampMillis == null || millis < firstTimestampMillis) firstTimestampMillis = millis
-                }
-                if (type == "session_title" && firstTitle == null) row.optString("content", "").trim().takeIf(String::isNotEmpty)?.let { firstTitle = it }
-                when (type) {
-                    "assistant_regenerated", "assistant_deleted" -> row.stringOrNull("messageId")?.let { stageHidden(sessionId, it, type) }
-                    "assistant_translation" -> {
-                        val id = row.stringOrNull("messageId")
-                        val language = row.stringOrNull("language")
-                        if (!id.isNullOrBlank() && !language.isNullOrBlank()) stageTranslation(sessionId, id, language)
-                    }
-                    "assistant_translation_hidden" -> row.stringOrNull("messageId")?.let { stageTranslationHidden(sessionId, it) }
-                }
-                if (type == "crew_snapshot") {
-                    val missionId = row.stringOrNull("missionId")
-                    if (!missionId.isNullOrBlank()) stageCrewSnapshot(sessionId, missionId, line.startOffset, crewSnapshotDigest(row))
-                }
-                if (type == "compaction") stageCompaction(sessionId, line.startOffset, logicalIndex)
-                if (type in MESSAGE_TYPES) {
-                    val rawId = row.stringOrNull("messageId")?.takeIf(String::isNotBlank)
-                    stageMessage(
-                        sessionId,
-                        offset = line.startOffset,
-                        rawMessageId = rawId,
-                        beforeMessageId = row.stringOrNull("beforeMessageId"),
-                        isAssistant = type != "user",
-                        ordinaryUser = type == "user" && row.optString("interruptRequestId").isBlank(),
-                        projectionIndex = logicalIndex,
-                        sortSeq = seq - 1L,
-                    )
-                }
-                if (!isResultOnly(row)) logicalIndex++
+                if (stagedInBatch == 0) break
             }
         }
+        return database.withChatWriteTransaction {
         calculateSteering(sessionId)
         assignMessageIndexes(sessionId)
         val messageCount = stageCount("chatdb_import_messages", sessionId)
         val issueCount = scalarLong("SELECT COUNT(*) FROM chatdb_import_issues WHERE session_id=?", arrayOf(sessionId))
         validations += ImportValidation("preflight_lines", true, "${lines} physical lines; $known known rows; $unknown unknown rows; $issueCount malformed/truncated")
         validations += ImportValidation("documented_row_catalog", true, "${KNOWN_TYPES.size} row forms are enumerated by ledger-inventory.md §A (the document heading says 46; the current table contains 43)")
-        return@withChatWriteTransaction Preflight(lines, known, unknown, counts, validations,
+        Preflight(lines, known, unknown, counts, validations,
             strictFailure, firstTitle, firstTimestampMillis, messageCount, issueCount)
+        }
     }
 
     private suspend fun validate(
@@ -869,15 +973,14 @@ internal class LedgerImporter(
         ledger: File,
         preflight: Preflight,
         skippedByType: Map<String, Long>,
+        sourceBytes: Long,
+        sourceSha256: String,
     ): List<ImportValidation> {
         val results = mutableListOf<ImportValidation>()
-        val storedSource = database.chatSql.query(
-            "SELECT legacy_ledger_bytes,legacy_ledger_sha256 FROM conversations WHERE id=?", arrayOf(sessionId),
-        ).use { c -> if (c.moveToFirst()) c.getLong(0) to c.getStringOrNullM1b("legacy_ledger_sha256") else null }
         val currentSha = sha256(ledger)
-        val sourceMatches = storedSource != null && storedSource.first == ledger.length() && storedSource.second == currentSha
+        val sourceMatches = sourceBytes == ledger.length() && sourceSha256 == currentSha
         results += ImportValidation("source_ledger_unchanged", sourceMatches,
-            "storedBytes=${storedSource?.first ?: -1L}, currentBytes=${ledger.length()}, sha256Matches=${storedSource?.second == currentSha}")
+            "validatedBytes=$sourceBytes, currentBytes=${ledger.length()}, sha256Matches=${sourceSha256 == currentSha}")
         val itemCounts = database.chatSql.query(
             "SELECT item_kind,COUNT(*) FROM conversation_items WHERE conversation_id=? GROUP BY item_kind", arrayOf(sessionId),
         ).use { cursor -> buildMap { while (cursor.moveToNext()) put(cursor.getString(0), cursor.getLong(1)) } }
@@ -1012,14 +1115,19 @@ internal class LedgerImporter(
                 "(moving.sort_sub=target_item.sort_sub AND moving.seq>=target.seq))))",
             arrayOf(sessionId),
         ).use { it.moveToFirst(); it.getLong(0) }
-        val indexesFollowSortErrors = scalarLong(
-            "SELECT COUNT(*) FROM messages earlier JOIN conversation_items ei ON ei.conversation_id=earlier.conversation_id AND ei.seq=earlier.seq " +
-                "JOIN messages later ON later.conversation_id=earlier.conversation_id AND earlier.message_index<later.message_index " +
-                "JOIN conversation_items li ON li.conversation_id=later.conversation_id AND li.seq=later.seq " +
-                "WHERE earlier.conversation_id=? AND (ei.sort_seq>li.sort_seq OR (ei.sort_seq=li.sort_seq AND " +
-                "(ei.sort_sub>li.sort_sub OR (ei.sort_sub=li.sort_sub AND ei.seq>=li.seq))))",
+        var indexesFollowSortErrors = 0L
+        var previousSortMessageIndex = Long.MIN_VALUE
+        database.chatSql.query(
+            "SELECT m.message_index FROM messages m JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
+                "WHERE m.conversation_id=? ORDER BY i.sort_seq,i.sort_sub,i.seq",
             arrayOf(sessionId),
-        )
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val current = cursor.getLong(0)
+                if (current <= previousSortMessageIndex) indexesFollowSortErrors++
+                previousSortMessageIndex = current
+            }
+        }
         val indexesFollowSort = indexesFollowSortErrors == 0L
         results += ImportValidation("message_sort_and_index_coherence", movedMessageErrors == 0L && indexesFollowSort,
             "steeringOrderErrors=$movedMessageErrors, messageIndicesFollowSort=$indexesFollowSort")
@@ -1138,23 +1246,54 @@ internal class LedgerImporter(
 
     private suspend fun digestSourceMessages(ledger: File, sessionId: String, messageCount: Long): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        var previousIndex = Long.MIN_VALUE
         var read = 0L
-        while (read < messageCount) {
-            val staged = database.chatSql.query(
-                "SELECT source_offset,message_index FROM chatdb_import_messages WHERE session_id=? AND imported=1 AND message_index>? ORDER BY message_index LIMIT 1",
-                arrayOf(sessionId, previousIndex),
-            ).use { c -> check(c.moveToFirst()) { "missing imported message index after $previousIndex" }; longArrayOf(c.getLong(0), c.getLong(1)) }
-            val offset = staged[0]
-            NonInterruptibleLedgerFile(ledger, offset).use { reader ->
-                val line = reader.readLine() ?: error("message source row disappeared")
-                val row = parseLedgerObject(StrictLedgerJson.decodeUtf8(line.bytes))
-                updateLengthPrefixed(digest, row.optString("content", ""))
+        val lineBuffer = ByteArray(64 * 1024)
+        val lineBytes = ByteArrayOutputStream()
+        database.chatSql.query(
+            "SELECT source_offset,message_index FROM chatdb_import_messages WHERE session_id=? AND imported=1 ORDER BY message_index",
+            arrayOf(sessionId),
+        ).use { cursor ->
+            RandomAccessFile(ledger, "r").use { input ->
+                while (cursor.moveToNext()) {
+                    check(read < messageCount) { "more imported messages than expected ($messageCount)" }
+                    val offset = cursor.getLong(0)
+                    val line = readSourceLine(input, offset, lineBuffer, lineBytes)
+                    val row = parseLedgerObject(StrictLedgerJson.decodeUtf8(line))
+                    updateLengthPrefixed(digest, row.optString("content", ""))
+                    read++
+                }
             }
-            previousIndex = staged[1]
-            read++
         }
+        check(read == messageCount) { "read $read source messages; expected $messageCount" }
         return digest.digest().toHex()
+    }
+
+    private fun readSourceLine(
+        input: RandomAccessFile,
+        offset: Long,
+        buffer: ByteArray,
+        output: ByteArrayOutputStream,
+    ): ByteArray {
+        input.seek(offset)
+        output.reset()
+        while (true) {
+            val count = input.read(buffer)
+            check(count >= 0) { "message source row disappeared at byte $offset" }
+            var newline = -1
+            for (index in 0 until count) {
+                if (buffer[index] == '\n'.code.toByte()) {
+                    newline = index
+                    break
+                }
+            }
+            if (newline >= 0) {
+                output.write(buffer, 0, newline)
+                break
+            }
+            output.write(buffer, 0, count)
+        }
+        val raw = output.toByteArray()
+        return if (raw.lastOrNull() == '\r'.code.toByte()) raw.copyOf(raw.size - 1) else raw
     }
 
     private fun readMetadata(file: File): ImportMetadata {
@@ -1416,6 +1555,40 @@ internal class LedgerImporter(
         return digest.digest().toHex()
     }
 
+    private fun sha256Prefix(file: File, offset: Long): String = sha256DigestPrefix(file, offset).digest().toHex()
+
+    private fun sha256DigestPrefix(file: File, offset: Long): MessageDigest {
+        require(offset >= 0L && offset <= file.length()) { "invalid source prefix offset $offset" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        RandomAccessFile(file, "r").use { input ->
+            val buffer = ByteArray(128 * 1024)
+            var remaining = offset
+            while (remaining > 0L) {
+                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                check(count > 0) { "ledger shortened while hashing prefix $offset" }
+                digest.update(buffer, 0, count)
+                remaining -= count
+            }
+        }
+        return digest
+    }
+
+    private fun digestAtOffset(digest: MessageDigest, file: File, offset: Long): String =
+        try {
+            (digest.clone() as MessageDigest).digest().toHex()
+        } catch (_: CloneNotSupportedException) {
+            // Providers without clone support retain correctness; normal Android/JVM SHA-256 is cloneable.
+            sha256Prefix(file, offset)
+        }
+
+    private fun updateDigest(digest: MessageDigest, line: NonInterruptibleLedgerFile.Line) {
+        digest.update(line.bytes)
+        if (line.terminated) {
+            if (line.bytesIncludingTerminator - line.bytes.size > 1L) digest.update('\r'.code.toByte())
+            digest.update('\n'.code.toByte())
+        }
+    }
+
     private fun requireSuccess(result: ChatDbResult<*>): Any? = when (result) {
         is ChatDbResult.Success<*> -> result.value
         ChatDbResult.NotFound -> error("repository_not_found")
@@ -1557,7 +1730,7 @@ internal class LedgerImporter(
         )
         val PREFLIGHT_TABLES = listOf(
             "chatdb_import_rows", "chatdb_import_issues", "chatdb_import_unknown_types", "chatdb_import_messages", "chatdb_import_compactions", "chatdb_import_crews",
-            "chatdb_import_hidden", "chatdb_import_translations", "chatdb_import_translation_hidden",
+            "chatdb_import_message_sources", "chatdb_import_hidden", "chatdb_import_translations", "chatdb_import_translation_hidden",
         )
         val KNOWN_TYPES = setOf(
             "user", "assistant", "proactive_message", "session_title",

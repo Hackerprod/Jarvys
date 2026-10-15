@@ -222,7 +222,7 @@ class StrictJournalRepositoryTest {
         database.testChatSql.execSQL("DROP TRIGGER injected_workspace_ref_failure")
     }
 
-    @Test fun strictAndArtifactReadSnapshotsRequestDeferredReaderConnections() {
+    @Test fun strictAndArtifactReadSnapshotsRunWhileWriterTransactionIsHeld() {
         val fixture = onDatabaseThread {
             val value = resultFixture()
             success(repository.appendCrewResultEvidence(value.result))
@@ -233,45 +233,46 @@ class StrictJournalRepositoryTest {
             )))
             value
         }
-        val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(
-            context, File(temporary.root, "strict-journal.db"),
-        )
-        val readerConversations = ConversationRepository(readerDatabase)
-        val readerModel = ModelTranscriptRepository(readerDatabase)
-        val readerMemory = MemoryTimelineRepository(readerDatabase)
-        val readerStrict = StrictJournalRepository(readerDatabase)
-        val readerArtifacts = ConversationArtifactsRepository(readerDatabase)
-        // Read from a separate Room instance so the test observes its connection route directly.
-        runBlocking {
-            readerConversations.messageCounts(fixture.execution)
-            readerModel.readModelTranscript(fixture.execution)
-            readerMemory.pendingCompactionIds(fixture.execution)
-            success(readerStrict.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
-            readerArtifacts.artifactsForConversation("artifact-read")
-        }
-        val readerRequests = AtomicInteger()
-        val writerRequests = AtomicInteger()
-        try {
+        val writerEntered = CountDownLatch(1)
+        val releaseWriter = CountDownLatch(1)
+        val writerExecutor = Executors.newSingleThreadExecutor()
+        val writer = writerExecutor.submit {
             runBlocking {
-                ChatSqlInstrumentation.observeConnectionRequests({ request ->
-                    when (request) {
-                        ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION -> readerRequests.incrementAndGet()
-                        ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION -> writerRequests.incrementAndGet()
-                    }
-                }) {
-                    val evidence = successValue(readerStrict.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
-                    assertEquals(fixture.result.evidenceId, evidence.evidenceId)
-                    assertEquals(fixture.result.contentSha256, evidence.contentSha256)
-                    assertEquals(0L, readerConversations.messageCounts(fixture.execution).total)
-                    assertTrue(readerModel.readModelTranscript(fixture.execution).entries.isEmpty())
-                    assertTrue(readerMemory.pendingCompactionIds(fixture.execution).isEmpty())
-                    assertEquals(listOf("artifact-read-1"), readerArtifacts.artifactsForConversation("artifact-read").map { it.artifact_id })
+                database.withChatWriteTransaction {
+                    success(repository.appendCrewResultEvidence(CrewResultEvidence.create(
+                        fixture.execution, fixture.result.missionId, "bot-uncommitted", UUID.randomUUID().toString(),
+                        "DONE", "uncommitted evidence", 1_800_000_000_001L,
+                    )))
+                    success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
+                        conversationId = "artifact-read", artifactId = "artifact-uncommitted", name = "pending.txt", mimeType = "text/plain",
+                        sizeBytes = 7L, kind = "FILE", relativePath = "chats/artifact-read/pending.txt", sha256 = "e".repeat(64),
+                    )))
+                    writerEntered.countDown()
+                    check(releaseWriter.await(10, TimeUnit.SECONDS)) { "timed out waiting to release the Room writer" }
                 }
             }
-            assertTrue("strict and artifact reads request deferred Room reader connections", readerRequests.get() > 0)
-            assertEquals("strict and artifact reads never request a Room writer connection", 0, writerRequests.get())
+        }
+        try {
+            assertTrue("the real Room writer has uncommitted strict and artifact changes", writerEntered.await(10, TimeUnit.SECONDS))
+            val started = System.nanoTime()
+            val snapshots = onDatabaseThread {
+                val evidence = success(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
+                val counts = conversations.messageCounts(fixture.execution)
+                val transcript = ModelTranscriptRepository(database).readModelTranscript(fixture.execution)
+                val pendingCompactions = MemoryTimelineRepository(database).pendingCompactionIds(fixture.execution)
+                val artifactIds = artifacts.artifactsForConversation("artifact-read").map { it.artifact_id }
+                listOf<Any>(evidence.contentSha256, counts.total, transcript.entries.size, pendingCompactions.size, artifactIds)
+            }
+            assertTrue("the real projections finish with the writer held", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 3_000L)
+            assertEquals(fixture.result.contentSha256, snapshots[0])
+            assertEquals(0L, snapshots[1])
+            assertEquals(0, snapshots[2])
+            assertEquals(0, snapshots[3])
+            assertEquals(listOf("artifact-read-1"), snapshots[4])
         } finally {
-            JarvysChatDatabaseProvider.closeDatabaseFileForTests(readerDatabase)
+            releaseWriter.countDown()
+            runCatching { writer.get(10, TimeUnit.SECONDS) }
+            writerExecutor.shutdownNow()
         }
     }
 
@@ -367,22 +368,11 @@ class StrictJournalRepositoryTest {
 
     @Test fun strictReadInsideWriterTransactionReusesWriterLeaseForReadYourWrites() = onDatabaseThread {
         val fixture = resultFixture()
-        val readerRequests = AtomicInteger()
-        val writerRequests = AtomicInteger()
-        val readBack = ChatSqlInstrumentation.observeConnectionRequests({ request ->
-            when (request) {
-                ChatSqlInstrumentation.ChatSqlConnectionRequest.READER_DEFERRED_TRANSACTION -> readerRequests.incrementAndGet()
-                ChatSqlInstrumentation.ChatSqlConnectionRequest.WRITER_IMMEDIATE_TRANSACTION -> writerRequests.incrementAndGet()
-            }
-        }) {
-            database.withChatWriteTransaction {
-                success(repository.appendCrewResultEvidence(fixture.result))
-                successValue(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
-            }
+        val readBack = database.withChatWriteTransaction {
+            success(repository.appendCrewResultEvidence(fixture.result))
+            successValue(repository.readCrewResultEvidence(fixture.execution, fixture.result.evidenceId))
         }
         assertCrewResultEvidenceEquals(fixture.result, readBack)
-        assertEquals("a read inside the write transaction reuses the writer lease", 0, readerRequests.get())
-        assertEquals("the outer operation acquires one writer transaction", 1, writerRequests.get())
     }
 
     @Test fun beforeWriteCallbackCannotReenterAnotherRepository() {
