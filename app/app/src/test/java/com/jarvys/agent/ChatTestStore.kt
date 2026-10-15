@@ -16,7 +16,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /** Isolated Room fixture for tests that exercise the LocalRunStore file constructor. */
-class ChatTestStore(
+class ChatTestStore @JvmOverloads constructor(
     private val runTestOnWorker: Boolean = true,
     private val registerApplicationFilesDirectory: Boolean = false,
 ) : TestRule {

@@ -4,6 +4,7 @@ import android.app.Application
 import com.jarvys.agent.CoreAgentRuntime
 import com.jarvys.agent.ChatTestStore
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner

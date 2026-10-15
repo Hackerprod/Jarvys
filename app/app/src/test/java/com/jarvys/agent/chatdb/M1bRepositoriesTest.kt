@@ -64,7 +64,7 @@ class M1bRepositoriesTest {
         databaseExecutor.submit<T> { runBlocking { block() } }.get(60, TimeUnit.SECONDS)
 
     @Test fun firstLedgerWritesCreateTheirConversationInTheSameTransaction() = onDatabaseThread {
-        fun assertCreated(conversationId: String, result: ChatDbResult<*>) {
+        suspend fun assertCreated(conversationId: String, result: ChatDbResult<*>) {
             assertTrue("$conversationId write should succeed: $result", result is ChatDbResult.Success)
             assertNotNull(conversations.readConversation(conversationId))
             assertEquals("$conversationId should contain exactly one committed ledger row", 2L, nextSeq(conversationId))
