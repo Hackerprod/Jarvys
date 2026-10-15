@@ -157,7 +157,7 @@ data class ToolCall(
         ForeignKey(entity = ToolCall::class, parentColumns = ["conversation_id", "batch_id", "call_id"], childColumns = ["conversation_id", "batch_id", "call_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
-    indices = [Index(name = "idx_tool_results_seq", value = ["conversation_id", "seq"])],
+    indices = [Index(name = "idx_tool_results_seq", value = ["conversation_id", "seq"]), Index(name = "idx_tool_results_artifact", value = ["conversation_id", "file_artifact_id"])],
 )
 data class ToolResult(
     val conversation_id: String,
@@ -168,6 +168,8 @@ data class ToolResult(
     val lifecycle: String,
     val output: String,
     val created_at: Double,
+    /** Ownership key for output archived by `MainChatTranscriptStore.retain`; null for inline-only output. */
+    val file_artifact_id: String? = null,
 )
 
 /** Append-only lifecycle rows; duplicate event_id imports within one conversation are first-wins (`INSERT OR IGNORE`). */
@@ -183,6 +185,7 @@ data class ToolResult(
         Index(name = "idx_tool_activities_event", value = ["conversation_id", "event_id"], unique = true),
         Index(name = "idx_tool_activities_owner_execution", value = ["conversation_id", "owner_user_message_id", "execution_id", "seq"]),
         Index(name = "idx_tool_activities_batch_call", value = ["conversation_id", "source_batch_id", "call_id", "seq"]),
+        Index(name = "idx_tool_activities_execution_call", value = ["conversation_id", "execution_id", "call_id", "seq"]),
     ],
 )
 data class ToolActivity(
@@ -325,16 +328,23 @@ data class ModelArtifact(
 
 /** `delivered_file` ownership rows; the file itself remains on disk. */
 @Entity(
-    tableName = "delivered_files",
+    tableName = "artifacts",
     primaryKeys = ["conversation_id", "artifact_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["file_ref_id"], onDelete = ForeignKey.SET_NULL),
+        ForeignKey(entity = FileRef::class, parentColumns = ["id"], childColumns = ["thumbnail_ref"], onDelete = ForeignKey.SET_NULL),
     ],
-    indices = [Index(name = "idx_delivered_files_seq", value = ["conversation_id", "seq"]), Index(name = "idx_delivered_files_file", value = ["file_ref_id"])],
+    indices = [
+        Index(name = "idx_artifacts_seq", value = ["conversation_id", "seq"]),
+        Index(name = "idx_artifacts_file", value = ["file_ref_id"]),
+        Index(name = "idx_artifacts_thumbnail", value = ["thumbnail_ref"]),
+        Index(name = "idx_artifacts_type", value = ["conversation_id", "artifact_type", "seq"]),
+        Index(name = "idx_artifacts_module", value = ["conversation_id", "module_id", "seq"]),
+    ],
 )
-data class DeliveredFile(
+data class ConversationArtifact(
     val conversation_id: String,
     val artifact_id: String,
     val seq: Long,
@@ -345,6 +355,14 @@ data class DeliveredFile(
     val relative_path: String,
     val sha256: String? = null,
     val file_ref_id: String? = null,
+    /** MIME type by default; presentation modules may define values such as `x-jarvys/chart`. */
+    val artifact_type: String,
+    val module_id: String? = null,
+    /** Opaque module-owned manifest JSON, retained without interpreting module-specific fields. */
+    val manifest_json: String? = null,
+    val title: String? = null,
+    /** Optional `file_refs.id` for a thumbnail that remains on disk. */
+    val thumbnail_ref: String? = null,
     val created_at: Double,
 )
 

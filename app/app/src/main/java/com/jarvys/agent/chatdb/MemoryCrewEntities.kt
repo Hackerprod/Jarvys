@@ -108,6 +108,8 @@ data class CrewMission(
     val last_snapshot_seq: Long,
     val schema_version: Int,
     val process_id: String?,
+    /** SHA-256 of the lossless serialized `crew_snapshot` payload, excluding its ledger timestamp. */
+    val snapshot_digest: String,
     val title: String,
     val original_instructions: String,
     val title_source: String? = null,
@@ -119,13 +121,13 @@ data class CrewMission(
     override fun equals(other: Any?): Boolean = this === other || other is CrewMission &&
         conversation_id == other.conversation_id && mission_id == other.mission_id &&
         first_snapshot_seq == other.first_snapshot_seq && last_snapshot_seq == other.last_snapshot_seq &&
-        schema_version == other.schema_version && process_id == other.process_id && title == other.title &&
+        schema_version == other.schema_version && process_id == other.process_id && snapshot_digest == other.snapshot_digest && title == other.title &&
         original_instructions == other.original_instructions && title_source == other.title_source && status == other.status &&
         ((synthesis == null && other.synthesis == null) || (synthesis != null && other.synthesis != null && synthesis.contentEquals(other.synthesis))) &&
         started_at_ms == other.started_at_ms && finished_at_ms == other.finished_at_ms
 
     override fun hashCode(): Int = 31 * listOf(conversation_id, mission_id, first_snapshot_seq, last_snapshot_seq,
-        schema_version, process_id, title, original_instructions, title_source, status, started_at_ms, finished_at_ms).hashCode() +
+        schema_version, process_id, snapshot_digest, title, original_instructions, title_source, status, started_at_ms, finished_at_ms).hashCode() +
         (synthesis?.contentHashCode() ?: 0)
 }
 
@@ -139,7 +141,7 @@ data class CrewMission(
     ],
     indices = [
         Index(name = "idx_crew_bots_ordinal", value = ["conversation_id", "mission_id", "ordinal"], unique = true),
-        Index(name = "idx_crew_bots_evidence", value = ["result_evidence_id"]),
+        Index(name = "idx_crew_bots_evidence", value = ["conversation_id", "result_evidence_id"]),
     ],
 )
 data class CrewBot(
@@ -213,7 +215,7 @@ data class CrewBotTool(
     ],
     indices = [
         Index(name = "idx_crew_messages_id", value = ["conversation_id", "mission_id", "message_id"], unique = true),
-        Index(name = "idx_crew_messages_coordination", value = ["coordination_evidence_id"]),
+        Index(name = "idx_crew_messages_coordination", value = ["conversation_id", "coordination_evidence_id"]),
     ],
 )
 data class CrewMessage(

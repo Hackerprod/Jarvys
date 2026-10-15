@@ -19,7 +19,7 @@ import androidx.room.Index
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
-        Index(name = "idx_workspace_result_refs_evidence", value = ["evidence_id"]),
+        Index(name = "idx_workspace_result_refs_evidence", value = ["conversation_id", "evidence_id"]),
         Index(name = "idx_workspace_result_refs_seq", value = ["conversation_id", "seq"]),
         Index(name = "idx_workspace_result_refs_notice", value = ["conversation_id", "is_notice", "seq"]),
     ],
@@ -123,7 +123,7 @@ data class CrewCoordinationEvidenceRef(
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
-        Index(name = "idx_workspace_coord_refs_evidence", value = ["evidence_id"]),
+        Index(name = "idx_workspace_coord_refs_evidence", value = ["conversation_id", "evidence_id"]),
         Index(name = "idx_workspace_coord_refs_seq", value = ["conversation_id", "seq"]),
         Index(name = "idx_workspace_coord_refs_notice", value = ["conversation_id", "is_notice", "seq"]),
         Index(name = "idx_workspace_coord_refs_message", value = ["conversation_id", "message_id"]),
@@ -148,7 +148,8 @@ data class WorkspaceCoordinationRef(
     val message_id: String,
     val kind: String,
     val observed_assignment_revision: Long,
-    val reported_status: String,
+    /** Not present in `crew_coordination_evidence` or its references; kept null in the shared-shape table. */
+    val reported_status: String? = null,
     val produced_at_ms: Long,
 )
 

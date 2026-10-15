@@ -3,7 +3,10 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -16,14 +19,17 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.rules.TemporaryFolder
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -60,6 +66,53 @@ class ConversationRepositoryTest {
 
         assertEquals("ensureDeleteAndTombstoneAreIdempotentAndPreventResurrection: expected <success(repository.deleteConversation(\"never-created\"))> to equal <false>", false, success(repository.deleteConversation("never-created")))
         assertTrue("ensureDeleteAndTombstoneAreIdempotentAndPreventResurrection: expected <repository.ensureConversation(\"never-created\") === ChatDbResult.Tombstoned> to be true", repository.ensureConversation("never-created") === ChatDbResult.Tombstoned)
+    }
+
+    @Test fun deletingWhileAnAppendIsActiveLeavesATombstoneAndNoOrphanRows() = onDatabaseThread {
+        success(repository.ensureConversation("delete-append-race"))
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val racers = Executors.newFixedThreadPool(2)
+        try {
+            val delete = racers.submit(Callable {
+                ready.countDown()
+                check(start.await(10, TimeUnit.SECONDS))
+                runBlocking { repository.deleteConversation("delete-append-race") }
+            })
+            val append = racers.submit(Callable {
+                ready.countDown()
+                check(start.await(10, TimeUnit.SECONDS))
+                runBlocking { repository.appendMessage(AppendMessageInput(
+                    conversationId = "delete-append-race", role = "user",
+                    parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "racing append")),
+                )) }
+            })
+            assertTrue(ready.await(10, TimeUnit.SECONDS))
+            start.countDown()
+            assertEquals(true, success(delete.get(15, TimeUnit.SECONDS)))
+            val appendResult = append.get(15, TimeUnit.SECONDS)
+            assertTrue(appendResult is ChatDbResult.Success || appendResult === ChatDbResult.NotFound || appendResult === ChatDbResult.Tombstoned)
+            assertTrue(repository.isTombstoned("delete-append-race"))
+            val remaining = database.openHelper.writableDatabase.query(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf("delete-append-race"),
+            ).use { c -> c.moveToFirst(); c.getInt(0) }
+            assertEquals(0, remaining)
+        } finally {
+            start.countDown()
+            racers.shutdownNow()
+        }
+    }
+
+    @Test fun metadataCanImplicitlyCreateAndIfAbsentTitleReturnsLegacyBoolean() = onDatabaseThread {
+        val implicit = success(repository.updateMetadata("implicit-metadata", pinned = true))
+        assertEquals("implicit-metadata", implicit.id)
+        assertTrue(implicit.pinned)
+        assertTrue(success(repository.appendConversationTitleIfAbsent("implicit-title", "  first title  ")))
+        assertFalse(success(repository.appendConversationTitleIfAbsent("implicit-title", "later title")))
+        assertEquals("first title", success(repository.ensureConversation("implicit-title")).generated_title)
+        success(repository.updateMetadata("tombstoned-metadata", title = "old"))
+        success(repository.deleteConversation("tombstoned-metadata"))
+        assertTrue(repository.updateMetadata("tombstoned-metadata", title = "new") === ChatDbResult.Tombstoned)
     }
 
     @Test fun legacyStableMessageIdentityUsesSessionAndAbsoluteIndex() {
@@ -160,6 +213,46 @@ class ConversationRepositoryTest {
         }
     }
 
+    @Test fun steeringMarkersOnPageBoundariesAreNeitherSkippedNorRepeatedForWindowSizesOneToThree() = onDatabaseThread {
+        success(repository.ensureConversation("steering-boundaries"))
+        val expected = mutableListOf<Long>()
+        repeat(5) { index ->
+            val user = append("steering-boundaries", "user", "turn-$index")
+            expected += user.seq
+            val request = success(repository.appendInterruptRequest("steering-boundaries", "follow-up-$index"))
+            expected += request.seq
+            val dispatch = success(repository.dispatchInterruptRequest("steering-boundaries", request.requestId))
+            expected += dispatch.message.seq
+            val inserted = success(repository.appendMessage(AppendMessageInput(
+                conversationId = "steering-boundaries", role = "assistant", status = "COMPLETED",
+                beforeMessageId = dispatch.message.messageId,
+                parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "inserted-$index")),
+            )))
+            expected += inserted.seq
+        }
+        val physicalSpine = database.openHelper.writableDatabase.query(
+            "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("steering-boundaries"),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+        assertEquals(expected.size, physicalSpine.size)
+        assertEquals(expected.sorted(), physicalSpine.sorted())
+
+        for (turns in 1..3) {
+            val pages = mutableListOf<MessageWindow>()
+            var page = repository.readTailWindow("steering-boundaries", turns)
+            while (true) {
+                pages += page
+                val cursor = page.olderCursorSeq ?: break
+                assertEquals("the current page begins at its inclusive older cursor", cursor, page.slots.first().item.seq)
+                val preceding = repository.readWindowBefore("steering-boundaries", cursor, turns)
+                assertTrue("the prior page excludes the current page cursor", preceding.slots.none { it.item.seq == cursor })
+                page = preceding
+            }
+            val flattened = pages.asReversed().flatMap { it.slots.map { slot -> slot.item.seq } }
+            assertEquals("steering rows are complete for turns=$turns", physicalSpine, flattened)
+            assertEquals("steering rows are unique for turns=$turns", flattened.size, flattened.distinct().size)
+        }
+    }
+
     @Test fun oldestWindowRetainsUnanchoredPrefixBeforeFirstUserAnchor() = onDatabaseThread {
         success(repository.ensureConversation("leading-prefix"))
         val markerSeq = success(repository.appendDecisionRequest(
@@ -236,6 +329,7 @@ class ConversationRepositoryTest {
             "decisions", "choice", "Choose again", "Retry", false, listOf(DecisionOptionInput("retry", "Retry")),
         ))
         assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <reopenedSeq > lastResolution> to be true", reopenedSeq > lastResolution)
+        assertTrue("a legacy resolution append does not require an existing request row", success(repository.resolveDecision("decisions", "orphan-choice", "dismissed", null, null)) > reopenedSeq)
         val row = database.openHelper.writableDatabase.query(
             "SELECT seq,title,status,option_id,resolved_seq FROM user_decisions WHERE conversation_id=? AND decision_id=?",
             arrayOf("decisions", "choice"),
@@ -328,16 +422,6 @@ class ConversationRepositoryTest {
                 .map { org.json.JSONObject(it.payload).getString("attachmentId") },
         )
 
-        // LocalRunStore has no public user-message edit operation; exercise the repository's
-        // internal replacement path without inventing a new public operation.
-        replacePartsPreservingAttachmentsInternally("attachments", user.messageId, "edited user body")
-        val replacedUser = repository.getMessage("attachments", user.messageId)!!
-        assertEquals("replacing a user body keeps its text", "edited user body", replacedUser.text)
-        assertEquals("replacing a user body keeps attachment refs in order", listOf("first-attachment-id", "second-attachment-id"),
-            replacedUser.parts.filter { it.kind == MessagePartKinds.ATTACHMENT_REF }
-                .map { org.json.JSONObject(it.payload).getString("attachmentId") },
-        )
-
         val assistant = success(repository.appendMessage(AppendMessageInput(
             conversationId = "attachments", role = "assistant", status = "STREAMING",
             parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "draft")),
@@ -352,7 +436,7 @@ class ConversationRepositoryTest {
 
         val reloadedUser = repository.getMessage("attachments", user.messageId)!!
         assertEquals("rehydration keeps user attachments in their original order", listOf("first-attachment-id", "second-attachment-id"), reloadedUser.attachments.map { it.attachmentId })
-        assertEquals("rejecting a user snapshot leaves the edited user body unchanged", "edited user body", reloadedUser.text)
+        assertEquals("rejecting a user snapshot leaves the original user body unchanged", "look", reloadedUser.text)
         assertEquals("rehydration keeps user attachment reference parts in their original order",
             listOf("first-attachment-id", "second-attachment-id"),
             reloadedUser.parts.filter { it.kind == MessagePartKinds.ATTACHMENT_REF }
@@ -363,66 +447,265 @@ class ConversationRepositoryTest {
                 "SELECT COUNT(*) FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath),
             ).use { c -> c.moveToFirst(); c.getLong(0) }
             assertEquals("each attachment reuses its single file reference", 1L, fileRefCount)
+            val fileMime = database.openHelper.writableDatabase.query(
+                "SELECT mime_type FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath),
+            ).use { c -> c.moveToFirst(); c.getString(0) }
+            assertEquals("file references retain attachment MIME", attachment.mimeType, fileMime)
         }
     }
 
+    @Test fun hotReadQueryPlansUseConversationIndexesWithoutAvoidableSorts() = onDatabaseThread {
+        val sql = database.openHelper.writableDatabase
+        fun explain(query: String, vararg args: String): List<String> = sql.query(
+            "EXPLAIN QUERY PLAN $query", args,
+        ).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail"))) }
+        }
+        val tupleBeforeAnchor = "(i.sort_seq<? OR (i.sort_seq=? AND i.sort_sub<?) OR (i.sort_seq=? AND i.sort_sub=? AND i.seq<?))"
+        val plans = linkedMapOf(
+            "tail" to explain(
+                "SELECT * FROM conversation_items WHERE conversation_id=? AND seq<=? ORDER BY seq DESC LIMIT ?",
+                "plan", "999999", "20",
+            ),
+            "before" to explain(
+                "SELECT * FROM conversation_items WHERE conversation_id=? AND seq<? AND seq<=? ORDER BY seq DESC LIMIT ?",
+                "plan", "100", "999999", "20",
+            ),
+            "window-page" to explain(
+                "SELECT * FROM conversation_items INDEXED BY idx_conversation_items_sort WHERE conversation_id=? AND seq<=? " +
+                    "AND (sort_seq>? OR (sort_seq=? AND sort_sub>?) OR (sort_seq=? AND sort_sub=? AND seq>=?) " +
+                    ") ORDER BY sort_seq DESC,sort_sub DESC,seq DESC LIMIT ?",
+                "plan", "999999", "1", "1", "0", "1", "0", "1", "500",
+            ),
+            "anchor" to explain(
+                "SELECT i.seq,i.sort_seq,i.sort_sub FROM conversation_items i INDEXED BY idx_conversation_items_sort " +
+                    "CROSS JOIN messages m INDEXED BY idx_messages_conversation_seq " +
+                    "WHERE i.conversation_id=? AND i.seq<=? AND m.conversation_id=i.conversation_id AND m.seq=i.seq " +
+                    "AND m.role='user' AND m.interrupt_request_id IS NULL ORDER BY i.sort_seq DESC,i.sort_sub DESC,i.seq DESC LIMIT 1 OFFSET ?",
+                "plan", "999999", "0",
+            ),
+            "earlier-anchor" to explain(
+                "SELECT EXISTS(SELECT 1 FROM conversation_items i INDEXED BY idx_conversation_items_sort " +
+                    "CROSS JOIN messages m INDEXED BY idx_messages_conversation_seq " +
+                    "WHERE i.conversation_id=? AND i.seq<=? AND m.conversation_id=i.conversation_id AND m.seq=i.seq " +
+                    "AND m.role='user' AND m.interrupt_request_id IS NULL AND $tupleBeforeAnchor LIMIT 1)",
+                "plan", "999999", "100", "100", "100", "100", "100", "100",
+            ),
+            "hydrate" to explain(
+                "WITH requested(message_id) AS (VALUES (?),(?)) SELECT m.* FROM messages m JOIN requested r ON r.message_id=m.message_id " +
+                    "WHERE m.conversation_id=? AND m.seq<=?",
+                "message-1", "message-2", "plan", "999999",
+            ),
+            "hydrate-children" to explain(
+                "WITH requested(message_id) AS (VALUES (?),(?)) " +
+                    "SELECT 'part' AS type,p.message_id,p.ordinal,p.kind,p.payload,NULL AS extra1,NULL AS extra2,NULL AS extra3,NULL AS extra4,NULL AS extra5,NULL AS extra6,NULL AS extra7,NULL AS extra8,NULL AS extra9,NULL AS extra10 " +
+                    "FROM message_parts p JOIN requested r ON r.message_id=p.message_id WHERE p.conversation_id=? " +
+                    "UNION ALL SELECT 'attachment',a.message_id,a.ordinal,a.attachment_id,a.name,a.mime_type,a.size_bytes,a.kind,a.relative_path,a.sha256,a.file_ref_id,NULL,NULL,NULL,NULL " +
+                    "FROM message_attachments a JOIN requested r ON r.message_id=a.message_id WHERE a.conversation_id=? " +
+                    "UNION ALL SELECT 'translation',t.message_id,t.seq,t.language,t.content,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL " +
+                    "FROM message_translations t JOIN requested r ON r.message_id=t.message_id WHERE t.conversation_id=? AND t.seq<=? " +
+                    "AND t.seq=(SELECT MAX(latest.seq) FROM message_translations latest WHERE latest.conversation_id=t.conversation_id " +
+                    "AND latest.message_id=t.message_id AND latest.seq<=?) " +
+                    "UNION ALL SELECT 'reply',s.message_id,s.ordinal,s.label,s.text,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL " +
+                    "FROM proactive_suggested_replies s JOIN requested r ON r.message_id=s.message_id WHERE s.conversation_id=?",
+                "message-1", "message-2", "plan", "plan", "plan", "999999", "999999", "plan",
+            ),
+            "pending-interrupts" to explain(
+                "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
+                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
+                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state_seq END AS input_state_seq," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
+                    "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
+                    "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
+                    "WHERE r.seq<=c.next_seq-1 ORDER BY r.conversation_id,r.seq",
+            ),
+            "pending-interrupts-conversation" to explain(
+                "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
+                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
+                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state_seq END AS input_state_seq," +
+                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
+                    "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
+                    "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
+                    "WHERE r.seq<=c.next_seq-1 AND r.conversation_id=? ORDER BY r.conversation_id,r.seq",
+                "plan",
+            ),
+        )
+
+        val hasUnindexedMessageScan = Regex("(?i)\\bSCAN(?: TABLE)? (?:messages|m|active)\\b(?!.*\\bUSING\\b)")
+        plans.forEach { (name, details) ->
+            assertTrue("$name query plan must be available", details.isNotEmpty())
+            assertTrue("$name query plan must not scan the messages table without an index: $details", details.none { hasUnindexedMessageScan.containsMatchIn(it) })
+        }
+        listOf("tail", "before", "window-page", "anchor", "earlier-anchor", "hydrate", "hydrate-children", "pending-interrupts", "pending-interrupts-conversation").forEach { name ->
+            val details = plans.getValue(name)
+            assertTrue("$name query should not need a temporary B-tree: $details", details.none { it.contains("USE TEMP B-TREE", ignoreCase = true) })
+        }
+        assertTrue("anchor query is driven by the ordered spine index: ${plans.getValue("anchor")}", plans.getValue("anchor").any { it.contains("idx_conversation_items_sort") })
+        assertTrue("anchor query hydrates users through the conversation/sequence index: ${plans.getValue("anchor")}", plans.getValue("anchor").any { it.contains("idx_messages_conversation_seq") })
+        listOf("pending-interrupts", "pending-interrupts-conversation").forEach { name ->
+            assertTrue("$name query uses its conversation/sequence index: ${plans.getValue(name)}", plans.getValue(name).any { it.contains("idx_interrupt_requests_seq") })
+        }
+
+        val hasActiveMessages = "EXISTS(SELECT 1 FROM messages active WHERE active.conversation_id=c.id AND active.seq<c.next_seq AND " +
+            "(active.role='user' OR (active.role='assistant' AND active.hidden_kind IS NULL)))"
+        fun orderedText(messageId: String) = "(SELECT group_concat(ordered_payload,'') FROM (" +
+            "SELECT p.payload AS ordered_payload FROM message_parts p WHERE p.conversation_id=c.id AND p.message_id=$messageId AND p.kind='text' ORDER BY p.ordinal LIMIT -1))"
+        val firstUserId = "(SELECT m.message_id FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND m.role='user' ORDER BY m.seq LIMIT 1)"
+        val latestGoalId = "(SELECT m.message_id FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND m.role='user' ORDER BY m.seq DESC LIMIT 1)"
+        val latestActiveId = "(SELECT m.message_id FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND " +
+            "(m.role='user' OR (m.role='assistant' AND m.hidden_kind IS NULL)) ORDER BY m.seq DESC LIMIT 1)"
+        val latestActiveAt = "(SELECT CAST(m.created_at*1000 AS INTEGER) FROM messages m WHERE m.conversation_id=c.id AND m.seq<c.next_seq AND " +
+            "(m.role='user' OR (m.role='assistant' AND m.hidden_kind IS NULL)) ORDER BY m.seq DESC LIMIT 1)"
+        val drawerPlan = explain(
+            "SELECT c.id,NULLIF(TRIM(c.title),''),NULLIF(TRIM(c.generated_title),''),${orderedText(firstUserId)}," +
+                "${orderedText(latestActiveId)},${orderedText(latestGoalId)},((SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id " +
+                "AND m.seq<c.next_seq AND (m.role='user' OR (m.role='assistant' AND m.hidden_kind IS NULL)))+1)/2 AS turns," +
+                "c.message_count,$latestActiveAt AS latest_active_at FROM conversations c " +
+                "WHERE c.kind NOT IN ('proactive','tasks') AND $hasActiveMessages ORDER BY latest_active_at DESC,c.id LIMIT ?",
+            "20",
+        )
+        assertTrue("drawer query plan must be available", drawerPlan.isNotEmpty())
+        assertTrue("drawer query must not scan the messages table without an index: $drawerPlan", drawerPlan.none { hasUnindexedMessageScan.containsMatchIn(it) })
+        // The drawer orders by a computed latest-message timestamp; SQLite's final sort is expected.
+    }
+
     @Test fun rawRepositoryInsertsProvideEveryRequiredSchemaColumn() {
-        val relativeSourcePath = "app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt"
         var directory: File? = File(System.getProperty("user.dir")).absoluteFile
-        var sourceFile: File? = null
-        while (directory != null && sourceFile == null) {
-            sourceFile = listOf(
-                File(directory, relativeSourcePath),
-                File(directory, "app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt"),
-            ).firstOrNull { it.isFile }
+        var sourceDirectory: File? = null
+        while (directory != null && sourceDirectory == null) {
+            sourceDirectory = listOf(
+                File(directory, "app/app/src/main/java/com/jarvys/agent/chatdb"),
+                File(directory, "app/src/main/java/com/jarvys/agent/chatdb"),
+            ).firstOrNull { it.isDirectory }
             directory = directory.parentFile
         }
-        assertTrue("ConversationRepository.kt source must be available to audit raw INSERT statements", sourceFile?.isFile == true)
-
-        val source = sourceFile!!.readText()
+        assertTrue("production chatdb Kotlin sources must be available to audit raw INSERT statements", sourceDirectory?.isDirectory == true)
         val insertPattern = Regex("""(?is)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)""")
-        val insertIntoCount = Regex("""(?i)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b""").findAll(source).count()
+        val insertIntoPattern = Regex("""(?i)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b""")
         val concatBoundary = Regex("\"\\s*\\+\\s*\"")
-        val inserts = insertPattern.findAll(source).map { match ->
-            val table = match.groupValues[1]
-            val columns = match.groupValues[2].replace(concatBoundary, "")
-                .split(',').map { it.trim().trim('`', '\"', '[', ']') }.filter(String::isNotEmpty).toSet()
-            val line = source.substring(0, match.range.first).count { it == '\n' } + 1
-            Triple(table, columns, line)
-        }.toList()
-        assertTrue("ConversationRepository.kt must contain raw INSERT statements to audit", inserts.isNotEmpty())
-        assertEquals("every raw INSERT INTO statement must have an explicit column list", insertIntoCount, inserts.size)
-
         val db = database.openHelper.writableDatabase
-        inserts.forEach { (table, insertedColumns, line) ->
-            val tableInfo = db.query("PRAGMA table_info($table)").use { cursor ->
-                buildList {
-                    while (cursor.moveToNext()) add(
-                        Triple(
-                            cursor.getString(cursor.getColumnIndexOrThrow("name")),
-                            cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) == 1 &&
-                                cursor.isNull(cursor.getColumnIndexOrThrow("dflt_value")),
-                            cursor.getInt(cursor.getColumnIndexOrThrow("pk")),
-                        ),
-                    )
+        val sourceFiles = sourceDirectory!!.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        assertTrue("the chatdb package must have Kotlin production files", sourceFiles.isNotEmpty())
+        var auditedInsertCount = 0
+        sourceFiles.forEach { sourceFile ->
+            // Join adjacent Kotlin string literals while preserving line numbers, so INSERT SQL
+            // split for formatting and Room @Query literals are audited as executable SQL.
+            val rawSource = sourceFile.readText(Charsets.UTF_8)
+            val source = concatBoundary.replace(rawSource) { boundary -> "\n".repeat(boundary.value.count { it == '\n' }) }
+            val inserts = insertPattern.findAll(source).toList()
+            assertEquals(
+                "${sourceFile.name}: every raw INSERT INTO statement must have an explicit column list",
+                insertIntoPattern.findAll(source).count(), inserts.size,
+            )
+            inserts.forEach { match ->
+                val table = match.groupValues[1]
+                val insertedColumnList = splitSqlExpressions(match.groupValues[2])
+                    .map { it.trim().trim('`', '\"', '[', ']') }
+                val line = source.substring(0, match.range.first).count { it == '\n' } + 1
+                val tail = source.substring(match.range.last + 1)
+                val valuesStart = Regex("(?is)\\bVALUES\\s*\\(").find(tail)
+                val valueExpressions = if (valuesStart != null) {
+                    val open = tail.indexOf('(', valuesStart.range.first)
+                    val close = matchingSqlParen(tail, open)
+                    assertTrue("${sourceFile.name}:$line INSERT INTO $table has an unterminated VALUES list", close >= 0)
+                    splitSqlExpressions(tail.substring(open + 1, close))
+                } else {
+                    val selectStart = Regex("(?is)\\bSELECT\\b").find(tail)
+                        ?: throw AssertionError("${sourceFile.name}:$line INSERT INTO $table has neither VALUES nor SELECT")
+                    val whereStart = Regex("(?is)\\bWHERE\\b").find(tail, selectStart.range.last + 1)
+                        ?: throw AssertionError("${sourceFile.name}:$line INSERT INTO $table SELECT has no WHERE boundary")
+                    splitSqlExpressions(tail.substring(selectStart.range.last + 1, whereStart.range.first))
+                }
+                assertEquals(
+                    "${sourceFile.name}:$line INSERT INTO $table must provide one value per explicit column",
+                    insertedColumnList.size, valueExpressions.size,
+                )
+                val insertedColumns = insertedColumnList.toSet()
+                val tableInfo = db.query("PRAGMA table_info($table)").use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) add(
+                            Triple(
+                                cursor.getString(cursor.getColumnIndexOrThrow("name")),
+                                cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) == 1 &&
+                                    cursor.isNull(cursor.getColumnIndexOrThrow("dflt_value")),
+                                cursor.getInt(cursor.getColumnIndexOrThrow("pk")),
+                            ),
+                        )
+                    }
+                }
+                assertTrue("${sourceFile.name}:$line INSERT INTO $table must target an existing table", tableInfo.isNotEmpty())
+                val createSql = db.query(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", arrayOf(table),
+                ).use { cursor -> if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else "" }
+                val autoIncrementPrimaryKeys = Regex(
+                    """(?i)(?:^|[,(])\s*[`"\[]?([A-Za-z_][A-Za-z0-9_]*)[`"\]]?\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b""",
+                ).findAll(createSql).map { it.groupValues[1] }.toSet()
+                val schemaColumns = tableInfo.map { it.first }.toSet()
+                val unknownColumns = insertedColumns - schemaColumns
+                assertTrue("${sourceFile.name}:$line INSERT INTO $table has unknown columns $unknownColumns", unknownColumns.isEmpty())
+                val requiredColumns = tableInfo.filter { (name, notNullWithoutDefault, primaryKeyPosition) ->
+                    notNullWithoutDefault && !(primaryKeyPosition > 0 && name in autoIncrementPrimaryKeys)
+                }.map { it.first }.toSet()
+                val missingColumns = requiredColumns - insertedColumns
+                assertTrue("${sourceFile.name}:$line INSERT INTO $table omits required columns $missingColumns", missingColumns.isEmpty())
+                auditedInsertCount++
+            }
+        }
+        assertTrue("raw INSERT audit must cover repository and Daos.kt @Query statements", auditedInsertCount > 0)
+    }
+
+    private fun splitSqlExpressions(value: String): List<String> {
+        val result = mutableListOf<String>()
+        var depth = 0
+        var quote: Char? = null
+        var start = 0
+        var index = 0
+        while (index < value.length) {
+            val ch = value[index]
+            if (quote != null) {
+                if (ch == quote) {
+                    if (index + 1 < value.length && value[index + 1] == quote) index++ else quote = null
+                }
+            } else when (ch) {
+                '\'', '\"', '`' -> quote = ch
+                '[' -> quote = ']'
+                '(' -> depth++
+                ')' -> depth--
+                ',' -> if (depth == 0) {
+                    result += value.substring(start, index).trim()
+                    start = index + 1
                 }
             }
-            assertTrue("ConversationRepository.kt:$line INSERT INTO $table must target an existing table", tableInfo.isNotEmpty())
-            val createSql = db.query(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", arrayOf(table),
-            ).use { cursor -> if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else "" }
-            val autoIncrementPrimaryKeys = Regex(
-                """(?i)(?:^|[,(])\s*[`"\[]?([A-Za-z_][A-Za-z0-9_]*)[`"\]]?\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b""",
-            ).findAll(createSql).map { it.groupValues[1] }.toSet()
-            val schemaColumns = tableInfo.map { it.first }.toSet()
-            val unknownColumns = insertedColumns - schemaColumns
-            assertTrue("ConversationRepository.kt:$line INSERT INTO $table has unknown columns $unknownColumns", unknownColumns.isEmpty())
-            val requiredColumns = tableInfo.filter { (name, notNullWithoutDefault, primaryKeyPosition) ->
-                notNullWithoutDefault && !(primaryKeyPosition > 0 && name in autoIncrementPrimaryKeys)
-            }.map { it.first }.toSet()
-            val missingColumns = requiredColumns - insertedColumns
-            assertTrue("ConversationRepository.kt:$line INSERT INTO $table omits required columns $missingColumns", missingColumns.isEmpty())
+            index++
         }
+        result += value.substring(start).trim()
+        return result.filter(String::isNotEmpty)
+    }
+
+    private fun matchingSqlParen(value: String, open: Int): Int {
+        if (open !in value.indices || value[open] != '(') return -1
+        var depth = 0
+        var quote: Char? = null
+        var index = open
+        while (index < value.length) {
+            val ch = value[index]
+            if (quote != null) {
+                if (ch == quote) {
+                    if (index + 1 < value.length && value[index + 1] == quote) index++ else quote = null
+                }
+            } else when (ch) {
+                '\'', '\"', '`' -> quote = ch
+                '[' -> quote = ']'
+                '(' -> depth++
+                ')' -> if (--depth == 0) return index
+            }
+            index++
+        }
+        return -1
     }
 
     @Test fun multiMessageHydrationUsesOneChildUnionQuery() {
@@ -472,6 +755,9 @@ class ConversationRepositoryTest {
         val second = success(repository.appendInterruptRequest("input-state", "second", listOf("skill-b")))
         assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <repository.pendingInterruptRequests(\"input-state\").flatMap { it.skills }> to equal <listOf(\"skill-a\", \"skill-b\")>", listOf("skill-a", "skill-b"), repository.pendingInterruptRequests("input-state").flatMap { it.skills })
 
+        assertTrue("requests without dispatched user rows cannot be incorporated", success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_INCORPORATED)).isEmpty())
+        success(repository.dispatchInterruptRequest("input-state", first.requestId))
+        success(repository.dispatchInterruptRequest("input-state", second.requestId))
         val marked = success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_INCORPORATED))
         assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <marked> to equal <listOf(first.requestId, second.requestId)>", listOf(first.requestId, second.requestId), marked)
         val values = database.openHelper.writableDatabase.query(
@@ -490,6 +776,262 @@ class ConversationRepositoryTest {
         assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <repository.dispatchInterruptRequest(\"input-state\", first.requestId) is ChatDbResult.Suc...> to be true", repository.dispatchInterruptRequest("input-state", first.requestId) is ChatDbResult.Success)
         val dispatched = success(repository.dispatchInterruptRequest("input-state", second.requestId)).message
         assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <dispatched.inputState> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, dispatched.inputState)
+    }
+
+    @Test fun pendingInterruptRecoveryIncludesDispatchedAcknowledgementsAndExcludesResolvedRequests() = onDatabaseThread {
+        success(repository.ensureConversation("pending-recovery"))
+        val dispatchedRequest = success(repository.appendInterruptRequest("pending-recovery", "retry me", listOf("skill")))
+        val dispatched = success(repository.dispatchInterruptRequest("pending-recovery", dispatchedRequest.requestId))
+        val recovered = repository.pendingInterruptRequests("pending-recovery").single()
+        assertEquals(dispatchedRequest.requestId, recovered.requestId)
+        assertTrue(recovered.alreadyDispatched)
+        assertTrue(recovered.acknowledgementRequired)
+        assertEquals(dispatched.message.messageId, recovered.dispatchedMessageId)
+        assertEquals(listOf("skill"), recovered.skills)
+
+        val resolvedRequest = success(repository.appendInterruptRequest("pending-recovery", "discard me"))
+        assertEquals(listOf(resolvedRequest.requestId), success(repository.markInputState(
+            "pending-recovery", listOf(resolvedRequest.requestId), ConversationRepository.INPUT_RESOLVED,
+        )))
+        assertEquals(listOf(dispatchedRequest.requestId), repository.pendingInterruptRequests("pending-recovery").map { it.requestId })
+        success(repository.markInputState("pending-recovery", listOf(dispatchedRequest.requestId), ConversationRepository.INPUT_RESOLVED))
+        assertTrue(repository.pendingInterruptRequests("pending-recovery").isEmpty())
+    }
+
+    @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {
+        success(repository.ensureConversation("implicit-resolution"))
+        val failedOwner = append("implicit-resolution", "user", "failed owner")
+        val failed = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "implicit-resolution", role = "assistant", status = "FAILED", ownerUserMessageId = failedOwner.messageId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "failed")),
+        )))
+        assertEquals("FAILED", failed.status)
+        assertEquals(ConversationRepository.INPUT_RESOLVED, repository.getMessage("implicit-resolution", failedOwner.messageId)?.inputState)
+
+        val partialOwner = append("implicit-resolution", "user", "partial owner")
+        val streaming = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "implicit-resolution", role = "assistant", status = "STREAMING", ownerUserMessageId = partialOwner.messageId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "partial")),
+        )))
+        success(repository.finalizeMessage("implicit-resolution", streaming.messageId, streaming.parts, "PARTIAL"))
+        assertEquals(ConversationRepository.INPUT_RESOLVED, repository.getMessage("implicit-resolution", partialOwner.messageId)?.inputState)
+
+        val request = success(repository.appendInterruptRequest("implicit-resolution", "stop me"))
+        success(repository.dispatchInterruptRequest("implicit-resolution", request.requestId))
+        success(repository.appendMessage(AppendMessageInput(
+            conversationId = "implicit-resolution", role = "assistant", status = "STOPPED", ownerUserMessageId = request.requestId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "stopped")),
+        )))
+        assertEquals(ConversationRepository.INPUT_RESOLVED, repository.getMessage("implicit-resolution", request.requestId)?.inputState)
+        assertTrue(repository.pendingInterruptRequests("implicit-resolution").isEmpty())
+
+        val unacknowledged = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "implicit-resolution", role = "user", interruptRequestId = "unacknowledged-request",
+            acknowledgementRequired = false, parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "one way")),
+        )))
+        assertEquals(ConversationRepository.INPUT_RESOLVED, unacknowledged.inputState)
+        assertTrue(success(repository.markInputState(
+            "implicit-resolution", listOf(unacknowledged.messageId), ConversationRepository.INPUT_INCORPORATED,
+        )).isEmpty())
+    }
+
+    @Test fun readWindowHydratesOnlyMessageSlotsWhenMarkerKeysRepeatMessageIds() = onDatabaseThread {
+        success(repository.ensureConversation("typed-slots"))
+        val user = append("typed-slots", "user", "question")
+        val assistant = append("typed-slots", "assistant", "answer")
+        success(repository.setTranslation("typed-slots", assistant.messageId, "es", "respuesta"))
+        success(repository.hideTranslation("typed-slots", assistant.messageId))
+        success(repository.hideAssistant("typed-slots", assistant.messageId, "assistant_regenerated"))
+        success(repository.setReaction("typed-slots", user.stableId, "\uD83D\uDC4D"))
+        val request = success(repository.appendInterruptRequest("typed-slots", "steer"))
+        success(repository.dispatchInterruptRequest("typed-slots", request.requestId))
+
+        val window = repository.readTailWindow("typed-slots", turns = 5)
+        val duplicateKeySlots = window.slots.filter { it.item.item_key == assistant.messageId || it.item.item_key == user.messageId }
+        assertTrue(duplicateKeySlots.any { it.item.item_kind == "message" && it.message != null })
+        assertTrue(duplicateKeySlots.filter { it.item.item_kind != "message" }.all { it.message == null })
+        assertEquals(1, duplicateKeySlots.count { it.message?.messageId == assistant.messageId })
+        assertEquals(1, duplicateKeySlots.count { it.message?.messageId == user.messageId })
+        assertTrue(window.slots.any { it.item.item_kind == "main_interrupt_request" && it.message == null })
+        assertTrue(window.slots.any { it.item.item_kind == "message_reaction" && it.message == null })
+        assertTrue(window.slots.any { it.item.item_kind == "assistant_translation" && it.message == null })
+        assertTrue(window.slots.any { it.item.item_kind == "assistant_translation_hidden" && it.message == null })
+        assertTrue(window.slots.any { it.item.item_kind == "assistant_regenerated" && it.message == null })
+    }
+
+    @Test fun beforeMessageIdChainsStayAdjacentAndMissingTargetsAppend() = onDatabaseThread {
+        success(repository.ensureConversation("before-chain"))
+        val first = append("before-chain", "assistant", "first")
+        val target = append("before-chain", "assistant", "target")
+        val moved = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "before-chain", role = "assistant", beforeMessageId = target.messageId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "first moved assistant")),
+        )))
+        val beforeMoved = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "before-chain", role = "assistant", beforeMessageId = moved.messageId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "before the already moved assistant")),
+        )))
+        val missingTarget = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "before-chain", role = "assistant", beforeMessageId = "deleted-target",
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "append fallback")),
+        )))
+        val ordered = database.openHelper.writableDatabase.query(
+            "SELECT message_id FROM messages WHERE conversation_id=? ORDER BY message_index", arrayOf("before-chain"),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        assertEquals(listOf(first.messageId, beforeMoved.messageId, moved.messageId, target.messageId, missingTarget.messageId), ordered)
+    }
+
+    @Test fun beforeMessageIdInsertionIntoLargeConversationShiftsOneSuffix() = onDatabaseThread {
+        success(repository.ensureConversation("before-large"))
+        append("before-large", "user", "owner")
+        val request = success(repository.appendInterruptRequest("before-large", "steering"))
+        val target = success(repository.dispatchInterruptRequest("before-large", request.requestId)).message
+        val db = database.openHelper.writableDatabase
+        val firstSyntheticSeq = db.query("SELECT next_seq FROM conversations WHERE id='before-large'").use { c -> c.moveToFirst(); c.getLong(0) }
+        database.withTransaction {
+            repeat(5000) { index ->
+                val seq = firstSyntheticSeq + index
+                val id = "synthetic-$index"
+                val role = if (index % 2 == 0) "user" else "assistant"
+                db.execSQL(
+                    "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES(?,?,'message',?,?,0,?,1.0)",
+                    arrayOf("before-large", seq, id, seq, if (role == "user") seq else null),
+                )
+                db.execSQL(
+                    "INSERT INTO messages(conversation_id,message_id,stable_id,seq,message_index,role,status,run_id,owner_user_message_id,duration_ms,before_message_id,proactive_thread_key,proactive_reply_to_message_id,proactive_decision_id,interrupt_request_id,ack_required,created_at,updated_at) " +
+                        "VALUES(?,?,?,?,?,?,'COMPLETED',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0,1.0,1.0)",
+                    arrayOf("before-large", id, id, seq, index + 2, role),
+                )
+            }
+            db.execSQL(
+                "UPDATE conversations SET message_count=message_count+5000,next_seq=? WHERE id=?",
+                arrayOf(firstSyntheticSeq + 5000, "before-large"),
+            )
+        }
+
+        val started = System.nanoTime()
+        val inserted = success(repository.appendMessage(AppendMessageInput(
+            conversationId = "before-large", role = "assistant", status = "COMPLETED", beforeMessageId = target.messageId,
+            parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "insert at the front of the suffix")),
+        )))
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        assertTrue("one beforeMessageId insertion should shift 5,000 rows in under 1.5 seconds; took ${elapsedMillis}ms", elapsedMillis < 1_500)
+        val positions = db.query(
+            "SELECT message_id,message_index FROM messages WHERE conversation_id=? AND message_id IN (?,?) ORDER BY message_index",
+            arrayOf("before-large", inserted.messageId, target.messageId),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) } }
+        assertEquals(listOf(inserted.messageId to 1L, target.messageId to 2L), positions)
+        val indexSummary = db.query(
+            "SELECT MIN(message_index),MAX(message_index),COUNT(*),COUNT(DISTINCT message_index) FROM messages WHERE conversation_id=?",
+            arrayOf("before-large"),
+        ).use { c -> c.moveToFirst(); listOf(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3)) }
+        assertEquals(listOf(0L, 5002L, 5003L, 5003L), indexSummary)
+    }
+
+    @Test fun ordinaryChatKindsIncludeCentralAndWorkspaceExec() = onDatabaseThread {
+        for (id in listOf("central-ordinary", "workspace-ordinary")) {
+            success(repository.ensureConversation(id, if (id.startsWith("central")) "central" else "workspace_exec"))
+            val user = success(repository.appendMessage(AppendMessageInput(
+                conversationId = id, role = "user", parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "with file")),
+                attachments = listOf(MessageAttachmentInput("file-$id", "note.txt", "text/plain", 4, "document", "$id/note.txt")),
+            )))
+            assertEquals("file-$id", user.attachments.single().attachmentId)
+            assertTrue(success(repository.setReaction(id, user.stableId, "\uD83D\uDC4D")).changed)
+            val request = success(repository.appendInterruptRequest(id, "follow up"))
+            assertTrue(success(repository.dispatchInterruptRequest(id, request.requestId)).inserted)
+        }
+    }
+
+    @Test fun itemWindowsPageByCapacityWithoutTurnAnchorsAndHydrationAcceptsOver999Ids() = onDatabaseThread {
+        success(repository.ensureConversation("tasks-paged", "tasks"))
+        repeat(505) { index -> success(repository.appendDecisionRequest(
+            "tasks-paged", "decision-$index", "Title", "Body", false, emptyList(),
+        )) }
+        val allSequences = database.openHelper.writableDatabase.query(
+            "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("tasks-paged"),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+        val pages = mutableListOf<MessageWindow>()
+        var page = repository.readTailWindow("tasks-paged", turns = 1)
+        while (true) {
+            assertTrue("each item window respects the 500-slot cap", page.slots.size <= 500)
+            pages += page
+            val cursor = page.olderCursorSeq ?: break
+            page = repository.readWindowBefore("tasks-paged", cursor, turns = 1)
+        }
+        val paged = pages.asReversed().flatMap { it.slots.map { slot -> slot.item.seq } }
+        assertTrue("an unanchored history over the slot limit is split across pages", pages.size > 1)
+        assertEquals(allSequences, paged)
+        assertEquals(allSequences.size, paged.distinct().size)
+
+        success(repository.ensureConversation("large-hydration"))
+        val ids = mutableListOf<String>()
+        database.withTransaction {
+            repeat(1005) { index ->
+                ids += success(repository.appendMessage(AppendMessageInput(
+                    conversationId = "large-hydration", role = "user",
+                    parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "body-$index")),
+                ))).messageId
+            }
+        }
+        val hydrated = repository.getMessagesByIds("large-hydration", ids.reversed())
+        assertEquals(1005, hydrated.size)
+        assertEquals(ids.reversed(), hydrated.map { it.messageId })
+        assertEquals("body-1004", hydrated.first().text)
+    }
+
+    @Test fun windowReadRunsWhileRoomWriteTransactionIsHeld() {
+        success(runBlocking { repository.ensureConversation("wal-reader") })
+        runBlocking { append("wal-reader", "user", "visible before writer") }
+        val writer = Executors.newSingleThreadExecutor()
+        val reader = Executors.newSingleThreadExecutor()
+        val writerEntered = CountDownLatch(1)
+        val releaseWriter = CountDownLatch(1)
+        try {
+            val write = writer.submit {
+                runBlocking {
+                    database.withTransaction {
+                        database.openHelper.writableDatabase.execSQL("UPDATE conversations SET updated_at=updated_at+1 WHERE id=?", arrayOf("wal-reader"))
+                        writerEntered.countDown()
+                        check(releaseWriter.await(10, TimeUnit.SECONDS))
+                    }
+                }
+            }
+            assertTrue(writerEntered.await(10, TimeUnit.SECONDS))
+            val read = reader.submit(Callable { runBlocking { repository.readTailWindow("wal-reader", 1) } })
+            assertEquals("the read sees the committed prefix without waiting for the writer", "visible before writer", read.get(3, TimeUnit.SECONDS).slots.single { it.item.item_kind == "message" }.message?.text)
+            releaseWriter.countDown()
+            write.get(10, TimeUnit.SECONDS)
+        } finally {
+            releaseWriter.countDown()
+            writer.shutdownNow()
+            reader.shutdownNow()
+        }
+    }
+
+    @Test fun blockingJavaFacadeRejectsMainThreadAndWorksOnItsBackgroundExecutor() {
+        val blocking = ConversationRepositoryBlocking(repository)
+        try {
+            val failureRef = AtomicReference<Throwable?>()
+            val mainCallFinished = CountDownLatch(1)
+            Handler(Looper.getMainLooper()).post {
+                failureRef.set(runCatching { blocking.ensureConversationSync("java-main") }.exceptionOrNull())
+                mainCallFinished.countDown()
+            }
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(mainCallFinished.await(5, TimeUnit.SECONDS))
+            val failure = failureRef.get()
+            assertTrue(failure is IllegalStateException)
+            assertTrue(failure?.message?.contains("main thread") == true)
+            val worker = Executors.newSingleThreadExecutor()
+            try {
+                val result = worker.submit(Callable { blocking.ensureConversationSync("java-worker") }).get(10, TimeUnit.SECONDS)
+                assertTrue(result is ChatDbResult.Success)
+            } finally {
+                worker.shutdownNow()
+            }
+        } finally {
+            blocking.close()
+        }
     }
 
     @Test fun ledgerProjectionParityCoversMessagesMarkersAndSteering() = onDatabaseThread {
@@ -569,6 +1111,17 @@ class ConversationRepositoryTest {
         success(repository.ensureConversation("tasks", "tasks"))
         success(repository.ensureConversation("central", "central"))
         success(repository.ensureConversation("workspace", "workspace_exec"))
+        append("central", "user", "central prompt")
+        append("workspace", "user", "workspace prompt")
+        success(repository.ensureConversation("pinned-old"))
+        success(repository.ensureConversation("recent"))
+        success(repository.appendMessage(AppendMessageInput(
+            "pinned-old", "user", listOf(MessagePartInput(MessagePartKinds.TEXT, "old")), createdAtSeconds = 100.0,
+        )))
+        success(repository.appendMessage(AppendMessageInput(
+            "recent", "user", listOf(MessagePartInput(MessagePartKinds.TEXT, "recent")), createdAtSeconds = 200.0,
+        )))
+        success(repository.updateMetadata("pinned-old", pinned = true))
         val rows = repository.listConversations(10)
         val first = rows.first { it.id == "first-user" }
         val metadata = rows.first { it.id == "metadata" }
@@ -582,7 +1135,10 @@ class ConversationRepositoryTest {
         success(repository.updateMetadata("metadata", privateCode = false))
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <success(repository.ensureConversation(\"metadata\")).private_code> to be true", success(repository.ensureConversation("metadata")).private_code)
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <repository.renameConversation(\"metadata\", \" \\t \") is ChatDbResult.Invalid> to be true", repository.renameConversation("metadata", " \t ") is ChatDbResult.Invalid)
-        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.none { it.id in setOf(\"system\", \"tasks\", \"central\", \"workspace\") }> to be true", rows.none { it.id in setOf("system", "tasks", "central", "workspace") })
+        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.none { it.id in setOf(\"system\", \"tasks\") }> to be true", rows.none { it.id in setOf("system", "tasks") })
+        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.any { it.id == \"central\" }> to be true", rows.any { it.id == "central" })
+        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.any { it.id == \"workspace\" }> to be true", rows.any { it.id == "workspace" })
+        assertTrue("repository ordering follows the latest message timestamp and leaves pin grouping to the UI", rows.indexOfFirst { it.id == "recent" } < rows.indexOfFirst { it.id == "pinned-old" })
     }
 
     @Test fun drawerCountsOnlyActiveMessagesAndUsesLegacyTitleGoalPreviewAndTimestamp() = onDatabaseThread {
@@ -630,26 +1186,6 @@ class ConversationRepositoryTest {
     private suspend fun append(conversationId: String, role: String, text: String): StoredMessage = success(
         repository.appendMessage(AppendMessageInput(conversationId, role, listOf(MessagePartInput(MessagePartKinds.TEXT, text)), status = if (role == "assistant") "COMPLETED" else null)),
     )
-
-    private fun replacePartsPreservingAttachmentsInternally(conversationId: String, messageId: String, newText: String) {
-        val preserveReferences = ConversationRepository::class.java.getDeclaredMethod(
-            "preserveAttachmentReferences", String::class.java, String::class.java, List::class.java,
-        ).apply { isAccessible = true }
-        val replaceParts = ConversationRepository::class.java.getDeclaredMethod(
-            "replaceParts", String::class.java, String::class.java, List::class.java,
-        ).apply { isAccessible = true }
-        val db = database.openHelper.writableDatabase
-        db.beginTransaction()
-        try {
-            val parts = preserveReferences.invoke(
-                repository, conversationId, messageId, listOf(MessagePartInput(MessagePartKinds.TEXT, newText)),
-            ) as List<MessagePartInput>
-            replaceParts.invoke(repository, conversationId, messageId, parts)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
 
     private fun <T> success(result: ChatDbResult<T>): T {
         assertTrue("Expected success but received $result", result is ChatDbResult.Success)

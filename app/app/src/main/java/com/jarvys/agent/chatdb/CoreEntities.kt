@@ -245,6 +245,7 @@ data class FileRef(
     val sha256: String,
     val relative_path: String,
     val bytes: Long,
+    val mime_type: String? = null,
     val last_referenced_at: Long,
     /** Earliest GC attempt time; deleting the ref never deletes history or the physical file in SQL. */
     val not_before: Long? = null,

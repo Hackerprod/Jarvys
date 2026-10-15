@@ -653,7 +653,7 @@ class JarvysChatDatabaseM0Test {
         val seeded = seedEveryConversationChild(sqlite, "timestamp-round-trip")
         val expected = 98_765.4321
         val requiredEventTables = setOf(
-            "conversation_items", "messages", "interrupt_requests", "delivered_files", "generated_images", "tool_batches",
+            "conversation_items", "messages", "interrupt_requests", "artifacts", "generated_images", "tool_batches",
             "tool_results", "tool_activities", "tool_presentations", "reflection_tool_markers", "reflections",
             "message_translations", "user_decisions", "message_reactions", "compactions", "compaction_reflection_acks",
         )
@@ -683,8 +683,8 @@ class JarvysChatDatabaseM0Test {
         val messageText = ExactUtf16.encode(String(charArrayOf('M', '\uDC00', 'G')))
         sqlite.execSQL(
             "INSERT INTO crew_missions(conversation_id,mission_id,first_snapshot_seq,last_snapshot_seq,schema_version,process_id,title," +
-                "original_instructions,title_source,status,synthesis,started_at_ms,finished_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            arrayOf(id, "mission-1", 1L, 1L, 4, "process-1", "title", "instructions", "user", "completed", synthesis, 10L, 20L),
+                "snapshot_digest,original_instructions,title_source,status,synthesis,started_at_ms,finished_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, "mission-1", 1L, 1L, 4, "process-1", "digest", "title", "instructions", "user", "completed", synthesis, 10L, 20L),
         )
         sqlite.execSQL(
             "INSERT INTO crew_bots(conversation_id,mission_id,bot_id,ordinal,name,status,error,result,resume_required,can_resume) " +
@@ -772,7 +772,7 @@ class JarvysChatDatabaseM0Test {
         }
 
         sqlite.execSQL("DELETE FROM file_refs WHERE id='file_refs_id'")
-        listOf("message_attachments", "model_artifacts", "delivered_files", "generated_images").forEach { table ->
+        listOf("message_attachments", "model_artifacts", "artifacts", "generated_images").forEach { table ->
             assertEquals("GC must preserve $table history", 1L, rowCount(sqlite, table))
             assertNull(scalarNullableString(sqlite, "SELECT file_ref_id FROM `$table` LIMIT 1"))
         }
@@ -893,6 +893,12 @@ class JarvysChatDatabaseM0Test {
         val insertAnnotation = Regex(Regex.escape(annotationStart) + "(?:\\s*\\((?:[^()]|\\([^()]*\\))*\\))?")
         val conflictReplace = Regex("\\bonConflict\\s*=\\s*(?:[\\w.]*REPLACE\\b|1\\b)")
         val rawReplace = Regex("\\bINSERT\\s+OR\\s+" + "REPLACE\\b|\\b" + "REPLACE\\s+INTO\\b", RegexOption.IGNORE_CASE)
+        val ddlReplace = Regex("\\bON\\s+CONFLICT\\s+" + "RE" + "PLACE\\b", RegexOption.IGNORE_CASE)
+        val sqliteInsertReplace = Regex(
+            "\\.insert\\s*\\([^,]+,\\s*(?:5|SQLiteDatabase\\.CONFLICT_" + "REPLACE)\\s*,|" +
+                "\\.insertWithOnConflict\\s*\\([^,]+,[^,]+,[^,]+,\\s*(?:5|SQLiteDatabase\\.CONFLICT_" + "REPLACE)\\s*\\)",
+            RegexOption.IGNORE_CASE,
+        )
         val allowMarker = "allowed-replace-fixture"
         val violations = sourceDirectories.flatMapIndexed { sourceIndex, sourceDirectory ->
             val isTestSource = sourceIndex == 1
@@ -912,11 +918,34 @@ class JarvysChatDatabaseM0Test {
                         if (isTestSource && (allowMarker in line || allowMarker in precedingLine)) null
                         else "${sourceFile.name}:${lineNumber + 1}: ${match.value}"
                     }.toList()
-                    (annotationViolations + sqlViolations).asSequence()
+                    val ddlViolations = ddlReplace.findAll(source).map { match ->
+                        val lineNumber = source.substring(0, match.range.first).count { ch -> ch == '\n' }
+                        "${sourceFile.name}:${lineNumber + 1}: ${match.value}"
+                    }.toList()
+                    val sqliteApiViolations = sqliteInsertReplace.findAll(source).map { match ->
+                        val lineNumber = source.substring(0, match.range.first).count { ch -> ch == '\n' }
+                        "${sourceFile.name}:${lineNumber + 1}: SQLiteDatabase.${match.value}"
+                    }.toList()
+                    (annotationViolations + sqlViolations + ddlViolations + sqliteApiViolations).asSequence()
                 }
                 .toList()
         }
         assertTrue("REPLACE can delete a parent and cascade children; test-only fixtures must be marked: $violations", violations.isEmpty())
+    }
+
+    @Test
+    fun m1aDaosRemainInternal() {
+        val schemaDirectory = System.getProperty("room.schemaDir")
+        assertTrue("Missing room.schemaDir", !schemaDirectory.isNullOrBlank())
+        val moduleDirectory = File(schemaDirectory!!).parentFile
+        val daoSource = File(moduleDirectory, "src/main/java/com/jarvys/agent/chatdb/Daos.kt")
+        assertTrue("Daos.kt source must be available to audit", daoSource.isFile)
+
+        val declarations = Regex("(?m)^\\s*(?:internal\\s+)?interface\\s+(\\w+)")
+            .findAll(daoSource.readText(Charsets.UTF_8))
+            .associate { it.groupValues[1] to it.value.trimStart().startsWith("internal interface") }
+        assertEquals(setOf("ConversationDao", "ConversationItemDao", "MessageDao"), declarations.keys)
+        assertTrue("M1a DAOs are implementation details and must remain internal: $declarations", declarations.values.all { it })
     }
 
     @Test

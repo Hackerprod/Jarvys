@@ -57,11 +57,12 @@ internal interface ConversationItemDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertAll(items: List<ConversationItem>): List<Long>
 
-    @Query("SELECT * FROM conversation_items WHERE conversation_id = :conversationId ORDER BY seq DESC LIMIT :limit")
-    suspend fun queryTail(conversationId: String, limit: Int): List<ConversationItem>
+    /** Readers supply one captured high-water sequence to keep WAL pages consistent during appends. */
+    @Query("SELECT * FROM conversation_items WHERE conversation_id = :conversationId AND seq <= :maxSeq ORDER BY seq DESC LIMIT :limit")
+    suspend fun queryTail(conversationId: String, limit: Int, maxSeq: Long = Long.MAX_VALUE): List<ConversationItem>
 
-    @Query("SELECT * FROM conversation_items WHERE conversation_id = :conversationId AND seq < :beforeSeq ORDER BY seq DESC LIMIT :limit")
-    suspend fun queryBefore(conversationId: String, beforeSeq: Long, limit: Int): List<ConversationItem>
+    @Query("SELECT * FROM conversation_items WHERE conversation_id = :conversationId AND seq < :beforeSeq AND seq <= :maxSeq ORDER BY seq DESC LIMIT :limit")
+    suspend fun queryBefore(conversationId: String, beforeSeq: Long, limit: Int, maxSeq: Long = Long.MAX_VALUE): List<ConversationItem>
 }
 
 /** Minimal typed message writes/lookups and count for the M0 schema contract. */
