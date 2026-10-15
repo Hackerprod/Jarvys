@@ -235,24 +235,70 @@ internal object JarvysChatDatabaseProvider {
     /** Closes provider-owned handles and executors together with their Room database. */
     internal fun closeDatabase(database: JarvysChatDatabase) {
         val readPool = synchronized(readPools) { readPools[database] }
-        readPool?.close()
-        synchronized(readPools) {
-            if (readPools[database] === readPool) readPools.remove(database)
+        try {
+            // Mark the pool closed and wake blocked acquisitions before Room waits for its own
+            // connection leases. Borrowed raw handles close when their owners return them.
+            readPool?.close()
+        } finally {
+            synchronized(readPools) {
+                if (readPools[database] === readPool) readPools.remove(database)
+            }
+            try {
+                database.close()
+            } finally {
+                val executors = synchronized(databaseExecutors) { databaseExecutors.remove(database) }.orEmpty()
+                synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
+                synchronized(writerDispatchers) { writerDispatchers.remove(database) }?.close()
+                synchronized(databaseFiles) { databaseFiles.remove(database) }
+                executors.forEach(ExecutorService::shutdown)
+                synchronized(this) { if (instance === database) instance = null }
+            }
         }
-        database.close()
-        val executors = synchronized(databaseExecutors) { databaseExecutors.remove(database) }.orEmpty()
-        synchronized(queryDispatchers) { queryDispatchers.remove(database) }?.close()
-        synchronized(writerDispatchers) { writerDispatchers.remove(database) }?.close()
-        synchronized(databaseFiles) { databaseFiles.remove(database) }
-        executors.forEach(ExecutorService::shutdown)
-        synchronized(this) { if (instance === database) instance = null }
     }
 
     /** Closes the process singleton and its read pool when the owning application is shutting down. */
     internal fun closeInstance() = synchronized(this) { instance?.let(::closeDatabase) }
 
-    /** Closes an isolated database opened for tests. */
-    internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) = closeDatabase(database)
+    /** Closes an isolated database opened for tests, with a bounded and diagnostic Room close. */
+    internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) {
+        val finished = java.util.concurrent.CountDownLatch(1)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val closer = Thread({
+            try {
+                closeDatabase(database)
+            } catch (error: Throwable) {
+                failure.set(error)
+            } finally {
+                finished.countDown()
+            }
+        }, "jarvys-chat-test-database-close").apply { isDaemon = true }
+        closer.start()
+
+        if (!finished.await(TEST_DATABASE_CLOSE_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+            closer.interrupt()
+            throw AssertionError(
+                "Timed out after ${TEST_DATABASE_CLOSE_TIMEOUT_SECONDS}s closing the chat database. " +
+                    "Closer interrupted; all-thread dump follows:\n${dumpAllThreadStacks()}",
+            )
+        }
+        failure.get()?.let { error ->
+            when (error) {
+                is Error -> throw error
+                is RuntimeException -> throw error
+                else -> throw IllegalStateException("Could not close the chat database in the test helper", error)
+            }
+        }
+    }
+
+    private fun dumpAllThreadStacks(): String = buildString {
+        Thread.getAllStackTraces().entries
+            .sortedBy { it.key.name }
+            .forEach { (thread, stack) ->
+                append("\n\"${thread.name}\" ")
+                append("state=${thread.state}, daemon=${thread.isDaemon}, alive=${thread.isAlive}\n")
+                stack.forEach { frame -> append("    at ").append(frame).append('\n') }
+            }
+    }
 
     /** Physical file for raw, read-only projection handles owned by this provider. */
     internal fun databaseFileForRawQuery(database: JarvysChatDatabase): File =
@@ -631,6 +677,7 @@ internal object DatabaseTriggers {
     }
 
     private const val READ_CONNECTION_POOL_SIZE = 4
+    private const val TEST_DATABASE_CLOSE_TIMEOUT_SECONDS = 30L
 
     private class NamedDaemonThreadFactory(private val prefix: String) : ThreadFactory {
         private val sequence = AtomicInteger(0)

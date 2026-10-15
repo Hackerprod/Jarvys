@@ -27,7 +27,9 @@ import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -50,12 +52,41 @@ class ChatReadProgressTest {
     }
 
     @After fun closeDatabase() {
-        if (::database.isInitialized && !databaseClosed) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
         testExecutor.shutdownNow()
+        check(testExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            "Database test worker remained active during @After; refusing to close Room under its operation"
+        }
+        if (::database.isInitialized && !databaseClosed) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
     }
 
-    private fun <T> onDatabaseThread(block: suspend () -> T): T =
-        testExecutor.submit<T> { runBlocking { block() } }.get(30, TimeUnit.SECONDS)
+    private fun <T> onDatabaseThread(block: suspend () -> T): T {
+        val workerThread = AtomicReference<Thread?>()
+        val taskFinished = CountDownLatch(1)
+        val work = object : FutureTask<T>(java.util.concurrent.Callable {
+            workerThread.set(Thread.currentThread())
+            runBlocking { block() }
+        }) {
+            override fun run() {
+                try {
+                    super.run()
+                } finally {
+                    taskFinished.countDown()
+                }
+            }
+        }
+        testExecutor.execute(work)
+        return try {
+            work.get(30, TimeUnit.SECONDS)
+        } catch (timeout: TimeoutException) {
+            work.cancel(true)
+            val taskStopped = taskFinished.await(5, TimeUnit.SECONDS)
+            throw AssertionError(
+                "Database test operation timed out and was interrupted; taskStillActive=${!taskStopped}, " +
+                    "worker=${workerThread.get()?.name}",
+                timeout,
+            )
+        }
+    }
 
     @Test fun multiStatementProjectionFinishesConsistentlyDuringContinuousCommits() = onDatabaseThread {
         success(repository.ensureConversation("read-progress"))
@@ -68,10 +99,15 @@ class ChatReadProgressTest {
         val stopWriter = AtomicBoolean(false)
         val commits = AtomicInteger(0)
         val writerStarted = CountDownLatch(1)
-        val writerExecutor = Executors.newSingleThreadExecutor()
+        val writerExecutor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "chatdb-continuous-writer").apply { isDaemon = true }
+        }
         val writer = writerExecutor.submit {
             while (!stopWriter.get()) {
-                success(kotlinx.coroutines.runBlocking { repository.appendMessage(message("read-progress", "concurrent-${commits.get()}")) })
+                success(kotlinx.coroutines.runBlocking {
+                    repository.appendMessage(message("read-progress", "concurrent-${commits.get()}"))
+                    delay(5L)
+                })
                 commits.incrementAndGet()
                 writerStarted.countDown()
             }
@@ -107,7 +143,74 @@ class ChatReadProgressTest {
                 writer.get(10, TimeUnit.SECONDS)
             } finally {
                 writerExecutor.shutdownNow()
+                assertTrue("the continuous writer exits before the database can close", writerExecutor.awaitTermination(5, TimeUnit.SECONDS))
             }
+        }
+    }
+
+    @Test fun continuousWritesUntilReadRetryThenDatabaseCloseCompletes() = onDatabaseThread {
+        success(repository.ensureConversation("read-retry-close"))
+
+        val stopWriter = AtomicBoolean(false)
+        val commits = AtomicInteger(0)
+        val firstReadStarted = CountDownLatch(1)
+        val retryStarted = CountDownLatch(1)
+        val writerExecutor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "chatdb-close-regression-writer").apply { isDaemon = true }
+        }
+        val writer = writerExecutor.submit {
+            check(firstReadStarted.await(10, TimeUnit.SECONDS)) { "the first read attempt did not begin" }
+            while (!stopWriter.get()) {
+                success(kotlinx.coroutines.runBlocking {
+                    repository.appendMessage(message("read-retry-close", "concurrent-${commits.get()}"))
+                    delay(5L)
+                })
+                commits.incrementAndGet()
+            }
+        }
+
+        try {
+            val attempts = AtomicInteger(0)
+            val snapshot = withTimeout(20_000L) {
+                database.withChatReadTransaction {
+                    val attempt = attempts.incrementAndGet()
+                    val before = countMessages("read-retry-close")
+                    val sumBefore = sumMessageSequences("read-retry-close")
+                    if (attempt == 1) {
+                        firstReadStarted.countDown()
+                        withTimeout(10_000L) {
+                            while (commits.get() < 3) delay(1L)
+                        }
+                    } else {
+                        retryStarted.countDown()
+                    }
+                    val after = countMessages("read-retry-close")
+                    val sumAfter = sumMessageSequences("read-retry-close")
+                    listOf(before, sumBefore, after, sumAfter)
+                }
+            }
+
+            assertTrue("the read-version fence invokes its writer-lease retry", retryStarted.await(10, TimeUnit.SECONDS))
+            assertEquals("the first mixed snapshot is retried", 2, attempts.get())
+            assertEquals("retry returns a single committed count", snapshot[0], snapshot[2])
+            assertEquals("retry returns a single committed sequence sum", snapshot[1], snapshot[3])
+            assertEquals(snapshot[0] * (snapshot[0] + 1L) / 2L, snapshot[1])
+        } finally {
+            stopWriter.set(true)
+            try {
+                writer.get(10, TimeUnit.SECONDS)
+            } finally {
+                writerExecutor.shutdownNow()
+                assertTrue("the regression writer exits before Room is closed", writerExecutor.awaitTermination(5, TimeUnit.SECONDS))
+            }
+        }
+
+        // This exercises the same bounded close helper used by @After and guards against the
+        // historical Room CloseBarrier spin after concurrent writes and the read retry.
+        try {
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        } finally {
+            databaseClosed = true
         }
     }
 
@@ -179,12 +282,12 @@ class ChatReadProgressTest {
         }
     }
 
-    private fun countMessages(): Long = database.chatSql.query(
-        "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf("read-progress"),
+    private fun countMessages(conversationId: String = "read-progress"): Long = database.chatSql.query(
+        "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf(conversationId),
     ).use { cursor -> cursor.moveToFirst(); cursor.getLong(0) }
 
-    private fun sumMessageSequences(): Long = database.chatSql.query(
-        "SELECT SUM(seq) FROM messages WHERE conversation_id=?", arrayOf("read-progress"),
+    private fun sumMessageSequences(conversationId: String = "read-progress"): Long = database.chatSql.query(
+        "SELECT SUM(seq) FROM messages WHERE conversation_id=?", arrayOf(conversationId),
     ).use { cursor -> cursor.moveToFirst(); cursor.getLong(0) }
 
     private fun message(conversationId: String, text: String) = AppendMessageInput(

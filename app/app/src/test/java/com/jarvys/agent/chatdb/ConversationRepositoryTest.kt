@@ -30,7 +30,9 @@ import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -49,12 +51,41 @@ class ConversationRepositoryTest {
     }
 
     @After fun closeDatabase() {
-        if (::database.isInitialized) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
         testExecutor.shutdownNow()
+        check(testExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            "Database test worker remained active during @After; refusing to close Room under its operation"
+        }
+        if (::database.isInitialized) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
     }
 
-    private fun <T> onDatabaseThread(block: suspend () -> T): T =
-        testExecutor.submit<T> { runBlocking { block() } }.get(45, TimeUnit.SECONDS)
+    private fun <T> onDatabaseThread(block: suspend () -> T): T {
+        val workerThread = AtomicReference<Thread?>()
+        val taskFinished = CountDownLatch(1)
+        val work = object : FutureTask<T>(Callable {
+            workerThread.set(Thread.currentThread())
+            runBlocking { block() }
+        }) {
+            override fun run() {
+                try {
+                    super.run()
+                } finally {
+                    taskFinished.countDown()
+                }
+            }
+        }
+        testExecutor.execute(work)
+        return try {
+            work.get(45, TimeUnit.SECONDS)
+        } catch (timeout: TimeoutException) {
+            work.cancel(true)
+            val taskStopped = taskFinished.await(5, TimeUnit.SECONDS)
+            throw AssertionError(
+                "Database test operation timed out and was interrupted; taskStillActive=${!taskStopped}, " +
+                    "worker=${workerThread.get()?.name}",
+                timeout,
+            )
+        }
+    }
 
     @Test fun ensureDeleteAndTombstoneAreIdempotentAndPreventResurrection() = onDatabaseThread {
         val first = success(repository.ensureConversation("lifecycle"))
