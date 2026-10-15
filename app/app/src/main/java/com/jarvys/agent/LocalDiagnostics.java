@@ -229,6 +229,8 @@ public final class LocalDiagnostics {
             this.prior = prior; this.recorder = recorder; this.terminator = terminator;
         }
         @Override public void uncaughtException(Thread thread, Throwable failure) {
+            failure.printStackTrace(System.err);
+            System.err.flush();
             try { recorder.record(Origin.UNCAUGHT, failure, true); }
             catch (Throwable ignored) { }
             finally {

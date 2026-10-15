@@ -54,6 +54,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -62,7 +63,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TasksScreensComposeTest {
-    @get:Rule val compose = createComposeRule()
+    private val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    private val compose = createComposeRule()
+    @get:Rule val rules = RuleChain.outerRule(chatTestStore).around(compose)
     private lateinit var context: Context
     private lateinit var fixture: Fixture
 

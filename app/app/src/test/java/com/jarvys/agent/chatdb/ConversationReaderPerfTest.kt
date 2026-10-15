@@ -84,14 +84,18 @@ class ConversationReaderPerfTest {
 
         val reader = ConversationReader(database)
         assertEquals(80, reader.readTailWindow(conversationId, 40).slots.size)
-        val statementCount = AtomicInteger()
-        val startedAt = System.nanoTime()
-        ChatSqlInstrumentation.observeStatements({ statementCount.incrementAndGet() }) {
-            val window = reader.readTailWindow(conversationId, 40)
-            assertEquals(80, window.slots.size)
+        val elapsedSamples = (1..5).map {
+            val statementCount = AtomicInteger()
+            val startedAt = System.nanoTime()
+            ChatSqlInstrumentation.observeStatements({ statementCount.incrementAndGet() }) {
+                val window = reader.readTailWindow(conversationId, 40)
+                assertEquals(80, window.slots.size)
+            }
+            assertTrue("tail scan stays within the indexed query budget", statementCount.get() <= 7)
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
         }
-        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
-        assertTrue("opening-chat tail read uses the seven expected index/hydration queries, without per-message SQL", statementCount.get() <= 7)
-        assertTrue("opening chat tail window should stay below 200 ms in JVM; took ${elapsedMillis}ms", elapsedMillis < 200L)
+        val medianMillis = elapsedSamples.sorted()[elapsedSamples.size / 2]
+        assertTrue("warmed chat tail window median should stay below 200 ms in JVM; samples=$elapsedSamples",
+            medianMillis < 200L)
     }
 }

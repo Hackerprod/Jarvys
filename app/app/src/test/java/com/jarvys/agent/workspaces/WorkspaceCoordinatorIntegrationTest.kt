@@ -611,7 +611,9 @@ class WorkspaceCoordinatorIntegrationTest {
     private fun manager(session: String, model: CoreAgentLoop.Model, lifecycle: CrewManager.WorkerLifecycle? = null): CrewManager {
         val factory = CrewManager.LoopFactory { _, registry, inbox -> CoreAgentLoop(model, registry, "", session,
             CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null) }
+        val store = LocalRunStore(context)
         return CrewManager(session, tools, { _, _ -> tools }, factory, null).also {
+            it.configureResultEvidenceListener { evidence -> store.appendCrewResultEvidence(evidence) }
             if (lifecycle != null) it.configure(tools, { _, _ -> tools }, factory, lifecycle)
         }
     }

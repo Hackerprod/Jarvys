@@ -282,13 +282,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         if (existing == null) {
             sql.execSQL("INSERT INTO crew_missions(conversation_id,mission_id,first_snapshot_seq,last_snapshot_seq,schema_version,process_id,snapshot_digest,title,original_instructions,title_source,status,synthesis,started_at_ms,finished_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 arrayOf(conversationId, snapshot.missionId, firstSnapshotSeq, lastSnapshotSeq, row.optInt("crewSchemaVersion"), snapshot.processId,
-                    digest, snapshot.title, snapshot.originalInstructions, snapshot.titleSource, snapshot.status,
+                    digest, snapshot.title, ExactUtf16.encode(snapshot.originalInstructions), snapshot.titleSource, snapshot.status,
                     ExactUtf16.encode(snapshot.synthesis), snapshot.startedAtMillis, snapshot.finishedAtMillis.takeIf { it > 0L }))
         } else {
             sql.execSQL("DELETE FROM crew_bots WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, snapshot.missionId))
             sql.execSQL("DELETE FROM crew_messages WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, snapshot.missionId))
             sql.execSQL("UPDATE crew_missions SET first_snapshot_seq=?,last_snapshot_seq=?,schema_version=?,process_id=?,snapshot_digest=?,title=?,original_instructions=?,title_source=?,status=?,synthesis=?,started_at_ms=?,finished_at_ms=? WHERE conversation_id=? AND mission_id=?",
-                arrayOf(firstSnapshotSeq, lastSnapshotSeq, row.optInt("crewSchemaVersion"), snapshot.processId, digest, snapshot.title, snapshot.originalInstructions,
+                arrayOf(firstSnapshotSeq, lastSnapshotSeq, row.optInt("crewSchemaVersion"), snapshot.processId, digest, snapshot.title, ExactUtf16.encode(snapshot.originalInstructions),
                     snapshot.titleSource, snapshot.status, ExactUtf16.encode(snapshot.synthesis), snapshot.startedAtMillis,
                     snapshot.finishedAtMillis.takeIf { it > 0L }, conversationId, snapshot.missionId))
         }
@@ -447,7 +447,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     private fun readMissionHeader(conversationId: String, missionId: String): CrewMission? = sql.query(
         "SELECT * FROM crew_missions WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, missionId),
     ).use { if (it.moveToFirst()) CrewMission(it.getString(0), it.getString(1), it.getLong(2), it.getLong(3), it.getInt(4),
-        it.getStringOrNullMemory("process_id"), it.getString(6), it.getString(7), it.getString(8), it.getStringOrNullMemory("title_source"),
+        it.getStringOrNullMemory("process_id"), it.getString(6), it.getString(7), it.getExactUtf16String(it.getColumnIndexOrThrow("original_instructions")), it.getStringOrNullMemory("title_source"),
         it.getString(10), it.getBlobOrNullMemory("synthesis"), it.getLong(12), it.getLongOrNullMemory("finished_at_ms")) else null }
 
     private fun readCrewSnapshot(conversationId: String, missionId: String): CrewMissionSnapshot? =
@@ -458,7 +458,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val missions = sql.query("SELECT * FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq", arrayOf(conversationId)).use { c ->
             buildList {
                 while (c.moveToNext()) add(CrewMission(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4),
-                    c.getStringOrNullMemory("process_id"), c.getString(6), c.getString(7), c.getString(8), c.getStringOrNullMemory("title_source"),
+                    c.getStringOrNullMemory("process_id"), c.getString(6), c.getString(7), c.getExactUtf16String(c.getColumnIndexOrThrow("original_instructions")), c.getStringOrNullMemory("title_source"),
                     c.getString(10), c.getBlobOrNullMemory("synthesis"), c.getLong(12), c.getLongOrNullMemory("finished_at_ms")))
             }
         }.filter { missionIds == null || it.mission_id in missionIds }
@@ -713,6 +713,8 @@ data class GlobalTimelineMarkers(
 private fun android.database.Cursor.getStringOrNullMemory(name: String): String? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getString(it) }
 private fun android.database.Cursor.getLongOrNullMemory(name: String): Long? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getLong(it) }
 private fun android.database.Cursor.getBlobOrNullMemory(name: String): ByteArray? = getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getBlob(it) }
+private fun android.database.Cursor.getExactUtf16String(index: Int): String =
+    if (getType(index) == android.database.Cursor.FIELD_TYPE_BLOB) ExactUtf16.decode(getBlob(index)) else getString(index)
 
 private fun <T> ChatDbResult<T>.requireSuccess(): T = when (this) {
     is ChatDbResult.Success -> value

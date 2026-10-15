@@ -108,6 +108,32 @@ class MainAgentInteractionTest {
         assertFalse(AgentRunUiState.state.value.events.any { it.stage == "QUEUED" })
     }
 
+    @Test fun interruptedPendingInputRecoveryLeavesDurableRequestForRetry() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "interrupted-recovery-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
+        val requestId = chatTestStore.onDatabaseWorker {
+            store.appendInterruptRequest(session, "retry after service restart", emptyList(), false)
+        }
+        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
+        val service = controller.get()
+        try {
+            // ChatDatabaseBridge translates an interrupted blocking wait to CancellationException.
+            val workerInterruptCleared = chatTestStore.onDatabaseWorker {
+                Thread.currentThread().interrupt()
+                service.runPendingInputRecoverySafely(session)
+                !Thread.currentThread().isInterrupted
+            }
+            assertTrue("Recovery clears the pool worker's interrupt before its next task",
+                workerInterruptCleared)
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }
+                .any { it.optString("requestId") == requestId })
+        } finally {
+            controller.destroy()
+        }
+    }
+
     @Test fun steeringDuringAnActiveRunPersistsWithoutStoppingThatRun() {
         withHeldWorker { service, context, session, release ->
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "new request", arrayListOf(), false))
@@ -832,6 +858,7 @@ class MainAgentInteractionTest {
             val nextGeneration = StopController::class.java.getDeclaredField("NEXT_GENERATION")
                 .apply { isAccessible = true }.get(null) as java.util.concurrent.atomic.AtomicLong
             AgentForegroundService.stopRun(session)
+            service.awaitStopTasksForTesting().get(5, TimeUnit.SECONDS)
             assertTrue(AgentRunUiState.snapshotForSession(session).stopping)
             val afterStop = nextGeneration.get()
             release.countDown()
@@ -999,6 +1026,7 @@ class MainAgentInteractionTest {
             assertEquals(service.getString(R.string.agent_notification_stop_all), notification.actions.single().title.toString())
 
             AgentForegroundService.stopRun(other)
+            service.awaitStopTasksForTesting().get(5, TimeUnit.SECONDS)
             assertTrue(AgentRunUiState.snapshotForSession(other).stopping)
             assertFalse("Stopping the second session leaves the first session's token active", StopController.getInstance().isStopped)
             releaseOther.countDown()
@@ -1406,6 +1434,8 @@ class MainAgentInteractionTest {
                 release.countDown()
             }
             assertTrue("The session work drains", awaitRunFinished(service, context))
+            service.awaitStopTasksForTesting().get(5, TimeUnit.SECONDS)
+            service.awaitSessionIdleForTesting(session).get(5, TimeUnit.SECONDS)
             assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
             assertFalse(AgentRunUiState.state.value.running)
             assertTrue(StopController.getInstance().isStopped)

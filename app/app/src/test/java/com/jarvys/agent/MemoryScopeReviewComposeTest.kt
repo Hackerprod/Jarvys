@@ -17,8 +17,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /** Synthetic memory only. Cross-conversation sharing remains an explicit action in this screen. */
 @RunWith(RobolectricTestRunner::class)
@@ -99,26 +97,12 @@ class MemoryScopeReviewComposeTest {
         assertEquals(LOCAL, stores.local.readForUser("local.md"))
     }
 
-    @Test fun changingSourceDuringShareNeverPublishesUnreviewedBytes() {
-        val stores = stores(); show(stores)
-        val lock = MemoryStore::class.java.getDeclaredField("lock").apply { isAccessible = true }
-            .get(stores.local) as java.util.concurrent.locks.ReentrantLock
-        lock.lock()
-        val clicked = CountDownLatch(1)
-        try {
-            val thread = Thread {
-                compose.runOnIdle {
-                    scrollList("memory-scope-list", "memory-scope-review-local.md")
-                    compose.onNodeWithTag("memory-scope-review-local.md").performClick()
-                }
-                clicked.countDown()
-            }.apply { start() }
-            assertTrue(clicked.await(5, TimeUnit.SECONDS))
-            stores.local.writeUserFile("local.md", document("Changed", "New unshared bytes"),
-                stores.local.latestRevisionId("local.md"), false, SESSION)
-        } finally { lock.unlock() }
-        waitFor { compose.onAllNodesWithText(compose.activity.getString(R.string.memory_scope_approval_failed)).fetchSemanticsNodes().isNotEmpty() ||
-            stores.root.listSharedPersonalForUser().isNotEmpty() }
+    @Test fun staleReviewCannotPublishChangedSource() {
+        val stores = stores()
+        val reviewed = stores.local.reviewForSharing("local.md")
+        stores.local.writeUserFile("local.md", document("Changed", "New unshared bytes"),
+            stores.local.latestRevisionId("local.md"), false, SESSION)
+        assertThrows(IllegalStateException::class.java) { stores.local.approveSharedPersonal(reviewed) }
         assertTrue(stores.root.listSharedPersonalForUser().isEmpty())
         assertTrue(stores.local.readForUser("local.md").contains("New unshared bytes"))
     }

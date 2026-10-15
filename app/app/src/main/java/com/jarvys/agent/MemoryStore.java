@@ -1678,8 +1678,11 @@ public final class MemoryStore {
                 output.flush();
                 output.getFD().sync();
             }
-            // Temporary and destination files share a directory, so rename is an atomic replacement on the app-private filesystem.
-            if (!temp.renameTo(target)) throw new IllegalStateException("Could not atomically replace " + target.getName());
+            // Temporary and destination files share a directory. NIO's replacement move works on
+            // Windows host tests too, where File.renameTo does not replace an existing target.
+            java.nio.file.Files.move(temp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         } catch (Exception error) {
             throw new IllegalStateException("Could not atomically persist memory data", error);
         } finally {

@@ -1,6 +1,7 @@
 package com.jarvys.agent.proactive
 
 import android.content.Context
+import com.jarvys.agent.AgentErrorReporter
 import android.util.Log
 import com.jarvys.agent.AgentForegroundService
 import com.jarvys.agent.AgentRunUiState
@@ -105,12 +106,16 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
                     }
                 } catch (failure: RuntimeException) {
                     Log.e("JarvysProactive", "Could not handle notification reply", failure)
+                    if (failure !is java.util.concurrent.CancellationException) {
+                        AgentErrorReporter.reportChatDatabaseFailure(context, failure)
+                    }
                 } finally {
-                    pendingResult.finish()
+                    pendingResult?.finish()
+                    Thread.interrupted()
                 }
             }
         } catch (failure: RuntimeException) {
-            pendingResult.finish()
+            pendingResult?.finish()
             Log.e("JarvysProactive", "Could not queue notification reply", failure)
         }
     }

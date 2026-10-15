@@ -178,7 +178,10 @@ public class MainAgentContractTest {
     assertEquals(1,reopened.loadConversationContext("interrupt").size());
     assertEquals(1,reopened.readConversationTimeline("interrupt").stream().filter(e->"QUEUED".equals(e.getStage())).count());
     assertTrue(reopened.dispatchInterruptRequest("interrupt",id).getBoolean("memoryDisabled"));
-    assertNull(reopened.dispatchInterruptRequest("interrupt",id));
+    org.json.JSONObject duplicate = reopened.dispatchInterruptRequest("interrupt",id);
+    assertNotNull(duplicate);
+    assertTrue(duplicate.getBoolean("alreadyDispatched"));
+    assertEquals(id, duplicate.getString("messageId"));
     assertEquals(2,reopened.readConversationMessages("interrupt").size());
     assertEquals(id,reopened.latestUserMessageId("interrupt"));
     assertFalse(reopened.readConversationTimeline("interrupt").stream().anyMatch(e->"QUEUED".equals(e.getStage())));

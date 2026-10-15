@@ -51,7 +51,11 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     data class RegenerationPrompt(val text: String, val userMessageId: String)
 
     /** A timeline page uses the first older item sequence as its exclusive keyset cursor. */
-    data class TimelineEventPage(val events: List<AgentRunUiEvent>, val olderCursorSeq: Long?) {
+    data class TimelineEventPage(
+        val events: List<AgentRunUiEvent>,
+        val olderCursorSeq: Long?,
+        val invalidatedToolTurnMessageIds: Set<String>,
+    ) {
         val hasOlder: Boolean get() = olderCursorSeq != null
     }
 
@@ -270,7 +274,12 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 val matchingResult = modelResults.firstOrNull { timelineToolKey(it.batchId, it.callId, null) == "$source/${first.call_id.orEmpty()}" }
                     ?.firstResult
                 if (matchingResult != null) {
-                    val stage = when (matchingResult.lifecycle) {
+                    // A read_skill transcript can retain output text even when its accepted
+                    // typed tool_result activity was never durably appended. Keep the
+                    // activity interrupted while exposing that durable detail.
+                    val stage = if (projected.skill() && projected.stage == "tool_interrupted") {
+                        projected.stage
+                    } else when (matchingResult.lifecycle) {
                         "INTERRUPTED_UNCERTAIN" -> "tool_interrupted"
                         "NEVER_LAUNCHED" -> "tool_not_started"
                         else -> if (matchingResult.output.startsWith("Tool error:")) "tool_error" else "tool_result"
@@ -483,7 +492,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 }
             }
         }
-        return TimelineEventPage(events, window.olderCursorSeq)
+        return TimelineEventPage(events, window.olderCursorSeq, sideTables.invalidations.keys)
     }
 
     private data class TimelineSideTables(

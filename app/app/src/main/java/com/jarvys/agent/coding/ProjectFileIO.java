@@ -362,8 +362,17 @@ final class ProjectFileIO {
       // CREATE_NEW is atomic with respect to other creators and refuses existing symlinks.
       Set<OpenOption> options = new HashSet<>(Arrays.asList(StandardOpenOption.WRITE,
           StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS));
-      FileChannel channel = FileChannel.open(destination.toPath(), options,
-          PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(source.toPath(), LinkOption.NOFOLLOW_LINKS)));
+      Set<java.nio.file.attribute.PosixFilePermission> sourcePermissions;
+      try {
+        sourcePermissions = Files.getPosixFilePermissions(source.toPath(), LinkOption.NOFOLLOW_LINKS);
+      } catch (UnsupportedOperationException nonPosixFileSystem) {
+        // Windows host tests have no POSIX permission view. CREATE_NEW still inherits the private
+        // parent ACL and retains the same no-replace/no-follow guarantees.
+        sourcePermissions = null;
+      }
+      FileChannel channel = sourcePermissions == null
+          ? FileChannel.open(destination.toPath(), options)
+          : FileChannel.open(destination.toPath(), options, PosixFilePermissions.asFileAttribute(sourcePermissions));
       try (FileChannel output = channel) {
         Attributes created = attributes(destination);
         copy(input, Channels.newOutputStream(output), expectedSha, expectedSize, observer);

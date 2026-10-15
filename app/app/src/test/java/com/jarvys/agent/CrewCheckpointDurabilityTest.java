@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -24,19 +23,25 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class CrewCheckpointDurabilityTest {
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+
+    private File newRegisteredFilesDirectory() {
+        File filesDirectory = chatTestStore.newFilesDirectory();
+        chatTestStore.localRunStore(filesDirectory);
+        return filesDirectory;
+    }
 
     @Test public void missingCheckpointReturnsNullWithoutCreatingState() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         assertNull(store.confirmDurable("chat-one", "bot-one", "scope-one"));
-        assertEquals(0, root.list().length);
+        assertFalse(checkpoint(root).getParentFile().exists());
         assertThrows(IllegalStateException.class, () -> store.confirmDurable("chat-one", "bot-one", null));
         assertThrows(IllegalStateException.class, () -> store.confirmDurable("chat-one", "bot-one", ""));
     }
 
     @Test public void renameBeforeDirectorySyncFailureNeedsLaterSuccessfulConfirmation() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         File target = checkpoint(root);
         AtomicBoolean fail = new AtomicBoolean(true);
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> {
@@ -66,7 +71,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void exactOriginalPayloadDigestSurvivesNoncanonicalSerialization() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         File target = checkpoint(root);
@@ -81,7 +86,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void eachConfirmationReadsCurrentEnvelopeWithoutChangingAnOlderReceipt() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         store.save("chat-one", "bot-one", new JSONObject().put("label", "first"), "scope-one",
                 CoreAgentLoop.Checkpoint.empty(), new JSONObject());
@@ -97,7 +102,7 @@ public class CrewCheckpointDurabilityTest {
 
     @SuppressWarnings("unchecked")
     @Test public void confirmedSnapshotCopiesJsonAndFreezesNestedTranscriptArguments() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         Map<String, Object> nested = new LinkedHashMap<>();
         nested.put("path", "src/Main.java");
@@ -128,7 +133,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void confirmsEveryAncestorThroughPrivateStorageRootUnderStoreLock() throws Exception {
-        File root = temporary.newFolder().getCanonicalFile();
+        File root = newRegisteredFilesDirectory().getCanonicalFile();
         saveEmpty(new CrewCheckpointStore(root));
         List<File> actual = new ArrayList<>();
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> {
@@ -146,7 +151,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void failureAtStorageRootCannotReturnAConfirmedSnapshot() throws Exception {
-        File root = temporary.newFolder().getCanonicalFile();
+        File root = newRegisteredFilesDirectory().getCanonicalFile();
         saveEmpty(new CrewCheckpointStore(root));
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> {
             if (directory.equals(root)) throw new IOException("Injected ancestor sync failure");
@@ -157,7 +162,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void validatesExpectedScopeAndEnvelopeIdentityBeforeDirectorySync() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         saveEmpty(new CrewCheckpointStore(root));
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> fail("Invalid evidence must not reach directory sync"));
         assertThrows(IllegalStateException.class, () -> store.confirmDurable("chat-one", "bot-one", "another-scope"));
@@ -171,7 +176,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void rejectsAlteredPayloadDigestSchemaAndInvalidSavedTimestamp() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         File target = checkpoint(root);
@@ -190,7 +195,7 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void deletedConversationAndIncompleteWriteStayUnavailable() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         File directory = checkpoint(root).getParentFile();
         assertTrue(directory.mkdirs());
@@ -198,7 +203,7 @@ public class CrewCheckpointDurabilityTest {
         write(pending, "unfinished");
         assertThrows(IllegalStateException.class, () -> store.confirmDurable("chat-one", "bot-one", "scope-one"));
         assertEquals("unfinished", read(pending));
-        File secondRoot = temporary.newFolder();
+        File secondRoot = newRegisteredFilesDirectory();
         CrewCheckpointStore secondStore = new CrewCheckpointStore(secondRoot);
         saveEmpty(secondStore);
         new ConversationMetadataAccess(secondRoot).update("chat-one", "deleted", true);
@@ -206,11 +211,11 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void symlinkFileAndDirectoryAreNeverConfirmed() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         File target = checkpoint(root);
-        File outside = temporary.newFile();
+        File outside = new File(chatTestStore.newFilesDirectory(), "outside.txt");
         write(outside, read(target));
         assertTrue(target.delete());
         Files.createSymbolicLink(target.toPath(), outside.toPath());
@@ -224,11 +229,13 @@ public class CrewCheckpointDurabilityTest {
     }
 
     @Test public void fileAndDirectorySyncPreserveAnExistingThreadInterrupt() throws Exception {
-        CrewCheckpointStore store = new CrewCheckpointStore(temporary.newFolder());
+        File root = newRegisteredFilesDirectory();
+        CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
-        Thread.currentThread().interrupt();
+        CrewCheckpointStore confirmingStore = new CrewCheckpointStore(root,
+                directory -> Thread.currentThread().interrupt());
         try {
-            assertNotNull(store.confirmDurable("chat-one", "bot-one", "scope-one"));
+            assertNotNull(confirmingStore.confirmDurable("chat-one", "bot-one", "scope-one"));
             assertTrue(Thread.currentThread().isInterrupted());
         } finally {
             Thread.interrupted();

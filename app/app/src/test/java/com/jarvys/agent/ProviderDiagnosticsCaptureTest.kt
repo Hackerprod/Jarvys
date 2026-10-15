@@ -23,6 +23,7 @@ import org.robolectric.annotation.Config
     shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class ProviderDiagnosticsCaptureTest {
     @get:Rule val temporary = TemporaryFolder()
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private val instanceField = LocalDiagnostics::class.java.getDeclaredField("instance").apply { isAccessible = true }
     private val secretField = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
     private var previousStore: Any? = null

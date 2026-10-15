@@ -135,6 +135,12 @@ final class ProjectJournalIO {
           } catch (ClosedByInterruptException interruptedDuringSync) {
             interrupted = true;
             Thread.interrupted();
+          } catch (java.nio.file.AccessDeniedException unsupportedDirectoryHandle) {
+            // The Android app runs on POSIX, where directory fsync is supported. Windows JVM
+            // hosts cannot open directory handles with FileChannel, so host-side tests still
+            // verify file fsync and atomic replacement without pretending this API is available.
+            if (File.separatorChar != '\\') throw unsupportedDirectoryHandle;
+            return;
           }
         }
       } finally {

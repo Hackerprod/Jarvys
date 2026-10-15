@@ -22,6 +22,7 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -30,6 +31,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TaskManualRunWorkerTest {
+    @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @Test fun manualWorkUsesTheNormalProcessorAndKeepsManualOccurrenceDistinctFromScheduledRun() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val root = Files.createTempDirectory("st2-manual-worker").toFile()

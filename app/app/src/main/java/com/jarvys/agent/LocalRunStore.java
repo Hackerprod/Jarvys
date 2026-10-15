@@ -327,6 +327,7 @@ public final class LocalRunStore {
 
     /** Exact raw evidence retrieval; callers must page resultText before exposing it to a model/UI. */
     public synchronized CrewResultEvidence readCrewResultEvidence(String sourceSessionId, String evidenceId) {
+        requireExecutionSession(sourceSessionId);
         WorkspaceResultReference.requireEvidenceId(evidenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readCrewResultEvidenceSync(
@@ -335,6 +336,7 @@ public final class LocalRunStore {
 
     /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
     public synchronized List<String> listCrewResultEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
+        requireExecutionSession(sourceSessionId);
         resultPage(limit);
         if (afterEvidenceId != null) WorkspaceResultReference.requireEvidenceId(afterEvidenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -351,6 +353,7 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultReference(String sourceSessionId, String referenceId) {
+        requireExecutionSession(sourceSessionId);
         WorkspaceResultReference.requireReferenceId(referenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceResultReferenceSync(
@@ -359,6 +362,9 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceResultReference> listWorkspaceResultReferences(
             String sourceSessionId, int limit, String afterReferenceId) {
+        requireExecutionSession(sourceSessionId);
+        resultPage(limit);
+        if (afterReferenceId != null) WorkspaceResultReference.requireReferenceId(afterReferenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceResultReferencesSync(
                 sourceSessionId, false, limit, afterReferenceId), "list workspace result references");
@@ -374,6 +380,7 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultNotice(String centralSessionId, String referenceId) {
+        requireCentralSession(centralSessionId);
         WorkspaceResultReference.requireReferenceId(referenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceResultReferenceSync(
@@ -382,6 +389,9 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceResultReference> listWorkspaceResultNotices(
             String centralSessionId, int limit, String afterReferenceId) {
+        requireCentralSession(centralSessionId);
+        resultPage(limit);
+        if (afterReferenceId != null) WorkspaceResultReference.requireReferenceId(afterReferenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceResultReferencesSync(
                 centralSessionId, true, limit, afterReferenceId), "list workspace result notices");
@@ -401,6 +411,7 @@ public final class LocalRunStore {
 
     /** Exact raw evidence retrieval; callers must page text before exposing it to a model/UI. */
     public synchronized CrewCoordinationEvidence readCrewCoordinationEvidence(String sourceSessionId, String evidenceId) {
+        requireExecutionSession(sourceSessionId);
         WorkspaceCoordinationReference.requireEvidenceId(evidenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readCrewCoordinationEvidenceSync(
@@ -409,6 +420,7 @@ public final class LocalRunStore {
 
     /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
     public synchronized List<String> listCrewCoordinationEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
+        requireExecutionSession(sourceSessionId);
         resultPage(limit);
         if (afterEvidenceId != null) WorkspaceCoordinationReference.requireEvidenceId(afterEvidenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -425,6 +437,7 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationReference(String sourceSessionId, String referenceId) {
+        requireExecutionSession(sourceSessionId);
         WorkspaceCoordinationReference.requireReferenceId(referenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReferenceSync(
@@ -433,6 +446,9 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationReferences(
             String sourceSessionId, int limit, String afterReferenceId) {
+        requireExecutionSession(sourceSessionId);
+        resultPage(limit);
+        if (afterReferenceId != null) WorkspaceCoordinationReference.requireReferenceId(afterReferenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceCoordinationReferencesSync(
                 sourceSessionId, false, limit, afterReferenceId), "list workspace coordination references");
@@ -448,6 +464,7 @@ public final class LocalRunStore {
     }
 
     public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationNotice(String centralSessionId, String referenceId) {
+        requireCentralSession(centralSessionId);
         WorkspaceCoordinationReference.requireReferenceId(referenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReferenceSync(
@@ -456,6 +473,9 @@ public final class LocalRunStore {
 
     public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationNotices(
             String centralSessionId, int limit, String afterReferenceId) {
+        requireCentralSession(centralSessionId);
+        resultPage(limit);
+        if (afterReferenceId != null) WorkspaceCoordinationReference.requireReferenceId(afterReferenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceCoordinationReferencesSync(
                 centralSessionId, true, limit, afterReferenceId), "list workspace coordination notices");
@@ -490,6 +510,7 @@ public final class LocalRunStore {
 
     /** Historical receipt only. STARTED means UNCERTAIN, including after reopening; never resume or replay. */
     public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReply(String centralSessionId, String referenceId) {
+        requireCentralSession(centralSessionId);
         WorkspaceCoordinationReference.requireReferenceId(referenceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReplySync(
@@ -498,6 +519,7 @@ public final class LocalRunStore {
 
     public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReply(
             String centralSessionId, String referenceId, String replyKey) {
+        requireCentralSession(centralSessionId);
         if (replyKey == null || !replyKey.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}"))
             throw new IllegalArgumentException("Invalid coordination reply key");
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -507,6 +529,7 @@ public final class LocalRunStore {
 
     /** Exact bounded identity lookup; at most two strict scans, with no retained reply bodies or new index. */
     public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReplyById(String centralSessionId, String replyId) {
+        requireCentralSession(centralSessionId);
         if (replyId == null || !replyId.matches("workspace-coordination-reply-[0-9a-f]{64}"))
             throw new IllegalArgumentException("Invalid coordination reply id");
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -541,6 +564,8 @@ public final class LocalRunStore {
     /** Exact metadata only; current registry ownership and READ policy remain the caller's responsibility. */
     public synchronized WorkspaceInputIncorporation readWorkspaceInputIncorporation(String centralSessionId,
             WorkspaceInputIncorporation.SourceKind sourceKind, String sourceId) {
+        requireCentralSession(centralSessionId);
+        WorkspaceInputIncorporation.receiptId(sourceKind, sourceId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceInputIncorporationSync(
                 centralSessionId, sourceKind, sourceId), "read workspace input incorporation");
@@ -549,6 +574,9 @@ public final class LocalRunStore {
     /** Bounded lexical pages, never raw source bodies or an unbounded receipt collection. */
     public synchronized List<WorkspaceInputIncorporation> listWorkspaceInputIncorporations(
             String centralSessionId, int limit, String afterReceiptId) {
+        requireCentralSession(centralSessionId);
+        resultPage(limit);
+        if (afterReceiptId != null) WorkspaceInputIncorporation.requireReceiptId(afterReceiptId);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.listWorkspaceInputIncorporationsSync(
                 centralSessionId, limit, afterReceiptId), "list workspace input incorporations");
@@ -584,6 +612,16 @@ public final class LocalRunStore {
     }
     private static void resultPage(int limit) {
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("Result page limit must be 1..100");
+    }
+
+    private static void requireExecutionSession(String sessionId) {
+        if (!WorkspaceIdentity.isExecutionSession(sessionId))
+            throw new IllegalArgumentException("Invalid workspace execution identity");
+    }
+
+    private static void requireCentralSession(String sessionId) {
+        if (!WorkspaceIdentity.isCentral(sessionId))
+            throw new IllegalArgumentException("Invalid Central conversation identity");
     }
 
     /** Reads the latest schema-supported Crew snapshot for each mission, preserving insertion order. */
@@ -1827,8 +1865,8 @@ public final class LocalRunStore {
         ChatTimelineEventPage dbPage = beforeOffset == NO_TIMELINE_CURSOR
                 ? chatDatabaseBridge.readRecentConversationTimelineSync(sessionId, turnCount)
                 : chatDatabaseBridge.readConversationTimelineBeforeSync(sessionId, beforeOffset, turnCount);
-        Set<String> invalidated = newerInvalidatedToolTurnMessageIds == null
-                ? Collections.emptySet() : newerInvalidatedToolTurnMessageIds;
+        Set<String> invalidated = new HashSet<>(dbPage.getInvalidatedToolTurnMessageIds());
+        if (newerInvalidatedToolTurnMessageIds != null) invalidated.addAll(newerInvalidatedToolTurnMessageIds);
         TimelineProjectionMarkers markers = newerProjectionMarkers == null
                 ? new TimelineProjectionMarkers() : newerProjectionMarkers;
         Set<String> translations = new HashSet<>();

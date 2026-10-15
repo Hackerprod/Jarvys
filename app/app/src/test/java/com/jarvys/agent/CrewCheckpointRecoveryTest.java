@@ -14,7 +14,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -23,11 +22,17 @@ import org.robolectric.annotation.Config;
 @Config(sdk = 34)
 public class CrewCheckpointRecoveryTest {
     @Rule
-    public TemporaryFolder temporary = new TemporaryFolder();
+    public final ChatTestStore chatTestStore = new ChatTestStore();
+
+    private File newRegisteredFilesDirectory() {
+        File filesDirectory = chatTestStore.newFilesDirectory();
+        chatTestStore.localRunStore(filesDirectory);
+        return filesDirectory;
+    }
 
     @Test
     public void savesVerifiableCheckpointWithoutCredentialsOrPermissionGrants() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         ConversationTurn request = new ConversationTurn("user", "Inspect the project", 7);
         ConversationTurn observation = new ConversationTurn("assistant", "password=transcript-secret");
@@ -49,7 +54,7 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void uncertainCallsAreRecoveredAsEvidenceAndNeverReportedAsCompleted() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         ModelReply.Call notStarted = new ModelReply.Call("intent", "coding_patch", Collections.emptyMap());
         ModelReply.Call started = new ModelReply.Call("started", "project_exec", Collections.emptyMap());
@@ -69,7 +74,7 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void corruptCommittedCheckpointCannotBeSilentlyReplaced() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         File target = checkpoint(root);
@@ -86,7 +91,7 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void incompleteCommitWithoutPredecessorIsPreservedAndBlocksOverwrite() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         File directory = checkpoint(root).getParentFile();
         assertTrue(directory.mkdirs());
@@ -100,7 +105,7 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void signedPayloadStillRequiresValidIdentityLifecycleAndIncomingIds() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         File target = checkpoint(root);
@@ -121,7 +126,7 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void deletedChatAndUnsafeMaterializationFailClosed() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         saveEmpty(store);
         new ConversationMetadataAccess(root).update("chat-one", "deleted", true);
@@ -133,8 +138,8 @@ public class CrewCheckpointRecoveryTest {
 
     @Test
     public void directorySyncPreservesThreadInterruptAfterCommit() throws Exception {
-        CrewCheckpointStore store = new CrewCheckpointStore(temporary.newFolder());
-        Thread.currentThread().interrupt();
+        CrewCheckpointStore store = new CrewCheckpointStore(newRegisteredFilesDirectory(),
+                directory -> Thread.currentThread().interrupt());
         try {
             saveEmpty(store);
             assertTrue(Thread.currentThread().isInterrupted());

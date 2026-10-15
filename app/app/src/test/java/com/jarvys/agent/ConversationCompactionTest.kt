@@ -197,7 +197,8 @@ class ConversationCompactionTest {
                 compactor.compact(messages(4), 32_768, "manual", ConversationCompactionPolicy.Mode.ALL,
                     CancellationToken.uncancellable(), null)
             }.exceptionOrNull()
-            assertTrue("an interrupted DB wait is a cancellation signal", interrupted is ChatDatabaseWaitInterruptedException)
+            assertTrue("an interrupted compaction step is a cancellation signal",
+                interrupted is java.util.concurrent.CancellationException)
             assertTrue("the caller interrupt flag is restored", Thread.currentThread().isInterrupted)
             Thread.interrupted()
             assertEquals(4, store.readConversationMessages(session).size)

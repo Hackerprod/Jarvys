@@ -99,7 +99,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         if (!reference.matchesEvidence(evidence)) return@transaction ChatDbResult.Conflict("Reference has no matching durable evidence")
         val old = findResultRef(reference.executionSessionId, reference.referenceId, false)
         if (old != null) {
-            if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
+            if (!old.sameBinding(reference)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
         ChatSqlBeforeWriteGuard.invoke(beforeWrite)
@@ -309,7 +309,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         if (!reference.matchesEvidence(evidence)) return@transaction ChatDbResult.Conflict("Coordination reference has no matching durable evidence")
         val old = findCoordinationRef(reference.executionSessionId, reference.referenceId, false)
         if (old != null) {
-            if (!old.samePayload(reference)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
+            if (!old.sameBinding(reference)) return@transaction ChatDbResult.Conflict(COORDINATION_CONFLICT)
             return@transaction ChatDbResult.Success(old)
         }
         ChatSqlBeforeWriteGuard.invoke(beforeWrite)

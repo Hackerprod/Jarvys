@@ -1242,7 +1242,7 @@ public final class CrewManager implements AutoCloseable {
             synchronized (bot.cycleLock) {
                 invalidateCoordinationLocked(bot);
                 // Capture before replacing the generation, but never call persistence/model code here.
-                if (terminalReport != null && !cycleId.isEmpty()) {
+                if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
                     evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
                             terminalReport.status, terminalReport.text, terminalReport.producedAtMillis);
                     bot.cycleMetadata = new CycleMetadata(cycleId, evidence);

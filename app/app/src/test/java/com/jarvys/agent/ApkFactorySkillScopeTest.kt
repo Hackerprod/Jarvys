@@ -19,6 +19,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +28,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ApkFactorySkillScopeTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private val id = SkillScopePolicy.APK_FACTORY_ID
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val skillField = SkillRepository::class.java.getDeclaredField("instance").apply { isAccessible = true }

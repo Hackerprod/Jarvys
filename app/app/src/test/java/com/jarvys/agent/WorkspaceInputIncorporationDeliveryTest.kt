@@ -1,6 +1,8 @@
 package com.jarvys.agent
 
 import android.app.Application
+import android.content.Context
+import android.content.ContextWrapper
 import com.jarvys.agent.coding.ProjectScopeStore
 import com.jarvys.agent.crew.*
 import com.jarvys.agent.workspaces.*
@@ -23,9 +25,11 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceInputIncorporationDeliveryTest {
-    @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+    @Rule @JvmField val chatTestStore = ChatTestStore()
 
     private lateinit var app: Application
+    private lateinit var filesDirectory: File
+    private lateinit var context: Context
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
     private lateinit var scope: WorkspaceRecord
@@ -37,8 +41,12 @@ class WorkspaceInputIncorporationDeliveryTest {
     @Before fun setup() {
         app = RuntimeEnvironment.getApplication()
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
-        File(app.filesDir, "jarvys").deleteRecursively()
-        registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
+        filesDirectory = chatTestStore.newFilesDirectory("input-proof")
+        context = object : ContextWrapper(app) {
+            override fun getFilesDir(): File = filesDirectory
+            override fun getApplicationContext(): Context = this
+        }
+        registry = WorkspaceRegistry(context); ledger = chatTestStore.localRunStore(filesDirectory)
         scope = registry.createWorkspace("input-proof", "Synthetic workspace")
         val pending = registry.prepareAssignment(scope.workspaceId, "assignment", "source-request", "Synthetic request",
             "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)
@@ -46,7 +54,7 @@ class WorkspaceInputIncorporationDeliveryTest {
         assignment = registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, "synthetic-bot")
         ledger.appendConversationMessage(scope.executionSessionId, "user", "Synthetic worker ledger")
         ledger.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "user", "Synthetic central ledger")
-        delivery = WorkspaceInputIncorporationDelivery(app, ledger)
+        delivery = WorkspaceInputIncorporationDelivery(context, ledger)
     }
     @After fun close() { registry.close(); app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME) }
 
@@ -63,8 +71,8 @@ class WorkspaceInputIncorporationDeliveryTest {
         val checkpoint = CoreAgentLoop.Checkpoint(listOf(ConversationTurn("user", "  Exact correction\n")),
             setOf(binding.mailboxMessageId), emptyMap(), 0,
             if (withProof) mapOf(binding.mailboxMessageId to proof) else emptyMap())
-        val identity = ProjectScopeStore(app.filesDir).open(scope.executionSessionId).durableIdentity()
-        CrewCheckpointStore(app.filesDir).save(scope.executionSessionId, requireNotNull(assignment.botId),
+        val identity = ProjectScopeStore(filesDirectory).open(scope.executionSessionId).durableIdentity()
+        CrewCheckpointStore(filesDirectory).save(scope.executionSessionId, requireNotNull(assignment.botId),
             JSONObject().put("conversationId", scope.executionSessionId).put("botId", assignment.botId)
                 .put("missionId", assignment.missionId), identity, checkpoint, JSONObject())
     }
@@ -88,7 +96,7 @@ class WorkspaceInputIncorporationDeliveryTest {
 
     @Test fun boundWorkerWithoutCheckpointDoesNotCreateProjectOrReceipt() {
         reconcile()
-        assertFalse(File(app.filesDir, "jarvys/coding-projects").exists())
+        assertFalse(File(filesDirectory, "jarvys/coding-projects").exists())
         assertTrue(ledger.listWorkspaceInputIncorporations(WorkspaceIdentity.CENTRAL_SESSION, 50, null).isEmpty())
     }
 
@@ -126,8 +134,8 @@ class WorkspaceInputIncorporationDeliveryTest {
                     CrewInputIncorporation.TransportKind.USER else CrewInputIncorporation.TransportKind.INBOX,
                 CrewInputIncorporation.transportSha256("Synthetic already-appended transport"))
         }
-        val identity = ProjectScopeStore(app.filesDir).open(scope.executionSessionId).durableIdentity()
-        CrewCheckpointStore(app.filesDir).save(scope.executionSessionId, requireNotNull(assignment.botId),
+        val identity = ProjectScopeStore(filesDirectory).open(scope.executionSessionId).durableIdentity()
+        CrewCheckpointStore(filesDirectory).save(scope.executionSessionId, requireNotNull(assignment.botId),
             JSONObject().put("missionId", assignment.missionId), identity,
             CoreAgentLoop.Checkpoint(emptyList(), proofs.keys, emptyMap(), -1, proofs), JSONObject())
         delivery.reconcile(scope.workspaceId, CancellationToken.uncancellable(), Runnable {}, selected)
@@ -202,6 +210,6 @@ class WorkspaceInputIncorporationDeliveryTest {
         // Deletion may remove the checkpoint entirely; either rejection or no candidate is honest.
         runCatching { reconcile() }
         assertNull(runCatching { receipt(binding) }.getOrNull())
-        assertTrue(ConversationMetadataAccess(app.filesDir).read(scope.executionSessionId).deleted)
+        assertTrue(ConversationMetadataAccess(filesDirectory).read(scope.executionSessionId).deleted)
     }
 }

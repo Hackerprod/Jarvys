@@ -22,12 +22,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
-import org.junit.runners.model.Statement;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -36,22 +33,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, application = Application.class)
 public class WorkspaceResultLedgerTest {
-    @Rule public TestRule databaseThread = (base, description) -> new Statement() {
-        @Override public void evaluate() throws Throwable {
-            java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
-                try { base.evaluate(); } catch (Exception e) { throw e; } catch (Throwable t) { throw new RuntimeException(t); } return null;
-            });
-            Thread worker = new Thread(task, "workspace-result-room-test");
-            worker.start();
-            try { task.get(); }
-            catch (java.util.concurrent.ExecutionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof Exception) throw (Exception) cause;
-                if (cause instanceof Error) throw (Error) cause;
-                throw new AssertionError(cause);
-            }
-        }
-    };
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
     private static final String OTHER_WORKSPACE = "2b5b9357-65e3-42e4-ae7c-1d4fa99d7dd5";
     private static final String SOURCE = WorkspaceIdentity.executionSessionId(WORKSPACE);
@@ -65,18 +47,14 @@ public class WorkspaceResultLedgerTest {
 
     @Before public void setup() {
         Context base = ApplicationProvider.getApplicationContext();
-        File databaseFiles = new File(base.getCacheDir(), "chat-db-result-" + UUID.randomUUID());
-        assertTrue(databaseFiles.mkdirs());
+        File databaseFiles = chatTestStore.newFilesDirectory();
         context = new ContextWrapper(base) {
             @Override public File getFilesDir() { return databaseFiles; }
             @Override public Context getApplicationContext() { return this; }
         };
-        store = new LocalRunStore(context);
+        store = chatTestStore.localRunStore(databaseFiles);
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(CENTRAL, "chat") instanceof ChatDbResult.Success);
         store.appendConversationMessage(SOURCE, "user", "Synthetic source chat");
-    }
-    @After public void teardown() {
-        if (context != null) ChatDatabaseBridge.closeInstanceForTests(context.getFilesDir());
     }
     private CrewResultEvidence evidence(String cycle, String text) {
         return CrewResultEvidence.create(SOURCE, MISSION, "bot-1", UUID.nameUUIDFromBytes(cycle.getBytes(StandardCharsets.UTF_8)).toString(),
@@ -271,7 +249,7 @@ public class WorkspaceResultLedgerTest {
 
         store.appendUserDecisionResolution(session, "decision-old", "SELECTED", "continue", "Continue");
         store.claimProactiveSuggestedReply(session, proactiveId, 0);
-        store.setMessageReaction(session, firstUser, "👍");
+        store.setMessageReaction(session, firstUser, "\ud83d\udc4d");
         store.appendCrewMissionSnapshot(new CrewMissionSnapshot(crewMissionId, session, "process-new",
                 "Latest mission snapshot", "DONE", "new synthesis", 10L, 20L,
                 Collections.emptyList(), Collections.emptyList()));
@@ -284,9 +262,9 @@ public class WorkspaceResultLedgerTest {
         store.appendConversationMessage(legacySession, "assistant", "legacy answer one");
         String legacyUser2 = store.appendConversationMessage(legacySession, "user", "legacy user two");
         store.appendConversationMessage(legacySession, "assistant", "legacy answer two");
-        store.setMessageReaction(legacySession, legacyUser0, "??");
-        store.setMessageReaction(legacySession, legacyUser1, "??");
-        store.setMessageReaction(legacySession, legacyUser2, "??");
+        store.setMessageReaction(legacySession, legacyUser0, "\ud83d\udc4d");
+        store.setMessageReaction(legacySession, legacyUser1, "\ud83d\udc4d");
+        store.setMessageReaction(legacySession, legacyUser2, "\ud83d\udc4d");
 
         List<AgentRunUiEvent> full = store.readConversationTimeline(session);
         assertTrue(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
@@ -294,7 +272,7 @@ public class WorkspaceResultLedgerTest {
                 .findFirst().get().getDecisionStatus());
         assertTrue(full.stream().anyMatch(event -> proactiveId.equals(event.getMessageId())
                 && event.getProactiveRepliesUsed()));
-        assertEquals("👍", full.stream().filter(event -> "user".equals(event.getKind())
+        assertEquals("\ud83d\udc4d", full.stream().filter(event -> "user".equals(event.getKind())
                 && firstUser.equals(event.getMessageId())).findFirst().get().getReactionEmoji());
         assertEquals("Latest mission snapshot", full.stream().filter(event -> "crew_mission".equals(event.getKind()))
                 .findFirst().get().getCrewMissionSnapshot().title);
@@ -303,7 +281,7 @@ public class WorkspaceResultLedgerTest {
         assertEquals(3, legacyFull.stream().filter(event -> "user".equals(event.getKind())
                 && (legacyUser0.equals(event.getMessageId()) || legacyUser1.equals(event.getMessageId())
                 || legacyUser2.equals(event.getMessageId()))).count());
-        assertEquals("👍", legacyFull.stream().filter(event -> "legacy user zero".equals(event.getText()))
+        assertEquals("\ud83d\udc4d", legacyFull.stream().filter(event -> "legacy user zero".equals(event.getText()))
                 .findFirst().get().getReactionEmoji());
         for (int pageSize : new int[] {1, 2, 3}) {
             assertEquals("legacy page size " + pageSize, eventSignatures(legacyFull),

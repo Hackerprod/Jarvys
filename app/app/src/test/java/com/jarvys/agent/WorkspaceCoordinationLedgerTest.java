@@ -24,12 +24,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
-import org.junit.runners.model.Statement;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -38,23 +35,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, application = Application.class)
 public class WorkspaceCoordinationLedgerTest {
-    @Rule public TestRule databaseThread = (base, description) -> new Statement() {
-        @Override public void evaluate() throws Throwable {
-            java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
-                try { base.evaluate(); } catch (Exception e) { throw e; } catch (Throwable t) { throw new RuntimeException(t); }
-                return null;
-            });
-            Thread worker = new Thread(task, "workspace-coordination-room-test");
-            worker.start();
-            try { task.get(); }
-            catch (java.util.concurrent.ExecutionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof Exception) throw (Exception) cause;
-                if (cause instanceof Error) throw (Error) cause;
-                throw new AssertionError(cause);
-            }
-        }
-    };
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
     private static final String OTHER_WORKSPACE = "2b5b9357-65e3-42e4-ae7c-1d4fa99d7dd5";
     private static final String SOURCE = WorkspaceIdentity.executionSessionId(WORKSPACE);
@@ -68,18 +49,14 @@ public class WorkspaceCoordinationLedgerTest {
 
     @Before public void setup() {
         Context base = ApplicationProvider.getApplicationContext();
-        File databaseFiles = new File(base.getCacheDir(), "chat-db-coordination-" + UUID.randomUUID());
-        assertTrue(databaseFiles.mkdirs());
+        File databaseFiles = chatTestStore.newFilesDirectory();
         context = new ContextWrapper(base) {
             @Override public File getFilesDir() { return databaseFiles; }
             @Override public Context getApplicationContext() { return this; }
         };
-        store = new LocalRunStore(context);
+        store = chatTestStore.localRunStore(databaseFiles);
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(CENTRAL, "chat") instanceof ChatDbResult.Success);
         store.appendConversationMessage(SOURCE, "user", "Synthetic source chat");
-    }
-    @After public void teardown() {
-        if (context != null) ChatDatabaseBridge.closeInstanceForTests(context.getFilesDir());
     }
     private CrewCoordinationEvidence evidence(String cycle, String text) {
         return CrewCoordinationEvidence.create(SOURCE, MISSION, "bot-1", UUID.nameUUIDFromBytes(cycle.getBytes(StandardCharsets.UTF_8)).toString(),
@@ -254,7 +231,7 @@ public class WorkspaceCoordinationLedgerTest {
         assertTrue(store.deleteConversation(CENTRAL));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceCoordinationNoticeIfAbsent(reference, () -> { }));
         assertThrows(IllegalStateException.class, () -> store.listWorkspaceCoordinationNotices(CENTRAL, 10, null));
-        assertTrue(store.listWorkspaceCoordinationNotices(CENTRAL, 10, null).isEmpty());
+        assertTrue(ChatDatabaseBridge.getInstance(context).isTombstonedSync(CENTRAL));
     }
 
     @Test public void missingSourceFailsClosedEvenForExactReadsAndFirstEvidence() {

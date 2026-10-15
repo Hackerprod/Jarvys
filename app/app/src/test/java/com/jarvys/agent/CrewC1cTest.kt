@@ -249,7 +249,14 @@ class CrewC1cTest {
                 }
             }
         }, null, null, { snapshot ->
-            store.appendCrewMissionSnapshot(snapshot)
+            try {
+                store.appendCrewMissionSnapshot(snapshot)
+            } catch (cancelled: java.util.concurrent.CancellationException) {
+                // CrewManager.close can interrupt its final, coalesced callback while the fixture
+                // closes the Room bridge. Teardown cancellation must not escape the worker thread.
+                Thread.interrupted()
+                return@configure
+            }
             if (snapshot.bots.singleOrNull()?.status == "RUNNING" && snapshot.messages.any {
                     it.from == "user" && it.text == "Please revisit the conclusion"
                 }) runningSnapshotPersisted.countDown()

@@ -12,6 +12,7 @@ import com.jarvys.agent.connectors.ConnectorRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +28,7 @@ import java.util.concurrent.CancellationException
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TaskManagementToolsTest {
+    @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private lateinit var context: Context
     private val clock = Clock.fixed(Instant.parse("2025-03-07T23:30:00Z"), ZoneOffset.UTC)
     private val zone = ZoneId.of("UTC")

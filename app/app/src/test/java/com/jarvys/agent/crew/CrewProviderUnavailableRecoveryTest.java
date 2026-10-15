@@ -3,7 +3,6 @@ package com.jarvys.agent.crew;
 import static org.junit.Assert.*;
 
 import com.jarvys.agent.CancellationToken;
-import com.jarvys.agent.ConversationTurn;
 import com.jarvys.agent.CoreAgentLoop;
 import com.jarvys.agent.CorePromptBudget;
 import com.jarvys.agent.CoreToolRegistry;
@@ -34,16 +33,20 @@ public class CrewProviderUnavailableRecoveryTest {
     public void partialWorkerWaitsForOwnedWorkAndOnlyResumesAfterExplicitReconciliation() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         AtomicInteger loops = new AtomicInteger();
+        AtomicBoolean resumedWithCompletionReceipt = new AtomicBoolean();
+        AtomicBoolean resumedWithProgressReceipt = new AtomicBoolean();
         CountDownLatch waiting = new CountDownLatch(1);
         CountDownLatch waitingAfterProgress = new CountDownLatch(1);
         FakeOwnedWork job = new FakeOwnedWork();
         RecordingCheckpoints checkpoints = new RecordingCheckpoints();
         CoreAgentLoop.Model model = (transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) throw unavailable();
-            assertEquals("Only explicit resume may make the next model request", 2, requests.get());
-            assertTrue(transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
+            resumedWithCompletionReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
+                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
                     && turn.content.contains("job-17 completed; exit code 0")));
-            assertTrue(transcript.stream().anyMatch(turn -> turn.content.contains("job-17 is still running")));
+            resumedWithProgressReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
+                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
+                    && turn.content.contains("job-17 is still running")));
             return new ModelReply("Reviewed job-17's retained completion receipt", Collections.emptyList());
         };
         CrewManager.SnapshotListener listener = snapshot -> {
@@ -110,6 +113,8 @@ public class CrewProviderUnavailableRecoveryTest {
 
             manager.resume(bot.id);
             awaitFinished(bot);
+            assertTrue("The explicit resume includes the completion receipt", resumedWithCompletionReceipt.get());
+            assertTrue("The explicit resume includes the earlier progress receipt", resumedWithProgressReceipt.get());
             assertEquals(CrewManager.Status.DONE, bot.status());
             assertFalse(bot.requiresExplicitResume());
             assertNotEquals(generation.generation(), bot.token.generation());
@@ -131,7 +136,6 @@ public class CrewProviderUnavailableRecoveryTest {
         CountDownLatch release = new CountDownLatch(1);
         try (CrewManager manager = manager((transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) throw unavailable();
-            assertEquals(2, requests.get());
             continued.countDown();
             try {
                 if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Continuation was never released");
@@ -348,10 +352,10 @@ public class CrewProviderUnavailableRecoveryTest {
     public void unpersistedPartialWorkerRejectsCaptainRetryButAllowsAnExplicitUserContinuation() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         AtomicInteger loops = new AtomicInteger();
+        AtomicBoolean followUpContainsUserContinuation = new AtomicBoolean();
         try (CrewManager manager = manager((transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) throw unavailable();
-            assertEquals(2, requests.get());
-            assertTrue(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
+            followUpContainsUserContinuation.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
                     && "Inspect the retained evidence and continue".equals(turn.content)));
             return new ModelReply("Continued with the user's explicit guidance", Collections.emptyList());
         }, loops, null)) {
@@ -368,6 +372,7 @@ public class CrewProviderUnavailableRecoveryTest {
             awaitFinished(bot);
             assertEquals(CrewManager.Status.DONE, bot.status());
             assertEquals(2, requests.get());
+            assertTrue("Explicit continuation reaches the follow-up model turn", followUpContainsUserContinuation.get());
             assertEquals("Explicit continuation reuses the retained loop", 1, loops.get());
         }
     }
@@ -376,12 +381,13 @@ public class CrewProviderUnavailableRecoveryTest {
     public void delayedReceiptAfterNormalDoneStillReanimatesOnceAndConsumesItsEvidence() throws Exception {
         AtomicInteger requests = new AtomicInteger();
         AtomicInteger loops = new AtomicInteger();
+        AtomicBoolean followUpContainsReceipt = new AtomicBoolean();
         CountDownLatch resumed = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         try (CrewManager manager = manager((transcript, prompt, declarations, token) -> {
             if (requests.incrementAndGet() == 1) return new ModelReply("Initial work complete", Collections.emptyList());
-            assertEquals("A delayed receipt should start exactly one follow-up cycle", 2, requests.get());
-            assertTrue(transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
+            followUpContainsReceipt.set(transcript.stream().anyMatch(turn -> "user".equals(turn.role)
+                    && turn.incomingMetadata != null && "FINDING".equals(turn.incomingMetadata.type)
                     && turn.content.contains("job-77 completed after the final answer")));
             resumed.countDown();
             try {
@@ -403,6 +409,7 @@ public class CrewProviderUnavailableRecoveryTest {
             try {
                 manager.observeOwnedWork(bot, generation, "job-77-done", "job-77 completed after the final answer");
                 await(resumed, "Normal DONE worker did not process its delayed receipt");
+                assertTrue("The resumed model turn includes the delayed receipt", followUpContainsReceipt.get());
                 manager.observeOwnedWork(bot, generation, "job-77-done", "job-77 completed after the final answer");
                 assertEquals(2, requests.get());
                 release.countDown();

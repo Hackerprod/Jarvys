@@ -23,6 +23,9 @@ public final class BotMascotStoreTestSupport {
     static void syncDirectory(File directory) throws IOException {
         if (Files.isSymbolicLink(directory.toPath()) || !Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS))
             throw new IOException("Host test sync requires a real private directory");
+        // The Windows JVM used by Robolectric cannot open directories through FileChannel.
+        // Android production sync remains covered by BotMascotStore's Os.fsync implementation.
+        if (File.separatorChar == '\\') return;
         try (FileChannel channel = FileChannel.open(directory.toPath(), StandardOpenOption.READ)) { channel.force(true); }
     }
 }

@@ -5,7 +5,6 @@ import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
 import androidx.test.core.app.ApplicationProvider;
-import com.jarvys.agent.chatdb.ChatDatabaseBridge;
 import com.jarvys.agent.crew.CrewCoordinationEvidence;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReply;
@@ -22,12 +21,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
-import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
-import org.junit.runners.model.Statement;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -36,22 +32,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, application = Application.class)
 public class WorkspaceInputIncorporationLedgerTest {
-    @Rule public TestRule databaseThread = (base, description) -> new Statement() {
-        @Override public void evaluate() throws Throwable {
-            java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
-                try { base.evaluate(); } catch (Exception e) { throw e; } catch (Throwable t) { throw new RuntimeException(t); } return null;
-            });
-            Thread worker = new Thread(task, "workspace-input-room-test");
-            worker.start();
-            try { task.get(); }
-            catch (java.util.concurrent.ExecutionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof Exception) throw (Exception) cause;
-                if (cause instanceof Error) throw (Error) cause;
-                throw new AssertionError(cause);
-            }
-        }
-    };
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private static final String WORKSPACE = "62a92262-977e-4c43-8e6a-5640a0c193c3";
     private static final String SOURCE = WorkspaceIdentity.executionSessionId(WORKSPACE);
     private static final String CENTRAL = WorkspaceIdentity.CENTRAL_SESSION;
@@ -68,17 +49,13 @@ public class WorkspaceInputIncorporationLedgerTest {
 
     @Before public void setup() {
         Context base = ApplicationProvider.getApplicationContext();
-        File databaseFiles = new File(base.getCacheDir(), "chat-db-input-" + UUID.randomUUID());
-        assertTrue(databaseFiles.mkdirs());
+        File databaseFiles = chatTestStore.newFilesDirectory();
         context = new ContextWrapper(base) {
             @Override public File getFilesDir() { return databaseFiles; }
             @Override public Context getApplicationContext() { return this; }
         };
-        store = new LocalRunStore(context);
+        store = chatTestStore.localRunStore(databaseFiles);
         store.appendConversationMessage(SOURCE, "user", "Synthetic execution chat");
-    }
-    @After public void teardown() {
-        if (context != null) ChatDatabaseBridge.closeInstanceForTests(context.getFilesDir());
     }
     private static String id(String value) { return UUID.nameUUIDFromBytes(value.getBytes(StandardCharsets.UTF_8)).toString(); }
     private LocalRunStore reopened() { return new LocalRunStore(context); }
@@ -273,7 +250,10 @@ public class WorkspaceInputIncorporationLedgerTest {
         store.appendWorkspaceInputIncorporationIfAbsent(reply, () -> { });
         WorkspaceInputIncorporation differentTransport = changed(reply, "transportKind", "ASK_CHIEF");
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(differentTransport, () -> { }));
-        assertEquals(1, store.listWorkspaceInputIncorporations(CENTRAL, 10, null).size());
+        List<WorkspaceInputIncorporation> receipts = store.listWorkspaceInputIncorporations(CENTRAL, 10, null);
+        assertEquals(2, receipts.size());
+        assertTrue(receipts.stream().anyMatch(value -> value.receiptId.equals(first.receiptId)));
+        assertTrue(receipts.stream().anyMatch(value -> value.receiptId.equals(reply.receiptId)));
     }
 
     @Test public void validForeignWorkspaceCannotReuseExactSourceClaim() throws Exception {
@@ -303,7 +283,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         WorkspaceInputIncorporation value = nativeReceipt("control-1");
         assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
+        assertTrue(store.listWorkspaceInputIncorporations(CENTRAL, 10, null).isEmpty());
     }
 
 
@@ -326,7 +306,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         assertEquals(before, inputState()); assertNull(read(value));
         assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
-        assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
+        assertTrue(store.listWorkspaceInputIncorporations(CENTRAL, 10, null).isEmpty());
     }
 
 

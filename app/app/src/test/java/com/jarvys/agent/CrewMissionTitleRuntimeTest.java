@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -30,6 +31,7 @@ import org.robolectric.annotation.Config;
 @Config(sdk = 34)
 public class CrewMissionTitleRuntimeTest {
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
+    @Rule public ChatTestStore chatTestStore = new ChatTestStore(false, true);
     private Context context;
     private Object previousSecrets;
 

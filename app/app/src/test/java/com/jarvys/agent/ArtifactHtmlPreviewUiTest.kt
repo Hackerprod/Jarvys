@@ -40,6 +40,7 @@ import java.util.UUID
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -57,12 +58,14 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [34], qualifiers = "en-rUS-w320dp-h900dp-port-mdpi",
     shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class ArtifactHtmlPreviewUiTest {
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     // Queue IO-completed recomposition onto the test clock instead of resuming View work
     // on the IO worker through Compose 1.x's default UnconfinedTestDispatcher.
     @OptIn(ExperimentalTestApi::class)
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
+    private val compose = createAndroidComposeRule<ComponentActivity>(
         effectContext = StandardTestDispatcher(),
     )
+    @get:Rule val rules = RuleChain.outerRule(chatTestStore).around(compose)
 
     private data class Fixture(
         val session: String,

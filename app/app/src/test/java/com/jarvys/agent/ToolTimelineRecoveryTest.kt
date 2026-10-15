@@ -32,16 +32,17 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ToolTimelineRecoveryTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
-    // Real Markdown/preview background work must resume composition through the test clock.
-    @OptIn(ExperimentalTestApi::class)
+    // Compose actions such as scrollTo must run on the rule's test dispatcher without a second
+    // queued dispatcher waiting for the main test coroutine to advance.
+    @OptIn(ExperimentalTestApi::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
-        effectContext = StandardTestDispatcher(),
+        effectContext = UnconfinedTestDispatcher(),
     )
 
     @Test fun realWorkspaceToolsRecreateActivityRestoreExpandAndOpenExistingPreviewWithoutReplay() {
@@ -133,9 +134,7 @@ class ToolTimelineRecoveryTest {
         // Preview file verification runs on IO. Compose idleness alone does not await that work.
         compose.waitUntil(10_000) {
             compose.onAllNodes(isRoot()).fetchSemanticsNodes()
-            var ready = false
-            compose.runOnUiThread { ready = findWebView(compose.activity.window.decorView) != null }
-            ready
+            findWebView(compose.activity.window.decorView) != null
         }
         compose.waitForIdle()
         compose.runOnIdle {

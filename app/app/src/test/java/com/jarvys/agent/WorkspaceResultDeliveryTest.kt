@@ -1,6 +1,8 @@
 package com.jarvys.agent
 
 import android.app.Application
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.crew.CrewMissionAccess
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.*
@@ -34,6 +36,8 @@ class WorkspaceResultDeliveryTest {
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
         delivery = WorkspaceResultDelivery(app, ledger)
+        assertTrue(ChatDatabaseBridge.getInstance(app)
+            .ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
         scope = registry.createWorkspace("scope", "Synthetic scope")
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment", "request", "Synthetic request",
             "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)

@@ -771,7 +771,7 @@ public final class AgentForegroundService extends Service {
     if (worker.isShutdown()) return false;
     if (sessionId == null) {
       try {
-        worker.execute(() -> recoverPendingInputs(null));
+        worker.execute(() -> runPendingInputRecoverySafely(null));
         return true;
       } catch (java.util.concurrent.RejectedExecutionException rejected) {
         return false;
@@ -785,7 +785,7 @@ public final class AgentForegroundService extends Service {
             failPendingInputRecovery(sessionId);
             return;
           }
-          recoverPendingInputs(sessionId);
+          runPendingInputRecoverySafely(sessionId);
         });
         return true;
       } catch (java.util.concurrent.RejectedExecutionException rejected) {
@@ -794,25 +794,46 @@ public final class AgentForegroundService extends Service {
     }
   }
 
-  private void failPendingInputRecovery(String onlySessionId) {
-    LocalRunStore store = new LocalRunStore(this);
-    if (onlySessionId == null) {
-      Set<String> pendingSessions = new java.util.LinkedHashSet<>();
-      for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
-        String sessionId = request.optString("sessionId", "");
-        if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
-      }
-      for (String sessionId : pendingSessions) failPendingInputRecovery(sessionId);
-      return;
+  /** Recovery is retryable work: teardown cancellation leaves durable requests for the next scan. */
+  void runPendingInputRecoverySafely(String onlySessionId) {
+    try {
+      recoverPendingInputs(onlySessionId);
+    } catch (CancellationException cancelled) {
+      // ChatDatabaseBridge reports an interrupted wait as cancellation. Keep the durable request
+      // pending so a later service instance can retry it.
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
+    } finally {
+      // Do not carry a cancelled Room wait's interrupt flag into the next pooled service task.
+      Thread.interrupted();
     }
-    synchronized (interruptAdmissionLock(onlySessionId)) {
-      List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
-      for (org.json.JSONObject request : pending) {
-        String sessionId = request.optString("sessionId", onlySessionId);
-        String requestId = request.optString("requestId", "");
-        if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
-        failPendingInput(sessionId, requestId);
+  }
+
+  private void failPendingInputRecovery(String onlySessionId) {
+    try {
+      LocalRunStore store = new LocalRunStore(this);
+      if (onlySessionId == null) {
+        Set<String> pendingSessions = new java.util.LinkedHashSet<>();
+        for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
+          String sessionId = request.optString("sessionId", "");
+          if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
+        }
+        for (String sessionId : pendingSessions) failPendingInputRecovery(sessionId);
+        return;
       }
+      synchronized (interruptAdmissionLock(onlySessionId)) {
+        List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
+        for (org.json.JSONObject request : pending) {
+          String sessionId = request.optString("sessionId", onlySessionId);
+          String requestId = request.optString("requestId", "");
+          if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
+          failPendingInput(sessionId, requestId);
+        }
+      }
+    } catch (CancellationException cancelled) {
+      // A service teardown is not a user STOP. Leave any unprocessed request available to retry.
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
     }
   }
 
@@ -855,6 +876,9 @@ public final class AgentForegroundService extends Service {
     try {
       startRealAgentInternal(this, "", skills, sessionId, text, true,
           latest.optBoolean("memoryDisabled", false), false, messageId, messageId);
+    } catch (CancellationException cancelled) {
+      releaseFollowUpClaim(sessionId, messageId);
+      throw cancelled;
     } catch (RuntimeException startFailure) {
       try { failPendingInputRecovery(sessionId); }
       catch (RuntimeException persistenceFailure) { reportStopPersistenceFailure(persistenceFailure); }
@@ -915,7 +939,7 @@ public final class AgentForegroundService extends Service {
       }
       AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
     } catch (RuntimeException failure) {
-      reportStopPersistenceFailure(failure);
+      if (!(failure instanceof CancellationException)) reportStopPersistenceFailure(failure);
     } finally {
       releaseFollowUpClaim(sessionId, requestId);
     }
@@ -992,7 +1016,7 @@ public final class AgentForegroundService extends Service {
           failPendingInputRecovery(sessionId);
           return;
         }
-        recoverPendingInputs(sessionId);
+        runPendingInputRecoverySafely(sessionId);
       });
     } catch (java.util.concurrent.RejectedExecutionException rejected) {
       failPendingInputRecovery(sessionId);
@@ -1670,9 +1694,18 @@ public final class AgentForegroundService extends Service {
   }
 
   private void enqueueAutomaticReflection(String sessionId, String throughMessageId) {
-    LocalRunStore privacyStore = new LocalRunStore(this);
-    if (privacyStore.conversationHasPrivateImagesOrAttachments(sessionId)
-        || privacyStore.conversationHasPrivateCode(sessionId)) return;
+    try {
+      LocalRunStore privacyStore = new LocalRunStore(this);
+      if (privacyStore.conversationHasPrivateImagesOrAttachments(sessionId)
+          || privacyStore.conversationHasPrivateCode(sessionId)) return;
+    } catch (CancellationException cancelled) {
+      // The completed chat remains completed; a teardown must not turn it into a failed run.
+      Thread.interrupted();
+      return;
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
+      return;
+    }
     activeReflectionTasks.incrementAndGet();
     try {
       reflectionWorker.execute(
@@ -1687,11 +1720,16 @@ public final class AgentForegroundService extends Service {
                   sessionId, getString(R.string.reflection_status_running));
               transferred = true;
               runMemoryReflection(sessionId, "post_turn", false, throughMessageId, token);
+            } catch (CancellationException cancelled) {
+              // shutdownNow may interrupt a database wait before the reflection token is created.
+            } catch (RuntimeException failure) {
+              reportStopPersistenceFailure(failure);
             } finally {
               if (!transferred) {
                 activeReflectionTasks.decrementAndGet();
                 stopServiceIfIdle();
               }
+              Thread.interrupted();
             }
           });
     } catch (RuntimeException rejected) {

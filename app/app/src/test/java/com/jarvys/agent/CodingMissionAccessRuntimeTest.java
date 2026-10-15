@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -45,6 +46,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class CodingMissionAccessRuntimeTest {
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
     private static final List<String> MUTATING = Arrays.asList("write", "edit", "coding_patch",
             "coding_adopt", "apk_factory", "project_exec", "project_jobs", "board_post",
             "delegate_subtask", "crew_spawn", "project_image", "import_project_image", "mcp_untrusted_write", "unknown_future_tool");

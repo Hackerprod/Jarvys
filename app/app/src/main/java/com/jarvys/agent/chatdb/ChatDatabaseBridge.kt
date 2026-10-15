@@ -41,6 +41,7 @@ class ChatDatabaseWaitInterruptedException(cause: InterruptedException) :
 data class ChatTimelineEventPage(
     val events: List<AgentRunUiEvent>,
     val olderCursorSeq: Long?,
+    val invalidatedToolTurnMessageIds: Set<String>,
 ) {
     val hasOlder: Boolean get() = olderCursorSeq != null
 }
@@ -830,7 +831,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
         it.strictJournals.listWorkspaceInputIncorporations(centralSessionId, limit, afterReceiptId)
     }
 
-    private fun ConversationReader.TimelineEventPage.toPublicPage() = ChatTimelineEventPage(events, olderCursorSeq)
+    private fun ConversationReader.TimelineEventPage.toPublicPage() = ChatTimelineEventPage(
+        events, olderCursorSeq, invalidatedToolTurnMessageIds,
+    )
 
     private fun ModelTranscriptEntry.toRestoreRow(): JSONObject? = when (this) {
         is ModelTranscriptEntry.Batch -> {

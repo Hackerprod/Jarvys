@@ -395,6 +395,11 @@ public final class CrewCheckpointStore {
                     } catch (ClosedByInterruptException cancelledDuringSync) {
                         interrupted = true;
                         Thread.interrupted();
+                    } catch (java.nio.file.AccessDeniedException unsupportedDirectoryHandle) {
+                        // The production Android filesystem supports directory fsync. Windows JVM
+                        // hosts do not expose directory handles through FileChannel.
+                        if (File.separatorChar != '\\') throw unsupportedDirectoryHandle;
+                        return;
                     }
                 }
             } finally {

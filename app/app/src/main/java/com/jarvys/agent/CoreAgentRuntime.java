@@ -499,21 +499,24 @@ public final class CoreAgentRuntime {
             CoreAgentRuntime.this.persistCrewSnapshot(crewStore, crewMissionSnapshot);
           }
         });
-    if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(this.sessionId)) {
-      manager.configureResultEvidenceListener(new CrewManager.ResultEvidenceListener() {
-        @Override public void onResult(com.jarvys.agent.crew.CrewResultEvidence evidence) {
-          if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
-            throw new IllegalArgumentException("Result evidence owner changed");
-          crewStore.appendCrewResultEvidence(evidence, () -> {});
-          com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
-          WorkspaceResultDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
+    final boolean workspaceExecution = com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(this.sessionId);
+    if (workspaceExecution) manager.configureResultEvidenceListener(new CrewManager.ResultEvidenceListener() {
+      @Override public void onResult(com.jarvys.agent.crew.CrewResultEvidence evidence) {
+        if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
+          throw new IllegalArgumentException("Result evidence owner changed");
+        crewStore.appendCrewResultEvidence(evidence, () -> {});
+        com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+        WorkspaceResultDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
+      }
+      @Override public void onDeliveryFailure(com.jarvys.agent.crew.CrewResultEvidence evidence, RuntimeException failure) {
+        if (failure instanceof java.util.concurrent.CancellationException) {
+          Thread.interrupted();
+          return;
         }
-        @Override public void onDeliveryFailure(com.jarvys.agent.crew.CrewResultEvidence evidence, RuntimeException failure) {
-          com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceFailed(evidence.conversationId, evidence.missionId, evidence.evidenceId);
-          LocalDiagnostics.recoverable(CoreAgentRuntime.this.context, LocalDiagnostics.Origin.RUNTIME, failure);
-        }
-      });
-    }
+        com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceFailed(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+        AgentErrorReporter.reportChatDatabaseFailure(CoreAgentRuntime.this.context, failure);
+      }
+    });
     if (WorkspaceCoordinationDelivery.isCanonicalWorkspace(this.context, this.sessionId)) {
       manager.configureCoordinationEvidenceListener(new CrewManager.CoordinationEvidenceListener() {
         @Override public void onCoordinationEvidence(com.jarvys.agent.crew.CrewCoordinationEvidence evidence) {
@@ -621,7 +624,12 @@ public final class CoreAgentRuntime {
       crewStore.appendCrewMissionSnapshot(snapshot);
       com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId);
     } catch (RuntimeException e) {
-      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotFailed(this.sessionId, snapshot.missionId);
+      if (e instanceof java.util.concurrent.CancellationException) {
+        Thread.interrupted();
+      } else {
+        com.jarvys.agent.workspaces.WorkspaceChanges.snapshotFailed(this.sessionId, snapshot.missionId);
+        AgentErrorReporter.reportChatDatabaseFailure(this.context, e);
+      }
     }
     AgentForegroundService.onCrewSnapshot(this.context);
   }

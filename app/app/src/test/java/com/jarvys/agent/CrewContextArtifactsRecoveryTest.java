@@ -11,7 +11,6 @@ import java.util.concurrent.CancellationException;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -19,8 +18,14 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class CrewContextArtifactsRecoveryTest {
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private final CancellationToken token = CancellationToken.uncancellable();
+
+    private File newRegisteredFilesDirectory() {
+        File filesDirectory = chatTestStore.newFilesDirectory();
+        chatTestStore.localRunStore(filesDirectory);
+        return filesDirectory;
+    }
 
     @Test public void redactsNestedCredentialsAndPreservesNonSecretEvidence() throws Exception {
         JSONObject safe = new JSONObject(CrewContextArtifacts.redact("{\"nested\":[{\"api_key\":\"secret-value\",\"grant\":\"saved-permission\",\"path\":\"src/Main.java\"}],\"result\":\"Bearer bearer-value\"}"));
@@ -33,7 +38,7 @@ public class CrewContextArtifactsRecoveryTest {
     }
 
     @Test public void ownershipRestoresOnlyAfterContentDigestAndIdentityVerification() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewContextArtifacts first = new CrewContextArtifacts(root, "chat-one", "bot-one");
         String id = first.save("Evidence: password=never-store-this", token);
         JSONObject ownership = first.snapshotOwnership();
@@ -53,7 +58,7 @@ public class CrewContextArtifactsRecoveryTest {
     }
 
     @Test public void tamperingAndSymlinkAreRejectedEvenWhenFileLengthMatches() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewContextArtifacts artifacts = new CrewContextArtifacts(root, "chat-one", "bot-one");
         String id = artifacts.save("abc", token);
         JSONObject ownership = artifacts.snapshotOwnership();
@@ -63,14 +68,14 @@ public class CrewContextArtifactsRecoveryTest {
         assertThrows(IllegalStateException.class, artifacts::snapshotOwnership);
         assertThrows(IllegalStateException.class, () -> artifacts.restoreOwnership(ownership));
         Files.delete(file.toPath());
-        File elsewhere = temporary.newFile();
+        File elsewhere = new File(chatTestStore.newFilesDirectory(), "elsewhere.txt");
         Files.write(elsewhere.toPath(), "abc".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(file.toPath(), elsewhere.toPath());
         assertFalse(read(artifacts, id).success);
     }
 
     @Test public void paginationRetainsUnicodeAndUsesBotLocalOffsets() throws Exception {
-        CrewContextArtifacts artifacts = new CrewContextArtifacts(temporary.newFolder(), "bot-one");
+        CrewContextArtifacts artifacts = new CrewContextArtifacts(newRegisteredFilesDirectory(), "bot-one");
         StringBuilder original = new StringBuilder("😀東京é\n");
         for (int i = 0; i < 200; i++) original.append("evidence 😀 ");
         String source = original.toString();
@@ -98,7 +103,7 @@ public class CrewContextArtifactsRecoveryTest {
     }
 
     @Test public void cancellationAndChatDeletionDisableArtifactAccess() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewContextArtifacts artifacts = new CrewContextArtifacts(root, "chat-one", "bot-one");
         String id = artifacts.save("evidence", token);
         CancellationToken cancelled = CancellationToken.cancellable();

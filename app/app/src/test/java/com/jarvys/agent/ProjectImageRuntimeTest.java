@@ -11,6 +11,7 @@ import java.util.*;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -19,6 +20,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class ProjectImageRuntimeTest {
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
     private Context context; private String session; private Object previous; private ProviderSettings settings;
     private final CoreToolRegistry empty = new CoreToolRegistry(Collections.emptyList());
     @Before public void setup() throws Exception {

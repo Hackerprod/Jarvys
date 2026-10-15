@@ -14,7 +14,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -25,10 +24,16 @@ public class CrewCheckpointIncorporationCodecTest {
     private static final String ADMISSION_CYCLE = "11111111-1111-1111-1111-111111111111";
     private static final String FIRST_CYCLE = "22222222-2222-2222-2222-222222222222";
     private static final String TEXT = "  Preserve exact whitespace.\npassword=never-persist-this  ";
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public final ChatTestStore chatTestStore = new ChatTestStore();
+
+    private File newRegisteredFilesDirectory() {
+        File filesDirectory = chatTestStore.newFilesDirectory();
+        chatTestStore.localRunStore(filesDirectory);
+        return filesDirectory;
+    }
 
     @Test public void roundTripRetainsHistoricalProofWhenCheckpointTextIsRedacted() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         CrewInputIncorporation proof = proof();
         save(store, proof);
@@ -46,7 +51,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void legacyAppliedIdsNeverGainInferredProof() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         save(store, proof());
         File target = checkpoint(root);
@@ -60,7 +65,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void checkpointRoundTripRetainsRealIncomingMessageProvenance() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         CrewInputIncorporation proof = proof();
         ConversationTurn incoming = new ConversationTurn("user", "Bot evidence", -1,
@@ -111,7 +116,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void duplicatesAndProofsWithoutAppliedMailboxIdsFailClosed() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         save(store, proof());
         File target = checkpoint(root);
@@ -125,7 +130,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void strictProofArrayRejectsNullMalformedAndUnsupportedRows() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         save(store, proof());
         File target = checkpoint(root);
@@ -144,7 +149,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void bindingRoutesMustMatchCheckpointConversationBotAndMission() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         save(store, proof());
         File target = checkpoint(root);
@@ -164,7 +169,7 @@ public class CrewCheckpointIncorporationCodecTest {
     }
 
     @Test public void saveRejectsInvalidRoutingBeforeCreatingCheckpoint() throws Exception {
-        File root = temporary.newFolder();
+        File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         CoreAgentLoop.Checkpoint loop = checkpoint(proof());
         assertThrows(IllegalStateException.class, () -> store.save("another-chat", "bot-one",
@@ -173,7 +178,7 @@ public class CrewCheckpointIncorporationCodecTest {
                 new JSONObject().put("missionId", "mission-one"), "scope-one", loop, new JSONObject()));
         assertThrows(IllegalStateException.class, () -> store.save("chat-one", "bot-one",
                 new JSONObject().put("missionId", "another-mission"), "scope-one", loop, new JSONObject()));
-        assertEquals(0, root.list().length);
+        assertFalse(checkpoint(root).getParentFile().exists());
     }
 
     @Test public void bindingAndProofJsonContributeToMaterializationCost() throws Exception {
