@@ -24,6 +24,7 @@ import com.jarvys.agent.UserDecisionRole;
 import com.jarvys.agent.chatdb.AppendMessageInput;
 import com.jarvys.agent.chatdb.AssistantMarkerValue;
 import com.jarvys.agent.chatdb.ChatDatabaseBridge;
+import com.jarvys.agent.chatdb.ChatTimelineEventPage;
 import com.jarvys.agent.chatdb.ChatDbResult;
 import com.jarvys.agent.chatdb.ConversationMetadataValue;
 import com.jarvys.agent.chatdb.ConversationImageReferenceValue;
@@ -1463,8 +1464,8 @@ public final class LocalRunStore {
                     sessionId, role, Collections.singletonList(new MessagePartInput("text", content == null ? "" : content)),
                     status, runId, userMessageId, durationMs, null, proactiveThreadKey, null, null,
                     null, false, storedAttachments, Collections.emptyList(),
-                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId)),
-                    "append conversation message"));
+                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId))),
+                    "append conversation message");
             return saved.getMessageId();
         }
         File ledger = conversationFile(sessionId);
@@ -1566,7 +1567,7 @@ public final class LocalRunStore {
                     sessionId, "user", Collections.singletonList(new MessagePartInput("text", content)), null,
                     null, null, null, null, threadKey, replyToMessageId, null, null, false,
                     Collections.emptyList(), Collections.emptyList(), System.currentTimeMillis() / 1000.0,
-                    conversationKindFor(sessionId)), "append proactive reply"));
+                    conversationKindFor(sessionId))), "append proactive reply");
             return saved.getMessageId();
         }
         String messageId = java.util.UUID.randomUUID().toString();
@@ -3245,8 +3246,8 @@ public final class LocalRunStore {
                     sessionId, "assistant", Collections.singletonList(new MessagePartInput("text", content == null ? "" : content)),
                     "COMPLETED", emptyToNull(runId), emptyToNull(userMessageId), null, beforeMessageId,
                     null, null, null, null, false, Collections.emptyList(), Collections.emptyList(),
-                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId)),
-                    "append assistant message before steering input"));
+                    System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId))),
+                    "append assistant message before steering input");
             return saved.getMessageId();
         }
         if (chatDatabaseBridge == null) throw noChatDatabase();
