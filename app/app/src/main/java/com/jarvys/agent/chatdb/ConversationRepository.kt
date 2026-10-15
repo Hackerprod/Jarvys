@@ -165,8 +165,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (existing != null) return@transactionResult ChatDbResult.Success(existing)
             val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,created_at,updated_at,next_seq) " +
-                    "SELECT ?,?,?,?,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
+                    "SELECT ?,?,0,0,0,?,?,0,1,'not_started' WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
                 arrayOf(id, kind, now, now, id),
             )
             findConversation(id)?.let { ChatDbResult.Success(it) } ?: ChatDbResult.Conflict("conversation insert lost a concurrent race")
@@ -298,7 +298,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         insertItem(conversationId, seq, ITEM_MESSAGE, id, sort.first, sort.second, latestTurnAnchor(conversationId), now)
         sql.execSQL(
             "INSERT INTO messages(conversation_id,message_id,stable_id,seq,message_index,role,status,proactive_thread_key," +
-                "proactive_decision_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "proactive_decision_id,ack_required,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?)",
             arrayOf(conversationId, id, id, seq, nextMessageIndex(conversationId), ROLE_ASSISTANT, "COMPLETED", threadKey, decisionId, now, now),
         )
         replaceParts(conversationId, id, listOf(MessagePartInput(MessagePartKinds.TEXT, content)))
@@ -930,7 +930,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     private fun partsWithAttachmentReferences(parts: List<MessagePartInput>, attachments: List<MessageAttachmentInput>): List<MessagePartInput> =
-        parts.filterNot { it.kind == MessagePartKinds.ATTACHMENT_REF } + attachments.map(::attachmentReferencePart)
+        parts.filterNot { it.kind == MessagePartKinds.ATTACHMENT_REF } + attachments.map { attachmentReferencePart(it.attachmentId) }
 
     /** Snapshots replace body parts while attachment rows remain stable; rebuild their ordered refs once. */
     private fun preserveAttachmentReferences(conversationId: String, messageId: String, parts: List<MessagePartInput>): List<MessagePartInput> {
@@ -950,7 +950,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         attachments.forEachIndexed { index, attachment ->
             val fileId = sql.query("SELECT id FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
             val resolvedFileId = fileId ?: UUID.randomUUID().toString().also { id ->
-                sql.execSQL("INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at) VALUES(?,?,?,?,?)", arrayOf(id, attachment.sha256.orEmpty(), attachment.relativePath, attachment.sizeBytes, (now * 1000).toLong()))
+                sql.execSQL("INSERT INTO file_refs(id,sha256,relative_path,bytes,last_referenced_at,attempts,generation) VALUES(?,?,?,?,?,0,0)", arrayOf(id, attachment.sha256.orEmpty(), attachment.relativePath, attachment.sizeBytes, (now * 1000).toLong()))
             }
             if (fileId != null) sql.execSQL(
                 "UPDATE file_refs SET sha256=COALESCE(NULLIF(?,''),sha256),bytes=?,last_referenced_at=? WHERE id=?",

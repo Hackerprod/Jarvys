@@ -18,7 +18,7 @@ internal interface ConversationDao {
             "SELECT :scope,:id,:deletedAt,:payload " +
             "WHERE NOT EXISTS (SELECT 1 FROM tombstones WHERE scope=:scope AND entity_id=:id)",
     )
-    suspend fun insertTombstoneIfAbsent(scope: String, id: String, deletedAt: Long, payload: String? = null): Int
+    suspend fun insertTombstoneIfAbsent(scope: String, id: String, deletedAt: Long, payload: String? = null): Long
 
     @Query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope = 'conversation' AND entity_id = :id)")
     suspend fun isTombstoned(id: String): Boolean

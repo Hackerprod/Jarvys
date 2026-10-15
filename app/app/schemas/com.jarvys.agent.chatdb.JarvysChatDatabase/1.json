@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "1d164226228e34a4641fd5671cb3b4c3",
+    "identityHash": "a9b00a7c2f3131bbabf2a1526ce58184",
     "entities": [
       {
         "tableName": "conversations",
@@ -3999,17 +3999,17 @@
       },
       {
         "tableName": "crew_result_evidence",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`evidence_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `reported_status` TEXT NOT NULL, `result_text` BLOB NOT NULL, `produced_at_ms` INTEGER NOT NULL, `content_sha256` TEXT NOT NULL, PRIMARY KEY(`evidence_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `evidence_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `reported_status` TEXT NOT NULL, `result_text` BLOB NOT NULL, `produced_at_ms` INTEGER NOT NULL, `content_sha256` TEXT NOT NULL, PRIMARY KEY(`conversation_id`, `evidence_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
-            "fieldPath": "evidence_id",
-            "columnName": "evidence_id",
+            "fieldPath": "conversation_id",
+            "columnName": "conversation_id",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "conversation_id",
-            "columnName": "conversation_id",
+            "fieldPath": "evidence_id",
+            "columnName": "evidence_id",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -4071,6 +4071,7 @@
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
+            "conversation_id",
             "evidence_id"
           ]
         },
@@ -4307,7 +4308,7 @@
       },
       {
         "tableName": "crew_coordination_evidence",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `evidence_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `text` BLOB NOT NULL, `produced_at_ms` INTEGER NOT NULL, `content_sha256` TEXT NOT NULL, PRIMARY KEY(`evidence_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `conversation_id` TEXT NOT NULL, `evidence_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `cycle_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `text` BLOB NOT NULL, `produced_at_ms` INTEGER NOT NULL, `content_sha256` TEXT NOT NULL, PRIMARY KEY(`conversation_id`, `evidence_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "schema_version",
@@ -4316,14 +4317,14 @@
             "notNull": true
           },
           {
-            "fieldPath": "evidence_id",
-            "columnName": "evidence_id",
+            "fieldPath": "conversation_id",
+            "columnName": "conversation_id",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "conversation_id",
-            "columnName": "conversation_id",
+            "fieldPath": "evidence_id",
+            "columnName": "evidence_id",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -4385,6 +4386,7 @@
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
+            "conversation_id",
             "evidence_id"
           ]
         },
@@ -4451,8 +4453,14 @@
       },
       {
         "tableName": "crew_coordination_evidence_refs",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`evidence_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `ref` TEXT NOT NULL, PRIMARY KEY(`evidence_id`, `ordinal`), FOREIGN KEY(`evidence_id`) REFERENCES `crew_coordination_evidence`(`evidence_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `evidence_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `ref` TEXT NOT NULL, PRIMARY KEY(`conversation_id`, `evidence_id`, `ordinal`), FOREIGN KEY(`conversation_id`, `evidence_id`) REFERENCES `crew_coordination_evidence`(`conversation_id`, `evidence_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
+          {
+            "fieldPath": "conversation_id",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
           {
             "fieldPath": "evidence_id",
             "columnName": "evidence_id",
@@ -4475,6 +4483,7 @@
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
+            "conversation_id",
             "evidence_id",
             "ordinal"
           ]
@@ -4485,9 +4494,11 @@
             "onDelete": "CASCADE",
             "onUpdate": "NO ACTION",
             "columns": [
+              "conversation_id",
               "evidence_id"
             ],
             "referencedColumns": [
+              "conversation_id",
               "evidence_id"
             ]
           }
@@ -5003,7 +5014,7 @@
       },
       {
         "tableName": "workspace_input_incorporations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `receipt_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `source_kind` TEXT NOT NULL, `source_id` TEXT NOT NULL, `source_reference_id` TEXT, `mailbox_message_id` TEXT NOT NULL, `owner_central_session_id` TEXT NOT NULL, `workspace_id` TEXT NOT NULL, `execution_session_id` TEXT NOT NULL, `assignment_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `admission_cycle_id` TEXT NOT NULL, `first_incorporation_cycle_id` TEXT NOT NULL, `source_payload_sha256` TEXT NOT NULL, `delivered_content_sha256` TEXT NOT NULL, `transport_kind` TEXT NOT NULL, `transport_sha256` TEXT NOT NULL, `checkpoint_payload_sha256` TEXT NOT NULL, `checkpoint_saved_at_ms` INTEGER NOT NULL, `recorded_at_ms` INTEGER NOT NULL, PRIMARY KEY(`receipt_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`schema_version` INTEGER NOT NULL, `conversation_id` TEXT NOT NULL, `receipt_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `source_kind` TEXT NOT NULL, `source_id` TEXT NOT NULL, `source_reference_id` TEXT, `mailbox_message_id` TEXT NOT NULL, `owner_central_session_id` TEXT NOT NULL, `workspace_id` TEXT NOT NULL, `execution_session_id` TEXT NOT NULL, `assignment_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `mission_id` TEXT NOT NULL, `bot_id` TEXT NOT NULL, `admission_cycle_id` TEXT NOT NULL, `first_incorporation_cycle_id` TEXT NOT NULL, `source_payload_sha256` TEXT NOT NULL, `delivered_content_sha256` TEXT NOT NULL, `transport_kind` TEXT NOT NULL, `transport_sha256` TEXT NOT NULL, `checkpoint_payload_sha256` TEXT NOT NULL, `checkpoint_saved_at_ms` INTEGER NOT NULL, `recorded_at_ms` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`, `receipt_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "schema_version",
@@ -5012,14 +5023,14 @@
             "notNull": true
           },
           {
-            "fieldPath": "receipt_id",
-            "columnName": "receipt_id",
+            "fieldPath": "conversation_id",
+            "columnName": "conversation_id",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "conversation_id",
-            "columnName": "conversation_id",
+            "fieldPath": "receipt_id",
+            "columnName": "receipt_id",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -5152,6 +5163,7 @@
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
+            "conversation_id",
             "receipt_id"
           ]
         },
@@ -5454,7 +5466,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1d164226228e34a4641fd5671cb3b4c3')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a9b00a7c2f3131bbabf2a1526ce58184')"
     ]
   }
 }

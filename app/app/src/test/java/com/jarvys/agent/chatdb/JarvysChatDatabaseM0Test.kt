@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1d164226228e34a4641fd5671cb3b4c3" // update after build; v1 is not published yet
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "a9b00a7c2f3131bbabf2a1526ce58184" // update after build; v1 is not published yet
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
