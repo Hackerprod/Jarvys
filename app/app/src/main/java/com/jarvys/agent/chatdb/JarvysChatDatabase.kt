@@ -15,6 +15,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -25,6 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ArrayBlockingQueue
+import kotlin.coroutines.ContinuationInterceptor
 
 /**
  * Normalized Room store for the conversation ledger (M0 schema version). Room entities do not emit
@@ -255,7 +257,14 @@ internal object JarvysChatDatabaseProvider {
     /** Runs a read projection on the query pool belonging to this exact Room database instance. */
     internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
-        if (LeasedConnectionElement.current() != null || RawReadConnectionElement.current() != null) return operation()
+        val activeLease = LeasedConnectionElement.current()
+        if (activeLease != null) {
+            // A writer lease is thread-bound by Android SQLiteSession. Reject an inherited lease
+            // on a dispatcher hop before any query path can acquire, use, or release a connection.
+            activeLease.assertCanUseFromCurrentCoroutine(currentCoroutineContext()[ContinuationInterceptor])
+            return operation()
+        }
+        if (RawReadConnectionElement.current() != null) return operation()
         return withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
             ?: throw IllegalStateException("No Jarvys chat query executor is registered for this database")) {
             operation()

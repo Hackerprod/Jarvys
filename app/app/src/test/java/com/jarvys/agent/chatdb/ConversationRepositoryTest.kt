@@ -1032,6 +1032,10 @@ class ConversationRepositoryTest {
             }
         }
         assertEquals("the committed read still returns the inserted request", "uncommitted-interrupt", request.requestId)
+        assertEquals(
+            listOf(request.requestId),
+            repository.pendingInterruptRequests("no-read-under-write").map { it.requestId },
+        )
     }
 
     @Test fun failedAssistantAndUnacknowledgedInterruptResolveTheirOwnerInput() = onDatabaseThread {

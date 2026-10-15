@@ -136,23 +136,39 @@ internal class LedgerImporter(
                 conversationPayloadBytesAfter = conversationPayloadBytes(sessionId),
             )
         }
-        database.chatSql.execSQL(
-            "UPDATE chatdb_import_messages SET imported=1 WHERE session_id=? AND source_offset<? AND EXISTS(" +
-                "SELECT 1 FROM chatdb_import_message_sources src JOIN messages m ON m.conversation_id=? AND m.seq=src.source_seq " +
-                "WHERE src.session_id=chatdb_import_messages.session_id AND src.source_offset=chatdb_import_messages.source_offset)",
-            arrayOf(sessionId, ensure.value.import_offset.coerceAtMost(bytes), sessionId),
-        )
-        // Appended assistant rows may steer before an imported message. The staging source-seq map
-        // remains stable across a verified prefix, so reconcile indexes even when sort_seq moved.
-        database.chatSql.execSQL(
-            "UPDATE messages SET message_index=(SELECT s.message_index FROM chatdb_import_messages s " +
-                "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
-                "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq) " +
-                "WHERE conversation_id=? AND EXISTS(SELECT 1 FROM chatdb_import_messages s " +
-                "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
-                "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq)",
-            arrayOf(sessionId, sessionId, sessionId),
-        )
+        database.withChatWriteTransaction {
+            database.chatSql.execSQL(
+                "UPDATE chatdb_import_messages SET imported=1 WHERE session_id=? AND source_offset<? AND EXISTS(" +
+                    "SELECT 1 FROM chatdb_import_message_sources src JOIN messages m ON m.conversation_id=? AND m.seq=src.source_seq " +
+                    "WHERE src.session_id=chatdb_import_messages.session_id AND src.source_offset=chatdb_import_messages.source_offset)",
+                arrayOf(sessionId, ensure.value.import_offset.coerceAtMost(bytes), sessionId),
+            )
+            // Appended assistant rows can steer before a message in the already-imported prefix.
+            // Reconcile both its display index and the item's sort tuple from the full-ledger
+            // preflight, preserving the same ordering a clean import would have written.
+            database.chatSql.execSQL(
+                "UPDATE messages SET message_index=(SELECT s.message_index FROM chatdb_import_messages s " +
+                    "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                    "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq) " +
+                    "WHERE conversation_id=? AND EXISTS(SELECT 1 FROM chatdb_import_messages s " +
+                    "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                    "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=messages.seq)",
+                arrayOf(sessionId, sessionId, sessionId),
+            )
+            database.chatSql.execSQL(
+                "UPDATE conversation_items SET " +
+                    "sort_seq=(SELECT s.sort_seq FROM chatdb_import_messages s " +
+                    "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                    "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=conversation_items.seq)," +
+                    "sort_sub=(SELECT s.sort_sub FROM chatdb_import_messages s " +
+                    "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                    "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=conversation_items.seq) " +
+                    "WHERE conversation_id=? AND EXISTS(SELECT 1 FROM chatdb_import_messages s " +
+                    "JOIN chatdb_import_message_sources src ON src.session_id=s.session_id AND src.source_offset=s.source_offset " +
+                    "WHERE s.session_id=? AND s.imported=1 AND src.source_seq=conversation_items.seq)",
+                arrayOf(sessionId, sessionId, sessionId, sessionId),
+            )
+        }
         val exactDoneSource = existingImport.import_state == "done" && existingImport.import_offset == bytes &&
             existingImport.legacy_ledger_bytes == bytes && existingImport.legacy_ledger_sha256 == sha256
         if (exactDoneSource) {

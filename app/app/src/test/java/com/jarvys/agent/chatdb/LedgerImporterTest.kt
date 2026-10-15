@@ -461,6 +461,29 @@ class LedgerImporterTest {
 
         val appended = jsonRow(null, "assistant", "content" to "appended-before-switch", "messageId" to "cutover-2", "beforeMessageId" to "cutover-1")
         FileOutputStream(ledger, true).bufferedWriter(StandardCharsets.UTF_8).use { it.append(appended.toString()).append('\n') }
+        val incremental = importer().importConversation(sessionId, ledger, writeMeta("$sessionId.meta.json"))
+        assertEquals(incremental.toDiagnosticText(), "done", incremental.state)
+        assertTrue(incremental.validations.all { it.passed })
+        assertTrue(
+            incremental.validations.single { it.name == "message_sort_and_index_coherence" }.passed,
+        )
+
+        val clean = importRows("$sessionId-clean", listOf(original, appended))
+        assertEquals(clean.toDiagnosticText(), "done", clean.state)
+        assertEquals(messageDigest("$sessionId-clean"), messageDigest(sessionId))
+        val appendedRow = database.testChatSql.query(
+            "SELECT m.seq,m.role,p.payload FROM messages m JOIN message_parts p " +
+                "ON p.conversation_id=m.conversation_id AND p.message_id=m.message_id AND p.kind='text' " +
+                "WHERE m.conversation_id=? AND m.message_id=?",
+            arrayOf(sessionId, "cutover-2"),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            Triple(cursor.getLong(0), cursor.getString(1), cursor.getString(2))
+        }
+        assertEquals(2L, appendedRow.first)
+        assertEquals("assistant", appendedRow.second)
+        assertEquals("appended-before-switch", appendedRow.third)
+
         coordinator.beginCutover(sessionId, ledger)
         try {
             assertEquals(2L, count("SELECT COUNT(*) FROM messages WHERE conversation_id=?", sessionId))

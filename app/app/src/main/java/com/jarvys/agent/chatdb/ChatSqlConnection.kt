@@ -370,6 +370,26 @@ internal data class ActiveChatDbConnection(
             }
         }
     }
+
+    suspend fun assertCanUseFromCurrentCoroutine(currentDispatcher: ContinuationInterceptor?) {
+        if (!isWriter) return
+        val rejection = when {
+            Thread.currentThread() !== ownerThread ->
+                "A chat writer lease cannot resume on a different thread; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+            installedDispatcher !== ownerDispatcher || currentDispatcher !== ownerDispatcher ->
+                "A chat writer lease cannot resume with a different dispatcher; suspending or changing dispatcher inside withChatWriteTransaction is unsupported"
+            else -> null
+        } ?: return
+
+        // Android's SQLiteSession is thread-bound. Route only the rejection through the owning
+        // dispatcher so Room's transaction cleanup remains on its transaction thread; never use
+        // the connection from the rejected context.
+        val ownerContext = ownerDispatcher
+        if (ownerContext != null) {
+            withContext(ownerContext) { throw IllegalStateException(rejection) }
+        }
+        throw IllegalStateException(rejection)
+    }
 }
 
 internal class LeasedConnectionElement(
@@ -414,7 +434,7 @@ internal suspend fun <T> JarvysChatDatabase.withChatWriteTransaction(block: susp
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
-        active.assertCanUse(currentCoroutineContext()[ContinuationInterceptor])
+        active.assertCanUseFromCurrentCoroutine(currentCoroutineContext()[ContinuationInterceptor])
         check(active.isWriter) { "Cannot start a chat database write inside a reader lease" }
         return block()
     }
@@ -432,7 +452,7 @@ internal suspend fun <T> JarvysChatDatabase.withChatReadTransaction(block: suspe
     ChatSqlBeforeWriteGuard.checkRepositoryAccess()
     val active = LeasedConnectionElement.current()
     if (active != null) {
-        active.assertCanUse(currentCoroutineContext()[ContinuationInterceptor])
+        active.assertCanUseFromCurrentCoroutine(currentCoroutineContext()[ContinuationInterceptor])
         // Reuse the current lease. A read inside a writer must see that transaction's own writes.
         return block()
     }
