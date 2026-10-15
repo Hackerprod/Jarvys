@@ -186,9 +186,10 @@ Principios: un contador `seq` monotónico por conversación (equivale a la posic
 ```sql
 conversations(id TEXT PK, kind TEXT CHECK(kind IN('chat','proactive','tasks','central','workspace_exec')),
   title TEXT, generated_title TEXT, pinned INT, archived INT, private_code INT,
-  deleted_at INT NULL,                       -- tombstone (sustituye meta.deleted)
   created_at INT, updated_at INT, last_message_at INT, message_count INT, next_seq INT,
   legacy_ledger_bytes INT, legacy_ledger_sha256 TEXT, migrated_at INT)
+tombstones(scope TEXT, entity_id TEXT, deleted_at INT /*ms aproximados*/, payload TEXT, PK(scope,entity_id)) -- sin FK
+-- AFTER DELETE ON conversations: INSERT INTO tombstones ... SELECT ... WHERE NOT EXISTS; deleted_at usa julianday('now')
 conversation_items(conversation_id, seq, item_kind TEXT, item_key TEXT,
   sort_seq INT, sort_sub INT, turn_anchor_seq INT,          -- orden con steering y ancla de turno
   PK(conversation_id, seq))   IDX(conversation_id, sort_seq, sort_sub)
@@ -253,21 +254,22 @@ crew_message_activities(conversation_id, mission_id, message_id, schema_version,
   tool_name, display_name, skill_id, skill_name, stage, detail, preview_id, audit_detail, reflection_source, timestamp_millis)
 crew_message_refs(conversation_id, mission_id, message_id, ordinal, ref)
 -- Diarios J (UNIQUE/FK sustituyen las validaciones del scan estricto)
-crew_result_evidence(evidence_id PK, conversation_id, seq, mission_id, bot_id, cycle_id, reported_status, result_text BLOB /*UTF-16 sin pérdida*/, produced_at_ms, content_sha256)
+crew_result_evidence(conversation_id, evidence_id, seq, mission_id, bot_id, cycle_id, reported_status, result_text BLOB /*UTF-16 sin pérdida*/, produced_at_ms, content_sha256, PK(conversation_id,evidence_id))
 workspace_result_refs(conversation_id /*ledger dueño*/, reference_id, is_notice INT, seq, evidence_id, content_sha256,
   owner_central_session_id, workspace_id, execution_session_id, assignment_id, request_id, mission_id, bot_id, cycle_id,
   observed_assignment_revision, reported_status, produced_at_ms, PK(conversation_id, reference_id, is_notice))
-crew_coordination_evidence(evidence_id PK, conversation_id, seq, mission_id, bot_id, cycle_id, message_id, kind, text BLOB, produced_at_ms, content_sha256)
-crew_coordination_evidence_refs(evidence_id, ordinal, ref)
+crew_coordination_evidence(conversation_id, evidence_id, seq, mission_id, bot_id, cycle_id, message_id, kind, text BLOB, produced_at_ms, content_sha256, PK(conversation_id,evidence_id))
+crew_coordination_evidence_refs(conversation_id, evidence_id, ordinal, ref, PK(conversation_id,evidence_id,ordinal))
 workspace_coordination_refs(... igual que result_refs + message_id, kind)
 workspace_coordination_replies(conversation_id, reference_id PK, reply_id, evidence_id, reply_key, text BLOB,
   central_request_id, original_user_request, mailbox_message_id, payload_sha256, prepared_at_ms, state, state_at_ms, seq)
   UNIQUE(conversation_id, reply_id) ; UNIQUE(conversation_id, evidence_id)
 workspace_coordination_reply_transitions(reply_id, seq, state, state_at_ms)
-workspace_input_incorporations(receipt_id PK, conversation_id, seq, source_kind, source_id, source_reference_id,
+workspace_input_incorporations(conversation_id, receipt_id, seq, source_kind, source_id, source_reference_id,
   mailbox_message_id, owner_central_session_id, workspace_id, execution_session_id, assignment_id, request_id,
   mission_id, bot_id, admission_cycle_id, first_incorporation_cycle_id, source_payload_sha256, delivered_content_sha256,
-  transport_kind, transport_sha256, checkpoint_payload_sha256, checkpoint_saved_at_ms, recorded_at_ms)
+  transport_kind, transport_sha256, checkpoint_payload_sha256, checkpoint_saved_at_ms, recorded_at_ms,
+  PK(conversation_id,receipt_id))
   UNIQUE(conversation_id, mailbox_message_id) -- dedupe por ledger; no implica unicidad cross-ledger
 ```
 
@@ -304,7 +306,7 @@ Mapeo fila → tablas:
 5. **Volumen ~48 MB** (dato del encargo, no verificado aquí): la importación debe ser streaming, por conversación, en transacciones acotadas, reanudable (`legacy_ledger_bytes`/sha) y fuera del hilo UI; hoy varias rutas leen todos los ledgers (drawer, `readPendingInterruptRequests()`, `cleanupOrphanAttachments`, MA:924).
 6. **Workspace/crew/proactive/tasks**: sesiones especiales con reglas propias (sin adjuntos ni reacciones; central solo muestra notices verificados); filas J requieren texto UTF-16 exacto con surrogates sueltos (LRS:965-976; test `exactUtf16TextSurvivesUtf8LedgerWithoutReplacement`) → TEXT de SQLite vía Android puede reemplazarlos: usar BLOB o escape propio. Dedupe de crew snapshots hoy solo en memoria (LRS:190-195) → los ledgers tienen snapshots repetidos; solo importar el último por misión pero conservar su `seq`.
 7. **Concurrencia**: un solo proceso Android, pero múltiples instancias `LocalRunStore` y hilos (servicio, UI, WorkManager) coordinados por `SESSION_TITLE_LOCK` estático y el bloqueo `ConversationMetadataStore.LOCK`. La migración debe ocurrir con el servicio parado o bajo un cerrojo que bloquee escrituras JSONL; después, escritura dual o corte limpio (no ambos fuentes vivas sin reconciliar). `AgentForegroundService` reanuda interrupts al arrancar (AFS:722-825): debe leer de DB ya migrada.
-8. **Borrado**: el tombstone `.meta.json deleted` gana siempre; importar como `deleted_at` y no resucitar ledgers medio borrados; además borrar filas DB en la misma transacción y luego ficheros externos (best-effort hoy).
+8. **Borrado**: el tombstone `.meta.json deleted` gana siempre; importar a la tabla `tombstones` y no resucitar ledgers medio borrados. `deleted_at` conserva milisegundos aproximados calculados con `julianday('now')`; el trigger `AFTER DELETE ON conversations` inserta el tombstone en la transacción del CASCADE. Los triggers también rechazan tombstones duplicados, `INSERT OR REPLACE` de conversaciones existentes y cambios del ID.
 9. **Paridad de proyección**: los límites de página actuales (D) producen diferencias leves; si la DB proyecta globalmente la UI puede cambiar (mejora) — documentarlo. El modelo no debe cambiar: test de oro que compare `loadConversationContext` JSONL vs DB por conversación.
 10. **Orden de timestamps**: `timestamp` en segundos double y `timestampMillis`/`producedAtMillis` en ms; no ordenar por timestamp, solo por `seq`.
 

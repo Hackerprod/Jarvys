@@ -76,10 +76,10 @@ import java.util.concurrent.atomic.AtomicInteger
     version = 1,
     exportSchema = true,
 )
-abstract class JarvysChatDatabase : RoomDatabase() {
-    abstract fun conversationDao(): ConversationDao
-    abstract fun conversationItemDao(): ConversationItemDao
-    abstract fun messageDao(): MessageDao
+internal abstract class JarvysChatDatabase : RoomDatabase() {
+    internal abstract fun conversationDao(): ConversationDao
+    internal abstract fun conversationItemDao(): ConversationItemDao
+    internal abstract fun messageDao(): MessageDao
     companion object {
         /** Entity table names used by M0 schema inspection; keep aligned with [Database.entities]. */
         @JvmField
@@ -135,7 +135,7 @@ abstract class JarvysChatDatabase : RoomDatabase() {
 }
 
 /** One app-process database instance at filesDir/jarvys/jarvys-chat.db. */
-object JarvysChatDatabaseProvider {
+internal object JarvysChatDatabaseProvider {
     private const val DATABASE_VERSION = 1
     private const val DATABASE_NAME = "jarvys-chat.db"
     private const val DATABASE_DIRECTORY = "jarvys"
@@ -283,6 +283,23 @@ object JarvysChatDatabaseProvider {
 internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase) {
         db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_replace " +
+                "BEFORE INSERT ON conversations " +
+                "WHEN EXISTS (SELECT 1 FROM conversations WHERE id=NEW.id) " +
+                "BEGIN SELECT RAISE(ABORT,'conversation_exists'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_conversation_id_immutable " +
+                "BEFORE UPDATE OF id ON conversations " +
+                "BEGIN SELECT RAISE(ABORT,'conversation_id_immutable'); END",
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS trg_tombstones_no_duplicate " +
+                "BEFORE INSERT ON tombstones " +
+                "WHEN EXISTS (SELECT 1 FROM tombstones WHERE scope=NEW.scope AND entity_id=NEW.entity_id) " +
+                "BEGIN SELECT RAISE(ABORT,'tombstone_exists'); END",
+        )
+        db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_tombstone_resurrection " +
                 "BEFORE INSERT ON conversations " +
                 "WHEN EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=NEW.id) " +
@@ -291,8 +308,9 @@ internal object DatabaseTriggers {
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_tombstone_after_delete " +
                 "AFTER DELETE ON conversations " +
-                "BEGIN INSERT OR IGNORE INTO tombstones(scope,entity_id,deleted_at) " +
-                "VALUES('conversation',OLD.id,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)); END",
+                "BEGIN INSERT INTO tombstones(scope,entity_id,deleted_at) " +
+                "SELECT 'conversation',OLD.id,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) " +
+                "WHERE NOT EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=OLD.id); END",
         )
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_tombstones_no_update " +

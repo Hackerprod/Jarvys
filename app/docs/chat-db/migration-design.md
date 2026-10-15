@@ -1,6 +1,6 @@
 # Diseño: migración del ledger de conversaciones a SQLite (patrón Kelivo)
 
-> **Estado del esquema M0 (2026-10-14):** la v1 de Room está implementada y sus tests base pasaron; los ajustes de M0 de esta entrega cambian columnas e índices y quedan pendientes de regenerar por el build del arquitecto. M1 (repositorio) todavía no empieza. Cualquier cambio estructural futuro requiere subir la versión, añadir una migración explícita y actualizar deliberadamente el identityHash fijado por el test.
+> **Estado del esquema M0 (2026-10-14):** la v1 de Room está implementada, regenerada y fijada; el esquema v1 aún no está publicado en un APK, por lo que M1a puede ajustar sus claves sin una migración. El build del arquitecto regenerará el hash tras estos cambios. Cualquier cambio estructural posterior a la publicación requiere subir la versión, añadir una migración explícita y actualizar deliberadamente el identityHash fijado por el test.
 
 Fuentes: `kelivo-db-report.md` (arquitectura de referencia) y `ledger-inventory.md` (46 tipos de fila de Jarvys, escritores/lectores, esquema propuesto, riesgos, tests). Este documento fija las decisiones que guían la implementación y el contrato de migración.
 
@@ -30,6 +30,7 @@ Mensajes y cuerpo (como `message_rows` + `message_part_rows`):
 - `file_refs` identifica cada archivo por `relative_path` UNIQUE y puede indexar `sha256` sin unicidad; sus FKs desde historial usan `SET NULL`. El borrado fisico de archivos ocurre fuera de la transaccion SQLite.
 - Los notices/reply intents del ledger central guardan `evidence_id` como referencia logica al ledger de ejecucion; la verificacion cruzada queda en el repositorio porque ambos imports y borrados son independientes.
 - Estado de ejecución: tabla `generation_run`/estados activos con optimistic lock y UNIQUE parcial por mensaje activo, y al arrancar los runs activos pasan a `interrupted` (patrón Kelivo) — sustituye los marcadores de recuperación actuales cuando se aborde runs.
+- Las claves de los diarios J que se deduplican por ledger incluyen `conversation_id`: `crew_result_evidence` y `crew_coordination_evidence` usan PK `(conversation_id,evidence_id)`, sus referencias hijas usan `(conversation_id,evidence_id,ordinal)`, y `workspace_input_incorporations` usa `(conversation_id,receipt_id)`. Los `evidence_id` que enlazan ledgers siguen siendo referencias lógicas y se verifican junto con `execution_session_id`/`conversation_id`; así, una colisión de ID entre ledgers no descarta una fila legítima ni deja su espina sin dueño.
 
 ## 4. Repositorio
 - `ConversationRepository` (Kotlin) con operaciones lógicas transaccionales (BEGIN IMMEDIATE): append mensaje, dispatch de interrupt (mensaje + marca), cierre de turno (resultados + input_state), regenerar/borrar/traducir/reaccionar, decisiones, compactación, reflexión, crew snapshot, diarios de workspace, borrado con tombstone + CASCADE.

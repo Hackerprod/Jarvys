@@ -326,6 +326,7 @@ data class CrewMessageRef(
 /** `crew_result_evidence`; free-form result text is an exact UTF-16 BLOB. */
 @Entity(
     tableName = "crew_result_evidence",
+    primaryKeys = ["conversation_id", "evidence_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
@@ -336,8 +337,8 @@ data class CrewMessageRef(
     ],
 )
 data class CrewResultEvidence(
-    @androidx.room.PrimaryKey val evidence_id: String,
     val conversation_id: String,
+    val evidence_id: String,
     val seq: Long,
     val schema_version: Int,
     val mission_id: String,

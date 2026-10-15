@@ -48,6 +48,7 @@ data class WorkspaceResultRef(
 /** Replaces `crew_coordination_evidence`; free-form text is preserved as exact UTF-16 code-unit bytes. */
 @Entity(
     tableName = "crew_coordination_evidence",
+    primaryKeys = ["conversation_id", "evidence_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
@@ -60,8 +61,8 @@ data class WorkspaceResultRef(
 )
 data class CrewCoordinationEvidence(
     val schema_version: Int = 1,
-    @androidx.room.PrimaryKey val evidence_id: String,
     val conversation_id: String,
+    val evidence_id: String,
     val seq: Long,
     val mission_id: String,
     val bot_id: String,
@@ -99,10 +100,11 @@ data class CrewCoordinationEvidence(
 /** Replaces the `refs[]` values nested in `crew_coordination_evidence` rows. */
 @Entity(
     tableName = "crew_coordination_evidence_refs",
-    primaryKeys = ["evidence_id", "ordinal"],
-    foreignKeys = [ForeignKey(entity = CrewCoordinationEvidence::class, parentColumns = ["evidence_id"], childColumns = ["evidence_id"], onDelete = ForeignKey.CASCADE)],
+    primaryKeys = ["conversation_id", "evidence_id", "ordinal"],
+    foreignKeys = [ForeignKey(entity = CrewCoordinationEvidence::class, parentColumns = ["conversation_id", "evidence_id"], childColumns = ["conversation_id", "evidence_id"], onDelete = ForeignKey.CASCADE)],
 )
 data class CrewCoordinationEvidenceRef(
+    val conversation_id: String,
     val evidence_id: String,
     val ordinal: Int,
     val ref: String,
@@ -248,12 +250,14 @@ data class WorkspaceCoordinationReplyTransition(
 
 /**
  * Replaces `workspace_input_incorporation` receipts proving that workspace input was incorporated. First-seen
- * receipt identities are immutable; M1 repository writes use first-wins `INSERT OR IGNORE` semantics.
+ * receipt identities are immutable within a conversation; another ledger may legitimately reuse the same ID.
+ * M1 repository writes use first-wins semantics within the owning conversation.
  * Mailbox-message deduplication is scoped to this conversation ledger; the legacy strict scan reads the
  * canonical Central ledger and makes no global cross-ledger uniqueness claim.
  */
 @Entity(
     tableName = "workspace_input_incorporations",
+    primaryKeys = ["conversation_id", "receipt_id"],
     foreignKeys = [
         ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE),
         ForeignKey(entity = ConversationItem::class, parentColumns = ["conversation_id", "seq"], childColumns = ["conversation_id", "seq"], onDelete = ForeignKey.CASCADE),
@@ -266,8 +270,8 @@ data class WorkspaceCoordinationReplyTransition(
 )
 data class WorkspaceInputIncorporation(
     val schema_version: Int = 1,
-    @androidx.room.PrimaryKey val receipt_id: String,
     val conversation_id: String,
+    val receipt_id: String,
     val seq: Long,
     val source_kind: String,
     val source_id: String,

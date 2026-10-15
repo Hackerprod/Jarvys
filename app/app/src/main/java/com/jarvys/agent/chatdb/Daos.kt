@@ -8,13 +8,17 @@ import androidx.room.Transaction
 
 /** Conversation writes preserve tombstones even though deleting the conversation cascades its children. */
 @Dao
-interface ConversationDao {
+internal interface ConversationDao {
     /** SOLO para el repositorio (M1); callers must prefer [insertIfNotTombstoned]. */
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertConversationRow(conversation: Conversation): Long
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertTombstoneRow(tombstone: Tombstone)
+    @Query(
+        "INSERT INTO tombstones(scope,entity_id,deleted_at,payload) " +
+            "SELECT :scope,:id,:deletedAt,:payload " +
+            "WHERE NOT EXISTS (SELECT 1 FROM tombstones WHERE scope=:scope AND entity_id=:id)",
+    )
+    suspend fun insertTombstoneIfAbsent(scope: String, id: String, deletedAt: Long, payload: String? = null): Int
 
     @Query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope = 'conversation' AND entity_id = :id)")
     suspend fun isTombstoned(id: String): Boolean
@@ -36,7 +40,7 @@ interface ConversationDao {
     /** Deletes all conversation rows by CASCADE and preserves the permanent tombstone atomically. */
     @Transaction
     suspend fun deleteById(id: String, deletedAt: Long = System.currentTimeMillis()): Int {
-        insertTombstoneRow(Tombstone("conversation", id, deletedAt))
+        insertTombstoneIfAbsent("conversation", id, deletedAt)
         return deleteConversationRow(id)
     }
 
@@ -46,7 +50,7 @@ interface ConversationDao {
 
 /** Sequence-keyed timeline spine queries for newest and strictly older pages. */
 @Dao
-interface ConversationItemDao {
+internal interface ConversationItemDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(item: ConversationItem): Long
 
@@ -62,7 +66,7 @@ interface ConversationItemDao {
 
 /** Minimal typed message writes/lookups and count for the M0 schema contract. */
 @Dao
-interface MessageDao {
+internal interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(message: Message): Long
 

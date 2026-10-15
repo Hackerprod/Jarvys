@@ -182,7 +182,7 @@ class WorkspaceLedgerIndependenceTest {
                 byteArrayOf(7, 8), 11L, "b".repeat(64)),
         )
         val evidenceBytes = byteArrayOf(7, 8)
-        val evidenceA = CrewCoordinationEvidence(1, "equality-evidence", execution, 2L, "mission-1", "bot-1", "cycle-1",
+        val evidenceA = CrewCoordinationEvidence(1, execution, "equality-evidence", 2L, "mission-1", "bot-1", "cycle-1",
             "message-2", "QUESTION", evidenceBytes, 12L, "d".repeat(64))
         val evidenceB = evidenceA.copy(text = evidenceBytes.copyOf())
         assertEquals(evidenceA, evidenceB)

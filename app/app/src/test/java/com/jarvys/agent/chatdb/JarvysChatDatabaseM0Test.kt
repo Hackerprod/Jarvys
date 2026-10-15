@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1d164226228e34a4641fd5671cb3b4c3" // pinned to the v1 schema; changing v1 requires a version bump + migration
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "1d164226228e34a4641fd5671cb3b4c3" // update after build; v1 is not published yet
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -339,9 +339,74 @@ class JarvysChatDatabaseM0Test {
     }
 
     @Test
+    fun newConversationAndTombstoneTriggersRejectRawSqlAndAfterDeletePersistsMillis() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        val id = "guarded-conversation"
+        database.conversationDao().insertIfNotTombstoned(conversation(id))
+        database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1, created_at = 1.0))
+        database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
+
+        // allowed-replace-fixture: exercise the abort trigger that prevents REPLACE from cascading children.
+        assertConstraintMessage("INSERT OR REPLACE conversation", "conversation_exists") {
+            sqlite.execSQL(
+                "INSERT OR REPLACE INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " + // allowed-replace-fixture
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 0, 2L, 2L, 0L, 1L, "not_started"),
+            )
+        }
+        assertEquals(1L, rowCount(sqlite, "conversation_items"))
+        assertEquals(1L, rowCount(sqlite, "messages"))
+
+        assertConstraintMessage("conversation ID mutation", "conversation_id_immutable") {
+            sqlite.execSQL("UPDATE conversations SET id='mutated-id' WHERE id=?", arrayOf(id))
+        }
+        assertEquals(1L, scalarLong(sqlite, "SELECT COUNT(*) FROM conversations WHERE id=?", arrayOf(id)))
+
+        val beforeDelete = System.currentTimeMillis()
+        sqlite.execSQL("DELETE FROM conversations WHERE id=?", arrayOf(id))
+        val deletedAt = scalarLong(sqlite, "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?", arrayOf(id))
+        assertTrue("AFTER DELETE timestamp should be approximate epoch milliseconds: $deletedAt", deletedAt in (beforeDelete - 1_000L)..(System.currentTimeMillis() + 1_000L))
+        assertEquals(0L, rowCount(sqlite, "conversation_items"))
+
+        val missingId = "raw-tombstone"
+        database.conversationDao().deleteById(missingId, 123L)
+        assertConstraintMessage("duplicate tombstone", "tombstone_exists") {
+            sqlite.execSQL(
+                "INSERT OR IGNORE INTO tombstones(scope,entity_id,deleted_at) VALUES('conversation',?,124)",
+                arrayOf(missingId),
+            )
+        }
+        assertEquals(1L, scalarLong(sqlite, "SELECT COUNT(*) FROM tombstones WHERE scope='conversation' AND entity_id=?", arrayOf(missingId)))
+    }
+
+    @Test
+    fun installedTriggerNamesExactlyMatchTheDatabaseTriggerContract() = onDatabaseThreadBlocking {
+        val expected = setOf(
+            "trg_conversation_no_tombstone_resurrection",
+            "trg_conversation_no_replace",
+            "trg_conversation_id_immutable",
+            "trg_tombstones_no_duplicate",
+            "trg_conversation_tombstone_after_delete",
+            "trg_tombstones_no_update",
+            "trg_tombstones_no_delete",
+            "trg_workspace_reply_transition_monotonic",
+            "trg_workspace_reply_update_monotonic",
+            "trg_generation_run_target_insert",
+            "trg_generation_run_target_update",
+        )
+        val actual = database.openHelper.writableDatabase.query(
+            "SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name",
+        ).use { cursor ->
+            buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        assertEquals(expected, actual)
+    }
+
+    @Test
     fun onOpenRecreatesMissingDatabaseTriggers() = onDatabaseThreadBlocking {
         val sqlite = database.openHelper.writableDatabase
         sqlite.execSQL("DROP TRIGGER trg_tombstones_no_update")
+        sqlite.execSQL("DROP TRIGGER trg_conversation_no_replace")
         assertEquals(0L, scalarLong(
             sqlite,
             "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tombstones_no_update'",
@@ -354,6 +419,11 @@ class JarvysChatDatabaseM0Test {
         assertEquals(1L, scalarLong(
             reopened,
             "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tombstones_no_update'",
+            emptyArray(),
+        ))
+        assertEquals(1L, scalarLong(
+            reopened,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_conversation_no_replace'",
             emptyArray(),
         ))
     }
@@ -453,10 +523,62 @@ class JarvysChatDatabaseM0Test {
             insertRow(sqlite, "workspace_input_incorporations", duplicateMailboxInSameLedger)
         }
         val duplicateMailboxInOtherLedger = inputReceipt.toMutableMap().apply {
-            put("receipt_id", "other-ledger-receipt")
             put("conversation_id", "unique-journal-other")
         }
         insertRow(sqlite, "workspace_input_incorporations", duplicateMailboxInOtherLedger)
+    }
+
+    @Test
+    fun journalIdentityKeysAreScopedToConversationLedger() = onDatabaseThread {
+        val sqlite = database.openHelper.writableDatabase
+        val firstId = "journal-key-a"
+        val secondId = "journal-key-b"
+        listOf(firstId, secondId).forEach { id ->
+            database.conversationDao().insertIfNotTombstoned(conversation(id))
+            database.conversationItemDao().insert(ConversationItem(id, 1, "journal", "fixture", 1, created_at = 1.0))
+        }
+        assertEquals(listOf("conversation_id", "evidence_id"), primaryKeyColumns(sqlite, "crew_result_evidence"))
+        assertEquals(listOf("conversation_id", "evidence_id"), primaryKeyColumns(sqlite, "crew_coordination_evidence"))
+        assertEquals(listOf("conversation_id", "evidence_id", "ordinal"), primaryKeyColumns(sqlite, "crew_coordination_evidence_refs"))
+        assertEquals(listOf("conversation_id", "receipt_id"), primaryKeyColumns(sqlite, "workspace_input_incorporations"))
+
+        fun ledgerParents(id: String) = mapOf(
+            "conversations" to mapOf("id" to id),
+            "conversation_items" to mapOf("conversation_id" to id, "seq" to 1L),
+        )
+        val resultEvidenceA = genericEntityRow(sqlite, "crew_result_evidence", ledgerParents(firstId), foreignKeys(sqlite, "crew_result_evidence"))
+        val resultEvidenceB = genericEntityRow(sqlite, "crew_result_evidence", ledgerParents(secondId), foreignKeys(sqlite, "crew_result_evidence"))
+        insertRow(sqlite, "crew_result_evidence", resultEvidenceA)
+        insertRow(sqlite, "crew_result_evidence", resultEvidenceB)
+        assertConstraint("duplicate result evidence in one ledger") { insertRow(sqlite, "crew_result_evidence", resultEvidenceA) }
+
+        val coordinationA = genericEntityRow(sqlite, "crew_coordination_evidence", ledgerParents(firstId), foreignKeys(sqlite, "crew_coordination_evidence"))
+        val coordinationB = genericEntityRow(sqlite, "crew_coordination_evidence", ledgerParents(secondId), foreignKeys(sqlite, "crew_coordination_evidence"))
+        insertRow(sqlite, "crew_coordination_evidence", coordinationA)
+        insertRow(sqlite, "crew_coordination_evidence", coordinationB)
+        assertConstraint("duplicate coordination evidence in one ledger") { insertRow(sqlite, "crew_coordination_evidence", coordinationA) }
+
+        fun evidenceRef(evidence: Map<String, Any?>): Map<String, Any?> = genericEntityRow(
+            sqlite,
+            "crew_coordination_evidence_refs",
+            mapOf("crew_coordination_evidence" to evidence),
+            foreignKeys(sqlite, "crew_coordination_evidence_refs"),
+        )
+        val evidenceRefA = evidenceRef(coordinationA)
+        val evidenceRefB = evidenceRef(coordinationB)
+        insertRow(sqlite, "crew_coordination_evidence_refs", evidenceRefA)
+        insertRow(sqlite, "crew_coordination_evidence_refs", evidenceRefB)
+        assertConstraint("duplicate coordination evidence ref in one ledger") {
+            insertRow(sqlite, "crew_coordination_evidence_refs", evidenceRefA)
+        }
+
+        val receiptA = genericEntityRow(sqlite, "workspace_input_incorporations", ledgerParents(firstId), foreignKeys(sqlite, "workspace_input_incorporations"))
+        val receiptB = genericEntityRow(sqlite, "workspace_input_incorporations", ledgerParents(secondId), foreignKeys(sqlite, "workspace_input_incorporations"))
+        insertRow(sqlite, "workspace_input_incorporations", receiptA)
+        insertRow(sqlite, "workspace_input_incorporations", receiptB)
+        assertConstraint("duplicate workspace receipt in one ledger") {
+            insertRow(sqlite, "workspace_input_incorporations", receiptA)
+        }
     }
 
     @Test
@@ -626,7 +748,7 @@ class JarvysChatDatabaseM0Test {
         val botB = botA.copy(error = error.copyOf(), result = result.copyOf())
         assertEquals(botA, botB)
         assertEquals(botA.hashCode(), botB.hashCode())
-        val evidenceA = CrewResultEvidence("evidence-1", id, 1L, 1, "mission-1", "bot-1", "cycle-1", "DONE", result, 30L, "sha256")
+        val evidenceA = CrewResultEvidence(id, "evidence-1", 1L, 1, "mission-1", "bot-1", "cycle-1", "DONE", result, 30L, "sha256")
         val evidenceB = evidenceA.copy(result_text = result.copyOf())
         assertEquals(evidenceA, evidenceB)
         assertEquals(evidenceA.hashCode(), evidenceB.hashCode())
@@ -759,19 +881,42 @@ class JarvysChatDatabaseM0Test {
     fun entityInsertsDoNotUseReplaceConflictStrategy() {
         val schemaDirectory = System.getProperty("room.schemaDir")
         assertTrue("Missing room.schemaDir", !schemaDirectory.isNullOrBlank())
-        val sourceDirectory = File(File(schemaDirectory!!).parentFile, "src/main/java/com/jarvys/agent/chatdb")
-        assertTrue("Missing chat database source directory: ${sourceDirectory.absolutePath}", sourceDirectory.isDirectory)
-        val insertAnnotation = Regex("""@Insert(?:\s*\((?:[^()]|\([^()]*\))*\))?""")
-        val violations = sourceDirectory.walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .flatMap { sourceFile ->
-                val source = sourceFile.readText(Charsets.UTF_8)
-                insertAnnotation.findAll(source)
-                    .filter { it.value.contains("OnConflictStrategy.REPLACE") }
-                    .map { "${sourceFile.name}:${source.substring(0, it.range.first).count { ch -> ch == '\n' } + 1}" }
-            }
-            .toList()
-        assertTrue("Entity @Insert must not use REPLACE because it can delete a parent and cascade: $violations", violations.isEmpty())
+        val moduleDirectory = File(schemaDirectory!!).parentFile
+        val sourceDirectories = listOf(
+            File(moduleDirectory, "src/main/java/com/jarvys/agent/chatdb"),
+            File(moduleDirectory, "src/test/java/com/jarvys/agent/chatdb"),
+        )
+        sourceDirectories.forEach { sourceDirectory ->
+            assertTrue("Missing chat database source directory: ${sourceDirectory.absolutePath}", sourceDirectory.isDirectory)
+        }
+        val annotationStart = "@" + "Insert"
+        val insertAnnotation = Regex(Regex.escape(annotationStart) + "(?:\\s*\\((?:[^()]|\\([^()]*\\))*\\))?")
+        val conflictReplace = Regex("\\bonConflict\\s*=\\s*(?:[\\w.]*REPLACE\\b|1\\b)")
+        val rawReplace = Regex("\\bINSERT\\s+OR\\s+" + "REPLACE\\b|\\b" + "REPLACE\\s+INTO\\b", RegexOption.IGNORE_CASE)
+        val allowMarker = "allowed-replace-fixture"
+        val violations = sourceDirectories.flatMapIndexed { sourceIndex, sourceDirectory ->
+            val isTestSource = sourceIndex == 1
+            sourceDirectory.walkTopDown()
+                .filter { it.isFile && it.extension in setOf("kt", "java") }
+                .flatMap { sourceFile ->
+                    val source = sourceFile.readText(Charsets.UTF_8)
+                    val lines = source.lines()
+                    val annotationViolations = insertAnnotation.findAll(source)
+                        .filter { conflictReplace.containsMatchIn(it.value) }
+                        .map { "${sourceFile.name}:${source.substring(0, it.range.first).count { ch -> ch == '\n' } + 1}: @Insert REPLACE" }
+                        .toList()
+                    val sqlViolations = rawReplace.findAll(source).mapNotNull { match ->
+                        val lineNumber = source.substring(0, match.range.first).count { ch -> ch == '\n' }
+                        val line = lines.getOrElse(lineNumber) { "" }
+                        val precedingLine = lines.getOrElse(lineNumber - 1) { "" }
+                        if (isTestSource && (allowMarker in line || allowMarker in precedingLine)) null
+                        else "${sourceFile.name}:${lineNumber + 1}: ${match.value}"
+                    }.toList()
+                    (annotationViolations + sqlViolations).asSequence()
+                }
+                .toList()
+        }
+        assertTrue("REPLACE can delete a parent and cascade children; test-only fixtures must be marked: $violations", violations.isEmpty())
     }
 
     @Test
@@ -1268,6 +1413,14 @@ class JarvysChatDatabaseM0Test {
     private inline fun assertConstraint(label: String, block: () -> Unit) {
         val failure = runCatching(block).exceptionOrNull()
         assertConstraintFailure(label, failure)
+    }
+
+    private inline fun assertConstraintMessage(label: String, fragment: String, block: () -> Unit) {
+        val failure = runCatching(block).exceptionOrNull()
+        assertConstraintFailure(label, failure)
+        var cause: Throwable? = failure
+        while (cause != null && cause !is SQLiteConstraintException) cause = cause.cause
+        assertTrue("Expected $label to be rejected by its trigger ($fragment), got $cause", cause?.message?.contains(fragment) == true)
     }
 
     private fun assertConstraintFailure(label: String, failure: Throwable?) {
