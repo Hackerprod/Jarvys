@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launch theme for MainActivity: the window (and the system splash on Android 12+) uses the
+         same dark color as the adaptive launcher icon background instead of the light theme's white. -->
+    <style name="Theme.Jarvys.Launch" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>

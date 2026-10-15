@@ -67,6 +67,7 @@
 
         <activity
             android:name="com.jarvys.agent.MainActivity"
+            android:theme="@style/Theme.Jarvys.Launch"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
