@@ -10,7 +10,6 @@ import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionRole
 import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
-import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -227,95 +226,20 @@ class ConversationRepository internal constructor(private val database: JarvysCh
 
     private val sql get() = database.chatSql
 
-    /**
-     * Opens the writer transaction that encloses one importer batch. Repository appends invoked
-     * from [block] reuse the same Room writer lease, so the caller can commit its byte checkpoint
-     * atomically with the batch rows.
-     */
-    internal suspend fun <T> withImportBatch(conversationId: String, block: suspend () -> T): T =
-        database.withChatWriteTransaction {
-            check(!isTombstonedRaw(conversationId)) { "import_conversation_tombstoned" }
-            check(findConversation(conversationId) != null) { "import_conversation_not_found" }
-            block()
-        }
-
-    /** Installs imported metadata without replacing an existing conversation's sequence/state. */
-    internal suspend fun ensureConversationForImport(row: Conversation): ChatDbResult<Conversation> =
-        database.withChatWriteTransaction {
-            if (!isValidConversationId(row.id) || row.kind.isBlank()) return@withChatWriteTransaction ChatDbResult.Invalid("conversation import identity is invalid")
-            if (isTombstonedRaw(row.id)) return@withChatWriteTransaction ChatDbResult.Tombstoned
-            val existing = findConversation(row.id)
-            if (existing == null) {
-                sql.execSQL(
-                    "INSERT INTO conversations(id,kind,title,generated_title,pinned,archived,private_code,created_at,updated_at,last_message_at,message_count,next_seq,import_state,legacy_ledger_bytes,legacy_ledger_sha256,imported_at,import_offset) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    arrayOf(row.id, row.kind, row.title, row.generated_title, row.pinned.asSqlInt(), row.archived.asSqlInt(), row.private_code.asSqlInt(),
-                        row.created_at, row.updated_at, row.last_message_at, row.message_count, row.next_seq, row.import_state,
-                        row.legacy_ledger_bytes, row.legacy_ledger_sha256, row.imported_at, row.import_offset),
-                )
-            } else {
-                sql.execSQL(
-                    "UPDATE conversations SET kind=?,title=?,generated_title=CASE WHEN generated_title IS NULL OR generated_title='' THEN ? ELSE generated_title END," +
-                        "pinned=?,archived=?,private_code=? WHERE id=?",
-                    arrayOf(row.kind, row.title, row.generated_title, row.pinned.asSqlInt(), row.archived.asSqlInt(), row.private_code.asSqlInt(), row.id),
-                )
-            }
-            ChatDbResult.Success(findConversation(row.id)!!)
-        }
-
-    /** Updates a restart checkpoint on the current writer lease (or opens one when called alone). */
-    internal suspend fun setImportCheckpoint(
-        conversationId: String,
-        state: String,
-        offset: Long,
-        ledgerBytes: Long? = null,
-        ledgerSha256: String? = null,
-        importedAtMillis: Long? = null,
-    ): ChatDbResult<Boolean> = database.withChatWriteTransaction {
-        if (state !in setOf("not_started", "in_progress", "done", "failed") || offset < 0L || ledgerBytes?.let { it < 0L } == true)
-            return@withChatWriteTransaction ChatDbResult.Invalid("import checkpoint is invalid")
-        if (isTombstonedRaw(conversationId)) return@withChatWriteTransaction ChatDbResult.Tombstoned
-        val exists = sql.query("SELECT 1 FROM conversations WHERE id=?", arrayOf(conversationId)).use { it.moveToFirst() }
-        if (!exists) return@withChatWriteTransaction ChatDbResult.NotFound
-        sql.execSQL(
-            "UPDATE conversations SET import_state=?,import_offset=?,legacy_ledger_bytes=COALESCE(?,legacy_ledger_bytes)," +
-                "legacy_ledger_sha256=COALESCE(?,legacy_ledger_sha256),imported_at=CASE WHEN ?='done' THEN COALESCE(?,imported_at) ELSE imported_at END WHERE id=?",
-            arrayOf(state, offset, ledgerBytes, ledgerSha256, state, importedAtMillis, conversationId),
-        )
-        ChatDbResult.Success(true)
-    }
-
-    /** Reads the persisted importer state/byte offset without opening the single writer lease. */
-    internal suspend fun readImportConversation(conversationId: String): Conversation? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
-        database.withChatReadTransaction { findConversation(conversationId) }
-    }
-
     /** Returns the durable interrupt request identity, including resolved/dispatched state. */
     suspend fun readInterruptRequest(conversationId: String, requestId: String): InterruptRequestValue? =
         JarvysChatDatabaseProvider.onQueryExecutor(database) {
             database.withChatReadTransaction { findInterrupt(conversationId, requestId) }
         }
 
-    internal suspend fun isImported(conversationId: String): Boolean =
-        readImportConversation(conversationId)?.import_state == "done"
-
-    /** Imports a positional ledger row whose domain projection is stored only on another row. */
-    internal suspend fun appendImportMarker(
-        position: ImportedLedgerPosition,
-        itemKind: String,
-        itemKey: String,
-    ): ChatDbResult<Long> = database.withImportPosition(position) {
-        transactionResult {
-            if (itemKind.isBlank() || itemKey.isBlank()) return@transactionResult ChatDbResult.Invalid("import marker identity is required")
-            if (findConversation(position.conversationId) == null) return@transactionResult missingConversation(position.conversationId)
-            val seq = allocateSequence(position.conversationId)
-            insertItem(
-                position.conversationId, seq, itemKind, itemKey, position.sortSeq, position.sortSub,
-                position.turnAnchorSeq, position.createdAtSeconds,
-            )
-            ChatDbResult.Success(seq)
+    internal suspend fun readConversationKind(conversationId: String): String? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction {
+                sql.query("SELECT kind FROM conversations WHERE id=?", arrayOf(conversationId)).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            }
         }
-    }
 
     private fun maxSeq(conversationId: String): Long = sql.query(
         "SELECT next_seq-1 FROM conversations WHERE id=?", arrayOf(conversationId),
@@ -335,8 +259,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (existing != null) return@transactionResult ChatDbResult.Success(existing)
             val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
-                    "SELECT ?,?,0,0,0,?,?,0,1,'not_started' WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
                 arrayOf(id, kind, now, now, id),
             )
             findConversation(id)?.let { ChatDbResult.Success(it) } ?: ChatDbResult.Conflict("conversation insert lost a concurrent race")
@@ -361,8 +285,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (current == null) {
             val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
-                    "SELECT ?,'chat',0,0,0,?,?,0,1,'not_started' WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'chat',0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId, now, now, conversationId),
             )
             current = findConversation(conversationId) ?: return@transactionResult missingConversation(conversationId)
@@ -387,16 +311,16 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (!isValidConversationId(conversationId)) return@transactionResult ChatDbResult.Invalid("conversation id is invalid")
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
         if (findConversation(conversationId) == null) {
-            val now = importedNowMillis() ?: System.currentTimeMillis()
+            val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
-                    "SELECT ?,'chat',0,0,0,?,?,0,1,'not_started' WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'chat',0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId, now, now, conversationId),
             )
         }
         sql.execSQL(
             "UPDATE conversations SET generated_title=?,updated_at=? WHERE id=? AND (title IS NULL OR TRIM(title)='') AND (generated_title IS NULL OR TRIM(generated_title)='')",
-            arrayOf(normalized, importedNowMillis() ?: System.currentTimeMillis(), conversationId),
+            arrayOf(normalized, System.currentTimeMillis(), conversationId),
         )
         val inserted = sql.query("SELECT changes()").use { c -> c.moveToFirst(); c.getInt(0) != 0 }
         ChatDbResult.Success(inserted)
@@ -442,24 +366,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * generated UUID is also `stable_id`, replacing `role=user`/`role=assistant` in
      * `LocalRunStore.java:appendConversationMessage`.
      */
-    suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = appendMessageInternal(input, null)
-
-    /** Import-only append preserving the source message identities and absolute model index. */
-    internal suspend fun appendMessageImported(
-        input: AppendMessageInput,
-        messageId: String,
-        stableId: String,
-        messageIndex: Long,
-    ): ChatDbResult<StoredMessage> {
-        if (messageId.isBlank() || stableId.isBlank() || messageIndex < 0L)
-            return ChatDbResult.Invalid("imported message identity or model index is invalid")
-        return appendMessageInternal(input, ImportedMessageIdentity(messageId, stableId, messageIndex))
-    }
-
-    private suspend fun appendMessageInternal(
-        input: AppendMessageInput,
-        importedIdentity: ImportedMessageIdentity?,
-    ): ChatDbResult<StoredMessage> = transactionResult {
+    suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = transactionResult {
         validateMessageInput(input)?.let { return@transactionResult ChatDbResult.Invalid(it) }
         val conversation = findConversation(input.conversationId) ?: return@transactionResult missingConversation(input.conversationId)
         if (isTombstonedRaw(input.conversationId)) return@transactionResult ChatDbResult.Tombstoned
@@ -470,15 +377,13 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             val existing = findMessageByDecision(input.conversationId, input.proactiveDecisionId)
             if (existing != null) return@transactionResult ChatDbResult.Success(hydrateMessages(input.conversationId, listOf(existing.messageId)).single())
         }
-        val id = importedIdentity?.messageId ?: UUID.randomUUID().toString()
-        val stableId = importedIdentity?.stableId ?: id
+        val id = UUID.randomUUID().toString()
+        val stableId = id
         val now = input.createdAtSeconds ?: epochSeconds()
-        val updatedAt = importedUpdatedAtSeconds() ?: now
+        val updatedAt = now
         val seq = allocateSequence(input.conversationId)
-        val index = importedIdentity?.messageIndex ?: messageIndexFor(input.conversationId, input.beforeMessageId)
-        val importedPosition = importedPositionFor(input.conversationId)
-        val sort = if (importedPosition != null) importedPosition.sortSeq to importedPosition.sortSub
-        else sortPositionFor(input.conversationId, seq, input.beforeMessageId)
+        val index = messageIndexFor(input.conversationId, input.beforeMessageId)
+        val sort = sortPositionFor(input.conversationId, seq, input.beforeMessageId)
         val anchor = if (input.role == ROLE_USER && input.interruptRequestId == null) seq else latestTurnAnchor(input.conversationId)
         insertItem(input.conversationId, seq, ITEM_MESSAGE, id, sort.first, sort.second, anchor, now)
         sql.execSQL(
@@ -515,25 +420,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         content: String,
         threadKey: String? = null,
         replies: List<SuggestedReplyInput> = emptyList(),
-    ): ChatDbResult<StoredMessage> = appendProactiveAssistantMessageInternal(conversationId, decisionId, content, threadKey, replies, null)
-
-    /** Imported proactive messages keep their ledger identity and precomputed absolute index. */
-    internal suspend fun appendProactiveAssistantMessageImported(
-        conversationId: String,
-        decisionId: String,
-        content: String,
-        threadKey: String?,
-        replies: List<SuggestedReplyInput>,
-        messageId: String,
-        stableId: String,
-        messageIndex: Long,
-    ): ChatDbResult<StoredMessage> {
-        if (messageId.isBlank() || stableId.isBlank() || messageIndex < 0L)
-            return ChatDbResult.Invalid("imported proactive message identity or model index is invalid")
-        return appendProactiveAssistantMessageInternal(
-            conversationId, decisionId, content, threadKey, replies, ImportedMessageIdentity(messageId, stableId, messageIndex),
-        )
-    }
+    ): ChatDbResult<StoredMessage> = appendProactiveAssistantMessageInternal(conversationId, decisionId, content, threadKey, replies)
 
     private suspend fun appendProactiveAssistantMessageInternal(
         conversationId: String,
@@ -541,26 +428,24 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         content: String,
         threadKey: String?,
         replies: List<SuggestedReplyInput>,
-        importedIdentity: ImportedMessageIdentity?,
     ): ChatDbResult<StoredMessage> = transactionResult {
         if (decisionId.isBlank()) return@transactionResult ChatDbResult.Invalid("decision id is required")
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
         val existing = findMessageByDecision(conversationId, decisionId)
         if (existing != null) return@transactionResult ChatDbResult.Success(hydrateMessages(conversationId, listOf(existing.messageId)).single())
-        val id = importedIdentity?.messageId ?: UUID.randomUUID().toString()
+        val id = UUID.randomUUID().toString()
         if (findMessage(conversationId, id) != null) return@transactionResult ChatDbResult.Conflict("proactive message id already exists")
-        val stableId = importedIdentity?.stableId ?: id
+        val stableId = id
         val now = epochSeconds()
-        val updatedAt = importedUpdatedAtSeconds() ?: now
+        val updatedAt = now
         val seq = allocateSequence(conversationId)
-        val importedPosition = importedPositionFor(conversationId)
-        val sort = if (importedPosition != null) importedPosition.sortSeq to importedPosition.sortSub else sortPositionFor(conversationId, seq, null)
+        val sort = sortPositionFor(conversationId, seq, null)
         insertItem(conversationId, seq, ITEM_MESSAGE, id, sort.first, sort.second, latestTurnAnchor(conversationId), now)
         sql.execSQL(
             "INSERT INTO messages(conversation_id,message_id,stable_id,seq,message_index,role,status,proactive_thread_key," +
                 "proactive_decision_id,ack_required,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?)",
-            arrayOf(conversationId, id, stableId, seq, importedIdentity?.messageIndex ?: nextMessageIndex(conversationId), ROLE_ASSISTANT, "COMPLETED", threadKey, decisionId, now, updatedAt),
+            arrayOf(conversationId, id, stableId, seq, nextMessageIndex(conversationId), ROLE_ASSISTANT, "COMPLETED", threadKey, decisionId, now, updatedAt),
         )
         replaceParts(conversationId, id, listOf(MessagePartInput(MessagePartKinds.TEXT, content)))
         insertSuggestedReplies(conversationId, id, replies)
@@ -700,33 +585,19 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         content: String,
         skills: List<String> = emptyList(),
         memoryDisabled: Boolean = false,
-    ): ChatDbResult<InterruptRequestValue> = appendInterruptRequestInternal(conversationId, null, content, skills, memoryDisabled, allowLongContent = false)
-
-    /** Imported interrupt receipts retain their source requestId. */
-    internal suspend fun appendInterruptRequestImported(
-        conversationId: String,
-        requestId: String,
-        content: String,
-        skills: List<String> = emptyList(),
-        memoryDisabled: Boolean = false,
-    ): ChatDbResult<InterruptRequestValue> {
-        if (requestId.isBlank()) return ChatDbResult.Invalid("imported interrupt request id is required")
-        return appendInterruptRequestInternal(conversationId, requestId, content, skills, memoryDisabled, allowLongContent = true)
-    }
+    ): ChatDbResult<InterruptRequestValue> = appendInterruptRequestInternal(conversationId, content, skills, memoryDisabled)
 
     private suspend fun appendInterruptRequestInternal(
         conversationId: String,
-        importedRequestId: String?,
         content: String,
         skills: List<String>,
         memoryDisabled: Boolean,
-        allowLongContent: Boolean,
     ): ChatDbResult<InterruptRequestValue> = transactionResult {
-        if (content.isBlank() || (!allowLongContent && content.length > 32000)) return@transactionResult ChatDbResult.Invalid("interrupt content is invalid")
+        if (content.isBlank() || content.length > 32000) return@transactionResult ChatDbResult.Invalid("interrupt content is invalid")
         val conversation = findConversation(conversationId) ?: return@transactionResult missingConversation(conversationId)
         if (!isOrdinaryChat(conversation.kind)) return@transactionResult ChatDbResult.Invalid("interrupts require an ordinary chat")
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
-        val id = importedRequestId ?: UUID.randomUUID().toString()
+        val id = UUID.randomUUID().toString()
         val existing = findInterrupt(conversationId, id)
         if (existing != null) {
             val existingSkills = sql.query(
@@ -831,46 +702,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             changed += id
         }
         ChatDbResult.Success(changed)
-    }
-
-    /** Imports one ledger marker and applies its final state to every eligible message/receipt. */
-    internal suspend fun markInputStateImported(
-        conversationId: String,
-        messageIds: List<String>,
-        state: String,
-    ): ChatDbResult<Long> = transactionResult {
-        if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
-        if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
-        if (state != INPUT_INCORPORATED && state != INPUT_RESOLVED) return@transactionResult ChatDbResult.Invalid("unknown input state")
-        if (messageIds.isEmpty()) return@transactionResult ChatDbResult.Invalid("an imported input-state marker needs at least one message id")
-
-        val requestedIds = messageIds.distinct()
-        val targets = requestedIds.mapNotNull { id ->
-            val message = findMessage(conversationId, id)
-            val requestState = sql.query(
-                "SELECT input_state FROM interrupt_requests WHERE conversation_id=? AND request_id=?", arrayOf(conversationId, id),
-            ).use { c -> if (c.moveToFirst()) c.getStringOrNull(0) else NO_INPUT_STATE_ROW }
-            val eligible = !(message == null && requestState == NO_INPUT_STATE_ROW) &&
-                !(state == INPUT_INCORPORATED && (message == null || message.role != ROLE_USER)) &&
-                !(message != null && (message.role != ROLE_USER || message.inputState != null)) &&
-                !(message == null && requestState != null) &&
-                !(message != null && requestState != null && requestState != NO_INPUT_STATE_ROW)
-            if (eligible) id to message else null
-        }
-        val seq = allocateSequence(conversationId)
-        insertItem(
-            conversationId, seq, itemKindForInputState(state), requestedIds.joinToString("\u001f"), seq, 0,
-            latestTurnAnchor(conversationId), epochSeconds(),
-        )
-        for ((id, message) in targets) {
-            if (message != null) {
-                sql.execSQL("UPDATE messages SET input_state=?,input_state_seq=? WHERE conversation_id=? AND message_id=? AND input_state IS NULL", arrayOf(state, seq, conversationId, id))
-                sql.execSQL("UPDATE interrupt_requests SET input_state=?,input_state_seq=? WHERE conversation_id=? AND dispatched_message_id=? AND input_state IS NULL", arrayOf(state, seq, conversationId, id))
-            } else {
-                sql.execSQL("UPDATE interrupt_requests SET input_state=?,input_state_seq=? WHERE conversation_id=? AND request_id=? AND input_state IS NULL", arrayOf(state, seq, conversationId, id))
-            }
-        }
-        ChatDbResult.Success(seq)
     }
 
     /** Adds/updates `user_decision_request` plus options, replacing `LocalRunStore.java:appendUserDecisionRequest`. */
@@ -1328,26 +1159,21 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     private fun allocateSequence(conversationId: String): Long {
-        val imported = importedPositionFor(conversationId)
         val current = sql.query("SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId)).use { c ->
             if (!c.moveToFirst()) throw RepositoryAbort("conversation_not_found")
             c.getLong(0)
         }
-        if (imported != null && imported.seq != current) throw RepositoryAbort("import_sequence_mismatch:expected=$current,source=${imported.seq}")
-        val sequence = imported?.seq ?: current
         sql.execSQL(
             "UPDATE conversations SET next_seq=?,updated_at=? WHERE id=? AND next_seq=?",
-            arrayOf(sequence + 1L, imported?.conversationUpdatedAtMillis ?: System.currentTimeMillis(), conversationId, current),
+            arrayOf(current + 1L, System.currentTimeMillis(), conversationId, current),
         )
-        return sequence
+        return current
     }
 
     private fun insertItem(conversationId: String, seq: Long, kind: String, key: String, sortSeq: Long, sortSub: Int, anchor: Long?, createdAt: Double) {
-        val imported = importedPositionFor(conversationId)
         sql.execSQL(
             "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            arrayOf(conversationId, seq, kind, key, imported?.sortSeq ?: sortSeq, imported?.sortSub ?: sortSub,
-                if (imported == null) anchor else imported.turnAnchorSeq, imported?.createdAtSeconds ?: createdAt),
+            arrayOf(conversationId, seq, kind, key, sortSeq, sortSub, anchor, createdAt),
         )
     }
 
@@ -1567,7 +1393,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     ).use { c -> if (c.moveToFirst()) readMessage(c) else null }
 
     private data class MessageIdentity(val messageId: String)
-    private data class ImportedMessageIdentity(val messageId: String, val stableId: String, val messageIndex: Long)
     private fun findMessageByDecision(conversationId: String, decisionId: String): MessageIdentity? = sql.query(
         "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_decision_id=? LIMIT 1", arrayOf(conversationId, decisionId),
     ).use { c -> if (c.moveToFirst()) MessageIdentity(c.getString(0)) else null }
@@ -1581,8 +1406,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             id=c.getString(0), kind=c.getString(1), title=c.getStringOrNull(2), generated_title=c.getStringOrNull(3),
             pinned=c.getInt(4)!=0, archived=c.getInt(5)!=0, private_code=c.getInt(6)!=0,
             created_at=c.getLong(7), updated_at=c.getLong(8), last_message_at=c.getLongOrNull(9), message_count=c.getLong(10), next_seq=c.getLong(11),
-            import_state=c.getString(12), legacy_ledger_bytes=c.getLongOrNull(13), legacy_ledger_sha256=c.getStringOrNull(14), imported_at=c.getLongOrNull(15),
-            import_offset=c.getLong(16),
         )
     }
 
@@ -1672,7 +1495,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         private val INPUT_RESOLVING_FAILURE_STATUSES = setOf("FAILED", "PARTIAL", "STOPPED")
         private fun activeTargetKey(conversationId: String, messageId: String) = "${conversationId.length}:$conversationId${messageId.length}:$messageId"
         private fun isValidConversationId(value: String) = value.matches(Regex("[A-Za-z0-9_.-]{1,100}")) && value != "." && value != ".."
-        private fun epochSeconds(): Double = importedNowSeconds() ?: System.currentTimeMillis() / 1000.0
+        private fun epochSeconds(): Double = System.currentTimeMillis() / 1000.0
         private fun Boolean.asSqlInt() = if (this) 1 else 0
         private fun String?.isTerminalStatus() = this?.uppercase() in setOf("COMPLETED", "FAILED", "PARTIAL", "STOPPED", "INTERRUPTED")
         private fun isOrdinaryChat(kind: String) = kind != "proactive" && kind != "tasks"
@@ -1680,11 +1503,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         private fun String.isActiveRunState() = this in setOf(RUN_PREPARING, RUN_REQUESTING, RUN_STREAMING, RUN_WAITING_TOOL)
         private fun String.isTerminalRunState() = this in setOf("completed", "failed", "interrupted", "cancelled", "stopped")
 
-        /** Legacy identity for `role=user`/`role=assistant` rows read by `LocalRunStore.java:readConversationMessages`, following `MessageReactionTool.java:stableMessageId` when `messageId` is absent. */
-        @JvmStatic fun legacyStableMessageId(sessionId: String, messageIndex: Long): String {
-            val bytes = "$sessionId\u0000$messageIndex".toByteArray(StandardCharsets.UTF_8)
-            return "legacy-${UUID.nameUUIDFromBytes(bytes)}"
-        }
     }
 }
 

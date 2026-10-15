@@ -25,8 +25,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
-import java.nio.charset.StandardCharsets
-import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -148,16 +146,6 @@ class ConversationRepositoryTest {
         success(repository.updateMetadata("tombstoned-metadata", title = "old"))
         success(repository.deleteConversation("tombstoned-metadata"))
         assertTrue(repository.updateMetadata("tombstoned-metadata", title = "new") === ChatDbResult.Tombstoned)
-    }
-
-    @Test fun legacyStableMessageIdentityUsesSessionAndAbsoluteIndex() {
-        val session = "legacy.session-7"
-        val absoluteIndex = 42L
-        val expected = "legacy-${UUID.nameUUIDFromBytes("$session\u0000$absoluteIndex".toByteArray(StandardCharsets.UTF_8))}"
-        val first = ConversationRepository.legacyStableMessageId(session, absoluteIndex)
-        assertEquals("legacyStableMessageIdentityUsesSessionAndAbsoluteIndex: expected <first> to equal <expected>", expected, first)
-        assertEquals("legacyStableMessageIdentityUsesSessionAndAbsoluteIndex: expected <ConversationRepository.legacyStableMessageId(session, absoluteIndex)> to equal <first>", first, ConversationRepository.legacyStableMessageId(session, absoluteIndex))
-        assertTrue("legacyStableMessageIdentityUsesSessionAndAbsoluteIndex: expected <first != ConversationRepository.legacyStableMessageId(session, absoluteIndex + 1)> to be true", first != ConversationRepository.legacyStableMessageId(session, absoluteIndex + 1))
     }
 
     @Test fun concurrentAppendsKeepSequenceAndAbsoluteMessageIndicesContiguous() = onDatabaseThread {
@@ -656,13 +644,6 @@ class ConversationRepositoryTest {
         val insertPattern = Regex("""(?is)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)""")
         val insertIntoPattern = Regex("""(?i)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b""")
         val concatBoundary = Regex("\"\\s*\\+\\s*\"")
-        // Importer preflight tables are runtime staging tables created by the importer; they are
-        // not part of the exported Room schema checked by this audit.
-        val importerStagingTables = setOf(
-            "chatdb_import_rows", "chatdb_import_issues", "chatdb_import_unknown_types",
-            "chatdb_import_messages", "chatdb_import_compactions", "chatdb_import_crews",
-            "chatdb_import_hidden", "chatdb_import_translations", "chatdb_import_translation_hidden",
-        )
         val db = database.testChatSql
         val sourceFiles = sourceDirectory!!.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue("the chatdb package must have Kotlin production files", sourceFiles.isNotEmpty())
@@ -708,12 +689,6 @@ class ConversationRepositoryTest {
                 )
                 val insertedColumns = insertedColumnList.toSet()
                 assertEquals("${sourceFile.name}:$line INSERT INTO $table must not repeat explicit columns", insertedColumnList.size, insertedColumns.size)
-                if (table in importerStagingTables || table.startsWith("chatdb_import_")) {
-                    // The SQL shape is still audited above; runtime staging tables are outside the
-                    // exported Room schema, so they have no schema table to inspect here.
-                    auditedInsertCount++
-                    return@forEach
-                }
                 val tableInfo = db.query("PRAGMA table_info($table)").use { cursor ->
                     buildList {
                         while (cursor.moveToNext()) add(
@@ -963,7 +938,7 @@ class ConversationRepositoryTest {
             val marker = database.testChatSql.query(
                 "SELECT item_kind FROM conversation_items WHERE conversation_id=? AND seq=?", arrayOf("input-state", markerSeq),
             ).use { c -> assertTrue("each input-state marker has a spine row", c.moveToFirst()); c.getString(0) }
-            assertEquals("ledger marker records the imported input-state row kind", "main_chat_input_incorporated", marker)
+            assertEquals("input marker records the input-state row kind", "main_chat_input_incorporated", marker)
             assertTrue("the marker belongs to one of the requested receipts", requestId == first.requestId || requestId == second.requestId)
         }
         assertTrue("resolved state cannot be applied until a receipt has a dispatched message", success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_RESOLVED)).isEmpty())

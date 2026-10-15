@@ -126,19 +126,10 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * 8000 characters must already be represented by the retained-argument reference produced by
      * `MainChatTranscriptStore.boundedArguments` (`MainChatTranscriptStore.java:141-156`).
      */
-    suspend fun appendToolBatch(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> = appendToolBatchInternal(input, allowLargePayloads = false)
-
-    /** Import path keeps legacy opaque text/arguments verbatim even when ordinary writes externalize them. */
-    internal suspend fun appendToolBatchImported(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> =
-        appendToolBatchInternal(input, allowLargePayloads = true)
-
-    private suspend fun appendToolBatchInternal(
-        input: ModelToolBatchInput,
-        allowLargePayloads: Boolean,
-    ): ChatDbResult<ModelToolBatchSnapshot> = transaction {
-        if (input.conversationId.isBlank() || input.batchId.isBlank() || (!allowLargePayloads && !isUuid(input.batchId)) || input.messageIndex < 0L || input.calls.any {
+    suspend fun appendToolBatch(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> = transaction {
+        if (input.conversationId.isBlank() || input.batchId.isBlank() || !isUuid(input.batchId) || input.messageIndex < 0L || input.calls.any {
                 it.callId.isBlank() || it.toolName.isBlank() || it.argumentsJson.isBlank() ||
-                    (!allowLargePayloads && (it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS))
+                    it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS
             }) return@transaction ChatDbResult.Invalid("batch, owner index, call IDs, names, and opaque arguments are required")
         if (input.callsDecodeError == null && input.rawCalls != null) return@transaction ChatDbResult.Invalid("raw_calls is reserved for undecodable call arrays")
         if (input.callsDecodeError != null && input.rawCalls == null) return@transaction ChatDbResult.Invalid("undecodable calls must retain raw_calls")
@@ -205,17 +196,11 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     /**
      * Appends a `model_tool_result` row. Replaces `MainChatTranscriptStore.attach`
      * (`MainChatTranscriptStore.java:128-137`): the first result per call wins, even when its
-     * `toolName` differs from the call. Legacy restoration interprets that mismatch as a placeholder;
+     * `toolName` differs from the call. Transcript restoration interprets that mismatch as a placeholder;
      * later result attempts still advance `last_activity_seq` without replacing the first row.
      */
-    suspend fun appendToolResult(input: ModelToolResultInput): ChatDbResult<ToolResult?> = appendToolResultInternal(input, allowLargeOutput = false)
-
-    /** Import path preserves legacy output payloads that predate the current inline-retention policy. */
-    internal suspend fun appendToolResultImported(input: ModelToolResultInput): ChatDbResult<ToolResult?> =
-        appendToolResultInternal(input, allowLargeOutput = true)
-
-    private suspend fun appendToolResultInternal(input: ModelToolResultInput, allowLargeOutput: Boolean): ChatDbResult<ToolResult?> = transaction {
-        if (!allowLargeOutput && input.output.length > INLINE_TOOL_OUTPUT_CHARS)
+    suspend fun appendToolResult(input: ModelToolResultInput): ChatDbResult<ToolResult?> = transaction {
+        if (input.output.length > INLINE_TOOL_OUTPUT_CHARS)
             return@transaction ChatDbResult.Invalid("tool output must be retained as an artifact reference before storage")
         ensureConversationExists(input.conversationId)
         val call = readCall(input.conversationId, input.batchId, input.callId) ?: return@transaction ChatDbResult.NotFound
@@ -277,18 +262,6 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     suspend fun appendModelArtifact(
         conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
         mimeType: String = "text/plain",
-    ): ChatDbResult<ModelArtifact> = appendModelArtifactInternal(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType, allowOverQuota = false)
-
-    /** Legacy importer preserves every owned artifact even when legacy retention exceeded its current quota. */
-    internal suspend fun appendModelArtifactImported(
-        conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
-        mimeType: String = "text/plain",
-    ): ChatDbResult<ModelArtifact> = appendModelArtifactInternal(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType, allowOverQuota = true)
-
-    private suspend fun appendModelArtifactInternal(
-        conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
-        mimeType: String,
-        allowOverQuota: Boolean,
     ): ChatDbResult<ModelArtifact> = transaction {
         if (conversationId.isBlank() || artifactId.isBlank() || relativePath.isBlank() || sha256.isBlank() || chars < 0L || bytes < 0L)
             return@transaction ChatDbResult.Invalid("model artifact metadata is invalid")
@@ -298,7 +271,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             ChatDbResult.Success(existing) else ChatDbResult.Conflict("model artifact identity has different metadata")
         val total = sql.query("SELECT COALESCE(SUM(bytes),0) FROM model_artifacts WHERE conversation_id=?", arrayOf(conversationId))
             .use { it.moveToFirst(); it.getLong(0) }
-        if (!allowOverQuota && bytes > MAX_MODEL_ARTIFACT_BYTES - total) return@transaction ChatDbResult.Invalid("model artifact retention quota exceeded")
+        if (bytes > MAX_MODEL_ARTIFACT_BYTES - total) return@transaction ChatDbResult.Invalid("model artifact retention quota exceeded")
         val time = nowSeconds()
         val fileRefId = ensureFileRef(relativePath, sha256, bytes, mimeType, (time * 1000.0).toLong())
         val seq = insertLedgerItem(conversationId, "model_artifact", artifactId, time)
@@ -320,7 +293,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         val prior = readToolActivityByEvent(input.conversationId, input.eventId)
         if (prior != null) return@transaction ChatDbResult.Success(prior)
         val resolution = resolveActivityBatch(input.conversationId, input.ownerUserMessageId, input.executionId, input.callId)
-        val time = input.createdAtSeconds ?: importedNowSeconds() ?: input.timestampMillis / 1000.0
+        val time = input.createdAtSeconds ?: input.timestampMillis / 1000.0
         val seq = insertLedgerItem(input.conversationId, "tool_activity", input.eventId, time,
             ownerMessageSeq(input.conversationId, input.ownerUserMessageId))
         sql.execSQL(
@@ -376,11 +349,9 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * `MainChatTranscriptStore.restore` (`MainChatTranscriptStore.java:238-325`): each batch stays
      * at its `model_tool_calls` position; calls expose the latest lifecycle, first matching result,
      * and completeness. Consumers synthesize interruption placeholders from these exact states.
-     * `compactionBoundaryRowIndex` is the original legacy row index persisted in the suffix of
-     * `legacy-<timestamp>-<rowIndex>`. It is not the number of `conversation_items` before the
-     * compaction: `session_title` has no spine row and each input marker is expanded per ID. The
-     * original row index counts those ledger rows once and excludes result-only strict-journal rows.
-     * New writes persist that legacy count in the generated compaction ID.
+     * `compactionBoundaryRowIndex` is the count of timeline rows before the compaction, persisted
+     * in the suffix of its generated `legacy-<timestamp>-<rowIndex>` ID. This keeps the summary
+     * boundary stable when the reader reconstructs the model context.
      */
     suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
         database.withChatReadTransaction {

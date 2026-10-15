@@ -7,7 +7,6 @@ import com.jarvys.agent.chatdb.ConversationRepository
 import com.jarvys.agent.chatdb.ConversationSummary
 import com.jarvys.agent.chatdb.FileRef
 import com.jarvys.agent.chatdb.GlobalTimelineMarkers
-import com.jarvys.agent.chatdb.ImportCoordinator
 import com.jarvys.agent.chatdb.InterruptRequestValue
 import com.jarvys.agent.chatdb.JarvysChatDatabase
 import com.jarvys.agent.chatdb.MemoryTimelineRepository
@@ -29,10 +28,9 @@ import org.json.JSONTokener
 import java.util.Locale
 
 /**
- * M3's internal read surface. It is intentionally not installed into [LocalRunStore] or the app;
- * M4 will route a conversation here only after [ImportCoordinator] has completed cutover.
- * Every composed projection runs under one read fence. Repository calls made inside the fence
- * reuse its read handle, while a writer lease continues to provide read-your-writes inline.
+ * Read surface for the conversation database. Every composed projection runs under one read fence.
+ * Repository calls made inside the fence reuse its read handle, while a writer lease continues to
+ * provide read-your-writes inline.
  */
 internal class ConversationReader(private val database: JarvysChatDatabase) {
     private val conversations = ConversationRepository(database)
@@ -119,7 +117,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     suspend fun readConversationMessages(conversationId: String): List<StoredMessage> =
         readProjection { conversations.readConversationMessages(conversationId) }
 
-    /** Legacy active-message view hides regenerated/deleted assistant rows but keeps terminal status rows. */
+    /** Active-message view hides regenerated/deleted assistant rows but keeps terminal status rows. */
     suspend fun readActiveConversationMessages(conversationId: String): List<StoredMessage> =
         readProjection {
             conversations.readMessagesAtOrAfterIndex(conversationId)
@@ -163,7 +161,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         return latest.messageId == messageId
     }
 
-    /** Ledger-order steering follow-ups after a cursor, matching the legacy reverse scan. */
+    /** Returns later user messages in conversation order after the specified message. */
     suspend fun readUserMessagesAfter(conversationId: String, messageId: String): List<StoredMessage> = readProjection {
         if (messageId.isEmpty()) return@readProjection emptyList()
         val messages = conversations.readMessagesAtOrAfterIndex(conversationId)
@@ -209,7 +207,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             conversations.getMessagesByIds(conversationId, translationMessageIds).associateBy { it.messageId }
         val messagesById = (messages + translationTargets.values).associateBy { it.messageId }
         val reactions = conversations.readMessageReactions(conversationId)
-        val ordinaryChat = conversations.readImportConversation(conversationId)?.kind !in setOf("proactive", "tasks")
+        val ordinaryChat = (conversations.readConversationKind(conversationId) ?: "chat") !in setOf("proactive", "tasks")
         val events = ArrayList<AgentRunUiEvent>()
         for (slot in window.slots) {
             val message = slot.message
@@ -277,14 +275,14 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     suspend fun hasReflectionCommit(conversationId: String, reflectionId: String): Boolean =
         readProjection { memory.hasReflectionCommit(conversationId, reflectionId) }
 
-    /** Exact legacy window and UTF-16 truncation rules for this bounded display-only context string. */
+    /** Builds a bounded context string using message and UTF-16 code-unit limits. */
     suspend fun readConversationContext(conversationId: String): String {
         val messages = readActiveConversationMessages(conversationId)
         val context = StringBuilder()
         val first = maxOf(0, messages.size - 16)
         for (index in first until messages.size) {
             var content = messages[index].text
-            // Match the three code points in LocalRunStore's existing UTF-8 source literal.
+            // Kotlin String length and substring count UTF-16 code units.
             if (content.length > 3_000) content = content.substring(0, 3_000) + "\u00E2\u20AC\u00A6"
             if (context.length + content.length > 16_000) break
             context.append(messages[index].role.uppercase(Locale.ROOT)).append(": ")
@@ -293,7 +291,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         return context.toString()
     }
 
-    /** Projects M1 attachment and completed-image rows in source-ledger order. */
+    /** Projects attachment and completed-image rows in conversation timeline order. */
     suspend fun readConversationImageReferences(conversationId: String): List<ConversationImageReference> = readProjection {
         artifacts.readImageReferences(conversationId).mapNotNull { value ->
             value.attachment?.let { ConversationImageReference.attachment(value.messageId, it) }
@@ -355,7 +353,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         conversationId: String,
     ): List<ModelProjectionRow> {
         val rows = snapshot.entries.mapNotNull { entry ->
-            val json = entry.toLegacyProjectionRow() ?: return@mapNotNull null
+            val json = entry.toModelRestoreRow() ?: return@mapNotNull null
             ModelProjectionRow(SortPosition(entry.sortSeq, entry.sortSub, entry.seq), json)
         }.toMutableList()
         database.chatSql.query(
@@ -378,7 +376,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         return rows.sortedBy { it.position }
     }
 
-    private fun ModelTranscriptEntry.toLegacyProjectionRow(): JSONObject? = when (this) {
+    private fun ModelTranscriptEntry.toModelRestoreRow(): JSONObject? = when (this) {
         is ModelTranscriptEntry.Batch -> {
             val batch = value.batch
             val calls = if (batch.raw_calls != null) {

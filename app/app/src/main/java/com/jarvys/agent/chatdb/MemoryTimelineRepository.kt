@@ -24,8 +24,6 @@ data class CompactionInput(
     val mode: String? = null,
     val summarizedMessages: Long,
     val createdAtSeconds: Double? = null,
-    /** M2 supplies the exact legacy id computed from the source timestamp token and logical row index. */
-    val persistedCompactionId: String? = null,
 )
 
 data class ReflectionInput(
@@ -79,15 +77,8 @@ data class PendingInterrupt(
  */
 internal class MemoryTimelineRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /**
-     * Adds one `compaction` row (`LocalRunStore.appendCompaction`, `LocalRunStore.java:4635-4654`) and
-     * persists `legacy-<timestamp>-<rowIndex>` exactly as `LocalRunStore.compactionId`
-     * (`LocalRunStore.java:3500-3503`) does. The index counts eligible `conversation_items` in
-     * `(sort_seq,sort_sub,seq)` order before the new row, excluding the result-only row kinds used
-     * by `loadConversationContext` (`LocalRunStore.java:2879-2915`). M2 must reproduce the legacy
-     * filtered list by importing those sort positions after `readConversationRows` applies
-     * `isResultOnlyRow` and `orderAssistantMessagesBeforeSteering` (`LocalRunStore.java:3017-3018`,
-     * `3041-3043`, `3143-3157`), then pass the ID built from the original timestamp token through
-     * [CompactionInput.persistedCompactionId]. New rows derive the same index immediately before append.
+     * Adds one summary at its timeline position. The persisted ID includes the append timestamp and
+     * count of existing timeline rows so readers can recover its summary boundary deterministically.
      */
     suspend fun appendCompaction(input: CompactionInput): ChatDbResult<Compaction> = transaction {
         if (input.conversationId.isBlank() || input.summary.isBlank() || input.summary.trim().isEmpty())
@@ -96,7 +87,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val time = input.createdAtSeconds ?: nowSeconds()
         val nextSeq = nextSequence(input.conversationId)
         val rowIndex = timelineRowCountBefore(input.conversationId, nextSeq, 0)
-        val id = input.persistedCompactionId?.takeIf(String::isNotBlank) ?: "legacy-${jsonNumberToken(time)}-$rowIndex"
+        val id = "legacy-${jsonNumberToken(time)}-$rowIndex"
         if (readCompaction(input.conversationId, id) != null) return@transaction ChatDbResult.Conflict("compaction identity already exists")
         val seq = insertLedgerItem(input.conversationId, "compaction", id, time)
         sql.execSQL(
@@ -276,70 +267,6 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val time = row.optDouble("timestamp", nowSeconds())
         val seq = insertLedgerItem(conversationId, "crew_snapshot", snapshot.missionId, time)
         persistCrewSnapshot(conversationId, row, snapshot, digest, existing?.first_snapshot_seq ?: seq, seq)
-        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
-    }
-
-    /** Adds a lightweight first-position spine row while the importer discards repeated snapshots. */
-    internal suspend fun appendCrewSnapshotMarkerImported(conversationId: String, missionId: String): ChatDbResult<Long> = transaction {
-        if (missionId.isBlank()) return@transaction ChatDbResult.Invalid("crew mission id is required")
-        ensureConversationExists(conversationId)
-        val seq = insertLedgerItem(conversationId, "crew_snapshot", missionId)
-        ChatDbResult.Success(seq)
-    }
-
-    /** Stores the final source snapshot and preserves the mission's first and last ledger positions. */
-    internal suspend fun appendCrewSnapshotImported(
-        conversationId: String,
-        row: JSONObject,
-        firstSnapshotSeq: Long,
-    ): ChatDbResult<CrewMissionSnapshot> = transaction {
-        if (conversationId.isBlank() || row.optString("type") != "crew_snapshot")
-            return@transaction ChatDbResult.Invalid("crew_snapshot row and conversation are required")
-        ensureConversationExists(conversationId)
-        val position = importedPositionFor(conversationId)
-            ?: return@transaction ChatDbResult.Invalid("crew snapshot import position is missing")
-        if (firstSnapshotSeq <= 0L || firstSnapshotSeq > position.seq)
-            return@transaction ChatDbResult.Invalid("crew first snapshot sequence is invalid")
-        val snapshot = CrewMissionSnapshot.fromJson(row) ?: return@transaction ChatDbResult.Invalid("crew_snapshot schema or payload is unsupported")
-        if (snapshot.conversationId != conversationId || snapshot.missionId.isBlank())
-            return@transaction ChatDbResult.Invalid("crew_snapshot identity does not match its conversation")
-        val firstMarkerExists = sql.query(
-            "SELECT 1 FROM conversation_items WHERE conversation_id=? AND seq=? AND item_kind='crew_snapshot' AND item_key=?",
-            arrayOf(conversationId, firstSnapshotSeq, snapshot.missionId),
-        ).use { it.moveToFirst() }
-        if (!firstMarkerExists && firstSnapshotSeq != position.seq)
-            return@transaction ChatDbResult.Invalid("crew first snapshot marker is missing")
-        val digest = losslessSnapshotDigest(row)
-        verifySnapshotEvidence(snapshot)
-        val time = row.optDouble("timestamp", position.createdAtSeconds)
-        val seq = insertLedgerItem(conversationId, "crew_snapshot", snapshot.missionId, time)
-        persistCrewSnapshot(conversationId, row, snapshot, digest, firstSnapshotSeq, seq)
-        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
-    }
-
-    /** Materializes a retained final snapshot after its lightweight first/last markers are present. */
-    internal suspend fun storeCrewSnapshotImported(
-        conversationId: String,
-        row: JSONObject,
-        firstSnapshotSeq: Long,
-        lastSnapshotSeq: Long,
-    ): ChatDbResult<CrewMissionSnapshot> = transaction {
-        if (conversationId.isBlank() || row.optString("type") != "crew_snapshot")
-            return@transaction ChatDbResult.Invalid("crew_snapshot row and conversation are required")
-        ensureConversationExists(conversationId)
-        if (firstSnapshotSeq <= 0L || lastSnapshotSeq < firstSnapshotSeq)
-            return@transaction ChatDbResult.Invalid("crew snapshot sequence range is invalid")
-        val snapshot = CrewMissionSnapshot.fromJson(row) ?: return@transaction ChatDbResult.Invalid("crew_snapshot schema or payload is unsupported")
-        if (snapshot.conversationId != conversationId || snapshot.missionId.isBlank())
-            return@transaction ChatDbResult.Invalid("crew_snapshot identity does not match its conversation")
-        val markersExist = sql.query(
-            "SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='crew_snapshot' AND item_key=? AND seq IN (?,?)",
-            arrayOf(conversationId, snapshot.missionId, firstSnapshotSeq, lastSnapshotSeq),
-        ).use { c -> c.moveToFirst() && c.getInt(0) == if (firstSnapshotSeq == lastSnapshotSeq) 1 else 2 }
-        if (!markersExist) return@transaction ChatDbResult.Invalid("crew first or last snapshot marker is missing")
-        val digest = losslessSnapshotDigest(row)
-        verifySnapshotEvidence(snapshot)
-        persistCrewSnapshot(conversationId, row, snapshot, digest, firstSnapshotSeq, lastSnapshotSeq)
         ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
     }
 

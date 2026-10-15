@@ -30,7 +30,7 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "69e03d71e91fdcb3649824a652bf777a" // M2 adds conversations.import_offset; schema v1 is not published yet
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "<update after build>" // update after build
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -300,9 +300,9 @@ class JarvysChatDatabaseM0Test {
         }.isFailure)
         assertConstraint {
             database.testChatSql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                arrayOf<Any?>(id, "chat", 0, 0, 0, 1L, 1L, 0L, 1L, "not_started"),
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 0, 1L, 1L, 0L, 1L),
             )
         }
         assertEquals(99L, scalarLong(
@@ -313,8 +313,8 @@ class JarvysChatDatabaseM0Test {
     }
 
     @Test
-    fun deletingConversationThatWasNeverImportedLeavesPermanentTombstone() = onDatabaseThread {
-        val id = "not-imported-yet"
+    fun deletingConversationThatWasNeverCreatedLeavesPermanentTombstone() = onDatabaseThread {
+        val id = "never-created"
         assertEquals(0, database.conversationDao().deleteById(id, 77L))
         assertTrue(database.conversationDao().isTombstoned(id))
         assertEquals(77L, scalarLong(
@@ -352,9 +352,9 @@ class JarvysChatDatabaseM0Test {
         // allowed-replace-fixture: exercise the abort trigger that prevents REPLACE from cascading children.
         assertConstraintMessage("INSERT OR REPLACE conversation", "conversation_exists") {
             sqlite.execSQL(
-                "INSERT OR REPLACE INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " + // allowed-replace-fixture
-                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                arrayOf<Any?>(id, "chat", 0, 0, 0, 2L, 2L, 0L, 1L, "not_started"),
+                "INSERT OR REPLACE INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " + // allowed-replace-fixture
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 0, 2L, 2L, 0L, 1L),
             )
         }
         assertEquals(1L, rowCount(sqlite, "conversation_items"))

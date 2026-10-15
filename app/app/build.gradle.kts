@@ -67,11 +67,6 @@ android {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
             it.systemProperty("room.schemaDir", "$projectDir/schemas")
-            it.systemProperty(
-                "jarvys.goldenLedgers",
-                System.getProperty("jarvys.goldenLedgers") ?: "C:\\Projects\\Jarvys-out\\golden-ledgers",
-            )
-            it.systemProperty("jarvys.goldenLedgers.optional", System.getProperty("jarvys.goldenLedgers.optional") ?: "false")
         }
     }
     compileOptions {

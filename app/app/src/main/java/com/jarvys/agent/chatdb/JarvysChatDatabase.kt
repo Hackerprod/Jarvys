@@ -32,7 +32,7 @@ import kotlin.coroutines.ContinuationInterceptor
 /**
  * Normalized Room store for the conversation ledger (M0 schema version). Room entities do not emit
  * SQL CHECK constraints; triggers install the invariants SQLite can enforce. Remaining payload,
- * enum, bounds, optional sequence-marker, and first-wins import checks are M1 repository responsibilities.
+ * enum, bounds, optional sequence-marker, and first-wins checks are M1 repository responsibilities.
  * Do not call [clearAllTables]: permanent tombstones are immutable and intentionally reject deletion.
  */
 @Database(

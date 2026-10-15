@@ -308,33 +308,6 @@ class StrictJournalRepositoryTest {
         }
     }
 
-    @Test fun emptyFileDigestMeansUnknownAndCanBeCompletedLater() = onDatabaseThread {
-        ensure("digest-compat")
-        val path = "chats/digest-compat/report.bin"
-        val unknown = success(artifacts.appendDeliveredArtifactImported(DeliveredArtifactInput(
-            conversationId = "digest-compat", artifactId = "unknown-digest", name = "report.bin", mimeType = null,
-            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = "",
-        )))
-        val knownSha = "e".repeat(64)
-        val completed = success(artifacts.appendDeliveredArtifact(DeliveredArtifactInput(
-            conversationId = "digest-compat", artifactId = "known-digest", name = "report.bin", mimeType = null,
-            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = knownSha,
-        )))
-        assertEquals(unknown.file_ref_id, completed.file_ref_id)
-        assertEquals(knownSha, database.testChatSql.query(
-            "SELECT sha256 FROM file_refs WHERE id=?", arrayOf(completed.file_ref_id),
-        ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
-
-        val laterUnknown = success(artifacts.appendDeliveredArtifactImported(DeliveredArtifactInput(
-            conversationId = "digest-compat", artifactId = "later-unknown", name = "report.bin", mimeType = null,
-            sizeBytes = 8L, kind = "FILE", relativePath = path, sha256 = "",
-        )))
-        assertEquals(completed.file_ref_id, laterUnknown.file_ref_id)
-        assertEquals(knownSha, database.testChatSql.query(
-            "SELECT sha256 FROM file_refs WHERE id=?", arrayOf(laterUnknown.file_ref_id),
-        ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
-    }
-
     @Test fun strictAndArtifactReadQueriesStayOnQueryExecutorAndUseBoundedStatements() {
         val fixtures = onDatabaseThread {
             val result = resultFixture()

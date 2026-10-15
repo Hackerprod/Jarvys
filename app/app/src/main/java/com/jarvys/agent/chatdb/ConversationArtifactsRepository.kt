@@ -58,18 +58,9 @@ sealed interface ChatFileOwnership {
  */
 internal class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /** Stores one `delivered_file`; duplicate `(conversation_id,artifact_id)` content is idempotent, differing content conflicts. */
-    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = appendDeliveredArtifactInternal(input, allowUnknownChecksum = false)
-
-    /** Legacy delivered-file rows may omit a digest; empty string records unknown without inventing one. */
-    internal suspend fun appendDeliveredArtifactImported(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> =
-        appendDeliveredArtifactInternal(input, allowUnknownChecksum = true)
-
-    private suspend fun appendDeliveredArtifactInternal(
-        input: DeliveredArtifactInput,
-        allowUnknownChecksum: Boolean,
-    ): ChatDbResult<ConversationArtifact> = transaction {
+    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||
-            (!allowUnknownChecksum && input.sha256.isBlank()) || input.sizeBytes < 0L || input.kind.isBlank())
+            input.sha256.isBlank() || input.sizeBytes < 0L || input.kind.isBlank())
             return@transaction ChatDbResult.Invalid("delivered artifact metadata is required")
         ensureConversationExists(input.conversationId)
         val mime = normalizeMimeType(input.mimeType)
@@ -101,18 +92,12 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
      * `appendGeneratedImageFailure` (`LocalRunStore.java:appendGeneratedImageEvent`,
      * `LocalRunStore.java:appendGeneratedImageFailure`); image bytes stay on disk and `file_refs` records metadata.
      */
-    suspend fun appendGeneratedImage(input: GeneratedImageInput): ChatDbResult<GeneratedImage> = appendGeneratedImageInternal(input, allowUnknownDigest = false)
-
-    private suspend fun appendGeneratedImageInternal(
-        input: GeneratedImageInput,
-        allowUnknownDigest: Boolean,
-    ): ChatDbResult<GeneratedImage> = transaction {
+    suspend fun appendGeneratedImage(input: GeneratedImageInput): ChatDbResult<GeneratedImage> = transaction {
         if (input.conversationId.isBlank() || input.status.isBlank() || input.bytes?.let { it < 0L } == true)
             return@transaction ChatDbResult.Invalid("generated image fields are invalid")
         val hasAnyFileMetadata = input.imagePath != null || input.sha256 != null || input.bytes != null
         val hasCompleteFileMetadata = input.imagePath != null && input.sha256 != null && input.bytes != null
-        val legacyPathWithoutDigestOrSize = allowUnknownDigest && input.imagePath != null && input.sha256 == null && input.bytes == null
-        if (hasAnyFileMetadata && !hasCompleteFileMetadata && !legacyPathWithoutDigestOrSize)
+        if (hasAnyFileMetadata && !hasCompleteFileMetadata)
             return@transaction ChatDbResult.Invalid("generated image path, digest, and byte count must be supplied together")
         ensureConversationExists(input.conversationId)
         val time = input.createdAtSeconds ?: nowSeconds()
@@ -128,10 +113,6 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
         )
         ChatDbResult.Success(readGeneratedImage(input.conversationId, seq)!!)
     }
-
-    /** Explicit import entry point; an empty SHA-256 stays empty to represent an unknown legacy digest. */
-    internal suspend fun appendGeneratedImageImported(input: GeneratedImageInput): ChatDbResult<GeneratedImage> =
-        appendGeneratedImageInternal(input, allowUnknownDigest = true)
 
     /** Indexed equivalent of `LocalRunStore.findChatFile` (`LocalRunStore.java:findChatFile`) for delivered and message-attachment ownership. */
     suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = readSnapshot {

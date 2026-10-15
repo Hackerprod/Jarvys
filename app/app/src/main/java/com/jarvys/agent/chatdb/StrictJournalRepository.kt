@@ -779,7 +779,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         }
         requireExactCoordinationSource(durable.reference)
         ChatSqlBeforeWriteGuard.invoke(beforeWrite)
-        val transitionAtMillis = importedNowMillis() ?: maxOf(System.currentTimeMillis(), durable.stateAtMillis)
+        val transitionAtMillis = maxOf(System.currentTimeMillis(), durable.stateAtMillis)
         val transitioned = durable.withState(target, transitionAtMillis)
         val seq = appendItem(durable.reference.ownerCentralSessionId, CoordinationReply.STATE_TYPE, durable.reference.referenceId)
         // The SQL trigger validates the transition against the old reply state, so insert its
@@ -993,15 +993,12 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     }
 
     private fun appendItem(conversationId: String, kind: String, key: String): Long {
-        val imported = importedPositionFor(conversationId)
         val current = sql.query("SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId)).use { c ->
             if (!c.moveToFirst()) throw JournalAbort("conversation_not_found")
             c.getLong(0)
         }
-        if (imported != null && imported.seq != current) throw JournalAbort("import_sequence_mismatch:expected=$current,source=${imported.seq}")
-        val sequence = imported?.seq ?: current
         val changed = sql.compileStatement("UPDATE conversations SET next_seq=?,updated_at=? WHERE id=? AND next_seq=?").run {
-            bindLong(1, sequence + 1L); bindLong(2, imported?.conversationUpdatedAtMillis ?: System.currentTimeMillis()); bindString(3, conversationId); bindLong(4, current); executeUpdateDelete()
+            bindLong(1, current + 1L); bindLong(2, System.currentTimeMillis()); bindString(3, conversationId); bindLong(4, current); executeUpdateDelete()
         }
         if (changed != 1) throw JournalAbort("sequence_conflict")
         // LRS timeline projection admits `workspace_result_notice`; anchor it like other
@@ -1012,11 +1009,9 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         ).use { c -> if (c.moveToFirst()) c.getLong(0) else null } else null
         sql.execSQL(
             "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            arrayOf(conversationId, sequence, kind, key, imported?.sortSeq ?: sequence, imported?.sortSub ?: 0,
-                if (imported == null) turnAnchor else imported.turnAnchorSeq,
-                imported?.createdAtSeconds ?: System.currentTimeMillis() / 1000.0),
+            arrayOf(conversationId, current, kind, key, current, 0, turnAnchor, System.currentTimeMillis() / 1000.0),
         )
-        return sequence
+        return current
     }
 
     private fun requireExecutionConversation(id: String) {

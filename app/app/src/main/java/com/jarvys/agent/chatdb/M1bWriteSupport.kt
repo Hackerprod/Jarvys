@@ -32,7 +32,6 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         sortSeq: Long? = null,
         sortSub: Int = 0,
     ): Long {
-        val imported = importedPositionFor(conversationId)
         if (sql.query(
                 "SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId),
@@ -41,17 +40,14 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
             if (!it.moveToFirst()) throw M1bAbort("conversation_not_found")
             it.getLong(0)
         }
-        if (imported != null && next != imported.seq) {
-            throw M1bAbort("import_sequence_mismatch:expected=$next,source=${imported.seq}")
-        }
-        val sequence = imported?.seq ?: next
-        val timestamp = imported?.createdAtSeconds ?: createdAtSeconds
-        val effectiveSortSeq = imported?.sortSeq ?: sortSeq ?: sequence
-        val effectiveSortSub = imported?.sortSub ?: sortSub
-        val effectiveTurnAnchor = if (imported == null) turnAnchorSeq else imported.turnAnchorSeq
+        val sequence = next
+        val timestamp = createdAtSeconds
+        val effectiveSortSeq = sortSeq ?: sequence
+        val effectiveSortSub = sortSub
+        val effectiveTurnAnchor = turnAnchorSeq
         sql.execSQL(
             "UPDATE conversations SET next_seq=?,updated_at=? WHERE id=? AND next_seq=?",
-            arrayOf(sequence + 1L, imported?.conversationUpdatedAtMillis ?: System.currentTimeMillis(), conversationId, next),
+            arrayOf(sequence + 1L, System.currentTimeMillis(), conversationId, next),
         )
         sql.execSQL(
             "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) " +
@@ -79,9 +75,9 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         if (!exists) throw M1bAbort("conversation_not_found")
     }
 
-    protected fun nowSeconds(): Double = importedNowSeconds() ?: System.currentTimeMillis() / 1000.0
+    protected fun nowSeconds(): Double = System.currentTimeMillis() / 1000.0
 
-    protected fun nowMillis(): Long = importedNowMillis() ?: System.currentTimeMillis()
+    protected fun nowMillis(): Long = System.currentTimeMillis()
 
     protected class M1bAbort(val reason: String) : RuntimeException(reason)
 }

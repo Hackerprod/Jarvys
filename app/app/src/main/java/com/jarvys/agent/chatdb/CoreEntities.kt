@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 
-/** Conversation metadata and legacy-import receipts. Deletion tombstones live independently in [Tombstone]. */
+/** Conversation metadata. Deletion tombstones live independently in [Tombstone]. */
 @Entity(tableName = "conversations")
 data class Conversation(
     @androidx.room.PrimaryKey val id: String,
@@ -19,11 +19,6 @@ data class Conversation(
     val last_message_at: Long? = null,
     val message_count: Long = 0L,
     val next_seq: Long = 1L,
-    val import_state: String = "not_started",
-    val legacy_ledger_bytes: Long? = null,
-    val legacy_ledger_sha256: String? = null,
-    val imported_at: Long? = null,
-    @androidx.room.ColumnInfo(defaultValue = "0") val import_offset: Long = 0L,
 )
 
 /** Deletion history survives the conversation CASCADE and permanently blocks resurrection. */
@@ -111,8 +106,6 @@ data class Message(
     val proactive_decision_id: String? = null,
     val interrupt_request_id: String? = null,
     val ack_required: Boolean = false,
-    /** Optional source integer retained from the proposed legacy schema; M2 will define its importer mapping. */
-    val legacy_id: Long? = null,
     val created_at: Double,
     val updated_at: Double,
     val hidden_kind: String? = null,
