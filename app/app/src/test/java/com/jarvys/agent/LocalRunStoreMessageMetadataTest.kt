@@ -6,14 +6,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Rule
-import org.junit.rules.TemporaryFolder
 import java.io.File
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class LocalRunStoreMessageMetadataTest {
-    @Rule @JvmField val temporaryFolder = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
     @Test fun pagedTimelineCacheRefreshesAfterAppendAndEditRows() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "paged-refresh-${System.nanoTime()}"
         val userId = store.appendConversationMessage(session, "user", "First question")
         val assistantId = store.appendConversationMessage(session, "assistant", "First answer", null, "", userId)
@@ -36,7 +37,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun olderTimelinePageHonorsNewerAssistantDeletionForToolRows() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "paged-tool-invalidation-${System.nanoTime()}"
         val oldUserId = store.appendConversationMessage(session, "user", "Old request")
         store.appendReflectionToolEvent(session, oldUserId, "Old tool", "mcp", "tool_result", "old-call")
@@ -55,7 +56,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun messageDurationAndTranslationSurviveTimelineRestoreWithoutEnteringModelContext() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "footer-test-${System.nanoTime()}"
         store.appendConversationMessage(session, "user", "Explain this")
         val id = store.appendConversationMessage(session, "assistant", "A concise answer", 850L, "", "")
@@ -79,7 +80,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun regenerationReplacesOldAnswerAndTranslationWithoutDuplicatingUserTurn() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "regen-${System.nanoTime()}"
         val userId = store.appendConversationMessage(session, "user", "Do the task")
         val oldId = store.appendConversationMessage(session, "assistant", "Old answer", null, "old-run", userId)
@@ -103,7 +104,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun regenerationInvalidatesPriorCompactionButKeepsRawIndexBoundaryForNewCheckpoint() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "regen-compact-${System.nanoTime()}"
         store.appendConversationMessage(session, "user", "first request")
         store.appendConversationMessage(session, "assistant", "first answer")
@@ -123,39 +124,8 @@ class LocalRunStoreMessageMetadataTest {
         assertFalse(compactedAgain.any { it.content.contains("old answer in stale summary") })
     }
 
-    @Test fun legacySessionsWithoutMessageIdsOrReplacementRecordsKeepTheirMessages() {
-        val root = temporaryFolder.newFolder()
-        val store = LocalRunStore(root)
-        val file = File(root, "jarvys/conversations/legacy.jsonl")
-        file.writeText("""{"role":"user","content":"legacy prompt","timestamp":1}
-{"role":"assistant","content":"legacy answer","timestamp":2}
-""")
-
-        assertEquals(listOf("legacy prompt", "legacy answer"), store.loadConversationContext("legacy").map { it.content })
-        assertEquals(2, store.readConversationTimeline("legacy").size)
-    }
-
-    @Test fun legacyAssistantRowsWithTokenFieldsAreReadAsMessagesAndMetricsAreIgnored() {
-        val root = temporaryFolder.newFolder()
-        val store = LocalRunStore(root)
-        val session = "legacy-token-fields"
-        val file = File(root, "jarvys/conversations/$session.jsonl")
-        file.parentFile?.mkdirs()
-        file.writeText("""{"role":"assistant","content":"historic answer","messageId":"old-id","timestamp":2,"promptTokens":6400,"completionTokens":28,"cachedTokens":0,"totalTokens":6428,"durationMs":930,"status":"COMPLETED"}
-""")
-
-        val event = store.readConversationTimeline(session).single()
-        assertEquals("assistant", event.kind)
-        assertEquals("historic answer", event.text)
-        assertNull(event.stage)
-        assertEquals(930L, event.durationMs)
-        assertFalse(event.toString().contains("promptTokens"))
-        assertFalse(event.toString().contains("6428"))
-        assertEquals(listOf("historic answer"), store.loadConversationContext(session).map { it.content })
-    }
-
     @Test fun deletedAssistantIsTombstonedFromContextAndTimeline() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "delete-${System.nanoTime()}"
         store.appendConversationMessage(session, "user", "Keep the question")
         val answerId = store.appendConversationMessage(session, "assistant", "Hide this answer")
@@ -169,7 +139,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun assistantDeletionUsesTheOwnerPersistedOnTheAssistantRow() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "delete-owner-${System.nanoTime()}"
         val originalUser = store.appendConversationMessage(session, "user", "Original turn")
         store.appendReflectionToolEvent(session, originalUser, "Original tool", "mcp", "tool_result", "original-tool")
@@ -188,7 +158,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun translationCanBeHiddenAndLaterReplacedUsingAppendOnlyRecords() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "translation-hide-${System.nanoTime()}"
         store.appendConversationMessage(session, "user", "Translate this")
         val answerId = store.appendConversationMessage(session, "assistant", "Hello")
@@ -203,7 +173,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun completedOutcomeHasNoStageLiveOrRestoredWhileOtherOutcomesKeepTheirStage() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "assistant-outcome-${System.nanoTime()}"
         val outcomes = listOf("COMPLETED", "STOPPED", "FAILED", "PARTIAL")
         outcomes.forEachIndexed { index, outcome ->
@@ -225,7 +195,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun restoredToolRowsStayBetweenTheirUserAndAssistantAndCarryOnlySafeMetadata() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "restored-tools-${System.nanoTime()}"
         val userId = store.appendConversationMessage(session, "user", "Send this message")
         store.appendReflectionToolEvent(session, userId, "Telegram Send Message", "connector:telegram",
@@ -248,7 +218,7 @@ class LocalRunStoreMessageMetadataTest {
     }
 
     @Test fun regeneratedOrDeletedAssistantTurnsDoNotLeaveTheirToolRowsInTimeline() {
-        val store = LocalRunStore(temporaryFolder.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "invalidated-tools-${System.nanoTime()}"
         val regeneratedUser = store.appendConversationMessage(session, "user", "Try again")
         store.appendReflectionToolEvent(session, regeneratedUser, "Old tool", "mcp", "tool_result", "old-call")

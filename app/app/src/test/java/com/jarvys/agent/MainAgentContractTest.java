@@ -7,11 +7,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
 /** Deterministic contracts and real loop/store events. This is not a live-model quality evaluation. */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+@org.robolectric.annotation.Config(sdk = 28)
 public class MainAgentContractTest {
-  @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
   @Test public void coreIsBoundedOriginalPrincipalContractWithLocale() {
     assertTrue(MainAgentPrompt.CORE.length() <= 6500);
@@ -107,7 +108,7 @@ public class MainAgentContractTest {
   }
 
   @Test public void commentaryIsDurableBeforeToolAndNotDuplicatedInContext() throws Exception {
-    File files = temporary.newFolder(); LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory(); LocalRunStore store = chatTestStore.localRunStore(files);
     String session = "principal-progress"; store.appendConversationMessage(session, "user", "Inspect");
     List<String> order = new ArrayList<>(); AtomicInteger turns = new AtomicInteger();
     CoreAgentLoop loop = new CoreAgentLoop((history,prompt,tools,token) -> turns.getAndIncrement() == 0
@@ -126,7 +127,7 @@ public class MainAgentContractTest {
         });
     assertEquals(Arrays.asList("progress", "tool", "final"), order);
     assertEquals("COMPLETED", result.outcome);
-    List<AgentRunUiEvent> restored = new LocalRunStore(files).readConversationTimeline(session);
+    List<AgentRunUiEvent> restored = chatTestStore.localRunStore(files).readConversationTimeline(session);
     assertEquals(1, restored.stream().filter(e -> "PROGRESS".equals(e.getStage())).count());
     assertEquals(1, store.loadConversationContext(session).stream().filter(t -> t.content.contains("I found the source")).count());
     assertEquals(1, store.readConversationMessages(session).size());
@@ -169,10 +170,10 @@ public class MainAgentContractTest {
   }
 
   @Test public void pendingInputIsDurableInertAndOnlyDispatchedOnce() throws Exception {
-    File files=temporary.newFolder(); LocalRunStore store=new LocalRunStore(files);
+    File files=chatTestStore.newFilesDirectory(); LocalRunStore store=chatTestStore.localRunStore(files);
     store.appendConversationMessage("interrupt","user","old");
     String id=store.appendInterruptRequest("interrupt","new instruction",Collections.singletonList("skill"),true);
-    LocalRunStore reopened=new LocalRunStore(files);
+    LocalRunStore reopened=chatTestStore.localRunStore(files);
     assertEquals(1,reopened.readConversationMessages("interrupt").size());
     assertEquals(1,reopened.loadConversationContext("interrupt").size());
     assertEquals(1,reopened.readConversationTimeline("interrupt").stream().filter(e->"QUEUED".equals(e.getStage())).count());
@@ -184,7 +185,7 @@ public class MainAgentContractTest {
   }
 
   @Test public void pendingInputNeverCrossesConversations() throws Exception {
-    LocalRunStore store=new LocalRunStore(temporary.newFolder());
+    LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
     String id=store.appendInterruptRequest("chat-one","change direction",Collections.emptyList(),false);
     assertNull(store.dispatchInterruptRequest("chat-two",id));
     assertTrue(store.loadConversationContext("chat-two").isEmpty());
@@ -192,7 +193,7 @@ public class MainAgentContractTest {
   }
 
   @Test public void repeatedTextHasDistinctRequestIdentity() throws Exception {
-    LocalRunStore store=new LocalRunStore(temporary.newFolder());
+    LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
     String a=store.appendInterruptRequest("same","same text",Collections.emptyList(),false);
     String b=store.appendInterruptRequest("same","same text",Collections.emptyList(),false);
     assertNotEquals(a,b); assertNotNull(store.dispatchInterruptRequest("same",a)); assertNotNull(store.dispatchInterruptRequest("same",b));
@@ -200,13 +201,13 @@ public class MainAgentContractTest {
   }
 
   @Test public void invalidReplacementDoesNotPersist() throws Exception {
-    LocalRunStore store=new LocalRunStore(temporary.newFolder());
+    LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
     try { store.appendInterruptRequest("main"," ",Collections.emptyList(),false); fail(); } catch (IllegalArgumentException expected) { }
     assertTrue(store.readConversationTimeline("main").isEmpty());
   }
 
   @Test public void regenerationHidesInterimWithoutReplayingEffects() throws Exception {
-    File files=temporary.newFolder(); LocalRunStore store=new LocalRunStore(files); String session="regen-progress";
+    File files=chatTestStore.newFilesDirectory(); LocalRunStore store=chatTestStore.localRunStore(files); String session="regen-progress";
     String user=store.appendConversationMessage(session,"user","inspect"); AtomicInteger turns=new AtomicInteger();
     CoreAgentLoop loop=new CoreAgentLoop((h,p,d,t)->turns.getAndIncrement()==0?reply("Progress", "regen-call"):new ModelReply("Done",Collections.emptyList()),
         new CoreToolRegistry(Collections.singletonList(tool("read",(a,t)->CoreToolResult.success("ok")))),"system",session);

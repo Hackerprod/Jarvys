@@ -12,7 +12,7 @@ public final class CodingJobConversationGuard {
 
   public <T> T active(String conversationId, Callable<T> action) throws Exception {
     T tCall;
-    synchronized (ConversationMetadataAccess.LOCK) {
+    synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
       if (this.metadata.read(conversationId).deleted) {
         throw new IllegalStateException("This chat has been deleted; coding jobs are unavailable");
       }

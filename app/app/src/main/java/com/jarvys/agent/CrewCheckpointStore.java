@@ -143,7 +143,7 @@ public final class CrewCheckpointStore {
     }
 
     public void save(String conversationId, String botId, JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
                 if (scopeIdentity == null || scopeIdentity.isEmpty() || loop == null || metadata == null || artifactOwnership == null) {
@@ -210,7 +210,7 @@ public final class CrewCheckpointStore {
     }
 
     public Snapshot load(String conversationId, String botId) {
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
                 File target = file(conversationId, botId);
@@ -232,7 +232,7 @@ public final class CrewCheckpointStore {
      * save may have renamed it before failing directory sync. No file or receipt is created.
      */
     public ConfirmedSnapshot confirmDurable(String conversationId, String botId, String expectedScopeIdentity) {
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
                 if (expectedScopeIdentity == null || expectedScopeIdentity.isEmpty()) {
@@ -274,7 +274,7 @@ public final class CrewCheckpointStore {
     }
 
     private Listing scan(String conversationId) {
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             Listing result = new Listing();
             File directory = new File(this.filesDirectory, "jarvys/crew-context/" + digest(conversationId.getBytes(StandardCharsets.UTF_8)));

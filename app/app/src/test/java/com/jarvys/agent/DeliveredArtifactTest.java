@@ -22,6 +22,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class DeliveredArtifactTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore(true, true);
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     private File files;
     private LocalRunStore ledger;
@@ -34,7 +35,7 @@ public class DeliveredArtifactTest {
         java.lang.reflect.Field singleton = SecretStore.class.getDeclaredField("singleton"); singleton.setAccessible(true);
         priorSecrets = singleton.get(null);
         singleton.set(null, new SecretStore(context.getSharedPreferences("delivery-fixture", Context.MODE_PRIVATE)));
-        files = temporary.getRoot(); ledger = new LocalRunStore(files);
+        files = chatTestStore.newFilesDirectory(); ledger = chatTestStore.localRunStore(files);
         artifacts = new DeliveredArtifactStore(new File(files, "jarvys"));
         workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
                 null, null, null, session, false);
@@ -47,7 +48,7 @@ public class DeliveredArtifactTest {
     private DeliverFileTool tool() { return new DeliverFileTool(session, workspace, artifacts, ledger); }
     private Map<String,Object> args(String path) { return Collections.singletonMap("path", path); }
     private ChatAttachment delivered() {
-        return new LocalRunStore(files).readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact() != null)
+        return chatTestStore.localRunStore(files).readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact() != null)
                 .findFirst().get().getDeliveredArtifact();
     }
     @Test public void nativeSnapshotSurvivesWorkspaceEditAndProcessRecreation() throws Exception {
@@ -58,7 +59,7 @@ public class DeliveredArtifactTest {
         workspace.write("report.txt", "replacement");
         File saved = new DeliveredArtifactStore(new File(files, "jarvys")).resolve(session, file);
         assertEquals("original", new String(Files.readAllBytes(saved.toPath()), StandardCharsets.UTF_8));
-        assertTrue(new LocalRunStore(files).conversationHasPrivateImagesOrAttachments(session));
+        assertTrue(chatTestStore.localRunStore(files).conversationHasPrivateImagesOrAttachments(session));
         assertFalse(result.content.contains(files.getAbsolutePath()));
         assertFalse(result.content.contains("original"));
         assertEquals(artifacts.sha256(session,file), new JSONObject(result.content).getString("sha256"));
@@ -77,7 +78,7 @@ public class DeliveredArtifactTest {
         for (int i=0;i<80;i++) { ledger.appendConversationMessage(session,"user","Follow-up " + i); ledger.appendConversationMessage(session,"assistant","Discussed " + i); }
         ledger.appendCompaction(session,"Earlier work produced a report attachment.",150,"automatic","all",150);
         workspace.write("report.txt","new workspace version");
-        LocalRunStore reopened = new LocalRunStore(files);
+        LocalRunStore reopened = chatTestStore.localRunStore(files);
         assertEquals(1,reopened.readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact()!=null).count());
         assertEquals(artifact,reopened.findChatFile(session,"delivered",artifact.id));
         assertEquals(sha,new DeliveredArtifactStore(new File(files,"jarvys")).sha256(session,artifact));
@@ -131,7 +132,7 @@ public class DeliveredArtifactTest {
     @Test public void symlinkFilesAndParentsFailClosedWithoutLeakingPrivateBytes() throws Exception {
         workspace.write("base.txt", "safe");
         File root = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(session));
-        File outside = temporary.newFolder("private"); Files.write(new File(outside, "token").toPath(), "secret".getBytes(StandardCharsets.UTF_8));
+        File outside = chatTestStore.newFilesDirectory("private"); Files.write(new File(outside, "token").toPath(), "secret".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(new File(root, "link").toPath(), new File(outside, "token").toPath());
         Files.createSymbolicLink(new File(root, "directory").toPath(), outside.toPath());
         assertFalse(tool().execute(args("link"), CancellationToken.uncancellable()).success);
@@ -142,7 +143,7 @@ public class DeliveredArtifactTest {
         workspace.write("folder/file.txt", "safe");
         File root = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(session));
         File parent = new File(root,"folder"), kept = new File(root,"kept");
-        File outside = temporary.newFolder("outside"); Files.write(new File(outside,"file.txt").toPath(), "evil".getBytes(StandardCharsets.UTF_8));
+        File outside = chatTestStore.newFilesDirectory("outside"); Files.write(new File(outside,"file.txt").toPath(), "evil".getBytes(StandardCharsets.UTF_8));
         ArtifactOsShadow.beforeOpen = () -> { try { Files.move(parent.toPath(), kept.toPath()); Files.createSymbolicLink(parent.toPath(), outside.toPath()); } catch(Exception e) { throw new RuntimeException(e); } };
         ArtifactOsShadow.afterOpen = () -> { try { Files.delete(parent.toPath()); Files.move(kept.toPath(), parent.toPath()); } catch(Exception e) { throw new RuntimeException(e); } };
         assertFalse(tool().execute(args("folder/file.txt"), CancellationToken.uncancellable()).success);
@@ -194,7 +195,7 @@ public class DeliveredArtifactTest {
         assertEquals("COMPLETED", loop.run("Attach report", Collections.emptyList(), CancellationToken.uncancellable(), null).outcome);
         ChatAttachment artifact = delivered();
         for (int i=0; i<3; i++) {
-            LocalRunStore restored = new LocalRunStore(files);
+            LocalRunStore restored = chatTestStore.localRunStore(files);
             assertTrue(restored.loadConversationContext(session).stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
                     && t.toolCallId.equals("deliver-real-1") && t.content.contains("delivered:" + artifact.id)));
             assertEquals(1, restored.readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact() != null).count());

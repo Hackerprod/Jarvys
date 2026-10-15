@@ -10,17 +10,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class CrewMissionPersistenceTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @get:Rule val temp = TemporaryFolder()
 
     @Test
-    fun legacyConversationMigratesAdditivelyAndActiveBotsRecoverAsInterrupted() {
-        val store = LocalRunStore(temp.root)
+    fun activeCrewMissionSnapshotsRecoverAsInterrupted() {
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "crew-persist-session"
         store.appendConversationMessage(session, "user", "Compare these sources")
-        val oldMessages = store.readConversationMessages(session).map { it.optString("content") }
         assertTrue(store.readCrewMissionSnapshots(session).isEmpty())
 
         val projectId = WorkspaceStore.projectIdForSession(session)
@@ -34,15 +35,12 @@ class CrewMissionPersistenceTest {
         val snapshot = CrewMissionSnapshot("mission-1", session, "dead-process", "Compare these sources",
             "RUNNING", "", 100L, 0L, listOf(bot), listOf(question))
         store.appendCrewMissionSnapshot(snapshot)
-        val ledger = File(temp.root, "jarvys/conversations/$session.jsonl").readText()
-        assertTrue(ledger.contains("\"crewSchemaVersion\":${CrewMissionSnapshot.SCHEMA_VERSION}"))
-        assertFalse(ledger.contains("tokensUsed"))
-
         val migrated = store.recoverCrewMissions(session).single()
         assertEquals("INTERRUPTED", migrated.status)
         assertEquals("INTERRUPTED", migrated.bots.single().status)
         assertTrue(migrated.bots.single().error.isEmpty())
-        assertEquals(oldMessages, store.readConversationMessages(session).map { it.optString("content") })
+        assertEquals(listOf("Compare these sources"),
+            store.readConversationMessages(session).map { it.optString("content") })
         assertEquals("Primary source notes", board.read("/board/source.md"))
 
         val timelineMission = store.readConversationTimeline(session).single { it.kind == "crew_mission" }

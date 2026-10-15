@@ -13,16 +13,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
 /** Focused behavior tests for compaction at model-turn boundaries and its recovery path. */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+@org.robolectric.annotation.Config(sdk = 28)
 public class CoreAgentLoopCompactionBehaviorTest {
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
     @Test public void midRunPreflightCompactionKeepsCurrentUserTurnWhenNextPromptIsEmpty() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "mid-run-current-user";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         store.appendConversationMessage(session, "assistant", "old context " + repeat('x', 20_000));
         store.appendConversationMessage(session, "user", "Do the current task");
         List<ConversationTurn> history = store.loadConversationContext(session);
@@ -65,9 +66,9 @@ public class CoreAgentLoopCompactionBehaviorTest {
     }
 
     @Test public void modelReplyDoesNotTriggerCompactionBeforeItsToolCallsExecute() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "no-post-reply-compaction";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         AtomicInteger summaries = new AtomicInteger();
         AtomicInteger requests = new AtomicInteger();
         AtomicInteger effects = new AtomicInteger();
@@ -102,9 +103,9 @@ public class CoreAgentLoopCompactionBehaviorTest {
     }
 
     @Test public void failedCompactionTruncatesOnlyToolResultsAndKeepsMoreThanFortyMessages() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "failed-compaction-tool-budget";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         AtomicInteger summaryAttempts = new AtomicInteger();
         AtomicReference<List<ConversationTurn>> received = new AtomicReference<>();
         List<ConversationTurn> history = new ArrayList<>();

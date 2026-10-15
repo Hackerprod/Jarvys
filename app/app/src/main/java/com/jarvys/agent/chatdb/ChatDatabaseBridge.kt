@@ -163,6 +163,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
         check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
             "ChatDatabaseBridge cannot be called inside an active chat database lease"
         }
+        check(Thread.currentThread() !== executorThread) {
+            "ChatDatabaseBridge cannot be re-entered from its own executor thread"
+        }
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "ChatDatabaseBridge blocking methods must not be called from the main thread"
         }
@@ -357,6 +360,15 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun dispatchInterruptRequestSync(conversationId: String, requestId: String): ChatDbResult<DispatchedInterrupt> =
         execute { it.conversations.dispatchInterruptRequest(conversationId, requestId) }
 
+    fun appendAndDispatchInterruptRequestSync(
+        conversationId: String,
+        content: String,
+        skills: List<String>,
+        memoryDisabled: Boolean,
+    ): ChatDbResult<DispatchedInterrupt> = execute {
+        it.modelTurnWriter.appendAndDispatchInterruptRequest(conversationId, content, skills, memoryDisabled)
+    }
+
     @JvmOverloads
     fun pendingInterruptRequestsSync(conversationId: String? = null): List<InterruptRequestValue> =
         execute { it.conversations.pendingInterruptRequests(conversationId) }
@@ -416,6 +428,28 @@ class ChatDatabaseBridge private constructor(context: Context) {
         turns: Int,
     ): ChatTimelineEventPage = execute {
         it.reader.readConversationTimelineBefore(conversationId, cursorSeq, turns).toPublicPage()
+    }
+
+    /** Reads a complete timeline under one read fence, loading its side tables once. */
+    fun readConversationTimelineSync(conversationId: String, turns: Int): List<AgentRunUiEvent> =
+        execute { it.reader.readConversationTimeline(conversationId, turns) }
+
+    fun persistStoppedSubmissionSync(
+        conversationId: String,
+        followUpRequestId: String?,
+        ownerUserMessageId: String?,
+        userMessageContentIfMissing: String?,
+        assistantMessage: String,
+        conversationKind: String,
+    ): ChatDbResult<StoppedSubmissionResult> = execute {
+        it.modelTurnWriter.persistStoppedSubmission(StoppedSubmissionInput(
+            conversationId = conversationId,
+            followUpRequestId = followUpRequestId,
+            ownerUserMessageId = ownerUserMessageId,
+            userMessageContentIfMissing = userMessageContentIfMissing,
+            assistantMessage = assistantMessage,
+            conversationKind = conversationKind,
+        ))
     }
 
     fun loadConversationContextSync(conversationId: String): List<ConversationTurn> =

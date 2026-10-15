@@ -5,10 +5,11 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class ToolActivityRecoveryTest {
-    @get:Rule val temporary=TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     private fun activity(key:String,stage:String="tool_call",detail:String="",skill:Boolean=false)=ToolActivity("$key/$stage",key,"same-call",
         if(skill) "read_skill" else "read",if(skill) "Read Skill" else "Read",if(skill) "skill.garden" else "",
         if(skill) "Gardening" else "",stage,detail,"","audit","workspace",100)
@@ -21,16 +22,16 @@ class ToolActivityRecoveryTest {
             .put("callId","same-call").put("toolName","read").put("output",output))
     }
     @Test fun everyTypedStageIsDurableButReopenHasOneRowWithFullEvidence() {
-        val root=temporary.newFolder();val store=LocalRunStore(root);val user=store.appendConversationMessage("chat","user","Inspect")
+        val root=chatTestStore.newFilesDirectory();val store=chatTestStore.localRunStore(root);val user=store.appendConversationMessage("chat","user","Inspect")
         calls(store,user,"batch");store.appendToolActivity("chat",user,activity("run"))
         store.appendToolActivity("chat",user,activity("run","tool_progress","Partial result"))
         result(store,"batch","Full result");store.appendToolActivity("chat",user,activity("run","tool_result","Full result"))
-        val row=LocalRunStore(root).readConversationTimeline("chat").single { it.kind=="tool" }
+        val row=chatTestStore.localRunStore(root).readConversationTimeline("chat").single { it.kind=="tool" }
         assertEquals("run",row.toolCallId);assertEquals("tool_result",row.stage);assertEquals("Full result",row.detail)
         assertTrue(row.toolActivity!!.allDetail().contains("Partial result"))
     }
     @Test fun sameRawCallAcrossTwoUsersAndTwoBatchesNeverMerges() {
-        val store=LocalRunStore(temporary.newFolder())
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         for(i in 1..2) {
             val user=store.appendConversationMessage("chat","user","Question $i");calls(store,user,"b$i")
             store.appendToolActivity("chat",user,activity("run$i"));result(store,"b$i","Result $i")
@@ -39,7 +40,7 @@ class ToolActivityRecoveryTest {
         assertEquals(listOf("Result 1","Result 2"),store.readConversationTimeline("chat").filter { it.kind=="tool" }.map { it.detail })
     }
     @Test fun repeatedCallWithinOneUserDistinctBatchesRetainsBothExecutions() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Retry")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Retry")
         for(i in 1..2) {
             calls(store,user,"b$i");store.appendToolActivity("chat",user,activity("run$i"));result(store,"b$i","Result $i")
             store.appendToolActivity("chat",user,activity("run$i","tool_result","Result $i"))
@@ -47,37 +48,37 @@ class ToolActivityRecoveryTest {
         assertEquals(listOf("run1","run2"),store.readConversationTimeline("chat").filter { it.kind=="tool" }.map { it.toolCallId })
     }
     @Test fun legacyDistinctBatchesWithRepeatedCallAndSameUserStaySeparate() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Inspect")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
         calls(store,user,"a");result(store,"a","First");calls(store,user,"b");result(store,"b","Second")
         assertEquals(listOf("First","Second"),store.readConversationTimeline("chat").filter { it.kind=="tool" }.map { it.detail })
     }
     @Test fun interruptedRowRecoversActualDurableResultRatherThanHidingIt() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Inspect")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
         calls(store,user,"a");store.appendToolActivity("chat",user,activity("run"));result(store,"a","Actual success")
         store.appendToolActivity("chat",user,activity("run","tool_interrupted"))
         val row=store.readConversationTimeline("chat").single { it.kind=="tool" }
         assertEquals("tool_result",row.stage);assertEquals("Actual success",row.detail)
     }
     @Test fun skillInterruptedBeforeAcceptedContentRetainsEvidenceWithoutClaimingLoaded() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Skill")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Skill")
         calls(store,user,"a","read_skill");store.appendToolActivity("chat",user,activity("run",skill=true));result(store,"a","Instructions")
         val row=store.readConversationTimeline("chat").single { it.kind=="tool" }
         assertEquals("tool_interrupted",row.stage);assertEquals("Instructions",row.detail);assertTrue(row.toolActivity!!.skill())
     }
     @Test fun missingResultStaysUnconfirmedAfterReopenAndDoesNotReplay() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Inspect")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
         calls(store,user,"a");store.appendToolActivity("chat",user,activity("run"))
         repeat(2) { assertEquals("tool_interrupted",store.readConversationTimeline("chat").single { it.kind=="tool" }.stage) }
     }
     @Test fun regenerationInvalidatesOldTypedRowsButPreservesReplacement() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Inspect")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
         store.appendToolActivity("chat",user,activity("old","tool_result","Old"))
         val assistant=store.appendConversationMessage("chat","assistant","Old",0L,"run",user,"COMPLETED")
         store.appendAssistantRegenerated("chat",assistant);store.appendToolActivity("chat",user,activity("new","tool_result","New"))
         assertEquals("new",store.readConversationTimeline("chat").single { it.kind=="tool" }.toolCallId)
     }
     @Test fun typedEvidenceDoesNotEnterModelTranscriptOrConversationMessages() {
-        val store=LocalRunStore(temporary.newFolder());val user=store.appendConversationMessage("chat","user","Inspect")
+        val store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());val user=store.appendConversationMessage("chat","user","Inspect")
         store.appendToolActivity("chat",user,activity("run","tool_result","UI_ONLY_MARKER"))
         assertFalse(store.readModelTranscriptRows("chat").any { it.toString().contains("UI_ONLY_MARKER") })
         assertFalse(store.readConversationMessages("chat").any { it.toString().contains("UI_ONLY_MARKER") })

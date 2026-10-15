@@ -24,6 +24,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GeneratedImageStoreTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @get:Rule val temporaryFolder = TemporaryFolder()
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
@@ -48,7 +49,7 @@ class GeneratedImageStoreTest {
     @Test
     fun imageRowsRoundTripAndConversationDeletionRemovesOnlyThatImageDirectory() {
         val files = temporaryFolder.root
-        val runStore = LocalRunStore(files)
+        val runStore = chatTestStore.localRunStore(files)
         val images = GeneratedImageStore(File(files, "jarvys"))
         val session = "generated-session"
         val relativePath = images.save(session, UUID.randomUUID().toString(), pngFixture())
@@ -134,9 +135,10 @@ class GeneratedImageStoreTest {
 
     @Test
     fun liveImageEventRefreshesFromLedgerWithoutDuplicationAndFailedRowsRestore() {
-        val store = LocalRunStore(temporaryFolder.root)
+        val files = chatTestStore.newFilesDirectory()
+        val store = chatTestStore.localRunStore(files)
         val session = "live-generated-image"
-        val images = GeneratedImageStore(File(temporaryFolder.root, "jarvys"))
+        val images = GeneratedImageStore(File(files, "jarvys"))
         val path = images.save(session, UUID.randomUUID().toString(), pngFixture())
         store.appendGeneratedImageEvent(session, path, "A lighthouse", "", "auto", "image/png")
         val restored = store.readConversationTimeline(session)

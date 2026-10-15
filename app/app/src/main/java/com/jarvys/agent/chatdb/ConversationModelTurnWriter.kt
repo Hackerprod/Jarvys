@@ -41,12 +41,97 @@ data class ConversationModelTurnResult(
     val inputMessageIdsChanged: List<String>,
 )
 
+/** One terminal STOP/failure checkpoint for a queued submission and its follow-up receipt. */
+data class StoppedSubmissionInput(
+    val conversationId: String,
+    val followUpRequestId: String? = null,
+    val ownerUserMessageId: String? = null,
+    val userMessageContentIfMissing: String? = null,
+    val assistantMessage: String,
+    val conversationKind: String = "chat",
+)
+
+data class StoppedSubmissionResult(
+    val ownerUserMessageId: String?,
+    val assistantMessage: StoredMessage,
+)
+
 /** Keeps the multi-repository write set atomic by invoking the existing repository transactions under one writer lease. */
 internal class ConversationModelTurnWriter(
     private val database: JarvysChatDatabase,
     private val conversations: ConversationRepository,
     private val transcript: ModelTranscriptRepository,
 ) {
+    /** Commits steering admission and its user-row dispatch before any provider callback runs. */
+    suspend fun appendAndDispatchInterruptRequest(
+        conversationId: String,
+        content: String,
+        skills: List<String>,
+        memoryDisabled: Boolean,
+    ): ChatDbResult<DispatchedInterrupt> {
+        return try {
+            database.withChatWriteTransaction {
+                val request = requireSuccess(conversations.appendInterruptRequest(
+                    conversationId, content, skills, memoryDisabled,
+                ))
+                requireSuccess(conversations.dispatchInterruptRequest(conversationId, request.requestId))
+            }
+        } catch (abort: CompositeWriteAbort) {
+            abort.result
+        }
+    }
+
+    /**
+     * Atomically dispatches an optional steering receipt, records the failed assistant result, and
+     * resolves both the owning user row and the receipt. Keeping these operations together means a
+     * stopped follow-up cannot be recovered after its failure bubble was written.
+     */
+    suspend fun persistStoppedSubmission(input: StoppedSubmissionInput): ChatDbResult<StoppedSubmissionResult> {
+        if (input.conversationId.isBlank()) return ChatDbResult.Invalid("conversation id is required")
+        if (input.assistantMessage.isBlank()) return ChatDbResult.Invalid("terminal assistant message is required")
+        if (input.conversationKind.isBlank()) return ChatDbResult.Invalid("conversation kind is required")
+
+        return try {
+            database.withChatWriteTransaction {
+                var ownerMessageId = input.ownerUserMessageId?.takeIf(String::isNotBlank)
+                if (ownerMessageId == null && input.userMessageContentIfMissing != null) {
+                    ownerMessageId = requireSuccess(conversations.appendMessage(AppendMessageInput(
+                        conversationId = input.conversationId,
+                        role = "user",
+                        parts = listOf(MessagePartInput("text", input.userMessageContentIfMissing)),
+                        conversationKind = input.conversationKind,
+                    ))).messageId
+                }
+
+                val followUpRequestId = input.followUpRequestId?.takeIf(String::isNotBlank)
+                if (followUpRequestId != null) {
+                    when (val dispatched = conversations.dispatchInterruptRequest(input.conversationId, followUpRequestId)) {
+                        is ChatDbResult.Success -> Unit
+                        ChatDbResult.NotFound -> Unit // It was already removed or never admitted.
+                        ChatDbResult.Tombstoned -> throw CompositeWriteAbort(ChatDbResult.Tombstoned)
+                        is ChatDbResult.Conflict -> throw CompositeWriteAbort(dispatched)
+                        is ChatDbResult.Invalid -> throw CompositeWriteAbort(dispatched)
+                    }
+                }
+
+                val failed = requireSuccess(conversations.appendMessage(AppendMessageInput(
+                    conversationId = input.conversationId,
+                    role = "assistant",
+                    parts = listOf(MessagePartInput("text", input.assistantMessage)),
+                    status = "FAILED",
+                    ownerUserMessageId = ownerMessageId,
+                    conversationKind = input.conversationKind,
+                )))
+                val resolvedIds = listOfNotNull(ownerMessageId, followUpRequestId).distinct()
+                if (resolvedIds.isNotEmpty())
+                    requireSuccess(conversations.markInputState(input.conversationId, resolvedIds, "resolved"))
+                ChatDbResult.Success(StoppedSubmissionResult(ownerMessageId, failed))
+            }
+        } catch (abort: CompositeWriteAbort) {
+            abort.result
+        }
+    }
+
     suspend fun append(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> {
         if (input.conversationId.isBlank()) return ChatDbResult.Invalid("conversation id is required")
         if ((input.inputState == null) != input.inputMessageIds.isEmpty()) {

@@ -5,7 +5,8 @@ import com.jarvys.agent.chatdb.ConversationMetadataValue;
 
 /** DB-backed conversation metadata access and identity policy. */
 public final class ConversationMetadataAccess {
-  static final Object LOCK = new Object();
+  private static final java.util.concurrent.ConcurrentMap<String, Object> SESSION_LOCKS =
+      new java.util.concurrent.ConcurrentHashMap<>();
   private final java.io.File filesDirectory;
 
   public static final class Snapshot {
@@ -37,6 +38,12 @@ public final class ConversationMetadataAccess {
     }
   }
 
+  /** Shared filesystem coordination for one chat; unrelated conversations never serialize each other. */
+  static Object lockForSession(String sessionId) {
+    validateSessionId(sessionId);
+    return SESSION_LOCKS.computeIfAbsent(sessionId, ignored -> new Object());
+  }
+
   private ChatDatabaseBridge database() {
     ChatDatabaseBridge bridge = ChatDatabaseBridge.findInstanceForFilesDirectory(filesDirectory);
     if (bridge == null) {
@@ -47,12 +54,10 @@ public final class ConversationMetadataAccess {
 
   public Snapshot read(String sessionId) {
     validateSessionId(sessionId);
-    synchronized (LOCK) {
-      ConversationMetadataValue value = database().readConversationMetadataSync(sessionId);
-      if (value == null) return new Snapshot(null, false, false, false, false);
-      return new Snapshot(value.getTitle(), value.getPinned(), value.getArchived(), value.getDeleted(),
-          value.getPrivateCode());
-    }
+    ConversationMetadataValue value = database().readConversationMetadataSync(sessionId);
+    if (value == null) return new Snapshot(null, false, false, false, false);
+    return new Snapshot(value.getTitle(), value.getPinned(), value.getArchived(), value.getDeleted(),
+        value.getPrivateCode());
   }
 
   public static String normalizeTitle(String title) {
@@ -76,33 +81,31 @@ public final class ConversationMetadataAccess {
 
   void update(String sessionId, String key, Object value) {
     validateSessionId(sessionId);
-    synchronized (LOCK) {
-      ChatDatabaseBridge bridge = database();
-      switch (key) {
-        case "deleted":
-          if (!Boolean.TRUE.equals(value)) throw new IllegalArgumentException("Conversation deletion is irreversible");
-          ChatDatabaseBridge.requireSuccessSync(bridge.deleteConversationSync(sessionId), "Could not delete conversation");
-          return;
-        case "title":
-          ChatDatabaseBridge.requireSuccessSync(
-              bridge.renameConversationSync(sessionId, (String) value), "Could not rename conversation");
-          return;
-        case "pinned":
-          ChatDatabaseBridge.requireSuccessSync(
-              bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null, null), "Could not update pinned state");
-          return;
-        case "archived":
-          ChatDatabaseBridge.requireSuccessSync(
-              bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value, null), "Could not update archived state");
-          return;
-        case "privateCode":
-          ChatDatabaseBridge.requireSuccessSync(
-              bridge.updateMetadataSync(sessionId, null, null, null, null, Boolean.TRUE.equals(value)),
-              "Could not update conversation privacy state");
-          return;
-        default:
-          throw new IllegalArgumentException("Unsupported conversation metadata field: " + key);
-      }
+    ChatDatabaseBridge bridge = database();
+    switch (key) {
+      case "deleted":
+        if (!Boolean.TRUE.equals(value)) throw new IllegalArgumentException("Conversation deletion is irreversible");
+        ChatDatabaseBridge.requireSuccessSync(bridge.deleteConversationSync(sessionId), "Could not delete conversation");
+        return;
+      case "title":
+        ChatDatabaseBridge.requireSuccessSync(
+            bridge.renameConversationSync(sessionId, (String) value), "Could not rename conversation");
+        return;
+      case "pinned":
+        ChatDatabaseBridge.requireSuccessSync(
+            bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null, null), "Could not update pinned state");
+        return;
+      case "archived":
+        ChatDatabaseBridge.requireSuccessSync(
+            bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value), "Could not update archived state");
+        return;
+      case "privateCode":
+        ChatDatabaseBridge.requireSuccessSync(
+            bridge.updateMetadataSync(sessionId, null, null, null, null, Boolean.TRUE.equals(value)),
+            "Could not update conversation privacy state");
+        return;
+      default:
+        throw new IllegalArgumentException("Unsupported conversation metadata field: " + key);
     }
   }
 }

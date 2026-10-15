@@ -36,6 +36,7 @@ import org.robolectric.annotation.SQLiteMode;
 @Config(sdk = 34, application = Application.class, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 public class WorkspaceArtifactDeliveryTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     private static final String CENTRAL = WorkspaceIdentity.CENTRAL_SESSION;
     private Context context;
@@ -52,13 +53,13 @@ public class WorkspaceArtifactDeliveryTest {
         context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME);
         registry = new WorkspaceRegistry(context);
         source = registry.createWorkspace("delivery-source", "Synthetic workspace");
-        files = temporary.getRoot();
+        files = chatTestStore.newFilesDirectory();
         java.lang.reflect.Field singleton = SecretStore.class.getDeclaredField("singleton");
         singleton.setAccessible(true);
         priorSecrets = singleton.get(null);
         singleton.set(null, new SecretStore(context.getSharedPreferences("workspace-delivery-fixture", Context.MODE_PRIVATE)));
         workspace = workspace(source);
-        ledger = new LocalRunStore(files);
+        ledger = chatTestStore.localRunStore(files);
         artifacts = new DeliveredArtifactStore(new File(files, "jarvys"));
         ledger.appendConversationMessage(CENTRAL, "user", "Attach the workspace file");
         AgentRunUiState.resetSession(CENTRAL);

@@ -42,7 +42,8 @@ public class CrewCheckpointDurabilityTest {
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> {
             if (directory.equals(target.getParentFile())) {
                 assertTrue("Fault is injected only after the atomic rename", target.isFile());
-                assertTrue(Thread.holdsLock(ConversationMetadataAccess.LOCK));
+                assertTrue(Thread.holdsLock(ConversationMetadataAccess.lockForSession("chat-one")));
+                assertFalse(Thread.holdsLock(ConversationMetadataAccess.lockForSession("chat-two")));
                 if (fail.get()) throw new IOException("Injected post-rename directory fsync failure");
             }
         });
@@ -131,7 +132,8 @@ public class CrewCheckpointDurabilityTest {
         saveEmpty(new CrewCheckpointStore(root));
         List<File> actual = new ArrayList<>();
         CrewCheckpointStore store = new CrewCheckpointStore(root, directory -> {
-            assertTrue(Thread.holdsLock(ConversationMetadataAccess.LOCK));
+            assertTrue(Thread.holdsLock(ConversationMetadataAccess.lockForSession("chat-one")));
+            assertFalse(Thread.holdsLock(ConversationMetadataAccess.lockForSession("chat-two")));
             actual.add(directory);
         });
         assertNotNull(store.confirmDurable("chat-one", "bot-one", "scope-one"));

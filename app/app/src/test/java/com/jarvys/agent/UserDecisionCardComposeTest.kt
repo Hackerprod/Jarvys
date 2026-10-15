@@ -27,7 +27,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.ui.chat.UserDecisionEventCard as JarvysUserDecisionEventCard
-import java.nio.file.Files
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +40,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class UserDecisionCardComposeTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun cardRendersOneTwoAndManyScrollableOptionsWithPrimaryAndDestructiveActions() {
@@ -138,11 +138,13 @@ class UserDecisionCardComposeTest {
     }
 
     @Test fun restoredPendingTimelineCardRendersAsNoResponseAndCannotBeReplayed() {
-        val store = LocalRunStore(Files.createTempDirectory("e1-restored-decision").toFile())
+        val files = chatTestStore.newFilesDirectory()
         val session = "e1-restored-${System.nanoTime()}"
-        store.appendUserDecisionRequest(session, "abandoned", "Choose", "Body",
-            listOf(UserDecisionOption("one", "One")), true)
-        val restored = store.readConversationTimeline(session).single()
+        val restored = chatTestStore.withLocalRunStore(files) { store ->
+            store.appendUserDecisionRequest(session, "abandoned", "Choose", "Body",
+                listOf(UserDecisionOption("one", "One")), true)
+            store.readConversationTimeline(session).single()
+        }
         val app = compose.activity.applicationContext
         val spanish = app.createConfigurationContext(Configuration(app.resources.configuration).apply {
             setLocale(Locale("es"))

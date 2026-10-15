@@ -18,6 +18,11 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MainAgentInteractionTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(
+        runTestOnWorker = false,
+        registerApplicationFilesDirectory = true,
+    )
+
     @After fun cleanup() {
         StopController.stopAllRuns()
         StopController.getInstance().stopRun()
@@ -90,13 +95,13 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "promote-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        store.appendConversationMessage(session, "user", "old")
+        chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "old") }
         AgentRunUiState.beginRun(session, "old")
-        val id = store.appendInterruptRequest(session, "same text", emptyList(), false)
-        AgentRunUiState.refreshPersistedSession(session, store.readConversationTimeline(session))
+        val id = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(session, "same text", emptyList(), false) }
+        AgentRunUiState.refreshPersistedSession(session, chatTestStore.onDatabaseWorker { store.readConversationTimeline(session) })
         assertTrue(AgentRunUiState.state.value.events.any { it.stage == "QUEUED" })
-        store.dispatchInterruptRequest(session, id)
-        AgentRunUiState.refreshPersistedSession(session, store.readConversationTimeline(session))
+        chatTestStore.onDatabaseWorker { store.dispatchInterruptRequest(session, id) }
+        AgentRunUiState.refreshPersistedSession(session, chatTestStore.onDatabaseWorker { store.readConversationTimeline(session) })
         AgentRunUiState.beginRun(session, "same text")
         AgentRunUiState.bindCurrentUserMessage(session, id)
         assertEquals(1, AgentRunUiState.state.value.events.count { it.messageId == id })
@@ -108,7 +113,7 @@ class MainAgentInteractionTest {
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "new request", arrayListOf(), false))
             assertTrue(AgentRunUiState.state.value.running)
             assertFalse(StopController.getInstance().isStopped)
-            assertTrue(LocalRunStore(context).readConversationMessages(session).any {
+            assertTrue(chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationMessages(session) }.any {
                 it.optString("role") == "user" && it.optString("content") == "new request"
             })
             val generationField = StopController.getInstance().javaClass.getDeclaredField("generation")
@@ -122,7 +127,7 @@ class MainAgentInteractionTest {
             AgentRunUiState.completeGeneration(session, retainedGeneration, "stopped-$session",
                 "STOPPED", "Run stopped", "", 0)
             assertFalse(AgentRunUiState.state.value.running)
-            assertFalse(LocalRunStore(context).readConversationTimeline(session).any { it.stage == "QUEUED" })
+            assertFalse(chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationTimeline(session) }.any { it.stage == "QUEUED" })
         }
     }
 
@@ -131,7 +136,7 @@ class MainAgentInteractionTest {
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "follow up", arrayListOf("safe"), true))
             assertTrue(AgentRunUiState.state.value.running)
             assertFalse(StopController.getInstance().isStopped)
-            assertEquals("follow up", LocalRunStore(context).readConversationMessages(session).last().optString("content"))
+            assertEquals("follow up", chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationMessages(session) }.last().optString("content"))
             release.countDown()
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
             assertTrue(AgentRunUiState.state.value.running)
@@ -142,7 +147,7 @@ class MainAgentInteractionTest {
         withHeldWorker { service, context, session, release ->
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "B", arrayListOf(), false))
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "C", arrayListOf(), false))
-            val rows = LocalRunStore(context).readConversationMessages(session)
+            val rows = chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationMessages(session) }
                 .filter { it.optString("role") == "user" }.map { it.optString("content") }
             assertEquals(listOf("original", "B", "C"), rows)
             release.countDown()
@@ -156,7 +161,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-exit-race-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val initialEntered = CountDownLatch(1)
         val releaseInitial = CountDownLatch(1)
@@ -220,14 +225,14 @@ class MainAgentInteractionTest {
             assertTrue("The admitted message runs as one follow-up", awaitServiceCallback(followUpEntered, 10))
             assertTrue("The follow-up leaves its session lane", awaitRunFinished(service, context))
 
-            val messages = store.readConversationMessages(session)
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
             val steering = messages.single { it.optString("role") == "user"
                 && it.optString("content") == "arrived at run exit" }
             val steeringId = steering.optString("messageId")
-            assertTrue(store.incorporatedConversationMessageIds(session).contains(steeringId))
+            assertTrue(chatTestStore.onDatabaseWorker { store.incorporatedConversationMessageIds(session) }.contains(steeringId))
             assertEquals(1, messages.count { it.optString("role") == "assistant"
                 && it.optString("userMessageId") == steeringId })
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
             assertEquals(2, calls.get())
         } finally {
             releaseInitial.countDown()
@@ -260,9 +265,9 @@ class MainAgentInteractionTest {
                 assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
                 val store = LocalRunStore(context)
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-                while (store.readPendingInterruptRequests(session).size != 1 && System.nanoTime() < deadline)
+                while (chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.size != 1 && System.nanoTime() < deadline)
                     Thread.yield()
-                assertEquals(1, store.readPendingInterruptRequests(session).size)
+                assertEquals(1, chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.size)
                 second.start()
                 assertTrue(secondStarted.await(5, TimeUnit.SECONDS))
             }
@@ -272,7 +277,7 @@ class MainAgentInteractionTest {
             assertFalse(second.isAlive)
             assertEquals(true, firstResult.get())
             assertEquals(true, secondResult.get())
-            val users = LocalRunStore(context).readConversationMessages(session)
+            val users = chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationMessages(session) }
                 .filter { it.optString("role") == "user" }.map { it.optString("content") }
             assertEquals(listOf("original", "first", "second"), users)
         }
@@ -282,7 +287,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "final-drain-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial") }
         val provider = MainChatTurnContextProvider(store, session, initialId)
         val modelEntered = CountDownLatch(1)
         val releaseModel = CountDownLatch(1)
@@ -307,7 +312,7 @@ class MainAgentInteractionTest {
         val run = pool.submit<CoreAgentLoop.Result> { loop.run("initial", emptyList(), token, null) }
         try {
             assertTrue(modelEntered.await(5, TimeUnit.SECONDS))
-            val id = store.appendInterruptRequest(session, "please inspect this", emptyList(), false)
+            val id = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(session, "please inspect this", emptyList(), false) }
             assertTrue(provider.dispatchPendingRequest(id))
             releaseModel.countDown()
             assertEquals("Follow-up answered", run.get(10, TimeUnit.SECONDS).text)
@@ -326,7 +331,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-provider-failure-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial") }
         val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
@@ -341,7 +346,7 @@ class MainAgentInteractionTest {
                 val loop = CoreAgentLoop(object : CoreAgentLoop.Model {
                     override fun complete(transcript: List<ConversationTurn>, prompt: String,
                         declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
-                        val requestId = store.appendInterruptRequest(session, "retry the accepted input", emptyList(), false)
+                        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(session, "retry the accepted input", emptyList(), false) }
                         assertTrue(provider.dispatchPendingRequest(requestId))
                         throw ProviderHttpException("temporary provider outage", 503, 0L, null)
                     }
@@ -360,7 +365,7 @@ class MainAgentInteractionTest {
             assertTrue("A dispatched message survives a pre-checkpoint provider error", awaitServiceCallback(followUp, 10))
             service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
             assertEquals(listOf("initial", "retry the accepted input"), observedGoals)
-            val messages = store.readConversationMessages(session)
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
             assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "PARTIAL" })
             assertTrue(messages.any { it.optString("role") == "user" && it.optString("content") == "retry the accepted input" })
         } finally {
@@ -383,7 +388,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-consumed-$terminal-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val runCalls = AtomicInteger()
         val modelCalls = AtomicInteger()
@@ -403,8 +408,8 @@ class MainAgentInteractionTest {
                     override fun complete(transcript: List<ConversationTurn>, prompt: String,
                         declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
                         if (modelCalls.incrementAndGet() == 1) {
-                            val requestId = store.appendInterruptRequest(
-                                session, "accepted steering", emptyList(), false)
+                            val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
+                                session, "accepted steering", emptyList(), false) }
                             assertTrue(provider.dispatchPendingRequest(requestId))
                             return ModelReply("Intermediate answer", emptyList())
                         }
@@ -436,7 +441,7 @@ class MainAgentInteractionTest {
             assertEquals(listOf("initial request"), observedGoals)
             assertEquals(1, runCalls.get())
             assertEquals(1L, followUp.count)
-            val assistants = store.readConversationMessages(session).filter { it.optString("role") == "assistant" }
+            val assistants = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.filter { it.optString("role") == "assistant" }
             assertTrue(assistants.any { it.optString("status") == if (terminal == "failed") "FAILED" else "PARTIAL" })
         } finally {
             StopController.getInstance().stopRun()
@@ -449,7 +454,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-picked-not-incorporated-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val runCalls = AtomicInteger()
         val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -469,8 +474,8 @@ class MainAgentInteractionTest {
                 val model = object : CoreAgentLoop.Model {
                     override fun complete(transcript: List<ConversationTurn>, prompt: String,
                         declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
-                        val requestId = store.appendInterruptRequest(
-                            session, "picked but not incorporated", emptyList(), false)
+                        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
+                            session, "picked but not incorporated", emptyList(), false) }
                         steeringId.set(requestId)
                         assertTrue(provider.dispatchPendingRequest(requestId))
                         val picked = provider.takeDurableMessages()
@@ -492,7 +497,7 @@ class MainAgentInteractionTest {
             assertTrue("Both service turns finish", awaitRunFinished(service, context))
             assertEquals(listOf("initial request", "picked but not incorporated"), observedGoals)
             assertEquals(1, observedGoals.count { it == "picked but not incorporated" })
-            val messages = store.readConversationMessages(session)
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
             assertFalse("The duplicate recovery must not write a spurious FAILED row: $messages", messages.any {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
                     && it.optString("userMessageId") == steeringId.get()
@@ -508,7 +513,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "assistant-before-steering-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val modelCalls = AtomicInteger()
         val finalAnswer = CountDownLatch(1)
@@ -521,8 +526,8 @@ class MainAgentInteractionTest {
                 override fun complete(transcript: List<ConversationTurn>, prompt: String,
                     declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
                     if (modelCalls.incrementAndGet() == 1) {
-                        val requestId = store.appendInterruptRequest(
-                            session, "steering request", emptyList(), false)
+                        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
+                            session, "steering request", emptyList(), false) }
                         assertTrue(provider.dispatchPendingRequest(requestId))
                         return ModelReply("A1", emptyList())
                     }
@@ -543,22 +548,22 @@ class MainAgentInteractionTest {
             assertTrue("The second model answer is produced", awaitServiceCallback(finalAnswer, 10))
             assertTrue("The service run finishes", awaitRunFinished(service, context))
 
-            val visibleMessages = store.readConversationTimeline(session)
+            val visibleMessages = chatTestStore.onDatabaseWorker { store.readConversationTimeline(session) }
                 .filter { it.kind == "user" || it.kind == "assistant" }
                 .map { "${it.kind}:${it.text}" }
             assertEquals(listOf(
                 "user:initial request", "assistant:A1", "user:steering request", "assistant:A2"), visibleMessages)
-            val restoredMessages = store.loadConversationContext(session)
+            val restoredMessages = chatTestStore.onDatabaseWorker { store.loadConversationContext(session) }
                 .filter { it.kind == ConversationTurn.Kind.MESSAGE }
                 .map { "${it.role}:${it.content}" }
             assertEquals(listOf(
                 "user:initial request", "assistant:A1", "user:steering request", "assistant:A2"), restoredMessages)
             assertEquals(1, visibleMessages.count { it == "assistant:A1" })
             assertEquals(1, visibleMessages.count { it == "assistant:A2" })
-            val assistantRows = store.readConversationMessages(session).filter { it.optString("role") == "assistant" }
+            val assistantRows = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.filter { it.optString("role") == "assistant" }
             assertEquals(initialId, assistantRows.single { it.optString("content") == "A1" }.optString("userMessageId"))
-            assertEquals("steering request", store.readConversationMessage(session,
-                assistantRows.single { it.optString("content") == "A2" }.optString("userMessageId")))
+            assertEquals("steering request", chatTestStore.onDatabaseWorker { store.readConversationMessage(session,
+                assistantRows.single { it.optString("content") == "A2" }.optString("userMessageId")) })
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -570,7 +575,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-newer-pending-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
@@ -583,8 +588,8 @@ class MainAgentInteractionTest {
             observedGoals.add(goal)
             if (calls.incrementAndGet() == 1) {
                 val provider = runtime.mainChatSteeringProvider()!!
-                val olderRequestId = store.appendInterruptRequest(
-                    session, "older accepted steering", emptyList(), false)
+                val olderRequestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(
+                    session, "older accepted steering", emptyList(), false) }
                 assertTrue(provider.dispatchPendingRequest(olderRequestId))
                 val incorporated = provider.takeDurableMessages()
                 assertEquals(1, incorporated.size)
@@ -614,7 +619,7 @@ class MainAgentInteractionTest {
             // The newest input is the follow-up run goal (never part of its history); it must be consumed exactly once.
             assertEquals(1, observedGoals.count { it == "newer fallback input" } +
                 followUpHistory.get().count { it.role == "user" && it.content == "newer fallback input" })
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -630,7 +635,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-fallback-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
         val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
@@ -662,7 +667,7 @@ class MainAgentInteractionTest {
             assertTrue("Fallback input launches a fresh run", awaitServiceCallback(followUp, 10))
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
             assertEquals(listOf("initial request", "follow up after close"), observedGoals)
-            assertTrue(store.readConversationMessages(session).any {
+            assertTrue(chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.any {
                 it.optString("role") == "user" && it.optString("content") == "follow up after close"
             })
         } finally {
@@ -677,8 +682,8 @@ class MainAgentInteractionTest {
         val store = LocalRunStore(context)
         val sessionA = "recover-a-${System.nanoTime()}"
         val sessionB = "recover-b-${System.nanoTime()}"
-        store.appendConversationMessage(sessionA, "user", "initial A")
-        store.appendConversationMessage(sessionB, "user", "initial B")
+        chatTestStore.onDatabaseWorker { store.appendConversationMessage(sessionA, "user", "initial A") }
+        chatTestStore.onDatabaseWorker { store.appendConversationMessage(sessionB, "user", "initial B") }
         val service = startManagedService(context)
         val observed = java.util.Collections.synchronizedList(mutableListOf<String>())
         val bothStarted = CountDownLatch(2)
@@ -692,9 +697,9 @@ class MainAgentInteractionTest {
             CoreAgentLoop.Result("recovered", "visible recovery", 1, "PARTIAL")
         }
         try {
-            store.appendInterruptRequest(sessionA, "pending A", emptyList(), false)
-            store.appendInterruptRequest(sessionB, "pending B", emptyList(), false)
-            val expected = store.readPendingInterruptRequests().filter {
+            chatTestStore.onDatabaseWorker { store.appendInterruptRequest(sessionA, "pending A", emptyList(), false) }
+            chatTestStore.onDatabaseWorker { store.appendInterruptRequest(sessionB, "pending B", emptyList(), false) }
+            val expected = chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests() }.filter {
                 it.optString("sessionId") == sessionA || it.optString("sessionId") == sessionB
             }.map { it.optString("content") }
             AgentRunUiState.resetSession(sessionA)
@@ -709,9 +714,9 @@ class MainAgentInteractionTest {
             assertEquals(0, bothStarted.count)
             assertTrue("Both recovery runs drain", awaitRunFinished(service, context))
             assertEquals(expected, observed)
-            assertTrue(store.readPendingInterruptRequests().isEmpty())
-            assertEquals("PARTIAL", store.readConversationMessages(sessionA).last().optString("status"))
-            assertEquals("PARTIAL", store.readConversationMessages(sessionB).last().optString("status"))
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests() }.isEmpty())
+            assertEquals("PARTIAL", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionA) }.last().optString("status"))
+            assertEquals("PARTIAL", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionB) }.last().optString("status"))
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -723,9 +728,9 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = LocalRunStore(context)
         val session = "recover-dispatched-steering-${System.nanoTime()}"
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
-        val requestId = store.appendInterruptRequest(session, "accepted steering", emptyList(), false)
-        assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
+        val requestId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(session, "accepted steering", emptyList(), false) }
+        assertTrue(chatTestStore.onDatabaseWorker { store.dispatchInterruptRequest(session, requestId) } != null)
         val pickedProvider = MainChatTurnContextProvider(store, session, initialId)
         assertEquals(requestId, pickedProvider.takeDurableMessages().single().id)
         pickedProvider.closeForRunExit()
@@ -751,44 +756,7 @@ class MainAgentInteractionTest {
             assertTrue("Dispatched input is recovered after service restart", awaitServiceCallback(recovered, 10))
             assertTrue("Recovery run finishes", awaitRunFinished(recoveredService, context))
             assertEquals(1, calls.get())
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
-        } finally {
-            StopController.getInstance().stopRun()
-            stopManagedService(context)
-        }
-    }
-
-    @Test fun legacyDispatchedSteeringWithoutMarkerIsNotRecoveredByRealService() {
-        StopController.getInstance().stopRun()
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val store = LocalRunStore(context)
-        val session = "recover-legacy-dispatch-${System.nanoTime()}"
-        store.appendConversationMessage(session, "user", "initial request")
-        val requestId = store.appendInterruptRequest(session, "old dispatched steering", emptyList(), false)
-        assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
-        val ledger = java.io.File(context.filesDir, "jarvys/conversations/$session.jsonl")
-        ledger.writeText(ledger.readLines().joinToString("\n", postfix = "\n") { line ->
-            val row = org.json.JSONObject(line)
-            if (row.optString("messageId") == requestId) row.remove("mainChatAcknowledgementRequired")
-            row.toString()
-        })
-        assertTrue(store.readPendingInterruptRequests(session).isEmpty())
-
-        val service = startManagedService(context)
-        val runCalls = AtomicInteger()
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
-            CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
-        }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
-            runCalls.incrementAndGet()
-            CoreAgentLoop.Result("unexpected-legacy-replay", "unexpected", 1, "PARTIAL")
-        }
-        try {
-            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
-                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
-            assertTrue("Legacy recovery scan finishes without a run", awaitRunFinished(service, context))
-            assertEquals(0, runCalls.get())
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -821,13 +789,13 @@ class MainAgentInteractionTest {
             worker(service).shutdown()
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "preserved", arrayListOf(), false))
             assertTrue(AgentRunUiState.state.value.running)
-            val messages = LocalRunStore(context).readConversationMessages(session)
+            val messages = chatTestStore.onDatabaseWorker { LocalRunStore(context).readConversationMessages(session) }
             val user = messages.single { it.optString("role") == "user" && it.optString("content") == "preserved" }
             assertTrue("Rejected recovery is visible as a failed follow-up", messages.any {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
                     && it.optString("userMessageId") == user.optString("messageId")
             })
-            assertTrue(LocalRunStore(context).readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { LocalRunStore(context).readPendingInterruptRequests(session) }.isEmpty())
             release.countDown()
             StopController.getInstance().stopRun()
         }
@@ -838,7 +806,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "stopped-steering-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "original")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "original") }
         val service = startManagedService(context)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -869,16 +837,16 @@ class MainAgentInteractionTest {
             release.countDown()
             service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
             assertEquals("A stopped owner does not start a replacement run", afterStop, nextGeneration.get())
-            val messages = store.readConversationMessages(session)
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
             val queued = messages.filter { it.optString("role") == "user" && it.optString("content") in steeringMessages }
             assertEquals(steeringMessages.size, queued.size)
             for (input in queued) assertTrue(messages.any {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
                     && it.optString("userMessageId") == input.optString("messageId")
             })
-            val incorporatedIds = store.incorporatedConversationMessageIds(session)
+            val incorporatedIds = chatTestStore.onDatabaseWorker { store.incorporatedConversationMessageIds(session) }
             assertTrue(queued.none { incorporatedIds.contains(it.optString("messageId")) })
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
             assertFalse(AgentRunUiState.state.value.running)
             assertEquals(1, runCalls.get())
             startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
@@ -898,9 +866,9 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "runtime-factory-failure-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        store.appendConversationMessage(session, "user", "initial request")
-        val steeringId = store.appendInterruptRequest(session, "retry after owner exit", emptyList(), false)
-        assertTrue(store.dispatchInterruptRequest(session, steeringId) != null)
+        chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "initial request") }
+        val steeringId = chatTestStore.onDatabaseWorker { store.appendInterruptRequest(session, "retry after owner exit", emptyList(), false) }
+        assertTrue(chatTestStore.onDatabaseWorker { store.dispatchInterruptRequest(session, steeringId) } != null)
         val service = startManagedService(context)
         val factoryCalls = AtomicInteger()
         val runnerCalls = AtomicInteger()
@@ -919,14 +887,14 @@ class MainAgentInteractionTest {
                 .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
             assertTrue("Pending recovery enters runtime setup", awaitServiceCallback(factoryEntered, 10))
             assertTrue("The failed run and its recovery scan finish", awaitRunFinished(service, context))
-            val failures = store.readConversationMessages(session).filter {
+            val failures = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.filter {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
                     && it.optString("userMessageId") == steeringId
             }
             assertEquals(1, factoryCalls.get())
             assertEquals(0, runnerCalls.get())
             assertEquals(1, failures.size)
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -942,10 +910,10 @@ class MainAgentInteractionTest {
                 .apply { isAccessible = true }.get(service) as CancellationToken
             provider.closeForRunExit()
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "must not dispatch", arrayListOf(), false))
-            assertEquals(1, store.readPendingInterruptRequests(session).size)
-            store.deleteConversation(session)
-            assertTrue(store.readConversationMetadata(session).deleted)
-            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+            assertEquals(1, chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.size)
+            chatTestStore.onDatabaseWorker { store.deleteConversation(session) }
+            assertTrue(chatTestStore.onDatabaseWorker { store.readConversationMetadata(session) }.deleted)
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.isEmpty())
             assertTrue(StopController.getInstance().completeRun(token))
             val generationAfterOldRun = StopController.getInstance().javaClass.getDeclaredField("generation")
                 .apply { isAccessible = true }.get(StopController.getInstance()) as java.util.concurrent.atomic.AtomicLong
@@ -1006,7 +974,7 @@ class MainAgentInteractionTest {
             val other = "$session-other"
             AgentRunUiState.resetSession(other)
             val store = LocalRunStore(context)
-            val messageId = store.appendConversationMessage(other, "user", "different chat")
+            val messageId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(other, "user", "different chat") }
             val started = CountDownLatch(1)
             val releaseOther = CountDownLatch(1)
             service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
@@ -1022,8 +990,8 @@ class MainAgentInteractionTest {
             assertFalse(StopController.getInstance().isStopped)
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "steer session A", arrayListOf(), false))
             assertTrue(AgentForegroundService.interruptAndSend(context, other, "steer session B", arrayListOf(), false))
-            assertTrue(store.readPendingInterruptRequests(session).any { it.optString("content") == "steer session A" })
-            assertTrue(store.readPendingInterruptRequests(other).any { it.optString("content") == "steer session B" })
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session) }.any { it.optString("content") == "steer session A" })
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(other) }.any { it.optString("content") == "steer session B" })
             val notification = AgentForegroundService::class.java.getDeclaredMethod("buildForegroundNotification")
                 .apply { isAccessible = true }.invoke(service) as android.app.Notification
             assertEquals(service.getResources().getQuantityString(R.plurals.agent_notification_active_runs, 2, 2),
@@ -1049,8 +1017,8 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "ordered-session-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val firstId = store.appendConversationMessage(session, "user", "first message")
-        val secondId = store.appendConversationMessage(session, "user", "second message")
+        val firstId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "first message") }
+        val secondId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "second message") }
         val service = startManagedService(context)
         val firstStarted = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
@@ -1087,49 +1055,86 @@ class MainAgentInteractionTest {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "stop-queued-${System.nanoTime()}"
-        val store = LocalRunStore(context)
-        val firstId = store.appendConversationMessage(session, "user", "first held message")
-        val queuedId = store.appendConversationMessage(session, "user", "must stay queued")
-        val service = startManagedService(context)
-        val firstEntered = CountDownLatch(1)
+        var service: AgentForegroundService? = null
         val releaseFirst = CountDownLatch(1)
-        val calls = AtomicInteger()
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
-            calls.incrementAndGet()
-            if (goal == "first held message") {
-                firstEntered.countDown()
-                while (releaseFirst.count > 0) {
-                    try { releaseFirst.await() } catch (_: InterruptedException) { }
-                }
-            }
-            CoreAgentLoop.Result("stop-queued-$goal", "finished $goal", 1, "COMPLETED")
-        }
+        var stopEnqueued = false
         try {
+            val store = chatTestStore.onDatabaseWorker { LocalRunStore(context) }
+            val firstId = chatTestStore.onDatabaseWorker {
+                store.appendConversationMessage(session, "user", "first held message")
+            }
+            val serviceForTest = startManagedService(context)
+            service = serviceForTest
+            val firstEntered = CountDownLatch(1)
+            val calls = AtomicInteger()
+            serviceForTest.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
+                calls.incrementAndGet()
+                if (goal == "first held message") {
+                    firstEntered.countDown()
+                    while (releaseFirst.count > 0) {
+                        try { releaseFirst.await() } catch (_: InterruptedException) { }
+                    }
+                }
+                CoreAgentLoop.Result("stop-queued-$goal", "finished $goal", 1, "COMPLETED")
+            }
             AgentRunUiState.resetSession(session)
-            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, firstId), 0, 1)
+            serviceForTest.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, firstId), 0, 1)
             assertTrue("The first request owns the lane", firstEntered.await(5, TimeUnit.SECONDS))
-            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, queuedId), 0, 2)
+            val (followUpRequestId, followUpMessageId) = chatTestStore.onDatabaseWorker {
+                val requestId = store.appendInterruptRequest(session, "must stay queued", emptyList(), false)
+                val dispatched = store.dispatchInterruptRequest(session, requestId)
+                    ?: throw AssertionError("The durable follow-up request must dispatch once")
+                requestId to dispatched.optString("messageId")
+            }
+            val queuedIntent = android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_REAL_AGENT)
+                .putExtra("agent_goal", "must stay queued")
+                .putExtra("agent_display_goal", "must stay queued")
+                .putExtra("chat_session_id", session)
+                .putExtra("chat_user_message_recorded", true)
+                .putExtra("chat_user_message_id", followUpMessageId)
+                .putExtra("chat_follow_up_request_id", followUpRequestId)
+            serviceForTest.onStartCommand(queuedIntent, 0, 2)
 
             AgentForegroundService.stopRun(session)
+            stopEnqueued = true
+            serviceForTest.awaitStopTasksForTesting().get(10, TimeUnit.SECONDS)
+            val stoppedMessages = chatTestStore.onDatabaseWorker {
+                store.readConversationMessages(session)
+            }
+            val queuedMessage = stoppedMessages.single { it.optString("messageId") == followUpMessageId }
+            val stoppedResponse = stoppedMessages.single { it.optString("role") == "assistant"
+                && it.optString("userMessageId") == followUpMessageId }
+            assertEquals("must stay queued", queuedMessage.optString("content"))
+            assertEquals("FAILED", stoppedResponse.optString("status"))
+            assertTrue(chatTestStore.onDatabaseWorker {
+                store.resolvedConversationMessageIds(session).contains(followUpRequestId)
+            })
+            assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests(session).isEmpty() })
             releaseFirst.countDown()
-            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+            serviceForTest.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
 
             assertEquals("STOP must not promote the queued request", 1, calls.get())
-            val messages = store.readConversationMessages(session)
-            val stoppedResponse = messages.single { it.optString("role") == "assistant"
-                && it.optString("userMessageId") == queuedId }
-            assertEquals("FAILED", stoppedResponse.optString("status"))
-            assertEquals(service.getString(R.string.agent_run_stopped), stoppedResponse.optString("content"))
-            assertTrue(store.resolvedConversationMessageIds(session).contains(queuedId))
-            assertFalse(store.incorporatedConversationMessageIds(session).contains(queuedId))
+            assertEquals(serviceForTest.getString(R.string.agent_run_stopped), stoppedResponse.optString("content"))
+            assertFalse(chatTestStore.onDatabaseWorker {
+                store.incorporatedConversationMessageIds(session).contains(followUpRequestId)
+            })
             val state = AgentRunUiState.snapshotForSession(session)
             assertFalse(state.running)
             assertFalse(state.stopping)
             assertEquals("STOPPED", state.outcome)
         } finally {
             releaseFirst.countDown()
-            AgentForegroundService.stopRun(session)
-            stopManagedService(context)
+            try {
+                val activeService = service
+                if (activeService != null) {
+                    if (!stopEnqueued) AgentForegroundService.stopRun(session)
+                    activeService.awaitStopTasksForTesting().get(10, TimeUnit.SECONDS)
+                    activeService.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+                }
+            } finally {
+                if (service != null) stopManagedService(context)
+            }
         }
     }
 
@@ -1138,7 +1143,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "stop-bind-window-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val userMessageId = store.appendConversationMessage(session, "user", "stop during bind")
+        val userMessageId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "stop during bind") }
         val service = startManagedService(context)
         val runPublished = CountDownLatch(1)
         val allowBind = CountDownLatch(1)
@@ -1373,7 +1378,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "ordinary-queue-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val id = store.appendConversationMessage(session, "user", "must remain recoverable")
+        val id = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "must remain recoverable") }
         AgentRunUiState.beginRun(session, "must remain recoverable")
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -1404,8 +1409,8 @@ class MainAgentInteractionTest {
             assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
             assertFalse(AgentRunUiState.state.value.running)
             assertTrue(StopController.getInstance().isStopped)
-            assertEquals("must remain recoverable", store.readConversationMessage(session, id))
-            if (reject) assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
+            assertEquals("must remain recoverable", chatTestStore.onDatabaseWorker { store.readConversationMessage(session, id) })
+            if (reject) assertTrue(chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.any { it.optString("status") == "FAILED" })
         } finally {
             AgentForegroundService.stopRun(session)
             release.countDown()
@@ -1421,7 +1426,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "early-setup-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val id = store.appendConversationMessage(session, "user", "read only")
+        val id = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "read only") }
         val factoryEntered = CountDownLatch(1)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
             factoryEntered.countDown()
@@ -1436,8 +1441,8 @@ class MainAgentInteractionTest {
             assertTrue(StopController.getInstance().isStopped)
             assertFalse(AgentRunUiState.state.value.running)
             assertEquals("FAILED", AgentRunUiState.state.value.outcome)
-            assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
-            assertTrue(store.readModelTranscriptRows(session).isEmpty())
+            assertTrue(chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }.any { it.optString("status") == "FAILED" })
+            assertTrue(chatTestStore.onDatabaseWorker { store.readModelTranscriptRows(session) }.isEmpty())
         } finally {
             StopController.getInstance().stopRun(); serviceController.destroy()
         }
@@ -1556,7 +1561,7 @@ class MainAgentInteractionTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "replacement-${System.nanoTime()}"
         val store = LocalRunStore(context)
-        val initialId = store.appendConversationMessage(session, "user", "original")
+        val initialId = chatTestStore.onDatabaseWorker { store.appendConversationMessage(session, "user", "original") }
         AgentRunUiState.beginRun(session, "original")
         val old = StopController.getInstance().beginRun()!!
         AgentRunUiState.bindGeneration(session, old.generation())

@@ -8,15 +8,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class ConversationCompactionTest {
-    @get:Rule val temporaryFolder = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
     private fun messages(count: Int, chars: Int = 20) = (0 until count).map { index ->
         ConversationTurn(if (index % 2 == 0) "user" else "assistant", "m$index " + "x".repeat(chars), index)
@@ -117,8 +117,8 @@ class ConversationCompactionTest {
 
     @Test
     fun originalHistoryIsAppendOnlyAndLatestOfTwoCompactionsReconstructsContext() {
-        val files = temporaryFolder.newFolder("conversation-files")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("conversation-files")
+        val store = chatTestStore.localRunStore(files)
         val session = "compact-session"
         store.appendConversationMessage(session, "user", "one")
         store.appendConversationMessage(session, "assistant", "two")
@@ -127,7 +127,6 @@ class ConversationCompactionTest {
         assertEquals(4, store.loadConversationContext(session).size)
 
         store.appendCompaction(session, "summary one", 2, "auto_preflight", "sliding_window", 2)
-        assertFalse(File(files, "jarvys/conversations/$session.jsonl").readText().contains("tokensBefore"))
         val afterFirst = store.loadConversationContext(session)
         assertTrue(afterFirst.first().content.contains("summary one"))
         assertEquals(listOf(2, 3), afterFirst.drop(1).map { it.originalMessageIndex })
@@ -147,21 +146,6 @@ class ConversationCompactionTest {
     }
 
     @Test
-    fun backCompatibilityAndAtomicAppendLeaveValidJsonlAndManualFields() {
-        val store = LocalRunStore(temporaryFolder.newFolder("legacy-files"))
-        store.appendConversationMessage("legacy", "user", "kept as before")
-        val legacy = store.loadConversationContext("legacy")
-        assertEquals(1, legacy.size)
-        assertEquals("kept as before", legacy.single().content)
-        store.appendCompaction("legacy", "summary", 1, "manual", "all", 1)
-        assertTrue(store.loadConversationContext("legacy").single().content.contains("summary"))
-        assertEquals(1, store.readConversationMessages("legacy").size)
-        val record = store.readConversationTimeline("legacy").last()
-        assertEquals("compaction", record.kind)
-        assertEquals(1, record.compactionMessageCount)
-    }
-
-    @Test
     fun openRouterWindowParserRequiresExactConfiguredModelAndRealMetadata() {
         val catalog = """{"data":[{"id":"vendor/model-a","context_length":128000},{"id":"vendor/no-limit"}]}"""
         assertEquals(128_000, ProviderContextWindowResolver.parseOpenRouterContextWindow(catalog, "vendor/model-a"))
@@ -178,8 +162,8 @@ class ConversationCompactionTest {
             if (userPrompt.length > 70_000) throw IllegalStateException("Provider context window exceeded")
             ModelReply("s".repeat(60_000), emptyList())
         }
-        val files = temporaryFolder.newFolder("summary-files")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("summary-files")
+        val store = chatTestStore.localRunStore(files)
         val session = "summary-session"
         repeat(4) { index -> store.appendConversationMessage(session, if (index % 2 == 0) "user" else "assistant", "original-$index") }
         val compactor = ConversationCompactor(session, CoreAgentModel(provider, session), store)
@@ -198,8 +182,8 @@ class ConversationCompactionTest {
 
     @Test
     fun stopDuringSummaryDoesNotAppendPartialCompactionRecord() {
-        val files = temporaryFolder.newFolder("cancel-files")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("cancel-files")
+        val store = chatTestStore.localRunStore(files)
         val session = "cancel-session"
         repeat(4) { index -> store.appendConversationMessage(session, if (index % 2 == 0) "user" else "assistant", "message-$index") }
         val provider = FakeProvider { _, _, _, _, _, _ ->
@@ -211,7 +195,7 @@ class ConversationCompactionTest {
             runCatching {
                 compactor.compact(messages(4), 32_768, "manual", ConversationCompactionPolicy.Mode.ALL,
                     CancellationToken.uncancellable(), null)
-            }.onSuccess { error("STOP should cancel before the JSONL append") }
+            }.onSuccess { error("STOP should cancel before the compaction checkpoint") }
             assertEquals(4, store.readConversationMessages(session).size)
             assertTrue(store.readConversationTimeline(session).none { it.kind == "compaction" })
         } finally {
@@ -220,11 +204,11 @@ class ConversationCompactionTest {
     }
 
     @Test
-    fun automaticPreflightOverflowAndManualTriggersUseConfiguredFakeModels() {
+    fun automaticPreflightOverflowAndManualCompactionsPersist() {
         val scenarios = listOf("auto_preflight", "overflow", "manual")
         scenarios.forEach { scenario ->
-            val files = temporaryFolder.newFolder("trigger-$scenario")
-            val store = LocalRunStore(files)
+            val files = chatTestStore.newFilesDirectory("trigger-$scenario")
+            val store = chatTestStore.localRunStore(files)
             val session = "session-$scenario"
             repeat(4) { index ->
                 store.appendConversationMessage(session, if (index % 2 == 0) "user" else "assistant",
@@ -252,9 +236,6 @@ class ConversationCompactionTest {
                     CorePromptBudget.standard(), compactor).run("current request",
                     store.loadConversationContext(session).dropLast(1), CancellationToken.uncancellable(), null)
             }
-            val ledger = File(files, "jarvys/conversations/$session.jsonl")
-            val record = ledger.readLines().map(::JSONObject).last { it.optString("type") == "compaction" }
-            assertEquals(scenario, record.optString("trigger"))
             assertEquals(1, store.readConversationTimeline(session).count { it.kind == "compaction" })
             if (scenario == "overflow") assertEquals(2, requests)
         }
@@ -262,8 +243,8 @@ class ConversationCompactionTest {
 
     @Test
     fun providerOverflowCompactsAndRetriesAtMostThreeTimes() {
-        val files = temporaryFolder.newFolder("overflow-limit-files")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("overflow-limit-files")
+        val store = chatTestStore.localRunStore(files)
         val session = "overflow-limit"
         repeat(4) { index -> store.appendConversationMessage(session, if (index % 2 == 0) "user" else "assistant", "m$index") }
         val compactor = ConversationCompactor(session,
@@ -288,8 +269,8 @@ class ConversationCompactionTest {
 
     @Test
     fun concurrentCompactionForSameSessionIsRejectedUntilCurrentSummaryCommits() {
-        val files = temporaryFolder.newFolder("concurrent-files")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("concurrent-files")
+        val store = chatTestStore.localRunStore(files)
         val session = "same-session"
         repeat(4) { index -> store.appendConversationMessage(session, if (index % 2 == 0) "user" else "assistant", "m$index") }
         val summaryStarted = CountDownLatch(1)

@@ -11,7 +11,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class CrewC1cTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
         it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" && it.incomingMetadata != null
     }.joinToString("\n") { it.content }
@@ -41,7 +44,7 @@ class CrewC1cTest {
         val manager = CrewManager("c1c-debate", emptyTools,
             { _, _ -> throw AssertionError("Captain test tools should not create a worker registry") },
             { _, _, _ -> throw AssertionError("Configure worker factory before spawn") }, null)
-        val boardRoot = Files.createTempDirectory("crew-c1c-board").toFile()
+        val boardRoot = chatTestStore.newFilesDirectory()
         val board = com.jarvys.agent.crew.CrewBoard(WorkspaceStore(boardRoot, "abcdef0123456789abcdef01"))
         manager.configure(emptyTools,
             { bot, crew -> CoreToolRegistry(CrewTools.bot(bot, crew, board)) },
@@ -226,7 +229,7 @@ class CrewC1cTest {
     @Test
     fun userFollowUpToDoneBotIsTrustedAndPersistedWithFromUser() {
         val session = "c1c-user-done"
-        val store = LocalRunStore(Files.createTempDirectory("crew-c1c-ledger").toFile())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val followUpEntered = CountDownLatch(1)
         val releaseFollowUp = CountDownLatch(1)
         val runningSnapshotPersisted = CountDownLatch(1)

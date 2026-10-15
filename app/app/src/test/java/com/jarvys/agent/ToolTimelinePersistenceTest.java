@@ -6,14 +6,15 @@ import java.nio.file.Files;
 import java.util.List;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+@org.robolectric.annotation.Config(sdk = 28)
 public class ToolTimelinePersistenceTest {
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
     @Test public void terminalDetailsAuditAndExactPreviewSurviveFreshStoreWithoutReflectionLeak() throws Exception {
-        File files = temporary.newFolder(); String session = "terminal-presentation";
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); String session = "terminal-presentation";
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String user = store.appendConversationMessage(session, "user", "Show preview");
         String project = WorkspaceStore.projectIdForSession(session);
         WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), project);
@@ -22,7 +23,7 @@ public class ToolTimelinePersistenceTest {
                 "Private page result password=hidden-sentinel", project, "read index.html");
         store.appendReflectionToolEvent(session, user, "Preview Workspace", "workspace", "tool_result", "saved-preview");
         store.appendConversationMessage(session, "assistant", "ready");
-        List<AgentRunUiEvent> events = new LocalRunStore(files).readConversationTimeline(session);
+        List<AgentRunUiEvent> events = chatTestStore.localRunStore(files).readConversationTimeline(session);
         AgentRunUiEvent tool = events.stream().filter(e -> "tool".equals(e.getKind())).findFirst().get();
         assertEquals(1, events.stream().filter(e -> "tool".equals(e.getKind())).count());
         assertTrue(tool.getDetail().contains("Private page result"));
@@ -32,14 +33,14 @@ public class ToolTimelinePersistenceTest {
         assertFalse(tool.getPreviewIsCurrent());
         assertFalse(store.buildReflectionPayload(session).text.contains("Private page result"));
         assertTrue(workspace.resolvePreviewPath("index.html").delete());
-        AgentRunUiEvent missing = new LocalRunStore(files).readConversationTimeline(session).stream()
+        AgentRunUiEvent missing = chatTestStore.localRunStore(files).readConversationTimeline(session).stream()
                 .filter(e -> "tool".equals(e.getKind())).findFirst().get();
         assertNull(missing.getPreviewId());
         assertTrue(missing.getDetail().contains("no longer available"));
     }
 
     @Test public void legacyPreviewRequiresOwnExistingCanonicalFileAndNeverReconstructsOutput() throws Exception {
-        File files = temporary.newFolder(); LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); LocalRunStore store = chatTestStore.localRunStore(files);
         String own = "legacy-own", other = "legacy-other", missing = "legacy-missing";
         for (String session : new String[] {own, other, missing}) {
             String user = store.appendConversationMessage(session, "user", "Show preview");
@@ -61,7 +62,7 @@ public class ToolTimelinePersistenceTest {
     }
 
     @Test public void hydrationAndOptimisticRowsDeduplicateOnlySameMessageIdentity() throws Exception {
-        LocalRunStore store = new LocalRunStore(temporary.newFolder()); String session = "identity-hydration";
+        LocalRunStore store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory()); String session = "identity-hydration";
         String first = store.appendConversationMessage(session, "user", "Same words");
         AgentRunUiState.resetSession(session);
         AgentRunUiState.restoreSession(session, store.readConversationTimeline(session));
@@ -78,8 +79,8 @@ public class ToolTimelinePersistenceTest {
     }
 
     @Test public void repeatedProviderCallIdInAnotherTurnSurvivesPageRefresh() throws Exception {
-        File files = temporary.newFolder(); String session = "same-call-id-separate-turns";
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); String session = "same-call-id-separate-turns";
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String oldUser = store.appendConversationMessage(session, "user", "Old turn");
         store.appendReflectionToolEvent(session, oldUser, "Old Tool", "mcp", "tool_result", "call_0");
         List<AgentRunUiEvent> oldPage = store.readConversationTimelinePage(
@@ -105,8 +106,8 @@ public class ToolTimelinePersistenceTest {
 
 
     @Test public void repeatedProviderCallIdInDifferentBatchesKeepsBatchScopedIdentity() throws Exception {
-        File files = temporary.newFolder(); String session = "same-call-id-separate-batches";
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); String session = "same-call-id-separate-batches";
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String user = store.appendConversationMessage(session, "user", "Run two batches");
         for (String batchId : java.util.Arrays.asList("batch-old", "batch-new")) {
             org.json.JSONObject call = new org.json.JSONObject().put("id", "call_0")
@@ -126,8 +127,8 @@ public class ToolTimelinePersistenceTest {
     }
 
     @Test public void interruptedStartedAndUnlaunchedToolsRestoreHonestCardsWithoutReplay() throws Exception {
-        File files = temporary.newFolder(); String session = "interrupted-timeline";
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); String session = "interrupted-timeline";
+        LocalRunStore store = chatTestStore.localRunStore(files);
         store.appendConversationMessage(session, "user", "Write two files");
         java.util.concurrent.atomic.AtomicInteger effects = new java.util.concurrent.atomic.AtomicInteger();
         CoreTool write = MainChatToolContinuityTest.testTool("write", (args, token) -> {
@@ -140,7 +141,7 @@ public class ToolTimelinePersistenceTest {
                 new CoreToolRegistry(java.util.Collections.singletonList(write)), "system", session);
         new MainChatTranscriptStore(files, session, store).attach(loop, java.util.Collections.emptyList());
         loop.run("Write two files", java.util.Collections.emptyList(), CancellationToken.uncancellable(), null);
-        List<AgentRunUiEvent> restored = new LocalRunStore(files).readConversationTimeline(session);
+        List<AgentRunUiEvent> restored = chatTestStore.localRunStore(files).readConversationTimeline(session);
         AgentRunUiEvent started = restored.stream().filter(e -> "started".equals(e.getToolCallId())).findFirst().get();
         AgentRunUiEvent pending = restored.stream().filter(e -> "pending".equals(e.getToolCallId())).findFirst().get();
         assertEquals("tool_interrupted", started.getStage());
@@ -161,8 +162,8 @@ public class ToolTimelinePersistenceTest {
     }
 
     @Test public void durableResultWithoutPresentationRestoresDetailsButRegenerationHidesOnlyUiAttempt() throws Exception {
-        File files = temporary.newFolder(); String session = "result-presentation-gap";
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory(); String session = "result-presentation-gap";
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String user = store.appendConversationMessage(session, "user", "Write one file");
         java.util.concurrent.atomic.AtomicInteger turns = new java.util.concurrent.atomic.AtomicInteger();
         CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
@@ -173,13 +174,13 @@ public class ToolTimelinePersistenceTest {
         CoreAgentLoop.Result result = loop.run("Write one file", java.util.Collections.emptyList(), CancellationToken.uncancellable(), null);
         store.appendReflectionToolEvent(session, user, "Write", "workspace", "tool_result", "gap-call");
         String answer = store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
-        List<AgentRunUiEvent> restored = new LocalRunStore(files).readConversationTimeline(session);
+        List<AgentRunUiEvent> restored = chatTestStore.localRunStore(files).readConversationTimeline(session);
         assertEquals(1, restored.stream().filter(e -> "tool".equals(e.getKind())).count());
         AgentRunUiEvent tool = restored.stream().filter(e -> "tool".equals(e.getKind())).findFirst().get();
         assertEquals("Wrote index.html", tool.getDetail()); assertEquals("tool_result", tool.getStage());
         store.appendAssistantRegenerated(session, answer);
-        assertFalse(new LocalRunStore(files).readConversationTimeline(session).stream().anyMatch(e -> "gap-call".equals(e.getToolCallId())));
-        assertTrue(new LocalRunStore(files).loadConversationContext(session).stream()
+        assertFalse(chatTestStore.localRunStore(files).readConversationTimeline(session).stream().anyMatch(e -> "gap-call".equals(e.getToolCallId())));
+        assertTrue(chatTestStore.localRunStore(files).loadConversationContext(session).stream()
                 .anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT && t.content.contains("Wrote index.html")));
     }
 

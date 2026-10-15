@@ -11,7 +11,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -20,14 +19,14 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class CodexReasoningPersistenceTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private static final String ENCRYPTED = "encrypted-reasoning-sentinel";
     private static final String CODEX_MODEL = "gpt-codex-test";
-    @Rule public TemporaryFolder temporary = new TemporaryFolder();
 
     @Test public void codexReasoningRoundTripsAndReplaysBeforeItsMessageAndCall() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "codex-reasoning-tool-turn";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         store.appendConversationMessage(session, "user", "Look up the current value");
         List<ConversationTurn> prior = store.loadConversationContext(session);
         ModelReply parsed = OpenAICodexResponsesClient.parseResponse(
@@ -61,7 +60,7 @@ public class CodexReasoningPersistenceTest {
 
         assertEquals("COMPLETED", result.outcome);
         assertEquals(1, toolEffects.get());
-        List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+        List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
         ConversationTurn callTurn = restored.stream()
                 .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_CALLS).findFirst().orElseThrow(AssertionError::new);
         assertEquals(3, callTurn.providerOutputItems.size());
@@ -88,10 +87,10 @@ public class CodexReasoningPersistenceTest {
         assertEquals("lookup-19", functionOutput.optString("call_id"));
     }
 
-    @Test public void assistantMessageReasoningIsStoredStructurallyAndLegacyTranscriptStillLoads() throws Exception {
-        File files = temporary.newFolder();
+    @Test public void assistantMessageReasoningIsStoredStructurally() throws Exception {
+        File files = chatTestStore.newFilesDirectory();
         String session = "codex-reasoning-message-turn";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String userMessageId = store.appendConversationMessage(session, "user", "Answer this");
         List<ConversationTurn> prior = store.loadConversationContext(session);
         String raw = new JSONObject().put("type", "reasoning").put("id", "rs_message")
@@ -109,7 +108,7 @@ public class CodexReasoningPersistenceTest {
         store.appendConversationMessage(session, "assistant", result.text, result.durationMs,
                 result.runId, userMessageId, result.outcome);
 
-        List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+        List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
         ConversationTurn assistant = restored.stream().filter(turn -> "assistant".equals(turn.role)
                 && "The answer".equals(turn.content)).findFirst().orElseThrow(AssertionError::new);
         assertEquals(1, assistant.providerOutputItems.size());
@@ -117,15 +116,6 @@ public class CodexReasoningPersistenceTest {
         assertFalse(assistant.content.contains(ENCRYPTED));
         assertFalse(store.readConversationTimeline(session).stream().anyMatch(event -> event.getText().contains(ENCRYPTED)));
 
-        String legacy = "old-codex-transcript";
-        LocalRunStore legacyStore = new LocalRunStore(files);
-        legacyStore.appendConversationMessage(legacy, "user", "Old request");
-        legacyStore.appendConversationMessage(legacy, "assistant", "Old answer");
-        List<ConversationTurn> oldContext = legacyStore.loadConversationContext(legacy);
-        assertTrue(oldContext.stream().allMatch(turn -> turn.providerOutputItems.isEmpty()));
-        JSONArray oldInput = OpenAICodexResponsesClient.userInput("", Collections.emptyList(), oldContext);
-        assertEquals("Old request", oldInput.getJSONObject(0).optString("content"));
-        assertEquals("Old answer", oldInput.getJSONObject(1).optString("content"));
     }
 
     @Test public void chatCompletionsAdapterIgnoresCodexReasoningItems() throws Exception {
@@ -170,9 +160,9 @@ public class CodexReasoningPersistenceTest {
     }
 
     @Test public void systemStatusAssistantRowsAndModelErrorsStayVisibleButLeaveModelHistory() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "system-status-history";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         store.appendConversationMessage(session, "user", "Continue");
         store.appendConversationMessage(session, "assistant", "localized stop text", null, "", "", "STOPPED");
         store.appendConversationMessage(session, "assistant", "localized timeout text", null, "", "", "PARTIAL");
@@ -181,7 +171,7 @@ public class CodexReasoningPersistenceTest {
         store.appendModelTranscriptRow(session, new JSONObject().put("type", "model_error")
                 .put("errorCode", "provider_unavailable").put("messageIndex", 0));
 
-        List<ConversationTurn> history = new LocalRunStore(files).loadConversationContext(session);
+        List<ConversationTurn> history = chatTestStore.localRunStore(files).loadConversationContext(session);
         List<String> contents = new java.util.ArrayList<>();
         for (ConversationTurn turn : history) {
             if (turn.kind == ConversationTurn.Kind.MESSAGE) contents.add(turn.content);
@@ -199,9 +189,9 @@ public class CodexReasoningPersistenceTest {
     }
 
     @Test public void compactionDropsReasoningForSummarizedAssistantTurns() throws Exception {
-        File files = temporary.newFolder();
+        File files = chatTestStore.newFilesDirectory();
         String session = "codex-reasoning-compacted";
-        LocalRunStore store = new LocalRunStore(files);
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String oldUserId = store.appendConversationMessage(session, "user", "Earlier question");
         store.appendConversationMessage(session, "assistant", "Earlier answer", null, "", oldUserId);
         String raw = new JSONObject().put("type", "reasoning").put("id", "rs_old")
@@ -234,7 +224,7 @@ public class CodexReasoningPersistenceTest {
         assertTrue(outcome.context.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.COMPACTION_SUMMARY));
         assertTrue(outcome.context.stream().anyMatch(turn -> "Current question".equals(turn.content)));
         assertFalse(outcome.context.stream().anyMatch(turn -> !turn.providerOutputItems.isEmpty()));
-        List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+        List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
         assertTrue(restored.stream().anyMatch(turn -> "Current question".equals(turn.content)));
         assertFalse(restored.stream().anyMatch(turn -> turn.providerOutputItems.stream()
                 .anyMatch(item -> item.value.contains(ENCRYPTED))));

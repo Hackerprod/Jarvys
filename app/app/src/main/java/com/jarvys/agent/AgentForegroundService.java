@@ -83,6 +83,10 @@ public final class AgentForegroundService extends Service {
   volatile Runnable afterPendingInputRecoveryScanForTesting;
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
+  private final AtomicInteger pendingStopTasks = new AtomicInteger();
+  private final Set<java.util.concurrent.CompletableFuture<Void>> pendingStopCompletions =
+      ConcurrentHashMap.newKeySet();
+  private final Set<String> pendingRejectedSessionResolution = ConcurrentHashMap.newKeySet();
   private final Map<String, SessionLane> sessionLanes = new ConcurrentHashMap<>();
   private final Object sessionLaneLock = new Object();
   private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
@@ -170,20 +174,14 @@ public final class AgentForegroundService extends Service {
             }
             sessionLanes.remove(sessionId, lane);
           }
+          pendingRejectedSessionResolution.add(sessionId);
         }
         idleWaiters.forEach(waiter -> waiter.complete(null));
-        for (SessionRequest queuedRequest : rejectedRequests) {
-          if (queuedRequest.onRejected != null) {
-            try {
-              queuedRequest.onRejected.run();
-            } catch (RuntimeException ignored) { }
+        if (!enqueueStopTask(() -> resolveRejectedSessionRequests(sessionId, rejectedRequests))) {
+          synchronized (interruptAdmissionLock(sessionId)) {
+            pendingRejectedSessionResolution.remove(sessionId);
           }
-          if (!queuedRequest.followUpClaimId.isEmpty()) {
-            failPendingInput(sessionId, queuedRequest.followUpClaimId);
-          }
-          releaseFollowUpClaim(sessionId, queuedRequest.followUpClaimId);
         }
-        failPendingInputRecovery(sessionId);
       }
     }
     refreshForegroundNotification();
@@ -202,6 +200,12 @@ public final class AgentForegroundService extends Service {
         return idle;
       }
     }
+  }
+
+  Future<?> awaitStopTasksForTesting() {
+    java.util.concurrent.CompletableFuture<?>[] pending = pendingStopCompletions.toArray(
+        new java.util.concurrent.CompletableFuture<?>[0]);
+    return java.util.concurrent.CompletableFuture.allOf(pending);
   }
 
   private void drainSession(String sessionId, SessionLane lane) {
@@ -270,7 +274,7 @@ public final class AgentForegroundService extends Service {
       if (skipResolvedFollowUp) continue;
       if (controllerRejected) {
         if (request.onRejected != null) {
-          try { request.onRejected.run(); } catch (RuntimeException ignored) { }
+          try { request.onRejected.run(); } catch (RuntimeException failure) { reportStopPersistenceFailure(failure); }
         }
         if (!request.followUpClaimId.isEmpty())
           failPendingInput(sessionId, request.followUpClaimId);
@@ -286,6 +290,7 @@ public final class AgentForegroundService extends Service {
         boolean stoppedByUser = active.token.wasStoppedByUser();
         if (stoppedByUser) {
           try { failPendingInputRecovery(sessionId); }
+          catch (RuntimeException failure) { reportStopPersistenceFailure(failure); }
           finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
         }
         Thread.interrupted();
@@ -315,7 +320,76 @@ public final class AgentForegroundService extends Service {
 
   public static void stopRun(String sessionId) {
     AgentForegroundService service = currentInstance;
-    if (service != null) service.stopSessionRun(sessionId);
+    if (service != null) service.enqueueStopTask(() -> service.stopSessionRun(sessionId));
+  }
+
+  private boolean enqueueStopTask(Runnable task) {
+    java.util.concurrent.CompletableFuture<Void> completion = new java.util.concurrent.CompletableFuture<>();
+    pendingStopCompletions.add(completion);
+    pendingStopTasks.incrementAndGet();
+    Runnable trackedTask = () -> {
+      try {
+        task.run();
+      } catch (RuntimeException failure) {
+        reportStopPersistenceFailure(failure);
+      } finally {
+        pendingStopTasks.decrementAndGet();
+        completion.complete(null);
+        pendingStopCompletions.remove(completion);
+        stopServiceIfIdle();
+      }
+    };
+    if (worker.isShutdown()) {
+      return enqueueStopFallback(trackedTask, completion);
+    }
+    try {
+      worker.execute(trackedTask);
+      return true;
+    } catch (RuntimeException rejected) {
+      return enqueueStopFallback(trackedTask, completion);
+    }
+  }
+
+  private boolean enqueueStopFallback(Runnable trackedTask,
+      java.util.concurrent.CompletableFuture<Void> completion) {
+    try {
+      java.util.concurrent.CompletableFuture.runAsync(trackedTask);
+      return true;
+    } catch (RuntimeException rejected) {
+      pendingStopTasks.decrementAndGet();
+      completion.complete(null);
+      pendingStopCompletions.remove(completion);
+      reportStopPersistenceFailure(rejected);
+      return false;
+    }
+  }
+
+  private void resolveRejectedSessionRequests(String sessionId, List<SessionRequest> rejectedRequests) {
+    synchronized (interruptAdmissionLock(sessionId)) {
+      try {
+        for (SessionRequest request : rejectedRequests) {
+          try {
+            if (request.onRejected != null) request.onRejected.run();
+            if (!request.followUpClaimId.isEmpty()) failPendingInput(sessionId, request.followUpClaimId);
+          } catch (RuntimeException failure) {
+            reportStopPersistenceFailure(failure);
+          } finally {
+            releaseFollowUpClaim(sessionId, request.followUpClaimId);
+          }
+        }
+        try {
+          failPendingInputRecovery(sessionId);
+        } catch (RuntimeException failure) {
+          reportStopPersistenceFailure(failure);
+        }
+      } finally {
+        pendingRejectedSessionResolution.remove(sessionId);
+      }
+    }
+  }
+
+  private void reportStopPersistenceFailure(Throwable failure) {
+    AgentErrorReporter.reportChatDatabaseFailure(this, failure);
   }
 
   public static boolean hasActiveRun(String sessionId) {
@@ -326,8 +400,8 @@ public final class AgentForegroundService extends Service {
 
   private void stopSessionRun(String sessionId) {
     if (sessionId == null) return;
-    List<SessionRequest> stoppedRequests = java.util.Collections.emptyList();
     synchronized (interruptAdmissionLock(sessionId)) {
+      List<SessionRequest> stoppedRequests = java.util.Collections.emptyList();
       SessionLane lane = sessionLanes.get(sessionId);
       if (lane != null) {
         synchronized (sessionLaneLock) {
@@ -352,14 +426,19 @@ public final class AgentForegroundService extends Service {
           legacy.stopRunAsync();
         }
       }
-    }
-    for (SessionRequest request : stoppedRequests) {
-      if (request.onStopped != null) {
-        try { request.onStopped.run(); } catch (RuntimeException ignored) { }
-      } else if (!request.followUpClaimId.isEmpty()) {
-        stopPendingInput(sessionId, request.followUpClaimId);
+      for (SessionRequest request : stoppedRequests) {
+        try {
+          if (request.onStopped != null) {
+            request.onStopped.run();
+          } else if (!request.followUpClaimId.isEmpty()) {
+            stopPendingInput(sessionId, request.followUpClaimId);
+          }
+        } catch (RuntimeException failure) {
+          reportStopPersistenceFailure(failure);
+        } finally {
+          releaseFollowUpClaim(sessionId, request.followUpClaimId);
+        }
       }
-      releaseFollowUpClaim(sessionId, request.followUpClaimId);
     }
   }
 
@@ -613,8 +692,9 @@ public final class AgentForegroundService extends Service {
       LocalRunStore store = new LocalRunStore(context);
       final String requestId;
       try {
-        requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
+        requestId = store.appendAndDispatchInterruptRequest(sessionId, text, skills, memoryDisabled);
       } catch (RuntimeException failure) {
+        AgentErrorReporter.reportChatDatabaseFailure(context, failure);
         return false;
       }
       // Re-read after durable admission. The session lock also serializes this decision with
@@ -645,14 +725,13 @@ public final class AgentForegroundService extends Service {
         try {
           start(context, ACTION_RECOVER_PENDING_INPUTS);
         } catch (RuntimeException startFailure) {
-          org.json.JSONObject request = store.dispatchInterruptRequest(sessionId, requestId);
-          if (request != null) {
-            store.appendConversationMessage(sessionId, "assistant",
-                AppLanguageRuntime.localizedContext(context).getString(R.string.chat_interrupt_start_failed),
-                null, "", requestId, "FAILED");
-            store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
+          try {
+            store.persistStoppedSubmission(sessionId, requestId, requestId, null,
+                AppLanguageRuntime.localizedContext(context).getString(R.string.chat_interrupt_start_failed));
+            AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
+          } catch (RuntimeException persistenceFailure) {
+            AgentErrorReporter.reportChatDatabaseFailure(context, persistenceFailure);
           }
-          AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         }
         return true;
       }
@@ -753,6 +832,7 @@ public final class AgentForegroundService extends Service {
     String sessionId = onlySessionId;
     org.json.JSONObject latest = null;
     synchronized (interruptAdmissionLock(sessionId)) {
+      if (pendingRejectedSessionResolution.contains(sessionId)) return;
       List<org.json.JSONObject> currentPending = store.readPendingInterruptRequests(sessionId);
       if (currentPending.isEmpty()) return;
       if (activeRunTokens.containsKey(sessionId)) return;
@@ -777,6 +857,7 @@ public final class AgentForegroundService extends Service {
           latest.optBoolean("memoryDisabled", false), false, messageId, messageId);
     } catch (RuntimeException startFailure) {
       try { failPendingInputRecovery(sessionId); }
+      catch (RuntimeException persistenceFailure) { reportStopPersistenceFailure(persistenceFailure); }
       finally { releaseFollowUpClaim(sessionId, messageId); }
     }
   }
@@ -820,24 +901,21 @@ public final class AgentForegroundService extends Service {
     try {
       LocalRunStore store = new LocalRunStore(this);
       synchronized (interruptAdmissionLock(sessionId)) {
-        org.json.JSONObject request = store.dispatchInterruptRequest(sessionId, requestId);
-        if (request == null) {
-          for (org.json.JSONObject pending : store.readPendingInterruptRequests(sessionId)) {
-            if (requestId.equals(pending.optString("requestId", ""))) {
-              request = pending;
-              break;
-            }
+        boolean pendingRequestExists = false;
+        for (org.json.JSONObject pending : store.readPendingInterruptRequests(sessionId)) {
+          if (requestId.equals(pending.optString("requestId", ""))) {
+            pendingRequestExists = true;
+            break;
           }
         }
-        if (request == null) return;
-        store.appendConversationMessage(sessionId, "assistant", getString(R.string.chat_interrupt_start_failed),
-            null, "", requestId, "FAILED");
-        store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
+        if (!pendingRequestExists) return;
+        store.persistStoppedSubmission(sessionId, requestId, requestId, null,
+            getString(R.string.chat_interrupt_start_failed));
         releaseFollowUpClaim(sessionId, requestId);
       }
       AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
-    } catch (RuntimeException ignored) {
-      // The durable request remains available for the next service recovery attempt.
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
     } finally {
       releaseFollowUpClaim(sessionId, requestId);
     }
@@ -850,14 +928,12 @@ public final class AgentForegroundService extends Service {
       LocalRunStore store = new LocalRunStore(this);
       String ownerMessageId = userMessageAlreadyRecorded
           ? (userMessageId.isEmpty() ? store.latestUserMessageId(sessionId) : userMessageId)
-          : store.appendConversationMessage(sessionId, "user", displayGoal);
-      if (ownerMessageId == null) ownerMessageId = "";
-      store.appendConversationMessage(sessionId, "assistant", message, null, "", ownerMessageId, "FAILED");
-      if (!ownerMessageId.isEmpty())
-        store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(ownerMessageId));
+          : null;
+      String missingUserContent = ownerMessageId == null ? displayGoal : null;
+      store.persistStoppedSubmission(sessionId, null, ownerMessageId, missingUserContent, message);
       AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
-    } catch (RuntimeException ignored) {
-      // The UI still needs to release the optimistic submission if persistence is unavailable.
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
     }
     AgentRunUiState.fail(sessionId, message);
   }
@@ -871,15 +947,12 @@ public final class AgentForegroundService extends Service {
       String ownerMessageId = userMessageAlreadyRecorded
           ? (userMessageId == null || userMessageId.isEmpty()
               ? store.latestUserMessageId(sessionId) : userMessageId)
-          : store.appendConversationMessage(sessionId, "user", displayGoal);
-      if (ownerMessageId == null) ownerMessageId = "";
-      if (followUpRequestId != null && !followUpRequestId.isEmpty())
-        store.dispatchInterruptRequest(sessionId, followUpRequestId);
-      store.appendConversationMessage(sessionId, "assistant", message, null, "", ownerMessageId, "FAILED");
-      if (!ownerMessageId.isEmpty())
-        store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(ownerMessageId));
+          : null;
+      String missingUserContent = ownerMessageId == null ? displayGoal : null;
+      store.persistStoppedSubmission(sessionId, followUpRequestId, ownerMessageId, missingUserContent, message);
       timeline = store.readRecentConversationTimeline(sessionId);
-    } catch (RuntimeException ignored) {
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
       timeline = AgentRunUiState.INSTANCE.snapshotForSession(sessionId).getEvents();
     }
     AgentRunUiState.stopUnstarted(sessionId, timeline);
@@ -888,14 +961,21 @@ public final class AgentForegroundService extends Service {
   private void stopPendingInput(String sessionId, String requestId) {
     try {
       LocalRunStore store = new LocalRunStore(this);
-      org.json.JSONObject request = store.dispatchInterruptRequest(sessionId, requestId);
-      if (request == null) return;
-      String message = AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped);
-      store.appendConversationMessage(sessionId, "assistant", message, null, "", requestId, "FAILED");
-      store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
+      synchronized (interruptAdmissionLock(sessionId)) {
+        boolean pendingRequestExists = false;
+        for (org.json.JSONObject pending : store.readPendingInterruptRequests(sessionId)) {
+          if (requestId.equals(pending.optString("requestId", ""))) {
+            pendingRequestExists = true;
+            break;
+          }
+        }
+        if (!pendingRequestExists) return;
+        String message = AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped);
+        store.persistStoppedSubmission(sessionId, requestId, requestId, null, message);
+      }
       AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
-    } catch (RuntimeException ignored) {
-      // Service recovery can resolve the durable request if persistence is temporarily unavailable.
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
     }
   }
 
@@ -953,7 +1033,7 @@ public final class AgentForegroundService extends Service {
       return START_NOT_STICKY;
     }
     if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-      stopRunAndServices();
+      enqueueStopTask(this::stopRunAndServices);
       return START_NOT_STICKY;
     }
     if (intent != null && ACTION_CREW_KEEPALIVE.equals(intent.getAction())) {
@@ -1029,11 +1109,12 @@ public final class AgentForegroundService extends Service {
           String message = getString(R.string.chat_interrupt_start_failed);
           try {
             LocalRunStore store = new LocalRunStore(this);
-            String id = userMessageAlreadyRecorded ? existingUserMessageId
-                : store.appendConversationMessage(chatSessionId, "user", chatDisplayGoal);
-            store.appendConversationMessage(chatSessionId, "assistant", message, null, "", id, "FAILED");
-            store.markConversationMessagesResolved(chatSessionId, java.util.Collections.singletonList(id));
-          } catch (RuntimeException ignored) { }
+            String ownerId = userMessageAlreadyRecorded ? existingUserMessageId : null;
+            store.persistStoppedSubmission(chatSessionId, null, ownerId,
+                ownerId == null || ownerId.isEmpty() ? chatDisplayGoal : null, message);
+          } catch (RuntimeException persistenceFailure) {
+            reportStopPersistenceFailure(persistenceFailure);
+          }
           AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED", message, "", 0L);
         }
       }, isInteractive, isInteractive ? () -> failRejectedInteractiveSubmission(chatSessionId,
@@ -1444,7 +1525,8 @@ public final class AgentForegroundService extends Service {
               stopped ? "STOPPED" : timedOut ? "PARTIAL" : "FAILED");
           conversationStore.markConversationMessagesResolved(sessionId,
               java.util.Collections.singletonList(assistantOwnerMessageId.get()));
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException persistenceFailure) {
+          reportStopPersistenceFailure(persistenceFailure);
         }
       }
       if (stopped) {
@@ -1562,7 +1644,7 @@ public final class AgentForegroundService extends Service {
 
   private void stopServiceIfIdle() {
     boolean noCrew = !CoreAgentRuntime.hasActiveCrewBots();
-    if (activeRuns.isEmpty() && sessionLanes.isEmpty() && !StopController.hasActiveRuns()
+    if (pendingStopTasks.get() == 0 && activeRuns.isEmpty() && sessionLanes.isEmpty() && !StopController.hasActiveRuns()
         && activeReflectionTasks.get() == 0 && noCrew) {
       stopSelf();
     }
@@ -1739,7 +1821,8 @@ public final class AgentForegroundService extends Service {
     StopController.stopAllRuns();
     MemoryReflectionRuntime.cancelAll();
     reflectionWorker.shutdownNow();
-    worker.shutdownNow();
+    if (pendingStopTasks.get() > 0) worker.shutdown();
+    else worker.shutdownNow();
     super.onDestroy();
   }
 

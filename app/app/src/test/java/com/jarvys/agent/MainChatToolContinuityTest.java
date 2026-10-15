@@ -10,17 +10,16 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
 /** Real loop/workspace/store/provider-request boundary; no provider or authentication requests. */
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
 @org.robolectric.annotation.Config(sdk = 34)
 public class MainChatToolContinuityTest {
-  @Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
   @Test public void successfulWorkspaceEffectsSurviveNextUserTurnAndFreshStore() throws Exception {
-    File files = temporary.newFolder();
-    LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory();
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String session = "workspace-continuity";
     String user = store.appendConversationMessage(session, "user", "Create a page");
     WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"),
@@ -48,7 +47,7 @@ public class MainChatToolContinuityTest {
         result.runId, user, result.outcome);
     assertEquals("<h1>Done</h1>", workspace.read("index.html"));
     store.appendConversationMessage(session, "user", "Did you really write it?");
-    List<ConversationTurn> reloaded = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> reloaded = chatTestStore.localRunStore(files).loadConversationContext(session);
     assertTrue("Successful write proof must be present in model context",
         reloaded.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
             && "provider-write-18".equals(t.toolCallId) && t.content.contains("Wrote index.html")));
@@ -58,9 +57,9 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void completedWriteSurvivesProviderFailureAndIsNeverReplayedOnRead() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "failed-after-write";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Write the file");
     AtomicInteger effects = new AtomicInteger(), turns = new AtomicInteger();
     CoreTool write = testTool("write", (args, token) -> {
@@ -76,7 +75,7 @@ public class MainChatToolContinuityTest {
     try { loop.run("Write the file", Collections.emptyList(), CancellationToken.uncancellable(), null); fail(); }
     catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("provider unavailable")); }
     for (int i = 0; i < 3; i++) {
-      List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+      List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
       assertTrue(restored.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
           && t.content.contains("Wrote index.html")));
     }
@@ -84,9 +83,9 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void unavailableToolErrorSurvivesReloadAsExactModelResult() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "unavailable-tool-error";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage(session, "user", "Use the missing tool");
     String expected = "Tool error: Tool is not available in this agent scope: missing_tool";
     AtomicInteger turns = new AtomicInteger();
@@ -99,7 +98,7 @@ public class MainChatToolContinuityTest {
     store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
     store.appendConversationMessage(session, "user", "Continue");
 
-    List<ConversationTurn> reloaded = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> reloaded = chatTestStore.localRunStore(files).loadConversationContext(session);
     List<ConversationTurn> results = new ArrayList<>();
     for (ConversationTurn turn : reloaded) if (turn.kind == ConversationTurn.Kind.TOOL_RESULT
         && "missing-tool-call".equals(turn.toolCallId)) results.add(turn);
@@ -109,9 +108,9 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void completedPreflightErrorBatchIsNotReinjectedAfterCompaction() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "compacted-preflight-error";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage(session, "user", "Use the missing tool");
     AtomicInteger turns = new AtomicInteger();
     CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
@@ -140,7 +139,7 @@ public class MainChatToolContinuityTest {
     compactor.compact(store.loadConversationContext(session), 32_768, "manual",
         ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
 
-    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
     int summaryIndex = -1;
     for (int index = 0; index < restored.size(); index++)
       if (restored.get(index).kind == ConversationTurn.Kind.COMPACTION_SUMMARY) summaryIndex = index;
@@ -156,9 +155,9 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void interruptedToolRemainsUncertainRatherThanSuccessOrAutomaticReplay() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "interrupted-write";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Write the file");
     AtomicInteger effects = new AtomicInteger();
     CoreTool write = testTool("write", (args, token) -> {
@@ -173,7 +172,7 @@ public class MainChatToolContinuityTest {
         new CoreToolRegistry(Collections.singletonList(write)), "system", session);
     new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
     loop.run("Write the file", Collections.emptyList(), CancellationToken.uncancellable(), null);
-    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
     assertTrue(restored.stream().anyMatch(t -> "started-write".equals(t.toolCallId)
         && t.content.contains("INTERRUPTED_UNCERTAIN")));
     assertTrue(restored.stream().anyMatch(t -> "pending-write".equals(t.toolCallId)
@@ -184,8 +183,8 @@ public class MainChatToolContinuityTest {
 
   @Test public void legacyToolCardsRetainOnlyHonestLimitedEvidence() {
     File files;
-    try { files = temporary.newFolder(); } catch (Exception e) { throw new RuntimeException(e); }
-    LocalRunStore store = new LocalRunStore(files);
+    try { files = chatTestStore.newFilesDirectory(); } catch (Exception e) { throw new RuntimeException(e); }
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage("legacy", "user", "Make a page");
     store.appendReflectionToolEvent("legacy", user, "Write", "workspace", "tool_result", "legacy-call");
     List<ConversationTurn> context = store.loadConversationContext("legacy");
@@ -228,9 +227,9 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void largeResultsUseRedactedArtifactsRecoverableAfterRestartAndScopedToChat() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "large-output";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Inspect data");
     String secret = "private-secret-sentinel";
     String output = "password=" + secret + "\n" + String.join("", Collections.nCopies(20_000, "x")) + "\nEND_PROOF";
@@ -241,7 +240,7 @@ public class MainChatToolContinuityTest {
             testTool("read", (args, token) -> CoreToolResult.success(output)))), "system", session);
     new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
     loop.run("Inspect data", Collections.emptyList(), CancellationToken.uncancellable(), null);
-    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
     String evidence = restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT).findFirst().get().content;
     assertTrue(evidence.length() < 12_000);
     assertFalse(evidence.contains(secret));
@@ -249,24 +248,24 @@ public class MainChatToolContinuityTest {
     assertTrue(evidence, id.find());
     Map<String, Object> request = arguments("artifact_id", id.group(1));
     request.put("limit_chars", 30_000);
-    CoreToolResult page = new MainChatTranscriptStore(files, session, new LocalRunStore(files))
+    CoreToolResult page = new MainChatTranscriptStore(files, session, chatTestStore.localRunStore(files))
         .recoveryTool().execute(request, CancellationToken.uncancellable());
     assertTrue(page.content, page.success);
     assertFalse(page.content.contains(secret));
-    assertFalse(new MainChatTranscriptStore(files, "another-chat", new LocalRunStore(files))
+    assertFalse(new MainChatTranscriptStore(files, "another-chat", chatTestStore.localRunStore(files))
         .recoveryTool().execute(request, CancellationToken.uncancellable()).success);
     try (java.util.stream.Stream<java.nio.file.Path> paths = java.nio.file.Files.walk(files.toPath())) {
       for (java.nio.file.Path path : (Iterable<java.nio.file.Path>) paths.filter(java.nio.file.Files::isRegularFile)::iterator)
         assertFalse(new String(java.nio.file.Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8).contains(secret));
     }
     store.deleteConversation(session);
-    assertTrue(new LocalRunStore(files).loadConversationContext(session).isEmpty());
+    assertTrue(chatTestStore.localRunStore(files).loadConversationContext(session).isEmpty());
   }
 
   @Test public void regeneratingAnswerCannotErasePreviouslyCompletedSideEffects() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "regenerated-effects";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage(session, "user", "Write it");
     AtomicInteger turns = new AtomicInteger();
     CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
@@ -277,15 +276,15 @@ public class MainChatToolContinuityTest {
     CoreAgentLoop.Result result = loop.run("Write it", Collections.emptyList(), CancellationToken.uncancellable(), null);
     String answer = store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
     store.appendAssistantRegenerated(session, answer);
-    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
     assertFalse(restored.stream().anyMatch(t -> t.content.equals("old answer")));
     assertTrue(restored.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT && t.content.contains("Wrote index.html")));
   }
 
   @Test public void compactionCannotEraseObservedWriteEvenWhenModelSummaryOmitsIt() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "compacted-effects";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage(session, "user", "Write it");
     AtomicInteger turns = new AtomicInteger();
     CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
@@ -311,20 +310,20 @@ public class MainChatToolContinuityTest {
         "manual", ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
     assertTrue(compacted.summary.contains("Wrote index.html"));
     assertTrue(compacted.summary.contains("compacted-write"));
-    List<ConversationTurn> reloaded = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> reloaded = chatTestStore.localRunStore(files).loadConversationContext(session);
     assertTrue(reloaded.stream().anyMatch(t -> t.content.contains("Wrote index.html")));
     assertFalse(reloaded.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_CALLS));
     store.appendConversationMessage(session, "assistant", "next answer");
     compactor.compact(store.loadConversationContext(session), 32_768, "manual", ConversationCompactionPolicy.Mode.ALL,
         CancellationToken.uncancellable(), null);
-    assertTrue(new LocalRunStore(files).loadConversationContext(session).stream()
+    assertTrue(chatTestStore.localRunStore(files).loadConversationContext(session).stream()
         .anyMatch(t -> t.content.contains("Wrote index.html")));
   }
 
   @Test public void compactedToolTranscriptWithEmptyPromptSendsSummaryWithoutEmptyUserTurn() throws Exception {
-    File files = temporary.newFolder();
+    File files = chatTestStore.newFilesDirectory();
     String session = "compacted-tool-empty-prompt";
-    LocalRunStore store = new LocalRunStore(files);
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Inspect the project");
     List<ConversationTurn> toolTranscript = Arrays.asList(
         new ConversationTurn("user", "Inspect the project", 0),
@@ -366,27 +365,9 @@ public class MainChatToolContinuityTest {
     assertEquals("Inspect the project", chatMessages.getJSONObject(2).getString("content"));
   }
 
-  @Test public void persistenceFailureStopsBeforeAnyToolEffect() throws Exception {
-    File files = temporary.newFolder(); String session = "failed-journal";
-    LocalRunStore store = new LocalRunStore(files);
-    store.appendConversationMessage(session, "user", "Write it");
-    AtomicInteger effects = new AtomicInteger();
-    CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> new ModelReply("",
-        Collections.singletonList(new ModelReply.Call("never-started", "write", arguments("path", "index.html")))),
-        new CoreToolRegistry(Collections.singletonList(testTool("write", (args, token) -> {
-          effects.incrementAndGet(); return CoreToolResult.success("Wrote index.html");
-        }))), "system", session);
-    new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
-    File ledger = new File(files, "jarvys/conversations/" + session + ".jsonl");
-    assertTrue(ledger.delete()); assertTrue(ledger.mkdir());
-    try { loop.run("Write it", Collections.emptyList(), CancellationToken.uncancellable(), null); fail(); }
-    catch (CoreAgentLoop.CheckpointFailure expected) { }
-    assertEquals(0, effects.get());
-  }
-
   @Test public void modelToolBodiesNeverBecomeReflectionInput() throws Exception {
-    File files = temporary.newFolder(); String session = "reflection-isolation";
-    LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory(); String session = "reflection-isolation";
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String user = store.appendConversationMessage(session, "user", "Inspect the file");
     AtomicInteger turns = new AtomicInteger();
     String privateText = "private-workspace-body-sentinel";
@@ -403,11 +384,11 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void preCreatedRecoveryToolReadsFreshSameRunCompactionArtifact() throws Exception {
-    File files = temporary.newFolder(); String session = "same-run-artifact";
-    LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory(); String session = "same-run-artifact";
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Inspect data");
     CoreTool originalReader = new MainChatTranscriptStore(files, session, store).recoveryTool();
-    MainChatTranscriptStore compactorStore = new MainChatTranscriptStore(files, session, new LocalRunStore(files));
+    MainChatTranscriptStore compactorStore = new MainChatTranscriptStore(files, session, chatTestStore.localRunStore(files));
     String reference = compactorStore.archive("Fresh source after model context compaction");
     java.util.regex.Matcher id = java.util.regex.Pattern.compile("artifact_id=\"([0-9a-f]{64})\"").matcher(reference);
     assertTrue(reference, id.find());
@@ -416,9 +397,26 @@ public class MainChatToolContinuityTest {
     assertTrue(recovered.content.contains("Fresh source after model context compaction"));
   }
 
+  @Test public void persistenceFailureStopsBeforeAnyToolEffect() throws Exception {
+    File files = chatTestStore.newFilesDirectory(); String session = "deleted-before-tool-checkpoint";
+    LocalRunStore store = chatTestStore.localRunStore(files);
+    store.appendConversationMessage(session, "user", "Write it");
+    AtomicInteger effects = new AtomicInteger();
+    CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> new ModelReply("",
+        Collections.singletonList(new ModelReply.Call("never-started", "write", arguments("path", "index.html")))),
+        new CoreToolRegistry(Collections.singletonList(testTool("write", (args, token) -> {
+          effects.incrementAndGet(); return CoreToolResult.success("Wrote index.html");
+        }))), "system", session);
+    new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
+    assertTrue(store.deleteConversation(session));
+    try { loop.run("Write it", Collections.emptyList(), CancellationToken.uncancellable(), null); fail(); }
+    catch (CoreAgentLoop.CheckpointFailure expected) { }
+    assertEquals(0, effects.get());
+  }
+
   @Test public void preRequestPlanAllCompactionRetainsLaterToolEffectOnReload() throws Exception {
-    File files = temporary.newFolder(); String session = "pending-compaction";
-    LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory(); String session = "pending-compaction";
+    LocalRunStore store = chatTestStore.localRunStore(files);
     String earlierUser = store.appendConversationMessage(session, "user", "Earlier request");
     store.appendConversationMessage(session, "assistant", "Earlier answer", null, "", earlierUser);
     String user = store.appendConversationMessage(session, "user", "Write a page");
@@ -453,7 +451,7 @@ public class MainChatToolContinuityTest {
     CoreAgentLoop.Result result = loop.run("", compacted.context, CancellationToken.uncancellable(), null);
     store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
     store.appendConversationMessage(session, "user", "Did it work?");
-    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
     assertEquals(1, effects.get());
     assertTrue(restored.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.COMPACTION_SUMMARY));
     assertTrue(restored.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
@@ -462,8 +460,8 @@ public class MainChatToolContinuityTest {
   }
 
   @Test public void isolatedCompactorKeepsFactsWithoutAdvertisingUnavailableRecoveryOrSavingArtifacts() throws Exception {
-    File files = temporary.newFolder(); String session = "isolated-worker";
-    LocalRunStore store = new LocalRunStore(files);
+    File files = chatTestStore.newFilesDirectory(); String session = "isolated-worker";
+    LocalRunStore store = chatTestStore.localRunStore(files);
     store.appendConversationMessage(session, "user", "Write one scoped file");
     ModelProviderClient provider = new ModelProviderClient() {
       @Override public ModelReply complete(String system, String prompt, List<com.jarvys.agent.device.ScreenData> images,

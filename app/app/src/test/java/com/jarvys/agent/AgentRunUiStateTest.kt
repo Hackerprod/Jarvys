@@ -13,7 +13,10 @@ import kotlinx.coroutines.withTimeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class AgentRunUiStateTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @Test
     fun selectingUncachedSessionPublishesItsEmptyStateInsteadOfPriorConversation() {
         val firstSession = "uncached-selection-a-${System.nanoTime()}"
@@ -592,8 +595,8 @@ class AgentRunUiStateTest {
 
     @Test fun persistedToolEventsAreDurableAcrossRefreshWithoutDuplicatingLiveResults() {
         val session = "refresh-tools-${System.nanoTime()}"
-        val root = java.nio.file.Files.createTempDirectory(session).toFile()
-        val store = LocalRunStore(root)
+        val root = chatTestStore.newFilesDirectory()
+        val store = chatTestStore.localRunStore(root)
         val userId = store.appendConversationMessage(session, "user", "Send a message")
         store.appendReflectionToolEvent(session, userId, "Telegram Send Message", "connector:telegram",
             "tool_result", "persisted-call")
@@ -611,7 +614,6 @@ class AgentRunUiStateTest {
         assertEquals("Telegram Send Message", tools.first().toolDisplayName)
         assertEquals("tool_call", tools.last().stage)
         AgentRunUiState.resetSession("$session-cleanup")
-        root.deleteRecursively()
     }
 
     @Test fun completedAssistantStageIsSharedForLiveOutcomes() {

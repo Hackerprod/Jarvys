@@ -23,6 +23,7 @@ public final class CrewContextArtifacts {
     public static final String READ_TOOL = "read_crew_artifact";
     private final String conversationId;
     private final ConversationMetadataAccess metadata;
+    private final Object scopeLock;
     private final Map<String, Integer> owned;
     private final File root;
 
@@ -37,7 +38,9 @@ public final class CrewContextArtifacts {
         }
         this.conversationId = conversationId;
         this.metadata = conversationId == null ? null : new ConversationMetadataAccess(filesDirectory);
-        synchronized (ConversationMetadataAccess.LOCK) {
+        this.scopeLock = ConversationMetadataAccess.lockForSession(
+                conversationId == null ? "crew-standalone-" + digest(botId) : conversationId);
+        synchronized (scopeLock) {
             requireActiveConversation();
             try {
                 String path = conversationId == null ? "standalone/" + digest(botId) : digest(conversationId) + "/" + digest(botId);
@@ -55,7 +58,7 @@ public final class CrewContextArtifacts {
 
     public static boolean deleteConversation(File filesDirectory, String conversationId) {
         ConversationMetadataAccess.validateSessionId(conversationId);
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             try {
                 File directory = new File(filesDirectory.getCanonicalFile(), "jarvys/crew-context/" + digest(conversationId));
                 return deleteTree(directory);
@@ -95,7 +98,7 @@ public final class CrewContextArtifacts {
 
     public String save(String content, CancellationToken token) {
         String strSaveLocked;
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (scopeLock) {
             requireActiveConversation();
             strSaveLocked = saveLocked(content, token);
         }
@@ -137,7 +140,7 @@ public final class CrewContextArtifacts {
 
     public JSONObject snapshotOwnership() {
         JSONObject snapshot;
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (scopeLock) {
             requireActiveConversation();
             snapshot = new JSONObject();
             try {
@@ -159,7 +162,7 @@ public final class CrewContextArtifacts {
     }
 
     public void restoreOwnership(JSONObject snapshot) {
-        synchronized (ConversationMetadataAccess.LOCK) {
+        synchronized (scopeLock) {
             requireActiveConversation();
             Map<String, Integer> restored = new LinkedHashMap<>();
             try {
@@ -236,7 +239,7 @@ public final class CrewContextArtifacts {
 
             @Override
             public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-                synchronized (ConversationMetadataAccess.LOCK) {
+                synchronized (scopeLock) {
                     try {
                         requireActiveConversation();
                         return readPage(arguments, token);

@@ -26,6 +26,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class HtmlPreviewSnapshotTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     private File files, workspaceRoot;
     private WorkspaceStore workspace;
@@ -39,7 +40,7 @@ public class HtmlPreviewSnapshotTest {
         java.lang.reflect.Field singleton = SecretStore.class.getDeclaredField("singleton"); singleton.setAccessible(true);
         priorSecrets = singleton.get(null);
         singleton.set(null, new SecretStore(context.getSharedPreferences("html-preview-fixture", Context.MODE_PRIVATE)));
-        files = temporary.getRoot(); ledger = new LocalRunStore(files);
+        files = chatTestStore.newFilesDirectory(); ledger = chatTestStore.localRunStore(files);
         store = new DeliveredArtifactStore(new File(files, "jarvys"));
         workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
                 null, null, null, session, false);
@@ -263,7 +264,7 @@ public class HtmlPreviewSnapshotTest {
         assertTrue(new File(workspaceRoot, "app.js").delete());
         AgentRunUiState.resetSession(session);
         for (int repeat = 0; repeat < 3; repeat++) {
-            LocalRunStore reopened = new LocalRunStore(files);
+            LocalRunStore reopened = chatTestStore.localRunStore(files);
             java.util.List<AgentRunUiEvent> timeline = reopened.readConversationTimeline(session);
             assertEquals(1, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).count());
             assertEquals(delivered.previewId, timeline.stream().filter(e -> "snapshot-delivery".equals(e.getToolCallId())).findFirst().get().getPreviewId());
@@ -278,8 +279,8 @@ public class HtmlPreviewSnapshotTest {
         assertEquals("<html>Changed source must not replace the snapshot</html>", workspace.read("index.html"));
         assertFalse(new File(workspaceRoot, "app.js").exists());
         assertTrue(ledger.deleteConversation(session));
-        assertNull(new LocalRunStore(files).findChatFile(session, "delivered", attachment.id));
-        assertFalse(new LocalRunStore(files).readConversationTimeline(session).stream().anyMatch(e -> e.getPreviewId() != null));
+        assertNull(chatTestStore.localRunStore(files).findChatFile(session, "delivered", attachment.id));
+        assertFalse(chatTestStore.localRunStore(files).readConversationTimeline(session).stream().anyMatch(e -> e.getPreviewId() != null));
         assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(session, delivered.previewId));
         assertFalse(previewTool(workspace).execute(Collections.singletonMap("path", "index.html"), CancellationToken.uncancellable()).success);
     }
@@ -293,7 +294,7 @@ public class HtmlPreviewSnapshotTest {
         alienWorkspace.write("index.html", "<html>Unrelated alien page</html>");
         ledger.appendConversationToolPresentation(alien, alienUser, "Preview Workspace", "tool_result", "alien-snapshot",
                 "An unavailable snapshot was requested", owner.previewId, "Preview requested HTML");
-        AgentRunUiEvent restored = new LocalRunStore(files).readConversationTimeline(alien).stream()
+        AgentRunUiEvent restored = chatTestStore.localRunStore(files).readConversationTimeline(alien).stream()
                 .filter(e -> "alien-snapshot".equals(e.getToolCallId())).findFirst().get();
         assertNull(restored.getPreviewId());
         assertNull(ledger.findChatFile(alien, "delivered", attachment(owner).id));
@@ -329,7 +330,7 @@ public class HtmlPreviewSnapshotTest {
         // No tool_presentation is written: model evidence is the only surviving tool record.
         write("pages/site.html", "<html>Mutable replacement</html>");
         assertTrue(new File(workspaceRoot, "pages/app.js").delete());
-        java.util.List<AgentRunUiEvent> timeline = new LocalRunStore(files).readConversationTimeline(session);
+        java.util.List<AgentRunUiEvent> timeline = chatTestStore.localRunStore(files).readConversationTimeline(session);
         assertEquals(1, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).count());
         assertEquals(attachment, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).findFirst().get().getDeliveredArtifact());
         assertEquals(explicit.previewId, timeline.stream().filter(e -> "recover-exact".equals(e.getToolCallId())).findFirst().get().getPreviewId());

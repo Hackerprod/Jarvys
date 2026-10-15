@@ -5,13 +5,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class MainChatTurnContextProviderTest {
-    @get:Rule val temporary = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
     @Test fun activeRunReadsDurableUserMessagesOnceAndRestartCanRecoverThem() {
-        val store = LocalRunStore(temporary.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
         val activeProvider = MainChatTurnContextProvider(store, session, initialId)
@@ -33,7 +34,7 @@ class MainChatTurnContextProviderTest {
     }
 
     @Test fun pickedSteeringRemainsUnconsumedUntilTheLoopAcknowledgesTranscriptInsertion() {
-        val store = LocalRunStore(temporary.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering-ack"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
         val provider = MainChatTurnContextProvider(store, session, initialId)
@@ -49,7 +50,7 @@ class MainChatTurnContextProviderTest {
     }
 
     @Test fun steeringArrivingAfterClosureStillRemainsEligibleForFollowUp() {
-        val store = LocalRunStore(temporary.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering-late"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
         val provider = MainChatTurnContextProvider(store, session, initialId)
@@ -62,7 +63,7 @@ class MainChatTurnContextProviderTest {
     }
 
     @Test fun restartDoesNotCollectAnAlreadyIncorporatedMessageAgainFromAnOlderCursor() {
-        val store = LocalRunStore(temporary.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering-old-cursor"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
         val steeringId = store.appendConversationMessage(session, "user", "already incorporated")
@@ -75,7 +76,7 @@ class MainChatTurnContextProviderTest {
     }
 
     @Test fun dispatchedButUnincorporatedSteeringIsRecoveredAcrossProviderRestart() {
-        val store = LocalRunStore(temporary.newFolder())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering-restart"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
         val requestId = store.appendInterruptRequest(session, "accepted steering", emptyList(), false)
@@ -100,37 +101,16 @@ class MainChatTurnContextProviderTest {
         assertEquals("", restartedProvider.latestUnincorporatedSteeringMessageId())
     }
 
-    @Test fun legacyDispatchedSteeringWithoutAcknowledgementMarkerIsNotRecovered() {
-        val files = temporary.newFolder()
-        val store = LocalRunStore(files)
-        val session = "main-chat-steering-legacy-dispatch"
-        val initialId = store.appendConversationMessage(session, "user", "initial request")
-        val requestId = store.appendInterruptRequest(session, "already dispatched by old app", emptyList(), false)
-        val ledger = java.io.File(files, "jarvys/conversations/$session.jsonl")
-        ledger.appendText(org.json.JSONObject()
-            .put("role", "user")
-            .put("messageId", requestId)
-            .put("interruptRequestId", requestId)
-            .put("content", "already dispatched by old app")
-            .put("timestamp", System.currentTimeMillis() / 1000.0)
-            .toString() + "\n")
-
-        assertTrue(store.readPendingInterruptRequests(session).isEmpty())
-        val provider = MainChatTurnContextProvider(store, session, initialId)
-        assertTrue(provider.takeDurableMessages().isEmpty())
-        assertEquals("", provider.latestUnincorporatedSteeringMessageId())
-    }
-
     @Test fun explicitResolutionDoesNotClaimTranscriptIncorporation() {
-        val files = temporary.newFolder()
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory()
+        val store = chatTestStore.localRunStore(files)
         val session = "main-chat-steering-resolved"
         store.appendConversationMessage(session, "user", "initial request")
         val requestId = store.appendInterruptRequest(session, "stopped steering", emptyList(), false)
         assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
 
         store.markConversationMessagesResolved(session, listOf(requestId))
-        val reopened = LocalRunStore(files)
+        val reopened = chatTestStore.localRunStore(files)
         assertTrue(reopened.readPendingInterruptRequests(session).isEmpty())
         assertFalse(store.incorporatedConversationMessageIds(session).contains(requestId))
 
@@ -140,7 +120,7 @@ class MainChatTurnContextProviderTest {
 
     @Test fun terminalAssistantResponseResolvesOwnerForRecoveryAndProvider() {
         for (status in listOf("FAILED", "PARTIAL", "STOPPED")) {
-            val store = LocalRunStore(temporary.newFolder())
+            val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
             val session = "main-chat-steering-terminal-$status"
             val initialId = store.appendConversationMessage(session, "user", "initial request")
             val requestId = store.appendInterruptRequest(session, "terminal steering", emptyList(), false)

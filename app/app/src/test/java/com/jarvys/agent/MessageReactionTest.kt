@@ -9,7 +9,6 @@ import org.junit.Before
 import org.junit.After
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -18,20 +17,18 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MessageReactionTest {
-    @get:Rule val temporary = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     private lateinit var root: File
     private lateinit var store: LocalRunStore
     private val session = "reactions"
     private val token get() = CancellationToken.uncancellable()
 
-    @Before fun setup() { root = temporary.newFolder(); store = LocalRunStore(root) }
+    @Before fun setup() { root = chatTestStore.newFilesDirectory(); store = chatTestStore.localRunStore(root) }
     @After fun cleanUi() { AgentRunUiState.restoreSession("reaction-tests-finished", emptyList()) }
     private fun args(id: String, emoji: String): Map<String, Any> = mapOf("message_id" to id, "emoji" to emoji)
     private fun tool(): MessageReactionTool = MessageReactionTool(store, session).also {
         it.prepareModelMetadata(store.loadConversationContext(session), "")
     }
-    private fun ledger() = File(root, "jarvys/conversations/$session.jsonl")
-
     @Test fun unicodeValidationAcceptsSingleEmojiSequencesAndRejectsContent() {
         listOf("👍", "👍🏽", "❤️", "💙", "👨‍👩‍👧‍👦", "👩🏿‍💻", "🏳️‍🌈", "🇪🇸", "1️⃣", "#️⃣", "☕", "😂", "✅").forEach {
             assertTrue("Expected emoji $it", MessageReactionEmoji.isValid(it))
@@ -58,34 +55,21 @@ class MessageReactionTest {
     @Test fun addReplaceRemoveAndNoOpsPersistWithoutAlteringHistoryOrIdentity() {
         val id = store.appendConversationMessage(session, "user", "  Keep **this** verbatim  ")
         val answer = store.appendConversationMessage(session, "assistant", "answer")
-        val original = ledger().readText()
         val before = store.readConversationTimeline(session)
         assertTrue(store.setMessageReaction(session, id, "👀"))
-        val length = ledger().length()
         assertFalse(store.setMessageReaction(session, id, "👀"))
-        assertEquals(length, ledger().length())
-        var restarted = LocalRunStore(root)
+        var restarted = chatTestStore.localRunStore(root)
         assertEquals("👀", restarted.readConversationTimeline(session).first().reactionEmoji)
         assertEquals(before.map { it.id }, restarted.readConversationTimeline(session).map { it.id })
-        assertTrue(ledger().readText().startsWith(original))
         assertEquals(2, store.conversationMessageCount(session))
         assertEquals(listOf("  Keep **this** verbatim  ", "answer"), store.loadConversationContext(session).map { it.content })
         assertEquals(listOf(id, answer), store.readConversationTimeline(session).map { it.messageId })
         assertTrue(restarted.setMessageReaction(session, id, "🎉"))
-        restarted = LocalRunStore(root)
+        restarted = chatTestStore.localRunStore(root)
         assertEquals("🎉", restarted.readConversationTimeline(session).first().reactionEmoji)
         assertTrue(restarted.setMessageReaction(session, id, ""))
-        val removedLength = ledger().length()
         assertFalse(restarted.setMessageReaction(session, id, ""))
-        assertEquals(removedLength, ledger().length())
-        assertEquals("", LocalRunStore(root).readConversationTimeline(session).first().reactionEmoji)
-    }
-
-    @Test fun noReactionRemovalDoesNotWrite() {
-        val id = store.appendConversationMessage(session, "user", "same")
-        val before = ledger().readText()
-        assertFalse(store.setMessageReaction(session, id, ""))
-        assertEquals(before, ledger().readText())
+        assertEquals("", chatTestStore.localRunStore(root).readConversationTimeline(session).first().reactionEmoji)
     }
 
     @Test fun foreignAssistantUnknownPathAndExtraArgumentsCannotChangeState() {
@@ -93,7 +77,7 @@ class MessageReactionTest {
         val assistant = store.appendConversationMessage(session, "assistant", "same")
         val foreign = store.appendConversationMessage("other", "user", "same")
         val tool = tool()
-        val before = ledger().readText()
+        val before = store.readConversationTimeline(session).map { it.id to it.reactionEmoji }
         listOf(assistant, foreign, "unknown", "../other", "", "user-0").forEach { id ->
             assertFalse(tool.execute(args(id, "👍"), token).success)
             assertTrue(runCatching { store.setMessageReaction(session, id, "👍") }.isFailure)
@@ -103,7 +87,7 @@ class MessageReactionTest {
             args(user, "👍🎉"), args(user, "<b>👍</b>"), args(user, " ")).forEach {
             assertFalse(tool.execute(it, token).success)
         }
-        assertEquals(before, ledger().readText())
+        assertEquals(before, store.readConversationTimeline(session).map { it.id to it.reactionEmoji })
         assertEquals("", store.readConversationTimeline("other").single().reactionEmoji)
     }
 
@@ -203,47 +187,14 @@ class MessageReactionTest {
         assertEquals(listOf("👍", "🎉"), store.readConversationTimeline(session).filter { it.kind == "user" }.map { it.reactionEmoji })
     }
 
-    @Test fun legacyIdsAreStableChatScopedAndOriginalLedgerRemainsUntouched() {
-        val original = "{\"role\":\"user\",\"content\":\"legacy\",\"timestamp\":1}\n{\"role\":\"assistant\",\"content\":\"answer\",\"timestamp\":2}\n"
-        ledger().writeText(original)
-        File(root, "jarvys/conversations/other.jsonl").writeText(original)
-        val id = store.readConversationTimeline(session).first().messageId
-        val other = store.readConversationTimeline("other").first().messageId
-        assertNotEquals(id, other)
-        assertEquals(id, LocalRunStore(root).readConversationTimeline(session).first().messageId)
-        assertTrue(tool().execute(args(id, "👍"), token).success)
-        assertEquals("👍", LocalRunStore(root).readConversationTimeline(session).first().reactionEmoji)
-        assertTrue(ledger().readText().startsWith(original))
-        assertEquals(listOf(0, 1), store.loadConversationContext(session).map { it.originalMessageIndex })
-        assertEquals("", store.readConversationTimeline(session).last().messageId)
-    }
-
-    @Test fun invalidFutureOrMalformedReactionRowsCannotRenderContentOrCreateMessages() {
-        val id = store.appendConversationMessage(session, "user", "body")
-        store.setMessageReaction(session, id, "👍")
-        listOf(JSONObject().put("version", 9).put("emoji", "🎉"),
-            JSONObject().put("version", 1).put("emoji", "<script>x</script>"),
-            JSONObject().put("version", 1).put("emoji", 5)).forEach {
-            ledger().appendText(it.put("type", "message_reaction").put("messageId", id).toString() + "\n")
-        }
-        assertEquals("👍", store.readConversationTimeline(session).single().reactionEmoji)
-        assertEquals(listOf("body"), store.loadConversationContext(session).map { it.content })
-    }
-
-    @Test fun duplicateIdsAndDeletedChatsFailClosed() {
-        val id = store.appendConversationMessage(session, "user", "one")
-        val original = ledger().readLines().single()
-        ledger().appendText(original + "\n")
-        assertFalse(tool().execute(args(id, "👍"), token).success)
-        assertTrue(runCatching { store.setMessageReaction(session, id, "👍") }.isFailure)
+    @Test fun deletedChatsRejectHeldReactionTools() {
         val clean = "deleted-reaction"
         val deletedId = store.appendConversationMessage(clean, "user", "delete")
         val liveTool = MessageReactionTool(store, clean).also { it.prepareModelMetadata(emptyList(), "delete") }
         store.deleteConversation(clean)
-        assertFalse(liveTool.execute(args(deletedId, "👍"), token).success)
+        assertFalse(liveTool.execute(args(deletedId, "\uD83D\uDC4D"), token).success)
         assertTrue(store.readConversationTimeline(clean).isEmpty())
     }
-
     @Test fun liveBindingAndRefreshKeepStreamingAndNeverTouchOtherMessagesOrChats() {
         val first = store.appendConversationMessage(session, "user", "same")
         AgentRunUiState.restoreSession(session, store.readConversationTimeline(session))
@@ -266,7 +217,7 @@ class MessageReactionTest {
         assertTrue(tool().execute(args(id, "👀"), token).success)
         assertEquals("other", AgentRunUiState.state.value.sessionId)
         assertTrue(AgentRunUiState.state.value.events.isEmpty())
-        AgentRunUiState.restoreSession(session, LocalRunStore(root).readConversationTimeline(session))
+        AgentRunUiState.restoreSession(session, chatTestStore.localRunStore(root).readConversationTimeline(session))
         assertEquals("👀", AgentRunUiState.state.value.events.last().reactionEmoji)
     }
 
@@ -337,24 +288,16 @@ class MessageReactionTest {
         assertFalse(historical.contains("Current incoming user request"))
     }
 
-    @Test fun duplicateAcrossUserAndAssistantIdsIsNotExposed() {
-        val id = store.appendConversationMessage(session, "user", "hello")
-        ledger().appendText(JSONObject().put("role", "assistant").put("content", "answer").put("messageId", id).toString() + "\n")
-        val tool = MessageReactionTool(store, session)
-        assertFalse(tool.prepareModelMetadata(store.loadConversationContext(session), "hello").contains(id))
-        assertFalse(tool.execute(args(id, "👍"), token).success)
-    }
-
-    @Test fun specialChatAndProactiveThreadRowsKeepLegacyIdentityAndCannotReact() {
-        listOf("jarvys-proactive", "jarvys-tasks").forEach { id ->
-            File(root, "jarvys/conversations/$id.jsonl").writeText("""{"role":"user","content":"legacy","timestamp":1}
-""")
-            assertEquals("", store.readConversationTimeline(id).single().messageId)
+    @Test fun specialChatsAndProactiveThreadMessagesCannotBeReactedTo() {
+        listOf("jarvys-proactive", "jarvys-tasks").forEach { specialSession ->
+            store.appendConversationMessage(specialSession, "user", "Automatic request")
+            assertTrue(runCatching { MessageReactionTool(store, specialSession) }.isFailure)
         }
-        ledger().writeText("""{"role":"user","content":"legacy","timestamp":1,"proactiveThreadKey":"thread"}
-""")
-        assertEquals("", store.readConversationTimeline(session).single().messageId)
-        assertFalse(tool().prepareModelMetadata(store.loadConversationContext(session), "legacy").contains("legacy-"))
+        val threadMessage = store.appendConversationMessage(session, "user", "Thread scoped request",
+            null, "", "", "", "thread")
+        val threadTool = MessageReactionTool(store, session)
+        val metadata = threadTool.prepareModelMetadata(store.loadConversationContext(session), "Thread scoped request")
+        assertFalse(metadata.contains(threadMessage))
+        assertFalse(threadTool.execute(args(threadMessage, "\uD83D\uDC4D"), token).success)
     }
-
 }

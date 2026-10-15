@@ -12,7 +12,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.ui.chat.ConversationTimelineItem
@@ -28,39 +27,40 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
-import java.nio.file.Files
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AgentRunRestorationComposeTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false)
     @get:Rule val compose = createComposeRule()
 
     @Test fun restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping() {
-        val root = Files.createTempDirectory("restored-delivered-preview").toFile()
-        val store = LocalRunStore(root)
+        val root = chatTestStore.newFilesDirectory()
         val session = "restored-preview-${System.nanoTime()}"
-        val userId = store.appendConversationMessage(session, "user", "Create a web page")
-        val projectId = WorkspaceStore.projectIdForSession(session)
-        val workspace = WorkspaceStore(File(root, "jarvys/workspaces"), projectId,
-            null, null, null, session, false)
-        workspace.write("index.html", "<!doctype html><h1>Restored page</h1>")
-        val artifacts = DeliveredArtifactStore(File(root, "jarvys"))
-        val artifact = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
-        store.appendDeliveredFile(session, artifact)
-        val preview = requireNotNull(artifacts.previewForAttachment(session, artifact))
-        store.appendConversationToolPresentation(session, userId, "Build output", "tool_result", "preview-call",
-            "{\"artifact_id\":\"delivered:${artifact.id}\"}", preview.token, "")
-        store.appendConversationToolPresentation(session, userId, "Read output", "tool_result", "read-call",
-            "Read completed", null, "")
-        store.appendConversationToolPresentation(session, userId, "Write output", "tool_error", "write-call",
-            "Write failed", null, "")
-
-        val timeline = LocalRunStore(root).readConversationTimeline(session)
+        val prepared = chatTestStore.withLocalRunStore(root) { store ->
+            val userId = store.appendConversationMessage(session, "user", "Create a web page")
+            val projectId = WorkspaceStore.projectIdForSession(session)
+            val workspace = WorkspaceStore(File(root, "jarvys/workspaces"), projectId,
+                null, null, null, session, false)
+            workspace.write("index.html", "<!doctype html><h1>Restored page</h1>")
+            val artifacts = DeliveredArtifactStore(File(root, "jarvys"))
+            val artifact = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
+            store.appendDeliveredFile(session, artifact)
+            val preview = requireNotNull(artifacts.previewForAttachment(session, artifact))
+            store.appendConversationToolPresentation(session, userId, "Build output", "tool_result", "preview-call",
+                "{\"artifact_id\":\"delivered:${artifact.id}\"}", preview.token, "")
+            store.appendConversationToolPresentation(session, userId, "Read output", "tool_result", "read-call",
+                "Read completed", null, "")
+            store.appendConversationToolPresentation(session, userId, "Write output", "tool_error", "write-call",
+                "Write failed", null, "")
+            artifact.id to store.readConversationTimeline(session)
+        }
+        val timeline = prepared.second
         val matchingResult = timeline.single { it.toolCallId == "preview-call" }
         val deliveredCard = timeline.single { it.kind == "delivered_file" }
         val projected = ConversationVisibility.project(timeline)
         assertFalse(projected.any { it.id == matchingResult.id })
-        assertTrue(projected.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == artifact.id })
+        assertTrue(projected.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == prepared.first })
         val toolGroup = ToolGrouping.project(projected).filterIsInstance<ConversationTimelineItem.ToolGroup>().single()
         assertEquals(2, toolGroup.toolCount)
         assertFalse(toolGroup.events.any { it.id == matchingResult.id })
@@ -82,27 +82,25 @@ class AgentRunRestorationComposeTest {
         compose.onNodeWithTag("conversation-activity-${matchingResult.id}").assertDoesNotExist()
         compose.onNodeWithTag("delivered-file-${deliveredCard.id}").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("tool-group-${toolGroup.firstEventId}").performScrollTo().assertIsDisplayed()
-        root.deleteRecursively()
     }
 
     @Test fun restoredToolCardsAndCompletedAssistantFooterAreVisible() {
-        val root = Files.createTempDirectory("restored-chat-tools").toFile()
-        val store = LocalRunStore(root)
+        val root = chatTestStore.newFilesDirectory()
         val session = "restored-compose-${System.nanoTime()}"
-        val userId = store.appendConversationMessage(session, "user", "Send a Telegram message")
-        store.appendReflectionToolEvent(session, userId, "Telegram Send Message", "mcp", "tool_result", "success-call")
-        store.appendReflectionToolEvent(session, userId, "Telegram Send Message", "mcp", "tool_error", "failure-call")
-        store.appendConversationMessage(session, "assistant", "The message was handled.", 100L,
-            "restored-run", userId, "COMPLETED")
-        val timeline = store.readConversationTimeline(session)
+        val timeline = chatTestStore.withLocalRunStore(root) { store ->
+            val userId = store.appendConversationMessage(session, "user", "Send a message")
+            store.appendReflectionToolEvent(session, userId, "Send Message", "messaging", "tool_result", "success-call")
+            store.appendReflectionToolEvent(session, userId, "Send Message", "messaging", "tool_error", "failure-call")
+            store.appendConversationMessage(session, "assistant", "The message was handled.", 100L,
+                "restored-run", userId, "COMPLETED")
+            store.readConversationTimeline(session)
+        }
         assertNull(timeline.last { it.kind == "assistant" }.stage)
         val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
             private val states = mutableMapOf<String, Boolean>()
             override fun isConnected(id: String) = states[id] == true
             override fun setConnected(id: String, connected: Boolean) { states[id] = connected }
         }, { true })
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-
         compose.setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxSize()) {
@@ -133,6 +131,5 @@ class AgentRunRestorationComposeTest {
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription(context.getString(R.string.chat_footer_regenerate))
             .performScrollTo().assertIsDisplayed()
-        root.deleteRecursively()
     }
 }

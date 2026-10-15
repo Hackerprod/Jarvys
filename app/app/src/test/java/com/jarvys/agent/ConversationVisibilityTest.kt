@@ -4,10 +4,11 @@ import com.jarvys.agent.ui.chat.ConversationVisibility
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class ConversationVisibilityTest {
-    @get:Rule val temporary = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
     private fun activity(name: String, stage: String, execution: String = name) = ToolActivity(
         "$execution/$stage", execution, execution, name, "display", "", "", stage,
@@ -79,15 +80,15 @@ class ConversationVisibilityTest {
     }
 
     @Test fun reopenFiltersTypedCoordinationButKeepsDurableEvidenceAndErrors() {
-        val root = temporary.newFolder()
-        val store = LocalRunStore(root)
+        val root = chatTestStore.newFilesDirectory()
+        val store = chatTestStore.localRunStore(root)
         val session = "quiet-reopen"
         val user = store.appendConversationMessage(session, "user", "Create an app")
         store.appendToolActivity(session, user, activity("workspaces", "tool_result", "success"))
         store.appendToolActivity(session, user, activity("workspaces", "tool_error", "failure"))
         store.appendToolActivity(session, user, activity("app_diagnostics", "tool_result", "diagnostics"))
         store.appendConversationMessage(session, "assistant", "The workspace needs attention")
-        val reopened = LocalRunStore(root).readConversationTimeline(session)
+        val reopened = chatTestStore.localRunStore(root).readConversationTimeline(session)
         val storedBefore = root.walkTopDown().filter { it.isFile }.associate {
             it.relativeTo(root).path to java.security.MessageDigest.getInstance("SHA-256").digest(it.readBytes()).toList()
         }
@@ -95,7 +96,7 @@ class ConversationVisibilityTest {
         assertEquals(3, reopened.count { it.kind == "tool" })
         assertEquals(2, visible.count { it.kind == "tool" })
         assertTrue(visible.any { it.toolActivity?.toolName == "workspaces" && it.stage == "tool_error" })
-        val again = LocalRunStore(root).readConversationTimeline(session)
+        val again = chatTestStore.localRunStore(root).readConversationTimeline(session)
         assertEquals(reopened.map { it.toolActivity?.toJson()?.toString() }, again.map { it.toolActivity?.toJson()?.toString() })
         assertEquals(reopened.map { Triple(it.kind, it.stage, it.text) }, again.map { Triple(it.kind, it.stage, it.text) })
         assertEquals(storedBefore, root.walkTopDown().filter { it.isFile }.associate {

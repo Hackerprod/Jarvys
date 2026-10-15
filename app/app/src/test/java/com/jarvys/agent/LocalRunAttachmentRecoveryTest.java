@@ -3,13 +3,10 @@ package com.jarvys.agent;
 import static org.junit.Assert.*;
 import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -20,37 +17,15 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class LocalRunAttachmentRecoveryTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     @Rule public TemporaryFolder temp = new TemporaryFolder();
-    private LocalRunStore store() { return new LocalRunStore(temp.getRoot()); }
-    private AttachmentStore attachments() { return new AttachmentStore(new File(temp.getRoot(), "jarvys")); }
+    private File files;
+    @org.junit.Before public void setUp() { files = chatTestStore.newFilesDirectory(); }
+    private LocalRunStore store() { return chatTestStore.localRunStore(files); }
+    private AttachmentStore attachments() { return new AttachmentStore(new File(files, "jarvys")); }
     private ChatAttachment file(String session, String name) throws Exception {
         return attachments().copyFromStream(session, name, "text/plain", null, new ByteArrayInputStream(new byte[]{1, 2, 3}));
     }
-    private File ledger(String session) { return new File(temp.getRoot(), "jarvys/conversations/" + session + ".jsonl"); }
-
-    @Test public void oldAbsentAndNullAttachmentRowsRemainReadableAlongsideNewMetadata() throws Exception {
-        LocalRunStore store = store();
-        store.appendConversationMessage("chat", "user", "old unchanged");
-        JSONObject legacyNull = new JSONObject().put("role", "user").put("content", "null unchanged")
-                .put("messageId", "legacy-null").put("attachments", JSONObject.NULL);
-        Files.write(ledger("chat").toPath(), (legacyNull + "\n").getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
-        ChatAttachment item = file("chat", "notes.txt");
-        String message = store.appendConversationMessage("chat", "user", "new unchanged", Collections.singletonList(item));
-        List<ConversationTurn> context = store.loadConversationContext("chat");
-        assertEquals(3, context.size());
-        assertEquals("old unchanged", context.get(0).content);
-        assertTrue(context.get(0).attachments.isEmpty());
-        assertTrue(context.get(1).attachments.isEmpty());
-        assertEquals(Collections.singletonList(item), context.get(2).attachments);
-        assertEquals(Collections.singletonList(item), store.readConversationAttachments("chat", message));
-        assertTrue(store.readConversationAttachments("other", message).isEmpty());
-        assertEquals(Collections.singletonList(item), store.readConversationTimeline("chat").get(2).getAttachments());
-        String persisted = new String(Files.readAllBytes(ledger("chat").toPath()), StandardCharsets.UTF_8);
-        assertFalse(persisted.contains("base64"));
-        assertFalse(persisted.contains("workspace_path"));
-        assertTrue(store.conversationHasAttachments("chat"));
-    }
-
     @Test public void assistantProactiveAndScheduledScopesRejectAttachmentPersistence() throws Exception {
         LocalRunStore store = store();
         List<ChatAttachment> items = Collections.singletonList(file("chat", "private.txt"));
@@ -91,18 +66,17 @@ public class LocalRunAttachmentRecoveryTest {
         store.appendConversationMessage("other", "user", "keep", Collections.singletonList(other));
         String deletedRun = store.beginRun("target run", "target");
         String keptRun = store.beginRun("other run", "other");
-        WorkspaceStore workspace = new WorkspaceStore(new File(temp.getRoot(), "jarvys/workspaces"), WorkspaceStore.projectIdForSession("target"));
+        WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession("target"));
         workspace.importAttachment(target, new ByteArrayInputStream(new byte[]{1, 2, 3}));
         workspace.write("keep.txt", "ordinary workspace survives");
         assertTrue(store.deleteConversation("target"));
         assertTrue(store.readConversationMetadata("target").deleted);
-        assertFalse(ledger("target").exists());
-        assertFalse(new File(temp.getRoot(), "jarvys/runs/" + deletedRun).exists());
-        assertTrue(new File(temp.getRoot(), "jarvys/runs/" + keptRun).isDirectory());
+        assertFalse(new File(files, "jarvys/runs/" + deletedRun).exists());
+        assertTrue(new File(files, "jarvys/runs/" + keptRun).isDirectory());
         assertEquals("ordinary workspace survives", workspace.read("keep.txt"));
         assertTrue(attachments().resolve("other", other).isFile());
         store.recordSummary(deletedRun, 1, "late callback");
-        assertFalse(new File(temp.getRoot(), "jarvys/runs/" + deletedRun).exists());
+        assertFalse(new File(files, "jarvys/runs/" + deletedRun).exists());
         assertThrows(IllegalStateException.class, () -> store.appendConversationMessage("target", "assistant", "late"));
         assertThrows(IllegalStateException.class, () -> store.beginRun("resurrect", "target"));
         assertTrue(store.listConversationSessionIds().stream().noneMatch("target"::equals));
@@ -114,7 +88,7 @@ public class LocalRunAttachmentRecoveryTest {
         LocalRunStore store = store();
         store.appendConversationMessage("target", "user", "remove");
         String run = store.beginRun("target run", "target");
-        File directory = new File(temp.getRoot(), "jarvys/runs/" + run);
+        File directory = new File(files, "jarvys/runs/" + run);
         File outside = temp.newFile("sentinel");
         Files.write(outside.toPath(), "keep".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(new File(directory, "aliased-image.jpg").toPath(), outside.toPath());
@@ -128,19 +102,41 @@ public class LocalRunAttachmentRecoveryTest {
         assertFalse(directory.exists());
     }
 
-    @Test public void ledgerAndRunRootAliasesAreRejectedAndExternalFilesStayUntouched() throws Exception {
+    @Test public void runRootAliasesAreRejected() throws Exception {
         LocalRunStore store = store();
-        File sentinel = temp.newFile("external-ledger");
-        Files.write(sentinel.toPath(), "{\"role\":\"user\",\"content\":\"private\"}\n".getBytes(StandardCharsets.UTF_8));
-        Files.createSymbolicLink(ledger("aliased").toPath(), sentinel.toPath());
-        assertThrows(IllegalArgumentException.class, () -> store.readConversationMessages("aliased"));
-        assertThrows(IllegalArgumentException.class, () -> store.deleteConversation("aliased"));
-        assertTrue(sentinel.isFile());
-        File otherFiles = temp.newFolder("other-files");
+        File otherFiles = chatTestStore.newFilesDirectory("other-files");
         File jarvys = new File(otherFiles, "jarvys");
         assertTrue(jarvys.mkdirs());
-        Files.createSymbolicLink(new File(jarvys, "runs").toPath(), temp.getRoot().toPath());
-        assertThrows(IllegalStateException.class, () -> new LocalRunStore(otherFiles));
+        Files.createSymbolicLink(new File(jarvys, "runs").toPath(), files.toPath());
+        assertThrows(IllegalStateException.class, () -> chatTestStore.localRunStore(otherFiles));
+    }
+
+    @Test public void drawerListsOnlyLiveDatabaseConversationsAndTheirRuns() throws Exception {
+        LocalRunStore store = store();
+        store.appendConversationMessage("live-chat", "user", "Live request");
+        String liveRun = store.beginRun("Live goal", "live-chat");
+
+        store.appendConversationMessage("deleted-chat", "user", "Deleted request");
+        String deletedRun = store.beginRun("Private deleted goal", "deleted-chat");
+        assertTrue(store.deleteConversation("deleted-chat"));
+        File survivingDeletedRun = new File(files, "jarvys/runs/" + deletedRun);
+        assertTrue(survivingDeletedRun.mkdirs());
+        Files.write(new File(survivingDeletedRun, "steps.jsonl").toPath(),
+                ("{\"event\":\"run_start\",\"run_id\":\"" + deletedRun
+                        + "\",\"session_id\":\"deleted-chat\",\"goal\":\"Private deleted goal\"}\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        File preDatabaseRun = new File(files, "jarvys/runs/pre-database-run");
+        assertTrue(preDatabaseRun.mkdirs());
+        Files.write(new File(preDatabaseRun, "steps.jsonl").toPath(),
+                "{\"event\":\"run_start\",\"run_id\":\"pre-database-run\",\"session_id\":\"old-chat\",\"goal\":\"Private old goal\"}\n"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        List<org.json.JSONObject> rows = store.listConversations();
+        assertEquals(1, rows.size());
+        assertEquals("live-chat", rows.get(0).optString("session_id"));
+        assertEquals(liveRun, rows.get(0).optString("run_id"));
+        assertEquals("Live goal", rows.get(0).optString("goal"));
     }
 
     @Test public void privacyFlagsIncludeGeneratedFailuresAndCodeAndCleanupPreservesPersistedAttachments() throws Exception {
@@ -158,6 +154,6 @@ public class LocalRunAttachmentRecoveryTest {
         assertFalse(store.conversationHasPrivateCode("code-chat"));
         store.markConversationHasPrivateCode("code-chat");
         assertTrue(store.conversationHasPrivateCode("code-chat"));
-        assertTrue(new LocalRunStore(temp.getRoot()).conversationHasPrivateCode("code-chat"));
+        assertTrue(chatTestStore.localRunStore(files).conversationHasPrivateCode("code-chat"));
     }
 }

@@ -25,6 +25,7 @@ import com.jarvys.agent.chatdb.StoredMessage
 import com.jarvys.agent.chatdb.chatSql
 import com.jarvys.agent.chatdb.withChatReadTransaction
 import com.jarvys.agent.chatdb.JarvysChatDatabaseProvider
+import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.ToolActivity as UiToolActivity
@@ -198,7 +199,34 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         projectTimelinePage(conversationId, conversations.readWindowBefore(conversationId, cursorSeq, turns))
     }
 
-    private suspend fun projectTimelinePage(conversationId: String, window: MessageWindow): TimelineEventPage {
+    /** Reads every page under one fence and shares the conversation-wide projection tables. */
+    suspend fun readConversationTimeline(conversationId: String, turns: Int): List<AgentRunUiEvent> = readProjection {
+        require(turns > 0) { "timeline page size must be positive" }
+        val sideTables = readTimelineSideTables(conversationId)
+        val pages = ArrayList<List<AgentRunUiEvent>>()
+        var window = conversations.readTailWindow(conversationId, turns)
+        var page = projectTimelinePage(conversationId, window, sideTables)
+        pages.add(page.events)
+        var cursor = page.olderCursorSeq
+        while (cursor != null) {
+            window = conversations.readWindowBefore(conversationId, cursor, turns)
+            val older = projectTimelinePage(conversationId, window, sideTables)
+            pages.add(older.events)
+            val nextCursor = older.olderCursorSeq
+            if (nextCursor == null || nextCursor >= cursor) break
+            cursor = nextCursor
+        }
+        pages.asReversed().flatMapTo(ArrayList<AgentRunUiEvent>()) { it }
+    }
+
+    private suspend fun projectTimelinePage(conversationId: String, window: MessageWindow): TimelineEventPage =
+        projectTimelinePage(conversationId, window, readTimelineSideTables(conversationId))
+
+    private suspend fun projectTimelinePage(
+        conversationId: String,
+        window: MessageWindow,
+        sideTables: TimelineSideTables,
+    ): TimelineEventPage {
         val messages = window.slots.mapNotNull { it.message }
         val translationMessageIds = window.slots.asSequence()
             .filter { it.item.item_kind == "assistant_translation" }
@@ -207,16 +235,16 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val translationTargets = if (translationMessageIds.isEmpty()) emptyMap() else
             conversations.getMessagesByIds(conversationId, translationMessageIds).associateBy { it.messageId }
         val messagesById = (messages + translationTargets.values).associateBy { it.messageId }
-        val reactions = conversations.readMessageReactions(conversationId)
-        val ordinaryChat = (conversations.readConversationKind(conversationId) ?: "chat") !in setOf("proactive", "tasks")
-        val transcriptSnapshot = transcript.readModelTranscript(conversationId)
+        val reactions = sideTables.reactions
+        val ordinaryChat = sideTables.ordinaryChat
+        val transcriptSnapshot = sideTables.transcriptSnapshot
         val modelEntries = transcriptSnapshot.entries
         val batchesBySeq = modelEntries.filterIsInstance<ModelTranscriptEntry.Batch>().associateBy { it.seq }
         val batchesById = batchesBySeq.values.associateBy { it.value.batch.batch_id }
         val modelResults = modelEntries.filterIsInstance<ModelTranscriptEntry.ResultActivity>()
         val modelResultKeys = modelResults.mapTo(HashSet()) { timelineToolKey(it.batchId, it.callId, null) }
-        val invalidations = readTimelineInvalidations(conversationId)
-        val rawActivities = readTimelineToolActivities(conversationId)
+        val invalidations = sideTables.invalidations
+        val rawActivities = sideTables.activities
             .filter { activity ->
                 val owner = activity.owner_user_message_id
                 owner != null && activity.execution_id != null && !isInvalidated(owner, activity.seq, invalidations)
@@ -255,27 +283,27 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 activityEvent.copy(stage = stage, detail = detail.ifEmpty { null })
             } ?: activityEvent).copyToolTimelineIdentity("execution:${projected.executionId}", ownerAndExecution.first)
         }
-        val presentations = readTimelineToolPresentations(conversationId)
+        val presentations = sideTables.presentations
         val latestPresentations = presentations.groupBy { timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id) }
             .mapValues { (_, values) -> values.maxBy { it.seq } }
         val presentationKeys = presentations.mapTo(HashSet()) {
             timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id)
         }
-        val reflectionTools = readTimelineReflectionTools(conversationId)
+        val reflectionTools = sideTables.reflectionTools
         val reflectionToolsByKey = reflectionTools.groupBy { timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id) }
             .mapValues { (_, values) -> values.maxBy { it.seq } }
-        val compactionsBySeq = readTimelineCompactions(conversationId).associateBy { it.seq }
-        val reflectionRows = readTimelineReflections(conversationId)
+        val compactionsBySeq = sideTables.compactions.associateBy { it.seq }
+        val reflectionRows = sideTables.reflections
         val undoneReflections = reflectionRows.asSequence().filter { it.kind == "reflection_undo" }
             .mapNotNull { it.reflectionId }.toSet()
         val reflectionsBySeq = reflectionRows.associateBy { it.seq }
-        val decisionsBySeq = conversations.readDecisions(conversationId).associateBy { it.seq }
-        val pendingInterrupts = conversations.pendingInterruptRequests(conversationId).associateBy { it.seq }
+        val decisionsBySeq = sideTables.decisions.associateBy { it.seq }
+        val pendingInterrupts = sideTables.pendingInterrupts.associateBy { it.seq }
         val dispatchedInterrupts = pendingInterrupts.values.filter { it.dispatchedSeq != null }.mapTo(HashSet()) { it.requestId }
-        val artifactsBySeq = artifacts.artifactsForConversation(conversationId).associateBy { it.seq }
-        val generatedImagesBySeq = readTimelineGeneratedImages(conversationId).associateBy { it.seq }
-        val crewSnapshotsAtSeq = readTimelineLatestCrewSnapshots(conversationId)
-        val crewSnapshots = memory.readCrewMissionSnapshots(conversationId).associateBy { it.missionId }
+        val artifactsBySeq = sideTables.artifacts.associateBy { it.seq }
+        val generatedImagesBySeq = sideTables.generatedImages.associateBy { it.seq }
+        val crewSnapshotsAtSeq = sideTables.crewSnapshotsAtSeq
+        val crewSnapshots = sideTables.crewSnapshots.associateBy { it.missionId }
         val events = ArrayList<AgentRunUiEvent>()
         for (slot in window.slots) {
             val seq = slot.item.seq
@@ -457,6 +485,42 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         }
         return TimelineEventPage(events, window.olderCursorSeq)
     }
+
+    private data class TimelineSideTables(
+        val reactions: Map<String, String>,
+        val ordinaryChat: Boolean,
+        val transcriptSnapshot: ModelTranscriptSnapshot,
+        val invalidations: Map<String, Long>,
+        val activities: List<StoredToolActivity>,
+        val presentations: List<TimelineToolPresentation>,
+        val reflectionTools: List<TimelineReflectionTool>,
+        val compactions: List<Compaction>,
+        val reflections: List<TimelineReflection>,
+        val decisions: List<ConversationDecisionValue>,
+        val pendingInterrupts: List<InterruptRequestValue>,
+        val artifacts: List<ConversationArtifact>,
+        val generatedImages: List<GeneratedImage>,
+        val crewSnapshotsAtSeq: Map<String, Long>,
+        val crewSnapshots: List<CrewMissionSnapshot>,
+    )
+
+    private suspend fun readTimelineSideTables(conversationId: String) = TimelineSideTables(
+        reactions = conversations.readMessageReactions(conversationId),
+        ordinaryChat = (conversations.readConversationKind(conversationId) ?: "chat") !in setOf("proactive", "tasks"),
+        transcriptSnapshot = transcript.readModelTranscript(conversationId),
+        invalidations = readTimelineInvalidations(conversationId),
+        activities = readTimelineToolActivities(conversationId),
+        presentations = readTimelineToolPresentations(conversationId),
+        reflectionTools = readTimelineReflectionTools(conversationId),
+        compactions = readTimelineCompactions(conversationId),
+        reflections = readTimelineReflections(conversationId),
+        decisions = conversations.readDecisions(conversationId),
+        pendingInterrupts = conversations.pendingInterruptRequests(conversationId),
+        artifacts = artifacts.artifactsForConversation(conversationId),
+        generatedImages = readTimelineGeneratedImages(conversationId),
+        crewSnapshotsAtSeq = readTimelineLatestCrewSnapshots(conversationId),
+        crewSnapshots = memory.readCrewMissionSnapshots(conversationId),
+    )
 
     private fun readTimelineInvalidations(conversationId: String): Map<String, Long> = database.chatSql.query(
         "SELECT owner_user_message_id,MAX(hidden_seq) FROM messages WHERE conversation_id=? " +

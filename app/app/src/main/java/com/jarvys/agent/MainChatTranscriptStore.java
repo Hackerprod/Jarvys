@@ -45,14 +45,26 @@ final class MainChatTranscriptStore {
             for (String key : old) ownership.remove(key);
             retainedBytes = 0;
             for (JSONObject row : store.readModelTranscriptRows(sessionId)) {
-                if (!"model_artifact".equals(row.optString("type"))) continue;
-                String id = row.getString("artifactId");
-                JSONObject metadata = row.getJSONObject("artifact");
-                if (!ownership.has(id)) retainedBytes += metadata.getLong("bytes");
-                ownership.put(id, metadata);
+                retainOwnership(row);
+            }
+            // archive() can be called several times while one checkpoint is still being built.
+            // Those rows are committed together at the end, so include them in this quota view.
+            List<JSONObject> checkpointRows = pendingCheckpointRows.get();
+            if (checkpointRows != null) {
+                for (JSONObject row : checkpointRows) retainOwnership(row);
             }
         } catch (Exception failure) {
             throw new IllegalStateException("Could not read conversation artifact metadata", failure);
+        }
+    }
+
+    private void retainOwnership(JSONObject row) throws Exception {
+        if (!"model_artifact".equals(row.optString("type"))) return;
+        String id = row.getString("artifactId");
+        JSONObject metadata = row.getJSONObject("artifact");
+        if (!ownership.has(id)) {
+            retainedBytes += metadata.getLong("bytes");
+            ownership.put(id, metadata);
         }
     }
 

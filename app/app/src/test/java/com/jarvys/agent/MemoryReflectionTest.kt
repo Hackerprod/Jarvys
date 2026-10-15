@@ -16,7 +16,10 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class MemoryReflectionTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @get:Rule val temporaryFolder = TemporaryFolder()
 
     @Test
@@ -80,7 +83,7 @@ class MemoryReflectionTest {
 
     @Test
     fun localTranscriptPayloadUsesCheckpointMarkersOmitsExternalResultsAndNeverIncludesCompactionSummary() {
-        val store = LocalRunStore(temporaryFolder.newFolder("transcript-files"))
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory("transcript-files"))
         val session = "reflection-session"
         val firstUser = store.appendConversationMessage(session, "user", "I prefer concise answers and examples.")
         store.appendReflectionToolEvent(session, firstUser, "Contacts", "connector:contacts", "tool_result", "call-contacts")
@@ -112,7 +115,7 @@ class MemoryReflectionTest {
 
     @Test
     fun automaticPayloadBoundaryExcludesMessagesThatArriveWhileReflectionIsQueued() {
-        val store = LocalRunStore(temporaryFolder.newFolder("snapshot-files"))
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory("snapshot-files"))
         val session = "snapshot-session"
         store.appendConversationMessage(session, "user", "I prefer short answers and examples.")
         val firstAssistant = store.appendConversationMessage(session, "assistant", "I will use concise examples.",
@@ -130,7 +133,7 @@ class MemoryReflectionTest {
 
     @Test
     fun reflectionCommitAtomicallyStoresCheckpointChatSummaryAndGroupUndoMarker() {
-        val store = LocalRunStore(temporaryFolder.newFolder("reflection-commit-files"))
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory("reflection-commit-files"))
         val session = "commit-session"
         store.appendConversationMessage(session, "user", "I prefer compact explanations.")
         val assistantId = store.appendConversationMessage(session, "assistant", "Understood.",
@@ -187,7 +190,7 @@ class MemoryReflectionTest {
 
     @Test
     fun reflectionWorkerOnlyHasMemoryToolsAndRejectsConnectorMcpAndOutsidePaths() {
-        val files = temporaryFolder.newFolder("worker-files")
+        val files = chatTestStore.newFilesDirectory("worker-files")
         val memoryRoot = File(files, "memory")
         val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("reflection-test").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "a".repeat(24), null, null,
@@ -281,7 +284,7 @@ description: Stable preferences shared by the user.
 
     @Test
     fun cancellationAfterAWriteLeavesAnExplicitPartialGroupThatCanBeUndone() {
-        val files = temporaryFolder.newFolder("cancel-worker-files")
+        val files = chatTestStore.newFilesDirectory("cancel-worker-files")
         val memoryRoot = File(files, "memory")
         val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("cancel-worker").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "b".repeat(24), null, null,
@@ -312,7 +315,7 @@ description: Stable preferences shared by the user.
 
     @Test
     fun providerInterruptionBeforeAnyWriteFailsAndLeavesARolledBackGroupWithoutRetry() {
-        val files = temporaryFolder.newFolder("provider-before-write-files")
+        val files = chatTestStore.newFilesDirectory("provider-before-write-files")
         val root = File(files, "memory")
         val memory = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-before-write").also { it.ensureInitialized() }
         val session = "provider-before-write"
@@ -365,7 +368,7 @@ description: Stable preferences shared by the user.
 
     @Test
     fun providerInterruptionAfterOneWriteFailsAndRetainsExactlyOnePartialRevisionWithoutReplay() {
-        val files = temporaryFolder.newFolder("provider-after-write-files")
+        val files = chatTestStore.newFilesDirectory("provider-after-write-files")
         val root = File(files, "memory")
         val memory = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-after-write").also { it.ensureInitialized() }
         val session = "provider-after-write"
@@ -459,7 +462,7 @@ description: Stable preferences shared by the user.
 
     @Test
     fun reflectionWorkerHasFiniteModelTurnLimitAndDoesNotLoopRetryingTools() {
-        val files = temporaryFolder.newFolder("turn-limit-files")
+        val files = chatTestStore.newFilesDirectory("turn-limit-files")
         val memoryRoot = File(files, "memory")
         val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("turn-limit").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "c".repeat(24), null, null,

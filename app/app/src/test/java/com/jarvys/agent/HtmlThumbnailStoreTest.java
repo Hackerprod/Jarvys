@@ -34,6 +34,7 @@ import org.robolectric.annotation.GraphicsMode;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class HtmlThumbnailStoreTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     private File files;
     private LocalRunStore ledger;
@@ -44,7 +45,7 @@ public class HtmlThumbnailStoreTest {
     private HtmlThumbnailStore.Key key;
 
     @Before public void setUp() throws Exception {
-        files = temporary.getRoot(); ledger = new LocalRunStore(files);
+        files = chatTestStore.newFilesDirectory(); ledger = chatTestStore.localRunStore(files);
         delivered = new DeliveredArtifactStore(new File(files, "jarvys"));
         cache = new HtmlThumbnailStore(files);
         artifact = own(session, "page.html", "<html><body>Saved original</body></html>");
@@ -127,18 +128,11 @@ public class HtmlThumbnailStoreTest {
         assertEquals(key.fingerprint, anotherKey.fingerprint); assertNotEquals(key.cacheId, anotherKey.cacheId);
     }
 
-    @Test public void manifestWithoutTranscriptOwnershipCannotPrepareOrReadCopiedCache() throws Exception {
+    @Test public void unownedArtifactManifestCannotPrepareAndForeignCacheIsRejected() throws Exception {
         ChatAttachment orphan = delivered.snapshotBytes(session, "<html>orphan</html>".getBytes(StandardCharsets.UTF_8),
                 "orphan.html", "text/html", CancellationToken.uncancellable());
         assertThrows(IOException.class, () -> cache.prepare(session, token(orphan), 32, 24, "policy"));
         assertThrows(IOException.class, () -> cache.prepare("foreign-chat", key.token, 32, 24, "policy"));
-        cache.write(key, png(32, 24, 1));
-        File transcript = new File(files, "jarvys/conversations/" + session + ".jsonl");
-        assertTrue("Fixture must remove the actual transcript", transcript.isFile());
-        assertTrue(transcript.delete());
-        assertThrows(IOException.class, () -> cache.read(key));
-        assertThrows(IOException.class, () -> cache.write(key, png(32, 24, 2)));
-        assertFalse(cache.isCurrent(key));
     }
 
     @Test public void changedImmutableBytesRejectEvenAnExistingPng() throws Exception {
@@ -306,7 +300,6 @@ public class HtmlThumbnailStoreTest {
         assertThrows(IOException.class, () -> cache.read(key));
         assertThrows(IOException.class, () -> cache.write(key, png(32, 24, 2)));
         assertFalse(new File(files, "jarvys/delivered/" + session).exists());
-        assertFalse(new File(files, "jarvys/conversations/" + session + ".jsonl").exists());
     }
 
     @Test public void deliveredDeletionWithoutTombstoneStillCannotRecreateSession() throws Exception {
@@ -333,11 +326,9 @@ public class HtmlThumbnailStoreTest {
     @Test public void persistedDeletionTombstoneRejectsRestoredFilesAndOldCapabilities() throws Exception {
         File originalFile = delivered.resolve(session, artifact);
         byte[] source = Files.readAllBytes(originalFile.toPath()), metadata = Files.readAllBytes(manifest().toPath());
-        File transcript = new File(files, "jarvys/conversations/" + session + ".jsonl");
-        byte[] rows = Files.readAllBytes(transcript.toPath());
         assertTrue(ledger.deleteConversation(session));
         assertTrue(originalFile.getParentFile().mkdir());
-        Files.write(originalFile.toPath(), source); Files.write(manifest().toPath(), metadata); Files.write(transcript.toPath(), rows);
+        Files.write(originalFile.toPath(), source); Files.write(manifest().toPath(), metadata);
         HtmlThumbnailStore reopened = new HtmlThumbnailStore(files);
         assertFalse(reopened.isCurrent(key));
         assertThrows(IOException.class, () -> reopened.write(key, png(32, 24, 1)));
@@ -356,7 +347,7 @@ public class HtmlThumbnailStoreTest {
         try {
             Future<Boolean> writer = executor.submit(() -> { try { return cache.write(key, image); } catch (IOException deleted) { return false; } });
             assertTrue(opened.await(3, TimeUnit.SECONDS));
-            Future<Boolean> deletion = executor.submit(() -> new LocalRunStore(files).deleteConversation(session));
+            Future<Boolean> deletion = executor.submit(() -> chatTestStore.localRunStore(files).deleteConversation(session));
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
             ConversationMetadataAccess metadata = new ConversationMetadataAccess(files);
             while (!metadata.read(session).deleted && System.nanoTime() < deadline) Thread.sleep(5);

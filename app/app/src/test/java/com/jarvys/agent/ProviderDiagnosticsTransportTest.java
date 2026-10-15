@@ -40,6 +40,7 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class ProviderDiagnosticsTransportTest {
+    @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
     private Context context;
     private SecretStore secrets;
     private ProviderSettings settings;
@@ -329,8 +330,8 @@ public class ProviderDiagnosticsTransportTest {
                 return CoreToolResult.success("synthetic result " + effects.incrementAndGet());
             }
         };
-        File files = Files.createTempDirectory(context.getCacheDir().toPath(), "ux34-ledger-").toFile();
-        LocalRunStore store = new LocalRunStore(files);
+        File files = chatTestStore.newFilesDirectory();
+        LocalRunStore store = chatTestStore.localRunStore(files);
         String userId = store.appendConversationMessage(SESSION, "user", "synthetic task");
         CoreAgentLoop.Model model = (history, prompt, tools, token) -> {
             ModelReply reply = client.completeConversation("system", history, prompt, tools, SESSION, token);
@@ -357,7 +358,7 @@ public class ProviderDiagnosticsTransportTest {
         assertEquals(4, two.wire().getJSONArray("messages").length());
         assertEquals(6, three.wire().getJSONArray("messages").length());
         assertEquals("tool", three.wire().getJSONArray("messages").getJSONObject(5).getString("role"));
-        List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(SESSION);
+        List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(SESSION);
         assertEquals(2, restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_CALLS).count());
         assertEquals(2, restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT).count());
         assertEquals(FOOTER_LITERAL, restored.get(restored.size() - 1).content);

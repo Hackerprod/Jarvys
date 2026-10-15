@@ -6,9 +6,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class UserDecisionHistoryTest {
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @Test fun unresolvedRequestRestoresAsUnansweredWithoutReopeningGateAndResolutionIsDurable() {
-        val store = LocalRunStore(Files.createTempDirectory("e1-decision-history").toFile())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "e1-history-${System.nanoTime()}"
         val id = "decision-pending"
         val options = listOf(
@@ -32,7 +35,7 @@ class UserDecisionHistoryTest {
     }
 
     @Test fun refreshDoesNotReplaceLivePendingCardWithRestoredUnansweredSnapshot() {
-        val store = LocalRunStore(Files.createTempDirectory("e1-decision-refresh").toFile())
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "e1-live-${System.nanoTime()}"
         val option = UserDecisionOption("yes", "Yes")
         AgentRunUiState.resetSession(session)

@@ -5,11 +5,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import java.util.concurrent.atomic.AtomicReference
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28])
 class CoreAgentLoopTest {
-    @get:Rule val temporaryFolder = TemporaryFolder()
+    @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
     @Test
     fun toolResultReturnsIntoTranscriptBeforeTheModelWritesItsFinalAnswer() {
@@ -218,8 +219,8 @@ class CoreAgentLoopTest {
 
     @Test
     fun emptyProviderReplySurvivesPreRequestPlanAllCompaction() {
-        val files = temporaryFolder.newFolder("empty-reply-compaction")
-        val store = LocalRunStore(files)
+        val files = chatTestStore.newFilesDirectory("empty-reply-compaction")
+        val store = chatTestStore.localRunStore(files)
         val session = "empty-reply-compaction"
         val summaryProvider = object : ModelProviderClient {
             override fun complete(systemPrompt: String, userPrompt: String,
