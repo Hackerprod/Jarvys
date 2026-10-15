@@ -328,8 +328,19 @@ internal object JarvysChatDatabaseProvider {
         return withContext(dispatcher) { operation() }
     }
 
-    internal suspend fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase =
-        kotlinx.coroutines.runInterruptible { acquireReadDatabaseBlocking(database) }
+    internal suspend fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase {
+        // runInterruptible discards its result when the job is cancelled after the blocking call already
+        // returned; the borrowed handle must then go back to the pool or it is lost forever.
+        val acquired = java.util.concurrent.atomic.AtomicReference<SQLiteDatabase?>()
+        try {
+            return kotlinx.coroutines.runInterruptible {
+                acquireReadDatabaseBlocking(database).also { acquired.set(it) }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            acquired.getAndSet(null)?.let { releaseReadDatabase(database, it) }
+            throw cancelled
+        }
+    }
 
     /** Synchronous SQL facade fallback; its monitor wait responds to thread interruption. */
     internal fun acquireReadDatabaseBlocking(database: JarvysChatDatabase): SQLiteDatabase =

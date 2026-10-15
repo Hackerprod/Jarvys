@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -245,6 +246,36 @@ class ChatReadProgressTest {
         } finally {
             borrowed.forEach { JarvysChatDatabaseProvider.releaseReadDatabase(database, it) }
         }
+    }
+
+    @Test fun cancellingManyReadsRacingTheirAcquisitionNeverLeaksPoolHandles() = onDatabaseThread {
+        success(repository.ensureConversation("cancel-race"))
+        repeat(200) { round ->
+            kotlinx.coroutines.coroutineScope {
+                val jobs = List(8) {
+                    launch(Dispatchers.Default) {
+                        runCatching { repository.messageCounts("cancel-race") }
+                    }
+                }
+                if (round % 2 == 0) kotlinx.coroutines.yield()
+                jobs.forEach { it.cancel() }
+            }
+        }
+        // If any cancelled acquisition lost its handle, fewer than 4 concurrent reads could complete.
+        withTimeout(20_000) {
+            coroutineScope {
+                val concurrent = List(4) { async(Dispatchers.Default) { repository.messageCounts("cancel-race").total } }
+                concurrent.forEach { assertEquals(0L, it.await()) }
+            }
+        }
+        // Hold all four handles at once to prove none is missing.
+        val held = ArrayList<android.database.sqlite.SQLiteDatabase>()
+        try {
+            repeat(4) { held += withTimeout(5_000) { JarvysChatDatabaseProvider.acquireReadDatabase(database) } }
+        } finally {
+            held.forEach { JarvysChatDatabaseProvider.releaseReadDatabase(database, it) }
+        }
+        Unit
     }
 
     @Test fun synchronousQueryAndProjectionRejectTheMainLooper() {
