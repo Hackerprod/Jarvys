@@ -67,6 +67,11 @@ android {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
             it.systemProperty("room.schemaDir", "$projectDir/schemas")
+            it.systemProperty(
+                "jarvys.goldenLedgers",
+                System.getProperty("jarvys.goldenLedgers") ?: "C:\\Projects\\Jarvys-out\\golden-ledgers",
+            )
+            it.systemProperty("jarvys.goldenLedgers.optional", System.getProperty("jarvys.goldenLedgers.optional") ?: "false")
         }
     }
     compileOptions {
@@ -114,6 +119,9 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")
+    // Room's SupportSQLiteOpenHelper path serializes reads and writes on one helper connection.
+    // AndroidSQLiteDriver supplies the framework SQLite connection pool (WAL readers + writer).
+    implementation("androidx.sqlite:sqlite-framework:2.5.0")
     ksp("androidx.room:room-compiler:2.7.2")
     testImplementation("androidx.room:room-testing:2.7.2")
     debugImplementation("androidx.compose.ui:ui-tooling")

@@ -1,6 +1,5 @@
 package com.jarvys.agent.chatdb
 
-import androidx.room.withTransaction
 import java.util.UUID
 
 data class ModelCallInput(val callId: String, val toolName: String, val argumentsJson: String)
@@ -83,6 +82,8 @@ data class ToolActivityInput(
     val reflectionSource: String? = null,
     val timestampMillis: Long,
     val createdAtSeconds: Double? = null,
+    /** Original ledger batch identity. Normal appends continue resolving this from indexed history. */
+    val sourceBatchId: String? = null,
 )
 
 data class ToolPresentationInput(
@@ -125,10 +126,19 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * 8000 characters must already be represented by the retained-argument reference produced by
      * `MainChatTranscriptStore.boundedArguments` (`MainChatTranscriptStore.java:141-156`).
      */
-    suspend fun appendToolBatch(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> = transaction {
-        if (input.conversationId.isBlank() || !isUuid(input.batchId) || input.messageIndex < 0L || input.calls.any {
-                it.callId.isBlank() || it.callId.length > 512 || it.toolName.isBlank() || it.toolName.length > 256 ||
-                    it.argumentsJson.isBlank() || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS
+    suspend fun appendToolBatch(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> = appendToolBatchInternal(input, allowLargePayloads = false)
+
+    /** Import path keeps legacy opaque text/arguments verbatim even when ordinary writes externalize them. */
+    internal suspend fun appendToolBatchImported(input: ModelToolBatchInput): ChatDbResult<ModelToolBatchSnapshot> =
+        appendToolBatchInternal(input, allowLargePayloads = true)
+
+    private suspend fun appendToolBatchInternal(
+        input: ModelToolBatchInput,
+        allowLargePayloads: Boolean,
+    ): ChatDbResult<ModelToolBatchSnapshot> = transaction {
+        if (input.conversationId.isBlank() || input.batchId.isBlank() || (!allowLargePayloads && !isUuid(input.batchId)) || input.messageIndex < 0L || input.calls.any {
+                it.callId.isBlank() || it.toolName.isBlank() || it.argumentsJson.isBlank() ||
+                    (!allowLargePayloads && (it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS))
             }) return@transaction ChatDbResult.Invalid("batch, owner index, call IDs, names, and opaque arguments are required")
         if (input.callsDecodeError == null && input.rawCalls != null) return@transaction ChatDbResult.Invalid("raw_calls is reserved for undecodable call arrays")
         if (input.callsDecodeError != null && input.rawCalls == null) return@transaction ChatDbResult.Invalid("undecodable calls must retain raw_calls")
@@ -197,8 +207,15 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * (`MainChatTranscriptStore.java:128-137`): the first result per call wins, only an exact
      * `toolName` match is accepted, and duplicate result attempts still advance `last_activity_seq`.
      */
-    suspend fun appendToolResult(input: ModelToolResultInput): ChatDbResult<ToolResult?> = transaction {
-        if (input.output.length > INLINE_TOOL_OUTPUT_CHARS) return@transaction ChatDbResult.Invalid("tool output must be retained as an artifact reference before storage")
+    suspend fun appendToolResult(input: ModelToolResultInput): ChatDbResult<ToolResult?> = appendToolResultInternal(input, allowLargeOutput = false)
+
+    /** Import path preserves legacy output payloads that predate the current inline-retention policy. */
+    internal suspend fun appendToolResultImported(input: ModelToolResultInput): ChatDbResult<ToolResult?> =
+        appendToolResultInternal(input, allowLargeOutput = true)
+
+    private suspend fun appendToolResultInternal(input: ModelToolResultInput, allowLargeOutput: Boolean): ChatDbResult<ToolResult?> = transaction {
+        if (!allowLargeOutput && input.output.length > INLINE_TOOL_OUTPUT_CHARS)
+            return@transaction ChatDbResult.Invalid("tool output must be retained as an artifact reference before storage")
         ensureConversationExists(input.conversationId)
         val call = readCall(input.conversationId, input.batchId, input.callId) ?: return@transaction ChatDbResult.NotFound
         if (call.name != input.toolName) return@transaction ChatDbResult.Conflict("model_tool_result toolName does not match its call")
@@ -260,6 +277,18 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     suspend fun appendModelArtifact(
         conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
         mimeType: String = "text/plain",
+    ): ChatDbResult<ModelArtifact> = appendModelArtifactInternal(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType, allowOverQuota = false)
+
+    /** Legacy importer preserves every owned artifact even when legacy retention exceeded its current quota. */
+    internal suspend fun appendModelArtifactImported(
+        conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
+        mimeType: String = "text/plain",
+    ): ChatDbResult<ModelArtifact> = appendModelArtifactInternal(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType, allowOverQuota = true)
+
+    private suspend fun appendModelArtifactInternal(
+        conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
+        mimeType: String,
+        allowOverQuota: Boolean,
     ): ChatDbResult<ModelArtifact> = transaction {
         if (conversationId.isBlank() || artifactId.isBlank() || relativePath.isBlank() || sha256.isBlank() || chars < 0L || bytes < 0L)
             return@transaction ChatDbResult.Invalid("model artifact metadata is invalid")
@@ -269,7 +298,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             ChatDbResult.Success(existing) else ChatDbResult.Conflict("model artifact identity has different metadata")
         val total = sql.query("SELECT COALESCE(SUM(bytes),0) FROM model_artifacts WHERE conversation_id=?", arrayOf(conversationId))
             .use { it.moveToFirst(); it.getLong(0) }
-        if (bytes > MAX_MODEL_ARTIFACT_BYTES - total) return@transaction ChatDbResult.Invalid("model artifact retention quota exceeded")
+        if (!allowOverQuota && bytes > MAX_MODEL_ARTIFACT_BYTES - total) return@transaction ChatDbResult.Invalid("model artifact retention quota exceeded")
         val time = nowSeconds()
         val fileRefId = ensureFileRef(relativePath, sha256, bytes, mimeType, (time * 1000.0).toLong())
         val seq = insertLedgerItem(conversationId, "model_artifact", artifactId, time)
@@ -291,13 +320,14 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         val prior = readToolActivityByEvent(input.conversationId, input.eventId)
         if (prior != null) return@transaction ChatDbResult.Success(prior)
         val resolution = resolveActivityBatch(input.conversationId, input.ownerUserMessageId, input.executionId, input.callId)
-        val time = input.createdAtSeconds ?: input.timestampMillis / 1000.0
+        val time = input.createdAtSeconds ?: importedNowSeconds() ?: input.timestampMillis / 1000.0
         val seq = insertLedgerItem(input.conversationId, "tool_activity", input.eventId, time,
             ownerMessageSeq(input.conversationId, input.ownerUserMessageId))
         sql.execSQL(
             "INSERT INTO tool_activities(conversation_id,seq,event_id,owner_user_message_id,source_batch_id,execution_id,call_id,tool_name,display_name,skill_id,skill_name,stage,detail,preview_id,audit_detail,reflection_source,timestamp_millis,created_at) " +
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            arrayOf(input.conversationId, seq, input.eventId, input.ownerUserMessageId, resolution.batchId, input.executionId, input.callId,
+            arrayOf(input.conversationId, seq, input.eventId, input.ownerUserMessageId,
+                input.sourceBatchId?.takeIf(String::isNotBlank) ?: resolution.batchId, input.executionId, input.callId,
                 input.toolName, input.displayName, input.skillId, input.skillName, input.stage, input.detail, input.previewId,
                 input.auditDetail, input.reflectionSource, input.timestampMillis, time),
         )
@@ -351,7 +381,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * counting eligible imported `conversation_items` ordered by `(sort_seq,sort_sub,seq)` before the
      * compaction item. New writes use that same count immediately before appending the boundary.
      */
-    suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = database.withTransaction {
+    suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = database.withChatReadTransaction {
         val rows = sql.query(
             "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items WHERE conversation_id=? " +
                 "AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
@@ -435,25 +465,25 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * Resolves a `tool_activity` batch by indexed execution/call history or newest matching call,
      * replacing `LocalRunStore.toolActivitySourceBatch` (`LocalRunStore.java:1925-1996`) without a ledger scan.
      */
-    suspend fun resolveActivitySourceBatch(conversationId: String, ownerUserMessageId: String?, executionId: String?, callId: String?): ToolBatchResolution = database.withTransaction {
+    suspend fun resolveActivitySourceBatch(conversationId: String, ownerUserMessageId: String?, executionId: String?, callId: String?): ToolBatchResolution = database.withChatReadTransaction {
         resolveActivityBatch(conversationId, ownerUserMessageId, executionId, callId)
     }
 
     /** Indexed activity rows replacing the owner/execution grouping in `LocalRunStore.projectConversationTimeline` (`LocalRunStore.java:4275-4286`). */
-    suspend fun readToolActivities(conversationId: String, ownerUserMessageId: String, executionId: String): List<ToolActivity> = database.withTransaction {
+    suspend fun readToolActivities(conversationId: String, ownerUserMessageId: String, executionId: String): List<ToolActivity> = database.withChatReadTransaction {
         sql.query("SELECT * FROM tool_activities WHERE conversation_id=? AND owner_user_message_id=? AND execution_id=? ORDER BY seq",
             arrayOf(conversationId, ownerUserMessageId, executionId)).use { c -> buildList { while (c.moveToNext()) add(readToolActivity(c)) } }
     }
 
     /** Most recent batch for an owner, backed by `idx_tool_batches_owner`; replaces `LocalRunStore.readAssistantProgress` (`LocalRunStore.java:2803-2848`). */
-    suspend fun latestBatchForOwner(conversationId: String, ownerUserMessageId: String): ModelToolBatchSnapshot? = database.withTransaction {
+    suspend fun latestBatchForOwner(conversationId: String, ownerUserMessageId: String): ModelToolBatchSnapshot? = database.withChatReadTransaction {
         val id = sql.query("SELECT batch_id FROM tool_batches WHERE conversation_id=? AND owner_user_message_id=? ORDER BY seq DESC LIMIT 1",
             arrayOf(conversationId, ownerUserMessageId)).use { if (it.moveToFirst()) it.getString(0) else null }
         id?.let { readBatchSnapshot(conversationId, it) }
     }
 
     /** Reads first-wins `model_tool_result` rows for an owner, replacing `MainChatTranscriptStore.restore` (`MainChatTranscriptStore.java:238-325`). */
-    suspend fun toolResultsForOwner(conversationId: String, ownerUserMessageId: String): List<ToolResult> = database.withTransaction {
+    suspend fun toolResultsForOwner(conversationId: String, ownerUserMessageId: String): List<ToolResult> = database.withChatReadTransaction {
         sql.query("SELECT r.* FROM tool_results r JOIN tool_batches b ON b.conversation_id=r.conversation_id AND b.batch_id=r.batch_id " +
             "WHERE r.conversation_id=? AND b.owner_user_message_id=? ORDER BY r.seq", arrayOf(conversationId, ownerUserMessageId)).use { c ->
             buildList { while (c.moveToNext()) add(readToolResult(c)) }
@@ -461,7 +491,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     }
 
     /** Reads latest `tool_presentation` for `(batch,call)`, replacing timeline presentation projection in `LocalRunStore.projectConversationTimeline` (`LocalRunStore.java:4275-4286`). */
-    suspend fun latestToolPresentation(conversationId: String, batchId: String, callId: String): ToolPresentation? = database.withTransaction {
+    suspend fun latestToolPresentation(conversationId: String, batchId: String, callId: String): ToolPresentation? = database.withChatReadTransaction {
         sql.query("SELECT * FROM tool_presentations WHERE conversation_id=? AND batch_id=? AND call_id=? ORDER BY seq DESC LIMIT 1",
             arrayOf(conversationId, batchId, callId)).use { if (it.moveToFirst()) readToolPresentation(it) else null }
     }

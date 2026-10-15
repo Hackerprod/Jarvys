@@ -52,7 +52,7 @@ class WorkspaceLedgerIndependenceTest {
         val execution = "execution-ledger"
         database.conversationDao().insertIfNotTombstoned(Conversation(id = central, created_at = 1L, updated_at = 1L))
         database.conversationDao().insertIfNotTombstoned(Conversation(id = execution, created_at = 1L, updated_at = 1L))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         (1L..6L).forEach { seq ->
             sqlite.execSQL(
                 "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
@@ -210,14 +210,14 @@ class WorkspaceLedgerIndependenceTest {
     private fun <T> onDatabaseThread(block: suspend () -> T): T =
         executor.submit<T> { runBlocking { block() } }.get(30, TimeUnit.SECONDS)
 
-    private fun rowCount(database: androidx.sqlite.db.SupportSQLiteDatabase, table: String): Long =
+    private fun rowCount(database: ChatSqlDatabase, table: String): Long =
         database.query("SELECT COUNT(*) FROM `$table`").use { cursor ->
             check(cursor.moveToFirst())
             cursor.getLong(0)
         }
 
     private fun scalarLong(
-        database: androidx.sqlite.db.SupportSQLiteDatabase,
+        database: ChatSqlDatabase,
         sql: String,
         args: Array<out Any?>,
     ): Long = database.query(sql, args).use { cursor ->
@@ -226,7 +226,7 @@ class WorkspaceLedgerIndependenceTest {
     }
 
     private fun insertCrewResultEvidence(
-        database: androidx.sqlite.db.SupportSQLiteDatabase,
+        database: ChatSqlDatabase,
         evidenceId: String,
         executionConversationId: String,
     ) {
@@ -252,14 +252,14 @@ class WorkspaceLedgerIndependenceTest {
         )
     }
 
-    private fun tableColumns(database: androidx.sqlite.db.SupportSQLiteDatabase, table: String): Set<String> =
+    private fun tableColumns(database: ChatSqlDatabase, table: String): Set<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildSet {
                 while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
             }
         }
 
-    private fun foreignKeyParents(database: androidx.sqlite.db.SupportSQLiteDatabase, table: String): Set<String> =
+    private fun foreignKeyParents(database: ChatSqlDatabase, table: String): Set<String> =
         database.query("PRAGMA foreign_key_list(`$table`)").use { cursor ->
             buildSet {
                 while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("table")))

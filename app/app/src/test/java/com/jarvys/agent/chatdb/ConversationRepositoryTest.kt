@@ -3,7 +3,7 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.withTransaction
+import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import android.os.Handler
 import android.os.Looper
@@ -93,7 +93,7 @@ class ConversationRepositoryTest {
             val appendResult = append.get(15, TimeUnit.SECONDS)
             assertTrue(appendResult is ChatDbResult.Success || appendResult === ChatDbResult.NotFound || appendResult === ChatDbResult.Tombstoned)
             assertTrue(repository.isTombstoned("delete-append-race"))
-            val remaining = database.openHelper.writableDatabase.query(
+            val remaining = database.testChatSql.query(
                 "SELECT COUNT(*) FROM messages WHERE conversation_id=?", arrayOf("delete-append-race"),
             ).use { c -> c.moveToFirst(); c.getInt(0) }
             assertEquals(0, remaining)
@@ -142,7 +142,7 @@ class ConversationRepositoryTest {
         } finally {
             pool.shutdownNow()
         }
-        val rows = database.openHelper.writableDatabase.query(
+        val rows = database.testChatSql.query(
             "SELECT seq,message_index FROM messages WHERE conversation_id=? ORDER BY seq", arrayOf("concurrent"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0) to c.getLong(1)) } }
         assertEquals("concurrentAppendsKeepSequenceAndAbsoluteMessageIndicesContiguous: expected <rows.map { it.first }> to equal <(1L..36L).toList()>", (1L..36L).toList(), rows.map { it.first })
@@ -171,7 +171,7 @@ class ConversationRepositoryTest {
         val u3 = append("steering", "user", "u3")
         val a3 = append("steering", "assistant", "a3")
 
-        val ordered = database.openHelper.writableDatabase.query(
+        val ordered = database.testChatSql.query(
             "SELECT message_id FROM messages WHERE conversation_id=? ORDER BY message_index", arrayOf("steering"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         assertEquals("message indices follow the logical order after inserting before steering", listOf(u1.messageId, a1.messageId, u2.messageId, a2.messageId, inBetween.messageId, interrupt.requestId, u3.messageId, a3.messageId), ordered)
@@ -195,7 +195,7 @@ class ConversationRepositoryTest {
             it.item.item_kind == "message" && it.item.item_key == dispatched.message.messageId
         })
 
-        val expectedSpine = database.openHelper.writableDatabase.query(
+        val expectedSpine = database.testChatSql.query(
             "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("steering"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         for (turns in 1..3) {
@@ -230,7 +230,7 @@ class ConversationRepositoryTest {
             )))
             expected += inserted.seq
         }
-        val physicalSpine = database.openHelper.writableDatabase.query(
+        val physicalSpine = database.testChatSql.query(
             "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("steering-boundaries"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         assertEquals(expected.size, physicalSpine.size)
@@ -295,7 +295,7 @@ class ConversationRepositoryTest {
         val reactionRemoved = success(repository.setReaction("markers", user.stableId, ""))
         assertTrue("proactiveDecisionIsIdempotentAndMarkersFollowTheirLedgerRules: expected <reactionRemoved.changed> to be true", reactionRemoved.changed)
         assertFalse("proactiveDecisionIsIdempotentAndMarkersFollowTheirLedgerRules: expected <success(repository.setReaction(\"markers\", user.stableId, \"\")).changed> to be false", success(repository.setReaction("markers", user.stableId, "")).changed)
-        val reaction = database.openHelper.writableDatabase.query(
+        val reaction = database.testChatSql.query(
             "SELECT emoji FROM message_reactions WHERE conversation_id=? AND target_stable_id=?", arrayOf("markers", user.stableId),
         ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         assertEquals("proactiveDecisionIsIdempotentAndMarkersFollowTheirLedgerRules: expected <reaction> to equal <\"\">", "", reaction)
@@ -316,7 +316,7 @@ class ConversationRepositoryTest {
             conversationId = "decisions", decisionId = "choice", title = "Choose", body = "Pick one", allowDismiss = true,
             options = listOf(DecisionOptionInput("yes", "Yes", "Continue"), DecisionOptionInput("no", "No", role = "decline")),
         ))
-        val options = database.openHelper.writableDatabase.query(
+        val options = database.testChatSql.query(
             "SELECT option_id,label FROM user_decision_options WHERE conversation_id=? AND decision_id=? ORDER BY ordinal",
             arrayOf("decisions", "choice"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
@@ -330,7 +330,7 @@ class ConversationRepositoryTest {
         ))
         assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <reopenedSeq > lastResolution> to be true", reopenedSeq > lastResolution)
         assertTrue("a legacy resolution append does not require an existing request row", success(repository.resolveDecision("decisions", "orphan-choice", "dismissed", null, null)) > reopenedSeq)
-        val row = database.openHelper.writableDatabase.query(
+        val row = database.testChatSql.query(
             "SELECT seq,title,status,option_id,resolved_seq FROM user_decisions WHERE conversation_id=? AND decision_id=?",
             arrayOf("decisions", "choice"),
         ).use { c -> assertTrue("userDecisionRequestOptionsAndLatestResolutionAreProjected: expected <c.moveToFirst()> to be true", c.moveToFirst()); listOf(c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), if (c.isNull(3)) null else c.getString(3), if (c.isNull(4)) null else c.getLong(4)) }
@@ -353,7 +353,7 @@ class ConversationRepositoryTest {
         assertEquals("snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap: expected <late.text> to equal <\"final\">", "final", late.text)
         assertEquals("snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap: expected <late.status> to equal <\"COMPLETED\">", "COMPLETED", late.status)
 
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "CREATE TRIGGER test_abort_part BEFORE INSERT ON message_parts " +
                 "BEGIN SELECT RAISE(ABORT,'injected_repository_failure'); END",
         )
@@ -365,7 +365,7 @@ class ConversationRepositoryTest {
         } catch (failure: android.database.sqlite.SQLiteConstraintException) {
             assertTrue("snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap: expected <failure.message.orEmpty().contains(\"injected_repository_failure\")> to be true", failure.message.orEmpty().contains("injected_repository_failure"))
         }
-        database.openHelper.writableDatabase.execSQL("DROP TRIGGER test_abort_part")
+        database.testChatSql.execSQL("DROP TRIGGER test_abort_part")
         val finalMessage = append("atomic", "user", "after rollback")
         assertEquals("snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap: expected <finalMessage.seq> to equal <stream.seq + 1L>", stream.seq + 1L, finalMessage.seq)
         assertEquals("snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap: expected <finalMessage.messageIndex> to equal <1L>", 1L, finalMessage.messageIndex)
@@ -443,11 +443,11 @@ class ConversationRepositoryTest {
                 .map { org.json.JSONObject(it.payload).getString("attachmentId") },
         )
         listOf(firstAttachment, secondAttachment).forEach { attachment ->
-            val fileRefCount = database.openHelper.writableDatabase.query(
+            val fileRefCount = database.testChatSql.query(
                 "SELECT COUNT(*) FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath),
             ).use { c -> c.moveToFirst(); c.getLong(0) }
             assertEquals("each attachment reuses its single file reference", 1L, fileRefCount)
-            val fileMime = database.openHelper.writableDatabase.query(
+            val fileMime = database.testChatSql.query(
                 "SELECT mime_type FROM file_refs WHERE relative_path=?", arrayOf(attachment.relativePath),
             ).use { c -> c.moveToFirst(); c.getString(0) }
             assertEquals("file references retain attachment MIME", attachment.mimeType, fileMime)
@@ -455,7 +455,7 @@ class ConversationRepositoryTest {
     }
 
     @Test fun hotReadQueryPlansUseConversationIndexesWithoutAvoidableSorts() = onDatabaseThread {
-        val sql = database.openHelper.writableDatabase
+        val sql = database.testChatSql
         fun explain(query: String, vararg args: String): List<String> = sql.query(
             "EXPLAIN QUERY PLAN $query", args,
         ).use { cursor ->
@@ -587,7 +587,7 @@ class ConversationRepositoryTest {
         val insertPattern = Regex("""(?is)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)""")
         val insertIntoPattern = Regex("""(?i)\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b""")
         val concatBoundary = Regex("\"\\s*\\+\\s*\"")
-        val db = database.openHelper.writableDatabase
+        val db = database.testChatSql
         val sourceFiles = sourceDirectory!!.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue("the chatdb package must have Kotlin production files", sourceFiles.isNotEmpty())
         var auditedInsertCount = 0
@@ -789,6 +789,7 @@ class ConversationRepositoryTest {
         val callbackExecutor = Executors.newSingleThreadExecutor { task -> Thread(task, "chatdb-query-callback").apply { isDaemon = true } }
         val childQueryCount = AtomicInteger()
         val countedDatabase = Room.databaseBuilder(context, JarvysChatDatabase::class.java, countedFile.absolutePath)
+            .setDriver(AndroidSQLiteDriver())
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .setQueryExecutor(queryExecutor)
             .setTransactionExecutor(transactionExecutor)
@@ -834,13 +835,13 @@ class ConversationRepositoryTest {
         success(repository.dispatchInterruptRequest("input-state", second.requestId))
         val marked = success(repository.markInputState("input-state", listOf(first.requestId, second.requestId), ConversationRepository.INPUT_INCORPORATED))
         assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <marked> to equal <listOf(first.requestId, second.requestId)>", listOf(first.requestId, second.requestId), marked)
-        val values = database.openHelper.writableDatabase.query(
+        val values = database.testChatSql.query(
             "SELECT request_id,input_state,input_state_seq FROM interrupt_requests WHERE conversation_id=? ORDER BY seq", arrayOf("input-state"),
         ).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getString(0), c.getString(1), c.getLong(2))) } }
         assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <values.map { it.third }.distinct().size> to equal <2>", 2, values.map { it.third }.distinct().size)
         values.forEach { (requestId, state, markerSeq) ->
             assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <state> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, state)
-            val marker = database.openHelper.writableDatabase.query(
+            val marker = database.testChatSql.query(
                 "SELECT item_kind FROM conversation_items WHERE conversation_id=? AND seq=?", arrayOf("input-state", markerSeq),
             ).use { c -> assertTrue("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <c.moveToFirst()> to be true", c.moveToFirst()); c.getString(0) }
             assertEquals("inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive: expected <marker> to equal <ConversationRepository.INPUT_INCORPORATED>", ConversationRepository.INPUT_INCORPORATED, marker)
@@ -949,7 +950,7 @@ class ConversationRepositoryTest {
             conversationId = "before-chain", role = "assistant", beforeMessageId = "deleted-target",
             parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "append fallback")),
         )))
-        val ordered = database.openHelper.writableDatabase.query(
+        val ordered = database.testChatSql.query(
             "SELECT message_id FROM messages WHERE conversation_id=? ORDER BY message_index", arrayOf("before-chain"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         assertEquals(listOf(first.messageId, beforeMoved.messageId, moved.messageId, target.messageId, missingTarget.messageId), ordered)
@@ -960,24 +961,25 @@ class ConversationRepositoryTest {
         append("before-large", "user", "owner")
         val request = success(repository.appendInterruptRequest("before-large", "steering"))
         val target = success(repository.dispatchInterruptRequest("before-large", request.requestId)).message
-        val db = database.openHelper.writableDatabase
+        val db = database.testChatSql
         val firstSyntheticSeq = db.query("SELECT next_seq FROM conversations WHERE id='before-large'").use { c -> c.moveToFirst(); c.getLong(0) }
-        database.withTransaction {
+        database.withChatWriteTransaction {
+            val transactionSql = database.chatSql
             repeat(5000) { index ->
                 val seq = firstSyntheticSeq + index
                 val id = "synthetic-$index"
                 val role = if (index % 2 == 0) "user" else "assistant"
-                db.execSQL(
+                transactionSql.execSQL(
                     "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,turn_anchor_seq,created_at) VALUES(?,?,'message',?,?,0,?,1.0)",
                     arrayOf("before-large", seq, id, seq, if (role == "user") seq else null),
                 )
-                db.execSQL(
+                transactionSql.execSQL(
                     "INSERT INTO messages(conversation_id,message_id,stable_id,seq,message_index,role,status,run_id,owner_user_message_id,duration_ms,before_message_id,proactive_thread_key,proactive_reply_to_message_id,proactive_decision_id,interrupt_request_id,ack_required,created_at,updated_at) " +
                         "VALUES(?,?,?,?,?,?,'COMPLETED',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0,1.0,1.0)",
                     arrayOf("before-large", id, id, seq, index + 2, role),
                 )
             }
-            db.execSQL(
+            transactionSql.execSQL(
                 "UPDATE conversations SET message_count=message_count+5000,next_seq=? WHERE id=?",
                 arrayOf(firstSyntheticSeq + 5000, "before-large"),
             )
@@ -1021,7 +1023,7 @@ class ConversationRepositoryTest {
         repeat(505) { index -> success(repository.appendDecisionRequest(
             "tasks-paged", "decision-$index", "Title", "Body", false, emptyList(),
         )) }
-        val allSequences = database.openHelper.writableDatabase.query(
+        val allSequences = database.testChatSql.query(
             "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("tasks-paged"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         val pages = mutableListOf<MessageWindow>()
@@ -1039,7 +1041,7 @@ class ConversationRepositoryTest {
 
         success(repository.ensureConversation("large-hydration"))
         val ids = mutableListOf<String>()
-        database.withTransaction {
+        database.withChatWriteTransaction {
             repeat(1005) { index ->
                 ids += success(repository.appendMessage(AppendMessageInput(
                     conversationId = "large-hydration", role = "user",
@@ -1064,8 +1066,8 @@ class ConversationRepositoryTest {
         try {
             val write = writer.submit {
                 runBlocking {
-                    database.withTransaction {
-                        database.openHelper.writableDatabase.execSQL("UPDATE conversations SET updated_at=updated_at+1 WHERE id=?", arrayOf("wal-reader"))
+                    database.withChatWriteTransaction {
+                        database.chatSql.execSQL("UPDATE conversations SET updated_at=updated_at+1 WHERE id=?", arrayOf("wal-reader"))
                         writerEntered.countDown()
                         check(releaseWriter.await(10, TimeUnit.SECONDS))
                     }
@@ -1123,7 +1125,7 @@ class ConversationRepositoryTest {
         )))
         success(repository.hideAssistant("parity", hiddenAssistant.messageId, "assistant_regenerated"))
 
-        val actualSpine = database.openHelper.writableDatabase.query(
+        val actualSpine = database.testChatSql.query(
             "SELECT item_kind,item_key FROM conversation_items WHERE conversation_id=? ORDER BY sort_seq,sort_sub,seq", arrayOf("parity"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
         val expectedLedgerProjection = listOf(
@@ -1135,7 +1137,7 @@ class ConversationRepositoryTest {
             "assistant_regenerated" to hiddenAssistant.messageId,
         )
         assertEquals("ledgerProjectionParityCoversMessagesMarkersAndSteering: expected <actualSpine> to equal <expectedLedgerProjection>", expectedLedgerProjection, actualSpine)
-        val visibleMessageIds = database.openHelper.writableDatabase.query(
+        val visibleMessageIds = database.testChatSql.query(
             "SELECT message_id FROM messages WHERE conversation_id=? ORDER BY message_index", arrayOf("parity"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         assertEquals("ledgerProjectionParityCoversMessagesMarkersAndSteering: expected <visibleMessageIds> to equal <listOf(user.messageId, hiddenAssistant.messageId, insertedBeforeDispatch.messageId, dis...>", listOf(user.messageId, hiddenAssistant.messageId, insertedBeforeDispatch.messageId, dispatch.message.messageId), visibleMessageIds)
@@ -1164,7 +1166,7 @@ class ConversationRepositoryTest {
 
         success(repository.createGenerationRun("run-2", "runs", message.messageId))
         assertEquals("generationRunRevisionCheckpointAndStaleRecoveryAreAtomic: expected <repository.markStaleRunsInterrupted()> to equal <1>", 1, repository.markStaleRunsInterrupted())
-        val stale = database.openHelper.writableDatabase.query("SELECT state,active_target_key FROM generation_run WHERE id='run-2'").use { c ->
+        val stale = database.testChatSql.query("SELECT state,active_target_key FROM generation_run WHERE id='run-2'").use { c ->
             assertTrue("generationRunRevisionCheckpointAndStaleRecoveryAreAtomic: expected <c.moveToFirst()> to be true", c.moveToFirst()); c.getString(0) to if (c.isNull(1)) null else c.getString(1)
         }
         assertEquals("generationRunRevisionCheckpointAndStaleRecoveryAreAtomic: expected <stale.first> to equal <\"interrupted\">", "interrupted", stale.first)

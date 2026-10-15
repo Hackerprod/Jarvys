@@ -113,7 +113,7 @@ class M1bRepositoriesTest {
         assertEquals("tool_result", model.latestToolPresentation("protocol", incompleteId, "incomplete-call")!!.stage)
         success(model.appendReflectionTool(ReflectionToolInput("protocol", owner, callId = "incomplete-call", toolName = "writer", source = "connector", stage = "tool_result", marker = "safe marker")))
 
-        val beforeCompactionRows = database.openHelper.writableDatabase.query(
+        val beforeCompactionRows = database.testChatSql.query(
             "SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf("protocol"),
         ).use { it.moveToFirst(); it.getLong(0) }
         assertEquals(16L, beforeCompactionRows)
@@ -158,7 +158,7 @@ class M1bRepositoriesTest {
         assertEquals(incompleteId, model.latestBatchForOwner("protocol", owner)!!.batch.batch_id)
         assertEquals(listOf(first), model.toolResultsForOwner("protocol", owner))
 
-        val plan = database.openHelper.writableDatabase.query(
+        val plan = database.testChatSql.query(
             "EXPLAIN QUERY PLAN SELECT source_batch_id FROM tool_activities WHERE conversation_id=? AND owner_user_message_id=? AND execution_id=? AND call_id=? AND source_batch_id IS NOT NULL ORDER BY seq DESC LIMIT 1",
             arrayOf("protocol", owner, "execution-1", "incomplete-call"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("detail"))) } }.joinToString(" ")
@@ -202,11 +202,11 @@ class M1bRepositoriesTest {
         success(memory.appendCrewSnapshot("nullable-m1b", crewSnapshot(
             "nullable-m1b", "nullable-mission", 3, "Crew", "DONE", "DONE", "message",
         )))
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "UPDATE crew_missions SET process_id=NULL,title_source=NULL,synthesis=NULL,finished_at_ms=NULL WHERE conversation_id=? AND mission_id=?",
             arrayOf("nullable-m1b", "nullable-mission"),
         )
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "UPDATE crew_bots SET role_id=NULL,role_name=NULL,color_key=NULL,mission=NULL,error=NULL,result=NULL,waiting_reason=NULL," +
                 "started_at_ms=NULL,finished_at_ms=NULL,recovery_note=NULL,phase=NULL,last_progress=NULL,last_progress_at_ms=NULL,cycle_id=NULL " +
                 "WHERE conversation_id=? AND mission_id=?",
@@ -254,7 +254,7 @@ class M1bRepositoriesTest {
     @Test fun failedBatchChildInsertRollsBackItsSequenceAndSpineRow() = onDatabaseThread {
         success(conversations.ensureConversation("atomic-model"))
         val beforeNext = nextSeq("atomic-model")
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "CREATE TRIGGER injected_tool_call_failure BEFORE INSERT ON tool_calls BEGIN SELECT RAISE(ABORT,'injected failure'); END",
         )
 
@@ -267,7 +267,7 @@ class M1bRepositoriesTest {
         assertEquals(beforeNext, nextSeq("atomic-model"))
         assertEquals(0L, count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf("atomic-model")))
         assertEquals(0L, count("SELECT COUNT(*) FROM tool_batches WHERE conversation_id=?", arrayOf("atomic-model")))
-        database.openHelper.writableDatabase.execSQL("DROP TRIGGER injected_tool_call_failure")
+        database.testChatSql.execSQL("DROP TRIGGER injected_tool_call_failure")
     }
 
     @Test fun concurrentM1bAppendsAllocateContiguousConversationSequences() = onDatabaseThread {
@@ -283,7 +283,7 @@ class M1bRepositoriesTest {
         } finally {
             workers.shutdownNow()
         }
-        val seqs = database.openHelper.writableDatabase.query(
+        val seqs = database.testChatSql.query(
             "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY seq", arrayOf("concurrent-model"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
         assertEquals((1L..24L).toList(), seqs)
@@ -314,7 +314,7 @@ class M1bRepositoriesTest {
         assertEquals(listOf(first.compaction_id, second.compaction_id), memory.pendingCompactionIds("reflection"))
         success(memory.acknowledgeCompactions("reflection", clearAll = true))
         assertTrue(memory.pendingCompactionIds("reflection").isEmpty())
-        val expanded = database.openHelper.writableDatabase.query(
+        val expanded = database.testChatSql.query(
             "SELECT compaction_id FROM compaction_reflection_acks WHERE conversation_id=? ORDER BY compaction_id", arrayOf("reflection"),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         assertEquals(listOf(first.compaction_id, second.compaction_id).sorted(), expanded)
@@ -326,7 +326,7 @@ class M1bRepositoriesTest {
             throughMessageId = assistant.messageId, summary = "learned", revisionIds = listOf(7L, 9L), status = "completed", trigger = "manual")
         success(memory.appendReflectionCommit(commit))
         assertTrue(memory.hasReflectionCommit("reflection", "group-1"))
-        assertEquals(2L, database.openHelper.writableDatabase.query(
+        assertEquals(2L, database.testChatSql.query(
             "SELECT COUNT(*) FROM reflection_revisions WHERE conversation_id=?", arrayOf("reflection"),
         ).use { it.moveToFirst(); it.getLong(0) })
         success(memory.appendReflectionUndo("reflection", "group-1"))
@@ -350,7 +350,7 @@ class M1bRepositoriesTest {
         assertEquals(first.seq, duplicate.seq)
         assertTrue(artifacts.appendDeliveredArtifact(delivered.copy(title = "Changed")) is ChatDbResult.Conflict)
         assertEquals("x-jarvys/chart", first.artifact_type)
-        assertEquals("application/pdf", database.openHelper.writableDatabase.query(
+        assertEquals("application/pdf", database.testChatSql.query(
             "SELECT mime_type FROM file_refs WHERE id=?", arrayOf(first.file_ref_id),
         ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) })
         assertTrue(artifacts.findChatFile("files", "delivered", "artifact-1") is ChatFileOwnership.Delivered)
@@ -374,7 +374,7 @@ class M1bRepositoriesTest {
         success(conversations.ensureConversation("crew"))
         val v1 = crewSnapshot("crew", "mission-a", 1, "old title", "DONE", "DONE", "text-1")
         success(memory.appendCrewSnapshot("crew", v1))
-        val firstSeq = database.openHelper.writableDatabase.query(
+        val firstSeq = database.testChatSql.query(
             "SELECT first_snapshot_seq FROM crew_missions WHERE conversation_id=? AND mission_id=?", arrayOf("crew", "mission-a"),
         ).use { c -> assertTrue(c.moveToFirst()); c.getLong(0) }
         val nextSeq = nextSeq("crew")
@@ -385,14 +385,14 @@ class M1bRepositoriesTest {
         val latestA = success(memory.appendCrewSnapshot("crew", crewSnapshot("crew", "mission-a", 4, "latest title", "DONE", "DONE", "text\uD800exact")))
         success(memory.appendCrewSnapshot("crew", crewSnapshot("crew", "mission-b", 4, "running", "RUNNING", "RUNNING", "live")))
         assertEquals("latest title", latestA.title)
-        assertEquals(firstSeq, database.openHelper.writableDatabase.query(
+        assertEquals(firstSeq, database.testChatSql.query(
             "SELECT first_snapshot_seq FROM crew_missions WHERE conversation_id=? AND mission_id=?", arrayOf("crew", "mission-a"),
         ).use { c -> assertTrue(c.moveToFirst()); c.getLong(0) })
         val order = memory.readCrewMissionSnapshots("crew")
         assertEquals(1L, firstSeq)
         assertEquals(listOf("mission-a", "mission-b"), order.map { it.missionId })
         assertEquals("latest title", order.first().title)
-        val textBlob = database.openHelper.writableDatabase.query(
+        val textBlob = database.testChatSql.query(
             "SELECT text FROM crew_messages WHERE conversation_id=? AND mission_id=?", arrayOf("crew", "mission-a"),
         ).use { c -> assertTrue(c.moveToFirst()); c.getBlob(0) }
         assertArrayEquals(ExactUtf16.encode("text\uD800exact"), textBlob)
@@ -426,7 +426,7 @@ class M1bRepositoriesTest {
             .put("coordination", evidence.reference().toJson())
         success(memory.appendCrewSnapshot(conversationId, snapshot))
 
-        val sql = database.openHelper.writableDatabase
+        val sql = database.testChatSql
         sql.execSQL(
             "UPDATE crew_messages SET reference_message_id=NULL WHERE conversation_id=? AND mission_id=?",
             arrayOf(conversationId, missionId),
@@ -457,12 +457,12 @@ class M1bRepositoriesTest {
             val batchId = UUID.randomUUID().toString()
             success(model.appendToolBatch(ModelToolBatchInput("rollback", batchId, user.messageId, 0, "", calls = listOf(ModelCallInput("call", "tool", "{}")))))
             val before = nextSeq("rollback")
-            database.openHelper.writableDatabase.execSQL("CREATE TRIGGER injected_m1b_result_failure BEFORE INSERT ON tool_results BEGIN SELECT RAISE(ABORT,'injected failure'); END")
+            database.testChatSql.execSQL("CREATE TRIGGER injected_m1b_result_failure BEFORE INSERT ON tool_results BEGIN SELECT RAISE(ABORT,'injected failure'); END")
             assertTrue(model.appendToolResult(ModelToolResultInput("rollback", batchId, "call", "tool", "RESULT", "never persisted")) is ChatDbResult.Conflict)
             assertEquals(before, nextSeq("rollback"))
             assertEquals(0L, count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='model_tool_result'", arrayOf("rollback")))
             assertEquals(0L, count("SELECT COUNT(*) FROM tool_results WHERE conversation_id=?", arrayOf("rollback")))
-            database.openHelper.writableDatabase.execSQL("DROP TRIGGER injected_m1b_result_failure")
+            database.testChatSql.execSQL("DROP TRIGGER injected_m1b_result_failure")
         }
         onDatabaseThread { success(conversations.ensureConversation("concurrent-m1b")) }
         val pool = Executors.newFixedThreadPool(6)
@@ -473,7 +473,7 @@ class M1bRepositoriesTest {
             futures.forEach { assertTrue(it.get(45, TimeUnit.SECONDS) is ChatDbResult.Success) }
         } finally { pool.shutdownNow() }
         onDatabaseThread {
-            val seqs = database.openHelper.writableDatabase.query(
+            val seqs = database.testChatSql.query(
                 "SELECT seq FROM conversation_items WHERE conversation_id=? ORDER BY seq", arrayOf("concurrent-m1b"),
             ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
             assertEquals((1L..24L).toList(), seqs)
@@ -518,11 +518,11 @@ class M1bRepositoriesTest {
             .put("timestamp", 100.25)
     }
 
-    private fun nextSeq(conversationId: String): Long = database.openHelper.writableDatabase.query(
+    private fun nextSeq(conversationId: String): Long = database.testChatSql.query(
         "SELECT next_seq FROM conversations WHERE id=?", arrayOf(conversationId),
     ).use { assertTrue(it.moveToFirst()); it.getLong(0) }
 
-    private fun count(query: String, args: Array<out Any?>): Long = database.openHelper.writableDatabase.query(query, args)
+    private fun count(query: String, args: Array<out Any?>): Long = database.testChatSql.query(query, args)
         .use { assertTrue(it.moveToFirst()); it.getLong(0) }
 
     private fun <T> success(result: ChatDbResult<T>): T = when (result) {

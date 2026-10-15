@@ -9,11 +9,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.RoomDatabase.Callback
 import androidx.room.RoomDatabase.JournalMode
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.IdentityHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
@@ -189,6 +192,7 @@ internal object JarvysChatDatabaseProvider {
         val executorSet = createExecutors()
         return try {
             buildDatabase(context.applicationContext, databaseFile, executorSet).also { database ->
+                kotlinx.coroutines.runBlocking { database.useWriterConnection { } }
                 synchronized(isolatedExecutors) { isolatedExecutors[database] = executorSet }
                 synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
             }
@@ -207,7 +211,7 @@ internal object JarvysChatDatabaseProvider {
     }
 
     /** Runs a read projection on the query pool belonging to this exact Room database instance. */
-    internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: () -> T): T =
+    internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T =
         withContext(synchronized(queryDispatchers) { queryDispatchers[database] }
             ?: throw IllegalStateException("No Jarvys chat query executor is registered for this database")) {
             operation()
@@ -220,6 +224,9 @@ internal object JarvysChatDatabaseProvider {
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
         return Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
+            // Room 2.7 supplies separate writer/reader leases; Android configures WAL pool size
+            // through its db_connection_pool_size platform resource (default 4 total connections).
+            .setDriver(AndroidSQLiteDriver())
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
             .setQueryExecutor(executors[0])
             .setTransactionExecutor(executors[1])
@@ -266,6 +273,32 @@ internal object JarvysChatDatabaseProvider {
     }
 
     internal fun connectionPragmasCallback(): Callback = object : Callback() {
+        private val driverTriggersInstalled = AtomicBoolean(false)
+        private val driverTriggerInstallLock = Any()
+
+        private fun createDriverTriggersOnce(connection: SQLiteConnection) {
+            if (driverTriggersInstalled.get()) return
+            synchronized(driverTriggerInstallLock) {
+                if (driverTriggersInstalled.get()) return
+                DatabaseTriggers.create(connection)
+                driverTriggersInstalled.set(true)
+            }
+        }
+
+        override fun onCreate(connection: SQLiteConnection) {
+            super.onCreate(connection)
+            createDriverTriggersOnce(connection)
+            configureOpenedConnection(connection)
+        }
+
+        override fun onOpen(connection: SQLiteConnection) {
+            super.onOpen(connection)
+            createDriverTriggersOnce(connection)
+            configureOpenedConnection(connection)
+        }
+
+        // Kept for the test-only SupportSQLiteOpenHelper accessor; Room itself is built with
+        // AndroidSQLiteDriver and calls the SQLiteConnection overloads above.
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
             DatabaseTriggers.create(db)
@@ -295,9 +328,32 @@ internal object JarvysChatDatabaseProvider {
         verifyPragma(db, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
     }
 
+    /** Configure the actual driver connection; foreign_keys is per SQLite connection. */
+    internal fun configureOpenedConnection(connection: SQLiteConnection) {
+        val sql = DriverChatSqlDatabase(connection)
+        sql.execSQL("PRAGMA foreign_keys=ON")
+        sql.execSQL("PRAGMA busy_timeout=$BUSY_TIMEOUT_MILLIS")
+        sql.execSQL("PRAGMA synchronous=NORMAL")
+        sql.execSQL("PRAGMA wal_autocheckpoint=$WAL_AUTOCHECKPOINT_PAGES")
+        sql.execSQL("PRAGMA journal_size_limit=$JOURNAL_SIZE_LIMIT_BYTES")
+        verifyPragma(connection, "journal_mode", "wal")
+        verifyPragma(connection, "foreign_keys", "1")
+        verifyPragma(connection, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
+        verifyPragma(connection, "synchronous", "1")
+        verifyPragma(connection, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES.toString())
+        verifyPragma(connection, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
+    }
+
 /** Invariants Room cannot encode. Every future migration that rebuilds these tables must call [create]. */
 internal object DatabaseTriggers {
-    fun create(db: SupportSQLiteDatabase) {
+    fun create(connection: SQLiteConnection) {
+        val sql = DriverChatSqlDatabase(connection)
+        create(sql)
+    }
+
+    fun create(db: SupportSQLiteDatabase) = create(SupportChatSqlDatabase(db))
+
+    fun create(db: ChatSqlDatabase) {
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_replace " +
                 "BEFORE INSERT ON conversations " +
@@ -380,6 +436,21 @@ internal object DatabaseTriggers {
         }
     }
 
+    private fun verifyPragma(connection: SQLiteConnection, pragma: String, expected: String) {
+        val actual = connection.prepare("PRAGMA $pragma").use { statement ->
+            check(statement.step()) { "PRAGMA $pragma returned no value" }
+            when (statement.getColumnType(0)) {
+                1 -> statement.getLong(0).toString()
+                2 -> statement.getDouble(0).toString()
+                3 -> statement.getText(0)
+                else -> ""
+            }
+        }
+        check(actual.equals(expected, ignoreCase = true)) {
+            "Jarvys chat database PRAGMA contract failed: $pragma expected=$expected actual=$actual"
+        }
+    }
+
     private fun createExecutors(): List<ExecutorService> = listOf(
         Executors.newFixedThreadPool(4, NamedDaemonThreadFactory("jarvys-chat-read")),
         Executors.newSingleThreadExecutor(NamedDaemonThreadFactory("jarvys-chat-transaction")),
@@ -400,4 +471,8 @@ internal object DatabaseTriggers {
         }
     }
 }
+
+/** Test SQL inspections use leases from this database's actual Room driver pool. */
+internal val JarvysChatDatabase.testChatSql: ChatSqlDatabase
+    get() = chatSql
 

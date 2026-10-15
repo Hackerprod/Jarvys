@@ -23,6 +23,7 @@ data class Conversation(
     val legacy_ledger_bytes: Long? = null,
     val legacy_ledger_sha256: String? = null,
     val imported_at: Long? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val import_offset: Long = 0L,
 )
 
 /** Deletion history survives the conversation CASCADE and permanently blocks resurrection. */

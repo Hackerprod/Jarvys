@@ -3,10 +3,6 @@ package com.jarvys.agent.chatdb
 import android.content.Context
 import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.sqlite.db.SupportSQLiteDatabase
-import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.test.core.app.ApplicationProvider
 import androidx.room.withTransaction
 import kotlinx.coroutines.runBlocking
@@ -67,7 +63,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun createsEveryDeclaredEntityTableAndEnforcesPragmaContract() = onDatabaseThreadBlocking {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val openedPath = sqlite.query("PRAGMA database_list").use { cursor ->
             var mainPath: String? = null
             while (cursor.moveToNext()) {
@@ -104,7 +100,7 @@ class JarvysChatDatabaseM0Test {
             ConversationItem(id, seq, "event", "row-$seq", seq, created_at = seq + 0.25)
         })
         database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         sqlite.execSQL(
             "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
             arrayOf(id, "m1", 0, MessagePartKinds.TEXT, "hello")
@@ -170,12 +166,12 @@ class JarvysChatDatabaseM0Test {
         assertSuspendConstraint {
             database.messageDao().insert(message("unique", "m1", "stable-duplicate-id", 2, 1))
         }
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
             arrayOf("unique", "m1", 0, MessagePartKinds.TEXT, "first")
         )
         assertConstraint {
-            database.openHelper.writableDatabase.execSQL(
+            database.testChatSql.execSQL(
                 "INSERT INTO message_parts(conversation_id,message_id,ordinal,kind,payload) VALUES(?,?,?,?,?)",
                 arrayOf("unique", "m1", 0, MessagePartKinds.TEXT, "duplicate ordinal")
             )
@@ -202,7 +198,7 @@ class JarvysChatDatabaseM0Test {
         database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
         database.conversationItemDao().insert(ConversationItem(conversationId, 1, "message", messageId, 1, created_at = 1.0))
         database.messageDao().insert(message(conversationId, messageId, "stable-m1", 1, 0))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val activeTargetKey = "${conversationId.length}:$conversationId${messageId.length}:$messageId"
 
         fun insertRun(runId: String, state: String, targetKey: String?) {
@@ -235,7 +231,7 @@ class JarvysChatDatabaseM0Test {
             ConversationItem(conversationId, 1, "interrupt", "pending-1", 1, created_at = 1.0),
             ConversationItem(conversationId, 2, "interrupt", "pending-2", 2, created_at = 2.0),
         ))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         sqlite.execSQL(
             "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq,created_at) VALUES(?,?,?,?,?,?,?)",
             arrayOf<Any?>(conversationId, "pending-1", 1L, "first", 0, null, 1.25),
@@ -296,14 +292,14 @@ class JarvysChatDatabaseM0Test {
             database.conversationDao().insertIfNotTombstoned(conversation(id))
         }.isFailure)
         assertConstraint {
-            database.openHelper.writableDatabase.execSQL(
+            database.testChatSql.execSQL(
                 "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq,import_state) " +
                     "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 arrayOf<Any?>(id, "chat", 0, 0, 0, 1L, 1L, 0L, 1L, "not_started"),
             )
         }
         assertEquals(99L, scalarLong(
-            database.openHelper.writableDatabase,
+            database.testChatSql,
             "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
             arrayOf(id),
         ))
@@ -315,7 +311,7 @@ class JarvysChatDatabaseM0Test {
         assertEquals(0, database.conversationDao().deleteById(id, 77L))
         assertTrue(database.conversationDao().isTombstoned(id))
         assertEquals(77L, scalarLong(
-            database.openHelper.writableDatabase,
+            database.testChatSql,
             "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
             arrayOf(id),
         ))
@@ -326,7 +322,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun tombstonesRejectUpdateAndDelete() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         database.conversationDao().deleteById("immutable-tombstone", 55L)
 
         assertConstraint("tombstone UPDATE") {
@@ -340,7 +336,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun newConversationAndTombstoneTriggersRejectRawSqlAndAfterDeletePersistsMillis() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val id = "guarded-conversation"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
         database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1, created_at = 1.0))
@@ -394,7 +390,7 @@ class JarvysChatDatabaseM0Test {
             "trg_generation_run_target_insert",
             "trg_generation_run_target_update",
         )
-        val actual = database.openHelper.writableDatabase.query(
+        val actual = database.testChatSql.query(
             "SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name",
         ).use { cursor ->
             buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
@@ -404,7 +400,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun onOpenRecreatesMissingDatabaseTriggers() = onDatabaseThreadBlocking {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         sqlite.execSQL("DROP TRIGGER trg_tombstones_no_update")
         sqlite.execSQL("DROP TRIGGER trg_conversation_no_replace")
         assertEquals(0L, scalarLong(
@@ -415,7 +411,7 @@ class JarvysChatDatabaseM0Test {
 
         JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
         database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
-        val reopened = database.openHelper.writableDatabase
+        val reopened = database.testChatSql
         assertEquals(1L, scalarLong(
             reopened,
             "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tombstones_no_update'",
@@ -431,7 +427,7 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun everyConversationChildCascadesAndOnlyGlobalStorageAndTombstoneRowsRemain() = onDatabaseThread {
         val id = "cascade-every-table"
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val seeded = seedEveryConversationChild(sqlite, id)
         val childTables = JarvysChatDatabase.ENTITY_TABLE_NAMES - setOf(
             "conversations", "tombstones", "storage_meta", "file_refs",
@@ -455,7 +451,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun foreignKeyCheckIsEmptyAndEveryDeclaredForeignKeyRejectsAnOrphan() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val seeded = seedEveryConversationChild(sqlite, "fk-every-table")
         assertEmptyForeignKeyCheck(sqlite)
         var checked = 0
@@ -478,7 +474,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun duplicateRowsAreRejectedForEveryStrictJournalTable() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val seeded = seedEveryConversationChild(sqlite, "unique-journal")
         val journalTables = setOf(
             "crew_result_evidence", "workspace_result_refs", "crew_coordination_evidence",
@@ -530,7 +526,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun journalIdentityKeysAreScopedToConversationLedger() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val firstId = "journal-key-a"
         val secondId = "journal-key-b"
         listOf(firstId, secondId).forEach { id ->
@@ -583,7 +579,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun workspaceReplyAndEvidenceIdsAreUniqueWithinConversationOnly() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         suspend fun insertReference(conversationId: String, seq: Long, referenceId: String, evidenceId: String) {
             database.conversationItemDao().insert(
                 ConversationItem(conversationId, seq, "workspace_coordination_ref", referenceId, seq, created_at = seq.toDouble()),
@@ -630,7 +626,7 @@ class JarvysChatDatabaseM0Test {
         database.conversationDao().insertIfNotTombstoned(conversation(id))
         database.conversationItemDao().insert(ConversationItem(id, 1, "message", "m1", 1, created_at = 1.0))
         database.messageDao().insert(message(id, "m1", "stable-m1", 1, 0))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val columns = tableColumns(sqlite, "message_parts").keys
         assertTrue("revision is deliberately absent", "revision" !in columns)
         val pk = primaryKeyColumns(sqlite, "message_parts")
@@ -649,7 +645,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun ledgerCreatedAtColumnsAreRealAndRoundTripTheOriginalDouble() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val seeded = seedEveryConversationChild(sqlite, "timestamp-round-trip")
         val expected = 98_765.4321
         val requiredEventTables = setOf(
@@ -676,7 +672,7 @@ class JarvysChatDatabaseM0Test {
         val id = "crew-round-trip"
         database.conversationDao().insertIfNotTombstoned(conversation(id))
         database.conversationItemDao().insert(ConversationItem(id, 1, "crew_snapshot", "mission-1", 1, created_at = 1.0))
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val synthesis = ExactUtf16.encode(String(charArrayOf('S', '\uD800', 'Y')))
         val error = ExactUtf16.encode(String(charArrayOf('E', '\uDC00', 'R')))
         val result = ExactUtf16.encode(String(charArrayOf('R', '\uD800', 'S')))
@@ -756,7 +752,7 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun deletingFileReferenceLeavesConversationHistoryAndPhysicalFileInPlace() = onDatabaseThread {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         seedEveryConversationChild(sqlite, "file-reference-gc")
         val physicalFile = File(temporary.root, "test-artifact.bin").apply { writeBytes(byteArrayOf(8, 7, 6)) }
         sqlite.execSQL(
@@ -781,28 +777,23 @@ class JarvysChatDatabaseM0Test {
 
     @Test
     fun foreignKeysAreEnforcedOnASecondWriterConnection() {
-        val secondDatabase = Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
-            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addCallback(JarvysChatDatabaseProvider.connectionPragmasCallback())
-            .build()
+        val secondDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
         try {
-            val secondHelper: SupportSQLiteOpenHelper = secondDatabase.openHelper
-            val secondWriter = secondHelper.writableDatabase
-            assertEquals(1L, pragmaLong(secondWriter, "foreign_keys"))
+            assertEquals(1L, pragmaLong(secondDatabase.testChatSql, "foreign_keys"))
             assertConstraint("foreign key on second writer") {
-                secondWriter.execSQL(
+                secondDatabase.testChatSql.execSQL(
                     "INSERT INTO conversation_items(conversation_id,seq,item_kind,item_key,sort_seq,sort_sub,created_at) VALUES(?,?,?,?,?,?,?)",
                     arrayOf("missing-parent", 1L, "message", "orphan", 1L, 0, 1.25),
                 )
             }
         } finally {
-            secondDatabase.close()
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(secondDatabase)
         }
     }
 
     @Test
     fun databaseSupportsConcurrentReadersUnderWal() {
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val start = CountDownLatch(1)
         val readers = Executors.newFixedThreadPool(4)
         try {
@@ -867,7 +858,7 @@ class JarvysChatDatabaseM0Test {
         assertEquals("Exported schema version", 1, exportedDatabase.getInt("version"))
         assertEquals("Pinned v1 identity hash", EXPECTED_SCHEMA_V1_IDENTITY_HASH, exportedDatabase.getString("identityHash"))
 
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         assertEquals("Room database version", 1L, pragmaLong(sqlite, "user_version"))
         assertEquals(
             "Room identity hash",
@@ -955,12 +946,12 @@ class JarvysChatDatabaseM0Test {
         database.conversationItemDao().insert(ConversationItem(id, 1, "crew_result_evidence", "e1", 1, created_at = 1.0))
         val exactText = String(charArrayOf('A', '\uD800', 'B', '\uDC00', 'Z'))
         val expectedBytes = ExactUtf16.encode(exactText)
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "INSERT INTO crew_result_evidence(evidence_id,conversation_id,seq,schema_version,mission_id,bot_id,cycle_id,reported_status,result_text,produced_at_ms,content_sha256) " +
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf("e1", id, 1L, 1, "mission-1", "bot-1", "cycle-1", "completed", expectedBytes, 123L, "sha256")
         )
-        val sqlite = database.openHelper.writableDatabase
+        val sqlite = database.testChatSql
         val storedType = sqlite.query("PRAGMA table_info(crew_result_evidence)").use { cursor ->
             var type: String? = null
             while (cursor.moveToNext()) {
@@ -1021,19 +1012,19 @@ class JarvysChatDatabaseM0Test {
         updated_at = seq.toDouble(),
     )
 
-    private fun pragmaLong(database: SupportSQLiteDatabase, name: String): Long =
+    private fun pragmaLong(database: ChatSqlDatabase, name: String): Long =
         database.query("PRAGMA $name").use { cursor ->
             assertTrue("PRAGMA $name returned no row", cursor.moveToFirst())
             cursor.getLong(0)
         }
 
-    private fun pragmaString(database: SupportSQLiteDatabase, name: String): String =
+    private fun pragmaString(database: ChatSqlDatabase, name: String): String =
         database.query("PRAGMA $name").use { cursor ->
             assertTrue("PRAGMA $name returned no row", cursor.moveToFirst())
             cursor.getString(0)
         }
 
-    private fun rowCount(database: SupportSQLiteDatabase, table: String): Long =
+    private fun rowCount(database: ChatSqlDatabase, table: String): Long =
         database.query("SELECT COUNT(*) FROM `$table`").use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getLong(0)
@@ -1072,7 +1063,7 @@ class JarvysChatDatabaseM0Test {
 
     private fun assertExportedSchemaMatchesDatabase(
         exportedDatabase: JSONObject,
-        sqlite: SupportSQLiteDatabase,
+        sqlite: ChatSqlDatabase,
     ) {
         val expectedEntities = linkedMapOf<String, JSONObject>()
         val entities = exportedDatabase.getJSONArray("entities")
@@ -1120,7 +1111,7 @@ class JarvysChatDatabaseM0Test {
         }
     }
 
-    private fun databaseColumns(sqlite: SupportSQLiteDatabase, table: String): List<SchemaColumn> =
+    private fun databaseColumns(sqlite: ChatSqlDatabase, table: String): List<SchemaColumn> =
         sqlite.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -1156,7 +1147,7 @@ class JarvysChatDatabaseM0Test {
         }
     }
 
-    private fun databaseIndexes(sqlite: SupportSQLiteDatabase, table: String): Set<SchemaIndex> {
+    private fun databaseIndexes(sqlite: ChatSqlDatabase, table: String): Set<SchemaIndex> {
         val indexNames = sqlite.query("PRAGMA index_list(`$table`)").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -1200,7 +1191,7 @@ class JarvysChatDatabaseM0Test {
         }
     }
 
-    private fun databaseForeignKeys(sqlite: SupportSQLiteDatabase, table: String): Set<SchemaForeignKey> {
+    private fun databaseForeignKeys(sqlite: ChatSqlDatabase, table: String): Set<SchemaForeignKey> {
         val grouped = linkedMapOf<Int, SchemaForeignKeyRows>()
         sqlite.query("PRAGMA foreign_key_list(`$table`)").use { cursor ->
             while (cursor.moveToNext()) {
@@ -1272,7 +1263,7 @@ class JarvysChatDatabaseM0Test {
 
     /** Inserts one valid fixture row into every entity table whose rows belong to this conversation. */
     private suspend fun seedEveryConversationChild(
-        sqlite: SupportSQLiteDatabase,
+        sqlite: ChatSqlDatabase,
         conversationId: String,
     ): Map<String, Map<String, Any?>> {
         database.conversationDao().insertIfNotTombstoned(conversation(conversationId))
@@ -1310,7 +1301,7 @@ class JarvysChatDatabaseM0Test {
     }
 
     private fun genericEntityRow(
-        sqlite: SupportSQLiteDatabase,
+        sqlite: ChatSqlDatabase,
         table: String,
         parentRows: Map<String, Map<String, Any?>>,
         foreignKeys: List<SqlForeignKey>,
@@ -1360,14 +1351,14 @@ class JarvysChatDatabaseM0Test {
         else -> "${table}_$name"
     }
 
-    private fun insertRow(sqlite: SupportSQLiteDatabase, table: String, row: Map<String, Any?>) {
+    private fun insertRow(sqlite: ChatSqlDatabase, table: String, row: Map<String, Any?>) {
         val columns = row.keys.toList()
         val placeholders = List(columns.size) { "?" }.joinToString(",")
         val columnSql = columns.joinToString(",") { "`$it`" }
         sqlite.execSQL("INSERT INTO `$table`($columnSql) VALUES($placeholders)", columns.map { row[it] }.toTypedArray())
     }
 
-    private fun tableColumns(sqlite: SupportSQLiteDatabase, table: String): Map<String, SqlColumn> =
+    private fun tableColumns(sqlite: ChatSqlDatabase, table: String): Map<String, SqlColumn> =
         sqlite.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildMap {
                 while (cursor.moveToNext()) {
@@ -1381,13 +1372,13 @@ class JarvysChatDatabaseM0Test {
             }
         }
 
-    private fun primaryKeyColumns(sqlite: SupportSQLiteDatabase, table: String): List<String> =
+    private fun primaryKeyColumns(sqlite: ChatSqlDatabase, table: String): List<String> =
         tableColumns(sqlite, table).entries
             .filter { it.value.primaryKeyPosition > 0 }
             .sortedBy { it.value.primaryKeyPosition }
             .map { it.key }
 
-    private fun uniqueIndexColumns(sqlite: SupportSQLiteDatabase, table: String): Set<String> {
+    private fun uniqueIndexColumns(sqlite: ChatSqlDatabase, table: String): Set<String> {
         val names = sqlite.query("PRAGMA index_list(`$table`)").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -1408,7 +1399,7 @@ class JarvysChatDatabaseM0Test {
         }.toSet()
     }
 
-    private fun foreignKeys(sqlite: SupportSQLiteDatabase, table: String): List<SqlForeignKey> {
+    private fun foreignKeys(sqlite: ChatSqlDatabase, table: String): List<SqlForeignKey> {
         val grouped = linkedMapOf<Int, Pair<String, MutableList<Pair<Int, Pair<String, String>>>>>()
         sqlite.query("PRAGMA foreign_key_list(`$table`)").use { cursor ->
             while (cursor.moveToNext()) {
@@ -1433,7 +1424,7 @@ class JarvysChatDatabaseM0Test {
         else -> "orphan_${table}_${column}"
     }
 
-    private fun assertEmptyForeignKeyCheck(sqlite: SupportSQLiteDatabase) {
+    private fun assertEmptyForeignKeyCheck(sqlite: ChatSqlDatabase) {
         sqlite.query("PRAGMA foreign_key_check").use { cursor ->
             assertTrue("PRAGMA foreign_key_check returned a violation", !cursor.moveToFirst())
         }
@@ -1459,31 +1450,31 @@ class JarvysChatDatabaseM0Test {
         assertNotNull("Expected SQLiteConstraintException for $label but got $failure", cause)
     }
 
-    private fun scalarLong(sqlite: SupportSQLiteDatabase, sql: String, args: Array<out Any?> = emptyArray()): Long =
+    private fun scalarLong(sqlite: ChatSqlDatabase, sql: String, args: Array<out Any?> = emptyArray()): Long =
         sqlite.query(sql, args).use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getLong(0)
         }
 
-    private fun scalarDouble(sqlite: SupportSQLiteDatabase, sql: String): Double =
+    private fun scalarDouble(sqlite: ChatSqlDatabase, sql: String): Double =
         sqlite.query(sql).use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getDouble(0)
         }
 
-    private fun scalarString(sqlite: SupportSQLiteDatabase, sql: String): String =
+    private fun scalarString(sqlite: ChatSqlDatabase, sql: String): String =
         sqlite.query(sql).use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getString(0)
         }
 
-    private fun scalarNullableString(sqlite: SupportSQLiteDatabase, sql: String): String? =
+    private fun scalarNullableString(sqlite: ChatSqlDatabase, sql: String): String? =
         sqlite.query(sql).use { cursor ->
             assertTrue(cursor.moveToFirst())
             if (cursor.isNull(0)) null else cursor.getString(0)
         }
 
-    private fun scalarBlob(sqlite: SupportSQLiteDatabase, sql: String): ByteArray =
+    private fun scalarBlob(sqlite: ChatSqlDatabase, sql: String): ByteArray =
         sqlite.query(sql).use { cursor ->
             assertTrue(cursor.moveToFirst())
             cursor.getBlob(0)

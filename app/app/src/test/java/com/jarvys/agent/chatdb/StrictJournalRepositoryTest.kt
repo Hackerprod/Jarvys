@@ -65,7 +65,7 @@ class StrictJournalRepositoryTest {
         val conflictingPayload = CrewResultEvidence.create(execution, mission, "bot-a", first.cycleId, "DONE", "different", 10_001L)
         assertTrue(repository.appendCrewResultEvidence(conflictingPayload) is ChatDbResult.Conflict)
 
-        val stored = database.openHelper.writableDatabase.query(
+        val stored = database.testChatSql.query(
             "SELECT result_text FROM crew_result_evidence WHERE conversation_id=? AND evidence_id=?", arrayOf(execution, first.evidenceId),
         ).use { c -> assertTrue(c.moveToFirst()); c.getBlob(0) }
         assertArrayEquals(ExactUtf16.encode(first.resultText), stored)
@@ -106,12 +106,12 @@ class StrictJournalRepositoryTest {
             "message-a", "QUESTION", "other text", listOf("ref-a"), fixture.evidence.producedAtMillis)
         assertTrue(repository.appendCrewCoordinationEvidence(altered) is ChatDbResult.Conflict)
 
-        val storedText = database.openHelper.writableDatabase.query(
+        val storedText = database.testChatSql.query(
             "SELECT text FROM crew_coordination_evidence WHERE conversation_id=? AND evidence_id=?",
             arrayOf(fixture.execution, fixture.evidence.evidenceId),
         ).use { c -> assertTrue(c.moveToFirst()); c.getBlob(0) }
         assertArrayEquals(ExactUtf16.encode(fixture.evidence.text), storedText)
-        val storedRef = database.openHelper.writableDatabase.query(
+        val storedRef = database.testChatSql.query(
             "SELECT ref FROM crew_coordination_evidence_refs WHERE conversation_id=? AND evidence_id=? ORDER BY ordinal",
             arrayOf(fixture.execution, fixture.evidence.evidenceId),
         ).use { c -> assertTrue(c.moveToFirst()); c.getString(0) }
@@ -137,7 +137,7 @@ class StrictJournalRepositoryTest {
         assertEquals(accepted.state, successValue(repository.readWorkspaceCoordinationReply(WorkspaceIdentity.CENTRAL_SESSION, ref.referenceId)).state)
         assertEquals(2L, count("SELECT COUNT(*) FROM workspace_coordination_reply_transitions WHERE conversation_id=? AND reply_id=?", arrayOf(WorkspaceIdentity.CENTRAL_SESSION, accepted.replyId)))
 
-        val answerBlob = database.openHelper.writableDatabase.query(
+        val answerBlob = database.testChatSql.query(
             "SELECT text,original_user_request FROM workspace_coordination_replies WHERE conversation_id=? AND reference_id=?",
             arrayOf(WorkspaceIdentity.CENTRAL_SESSION, ref.referenceId),
         ).use { c -> assertTrue(c.moveToFirst()); c.getBlob(0) to c.getBlob(1) }
@@ -182,7 +182,7 @@ class StrictJournalRepositoryTest {
             WorkspaceIdentity.CENTRAL_SESSION, WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, "another-source",
         )))
 
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "UPDATE workspace_input_incorporations SET source_reference_id=NULL WHERE conversation_id=? AND receipt_id=?",
             arrayOf(WorkspaceIdentity.CENTRAL_SESSION, receipt.receiptId),
         )
@@ -202,7 +202,7 @@ class StrictJournalRepositoryTest {
             fixture.workspace, uuid(12), "request-a", 1L)
         val beforeSeq = conversationNextSeq(fixture.execution)
         val beforeItems = count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf(fixture.execution))
-        database.openHelper.writableDatabase.execSQL(
+        database.testChatSql.execSQL(
             "CREATE TRIGGER injected_workspace_ref_failure BEFORE INSERT ON workspace_result_refs BEGIN SELECT RAISE(ABORT,'injected failure'); END",
         )
 
@@ -210,7 +210,7 @@ class StrictJournalRepositoryTest {
         assertEquals(beforeSeq, conversationNextSeq(fixture.execution))
         assertEquals(beforeItems, count("SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf(fixture.execution)))
         assertEquals(0L, count("SELECT COUNT(*) FROM workspace_result_refs WHERE reference_id=?", arrayOf(ref.referenceId)))
-        database.openHelper.writableDatabase.execSQL("DROP TRIGGER injected_workspace_ref_failure")
+        database.testChatSql.execSQL("DROP TRIGGER injected_workspace_ref_failure")
     }
 
     private suspend fun resultFixture(): ResultFixture {
@@ -240,11 +240,11 @@ class StrictJournalRepositoryTest {
         assertTrue(conversations.ensureConversation(conversationId) is ChatDbResult.Success)
     }
 
-    private fun conversationNextSeq(id: String): Long = database.openHelper.writableDatabase.query(
+    private fun conversationNextSeq(id: String): Long = database.testChatSql.query(
         "SELECT next_seq FROM conversations WHERE id=?", arrayOf(id),
     ).use { c -> assertTrue(c.moveToFirst()); c.getLong(0) }
 
-    private fun count(query: String, args: Array<out Any?>): Long = database.openHelper.writableDatabase.query(query, args)
+    private fun count(query: String, args: Array<out Any?>): Long = database.testChatSql.query(query, args)
         .use { c -> assertTrue(c.moveToFirst()); c.getLong(0) }
 
     private fun <T> success(result: ChatDbResult<T>): T = when (result) {

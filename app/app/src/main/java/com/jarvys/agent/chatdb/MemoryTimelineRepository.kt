@@ -1,6 +1,5 @@
 package com.jarvys.agent.chatdb
 
-import androidx.room.withTransaction
 import com.jarvys.agent.ReflectionTranscriptBuilder
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewInputBinding
@@ -160,13 +159,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     /** `hasReflectionCommit` equivalent, scoped to this conversation (`LocalRunStore.java:3460-3465`). */
-    suspend fun hasReflectionCommit(conversationId: String, reflectionId: String): Boolean = database.withTransaction {
+    suspend fun hasReflectionCommit(conversationId: String, reflectionId: String): Boolean = database.withChatReadTransaction {
         sql.query("SELECT EXISTS(SELECT 1 FROM reflections WHERE conversation_id=? AND reflection_id=? AND kind='reflection_commit')",
             arrayOf(conversationId, reflectionId)).use { it.moveToFirst(); it.getInt(0) != 0 }
     }
 
     /** Reads compaction IDs still awaiting reflection, in source order (`LocalRunStore.java:3468-3484`). */
-    suspend fun pendingCompactionIds(conversationId: String): List<String> = database.withTransaction {
+    suspend fun pendingCompactionIds(conversationId: String): List<String> = database.withChatReadTransaction {
         val pending = LinkedHashSet<String>()
         sql.query("SELECT item_kind,item_key,seq FROM conversation_items WHERE conversation_id=? AND item_kind IN ('compaction','reflection_checkpoint','reflection_commit','compaction_reflection_consumed') ORDER BY sort_seq,sort_sub,seq",
             arrayOf(conversationId)).use { c ->
@@ -183,13 +182,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     /** Returns the latest active `compaction` as `loadConversationContext` does (`LocalRunStore.java:2879-2896`). */
-    suspend fun activeCompaction(conversationId: String): Compaction? = database.withTransaction { latestActiveCompaction(conversationId) }
+    suspend fun activeCompaction(conversationId: String): Compaction? = database.withChatReadTransaction { latestActiveCompaction(conversationId) }
 
     /**
      * SQL-backed equivalent of `LocalRunStore.buildReflectionPayload`
      * (`LocalRunStore.java:3239-3368`), including its `reflection_tool` trust markers and checkpoint boundary.
      */
-    suspend fun buildReflectionPayload(conversationId: String, throughMessageId: String? = null, replayAll: Boolean = false): ReflectionPayloadSnapshot = database.withTransaction {
+    suspend fun buildReflectionPayload(conversationId: String, throughMessageId: String? = null, replayAll: Boolean = false): ReflectionPayloadSnapshot = database.withChatReadTransaction {
         val rows = readTimelineRows(conversationId)
         val messages = rows.mapIndexedNotNull { index, row ->
             if (row.role == "user" || row.role == "assistant") row.messageId?.let { id ->
@@ -210,7 +209,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             arrayOf(conversationId)).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
         val end = messages.indices.reversed().firstOrNull { i -> messages[i].rowIndex <= maxRowIndex && !(messages[i].role == "assistant" && messages[i].id in hidden) } ?: -1
         val endMessageId = if (end < 0) "" else messages[end].id
-        if (end <= checkpointIndex) return@withTransaction ReflectionPayloadSnapshot("[]", "", emptyList(), 0, 0, 0, false)
+        if (end <= checkpointIndex) return@withChatReadTransaction ReflectionPayloadSnapshot("[]", "", emptyList(), 0, 0, 0, false)
 
         val connectorUsers = sql.query("SELECT owner_user_message_id,source FROM reflection_tool_markers WHERE conversation_id=? AND seq IN (SELECT seq FROM conversation_items WHERE conversation_id=? AND item_kind NOT IN $RESULT_ONLY_KINDS ORDER BY sort_seq,sort_sub,seq LIMIT ?)",
             arrayOf(conversationId, conversationId, (maxRowIndex + 1).coerceAtLeast(0))).use { c ->
@@ -239,7 +238,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         val serialized = ReflectionTranscriptBuilder.build(transcript)
         val includedEnd = ReflectionTranscriptBuilder.lastMessageId(serialized)
         val includedIndex = indexById[includedEnd] ?: -1
-        if (includedIndex < 0) return@withTransaction ReflectionPayloadSnapshot(serialized, "", emptyList(), 0, 0, 0, end >= 0)
+        if (includedIndex < 0) return@withChatReadTransaction ReflectionPayloadSnapshot(serialized, "", emptyList(), 0, 0, 0, end >= 0)
         val hasMore = includedIndex < end
         var userCharacters = 0
         var completedSteps = 0
@@ -269,25 +268,101 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         verifySnapshotEvidence(snapshot)
         val time = row.optDouble("timestamp", nowSeconds())
         val seq = insertLedgerItem(conversationId, "crew_snapshot", snapshot.missionId, time)
+        persistCrewSnapshot(conversationId, row, snapshot, digest, existing?.first_snapshot_seq ?: seq, seq)
+        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
+    }
+
+    /** Adds a lightweight first-position spine row while the importer discards repeated snapshots. */
+    internal suspend fun appendCrewSnapshotMarkerImported(conversationId: String, missionId: String): ChatDbResult<Long> = transaction {
+        if (missionId.isBlank()) return@transaction ChatDbResult.Invalid("crew mission id is required")
+        ensureConversationExists(conversationId)
+        val seq = insertLedgerItem(conversationId, "crew_snapshot", missionId)
+        ChatDbResult.Success(seq)
+    }
+
+    /** Stores the final source snapshot and preserves the mission's first and last ledger positions. */
+    internal suspend fun appendCrewSnapshotImported(
+        conversationId: String,
+        row: JSONObject,
+        firstSnapshotSeq: Long,
+    ): ChatDbResult<CrewMissionSnapshot> = transaction {
+        if (conversationId.isBlank() || row.optString("type") != "crew_snapshot")
+            return@transaction ChatDbResult.Invalid("crew_snapshot row and conversation are required")
+        ensureConversationExists(conversationId)
+        val position = importedPositionFor(conversationId)
+            ?: return@transaction ChatDbResult.Invalid("crew snapshot import position is missing")
+        if (firstSnapshotSeq <= 0L || firstSnapshotSeq > position.seq)
+            return@transaction ChatDbResult.Invalid("crew first snapshot sequence is invalid")
+        val snapshot = CrewMissionSnapshot.fromJson(row) ?: return@transaction ChatDbResult.Invalid("crew_snapshot schema or payload is unsupported")
+        if (snapshot.conversationId != conversationId || snapshot.missionId.isBlank())
+            return@transaction ChatDbResult.Invalid("crew_snapshot identity does not match its conversation")
+        val firstMarkerExists = sql.query(
+            "SELECT 1 FROM conversation_items WHERE conversation_id=? AND seq=? AND item_kind='crew_snapshot' AND item_key=?",
+            arrayOf(conversationId, firstSnapshotSeq, snapshot.missionId),
+        ).use { it.moveToFirst() }
+        if (!firstMarkerExists && firstSnapshotSeq != position.seq)
+            return@transaction ChatDbResult.Invalid("crew first snapshot marker is missing")
+        val digest = losslessSnapshotDigest(row)
+        verifySnapshotEvidence(snapshot)
+        val time = row.optDouble("timestamp", position.createdAtSeconds)
+        val seq = insertLedgerItem(conversationId, "crew_snapshot", snapshot.missionId, time)
+        persistCrewSnapshot(conversationId, row, snapshot, digest, firstSnapshotSeq, seq)
+        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
+    }
+
+    /** Materializes a retained final snapshot after its lightweight first/last markers are present. */
+    internal suspend fun storeCrewSnapshotImported(
+        conversationId: String,
+        row: JSONObject,
+        firstSnapshotSeq: Long,
+        lastSnapshotSeq: Long,
+    ): ChatDbResult<CrewMissionSnapshot> = transaction {
+        if (conversationId.isBlank() || row.optString("type") != "crew_snapshot")
+            return@transaction ChatDbResult.Invalid("crew_snapshot row and conversation are required")
+        ensureConversationExists(conversationId)
+        if (firstSnapshotSeq <= 0L || lastSnapshotSeq < firstSnapshotSeq)
+            return@transaction ChatDbResult.Invalid("crew snapshot sequence range is invalid")
+        val snapshot = CrewMissionSnapshot.fromJson(row) ?: return@transaction ChatDbResult.Invalid("crew_snapshot schema or payload is unsupported")
+        if (snapshot.conversationId != conversationId || snapshot.missionId.isBlank())
+            return@transaction ChatDbResult.Invalid("crew_snapshot identity does not match its conversation")
+        val markersExist = sql.query(
+            "SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND item_kind='crew_snapshot' AND item_key=? AND seq IN (?,?)",
+            arrayOf(conversationId, snapshot.missionId, firstSnapshotSeq, lastSnapshotSeq),
+        ).use { c -> c.moveToFirst() && c.getInt(0) == if (firstSnapshotSeq == lastSnapshotSeq) 1 else 2 }
+        if (!markersExist) return@transaction ChatDbResult.Invalid("crew first or last snapshot marker is missing")
+        val digest = losslessSnapshotDigest(row)
+        verifySnapshotEvidence(snapshot)
+        persistCrewSnapshot(conversationId, row, snapshot, digest, firstSnapshotSeq, lastSnapshotSeq)
+        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
+    }
+
+    private fun persistCrewSnapshot(
+        conversationId: String,
+        row: JSONObject,
+        snapshot: CrewMissionSnapshot,
+        digest: String,
+        firstSnapshotSeq: Long,
+        lastSnapshotSeq: Long,
+    ) {
+        val existing = readMissionHeader(conversationId, snapshot.missionId)
         if (existing == null) {
             sql.execSQL("INSERT INTO crew_missions(conversation_id,mission_id,first_snapshot_seq,last_snapshot_seq,schema_version,process_id,snapshot_digest,title,original_instructions,title_source,status,synthesis,started_at_ms,finished_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                arrayOf(conversationId, snapshot.missionId, seq, seq, row.optInt("crewSchemaVersion"), snapshot.processId,
+                arrayOf(conversationId, snapshot.missionId, firstSnapshotSeq, lastSnapshotSeq, row.optInt("crewSchemaVersion"), snapshot.processId,
                     digest, snapshot.title, snapshot.originalInstructions, snapshot.titleSource, snapshot.status,
                     ExactUtf16.encode(snapshot.synthesis), snapshot.startedAtMillis, snapshot.finishedAtMillis.takeIf { it > 0L }))
         } else {
             sql.execSQL("DELETE FROM crew_bots WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, snapshot.missionId))
             sql.execSQL("DELETE FROM crew_messages WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, snapshot.missionId))
-            sql.execSQL("UPDATE crew_missions SET last_snapshot_seq=?,schema_version=?,process_id=?,snapshot_digest=?,title=?,original_instructions=?,title_source=?,status=?,synthesis=?,started_at_ms=?,finished_at_ms=? WHERE conversation_id=? AND mission_id=?",
-                arrayOf(seq, row.optInt("crewSchemaVersion"), snapshot.processId, digest, snapshot.title, snapshot.originalInstructions,
+            sql.execSQL("UPDATE crew_missions SET first_snapshot_seq=?,last_snapshot_seq=?,schema_version=?,process_id=?,snapshot_digest=?,title=?,original_instructions=?,title_source=?,status=?,synthesis=?,started_at_ms=?,finished_at_ms=? WHERE conversation_id=? AND mission_id=?",
+                arrayOf(firstSnapshotSeq, lastSnapshotSeq, row.optInt("crewSchemaVersion"), snapshot.processId, digest, snapshot.title, snapshot.originalInstructions,
                     snapshot.titleSource, snapshot.status, ExactUtf16.encode(snapshot.synthesis), snapshot.startedAtMillis,
                     snapshot.finishedAtMillis.takeIf { it > 0L }, conversationId, snapshot.missionId))
         }
         insertCrewChildren(conversationId, snapshot)
-        ChatDbResult.Success(readCrewSnapshot(conversationId, snapshot.missionId)!!)
     }
 
     /** Returns current snapshots in `LinkedHashMap` first-insertion order (`LocalRunStore.java:1056-1094`). */
-    suspend fun readCrewMissionSnapshots(conversationId: String): List<CrewMissionSnapshot> = database.withTransaction {
+    suspend fun readCrewMissionSnapshots(conversationId: String): List<CrewMissionSnapshot> = database.withChatReadTransaction {
         val ids = sql.query("SELECT mission_id FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq",
             arrayOf(conversationId)).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         ids.mapNotNull { readCrewSnapshot(conversationId, it) }
@@ -312,7 +387,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
      * `LocalRunStore.readPendingInterruptRequests()` (`LocalRunStore.java:2816-2819`), in SQL without
      * scanning timeline pages.
      */
-    suspend fun readGlobalTimelineMarkers(): GlobalTimelineMarkers = database.withTransaction {
+    suspend fun readGlobalTimelineMarkers(): GlobalTimelineMarkers = database.withChatReadTransaction {
         val decisions = LinkedHashMap<Pair<String, String>, DecisionResolutionMarker>()
         sql.query("SELECT conversation_id,decision_id,status,option_id,option_label FROM user_decisions WHERE status IS NOT NULL ORDER BY resolved_seq",
             emptyArray()).use { c -> while (c.moveToNext()) decisions[c.getString(0) to c.getString(1)] = DecisionResolutionMarker(
@@ -330,7 +405,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     /** Reads pending `main_interrupt_request` rows across conversations, replacing `LocalRunStore.readPendingInterruptRequests()` (`LocalRunStore.java:2816-2819`). */
-    suspend fun pendingInterruptRequests(): List<PendingInterrupt> = database.withTransaction { pendingInterruptRequestsInternal() }
+    suspend fun pendingInterruptRequests(): List<PendingInterrupt> = database.withChatReadTransaction { pendingInterruptRequestsInternal() }
 
     private fun latestActiveCompaction(conversationId: String): Compaction? = sql.query(
         "SELECT c.* FROM compactions c JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +

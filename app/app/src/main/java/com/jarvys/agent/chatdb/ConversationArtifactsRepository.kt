@@ -1,6 +1,5 @@
 package com.jarvys.agent.chatdb
 
-import androidx.room.withTransaction
 import com.jarvys.agent.ChatAttachment
 import java.util.Locale
 import java.util.UUID
@@ -51,9 +50,18 @@ sealed interface ChatFileOwnership {
  */
 internal class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
     /** Stores one `delivered_file`; duplicate `(conversation_id,artifact_id)` content is idempotent, differing content conflicts. */
-    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
+    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = appendDeliveredArtifactInternal(input, allowUnknownChecksum = false)
+
+    /** Legacy delivered-file rows may omit a digest; empty string records unknown without inventing one. */
+    internal suspend fun appendDeliveredArtifactImported(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> =
+        appendDeliveredArtifactInternal(input, allowUnknownChecksum = true)
+
+    private suspend fun appendDeliveredArtifactInternal(
+        input: DeliveredArtifactInput,
+        allowUnknownChecksum: Boolean,
+    ): ChatDbResult<ConversationArtifact> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||
-            input.sha256.isBlank() || input.sizeBytes < 0L || input.kind.isBlank())
+            (!allowUnknownChecksum && input.sha256.isBlank()) || input.sizeBytes < 0L || input.kind.isBlank())
             return@transaction ChatDbResult.Invalid("delivered artifact metadata is required")
         ensureConversationExists(input.conversationId)
         val mime = normalizeMimeType(input.mimeType)
@@ -85,15 +93,22 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
      * `appendGeneratedImageFailure` (`LocalRunStore.java:appendGeneratedImageEvent`,
      * `LocalRunStore.java:appendGeneratedImageFailure`); image bytes stay on disk and `file_refs` records metadata.
      */
-    suspend fun appendGeneratedImage(input: GeneratedImageInput): ChatDbResult<GeneratedImage> = transaction {
+    suspend fun appendGeneratedImage(input: GeneratedImageInput): ChatDbResult<GeneratedImage> = appendGeneratedImageInternal(input, allowUnknownDigest = false)
+
+    private suspend fun appendGeneratedImageInternal(
+        input: GeneratedImageInput,
+        allowUnknownDigest: Boolean,
+    ): ChatDbResult<GeneratedImage> = transaction {
         if (input.conversationId.isBlank() || input.status.isBlank() || input.bytes?.let { it < 0L } == true)
             return@transaction ChatDbResult.Invalid("generated image fields are invalid")
-        if ((input.imagePath == null) != (input.sha256 == null) || (input.imagePath == null) != (input.bytes == null))
+        val hasCompleteFileMetadata = input.imagePath != null && input.sha256 != null && input.bytes != null
+        val hasPartialFileMetadata = (input.sha256 != null || input.bytes != null) && !hasCompleteFileMetadata
+        if (hasPartialFileMetadata || (!allowUnknownDigest && (input.imagePath == null) != hasCompleteFileMetadata))
             return@transaction ChatDbResult.Invalid("generated image path, digest, and byte count must be supplied together")
         ensureConversationExists(input.conversationId)
         val time = input.createdAtSeconds ?: nowSeconds()
-        val fileRef = if (input.imagePath == null) null else ensureFileRef(
-            input.imagePath, input.sha256!!, input.bytes!!, input.mimeType, (time * 1000.0).toLong(),
+        val fileRef = if (!hasCompleteFileMetadata) null else ensureFileRef(
+            input.imagePath!!, input.sha256!!, input.bytes!!, input.mimeType, (time * 1000.0).toLong(),
         )
         val seq = insertLedgerItem(input.conversationId, "generated_image", input.imagePath ?: "", time)
         sql.execSQL(
@@ -105,8 +120,12 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
         ChatDbResult.Success(readGeneratedImage(input.conversationId, seq)!!)
     }
 
+    /** Explicit import entry point; an empty SHA-256 stays empty to represent an unknown legacy digest. */
+    internal suspend fun appendGeneratedImageImported(input: GeneratedImageInput): ChatDbResult<GeneratedImage> =
+        appendGeneratedImageInternal(input, allowUnknownDigest = true)
+
     /** Indexed equivalent of `LocalRunStore.findChatFile` (`LocalRunStore.java:findChatFile`) for delivered and message-attachment ownership. */
-    suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = database.withTransaction {
+    suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = database.withChatReadTransaction {
         when (kind) {
             "delivered" -> readArtifact(conversationId, id)?.let { ChatFileOwnership.Delivered(it) }
             "attachment" -> sql.query(
@@ -130,14 +149,14 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     }
 
     /** Lists `delivered_file` artifacts in ledger order, backed by `LocalRunStore.findChatFile` ownership data and `idx_artifacts_seq`. */
-    suspend fun artifactsForConversation(conversationId: String): List<ConversationArtifact> = database.withTransaction {
+    suspend fun artifactsForConversation(conversationId: String): List<ConversationArtifact> = database.withChatReadTransaction {
         sql.query("SELECT artifact_id FROM artifacts WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId)).use { c ->
             buildList { while (c.moveToNext()) readArtifact(conversationId, c.getString(0))?.let(::add) }
         }
     }
 
     /** Indexed equivalent of `LocalRunStore.ownsGeneratedFile` (`LocalRunStore.java:ownsGeneratedFile`); failed or pathless generations are never owned images. */
-    suspend fun ownsGeneratedFile(conversationId: String, relativePath: String): Boolean = database.withTransaction {
+    suspend fun ownsGeneratedFile(conversationId: String, relativePath: String): Boolean = database.withChatReadTransaction {
         sql.query(
             "SELECT EXISTS(SELECT 1 FROM generated_images WHERE conversation_id=? AND image_path=? AND status='COMPLETED')",
             arrayOf(conversationId, relativePath),
@@ -145,13 +164,13 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     }
 
     /** Equivalent to `LocalRunStore.conversationHasAttachments` (`LocalRunStore.java:1645-1654`). */
-    suspend fun conversationHasAttachments(conversationId: String): Boolean = database.withTransaction {
+    suspend fun conversationHasAttachments(conversationId: String): Boolean = database.withChatReadTransaction {
         sql.query("SELECT EXISTS(SELECT 1 FROM message_attachments WHERE conversation_id=?)", arrayOf(conversationId))
             .use { it.moveToFirst(); it.getInt(0) != 0 }
     }
 
     /** Equivalent to `LocalRunStore.conversationHasPrivateImagesOrAttachments`; delivered files count with generated images. */
-    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean = database.withTransaction {
+    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean = database.withChatReadTransaction {
         sql.query(
             "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE conversation_id=? UNION ALL " +
                 "SELECT 1 FROM artifacts WHERE conversation_id=? UNION ALL " +
