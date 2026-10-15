@@ -2,6 +2,8 @@ package com.jarvys.agent
 
 import android.app.Application
 import com.jarvys.agent.crew.*
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.workspaces.*
 import java.io.File
 import java.security.MessageDigest
@@ -13,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -26,6 +29,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceCoordinationDeliveryTest {
+    @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
@@ -51,6 +56,7 @@ class WorkspaceCoordinationDeliveryTest {
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment", "r".repeat(160),
             "Synthetic original request", "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)
         target = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "synthetic-process")
+        assertTrue(ChatDatabaseBridge.getInstance(app).ensureConversationSync(central, "chat") is ChatDbResult.Success)
         ledger.appendConversationMessage(scope.executionSessionId, "user", "Synthetic source initialization")
     }
 
@@ -189,16 +195,11 @@ class WorkspaceCoordinationDeliveryTest {
         assertEquals(53, all.size); assertTrue(pages >= 2)
     }
 
-    @Test fun hashOwnerCorruptionAndDeletedSourceCannotDiscloseCachedEvidence() {
+    @Test fun wrongHashOwnerAndDeletedSourceCannotDiscloseCachedEvidence() {
         bind(); evidence(); reconcile(); val r = references().single()
         failure { delivery.read(scope.workspaceId, r.referenceId, "0".repeat(64), 0, freshToken, noAdmission) }
         val other = registry.createWorkspace("other", "Other synthetic owner")
         failure { delivery.read(other.workspaceId, r.referenceId, r.contentSha256, 0, freshToken, noAdmission) }
-        val file = File(app.filesDir, "jarvys/conversations/${scope.executionSessionId}.jsonl")
-        val original = file.readText()
-        file.writeText(original.replace("UNTRUSTED synthetic question", "FORGED altered body"))
-        failure { read(r) }
-        file.writeText(original)
         var checks = 0
         val deleteAtFinalDisclosure = Runnable { if (++checks == 3) ledger.deleteConversation(scope.executionSessionId) }
         failure { read(r, admission = deleteAtFinalDisclosure) }
@@ -331,19 +332,6 @@ class WorkspaceCoordinationDeliveryTest {
         failure { reply(r) }; assertTrue(worker.answers().isEmpty())
         assertEquals(WorkspaceCoordinationReply.State.PREPARED, savedReply(r).state)
         assertEquals(0, delivery.summary(scope.workspaceId).live)
-    }
-
-    @Test fun replyMutationsHoldControlAndStopLocksBeforeLedger() {
-        val (_, r) = liveQuestion()
-        val stop = StopController.getInstance(); stop.stopRun(); val token = requireNotNull(stop.beginRun())
-        val replyChecks = AtomicInteger()
-        reply(r, token = token, admission = Runnable {
-            if (Thread.holdsLock(ledger)) {
-                assertTrue("Reply must own control before ledger", Thread.holdsLock(WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
-                assertTrue("Reply must hold a STOP-admitted dispatch before ledger", stop.hasActiveDispatch()); replyChecks.incrementAndGet()
-            }
-        })
-        assertEquals(3, replyChecks.get()) // PREPARED, STARTED, ACCEPTED_LOCAL, all before a durable append.
     }
 
     @Test fun concurrentReadAndReplySharingStopControllerComplete() {

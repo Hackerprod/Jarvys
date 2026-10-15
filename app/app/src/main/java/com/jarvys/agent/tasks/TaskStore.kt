@@ -280,7 +280,9 @@ class TaskStore(private val ledger: File) {
         return synchronized(lock) {
             val parent = canonical.parentFile ?: error("Task ledger has no parent directory")
             check(parent.isDirectory || parent.mkdirs()) { "Could not create task ledger directory" }
-            RandomAccessFile(canonical, "rw").use { file -> file.channel.lock().use { _: FileLock -> block() } }
+            // Keep the OS lock off the ledger so Windows permits the separate read and append handles.
+            val lockFile = File(parent, canonical.name + ".lock")
+            RandomAccessFile(lockFile, "rw").use { file -> file.channel.lock().use { _: FileLock -> block() } }
         }
     }
 

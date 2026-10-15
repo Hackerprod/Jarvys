@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -34,6 +35,7 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
 class MainActivityDownloadFlowTest {
+    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val secretSingleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
     private var controller: ActivityController<MainActivity>? = null
@@ -66,6 +68,9 @@ class MainActivityDownloadFlowTest {
         assertEquals(1, provider.inserts)
         assertEquals(1, provider.publishes)
         assertArrayEquals(source.bytes, provider.file(provider.rows.keys.single()).readBytes())
+        val receiptKey = DownloadStore.key(source.session, "generated:${source.event.generatedImagePath}")
+        val receipt = requireNotNull(DownloadStore.readJournal(context, receiptKey))
+        assertEquals("saved", receipt.stage)
         assertNull("Save neither opens SAF nor launches a viewer/installer", Shadows.shadowOf(activity).nextStartedActivity)
         assertNull("API 29+ must not ask for storage permission", Shadows.shadowOf(activity).lastRequestedPermission)
         assertEquals(source.session, vm.notice.value?.request?.sessionId)
@@ -83,7 +88,10 @@ class MainActivityDownloadFlowTest {
 
         // A later tap reuses the durable completed export, including after the completion was dismissed.
         save(activity, source)
-        await { vm.transfers.value[source.request.key]?.result?.status == DownloadStore.Status.ALREADY_SAVED }
+        await { vm.transfers.value[source.request.key]?.result?.status in
+            setOf(DownloadStore.Status.ALREADY_SAVED, DownloadStore.Status.ERROR) }
+        assertEquals("A repeat tap must reuse the saved MediaStore row; error=${vm.transfers.value[source.request.key]?.result?.error}",
+            DownloadStore.Status.ALREADY_SAVED, vm.transfers.value[source.request.key]?.result?.status)
         assertEquals(1, provider.inserts)
         assertEquals(saved.uri, vm.transfers.value[source.request.key]?.result?.uri)
     }
@@ -106,7 +114,10 @@ class MainActivityDownloadFlowTest {
         assertEquals(0, send.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         assertNotNull(send.clipData)
         assertEquals(0, provider.inserts)
-        assertArrayEquals(source.bytes, context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+        val sharedBytes = chatTestStore.onDatabaseWorker {
+            context.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+        }
+        assertArrayEquals(source.bytes, sharedBytes)
     }
 
     @Test fun switchingChatAndRotationDuringCopyKeepsSourceAndSelectedConversation() {
@@ -205,7 +216,7 @@ class MainActivityDownloadFlowTest {
         val activity = start(source.session)
         val vm = ViewModelProvider(activity)[ChatFileTransfers::class.java]
         // A callback retained from an old card must lose its authority after chat deletion.
-        LocalRunStore(context).deleteConversation(source.session)
+        chatTestStore.onDatabaseWorker { LocalRunStore(context).deleteConversation(source.session) }
         save(activity, source)
         await { vm.notice.value?.failure != null }
         assertEquals(ChatFileTransfer.Failure.UNAVAILABLE, vm.notice.value!!.failure)
@@ -239,9 +250,12 @@ class MainActivityDownloadFlowTest {
         val bytes = ByteArrayOutputStream().also { image.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
         image.recycle()
         val path = GeneratedImageStore(context).save(session, UUID.randomUUID().toString(), bytes)
-        val store = LocalRunStore(context)
-        store.appendGeneratedImageEvent(session, path, "Activity download fixture", null, "32x24", "image/png")
-        return GeneratedFixture(session, store.readConversationTimeline(session).single { it.kind == "generated_image" }, bytes)
+        val event = chatTestStore.onDatabaseWorker {
+            val store = LocalRunStore(context)
+            store.appendGeneratedImageEvent(session, path, "Activity download fixture", null, "32x24", "image/png")
+            store.readConversationTimeline(session).single { it.kind == "generated_image" }
+        }
+        return GeneratedFixture(session, event, bytes)
     }
 
     private fun await(condition: () -> Boolean) {

@@ -33,6 +33,8 @@ import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.UUID;
@@ -452,9 +454,35 @@ public final class DownloadStore {
             output.flush();
             output.getFD().sync();
             file.finishWrite(output);
+            output = null;
+            promotePendingJournal(file.getBaseFile());
         } catch (Exception error) {
             if (output != null) file.failWrite(output);
             throw error;
+        }
+    }
+
+    private static void promotePendingJournal(File base) throws IOException {
+        File pending = new File(base.getPath() + ".new");
+        if (!pending.isFile()) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                Files.move(pending.toPath(), base.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } else {
+                File backup = new File(base.getPath() + ".journal-backup");
+                if (backup.exists() && !backup.delete()) throw new IOException("Could not clear journal backup");
+                boolean hadBase = base.exists();
+                if (hadBase && !base.renameTo(backup)) throw new IOException("Could not preserve journal");
+                if (!pending.renameTo(base)) {
+                    if (hadBase) backup.renameTo(base);
+                    throw new IOException("Could not promote journal");
+                }
+                if (backup.exists() && !backup.delete()) throw new IOException("Could not remove journal backup");
+            }
+        } catch (IOException error) {
+            throw error;
+        } catch (Exception error) {
+            throw new IOException("Could not promote journal", error);
         }
     }
 

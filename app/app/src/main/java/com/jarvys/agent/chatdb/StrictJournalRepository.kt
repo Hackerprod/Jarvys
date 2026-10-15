@@ -977,6 +977,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     }
 
     private fun requireExactCoordinationSource(reference: CoordinationReference) {
+        requireExecutionConversation(reference.executionSessionId)
         val source = findCoordinationRef(reference.executionSessionId, reference.referenceId, false)
         val notice = findCoordinationRef(reference.ownerCentralSessionId, reference.referenceId, true)
         check(source != null && notice != null && source.samePayload(reference) && notice.samePayload(reference)) {

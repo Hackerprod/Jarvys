@@ -82,34 +82,26 @@ class ProactiveEventStore(private val ledger: File) {
     }
 
     /** Purges current pending payloads on opt-out while retaining processed/discarded audit entries. */
-    fun clearPending(): Int {
-        val canonical = ledger.canonicalFile
-        val lock = LOCKS.computeIfAbsent(canonical.path) { Any() }
-        return synchronized(lock) {
-            if (!canonical.isFile) return@synchronized 0
-            RandomAccessFile(canonical, "rw").use { file ->
-                file.channel.lock().use {
-                    val latest = readLatestLocked()
-                    val removed = latest.values.count { it.state == ProactiveEvent.PENDING }
-                    val retained = latest.values.filter { it.state != ProactiveEvent.PENDING }
-                    val scrubbed = retained.map { event ->
-                        event.copy(
-                            appLabel = null,
-                            sender = null,
-                            title = null,
-                            body = null,
-                            sourceInstanceKey = null,
-                            conversationThread = null,
-                        )
-                    }
-                    val needsRewrite = removed > 0 ||
-                        retained.zip(scrubbed).any { (before, after) -> before != after } ||
-                        containsInvalidRowsLocked()
-                    if (needsRewrite) rewriteLocked(scrubbed)
-                    removed
-                }
-            }
+    fun clearPending(): Int = withFileLock {
+        if (!ledger.isFile) return@withFileLock 0
+        val latest = readLatestLocked()
+        val removed = latest.values.count { it.state == ProactiveEvent.PENDING }
+        val retained = latest.values.filter { it.state != ProactiveEvent.PENDING }
+        val scrubbed = retained.map { event ->
+            event.copy(
+                appLabel = null,
+                sender = null,
+                title = null,
+                body = null,
+                sourceInstanceKey = null,
+                conversationThread = null,
+            )
         }
+        val needsRewrite = removed > 0 ||
+            retained.zip(scrubbed).any { (before, after) -> before != after } ||
+            containsInvalidRowsLocked()
+        if (needsRewrite) rewriteLocked(scrubbed)
+        removed
     }
 
     private fun readLatestLocked(): LinkedHashMap<String, ProactiveEvent> {
@@ -190,7 +182,10 @@ class ProactiveEventStore(private val ledger: File) {
         val lock = LOCKS.computeIfAbsent(canonical.path) { Any() }
         return synchronized(lock) {
             canonical.parentFile?.let { parent -> check(parent.isDirectory || parent.mkdirs()) { "Could not create proactive event directory" } }
-            RandomAccessFile(canonical, "rw").use { file ->
+            // Windows rejects separate read/append handles while the ledger itself is locked.
+            // Keep cross-process coordination in a stable sibling file instead.
+            val lockFile = File(canonical.parentFile, canonical.name + ".lock")
+            RandomAccessFile(lockFile, "rw").use { file ->
                 val channel: FileChannel = file.channel
                 channel.lock().use { _: FileLock -> block() }
             }

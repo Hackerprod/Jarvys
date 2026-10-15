@@ -62,7 +62,12 @@ private fun ScopedPreviewScreen(projectId: String, sessionId: String?, modifier:
                     requireNotNull(sessionId)
                     val artifacts = DeliveredArtifactStore(context)
                     val descriptor = artifacts.resolvePreview(sessionId, projectId)
-                    val owner = LocalRunStore(context).findChatFile(sessionId, "delivered", descriptor.artifactId)
+                    val owner = try {
+                        LocalRunStore(context).findChatFile(sessionId, "delivered", descriptor.artifactId)
+                    } catch (failure: RuntimeException) {
+                        AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+                        throw failure
+                    }
                         ?: error("Preview is not owned by this conversation")
                     require(owner.id == descriptor.artifactId)
                     WorkspacePreviewContent(context.applicationContext, null, sessionId, descriptor)

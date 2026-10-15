@@ -74,7 +74,13 @@ internal object HtmlThumbnailRenderer {
                     } else {
                         val content = withContext(Dispatchers.IO) {
                             val checked = DeliveredArtifactStore(context).resolvePreview(session, descriptor.token)
-                            check(LocalRunStore(context).findChatFile(session, "delivered", checked.artifactId) != null)
+                            val owner = try {
+                                LocalRunStore(context).findChatFile(session, "delivered", checked.artifactId)
+                            } catch (failure: RuntimeException) {
+                                AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+                                throw failure
+                            }
+                            check(owner != null)
                             WorkspacePreviewContent(context.applicationContext, null, session, checked, thumbnail = true)
                         }
                         bitmap = withContext(Dispatchers.Main.immediate) {

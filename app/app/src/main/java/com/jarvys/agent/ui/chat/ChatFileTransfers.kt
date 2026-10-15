@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.jarvys.agent.AgentErrorReporter
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AttachmentStore
 import com.jarvys.agent.CancellationToken
@@ -47,8 +48,13 @@ internal data class ChatFileRequest(
     /** Rechecked at action time and stream-open time; stale cards cannot export a deleted chat. */
     fun requireOwnership(context: Context) {
         val store = LocalRunStore(context)
-        val owned = if (kind == "generated") store.ownsGeneratedFile(sessionId, artifactId)
+        val owned = try {
+            if (kind == "generated") store.ownsGeneratedFile(sessionId, artifactId)
             else attachment != null && attachment == store.findChatFile(sessionId, kind, artifactId)
+        } catch (failure: RuntimeException) {
+            AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+            throw failure
+        }
         check(owned) { "This file is no longer attached to the conversation" }
     }
 
@@ -125,7 +131,9 @@ internal class ChatFileTransfers(application: Application) : AndroidViewModel(ap
                         mutableNotice.value = completed
                     }
                     DownloadStore.Status.CANCELLED -> update(ChatFileTransfer(request))
-                    else -> fail(request, ChatFileTransfer.Failure.DOWNLOAD)
+                    else -> {
+                        fail(request, ChatFileTransfer.Failure.DOWNLOAD, exported)
+                    }
                 }
             }, onFailure = { fail(request, ChatFileTransfer.Failure.UNAVAILABLE) })
         }
@@ -187,8 +195,9 @@ internal class ChatFileTransfers(application: Application) : AndroidViewModel(ap
     fun dismissNotice() { mutableNotice.value = null }
     fun openFailed(request: ChatFileRequest) { fail(request, ChatFileTransfer.Failure.OPEN) }
 
-    private fun fail(request: ChatFileRequest, failure: ChatFileTransfer.Failure) {
-        val failed = ChatFileTransfer(request, failure = failure)
+    private fun fail(request: ChatFileRequest, failure: ChatFileTransfer.Failure,
+                     result: DownloadStore.Result? = null) {
+        val failed = ChatFileTransfer(request, result = result, failure = failure)
         update(failed)
         mutableNotice.value = failed
     }

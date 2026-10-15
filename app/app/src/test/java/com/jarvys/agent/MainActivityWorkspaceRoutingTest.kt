@@ -9,6 +9,7 @@ import androidx.navigation.NavHostController
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.workspaces.WORKSPACE_PAGE_SIZE
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -39,7 +40,9 @@ import org.robolectric.annotation.GraphicsMode
 class MainActivityWorkspaceRoutingTest {
     // Install Compose's clock before any real Activity is launched. Infinite visual animations stay
     // present, while tests advance finite frames instead of draining Robolectric's Choreographer.
-    @get:Rule val compose = createEmptyComposeRule()
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    private val compose = createEmptyComposeRule()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(compose)
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val store: LocalRunStore get() = LocalRunStore(context)
@@ -65,9 +68,11 @@ class MainActivityWorkspaceRoutingTest {
         AgentRunUiState.resetSession(legacy)
         attachment = AttachmentStore(context).copyFromStream(legacy, "kept.txt", "text/plain",
             ChatAttachment.Kind.FILE, ByteArrayInputStream(bytes))
-        val question = store.appendConversationMessage(legacy, "user", "Independent question", listOf(attachment))
-        store.appendConversationMessage(legacy, "assistant", "Independent answer", 0L, "", question, "COMPLETED")
-        store.renameConversation(legacy, "Independent title")
+        db {
+            val question = store.appendConversationMessage(legacy, "user", "Independent question", listOf(attachment))
+            store.appendConversationMessage(legacy, "assistant", "Independent answer", 0L, "", question, "COMPLETED")
+            store.renameConversation(legacy, "Independent title")
+        }
         context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE).edit()
             .putString("active_session_id", legacy).commit()
     }
@@ -99,8 +104,8 @@ class MainActivityWorkspaceRoutingTest {
         awaitCentralEmpty()
         assertEquals(original, transcript(legacy))
         assertArrayEquals(bytes, AttachmentStore(context).resolve(legacy, attachment).readBytes())
-        assertFalse(store.readConversationMetadata(legacy).deleted)
-        assertFalse(store.readConversationMetadata(legacy).archived)
+        assertFalse(db { store.readConversationMetadata(legacy).deleted })
+        assertFalse(db { store.readConversationMetadata(legacy).archived })
         WorkspaceRegistry(context).use { assertTrue("Selecting central cannot create a worker workspace", it.listWorkspaces().isEmpty()) }
     }
 
@@ -113,14 +118,14 @@ class MainActivityWorkspaceRoutingTest {
             arrayOf(legacy, ConversationAction.DELETE, ""))
         await { selected() == WorkspaceIdentity.CENTRAL_SESSION &&
             AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION &&
-            store.readConversationMetadata(legacy).deleted }
+            db { store.readConversationMetadata(legacy).deleted } }
         awaitCentralEmpty()
         assertEquals(AppNavigationBackPolicy.CHAT_ROOT, navigation().currentDestination?.route)
-        assertTrue(store.readConversationTimeline(legacy).isEmpty())
+        assertTrue(db { store.readConversationTimeline(legacy).isEmpty() })
     }
 
     @Test fun warmWorkerIntentRedirectsToCentralWithoutOpeningTheWorkerAsAChat() {
-        store.appendConversationMessage(execution, "user", "Worker-only ledger fixture")
+        db { store.appendConversationMessage(execution, "user", "Worker-only ledger fixture") }
         val workerBefore = transcript(execution)
         val legacyBefore = transcript(legacy)
         start()
@@ -156,12 +161,14 @@ class MainActivityWorkspaceRoutingTest {
         await { AgentRunUiState.state.value.sessionId == legacy && AgentRunUiState.state.value.events.isNotEmpty() }
         val generation = 501L
         AgentRunUiState.beginServiceRun(legacy, "Synthetic live owner", emptyList(), false, generation)
+        assertEquals("Synthetic live run owns its source before navigation", legacy,
+            AgentRunUiState.state.value.interactiveOwnerSessionId)
         invoke("openCentralWorkspaceChat")
-        awaitCentralEmpty()
+        awaitCentralEmpty(expectedInteractiveOwnerSessionId = legacy)
         assertEquals(legacy, AgentRunUiState.state.value.interactiveOwnerSessionId)
         assertFalse(AgentRunUiState.state.value.running)
         assertNull(mainJarvysMascotMode(AgentRunUiState.state.value, WorkspaceIdentity.CENTRAL_SESSION, true))
-        AgentRunUiState.restoreSession(legacy, store.readConversationTimeline(legacy))
+        AgentRunUiState.restoreSession(legacy, db { store.readConversationTimeline(legacy) })
         assertTrue(AgentRunUiState.state.value.running)
         assertEquals(legacy, AgentRunUiState.state.value.interactiveOwnerSessionId)
         AgentRunUiState.stopPendingGeneration(legacy, generation)
@@ -189,12 +196,14 @@ class MainActivityWorkspaceRoutingTest {
         val workspace = WorkspaceRegistry(context).use {
             it.createWorkspace("navigation-detail", "Recorded navigation workspace")
         }
-        val workerMessageId = store.appendConversationMessage(workspace.executionSessionId, "user",
-            "Worker transcript question")
-        store.appendConversationToolPresentation(workspace.executionSessionId, workerMessageId,
-            "Workspace test tool", "tool_result", "workspace-test-call", "Tool output for this workspace", null, "")
-        store.appendConversationMessage(workspace.executionSessionId, "assistant", "Worker transcript answer")
-        val workerToolEvent = store.readConversationTimeline(workspace.executionSessionId).single { it.kind == "tool" }
+        val workerToolEvent = db {
+            val workerMessageId = store.appendConversationMessage(workspace.executionSessionId, "user",
+                "Worker transcript question")
+            store.appendConversationToolPresentation(workspace.executionSessionId, workerMessageId,
+                "Workspace test tool", "tool_result", "workspace-test-call", "Tool output for this workspace", null, "")
+            store.appendConversationMessage(workspace.executionSessionId, "assistant", "Worker transcript answer")
+            store.readConversationTimeline(workspace.executionSessionId).single { it.kind == "tool" }
+        }
         val original = transcript(legacy)
         start()
         await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
@@ -244,9 +253,15 @@ class MainActivityWorkspaceRoutingTest {
         awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
         await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId
             && compose.onAllNodesWithTag("workspace-chat-timeline").fetchSemanticsNodes().isNotEmpty() }
+        await {
+            val title = compose.onAllNodesWithText(workspace.title, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
+            title &&
+                compose.onAllNodesWithText("Worker transcript question").fetchSemanticsNodes().isNotEmpty()
+        }
         settleNativeFrame()
         compose.onNodeWithTag("jarvys-back").assertIsDisplayed()
-        compose.onNodeWithTag("jarvys-topbar-title").assertTextContains(workspace.title)
+        compose.onNodeWithText(workspace.title, useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
         compose.onNodeWithText("Worker transcript question").assertIsDisplayed()
         compose.onNodeWithText("Worker transcript answer").assertIsDisplayed()
@@ -303,8 +318,7 @@ class MainActivityWorkspaceRoutingTest {
         val firstId = rows.first().workspaceId
         val lastId = rows.last().workspaceId
         await { compose.onAllNodesWithTag("workspace-list-row-$firstId").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
-        settleNativeFrame()
+        scrollWorkspaceListUntil("workspace-next-page")
         tapTag("workspace-next-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
         settleNativeFrame()
@@ -314,11 +328,9 @@ class MainActivityWorkspaceRoutingTest {
         tapTag("workspace-previous-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
             compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
-        settleNativeFrame()
+        scrollWorkspaceListUntil("workspace-list-row-$firstId", towardTop = true)
         compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
-        settleNativeFrame()
+        scrollWorkspaceListUntil("workspace-next-page")
         tapTag("workspace-next-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
         settleNativeFrame()
@@ -343,6 +355,21 @@ class MainActivityWorkspaceRoutingTest {
     private fun awaitRoute(route: String) {
         await { navigation().currentDestination?.route == route }
         settleNativeFrame()
+    }
+
+    private fun scrollWorkspaceListUntil(tag: String, towardTop: Boolean = false) {
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+        while (System.nanoTime() < end) {
+            if (compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()) return
+            compose.onNodeWithTag("workspace-list").performTouchInput {
+                if (towardTop) swipeDown() else swipeUp()
+            }
+            compose.mainClock.advanceTimeBy(300)
+            awaitReactionDrawIdle(compose, activity)
+            Thread.sleep(10)
+        }
+        assertTrue("Workspace catalog control did not become visible: $tag",
+            compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty())
     }
 
     private fun openDrawer() {
@@ -383,13 +410,18 @@ class MainActivityWorkspaceRoutingTest {
     private fun selected(): String? = context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
         .getString("active_session_id", null)
 
-    private fun transcript(session: String): List<Pair<String, String>> = store.readConversationTimeline(session)
-        .map { it.messageId to "${it.kind}:${it.text}" }
+    private fun transcript(session: String): List<Pair<String, String>> = db {
+        store.readConversationTimeline(session).map { it.messageId to "${it.kind}:${it.text}" }
+    }
 
-    private fun awaitCentralEmpty() = await {
+    private fun <T> db(operation: () -> T): T = chatTestStore.onDatabaseWorker(operation)
+
+    private fun awaitCentralEmpty(expectedInteractiveOwnerSessionId: String? = null) = await {
         selected() == WorkspaceIdentity.CENTRAL_SESSION &&
             AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION &&
-            AgentRunUiState.state.value.events.isEmpty()
+            AgentRunUiState.state.value.events.isEmpty() &&
+            (expectedInteractiveOwnerSessionId == null ||
+                AgentRunUiState.state.value.interactiveOwnerSessionId == expectedInteractiveOwnerSessionId)
     }
 
     private fun await(condition: () -> Boolean) {

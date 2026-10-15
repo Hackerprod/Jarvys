@@ -9,6 +9,7 @@ import java.util.UUID
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -22,6 +23,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceInputIncorporationDeliveryTest {
+    @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore

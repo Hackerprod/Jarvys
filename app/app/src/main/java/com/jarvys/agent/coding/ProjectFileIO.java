@@ -321,6 +321,15 @@ final class ProjectFileIO {
               file.toPath(),
               (Class<BasicFileAttributes>) BasicFileAttributes.class,
               LinkOption.NOFOLLOW_LINKS);
+      if (a.fileKey() == null) {
+        // Some host filesystems do not expose a NIO file key. Android's lstat still supplies
+        // device/inode identity, which keeps the scope check fail-closed without path fallback.
+        try {
+          return fromStat(Os.lstat(file.getPath()));
+        } catch (ErrnoException error) {
+          throw new IOException(error.getMessage(), error);
+        }
+      }
       return new Attributes(
           a.fileKey(), a.isDirectory(), a.isRegularFile(), a.isSymbolicLink(), a.size());
     }

@@ -737,7 +737,7 @@ object AgentRunUiState {
         _state.value = AgentRunUiSnapshot(
             sessionId = sessionId,
             running = ownedRunActive && ownedSessionId == sessionId,
-            interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null,
+            interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId),
             goal = events.lastOrNull { it.kind == "user" }?.text.orEmpty(),
             events = events,
             reflecting = current.reflecting,

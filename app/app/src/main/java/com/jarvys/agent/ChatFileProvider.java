@@ -31,12 +31,23 @@ public final class ChatFileProvider extends ContentProvider {
         String kind = parts.get(0), session = parts.get(1), id = parts.get(2);
         LocalRunStore conversations = new LocalRunStore(context);
         if ("generated".equals(kind)) {
-            if (!conversations.ownsGeneratedFile(session, id)) throw new IllegalArgumentException("Image does not belong to this chat");
+            boolean owned;
+            try { owned = conversations.ownsGeneratedFile(session, id); }
+            catch (RuntimeException failure) {
+                AgentErrorReporter.reportChatDatabaseFailure(context.getApplicationContext(), failure);
+                throw failure;
+            }
+            if (!owned) throw new IllegalArgumentException("Image does not belong to this chat");
             File file = new GeneratedImageStore(context).resolve(session, id);
             return new Entry(file, id, "image/png", file.length());
         }
         if (!kind.equals("delivered") && !kind.equals("attachment")) throw new IllegalArgumentException("Unknown attachment kind");
-        ChatAttachment attachment = conversations.findChatFile(session, kind, id);
+        ChatAttachment attachment;
+        try { attachment = conversations.findChatFile(session, kind, id); }
+        catch (RuntimeException failure) {
+            AgentErrorReporter.reportChatDatabaseFailure(context.getApplicationContext(), failure);
+            throw failure;
+        }
         if (attachment == null) throw new IllegalArgumentException("File does not belong to this chat");
         File file = kind.equals("delivered") ? new DeliveredArtifactStore(context).resolve(session, attachment)
                 : new AttachmentStore(context).resolve(session, attachment);

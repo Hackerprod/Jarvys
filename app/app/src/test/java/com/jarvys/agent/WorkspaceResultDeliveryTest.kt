@@ -7,6 +7,7 @@ import com.jarvys.agent.workspaces.*
 import java.util.UUID
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -19,6 +20,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceResultDeliveryTest {
+    @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+
     private lateinit var app: Application
     private lateinit var registry: WorkspaceRegistry
     private lateinit var ledger: LocalRunStore
@@ -227,11 +230,11 @@ class WorkspaceResultDeliveryTest {
         bind()
         val stopped = CrewResultEvidence.create(scope.executionSessionId, target.missionId, "bot",
             UUID.randomUUID().toString(), "STOPPED", "Synthetic interrupted result", 1234L)
+        ledger.appendCrewResultEvidence(stopped, noAdmission)
         val key = "synthetic-interrupted-" + UUID.randomUUID()
         val interrupted = WorkspaceResultDelivery.Companion.PendingReceipt(CancellationToken.cancellable())
         Thread.currentThread().interrupt()
         try {
-            ledger.appendCrewResultEvidence(stopped, noAdmission)
             assertFalse(WorkspaceResultDelivery.claimPending(key, interrupted))
             assertTrue(Thread.currentThread().isInterrupted)
         } finally { Thread.interrupted() }

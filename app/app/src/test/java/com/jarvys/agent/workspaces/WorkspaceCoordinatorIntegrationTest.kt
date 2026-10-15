@@ -2,6 +2,7 @@ package com.jarvys.agent.workspaces
 
 import android.app.Application
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.ChatTestStore
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreToolRegistry
@@ -28,6 +29,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -44,6 +46,8 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [34], application = Application::class)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class WorkspaceCoordinatorIntegrationTest {
+    @Rule @JvmField val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
+
     private lateinit var context: Application
     private lateinit var coordinator: WorkspaceCoordinator
     private lateinit var managerFactory: (String) -> CrewManager

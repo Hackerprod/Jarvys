@@ -110,7 +110,11 @@ class ProactiveDecisionAuditStore(private val ledger: File) {
         val lock = LOCKS.computeIfAbsent(canonical.path) { Any() }
         return synchronized(lock) {
             canonical.parentFile?.let { parent -> check(parent.isDirectory || parent.mkdirs()) }
-            RandomAccessFile(canonical, "rw").use { file -> file.channel.lock().use { _: FileLock -> block() } }
+            // Windows enforces byte-range locks across separate handles. Locking the ledger itself
+            // makes the read/append/atomic-rewrite handles fail while this lock is held, so keep
+            // process coordination in a stable sibling file instead.
+            val lockFile = File(canonical.parentFile, canonical.name + ".lock")
+            RandomAccessFile(lockFile, "rw").use { file -> file.channel.lock().use { _: FileLock -> block() } }
         }
     }
 

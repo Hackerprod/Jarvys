@@ -3,6 +3,7 @@ package com.jarvys.agent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -16,6 +17,7 @@ import com.jarvys.agent.ui.chat.ChatFileRequest
 import com.jarvys.agent.ui.chat.ChatFileTransfers
 import java.io.ByteArrayOutputStream
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -50,10 +52,12 @@ class MainActivityImageDownloadGestureTest {
             bytes = ByteArrayOutputStream().also { image.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
             image.recycle()
             val path = GeneratedImageStore(context).save(session, UUID.randomUUID().toString(), bytes)
-            val store = LocalRunStore(context)
-            store.appendConversationMessage(session, "user", "Create a blue image for my notes")
-            store.appendGeneratedImageEvent(session, path, "Blue image", null, "64x48", "image/png")
-            event = store.readConversationTimeline(session).single { it.kind == "generated_image" }
+            event = chatTestStore.onDatabaseWorker {
+                val store = LocalRunStore(context)
+                store.appendConversationMessage(session, "user", "Create a blue image for my notes")
+                store.appendGeneratedImageEvent(session, path, "Blue image", null, "64x48", "image/png")
+                store.readConversationTimeline(session).single { it.kind == "generated_image" }
+            }
             context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE).edit().putString("active_session_id", session).commit()
         }
         override fun after() {
@@ -61,7 +65,8 @@ class MainActivityImageDownloadGestureTest {
             WorkManagerTestCleanup.close(context)
         }
     }
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(fixtures).around(compose)
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(fixtures).around(compose)
 
     @Test fun realImageViewerSaveGestureExportsAndOpenIsOnlyLaunchedAfterTheOpenGesture() {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("generated-image-open-${event.id}").fetchSemanticsNodes().isNotEmpty() }
@@ -73,8 +78,7 @@ class MainActivityImageDownloadGestureTest {
         val vm = ViewModelProvider(compose.activity)[ChatFileTransfers::class.java]
         val request = requireNotNull(ChatFileRequest.generated(session, event))
         assertEquals(context.filesDir, vm.getApplication<android.app.Application>().filesDir)
-        compose.runOnIdle { println("UX16_SAVE_GESTURE transfers=${vm.transfers.value}; request=$request; state=${AgentRunUiState.state.value.sessionId}") }
-        try { compose.waitUntil(10_000) { vm.transfers.value[request.key]?.saved == true } }
+        try { await { vm.transfers.value[request.key]?.saved == true } }
         catch (failure: Throwable) {
             throw AssertionError("Gesture export did not finish: ${vm.transfers.value}; notice=${vm.notice.value}; state=${AgentRunUiState.state.value.sessionId}", failure)
         }
@@ -91,5 +95,15 @@ class MainActivityImageDownloadGestureTest {
         assertEquals(0, opened.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         assertTrue(opened.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
         assertEquals(session, context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE).getString("active_session_id", null))
+    }
+
+    private fun await(condition: () -> Boolean) {
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+        do {
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
+            if (condition()) return
+            Thread.sleep(10)
+        } while (System.nanoTime() < end)
+        assertTrue("Image gesture download did not settle: ${ViewModelProvider(compose.activity)[ChatFileTransfers::class.java].transfers.value}", condition())
     }
 }

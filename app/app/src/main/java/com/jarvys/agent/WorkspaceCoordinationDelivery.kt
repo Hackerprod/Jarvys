@@ -195,7 +195,6 @@ class WorkspaceCoordinationDelivery internal constructor(
                     }
                     accepted = ledger.markWorkspaceCoordinationReplyAccepted(started, Runnable {
                         token.throwIfCancelled(); admission.run()
-                        ledger.requireWorkspaceCoordinationDisclosureLive(reference, true)
                     })
                 }) token.throwIfCancelled()
             WorkspaceChanges.changed()

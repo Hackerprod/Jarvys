@@ -234,6 +234,8 @@ import java.nio.charset.StandardCharsets
 import java.io.File
 import java.io.FileInputStream
 
+private val workspaceProjectionDispatcher = Dispatchers.IO.limitedParallelism(1)
+
 private object Routes {
     const val CHAT = AppNavigationBackPolicy.CHAT_ROOT
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
@@ -546,17 +548,13 @@ class MainActivity : ComponentActivity() {
                     onDeleteAssistant = ::deleteAssistantMessage,
                     onProactiveSuggestedReply = { messageId, index ->
                         lifecycleScope.launch {
-                            val submitted = try {
-                                withContext(Dispatchers.IO) {
+                            val submittedResult = withContext(Dispatchers.IO) {
+                                chatDatabaseResult {
                                     com.jarvys.agent.proactive.ProactiveInteractionDispatcher
                                         .submitSuggestedReply(this@MainActivity, messageId, index)
                                 }
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (failure: RuntimeException) {
-                                reportChatDatabaseFailure(failure)
-                                false
                             }
+                            val submitted = submittedResult.getOrDefault(false)
                             if (!submitted) toast(getString(R.string.proactive_suggested_reply_unavailable))
                         }
                     },
@@ -937,10 +935,9 @@ class MainActivity : ComponentActivity() {
 
     private fun advanceAllReflectionCheckpoints(reason: String) {
         historyExecutor.execute {
-            runCatching {
-                val store = LocalRunStore(this)
-                store.listConversationSessionIds().forEach { store.advanceReflectionCheckpoint(it, reason) }
-            }
+            val store = LocalRunStore(this)
+            val sessions = chatDatabaseResult { store.listConversationSessionIds() }.getOrElse { return@execute }
+            sessions.forEach { sessionId -> chatDatabaseResult { store.advanceReflectionCheckpoint(sessionId, reason) } }
         }
     }
 
@@ -974,8 +971,7 @@ class MainActivity : ComponentActivity() {
             MemoryReflectionRuntime.cancel(conversationSessionId)
             val sessionId = conversationSessionId
             lifecycleScope.launch(Dispatchers.IO) {
-                runCatching { localRunStore.advanceReflectionCheckpoint(sessionId, "chat without memory") }
-                    .onFailure { android.util.Log.w("JarvysMemory", "Could not advance reflection checkpoint", it) }
+                chatDatabaseResult { localRunStore.advanceReflectionCheckpoint(sessionId, "chat without memory") }
             }
         }
     }
@@ -985,10 +981,9 @@ class MainActivity : ComponentActivity() {
         if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting) return
         val sessionId = conversationSessionId
         lifecycleScope.launch {
-            val countResult = runCatching {
-                withContext(Dispatchers.IO) { localRunStore.conversationMessageCount(sessionId) }
+            val countResult = withContext(Dispatchers.IO) {
+                chatDatabaseResult { localRunStore.conversationMessageCount(sessionId) }
             }
-            countResult.exceptionOrNull()?.let(::reportChatDatabaseFailure)
             val messageCount = countResult.getOrNull() ?: return@launch
             if (conversationSessionId != sessionId) return@launch
             if (messageCount < 4) {
@@ -1020,7 +1015,9 @@ ${event.text}
                     .completeSummary("", prompt, CancellationToken.uncancellable()).text.trim()
                 if (Thread.currentThread().isInterrupted || activeTranslationMessageId != messageId) return@submit
                 if (text.isBlank()) throw IllegalStateException(getString(R.string.chat_footer_translation_empty))
-                localRunStore.appendAssistantTranslation(sessionId, messageId, targetLanguage, text)
+                chatDatabaseResult {
+                    localRunStore.appendAssistantTranslation(sessionId, messageId, targetLanguage, text)
+                }.getOrThrow()
                 runOnUiThread {
                     if (activeTranslationMessageId == messageId) {
                         activeTranslationMessageId = null
@@ -1060,7 +1057,7 @@ ${event.text}
             }) return
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { localRunStore.appendAssistantTranslationHidden(sessionId, messageId) }
+                chatDatabaseResult { localRunStore.appendAssistantTranslationHidden(sessionId, messageId) }
             }
             result.onSuccess {
                 AgentRunUiState.assistantTranslationHidden(sessionId, messageId)
@@ -1075,7 +1072,7 @@ ${event.text}
             || AgentRunUiState.snapshotForSession(sessionId).running) return
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching {
+                chatDatabaseResult {
                     localRunStore.hideAssistantWithOwner(sessionId, event.messageId, "assistant_deleted")
                         .ownerUserMessageId.orEmpty()
                 }
@@ -1098,7 +1095,7 @@ ${event.text}
         if (sessionState.running || sessionState.compacting) return
         lifecycleScope.launch {
             val prompt = withContext(Dispatchers.IO) {
-                runCatching {
+                chatDatabaseResult {
                     localRunStore.regenerateAssistantIfLatest(sessionId, event.messageId)
                 }
             }.getOrElse {
@@ -1134,11 +1131,10 @@ ${event.text}
         timelineOlderLoading = false
         timelineOlderLoadError = false
         historyExecutor.execute {
-            val pageResult = runCatching {
+            val pageResult = chatDatabaseResult {
                 localRunStore.readConversationTimelinePage(
                     sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
             }
-            pageResult.exceptionOrNull()?.let(::reportChatDatabaseFailure)
             val page = pageResult.getOrNull()
             runOnUiThread {
                 if (requestSerial != timelineRequestSerial || conversationSessionId != sessionId
@@ -1171,7 +1167,16 @@ ${event.text}
         event.kind == kind && event.messageId.isNotBlank()
             && AgentRunUiState.containsEvent(sessionId, event)
 
+    private fun <T> chatDatabaseResult(block: () -> T): Result<T> =
+        try { Result.success(block()) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: RuntimeException) {
+            reportChatDatabaseFailure(failure)
+            Result.failure(failure)
+        }
+
     private fun reportChatDatabaseFailure(error: Throwable) {
+        AgentErrorReporter.reportChatDatabaseFailure(applicationContext, error)
         if (!chatDatabaseFailureNoticeShown.compareAndSet(false, true)) return
         runOnUiThread {
             if (!isFinishing && !isDestroyed)
@@ -1217,7 +1222,7 @@ ${event.text}
                     { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
                     selected.undoReflectionGroup(reflectionId, sessionId)
                 }
-                localRunStore.appendReflectionUndoEvent(sessionId, reflectionId)
+                chatDatabaseResult { localRunStore.appendReflectionUndoEvent(sessionId, reflectionId) }.getOrThrow()
                 revisions
             }
             runOnUiThread {
@@ -1422,7 +1427,7 @@ ${event.text}
             timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
             val sessionId = conversationSessionId
             historyExecutor.execute {
-                val title = runCatching { localRunStore.readConversationTitle(sessionId) }.getOrNull()
+                val title = chatDatabaseResult { localRunStore.readConversationTitle(sessionId) }.getOrNull()
                 runOnUiThread { if (conversationSessionId == sessionId) conversationTitle = title }
             }
             return
@@ -1446,7 +1451,7 @@ ${event.text}
         timelineHasOlder = false
         timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
         historyExecutor.execute {
-            val page = runCatching {
+            val page = chatDatabaseResult {
                 localRunStore.readConversationTimelinePage(
                     sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
             }.getOrNull()
@@ -1511,12 +1516,10 @@ ${event.text}
         timelineHasOlder = false
         timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
         historyExecutor.execute {
-            val pageResult = runCatching {
+            val page = chatDatabaseResult {
                 localRunStore.readConversationTimelinePage(
                     sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
-            }
-            pageResult.exceptionOrNull()?.let(::reportChatDatabaseFailure)
-            val page = pageResult.getOrNull()
+            }.getOrNull()
             runOnUiThread {
                 if (requestSerial == timelineRequestSerial && conversationSessionId == sessionId && selectedHistoryRunId == null) {
                     page?.let {
@@ -1546,7 +1549,7 @@ ${event.text}
             sessionTitleExecutor.execute {
                 val title = if (WorkspaceIdentity.isCentral(sessionId)) getString(R.string.workspace_central_chat)
                 else if (sessionId == ProactiveConversation.SESSION_ID) ProactiveConversation.title(this)
-                else runCatching {
+                else chatDatabaseResult {
                     localRunStore.readConversationTitle(sessionId)
                         ?: ConversationTitle.fromFirstMessage(localRunStore.readFirstUserMessage(sessionId))
                 }.getOrNull()
@@ -1571,7 +1574,7 @@ ${event.text}
         timelineOlderLoading = true
         timelineOlderLoadError = false
         historyExecutor.execute {
-            val page = runCatching {
+            val page = chatDatabaseResult {
                 localRunStore.readConversationTimelinePage(
                     sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS, newerInvalidations, newerProjectionMarkers)
             }.getOrNull()
@@ -1603,7 +1606,7 @@ ${event.text}
 
     private fun recoverCrewMissionsAsync(sessionId: String) {
         crewRecoveryExecutor.execute {
-            val recovered = runCatching { localRunStore.recoverCrewMissions(sessionId) }.getOrDefault(emptyList())
+            val recovered = chatDatabaseResult { localRunStore.recoverCrewMissions(sessionId) }.getOrDefault(emptyList())
             if (recovered.isNotEmpty()) runOnUiThread {
                 if (conversationSessionId == sessionId) recovered.forEach { AgentRunUiState.crewMissionChanged(sessionId, it) }
             }
@@ -1613,9 +1616,10 @@ ${event.text}
     private fun requestConversationTitle(sessionId: String, submittedMessage: String) {
         if (WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId)) return
         sessionTitleExecutor.execute {
-            if (!localRunStore.claimConversationTitleGeneration(sessionId)) return@execute
+            if (!chatDatabaseResult { localRunStore.claimConversationTitleGeneration(sessionId) }.getOrDefault(false))
+                return@execute
             try {
-                val firstUserMessage = runCatching { localRunStore.readFirstUserMessage(sessionId) }
+                val firstUserMessage = chatDatabaseResult { localRunStore.readFirstUserMessage(sessionId) }
                     .getOrNull()?.takeIf(String::isNotBlank) ?: submittedMessage
                 val generatedTitle = runCatching {
                     val model = CoreAgentModel(applicationContext, "$sessionId-title")
@@ -1630,7 +1634,7 @@ ${event.text}
                     ConversationTitle.normalizeModelTitle(response.text)
                 }.getOrNull()
                 val title = generatedTitle ?: ConversationTitle.fromFirstMessage(firstUserMessage) ?: "Jarvys"
-                if (localRunStore.appendConversationTitleIfAbsent(sessionId, title)) {
+                if (chatDatabaseResult { localRunStore.appendConversationTitleIfAbsent(sessionId, title) }.getOrDefault(false)) {
                     runOnUiThread {
                         if (conversationSessionId == sessionId) conversationTitle = title
                         refreshRunHistory()
@@ -1638,14 +1642,14 @@ ${event.text}
                 }
             } catch (_: RuntimeException) {
                 val fallback = ConversationTitle.fromFirstMessage(submittedMessage) ?: "Jarvys"
-                if (runCatching { localRunStore.appendConversationTitleIfAbsent(sessionId, fallback) }.getOrDefault(false)) {
+                if (chatDatabaseResult { localRunStore.appendConversationTitleIfAbsent(sessionId, fallback) }.getOrDefault(false)) {
                     runOnUiThread {
                         if (conversationSessionId == sessionId) conversationTitle = fallback
                         refreshRunHistory()
                     }
                 }
             } finally {
-                localRunStore.releaseConversationTitleGeneration(sessionId)
+                chatDatabaseResult { localRunStore.releaseConversationTitleGeneration(sessionId) }
             }
         }
     }
@@ -1683,23 +1687,26 @@ ${event.text}
             val result = runCatching {
                 check(!removal || !blocked()) { "Active work must finish first" }
                 when (action) {
-                    ConversationAction.PIN -> { localRunStore.setConversationPinned(sessionId, true); true }
-                    ConversationAction.UNPIN -> { localRunStore.setConversationPinned(sessionId, false); true }
-                    ConversationAction.ARCHIVE -> { localRunStore.setConversationArchived(sessionId, true); true }
-                    ConversationAction.RESTORE -> { localRunStore.setConversationArchived(sessionId, false); true }
-                    ConversationAction.RENAME -> { localRunStore.renameConversation(sessionId, title.orEmpty()); true }
+                    ConversationAction.PIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, true); true }.getOrThrow()
+                    ConversationAction.UNPIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, false); true }.getOrThrow()
+                    ConversationAction.ARCHIVE -> chatDatabaseResult { localRunStore.setConversationArchived(sessionId, true); true }.getOrThrow()
+                    ConversationAction.RESTORE -> chatDatabaseResult { localRunStore.setConversationArchived(sessionId, false); true }.getOrThrow()
+                    ConversationAction.RENAME -> chatDatabaseResult { localRunStore.renameConversation(sessionId, title.orEmpty()); true }.getOrThrow()
                     ConversationAction.DELETE -> {
-                        val cleaned = localRunStore.deleteConversation(sessionId)
-                        check(cleaned || localRunStore.readConversationMetadata(sessionId).deleted) { "Chat was not deleted" }
+                        val cleaned = chatDatabaseResult { localRunStore.deleteConversation(sessionId) }.getOrThrow()
+                        check(cleaned || chatDatabaseResult { localRunStore.readConversationMetadata(sessionId).deleted }.getOrThrow()) {
+                            "Chat was not deleted"
+                        }
                         cleaned
                     }
                 }
             }.recoverCatching { failure ->
-                if (action == ConversationAction.DELETE && runCatching { localRunStore.readConversationMetadata(sessionId).deleted }.getOrDefault(false)) false
+                if (action == ConversationAction.DELETE
+                    && chatDatabaseResult { localRunStore.readConversationMetadata(sessionId).deleted }.getOrDefault(false)) false
                 else throw failure
             }
             val updatedTitle = if (result.isSuccess && action == ConversationAction.RENAME)
-                runCatching { localRunStore.readConversationTitle(sessionId) }.getOrNull() else null
+                chatDatabaseResult { localRunStore.readConversationTitle(sessionId) }.getOrNull() else null
             runOnUiThread {
                 conversationActionPending = false
                 result.onSuccess { cleaned ->
@@ -1728,10 +1735,10 @@ ${event.text}
     private fun refreshRunHistory() {
         if (!::localRunStore.isInitialized) return
         historyExecutor.execute {
-            val items = runCatching {
-                localRunStore.listConversations().asSequence()
-                    .filterNot { it.optString("session_id") == ProactiveConversation.SESSION_ID }
-                    .mapNotNull { json ->
+            val conversations = chatDatabaseResult { localRunStore.listConversations() }.getOrElse { return@execute }
+            val items = conversations.asSequence()
+                .filterNot { it.optString("session_id") == ProactiveConversation.SESSION_ID }
+                .mapNotNull { json ->
                     val id = json.optString("run_id").takeIf(String::isNotBlank) ?: return@mapNotNull null
                     RunHistoryItem(
                         id = id,
@@ -1746,8 +1753,7 @@ ${event.text}
                         archived = json.optBoolean("archived", false),
                     )
                 }.toList()
-                    .distinctBy { it.sessionId }
-            }.getOrDefault(emptyList())
+                .distinctBy { it.sessionId }
             runOnUiThread {
                 runHistory = items
                 selectedHistoryRunId?.let(::selectHistoryRun)
@@ -1933,10 +1939,15 @@ private fun JarvysApp(
     LaunchedEffect(workspaceRevision, workspaceAfter, workspaceReload) {
         workspaceLoading = true; workspaceError = null; workspaceNext = null; workspaceRows = emptyList()
         try {
-            val page = withContext(Dispatchers.IO) { WorkspaceProjection.sidebarPage(context.applicationContext, workspaceAfter) }
+            val page = withContext(workspaceProjectionDispatcher) {
+                WorkspaceProjection.sidebarPage(context.applicationContext, workspaceAfter)
+            }
             workspaceRows = page.rows; workspaceNext = page.nextCursor
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { workspaceError = context.getString(R.string.workspace_catalog_load_error) }
+        catch (failure: Exception) {
+            AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+            workspaceError = context.getString(R.string.workspace_catalog_load_error)
+        }
         workspaceLoading = false
     }
     var correctionWorkspace by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1996,14 +2007,15 @@ private fun JarvysApp(
                 previous?.events.orEmpty(), loading = true)
             AgentRunUiState.showSession(executionSessionId)
             try {
-                val loaded = withContext(Dispatchers.IO) {
+                val loaded = withContext(workspaceProjectionDispatcher) {
                     WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId, previous)
                 }
                 workspaceChatState.value = loaded
                 AgentRunUiState.restoreSession(executionSessionId, loaded.events)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
+                AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
                 workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
                     previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
                     previous?.events.orEmpty(), error = context.getString(R.string.workspace_chat_load_error))
@@ -2309,11 +2321,16 @@ private fun JarvysApp(
                                 workspaceOlderHistoryLoading = true
                                 workspaceOlderHistoryLoadError = false
                                 scope.launch(Dispatchers.IO) {
-                                    val page = runCatching {
+                                    val page = try {
                                         LocalRunStore(context).readConversationTimelinePage(
                                             sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS,
                                             state.invalidatedToolTurnMessageIds, state.projectionMarkers)
-                                    }.getOrNull()
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (failure: RuntimeException) {
+                                        AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+                                        null
+                                    }
                                     withContext(Dispatchers.Main) {
                                         if (requestSerial != workspaceOlderHistoryRequestSerial
                                             || !workspaceChatActive || routeWorkspaceId != state.workspaceId

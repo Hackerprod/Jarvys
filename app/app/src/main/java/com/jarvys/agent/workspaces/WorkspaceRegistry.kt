@@ -23,6 +23,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
     companion object {
         const val DATABASE_NAME = "jarvys-workspaces-v1.db"
         const val NATIVE_UI_ORIGIN = "NATIVE_UI"
+        private val TRANSACTION_LOCK = Any()
         private const val MAX_PAGE = 100
         private val TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")
         private val DIGEST = Regex("[0-9a-f]{64}")
@@ -568,13 +569,15 @@ class WorkspaceRegistry(context: Context) : Closeable {
             Collections.unmodifiableList(result)
         }
     private fun <T> transaction(block: (SQLiteDatabase) -> T): T {
-        val db = helper.writableDatabase
-        db.beginTransaction()
-        try {
-            val result = block(db)
-            db.setTransactionSuccessful()
-            return result
-        } finally { db.endTransaction() }
+        return synchronized(TRANSACTION_LOCK) {
+            val db = helper.writableDatabase
+            db.beginTransaction()
+            try {
+                val result = block(db)
+                db.setTransactionSuccessful()
+                result
+            } finally { db.endTransaction() }
+        }
     }
 
     private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,

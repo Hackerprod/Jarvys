@@ -35,7 +35,9 @@ class AgentRunRestorationComposeTest {
     @get:Rule val compose = createComposeRule()
     private val context: android.content.Context get() = androidx.test.core.app.ApplicationProvider.getApplicationContext()
 
-    @Test fun restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping() {
+    @Test
+    @Config(sdk = [25], shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+    fun restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping() {
         val root = chatTestStore.newFilesDirectory()
         val session = "restored-preview-${System.nanoTime()}"
         val prepared = chatTestStore.withLocalRunStore(root) { store ->
@@ -124,9 +126,10 @@ class AgentRunRestorationComposeTest {
             R.plurals.connector_tool_group_completed_failures, 1, 2, 1,
         )).performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("tool-group-$firstToolId").performClick()
-        compose.onNodeWithText(context.getString(R.string.connector_tool_used, "Telegram Send Message"))
+        val displayedToolName = requireNotNull(timeline.first { it.kind == "tool" }.toolDisplayName)
+        compose.onNodeWithText(context.getString(R.string.connector_tool_used, displayedToolName))
             .performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.connector_tool_failed, "Telegram Send Message"))
+        compose.onNodeWithText(context.getString(R.string.connector_tool_failed, displayedToolName))
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription(context.getString(R.string.chat_footer_copy_description))
             .performScrollTo().assertIsDisplayed()

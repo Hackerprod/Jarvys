@@ -85,7 +85,8 @@ class MainActivityDrawerNavigationTest {
         }
     }
 
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(fixtures).around(compose)
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(fixtures).around(compose)
 
     @Test fun newChatDrawerTapSelectsANewSessionWithoutChangingThePreviousTranscriptOrAttachment() {
         awaitCurrentChat()
@@ -99,13 +100,13 @@ class MainActivityDrawerNavigationTest {
         compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
         assertEquals("", compose.onNode(hasSetTextAction()).fetchSemanticsNode()
             .config[SemanticsProperties.EditableText].text)
-        assertTrue(store.readConversationTimeline(newSession).isEmpty())
+        assertTrue(db { store.readConversationTimeline(newSession).isEmpty() })
         assertEquals(previousTranscript, transcript(currentSession))
-        val persistedAttachment = store.readConversationTimeline(currentSession).flatMap { it.attachments }.single()
+        val persistedAttachment = db { store.readConversationTimeline(currentSession).flatMap { it.attachments }.single() }
         assertEquals(currentAttachment, persistedAttachment)
         assertArrayEquals(attachmentBytes, AttachmentStore(context).resolve(currentSession, persistedAttachment).readBytes())
-        assertFalse(store.readConversationMetadata(currentSession).deleted)
-        assertFalse(store.readConversationMetadata(currentSession).archived)
+        assertFalse(db { store.readConversationMetadata(currentSession).deleted })
+        assertFalse(db { store.readConversationMetadata(currentSession).archived })
         assertSame(transfers, ViewModelProvider(activity)[ChatFileTransfers::class.java])
 
         openDrawer()
@@ -266,30 +267,30 @@ class MainActivityDrawerNavigationTest {
         pumpPendingNativeRoots()
         tapText(R.string.drawer_save_name)
         awaitText("Renamed garden notes")
-        assertEquals("Renamed garden notes", store.readConversationTitle(archivedA))
-        assertEquals(titleB, store.readConversationTitle(archivedB))
+        assertEquals("Renamed garden notes", db { store.readConversationTitle(archivedA) })
+        assertEquals(titleB, db { store.readConversationTitle(archivedB) })
         assertEquals(archivedABefore, transcript(archivedA))
 
         chooseConversationAction(titleB, R.string.drawer_unarchive)
-        compose.waitUntil(10_000) { !store.readConversationMetadata(archivedB).archived }
+        compose.waitUntil(10_000) { db { !store.readConversationMetadata(archivedB).archived } }
         compose.waitUntil(10_000) {
             compose.onAllNodes(hasText(titleB) and hasAnyAncestor(hasTestTag("archived-chats-list")))
                 .fetchSemanticsNodes().isEmpty()
         }
-        assertTrue(store.readConversationMetadata(archivedA).archived)
+        assertTrue(db { store.readConversationMetadata(archivedA).archived })
         assertEquals(archivedBBefore, transcript(archivedB))
 
         chooseConversationAction("Renamed garden notes", R.string.drawer_delete_action)
         compose.onNodeWithText(context.getString(R.string.drawer_delete_chat)).assertIsDisplayed()
-        assertFalse("Opening the confirmation must not delete", store.readConversationMetadata(archivedA).deleted)
+        assertFalse("Opening the confirmation must not delete", db { store.readConversationMetadata(archivedA).deleted })
         tapText(R.string.drawer_cancel_action)
         assertEquals(archivedABefore, transcript(archivedA))
         chooseConversationAction("Renamed garden notes", R.string.drawer_delete_action)
         tapText(R.string.drawer_delete_action)
         awaitTag("archived-chats-empty")
-        assertTrue(store.readConversationMetadata(archivedA).deleted)
-        assertTrue(store.readConversationTimeline(archivedA).isEmpty())
-        assertFalse(store.readConversationMetadata(archivedB).deleted)
+        assertTrue(db { store.readConversationMetadata(archivedA).deleted })
+        assertTrue(db { store.readConversationTimeline(archivedA).isEmpty() })
+        assertFalse(db { store.readConversationMetadata(archivedB).deleted })
         assertEquals(archivedBBefore, transcript(archivedB))
         assertEquals(currentBefore, transcript(currentSession))
         assertEquals(currentSession, selectedSession())
@@ -314,13 +315,12 @@ class MainActivityDrawerNavigationTest {
         openDrawer()
         compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(currentTitle))
         chooseConversationAction(currentTitle, R.string.drawer_archive)
-        compose.waitUntil(10_000) {
-            store.readConversationMetadata(currentSession).archived && selectedSession() != currentSession
-        }
+        compose.waitUntil(10_000) { selectedSession() != currentSession }
+        assertTrue("Archive action persists before leaving the conversation", db { store.readConversationMetadata(currentSession).archived })
         assertEquals(original, transcript(currentSession))
         assertEquals(untouched, transcript(archivedA))
-        assertFalse(store.readConversationMetadata(currentSession).deleted)
-        assertEquals(currentAttachment, store.readConversationTimeline(currentSession).flatMap { it.attachments }.single())
+        assertFalse(db { store.readConversationMetadata(currentSession).deleted })
+        assertEquals(currentAttachment, db { store.readConversationTimeline(currentSession).flatMap { it.attachments }.single() })
         assertArrayEquals(attachmentBytes, AttachmentStore(context).resolve(currentSession, currentAttachment).readBytes())
         assertSame(transfers, ViewModelProvider(activity)[ChatFileTransfers::class.java])
 
@@ -336,7 +336,7 @@ class MainActivityDrawerNavigationTest {
         awaitCurrentChat()
         assertEquals(original, transcript(currentSession))
         assertEquals(original.map { it.first }, AgentRunUiState.state.value.events.map { it.messageId })
-        assertTrue("Viewing an archive must not implicitly restore it", store.readConversationMetadata(currentSession).archived)
+        assertTrue("Viewing an archive must not implicitly restore it", db { store.readConversationMetadata(currentSession).archived })
         assertEquals(currentSession, selectedSession())
     }
 
@@ -347,10 +347,8 @@ class MainActivityDrawerNavigationTest {
         val transfers = ViewModelProvider(activity)[ChatFileTransfers::class.java]
         openArchives()
         val previousActivity = activity
-        compose.runOnIdle {
-            activity.intent.putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, archivedB)
-            store.renameConversation(archivedA, "Garden title changed on disk")
-        }
+        compose.runOnIdle { activity.intent.putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, archivedB) }
+        db { store.renameConversation(archivedA, "Garden title changed on disk") }
         compose.activityRule.scenario.recreate()
         assertNotSame(previousActivity, activity)
         awaitTag("archived-chats-list")
@@ -388,25 +386,30 @@ class MainActivityDrawerNavigationTest {
         openArchives()
         awaitText("Durable archive name")
         compose.onNodeWithText(titleB).assertIsDisplayed()
-        assertTrue(store.readConversationMetadata(archivedA).archived)
+        assertTrue(db { store.readConversationMetadata(archivedA).archived })
         assertEquals(currentSession, selectedSession())
     }
 
     private fun seed(session: String, title: String, turns: Int = 1, archived: Boolean = false,
         firstAttachment: ChatAttachment? = null) {
-        repeat(turns) { turn ->
-            val attachments = if (turn == 0 && firstAttachment != null) listOf(firstAttachment) else emptyList()
-            val message = store.appendConversationMessage(session, "user", "$title question ${turn + 1}", attachments)
-            store.appendConversationMessage(session, "assistant", "$title answer ${turn + 1}: a persisted local response.",
-                0L, "", message, "COMPLETED")
+        db {
+            repeat(turns) { turn ->
+                val attachments = if (turn == 0 && firstAttachment != null) listOf(firstAttachment) else emptyList()
+                val message = store.appendConversationMessage(session, "user", "$title question ${turn + 1}", attachments)
+                store.appendConversationMessage(session, "assistant", "$title answer ${turn + 1}: a persisted local response.",
+                    0L, "", message, "COMPLETED")
+            }
+            store.renameConversation(session, title)
+            store.setConversationArchived(session, archived)
         }
-        store.renameConversation(session, title)
-        store.setConversationArchived(session, archived)
     }
 
     /** Stable transcript identity/content comparison; archive and title metadata are deliberately separate. */
-    private fun transcript(session: String): List<Pair<String, String>> = store.readConversationTimeline(session)
-        .map { it.messageId to "${it.kind}:${it.text}" }
+    private fun transcript(session: String): List<Pair<String, String>> = db {
+        store.readConversationTimeline(session).map { it.messageId to "${it.kind}:${it.text}" }
+    }
+
+    private fun <T> db(operation: () -> T): T = chatTestStore.onDatabaseWorker(operation)
 
     private fun selectedSession(): String? = context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
         .getString("active_session_id", null)

@@ -368,7 +368,14 @@ class ConversationRepositoryTest {
         assertNull("reopening clears the prior decision status", row[2])
         assertNull("reopening clears the prior selected option", row[3])
         assertNull("reopening clears the prior resolution sequence", row[4])
-        assertTrue("a decision request cannot be appended to a missing conversation", repository.appendDecisionRequest("missing", "choice", "", "", false, emptyList()) is ChatDbResult.NotFound)
+        val firstDecisionSeq = success(repository.appendDecisionRequest(
+            "missing", "choice", "First request", "Creates the conversation", false, emptyList(),
+        ))
+        assertEquals("the first decision append creates its conversation at sequence one", 1L, firstDecisionSeq)
+        assertTrue("the first decision append creates a live conversation", repository.readConversationMetadata("missing") != null)
+        success(repository.deleteConversation("missing"))
+        assertTrue("a decision request cannot be appended to a tombstoned conversation",
+            repository.appendDecisionRequest("missing", "choice", "", "", false, emptyList()) is ChatDbResult.Tombstoned)
     }
 
     @Test fun snapshotsDoNotResurrectFinishedMessageAndFailedTransactionLeavesNoSequenceGap() = onDatabaseThread {

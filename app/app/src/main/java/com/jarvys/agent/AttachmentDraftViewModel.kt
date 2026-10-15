@@ -47,7 +47,11 @@ class AttachmentDraftViewModel internal constructor(
 
     init {
         if (startupCleanup.compareAndSet(false, true)) attachmentIo.execute {
-            runCatching { LocalRunStore(app).cleanupOrphanAttachments() }
+            try {
+                LocalRunStore(app).cleanupOrphanAttachments()
+            } catch (failure: RuntimeException) {
+                AgentErrorReporter.reportChatDatabaseFailure(app, failure)
+            }
         }
     }
 
@@ -120,7 +124,12 @@ class AttachmentDraftViewModel internal constructor(
                     attempt.cancellation.throwIfCancelledBeforePersistence()
                     val attachments = attachmentsToSend.mapNotNull { it.attachment }
                     attempt.cancellation.throwIfCancelledBeforePersistence()
-                    val messageId = messageSubmitter.persistMessage(getApplication(), session, text, attachments)
+                    val messageId = try {
+                        messageSubmitter.persistMessage(getApplication(), session, text, attachments)
+                    } catch (failure: Exception) {
+                        AgentErrorReporter.reportChatDatabaseFailure(app, failure)
+                        throw failure
+                    }
                     persisted = true
                     attempt.cancellation.markPersisted()
                     AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticEventId)
