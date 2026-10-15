@@ -4,6 +4,8 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import androidx.room.PooledConnection
 import androidx.room.Transactor
+import androidx.room.useReaderConnection
+import androidx.room.useWriterConnection
 import androidx.room.withTransaction
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteStatement

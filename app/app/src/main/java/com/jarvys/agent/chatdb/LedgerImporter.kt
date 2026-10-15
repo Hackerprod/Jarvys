@@ -324,11 +324,10 @@ internal class LedgerImporter(
         )
         val savepoint = "import_row_${line.lineNumber}"
         database.chatSql.execSQL("SAVEPOINT $savepoint")
-        try {
-            val result = database.withImportPosition(position) {
+        return try {
+            database.withImportPosition(position) {
                 applyKnownRow(sessionId, row, type, line, preflight, messageMeta, position)
             }
-            requireSuccess(result)
             if (type != "session_title" && nextSequence(sessionId) == sequence) {
                 val markerKey = markerKey(type, row, line.startOffset)
                 requireSuccess(conversations.appendImportMarker(position, type, markerKey))

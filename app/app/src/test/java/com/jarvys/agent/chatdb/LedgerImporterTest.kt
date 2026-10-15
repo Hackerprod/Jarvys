@@ -134,7 +134,7 @@ class LedgerImporterTest {
             .put("sizeBytes", 4).put("kind", "FILE").put("relativePath", "$attachmentId-report.txt"))
         chatRows += jsonRow("generated_image", "prompt" to "draw a circle", "revisedPrompt" to "circle", "size" to "small", "mimeType" to "image/png", "status" to "FAILED", "error" to "not generated")
         chatRows += jsonRow("main_interrupt_request", "requestId" to "interrupt-1", "content" to "Please check this", "skills" to JSONArray().put("skill-x"), "memoryDisabled" to false)
-        chatRows += jsonRow(role = "user", "content" to "interrupt input", "messageId" to "interrupt-1", "interruptRequestId" to "interrupt-1", "mainChatAcknowledgementRequired" to true)
+        chatRows += jsonRow(null, "user", "content" to "interrupt input", "messageId" to "interrupt-1", "interruptRequestId" to "interrupt-1", "mainChatAcknowledgementRequired" to true)
         chatRows += jsonRow("main_chat_input_incorporated", "messageIds" to JSONArray().put(userId))
         chatRows += jsonRow("main_chat_input_resolved", "messageIds" to JSONArray().put(user2Id))
         // Conflicting legacy markers for one identity are first-wins, matching LocalRunStore.
@@ -382,7 +382,7 @@ class LedgerImporterTest {
         val reports = ImportCoordinator(database).importAll(directory)
 
         assertEquals(1, reports.size)
-        assertEquals("deleted-orphan", reports.single().sessionId)
+        assertEquals("deleted-orphan", reports.single().conversationId)
         assertEquals("tombstone", reports.single().state)
         assertTrue(ConversationRepository(database).isTombstoned("deleted-orphan"))
     }

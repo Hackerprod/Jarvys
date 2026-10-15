@@ -9,6 +9,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.RoomDatabase.Callback
 import androidx.room.RoomDatabase.JournalMode
+import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -287,8 +288,8 @@ internal object JarvysChatDatabaseProvider {
 
         override fun onCreate(connection: SQLiteConnection) {
             super.onCreate(connection)
+            // PRAGMA synchronous cannot change inside the creation transaction; onOpen applies the PRAGMAs.
             createDriverTriggersOnce(connection)
-            configureOpenedConnection(connection)
         }
 
         override fun onOpen(connection: SQLiteConnection) {
