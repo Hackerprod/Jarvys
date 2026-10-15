@@ -283,7 +283,7 @@ private fun rawQuery(sql: String, args: Array<out Any?>, database: SQLiteDatabas
         },
         sql,
         emptyArray(),
-        null,
+        "",
     )
     return source.use {
         val names = Array(it.columnCount) { index -> it.getColumnName(index) }

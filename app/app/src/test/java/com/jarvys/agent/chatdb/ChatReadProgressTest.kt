@@ -71,7 +71,7 @@ class ChatReadProgressTest {
         val writerExecutor = Executors.newSingleThreadExecutor()
         val writer = writerExecutor.submit {
             while (!stopWriter.get()) {
-                success(repository.appendMessage(message("read-progress", "concurrent-${commits.get()}")))
+                success(kotlinx.coroutines.runBlocking { repository.appendMessage(message("read-progress", "concurrent-${commits.get()}")) })
                 commits.incrementAndGet()
                 writerStarted.countDown()
             }
