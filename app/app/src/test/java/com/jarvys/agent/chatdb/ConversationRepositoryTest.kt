@@ -465,7 +465,7 @@ class ConversationRepositoryTest {
         success(repository.ensureConversation("attachment-digest"))
         val path = "attachment-digest/shared.bin"
         success(repository.appendMessage(AppendMessageInput(
-            conversationId = "attachment-digest", role = "user",
+            conversationId = "attachment-digest", role = "user", parts = emptyList(),
             attachments = listOf(MessageAttachmentInput("unknown-digest", "shared.bin", "application/octet-stream", 23, "document", path)),
         )))
         val artifacts = ConversationArtifactsRepository(database)
@@ -978,7 +978,7 @@ class ConversationRepositoryTest {
             MemoryTimelineRepository(database).buildReflectionPayload("large-timeline")
         }
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
-        assertEquals("a marker-only timeline produces an empty reflection transcript", "[]", payload.serialized)
+        assertEquals("a marker-only timeline produces an empty reflection transcript", "[]", payload.text)
         assertTrue("timeline projection uses a bounded number of SQL statements", statements.get() <= 6)
         assertTrue("timeline projection reads twenty thousand rows within the performance budget", elapsedMillis < 20_000L)
     }
@@ -1199,7 +1199,7 @@ class ConversationRepositoryTest {
         val readerDatabase = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
         val readerRepository = ConversationRepository(readerDatabase)
         // Prime the independent Room instance so Robolectric's per-instance pool is already open.
-        successWindow(readerRepository.readTailWindow("wal-reader", turns = 1))
+        successWindow(runBlocking { readerRepository.readTailWindow("wal-reader", turns = 1) })
         val externalReader = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         val writer = Executors.newSingleThreadExecutor()
         val reader = Executors.newSingleThreadExecutor()
@@ -1223,7 +1223,7 @@ class ConversationRepositoryTest {
             }
             assertTrue(writerEntered.await(10, TimeUnit.SECONDS))
             val repositoryRead = reader.submit(Callable {
-                successWindow(readerRepository.readTailWindow("wal-reader", turns = 1)).slots
+                successWindow(runBlocking { readerRepository.readTailWindow("wal-reader", turns = 1) }).slots
                     .single { it.message?.role == "user" }.message!!.text
             })
             assertEquals("the second Room connection reads committed rows while Room holds its writer",

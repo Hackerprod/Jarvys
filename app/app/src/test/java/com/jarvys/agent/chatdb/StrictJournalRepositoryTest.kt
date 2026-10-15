@@ -365,7 +365,7 @@ class StrictJournalRepositoryTest {
         assertEquals("each list hydrates rows with a bounded SQL statement count", listOf(3, 3, 3, 3, 3, 1), counts)
 
         val ranOffMainLooper = AtomicReference<Boolean?>()
-        val result = AtomicReference<CrewResultLedgerEvidence?>()
+        val result = AtomicReference<CrewResultEvidence?>()
         Handler(Looper.getMainLooper()).post {
             result.set(runBlocking {
                 ChatSqlInstrumentation.observeStatements({ ranOffMainLooper.set(Looper.myLooper() != Looper.getMainLooper()) }) {

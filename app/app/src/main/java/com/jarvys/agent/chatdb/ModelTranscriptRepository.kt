@@ -402,9 +402,9 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             val callsByKey = batchSnapshots.flatMap { (batchId, snapshot) ->
                 snapshot.calls.map { (batchId to it.call.call_id) to it }
             }.toMap()
-            val errors = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_error" }.map { it.seq }, "model_errors", ::readModelError)
-            val providers = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_provider_output_items" }.map { it.seq }, "model_provider_outputs", ::readProviderOutput)
-            val artifacts = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_artifact" }.map { it.seq }, "model_artifacts", ::readModelArtifact)
+            val errors = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_error" }.map { it.seq }, "model_errors") { readModelError(it) }
+            val providers = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_provider_output_items" }.map { it.seq }, "model_provider_outputs") { readProviderOutput(it) }
+            val artifacts = loadRowsBySeq(conversationId, rows.filter { it.kind == "model_artifact" }.map { it.seq }, "model_artifacts") { readModelArtifact(it) }
 
             val events = rows.mapNotNull { item ->
                 when (item.kind) {
@@ -627,6 +627,8 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     private fun readModelError(conversationId: String, seq: Long): ModelError? = sql.query(
         "SELECT * FROM model_errors WHERE conversation_id=? AND seq=?", arrayOf(conversationId, seq),
     ).use { if (it.moveToFirst()) ModelError(it.getString(0), it.getLong(1), it.getStringOrNullM1b("owner_user_message_id"), it.getLong(3), it.getString(4)) else null }
+
+    private fun readModelError(it: android.database.Cursor) = ModelError(it.getString(0), it.getLong(1), it.getStringOrNullM1b("owner_user_message_id"), it.getLong(3), it.getString(4))
 
     private fun readProviderOutput(conversationId: String, seq: Long): ModelProviderOutput? = sql.query(
         "SELECT * FROM model_provider_outputs WHERE conversation_id=? AND seq=?", arrayOf(conversationId, seq),

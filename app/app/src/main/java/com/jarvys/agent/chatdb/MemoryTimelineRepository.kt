@@ -515,6 +515,12 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
 
     private fun readCompaction(c: android.database.Cursor) = Compaction(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getLong(4), c.getLong(5), c.getString(6), c.getString(7), c.getDouble(8))
 
+    private fun readMissionHeader(conversationId: String, missionId: String): CrewMission? = sql.query(
+        "SELECT * FROM crew_missions WHERE conversation_id=? AND mission_id=?", arrayOf(conversationId, missionId),
+    ).use { if (it.moveToFirst()) CrewMission(it.getString(0), it.getString(1), it.getLong(2), it.getLong(3), it.getInt(4),
+        it.getStringOrNullMemory("process_id"), it.getString(6), it.getString(7), it.getString(8), it.getStringOrNullMemory("title_source"),
+        it.getString(10), it.getBlobOrNullMemory("synthesis"), it.getLong(12), it.getLongOrNullMemory("finished_at_ms")) else null }
+
     private fun readCrewSnapshot(conversationId: String, missionId: String): CrewMissionSnapshot? =
         readCrewSnapshots(conversationId, listOf(missionId)).firstOrNull()
 
