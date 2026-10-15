@@ -92,6 +92,10 @@ class ChatDatabaseBridge private constructor(context: Context) {
         /** Test-only: Robolectric runs UI tests ON the main looper; production keeps the guard on. */
         @Volatile @JvmField internal var mainThreadGuardDisabledForTests = false
 
+        /** Set only by Gradle for JVM unit tests (system property); never present in the app process. */
+        private val UNIT_TEST_MAIN_THREAD_GUARD_OFF: Boolean =
+            System.getProperty("jarvys.unitTests.mainThreadGuardOff") == "true"
+
         /** Returns the per-filesDir facade. Creating it does not open SQLite. */
         @JvmStatic
         fun getInstance(context: Context): ChatDatabaseBridge {
@@ -177,7 +181,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
         check(Thread.currentThread() !== executorThread) {
             "ChatDatabaseBridge cannot be re-entered from its own executor thread"
         }
-        check(mainThreadGuardDisabledForTests || Looper.myLooper() != Looper.getMainLooper()) {
+        check(mainThreadGuardDisabledForTests || UNIT_TEST_MAIN_THREAD_GUARD_OFF || Looper.myLooper() != Looper.getMainLooper()) {
             "ChatDatabaseBridge blocking methods must not be called from the main thread"
         }
         return try {

@@ -67,6 +67,8 @@ android {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
             it.systemProperty("room.schemaDir", "$projectDir/schemas")
+            // Robolectric runs every test on the main looper; production keeps the chat-database main-thread guard on.
+            it.systemProperty("jarvys.unitTests.mainThreadGuardOff", "true")
         }
     }
     compileOptions {
