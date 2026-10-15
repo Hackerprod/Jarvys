@@ -127,6 +127,9 @@ internal class ImportCoordinator(
         writerLock.release()
     }
 
+    /** Point-in-time check used by the M4 read-source contract; does not acquire a ledger lock. */
+    internal fun hasActiveCutover(sessionId: String): Boolean = cutovers.containsKey(sessionId)
+
     private fun sessionId(file: File): String = file.name.removeSuffix(".jsonl")
 
     private fun importPriority(sessionId: String): Int = when {

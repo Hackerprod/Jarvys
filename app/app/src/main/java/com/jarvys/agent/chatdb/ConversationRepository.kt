@@ -6,6 +6,8 @@ import android.os.Looper
 import com.jarvys.agent.ConversationMetadataStore
 import com.jarvys.agent.ConversationTitle
 import com.jarvys.agent.MessageReactionEmoji
+import com.jarvys.agent.UserDecisionOption
+import com.jarvys.agent.UserDecisionRole
 import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
 import java.nio.charset.StandardCharsets
@@ -93,9 +95,26 @@ data class ReactionUpdate(val seq: Long?, val changed: Boolean)
 
 data class MessageSlot(val item: ConversationItem, val message: StoredMessage?)
 
+/** A hydrated message together with its globally sorted ledger position. */
+data class ConversationMessageAt(val message: StoredMessage, val sortSeq: Long, val sortSub: Int)
+
 data class MessageWindow(val conversationId: String, val slots: List<MessageSlot>, val olderCursorSeq: Long?)
 
 data class MessageCounts(val total: Long, val users: Long)
+
+data class ConversationDecisionValue(
+    val conversationId: String,
+    val decisionId: String,
+    val seq: Long,
+    val title: String,
+    val body: String,
+    val allowDismiss: Boolean,
+    val status: String,
+    val optionId: String?,
+    val optionLabel: String?,
+    val createdAtSeconds: Double,
+    val options: List<UserDecisionOption>,
+)
 
 data class ConversationSummary(
     val id: String,
@@ -270,6 +289,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     internal suspend fun readImportConversation(conversationId: String): Conversation? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
         database.withChatReadTransaction { findConversation(conversationId) }
     }
+
+    /** Returns the durable interrupt request identity, including resolved/dispatched state. */
+    suspend fun readInterruptRequest(conversationId: String, requestId: String): InterruptRequestValue? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) {
+            database.withChatReadTransaction { findInterrupt(conversationId, requestId) }
+        }
 
     internal suspend fun isImported(conversationId: String): Boolean =
         readImportConversation(conversationId)?.import_state == "done"
@@ -923,6 +948,110 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         messageIds.mapNotNull(loaded::get)
         } }
     }
+
+    /**
+     * Reads all persisted user/assistant messages at or after a model message index, in the
+     * conversation's steering-aware sort order. The returned body and attachment children are
+     * hydrated in batches under the same read fence.
+     */
+    suspend fun readMessagesAtOrAfterIndex(conversationId: String, firstMessageIndex: Long = 0L): List<ConversationMessageAt> {
+        require(firstMessageIndex >= 0L) { "firstMessageIndex must be non-negative" }
+        return JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            val positions = sql.query(
+                "SELECT m.message_id,i.sort_seq,i.sort_sub FROM messages m " +
+                    "JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
+                    "WHERE m.conversation_id=? AND m.seq<=? AND m.message_index>=? " +
+                    "ORDER BY i.sort_seq,i.sort_sub,i.seq",
+                arrayOf(conversationId, highWater, firstMessageIndex),
+            ).use { c -> buildList {
+                while (c.moveToNext()) add(Triple(c.getString(0), c.getLong(1), c.getInt(2)))
+            } }
+            if (positions.isEmpty()) return@withChatReadTransaction emptyList()
+            val hydrated = hydrateMessages(conversationId, positions.map { it.first }, highWater).associateBy { it.messageId }
+            positions.mapNotNull { (id, sortSeq, sortSub) ->
+                hydrated[id]?.let { ConversationMessageAt(it, sortSeq, sortSub) }
+            }
+        } }
+    }
+
+    /**
+     * Reads the legacy `LocalRunStore.readConversationMessages` stream in physical ledger order.
+     * This deliberately does not apply steering-aware `conversation_items.sort_*` ordering;
+     * callers that build model/UI projections use [readMessagesAtOrAfterIndex] or a window API.
+     */
+    suspend fun readConversationMessages(conversationId: String): List<StoredMessage> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            val ids = sql.query(
+                "SELECT message_id FROM messages WHERE conversation_id=? AND seq<=? ORDER BY seq",
+                arrayOf(conversationId, highWater),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            hydrateMessages(conversationId, ids, highWater)
+        } }
+
+    /** Last-wins reaction projection keyed by the persisted stable message ID. */
+    suspend fun readMessageReactions(conversationId: String): Map<String, String> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            sql.query(
+                "SELECT target_stable_id,emoji FROM message_reactions WHERE conversation_id=? ORDER BY seq",
+                arrayOf(conversationId),
+            ).use { c -> buildMap { while (c.moveToNext()) put(c.getString(0), c.getString(1)) } }
+        } }
+
+    /** Final decision cards and latest resolution, with options hydrated in one indexed join. */
+    suspend fun readDecisions(conversationId: String): List<ConversationDecisionValue> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            sql.query(
+                "SELECT d.decision_id,d.seq,d.title,d.body,d.allow_dismiss," +
+                    "CASE WHEN d.resolved_seq IS NOT NULL AND d.resolved_seq<=? THEN d.status ELSE NULL END AS resolved_status," +
+                    "CASE WHEN d.resolved_seq IS NOT NULL AND d.resolved_seq<=? THEN d.option_id ELSE NULL END AS resolved_option_id," +
+                    "CASE WHEN d.resolved_seq IS NOT NULL AND d.resolved_seq<=? THEN d.option_label ELSE NULL END AS resolved_option_label," +
+                    "d.created_at,o.option_id,o.label,o.description,o.role " +
+                    "FROM user_decisions d LEFT JOIN user_decision_options o " +
+                    "ON o.conversation_id=d.conversation_id AND o.decision_id=d.decision_id " +
+                    "WHERE d.conversation_id=? AND d.seq<=? ORDER BY d.seq,o.ordinal",
+                arrayOf(highWater, highWater, highWater, conversationId, highWater),
+            ).use { c ->
+                data class Pending(
+                    val seq: Long,
+                    val title: String,
+                    val body: String,
+                    val allowDismiss: Boolean,
+                    val status: String?,
+                    val optionId: String?,
+                    val optionLabel: String?,
+                    val createdAt: Double,
+                    val options: MutableList<UserDecisionOption>,
+                )
+                val values = linkedMapOf<String, Pending>()
+                while (c.moveToNext()) {
+                    val id = c.getString(0)
+                    val pending = values.getOrPut(id) {
+                        Pending(c.getLong(1), c.getString(2), c.getString(3), c.getInt(4) != 0,
+                            c.getStringOrNull("resolved_status"), c.getStringOrNull("resolved_option_id"),
+                            c.getStringOrNull("resolved_option_label"),
+                            c.getDouble(8), mutableListOf())
+                    }
+                    if (!c.isNull(9)) {
+                        val idValue = c.getString(9).trim()
+                        val label = c.getString(10).trim()
+                        if (idValue.isNotEmpty() && label.isNotEmpty()) {
+                            val role = runCatching {
+                                UserDecisionRole.valueOf(c.getStringOrNull(12).orEmpty().ifBlank { "default" }.uppercase(java.util.Locale.ROOT))
+                            }.getOrDefault(UserDecisionRole.DEFAULT)
+                            pending.options += UserDecisionOption(idValue, label, c.getStringOrNull(11).orEmpty(), role)
+                        }
+                    }
+                }
+                values.map { (id, value) -> ConversationDecisionValue(
+                    conversationId, id, value.seq, value.title, value.body, value.allowDismiss,
+                    value.status ?: "UNANSWERED", value.optionId, value.optionLabel, value.createdAt,
+                    value.options.toList(),
+                ) }
+            }
+        } }
 
     /**
      * Replaces `role=user`/`role=assistant` history windows from `LocalRunStore.java:loadConversationContext`; a steering dispatch

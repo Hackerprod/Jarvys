@@ -35,6 +35,14 @@ data class GeneratedImageInput(
     val createdAtSeconds: Double? = null,
 )
 
+/** Ordered legacy image-reference candidates; invalid generated paths are filtered by the domain factory. */
+data class ConversationImageReferenceValue(
+    val messageId: String,
+    val attachment: ChatAttachment? = null,
+    val generatedPath: String? = null,
+    val prompt: String = "",
+)
+
 sealed interface ChatFileOwnership {
     data class Attachment(val value: ChatAttachment) : ChatFileOwnership
     data class Delivered(val value: ConversationArtifact) : ChatFileOwnership
@@ -154,6 +162,74 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
         sql.query("SELECT * FROM artifacts WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId)).use { c ->
             buildList { while (c.moveToNext()) add(c.toConversationArtifact()) }
         }
+    }
+
+    /**
+     * Image refs in physical ledger order, replacing `LocalRunStore.readConversationImageReferences`.
+     * The user-message owner is derived at each generated-image row's sequence, not from the
+     * steering-aware UI order.
+     */
+    suspend fun readImageReferences(conversationId: String): List<ConversationImageReferenceValue> = readSnapshot {
+        val kind = sql.query("SELECT kind FROM conversations WHERE id=?", arrayOf(conversationId))
+            .use { if (it.moveToFirst()) it.getString(0) else null }
+        if (kind == "proactive" || kind == "tasks") return@readSnapshot emptyList()
+        val query = "SELECT source_seq,ordinal,message_id,source_kind,attachment_id,name,mime_type,size_bytes,attachment_kind,relative_path,generated_path,prompt " +
+            "FROM (" +
+            "SELECT m.seq AS source_seq,a.ordinal AS ordinal,m.message_id AS message_id,'attachment' AS source_kind," +
+            "a.attachment_id AS attachment_id,a.name AS name,a.mime_type AS mime_type,a.size_bytes AS size_bytes," +
+            "a.kind AS attachment_kind,a.relative_path AS relative_path,NULL AS generated_path,NULL AS prompt " +
+            "FROM messages m JOIN message_attachments a ON a.conversation_id=m.conversation_id AND a.message_id=m.message_id " +
+            "WHERE m.conversation_id=? AND m.role='user' AND COALESCE(m.proactive_thread_key,'')='' AND a.kind='IMAGE' " +
+            "UNION ALL " +
+            "SELECT g.seq AS source_seq,0 AS ordinal," +
+            "COALESCE((SELECT m.message_id FROM messages m WHERE m.conversation_id=g.conversation_id AND m.role='user' AND m.seq<g.seq ORDER BY m.seq DESC LIMIT 1),'') AS message_id," +
+            "'generated' AS source_kind,NULL AS attachment_id,NULL AS name,NULL AS mime_type,NULL AS size_bytes,NULL AS attachment_kind,NULL AS relative_path," +
+            "g.image_path AS generated_path,g.prompt AS prompt FROM generated_images g " +
+            "WHERE g.conversation_id=? AND g.status='COMPLETED'" +
+            ") ORDER BY source_seq,ordinal"
+        sql.query(query, arrayOf(conversationId, conversationId)).use { c -> buildList {
+            while (c.moveToNext()) {
+                if (c.getString(3) == "attachment") {
+                    val attachment = runCatching {
+                        ChatAttachment(
+                            c.getString(4), c.getString(5), c.getStringOrNullM1b("mime_type"), c.getLong(7),
+                            ChatAttachment.Kind.valueOf(c.getString(8)), c.getString(9),
+                        )
+                    }.getOrNull() ?: continue
+                    add(ConversationImageReferenceValue(c.getString(2), attachment = attachment))
+                } else {
+                    add(ConversationImageReferenceValue(
+                        c.getString(2), generatedPath = c.getStringOrNullM1b("generated_path"),
+                        prompt = c.getStringOrNullM1b("prompt").orEmpty(),
+                    ))
+                }
+            }
+        } }
+    }
+
+    /** File metadata with no surviving history reference, for a caller-owned post-transaction GC pass. */
+    suspend fun unreferencedFileRefs(): List<FileRef> = readSnapshot {
+        sql.query(
+            "SELECT f.* FROM file_refs f " +
+                "WHERE NOT EXISTS(SELECT 1 FROM message_attachments a WHERE a.file_ref_id=f.id) " +
+                "AND NOT EXISTS(SELECT 1 FROM artifacts a WHERE a.file_ref_id=f.id) " +
+                "AND NOT EXISTS(SELECT 1 FROM artifacts a WHERE a.thumbnail_ref=f.id) " +
+                "AND NOT EXISTS(SELECT 1 FROM generated_images g WHERE g.file_ref_id=f.id) " +
+                "AND NOT EXISTS(SELECT 1 FROM model_artifacts m WHERE m.file_ref_id=f.id) " +
+                "ORDER BY f.last_referenced_at,f.relative_path",
+        ).use { c -> buildList { while (c.moveToNext()) add(
+            FileRef(
+                id = c.getString(c.getColumnIndexOrThrow("id")),
+                sha256 = c.getString(c.getColumnIndexOrThrow("sha256")),
+                relative_path = c.getString(c.getColumnIndexOrThrow("relative_path")),
+                bytes = c.getLong(c.getColumnIndexOrThrow("bytes")),
+                mime_type = c.getStringOrNullM1b("mime_type"),
+                last_referenced_at = c.getLong(c.getColumnIndexOrThrow("last_referenced_at")),
+                not_before = c.getColumnIndexOrThrow("not_before").let { if (c.isNull(it)) null else c.getLong(it) },
+                attempts = c.getInt(c.getColumnIndexOrThrow("attempts")),
+                generation = c.getLong(c.getColumnIndexOrThrow("generation")),
+            ),
+        ) } }
     }
 
     /** Indexed equivalent of `LocalRunStore.ownsGeneratedFile` (`LocalRunStore.java:ownsGeneratedFile`); failed or pathless generations are never owned images. */

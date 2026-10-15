@@ -524,7 +524,7 @@ internal class LedgerImporter(
             "proactive_reply_used" -> conversations.consumeSuggestedReplies(sessionId, row.getString("messageId"))
             "user_decision_request" -> conversations.appendDecisionRequest(
                 sessionId, row.getString("decisionId"), row.optString("title", ""), row.optString("body", ""),
-                row.optBoolean("allowDismiss", false), parseDecisionOptions(row.optJSONArray("options")),
+                row.optBoolean("allowDismiss", true), parseDecisionOptions(row.optJSONArray("options")),
             )
             "user_decision_resolution" -> conversations.resolveDecision(
                 sessionId, row.getString("decisionId"), row.getString("status"), row.stringOrNull("optionId"), row.stringOrNull("optionLabel"),
