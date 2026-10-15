@@ -33,6 +33,7 @@ import java.io.File
 class AgentRunRestorationComposeTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false)
     @get:Rule val compose = createComposeRule()
+    private val context: android.content.Context get() = androidx.test.core.app.ApplicationProvider.getApplicationContext()
 
     @Test fun restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping() {
         val root = chatTestStore.newFilesDirectory()

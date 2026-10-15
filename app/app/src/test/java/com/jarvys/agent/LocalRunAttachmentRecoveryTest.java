@@ -3,6 +3,7 @@ package com.jarvys.agent;
 import static org.junit.Assert.*;
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Collections;
 import java.util.List;

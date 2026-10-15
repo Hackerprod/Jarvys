@@ -97,7 +97,7 @@ public final class ConversationMetadataAccess {
         return;
       case "archived":
         ChatDatabaseBridge.requireSuccessSync(
-            bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value), "Could not update archived state");
+            bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value, null), "Could not update archived state");
         return;
       case "privateCode":
         ChatDatabaseBridge.requireSuccessSync(

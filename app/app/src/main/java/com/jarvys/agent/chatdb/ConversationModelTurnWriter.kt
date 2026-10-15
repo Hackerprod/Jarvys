@@ -74,7 +74,7 @@ internal class ConversationModelTurnWriter(
                 val request = requireSuccess(conversations.appendInterruptRequest(
                     conversationId, content, skills, memoryDisabled,
                 ))
-                requireSuccess(conversations.dispatchInterruptRequest(conversationId, request.requestId))
+                ChatDbResult.Success(requireSuccess(conversations.dispatchInterruptRequest(conversationId, request.requestId)))
             }
         } catch (abort: CompositeWriteAbort) {
             abort.result
