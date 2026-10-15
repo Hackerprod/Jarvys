@@ -359,7 +359,10 @@ internal object JarvysChatDatabaseProvider {
             // provider's separate read-only pool serves concurrent projections from WAL.
             .setDriver(AndroidSQLiteDriver())
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-            .setQueryExecutor(executors[0])
+            // Android SQLiteSession transactions are thread-bound: Room's only connection (the writer) must
+            // always run on ONE thread, so Room's query and transaction contexts share the single writer executor.
+            // Our own concurrent reads use the separate read pool and never touch Room's connection.
+            .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
             .addMigrations(*Migrations.ALL)
             .addCallback(connectionPragmasCallback())
