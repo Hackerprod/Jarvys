@@ -105,8 +105,9 @@ class ChatReadProgressTest {
         val writer = writerExecutor.submit {
             while (!stopWriter.get()) {
                 success(kotlinx.coroutines.runBlocking {
-                    repository.appendMessage(message("read-progress", "concurrent-${commits.get()}"))
+                    val appended = repository.appendMessage(message("read-progress", "concurrent-${commits.get()}"))
                     delay(5L)
+                    appended
                 })
                 commits.incrementAndGet()
                 writerStarted.countDown()
@@ -162,8 +163,9 @@ class ChatReadProgressTest {
             check(firstReadStarted.await(10, TimeUnit.SECONDS)) { "the first read attempt did not begin" }
             while (!stopWriter.get()) {
                 success(kotlinx.coroutines.runBlocking {
-                    repository.appendMessage(message("read-retry-close", "concurrent-${commits.get()}"))
+                    val appended = repository.appendMessage(message("read-retry-close", "concurrent-${commits.get()}"))
                     delay(5L)
+                    appended
                 })
                 commits.incrementAndGet()
             }
