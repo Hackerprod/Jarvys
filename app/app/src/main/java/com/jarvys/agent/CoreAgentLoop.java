@@ -741,7 +741,7 @@ public final class CoreAgentLoop {
                             modelHasInput = true;
                             continue;
                         }
-                        answer = honestMemoryFallback(request, answer);
+                        answer = honestMemoryFallback(request, answer, instructions);
                     }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
@@ -840,21 +840,59 @@ public final class CoreAgentLoop {
                 + escaped + "\n</rejected_memory_claim_draft>";
     }
 
-    private static String honestMemoryFallback(String request, String rejectedDraft) {
+    private static final java.util.regex.Pattern CLAUSE_DELIMITER = java.util.regex.Pattern.compile(
+            "(?iu)(?:[,：:]\\s*|\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b)");
+
+    private static final java.util.regex.Pattern COORDINATING = java.util.regex.Pattern.compile("(?iu)\\s*(?:and|also|y|adem[aá]s)\\s*");
+
+    private static boolean isUnsupportedClaimClause(String clause, String instructions) {
+        return MemoryClaimValidator.claimsPersistence(clause, instructions)
+                && !PERSISTENCE_NEGATION.matcher(clause).find()
+                && !FILE_OR_PROJECT_SAVE.matcher(clause).find();
+    }
+
+    /**
+     * Keeps every part of the rejected draft that does not claim a memory write and appends one honest notice;
+     * the unsupported claim itself never reaches the user. Nothing useful left means the notice alone.
+     */
+    private static String honestMemoryFallback(String request, String rejectedDraft, String instructions) {
         String notice = request != null && SPANISH_REQUEST.matcher(request).find()
                 ? "No pude confirmar una escritura en memoria, así que no he guardado esta información."
                 : "I couldn't confirm a successful memory write, so I haven't saved this information.";
         if (rejectedDraft == null || rejectedDraft.isBlank()) return notice;
-        String[] sentences = rejectedDraft.split("(?<=[.!?;\\n])\\s*");
-        int colon = rejectedDraft.indexOf(':');
-        boolean hasColonContinuation = colon >= 0
-                && rejectedDraft.substring(colon + 1).trim().split("\\s+").length > 1;
-        if (sentences.length > 1 || rejectedDraft.indexOf(',') >= 0
-                || hasColonContinuation
-                || java.util.regex.Pattern.compile("(?iu)\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b").matcher(rejectedDraft).find()) {
-            return rejectedDraft.trim() + " " + notice;
+        StringBuilder kept = new StringBuilder();
+        for (String sentence : rejectedDraft.split("(?<=[.!?;\\n])\\s*")) {
+            if (sentence.isBlank()) continue;
+            java.util.regex.Matcher matcher = CLAUSE_DELIMITER.matcher(sentence);
+            StringBuilder rebuilt = new StringBuilder();
+            int position = 0;
+            String pendingDelimiter = "";
+            boolean any = false;
+            boolean droppedClaim = false;
+            while (true) {
+                boolean found = matcher.find();
+                String clause = sentence.substring(position, found ? matcher.start() : sentence.length());
+                // A clause coordinated ("and"/"y") right after a dropped claim continues its object: drop it too.
+                boolean continuesDropped = droppedClaim && COORDINATING.matcher(pendingDelimiter).matches();
+                if (!clause.isBlank() && !continuesDropped && !isUnsupportedClaimClause(clause, instructions)) {
+                    if (any) rebuilt.append(pendingDelimiter);
+                    rebuilt.append(clause);
+                    any = true;
+                    droppedClaim = false;
+                } else if (!clause.isBlank()) {
+                    droppedClaim = true;
+                }
+                if (!found) break;
+                pendingDelimiter = matcher.group();
+                position = matcher.end();
+            }
+            String text = rebuilt.toString().trim().replaceAll("^[,：:;\\s]+", "");
+            if (text.codePoints().noneMatch(Character::isLetterOrDigit)) continue;
+            if (kept.length() > 0) kept.append(' ');
+            kept.append(text);
         }
-        return notice;
+        String result = kept.toString().trim();
+        return result.isEmpty() ? notice : result + " " + notice;
     }
 
     private ToolBatchOutcome executeToolBatch(List<ModelReply.Call> calls, ModelReply reply,

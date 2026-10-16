@@ -320,6 +320,9 @@ class PersonalAgentBehaviorTest {
             "No te preocupes, he guardado tu nombre en memoria.",
             "No problem, I saved your name to memory.",
             "Guardé tu nombre en memoria.",
+            "Listo, anoté tu profesión en tu perfil.",
+            "I've remembered your preferences.",
+            "Ya está guardado en tu memoria.",
         ).forEach { claim ->
             assertTrue("Expected unsupported claim to be caught: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
         }
@@ -328,6 +331,9 @@ class PersonalAgentBehaviorTest {
             "I haven't saved that yet",
             "Guardé el archivo en /project/notes.md",
             "I saved the file ... and it is ready",
+            "I saved the file to /project/notes.md and it is ready",
+            "Archivo guardado; esto incluye los cambios",
+            "Todavía no lo he guardado en memoria",
         ).forEach { nonClaim ->
             assertFalse("Should not report an unsupported memory claim: $nonClaim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(nonClaim, rules))
         }
@@ -392,17 +398,31 @@ class PersonalAgentBehaviorTest {
     }
 
     @Test fun scenario08_fallbackKeepsUsefulDraftContentAndAddsHonestNotice() {
-        val session = ordinarySession("claim-fallback-content")
-        val loop = CoreAgentLoop(
-            CoreAgentLoop.Model { _, _, _, _ -> ModelReply("I saved your profile: the answer is 42.", emptyList()) },
-            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback-content", session)),
-            configuredClaimRules(), session,
-        )
+        val notice = "I couldn't confirm a successful memory write, so I haven't saved this information."
+        fun fallback(draft: String, tag: String): String {
+            val session = ordinarySession("claim-fallback-$tag")
+            val loop = CoreAgentLoop(
+                CoreAgentLoop.Model { _, _, _, _ -> ModelReply(draft, emptyList()) },
+                CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback-$tag", session)),
+                configuredClaimRules(), session,
+            )
+            return loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null).text
+        }
 
-        val result = loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null)
+        val mixed = fallback("I saved your profile: the answer is 42.", "mixed")
+        assertTrue(mixed, mixed.contains("the answer is 42"))
+        assertFalse(mixed, mixed.contains("saved your profile"))
+        assertTrue(mixed.endsWith(notice))
 
-        assertTrue(result.text.startsWith("I saved your profile: the answer is 42."))
-        assertTrue(result.text.endsWith("I couldn't confirm a successful memory write, so I haven't saved this information."))
+        val comforted = fallback("No problem, I saved your name to memory.", "comfort")
+        assertFalse(comforted, comforted.contains("saved your name"))
+        assertTrue(comforted.endsWith(notice))
+
+        val onlyClaim = fallback("I saved your name and your nickname to memory.", "only")
+        assertEquals(onlyClaim, notice, onlyClaim)
+
+        val file = fallback("I saved the file to /project/notes.md and it is ready", "file")
+        assertTrue(file, file.contains("/project/notes.md"))
     }
 
     @Test fun scenario09_secretsAreRejectedAndRedactedBeforeMaintenanceModelSeesTranscript() {
