@@ -60,6 +60,8 @@ data class ConnectorDefinition(
     val presentationGroup: ConnectorPresentationGroup = ConnectorPresentationGroup.ON_DEVICE,
     /** Live service grants are distinct from Android permissions and local autonomy policy. */
     val operationAccessGranted: ((String) -> Boolean)? = null,
+    /** Definitions with a dedicated adapter are cataloged here but not wrapped as connector tools. */
+    val usesDedicatedToolAdapter: Boolean = false,
 ) {
     constructor(
         id: String,
@@ -144,6 +146,8 @@ enum class ConnectorState { DISCONNECTED, CONNECTED, PERMISSION_REVOKED }
 interface ConnectorConnectionPreferences {
     fun isConnected(id: String): Boolean
     fun setConnected(id: String, connected: Boolean)
+    /** True when the user has explicitly connected or disconnected this definition before. */
+    fun hasConnectionChoice(id: String): Boolean = true
 }
 
 class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
@@ -154,6 +158,7 @@ class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
     }
 
     override fun isConnected(id: String): Boolean = preferences.getBoolean("connected_$id", false)
+    override fun hasConnectionChoice(id: String): Boolean = preferences.contains("connected_$id")
     override fun setConnected(id: String, connected: Boolean) {
         preferences.edit().putBoolean("connected_$id", connected).apply()
     }
@@ -332,6 +337,11 @@ class ConnectorRegistry private constructor(
         refreshStates()
     }
 
+    /** Applies a default connection only before the user has made a choice for this connector. */
+    fun connectIfUnselected(id: String) {
+        if (!stateStore.hasConnectionChoice(id)) connect(id)
+    }
+
     fun unregister(id: String) = synchronized(lock) {
         val current = get(id) ?: return@synchronized
         stateStore.setConnected(id, false)
@@ -374,10 +384,24 @@ class ConnectorRegistry private constructor(
         requesterColorKey: String?,
         approvedPendingAction: Boolean,
         deferAskWrite: java.util.function.Supplier<JSONObject>?,
+    ): JSONObject = invokeForScheduledTask(definition, operation, arguments, token, requester,
+        requesterColorKey, approvedPendingAction, deferAskWrite,
+        ConnectorInvocationContext(requester, requesterColorKey))
+
+    fun invokeForScheduledTask(
+        definition: ConnectorDefinition,
+        operation: ConnectorOperation,
+        arguments: JSONObject,
+        token: CancellationToken,
+        requester: String?,
+        requesterColorKey: String?,
+        approvedPendingAction: Boolean,
+        deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        invocationContext: ConnectorInvocationContext,
     ): JSONObject = invokeInternal(
         definition, operation, arguments, token, requester, requesterColorKey,
         unattended = true, approvedPendingAction = approvedPendingAction, deferAskWrite = deferAskWrite,
-        invocationContext = ConnectorInvocationContext(requester, requesterColorKey),
+        invocationContext = invocationContext,
     )
 
     private fun invokeInternal(

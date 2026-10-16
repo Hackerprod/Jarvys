@@ -64,6 +64,7 @@ public final class LocalRunStore {
     public static final long NO_TIMELINE_CURSOR = -1L;
     private static final Object SESSION_TITLE_LOCK = new Object();
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
+    private final Context appContext;
     private final File root;
     private final String runBoundary;
     /** Null only for the package-private file fixture; production instances always use Room. */
@@ -96,6 +97,7 @@ public final class LocalRunStore {
     }
 
     public LocalRunStore(Context context) {
+        this.appContext = context.getApplicationContext();
         File filesDirectory = context.getFilesDir();
         File jarvys = new File(filesDirectory, "jarvys");
         root = new File(jarvys, "runs");
@@ -111,6 +113,7 @@ public final class LocalRunStore {
 
     /** Non-production file fixture for run-store tests; conversation operations require a registered DB bridge. */
     LocalRunStore(File filesDirectory) {
+        this.appContext = null;
         File jarvys = new File(filesDirectory, "jarvys");
         root = new File(jarvys, "runs");
         notes = new File(jarvys, "notes");
@@ -832,9 +835,8 @@ public final class LocalRunStore {
         try {
             String effectiveType = artifactType == null || artifactType.trim().isEmpty()
                     ? artifact.mimeType : artifactType;
-            com.jarvys.agent.modules.ModuleManifest owner =
-                    com.jarvys.agent.modules.ModuleRegistry.currentOrNull() == null ? null
-                            : com.jarvys.agent.modules.ModuleRegistry.currentOrNull().artifactModuleForType(effectiveType);
+            com.jarvys.agent.modules.ModuleManifest owner = appContext == null ? null
+                    : com.jarvys.agent.modules.ModuleRegistry.get(appContext).artifactModuleForType(effectiveType);
             String effectiveModuleId = moduleId == null && owner != null ? owner.getId() : moduleId;
             String effectiveManifest = manifestJson == null && owner != null ? owner.getManifestJson() : manifestJson;
             requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
@@ -880,9 +882,8 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         try {
             String effectiveType = mimeType == null ? "image/png" : mimeType;
-            com.jarvys.agent.modules.ModuleManifest owner =
-                    com.jarvys.agent.modules.ModuleRegistry.currentOrNull() == null ? null
-                            : com.jarvys.agent.modules.ModuleRegistry.currentOrNull().artifactModuleForType(effectiveType);
+            com.jarvys.agent.modules.ModuleManifest owner = appContext == null ? null
+                    : com.jarvys.agent.modules.ModuleRegistry.get(appContext).artifactModuleForType(effectiveType);
             requireChatDbSuccess(chatDatabaseBridge.appendGeneratedImageSync(
                     new com.jarvys.agent.chatdb.GeneratedImageInput(sessionId, prompt == null ? "" : prompt,
                             revisedPrompt == null ? "" : revisedPrompt, size == null ? "" : size,

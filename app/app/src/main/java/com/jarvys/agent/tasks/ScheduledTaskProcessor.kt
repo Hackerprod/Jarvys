@@ -18,6 +18,8 @@ import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.WebSearchTools
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.modules.ModuleRegistry
+import com.jarvys.agent.modules.WebViewModuleRuntime
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
 import com.jarvys.agent.proactive.ConfiguredProactiveCoreLoopFactory
@@ -49,6 +51,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
     private val notifications: ScheduledTaskNotifications = TaskNotifier,
     private val tasks: TaskStore = TaskStore(context.applicationContext),
     private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(context.applicationContext),
+    private val moduleRegistry: ModuleRegistry = ModuleRegistry.get(context.applicationContext),
 ) : TaskExecutor {
     private val app = context.applicationContext
     private val localized = AppLanguageRuntime.localizedContext(app)
@@ -112,8 +115,8 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
             token.throwIfCancelled()
             if (toolCalls.any { it.outcome == "WAITING_VISIBLE_APP" }) return permanentFailure(
-                task, scheduledFor, TaskRunCause.AWAITING_USER,
-                "Open the app to complete the deferred action.", toolCalls, currentModel(), occurrenceId,
+                task, scheduledFor, TaskRunCause.VISIBLE_APP_REQUIRED,
+                TaskRunCause.VISIBLE_APP_REQUIRED.localized(localized), toolCalls, currentModel(), occurrenceId,
             )
             val failedConnectorCall = toolCalls.firstOrNull { it.name in scope.connectorNames && it.outcome == "ERROR" }
             if (failedConnectorCall != null) return permanentFailure(task, scheduledFor,
@@ -196,6 +199,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
     private fun buildTools(task: ScheduledTask, runId: String,
                            calls: MutableList<TaskToolCallRecord>): Scope {
         if (task.toolScope.mode !in setOf("READ_ONLY", "LISTED")) return failedScope("invalid_tool_scope")
+        moduleRegistry.installAndConnectUnselected(connectorRegistry, WebViewModuleRuntime(app))
         connectorRegistry.refreshStates()
         val taskCapabilityCeiling = task.creatorToolNames.toSet()
         val requested = task.toolScope.tools.toSet() intersect taskCapabilityCeiling
@@ -205,13 +209,22 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                     connectorRegistry.configuredAutonomyPolicy(definition, operation)
             }
         }.filter { it.second != AutonomyPolicy.DENY }.map { it.first }.toSet()
+        val moduleCatalog = moduleRegistry.modules().flatMap { module ->
+            val definition = connectorRegistry.get(module.id) ?: return@flatMap emptyList()
+            module.tools.mapNotNull { tool ->
+                val operation = definition.operations.firstOrNull { it.name == tool.name } ?: return@mapNotNull null
+                if (connectorRegistry.configuredAutonomyPolicy(definition, operation) == AutonomyPolicy.DENY) null
+                else tool.name
+            }
+        }.toSet()
         val availableConnectorNames = connectorRegistry.connectedDefinitions().flatMap { definition ->
             definition.operations.filter { operation ->
                 definition.operationAccessGranted?.invoke(operation.name) != false &&
                     connectorRegistry.configuredAutonomyPolicy(definition, operation) != AutonomyPolicy.DENY
             }.map { operation -> CoreConnectorTool.toolName(definition.id, operation.name) }
-        }.toSet()
-        val unavailable = requested intersect connectorCatalog - availableConnectorNames
+        }.toSet() + connectorRegistry.connectedDefinitions().filter { it.usesDedicatedToolAdapter }
+            .flatMap { definition -> definition.operations.map { it.name } }
+        val unavailable = requested intersect (connectorCatalog + moduleCatalog) - availableConnectorNames
         if (unavailable.isNotEmpty()) return failedScope("connector_unavailable:${unavailable.sorted().joinToString()}")
         val taskTools = CoreAgentRuntime.createScheduledTaskTools(
             app, task, "task-${task.id}-$runId", connectorRegistry,
@@ -225,7 +238,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                     .put("executed", false)
                     .put("pending_action_id", pending.id)
                     .toString())
-            })
+            }, moduleRegistry)
         val tracked = mutableListOf<CoreTool>()
         val connectorNames = taskTools.connectorToolNames().toSet()
         taskTools.names().forEach { name ->

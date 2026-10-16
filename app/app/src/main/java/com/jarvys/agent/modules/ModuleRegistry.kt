@@ -1,6 +1,7 @@
 package com.jarvys.agent.modules
 
 import android.content.Context
+import android.content.res.AssetManager
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.connectors.ConnectorConnectionFlow
 import com.jarvys.agent.connectors.ConnectorDefinition
@@ -10,6 +11,8 @@ import com.jarvys.agent.connectors.ConnectorPresentationGroup
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
+import com.jarvys.agent.connectors.ActionPolicyDefaults
+import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ApprovalSummary
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreToolResult
@@ -29,7 +32,7 @@ internal data class ModuleManifestSource(val assetDirectory: String, val manifes
 class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
     private val byId: Map<String, ModuleManifest>
     private val byToolName: Map<String, Pair<ModuleManifest, ModuleToolDeclaration>>
-    private val artifactOwners: Map<String, ModuleManifest>
+    private val artifactDeclarations: Map<String, Pair<ModuleManifest, ModuleArtifactType>>
 
     init {
         require(manifests.map { it.id }.distinct().size == manifests.size) { "Module ids must be unique" }
@@ -37,15 +40,15 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
         require(declaredTools.map { it.second.name }.distinct().size == declaredTools.size) {
             "Module tool names must be unique across bundled modules"
         }
-        val artifactDeclarations = manifests.flatMap { manifest ->
-            manifest.artifactTypes.map { artifact -> canonicalType(artifact.type) to manifest }
+        val declarations = manifests.flatMap { manifest ->
+            manifest.artifactTypes.map { artifact -> canonicalType(artifact.type) to (manifest to artifact) }
         }
-        require(artifactDeclarations.map { it.first }.distinct().size == artifactDeclarations.size) {
+        require(declarations.map { it.first }.distinct().size == declarations.size) {
             "Artifact type declarations must be unique across bundled modules"
         }
         byId = manifests.associateBy { it.id }
         byToolName = declaredTools.associate { (manifest, tool) -> tool.name to (manifest to tool) }
-        artifactOwners = artifactDeclarations.toMap()
+        artifactDeclarations = declarations.toMap()
     }
 
     fun modules(): List<ModuleManifest> = byId.values.toList()
@@ -58,12 +61,19 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
 
     /** Exact MIME declarations win, then a type wildcard, then the universal wildcard. */
     fun artifactModuleForType(type: String): ModuleManifest? {
+        return artifactDeclarationForType(type)?.first
+    }
+
+    /** Resolves the declared viewer through the same exact/wildcard rules as its module. */
+    fun artifactViewerForType(type: String): String? = artifactDeclarationForType(type)?.second?.viewer
+
+    private fun artifactDeclarationForType(type: String): Pair<ModuleManifest, ModuleArtifactType>? {
         val canonical = canonicalType(type)
         if (!ARTIFACT_TYPE_PATTERN.matches(canonical)) return null
-        artifactOwners[canonical]?.let { return it }
+        artifactDeclarations[canonical]?.let { return it }
         val major = canonical.substringBefore('/', "")
-        if (major.isNotEmpty() && major != "*") artifactOwners["$major/*"]?.let { return it }
-        return artifactOwners["*/*"]
+        if (major.isNotEmpty() && major != "*") artifactDeclarations["$major/*"]?.let { return it }
+        return artifactDeclarations["*/*"]
     }
 
     fun moduleIdForArtifactType(type: String): String? = artifactModuleForType(type)?.id
@@ -74,6 +84,9 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
         runtime: ModuleRuntime,
     ): List<ConnectorDefinition> {
         val definitions = modules().filter { it.tools.isNotEmpty() }.map { manifest ->
+            ActionPolicyDefaults.registerDefaults(manifest.id, manifest.tools.associate { tool ->
+                tool.name to if (tool.access == ModuleToolAccess.READ) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK
+            })
             connectorDefinition(manifest, runtime)
         }
         definitions.forEach { definition ->
@@ -84,6 +97,19 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
             }
         }
         return definitions.mapNotNull { connectorRegistry.get(it.id) }
+    }
+
+    /** Connects no-permission bundled modules only before the user has explicitly chosen connection state. */
+    fun installAndConnectUnselected(
+        connectorRegistry: ConnectorRegistry,
+        runtime: ModuleRuntime,
+    ): List<ConnectorDefinition> = installConnectorDefinitions(connectorRegistry, runtime).also { definitions ->
+        definitions.forEach { definition ->
+            if (connectorRegistry.state(definition) == com.jarvys.agent.connectors.ConnectorState.DISCONNECTED &&
+                definition.readPermissions.isEmpty() && definition.connectionPermissions.isEmpty()) {
+                connectorRegistry.connectIfUnselected(definition.id)
+            }
+        }
     }
 
     /** Creates the sole CoreTool adapter for each available bundled module declaration. */
@@ -130,6 +156,7 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
             connectionPermissions = emptyList(),
             presentationGroup = ConnectorPresentationGroup.ON_DEVICE,
             operationAccessGranted = { true },
+            usesDedicatedToolAdapter = true,
         )
     }
 
@@ -137,6 +164,7 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
         existing.name == requested.name && existing.version == requested.version &&
             existing.operations.map { it.name to it.inputSchema.toString() } ==
             requested.operations.map { it.name to it.inputSchema.toString() } &&
+            existing.usesDedicatedToolAdapter == requested.usesDedicatedToolAdapter &&
             existing.runtime is ModuleConnectorRuntime
 
     companion object {
@@ -159,15 +187,43 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
 
         fun fromAssets(context: Context, assetRoot: String = BUNDLED_ASSET_ROOT): ModuleRegistry {
             val assets = context.applicationContext.assets
-            val manifests = assets.list(assetRoot).orEmpty().sorted().mapNotNull { child ->
-                val folder = "$assetRoot/$child"
-                if (MANIFEST_FILE !in assets.list(folder).orEmpty()) null else {
-                    val manifestPath = "$folder/$MANIFEST_FILE"
-                    val json = assets.open(manifestPath).bufferedReader(Charsets.UTF_8).use { it.readText() }
-                    ModuleManifestSource(folder, json)
+            return fromBundleManifests(findManifestAssets(assets, assetRoot))
+        }
+
+        /** AssetManager implementations may list nested files directly instead of listing directories. */
+        private fun findManifestAssets(assets: AssetManager, root: String): List<ModuleManifestSource> {
+            val sources = linkedMapOf<String, ModuleManifestSource>()
+            val visited = mutableSetOf<String>()
+
+            fun addManifest(manifestPath: String, moduleDirectory: String) {
+                if (moduleDirectory in sources) return
+                val json = assets.open(manifestPath).bufferedReader(Charsets.UTF_8).use { it.readText() }
+                sources[moduleDirectory] = ModuleManifestSource(moduleDirectory, json)
+            }
+
+            fun visit(directory: String) {
+                if (!visited.add(directory)) return
+                val entries = runCatching { assets.list(directory).orEmpty().toList() }
+                    .getOrDefault(emptyList()).sorted()
+                if (MANIFEST_FILE in entries) {
+                    addManifest("$directory/$MANIFEST_FILE", directory)
+                    return
+                }
+                entries.forEach { rawEntry ->
+                    val entry = rawEntry.removePrefix("$directory/")
+                    when {
+                        entry == MANIFEST_FILE -> addManifest("$directory/$entry", directory)
+                        entry.endsWith("/$MANIFEST_FILE") -> {
+                            val manifestPath = "$directory/$entry"
+                            addManifest(manifestPath, manifestPath.removeSuffix("/$MANIFEST_FILE"))
+                        }
+                        entry.isNotBlank() && entry != "." && entry != ".." -> visit("$directory/$entry")
+                    }
                 }
             }
-            return fromBundleManifests(manifests)
+
+            visit(root)
+            return sources.values.toList()
         }
 
         internal fun fromBundleManifests(sources: List<ModuleManifestSource>): ModuleRegistry =

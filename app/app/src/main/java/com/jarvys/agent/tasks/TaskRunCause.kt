@@ -21,6 +21,7 @@ enum class TaskRunCause(val code: String, private val label: Int) {
     EFFECT_OCCURRED("EFFECT_OCCURRED", R.string.task_cause_effect_occurred),
     TASK_CHANGED("TASK_CHANGED", R.string.task_cause_task_changed),
     AWAITING_USER("AWAITING_USER", R.string.task_cause_awaiting_user),
+    VISIBLE_APP_REQUIRED("VISIBLE_APP_REQUIRED", R.string.task_cause_visible_app_required),
     UNKNOWN("UNKNOWN", R.string.task_cause_unknown);
 
     fun localized(context: Context): String = AppLanguageRuntime.localizedContext(context).getString(label)

@@ -1201,6 +1201,7 @@ After:
     <string name="task_cause_effect_occurred">The run stopped after an effect</string>
     <string name="task_cause_task_changed">The task changed or was removed before the manual run</string>
     <string name="task_cause_awaiting_user">A pending action needs your approval.</string>
+    <string name="task_cause_visible_app_required">Open the app to continue this task. Its approved action will resume automatically.</string>
     <string name="task_cause_unknown">Unknown cause</string>
 
     <string name="task_detail_error_detail">Failure detail: %1$s</string>

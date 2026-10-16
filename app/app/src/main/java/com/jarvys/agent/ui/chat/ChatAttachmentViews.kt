@@ -121,22 +121,22 @@ fun UserChatAttachments(attachments: List<ChatAttachment>, sessionId: String, mo
 
 @Composable
 private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean = false,
-    onOpenPreview: (String) -> Unit = {}) {
-    key(sessionId, attachment, delivered) {
-        ScopedAttachmentFileCard(attachment, sessionId, delivered, onOpenPreview)
+    onOpenPreview: (String) -> Unit = {}, renderHtmlPreview: Boolean = false) {
+    key(sessionId, attachment, delivered, renderHtmlPreview) {
+        ScopedAttachmentFileCard(attachment, sessionId, delivered, onOpenPreview, renderHtmlPreview)
     }
 }
 
 @Composable
 private fun ScopedAttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean,
-    onOpenPreview: (String) -> Unit) {
+    onOpenPreview: (String) -> Unit, renderHtmlPreview: Boolean) {
     val context = LocalContext.current
     val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
     val available by produceState<Boolean?>(null, request) {
         value = null
         value = withContext(Dispatchers.IO) { runCatching { request.requireOwnership(context); request.resolve(context).isFile }.getOrDefault(false) }
     }
-    val htmlCandidate = delivered && attachment.mimeType == "text/html"
+    val htmlCandidate = delivered && renderHtmlPreview
     val preview by produceState<Pair<Boolean, HtmlPreviewDescriptor?>>(false to null, request) {
         value = false to null
         val descriptor = if (htmlCandidate) withContext(Dispatchers.IO) {
@@ -181,14 +181,38 @@ private fun ScopedAttachmentFileCard(attachment: ChatAttachment, sessionId: Stri
 
 /** Files delivered by the agent are first-class transcript entries, not Markdown paths. */
 @Composable
-internal fun DeliveredArtifactEventCard(event: AgentRunUiEvent, sessionId: String, onOpenPreview: (String) -> Unit = {}) {
+internal fun DeliveredArtifactEventCard(
+    event: AgentRunUiEvent,
+    sessionId: String,
+    onOpenPreview: (String) -> Unit = {},
+) = DeliveredArtifactEventCardContent(event, sessionId, renderAsImage = false,
+    renderHtmlPreview = false, onOpenPreview = onOpenPreview)
+
+@Composable
+internal fun DeliveredArtifactEventCard(
+    event: AgentRunUiEvent,
+    sessionId: String,
+    renderAsImage: Boolean,
+    renderHtmlPreview: Boolean = false,
+    onOpenPreview: (String) -> Unit = {},
+) = DeliveredArtifactEventCardContent(event, sessionId, renderAsImage, renderHtmlPreview, onOpenPreview)
+
+@Composable
+private fun DeliveredArtifactEventCardContent(
+    event: AgentRunUiEvent,
+    sessionId: String,
+    renderAsImage: Boolean,
+    renderHtmlPreview: Boolean,
+    onOpenPreview: (String) -> Unit,
+) {
     val attachment = event.deliveredArtifact
     Column(Modifier.fillMaxWidth().testTag("delivered-file-${event.id}")) {
         if (attachment == null) UnavailableAttachment(event.id.toString())
-        else if (event.presentationArtifact?.artifactType?.startsWith("image/", ignoreCase = true) == true) AttachmentImage(attachment, sessionId,
+        else if (renderAsImage) AttachmentImage(attachment, sessionId,
             Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 360.dp).clip(RoundedCornerShape(14.dp)),
             tagPrefix = "delivered", delivered = true)
-        else AttachmentFileCard(attachment, sessionId, delivered = true, onOpenPreview = onOpenPreview)
+        else AttachmentFileCard(attachment, sessionId, delivered = true, onOpenPreview = onOpenPreview,
+            renderHtmlPreview = renderHtmlPreview)
     }
 }
 

@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class TaskPendingActionStatus { PENDING, CLAIMED, EXECUTED, REJECTED, STALE, INTERRUPTED_UNCERTAIN }
+enum class TaskPendingActionStatus { PENDING, CLAIMED, WAITING_VISIBLE_APP, EXECUTED, REJECTED, STALE, INTERRUPTED_UNCERTAIN }
 
 data class TaskPendingAction(
     val id: String,
@@ -37,7 +37,7 @@ data class TaskPendingAction(
 }
 
 sealed interface TaskPendingActionClaim {
-    data class Claimed(val action: TaskPendingAction) : TaskPendingActionClaim
+    data class Claimed(val action: TaskPendingAction, val wasWaitingForVisibleApp: Boolean = false) : TaskPendingActionClaim
     data class Stale(val action: TaskPendingAction) : TaskPendingActionClaim
     data class NotPending(val action: TaskPendingAction?) : TaskPendingActionClaim
 }
@@ -102,6 +102,11 @@ class TaskPendingActionStore private constructor(
         readLatestLocked().values.filter { it.taskId == taskId }
     }
 
+    fun waitingForVisibleApp(): List<TaskPendingAction> = withLock {
+        recoverForeignClaimsLocked()
+        readLatestLocked().values.filter { it.status == TaskPendingActionStatus.WAITING_VISIBLE_APP }
+    }
+
     fun get(id: String): TaskPendingAction? = withLock {
         recoverForeignClaimsLocked()
         readLatestLocked()[id]
@@ -111,7 +116,7 @@ class TaskPendingActionStore private constructor(
     fun claim(id: String, currentTask: ScheduledTask?): TaskPendingActionClaim = withLock {
         recoverForeignClaimsLocked()
         val current = readLatestLocked()[id] ?: return@withLock TaskPendingActionClaim.NotPending(null)
-        if (current.status != TaskPendingActionStatus.PENDING) {
+        if (current.status !in setOf(TaskPendingActionStatus.PENDING, TaskPendingActionStatus.WAITING_VISIBLE_APP)) {
             return@withLock TaskPendingActionClaim.NotPending(current)
         }
         if (currentTask == null || !current.isCurrentFor(currentTask) || !validActionBinding(current)) {
@@ -119,9 +124,10 @@ class TaskPendingActionStore private constructor(
             appendLocked(stale)
             return@withLock TaskPendingActionClaim.Stale(stale)
         }
+        val wasWaitingForVisibleApp = current.status == TaskPendingActionStatus.WAITING_VISIBLE_APP
         val claimed = current.copy(status = TaskPendingActionStatus.CLAIMED, claimOwner = processToken)
         appendLocked(claimed)
-        TaskPendingActionClaim.Claimed(claimed)
+        TaskPendingActionClaim.Claimed(claimed, wasWaitingForVisibleApp)
     }
 
     fun reject(id: String, expectedBinding: String? = null): TaskPendingAction? = withLock {
@@ -147,6 +153,16 @@ class TaskPendingActionStore private constructor(
         if (current.status != TaskPendingActionStatus.CLAIMED || current.claimOwner != processToken ||
             current.actionBinding != expectedBinding || !validActionBinding(current)) return@withLock current
         current.copy(status = TaskPendingActionStatus.EXECUTED, resultJson = resultJson, claimOwner = null)
+            .also(::appendLocked)
+    }
+
+    /** Keeps an approved action resumable when its WebView host is not currently visible. */
+    fun waitForVisibleApp(id: String, expectedBinding: String, resultJson: String): TaskPendingAction? = withLock {
+        recoverForeignClaimsLocked()
+        val current = readLatestLocked()[id] ?: return@withLock null
+        if (current.status != TaskPendingActionStatus.CLAIMED || current.claimOwner != processToken ||
+            current.actionBinding != expectedBinding || !validActionBinding(current)) return@withLock current
+        current.copy(status = TaskPendingActionStatus.WAITING_VISIBLE_APP, resultJson = resultJson, claimOwner = null)
             .also(::appendLocked)
     }
 

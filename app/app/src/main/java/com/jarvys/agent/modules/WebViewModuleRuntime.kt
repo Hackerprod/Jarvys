@@ -2,7 +2,6 @@ package com.jarvys.agent.modules
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -17,7 +16,6 @@ import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.PreviewResponsePolicy
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
@@ -115,33 +113,21 @@ class WebViewModuleRuntime @JvmOverloads constructor(
             fail = { message -> result.complete(CoreToolResult.failure(message.ifBlank { "Module handler failed." })) },
         )
         return WebView(appContext).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = false
-            settings.databaseEnabled = false
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.allowFileAccessFromFileURLs = false
-            settings.allowUniversalAccessFromFileURLs = false
-            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.blockNetworkLoads = true
-            settings.javaScriptCanOpenWindowsAutomatically = false
-            settings.setSupportMultipleWindows(false)
-            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+            ModuleWebViewSecurity.configure(this)
             addJavascriptInterface(bridge, JAVASCRIPT_BRIDGE_NAME)
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
-                    if (!isModuleAssetUrl(request.url, module.bundleAssetDirectory)) return blockedResponse()
-                    return assetLoader.shouldInterceptRequest(request.url) ?: blockedResponse()
+                    if (ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null)
+                        return ModuleWebViewSecurity.blockedResponse()
+                    return assetLoader.shouldInterceptRequest(request.url) ?: ModuleWebViewSecurity.blockedResponse()
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean =
-                    !isModuleAssetUrl(request.url, module.bundleAssetDirectory)
+                    ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null
 
                 @Deprecated("Required for older WebView callbacks")
                 override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean =
-                    !isModuleAssetUrl(Uri.parse(url), module.bundleAssetDirectory)
+                    ModuleWebViewSecurity.moduleAssetPath(Uri.parse(url), module.bundleAssetDirectory) == null
 
                 override fun onReceivedError(
                     view: WebView?,
@@ -158,7 +144,7 @@ class WebViewModuleRuntime @JvmOverloads constructor(
     }
 
     private fun bootstrapHtml(handlerPath: String, exportName: String, arguments: Map<String, Any?>): String {
-        val csp = PreviewResponsePolicy.interactiveHeaders().getValue("Content-Security-Policy")
+        val csp = ModuleWebViewSecurity.executionCsp()
         val handler = handlerPath.split('/').joinToString("/") { Uri.encode(it) }
         val export = JSONObject.quote(exportName)
         val args = JSONObject(arguments).toString()
@@ -184,21 +170,6 @@ class WebViewModuleRuntime @JvmOverloads constructor(
         CoreToolResult.success(raw)
     }
 
-    private fun isModuleAssetUrl(uri: Uri, bundleAssetDirectory: String): Boolean {
-        if (!"https".equals(uri.scheme, ignoreCase = true) || uri.encodedAuthority != ASSET_AUTHORITY) return false
-        val path = uri.encodedPath ?: return false
-        val expectedPrefix = "/assets/$bundleAssetDirectory/"
-        if (!path.startsWith(expectedPrefix)) return false
-        if (ENCODED_PATH_CONTROL.containsMatchIn(path)) return false
-        val decoded = Uri.decode(path.removePrefix(expectedPrefix))
-        return ModuleWorkspacePath.isSafeBundlePath(decoded)
-    }
-
-    private fun blockedResponse() = WebResourceResponse(
-        "text/plain", "UTF-8", 403, "Forbidden", PreviewResponsePolicy.interactiveHeaders(),
-        ByteArrayInputStream("Module resource is outside its bundled assets.".toByteArray(Charsets.UTF_8)),
-    )
-
     private fun destroyWebView(view: WebView) {
         view.stopLoading()
         view.removeJavascriptInterface(JAVASCRIPT_BRIDGE_NAME)
@@ -212,8 +183,6 @@ class WebViewModuleRuntime @JvmOverloads constructor(
 
     private companion object {
         const val JAVASCRIPT_BRIDGE_NAME = "Jarvys"
-        const val ASSET_AUTHORITY = "appassets.androidplatform.net"
-        val ENCODED_PATH_CONTROL = Regex("%(?:2e|2f|5c|00|25)", RegexOption.IGNORE_CASE)
     }
 }
 

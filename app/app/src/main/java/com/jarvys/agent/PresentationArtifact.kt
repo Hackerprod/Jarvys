@@ -15,5 +15,8 @@ data class PresentationArtifact(
     val thumbnailRef: String?,
     /** Storage classification retained for transfer compatibility; presenters use module/type. */
     val storageKind: String,
-    val isGeneratedImage: Boolean = false,
-)
+) {
+    /** Generated images use a reserved artifact id prefix and IMAGE storage classification. */
+    val isGeneratedImage: Boolean
+        get() = storageKind.equals("IMAGE", ignoreCase = true) && id.startsWith("generated:")
+}

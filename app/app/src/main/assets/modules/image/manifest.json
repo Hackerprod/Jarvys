@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "name": "Image presentation",
   "artifactTypes": [
-    { "type": "image/*" }
+    { "type": "image/*", "viewer": "native/image" }
   ],
   "tools": [],
   "skills": [],

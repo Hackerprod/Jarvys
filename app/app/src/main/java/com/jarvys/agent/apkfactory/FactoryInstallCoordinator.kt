@@ -409,6 +409,9 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
 
     override fun onCreate() {
         super.onCreate()
+        com.jarvys.agent.modules.ModuleHostVisibility.install(this) {
+            com.jarvys.agent.tasks.TaskPendingActionWork.resumeWaitingForVisibleApp(this)
+        }
         // Register only the lazy facade here; SQLite opens on its first background use.
         com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this)
         clearRetiredOperationPolicyState()

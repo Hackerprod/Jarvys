@@ -9,6 +9,7 @@ import com.jarvys.agent.modules.ModuleManifest
 import com.jarvys.agent.modules.MODULE_TOOL_RESULT_KEY
 import com.jarvys.agent.modules.ModuleToolAccess
 import com.jarvys.agent.modules.ModuleToolDeclaration
+import com.jarvys.agent.modules.ModuleHostVisibility
 import org.json.JSONObject
 
 /** The single CoreTool adapter for a tool declared by any bundled module. */
@@ -96,7 +97,7 @@ class ModuleTool internal constructor(
         return if (previewId != null) CoreToolResult.preview(content, previewId) else CoreToolResult.success(content)
     }
 
-    /** WebView-backed handlers need a foreground host, so scheduled execution is always surfaced. */
+    /** ASK still uses the durable approval queue; approved handlers wait for the app to be visible. */
     override fun executeScheduledTask(
         arguments: Map<String, Any?>?,
         token: CancellationToken,
@@ -107,14 +108,50 @@ class ModuleTool internal constructor(
         if (effectiveAutonomyPolicy() == AutonomyPolicy.DENY) {
             return CoreToolResult.failure("This action is unavailable under its current policy.")
         }
-        return CoreToolResult.success(JSONObject()
-            .put("status", VISIBLE_APP_REQUIRED_STATUS)
-            .put("executed", false)
-            .put("message", "Open the app to run this action; it was deferred for visible execution.")
-            .toString())
+        if (effectiveAutonomyPolicy() == AutonomyPolicy.ASK && !approvedPendingAction) {
+            if (deferAskWrite == null) return CoreToolResult.failure("Pending action queue is unavailable")
+            return CoreToolResult.success(deferAskWrite.get().toString())
+        }
+        if (!ModuleHostVisibility.isVisible()) return visibleAppRequiredResult()
+        val validated = ToolArgumentValidator.coerceAndValidate(
+            arguments?.mapValues { it.value as Any? }, inputSchema,
+        )
+        if (validated.error != null) return CoreToolResult.failure(validated.error)
+        val invocationContext = ConnectorInvocationContext(
+            requester = requester,
+            requesterColorKey = requesterColorKey,
+            conversationId = conversationId,
+        )
+        val response = connectorRegistry.invokeForScheduledTask(
+            connectorDefinition,
+            operation,
+            JSONObject(validated.arguments),
+            token,
+            requester,
+            requesterColorKey,
+            approvedPendingAction,
+            deferAskWrite,
+            invocationContext,
+        )
+        val envelope = response.optJSONObject(MODULE_TOOL_RESULT_KEY)
+            ?: return if (response.has("status")) CoreToolResult.success(response.toString())
+            else CoreToolResult.failure(response.toString())
+        val content = envelope.optString("content", "")
+        if (!envelope.optBoolean("success", false)) return CoreToolResult.failure(content)
+        if (envelope.optBoolean("finishRun", false)) return CoreToolResult.finish(content)
+        if (envelope.optBoolean("completeContentRequired", false)) return CoreToolResult.complete(content)
+        val previewId = envelope.optString("previewId").takeIf(String::isNotBlank)
+        return if (previewId != null) CoreToolResult.preview(content, previewId) else CoreToolResult.success(content)
     }
+
+    private fun visibleAppRequiredResult() = CoreToolResult.success(JSONObject()
+        .put("status", VISIBLE_APP_REQUIRED_STATUS)
+        .put("executed", false)
+        .put("message", VISIBLE_APP_REQUIRED_MESSAGE)
+        .toString())
 
     companion object {
         const val VISIBLE_APP_REQUIRED_STATUS = "deferred_visible_app_required"
+        const val VISIBLE_APP_REQUIRED_MESSAGE = "Open the app to continue this task."
     }
 }

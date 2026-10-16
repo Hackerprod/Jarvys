@@ -1547,13 +1547,24 @@ public final class CoreAgentRuntime {
   public static CoreToolRegistry createScheduledTaskTools(
       Context context, ScheduledTask task, String sessionId,
       ConnectorRegistry connectorRegistry, ScheduledTaskWriteDeferrer deferrer) {
-    return createScheduledTaskTools(context, task, sessionId, connectorRegistry, deferrer, false);
+    Context appContext = context.getApplicationContext();
+    return createScheduledTaskTools(context, task, sessionId, connectorRegistry, deferrer, false,
+        ModuleRegistry.get(appContext));
+  }
+
+  /** Testable/runtime-injected variant used by scheduled execution with an explicit module catalog. */
+  public static CoreToolRegistry createScheduledTaskTools(
+      Context context, ScheduledTask task, String sessionId,
+      ConnectorRegistry connectorRegistry, ScheduledTaskWriteDeferrer deferrer,
+      ModuleRegistry moduleRegistry) {
+    return createScheduledTaskTools(context, task, sessionId, connectorRegistry, deferrer, false,
+        moduleRegistry);
   }
 
   private static CoreToolRegistry createScheduledTaskTools(
       Context context, ScheduledTask task, String sessionId,
       ConnectorRegistry connectorRegistry, ScheduledTaskWriteDeferrer deferrer,
-      boolean approvedPendingAction) {
+      boolean approvedPendingAction, ModuleRegistry moduleRegistry) {
     Context appContext = context.getApplicationContext();
     String creatorSession = creatorSessionId(task.getCreatedBy());
     String workspaceSession = creatorSession == null ? sessionId : creatorSession;
@@ -1564,7 +1575,7 @@ public final class CoreAgentRuntime {
     }
     CoreAgentRuntime runtime = new CoreAgentRuntime(
         appContext, sessionId, skills, null,
-        discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry),
+        discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry, moduleRegistry),
         WorkspaceTools.createScheduledTask(appContext, workspaceSession,
             false, task.getToolScope().getSkillIds()), connectorRegistry, 0,
         CorePromptBudget.standard(), false, true);
@@ -1576,7 +1587,19 @@ public final class CoreAgentRuntime {
       Context context, ScheduledTask currentTask, String toolName,
       Map<String, Object> arguments, CancellationToken token) {
     Context appContext = context.getApplicationContext();
-    ScheduledTask latestTask = new com.jarvys.agent.tasks.TaskStore(appContext).get(currentTask.getId());
+    return executeScheduledTaskAction(context, currentTask, toolName, arguments, token,
+        ConnectorRegistry.Companion.get(appContext), ModuleRegistry.get(appContext),
+        new com.jarvys.agent.tasks.TaskStore(appContext));
+  }
+
+  /** Injected variant keeps scheduled approval execution bound to the same module and connector catalogs. */
+  public static CoreToolResult executeScheduledTaskAction(
+      Context context, ScheduledTask currentTask, String toolName,
+      Map<String, Object> arguments, CancellationToken token,
+      ConnectorRegistry connectorRegistry, ModuleRegistry moduleRegistry,
+      com.jarvys.agent.tasks.TaskStore taskStore) {
+    Context appContext = context.getApplicationContext();
+    ScheduledTask latestTask = taskStore.get(currentTask.getId());
     if (latestTask == null || latestTask.getRevision() != currentTask.getRevision()) {
       return CoreToolResult.failure("Scheduled task changed after this action was approved");
     }
@@ -1586,12 +1609,12 @@ public final class CoreAgentRuntime {
       return CoreToolResult.failure("Scheduled task capability is no longer in its reviewed scope");
     }
     CoreToolRegistry registry = createScheduledTaskTools(context, currentTask,
-        "scheduled-task:" + currentTask.getId(), ConnectorRegistry.Companion.get(context), null,
-        true);
+        "scheduled-task:" + currentTask.getId(), connectorRegistry, null,
+        true, moduleRegistry);
     if (!registry.names().contains(toolName)) {
       return CoreToolResult.failure("Scheduled task capability is unavailable under current policy");
     }
-    ScheduledTask beforeDispatch = new com.jarvys.agent.tasks.TaskStore(appContext).get(currentTask.getId());
+    ScheduledTask beforeDispatch = taskStore.get(currentTask.getId());
     if (beforeDispatch == null || beforeDispatch.getRevision() != currentTask.getRevision()
         || !beforeDispatch.getToolScope().equals(currentTask.getToolScope())
         || !beforeDispatch.getCreatorToolNames().equals(currentTask.getCreatorToolNames())) {
@@ -2319,37 +2342,38 @@ public final class CoreAgentRuntime {
     return discoverConnectorTools(context, sessionId, ConnectorRegistry.Companion.get(context));
   }
 
-  private static List<CoreTool> discoverConnectorTools(
+  static List<CoreTool> discoverConnectorTools(
       Context context, String sessionId, ConnectorRegistry registry) {
+    return discoverConnectorTools(context, sessionId, registry, ModuleRegistry.get(context));
+  }
+
+  static List<CoreTool> discoverConnectorTools(
+      Context context, String sessionId, ConnectorRegistry registry, ModuleRegistry modules) {
     registry.refreshStates();
     List<CoreTool> result = new ArrayList<>();
     for (ConnectorDefinition definition : registry.connectedDefinitions()) {
+      if (definition.getUsesDedicatedToolAdapter()) continue;
       for (ConnectorOperation operation : definition.getOperations()) {
         if (definition.getOperationAccessGranted() != null
             && !definition.getOperationAccessGranted().invoke(operation.getName())) continue;
         result.add(new CoreConnectorTool(registry, definition, operation).withConversation(context, sessionId));
       }
     }
-    result.addAll(discoverModuleTools(context, sessionId, registry));
+    result.addAll(discoverModuleTools(context, sessionId, registry, modules));
     return result;
   }
 
   /** Bundled modules enter the same connector policy catalog and tool list as other connectors. */
   private static List<CoreTool> discoverModuleTools(
       Context context, String sessionId, ConnectorRegistry registry) {
+    return discoverModuleTools(context, sessionId, registry, ModuleRegistry.get(context));
+  }
+
+  private static List<CoreTool> discoverModuleTools(
+      Context context, String sessionId, ConnectorRegistry registry, ModuleRegistry modules) {
     if (context == null) return Collections.emptyList();
-    ModuleRegistry modules = ModuleRegistry.get(context);
     WebViewModuleRuntime runtime = new WebViewModuleRuntime(context);
-    List<ConnectorDefinition> definitions = modules.installConnectorDefinitions(registry, runtime);
-    for (ConnectorDefinition definition : definitions) {
-      if (registry.state(definition) == ConnectorState.DISCONNECTED
-          && definition.getReadPermissions().isEmpty()
-          && definition.getConnectionPermissions().isEmpty()) {
-        // These manifests are bundled app code with no external permission grant. Their tools
-        // remain individually governed by the existing Allow/Ask/Deny action policy.
-        registry.connect(definition.getId());
-      }
-    }
+    modules.installAndConnectUnselected(registry, runtime);
     return new ArrayList<CoreTool>(modules.tools(registry, runtime, sessionId));
   }
 

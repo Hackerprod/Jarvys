@@ -1,7 +1,11 @@
 package com.jarvys.agent.modules
 
 import com.jarvys.agent.connectors.ActionPolicyDefaults
+import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.CoreToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -34,12 +38,35 @@ class ModuleRegistryTest {
         assertNull(registry.moduleIdForArtifactType(""))
     }
 
-    @Test fun parsesDeclarationsAndRegistersAccessDerivedPolicyDefaults() {
+    @Test fun resolvesManifestViewerWithTheSameArtifactTypeSpecificity() {
+        val registry = ModuleRegistry.fromManifests(listOf(
+            manifest("com.test.module.files", "Files", artifacts = """[{"type":"*/*","viewer":"native/file"}]"""),
+            manifest("com.test.module.images", "Images", artifacts = """[{"type":"image/*","viewer":"native/image"}]"""),
+            manifest("com.test.module.png", "PNG", artifacts = """[{"type":"image/png","viewer":"native/png"}]"""),
+        ))
+
+        assertEquals("native/png", registry.artifactViewerForType("IMAGE/PNG; charset=binary"))
+        assertEquals("native/image", registry.artifactViewerForType("image/jpeg"))
+        assertEquals("native/file", registry.artifactViewerForType("application/pdf"))
+        assertNull(registry.artifactViewerForType(""))
+    }
+
+    @Test fun parsingHasNoPolicySideEffectsAndInstallationRegistersAccessDerivedDefaults() {
         val registry = ModuleRegistry.fromManifests(listOf(toolManifest()))
         val module = registry.module("com.test.module.tools")
 
         assertNotNull(module)
         assertEquals(listOf("read_items", "write_items"), module!!.tools.map { it.name })
+        assertEquals(false, ActionPolicyDefaults.registeredActions().any { it.connectorId == module.id })
+
+        val connectorRegistry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            private val connections = mutableMapOf<String, Boolean>()
+            override fun isConnected(id: String) = connections[id] == true
+            override fun setConnected(id: String, connected: Boolean) { connections[id] = connected }
+            override fun hasConnectionChoice(id: String) = connections.containsKey(id)
+        }, { true }, ApprovalGate.INSTANCE)
+        registry.installConnectorDefinitions(connectorRegistry, ModuleRuntime { _, _, _ -> CoreToolResult.success("ok") })
+
         assertEquals(AutonomyPolicy.ALLOW,
             ActionPolicyDefaults.descriptor(module.id, "read_items").defaultPolicy)
         assertEquals(AutonomyPolicy.ASK,

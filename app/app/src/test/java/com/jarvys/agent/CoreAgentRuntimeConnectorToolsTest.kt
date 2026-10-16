@@ -18,12 +18,19 @@ import com.jarvys.agent.skills.SkillEntry
 import com.jarvys.agent.skills.SkillMetadata
 import com.jarvys.agent.skills.SkillSource
 import com.jarvys.agent.mcp.McpToolDefinition
+import com.jarvys.agent.modules.ModuleRegistry
+import androidx.test.core.app.ApplicationProvider
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.json.JSONObject
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class CoreAgentRuntimeConnectorToolsTest {
     private class Preferences : ConnectorConnectionPreferences {
         private val values = mutableMapOf<String, Boolean>()
@@ -57,6 +64,36 @@ class CoreAgentRuntimeConnectorToolsTest {
         val names = runtime.createTools().names()
         assertTrue("calendar tool omitted: $names", CalendarConnector.SEARCH_TOOL in names)
         assertTrue("MCP tool omitted: $names", "mcp_lookup" in names)
+    }
+
+    @Test fun repeatedDiscoveryExposesEachModuleToolOnceAndPreservesExplicitDisconnect() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val moduleId = "com.test.module.discovery"
+        val modules = ModuleRegistry.fromManifests(listOf("""{"schemaVersion":1,"id":"$moduleId",
+            "version":"1.0.0","name":"Discovery test","artifactTypes":[],"skills":[],"capabilities":[],
+            "tools":[{"name":"read_items","description":"Read items",
+              "inputSchema":{"type":"object"},"access":"read","handler":"logic/tools.js#readItems"}]}"""))
+        val preferences = object : ConnectorConnectionPreferences {
+            private val choices = mutableMapOf<String, Boolean>()
+            override fun isConnected(id: String) = choices[id] == true
+            override fun setConnected(id: String, connected: Boolean) { choices[id] = connected }
+            override fun hasConnectionChoice(id: String) = choices.containsKey(id)
+        }
+        val registry = ConnectorRegistry.createForTests(preferences, { true }, ApprovalGate.INSTANCE)
+
+        repeat(2) {
+            val discovered = CoreAgentRuntime.discoverConnectorTools(context, "module-discovery-test", registry, modules)
+            assertEquals(1, discovered.count { it.declaration().name == "read_items" })
+            assertFalse(discovered.any {
+                it is CoreConnectorTool && it.declaration().name == CoreConnectorTool.toolName(moduleId, "read_items")
+            })
+        }
+        assertTrue(registry.connectedDefinitions().single().usesDedicatedToolAdapter)
+
+        registry.disconnect(moduleId)
+        val afterDisconnect = CoreAgentRuntime.discoverConnectorTools(context, "module-discovery-test", registry, modules)
+        assertFalse(afterDisconnect.any { it.declaration().name == "read_items" })
+        assertTrue(registry.connectedDefinitions().isEmpty())
     }
 
     @Test fun connectedUsageNoteIsAddedToInstructionsAndOmittedWhenDisconnected() {

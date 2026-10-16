@@ -9,7 +9,9 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import org.json.JSONObject
 
-enum class TaskPendingActionExecutionStatus { EXECUTED, INTERRUPTED_UNCERTAIN, STALE, NOT_PENDING, NOT_FOUND }
+enum class TaskPendingActionExecutionStatus {
+    EXECUTED, WAITING_VISIBLE_APP, INTERRUPTED_UNCERTAIN, STALE, NOT_PENDING, NOT_FOUND,
+}
 
 /** Single-use approval boundary. CLAIMED is durable before any real tool can run. */
 class TaskPendingActionExecution(
@@ -17,6 +19,8 @@ class TaskPendingActionExecution(
     private val store: TaskPendingActionStore,
     private val currentTask: (String) -> ScheduledTask?,
     private val dismissNotification: (String) -> Unit = { TaskNotifier.dismissPendingAction(context, it) },
+    private val onVisibleAppRequired: (ScheduledTask, TaskPendingAction) -> Unit = { _, _ -> },
+    private val onVisibleAppActionExecuted: (ScheduledTask, TaskPendingAction) -> Unit = { _, _ -> },
 ) {
     fun execute(
         actionId: String,
@@ -37,6 +41,7 @@ class TaskPendingActionExecution(
             }
             is TaskPendingActionClaim.Claimed -> {
                 val action = claim.action
+                val resumedAfterVisibleWait = claim.wasWaitingForVisibleApp
                 val task = currentTask(taskId)
                 if (task == null || !action.isCurrentFor(task)) {
                     store.markInterruptedUncertain(actionId, action.actionBinding,
@@ -53,8 +58,13 @@ class TaskPendingActionExecution(
                     return TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
                 val receipt = JSONObject().put("success", result.success).put("content", result.content).toString()
+                val deferredUntilVisible = result.success && runCatching {
+                    JSONObject(result.content).optString("status") ==
+                        com.jarvys.agent.ModuleTool.VISIBLE_APP_REQUIRED_STATUS
+                }.getOrDefault(false)
                 val status = runCatching {
-                    if (result.success) store.markExecuted(actionId, action.actionBinding, receipt)?.status
+                    if (deferredUntilVisible) store.waitForVisibleApp(actionId, action.actionBinding, receipt)?.status
+                    else if (result.success) store.markExecuted(actionId, action.actionBinding, receipt)?.status
                     else store.markInterruptedUncertain(actionId, action.actionBinding,
                         JSONObject().put("success", false).put("content", result.content)
                             .put("status", TaskPendingActionStatus.INTERRUPTED_UNCERTAIN.name).toString())?.status
@@ -63,8 +73,17 @@ class TaskPendingActionExecution(
                         uncertainReceipt("result_receipt_not_durable")) }.getOrNull()?.status
                 }
                 dismissNotification(actionId)
-                if (status == TaskPendingActionStatus.EXECUTED) TaskPendingActionExecutionStatus.EXECUTED
-                else TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
+                when (status) {
+                    TaskPendingActionStatus.WAITING_VISIBLE_APP -> {
+                        onVisibleAppRequired(task, action)
+                        TaskPendingActionExecutionStatus.WAITING_VISIBLE_APP
+                    }
+                    TaskPendingActionStatus.EXECUTED -> {
+                        if (resumedAfterVisibleWait) onVisibleAppActionExecuted(task, action)
+                        TaskPendingActionExecutionStatus.EXECUTED
+                    }
+                    else -> TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
+                }
             }
         }
     }
@@ -77,7 +96,9 @@ class TaskPendingActionExecution(
 
 /** Notification and detail approvals are unique WorkManager requests, independent of task runs. */
 object TaskPendingActionWork {
-    fun enqueue(context: Context, action: TaskPendingAction): Boolean = runCatching {
+    fun enqueue(context: Context, action: TaskPendingAction): Boolean = enqueue(context, action, ExistingWorkPolicy.KEEP)
+
+    private fun enqueue(context: Context, action: TaskPendingAction, policy: ExistingWorkPolicy): Boolean = runCatching {
         val request = androidx.work.OneTimeWorkRequest.Builder(TaskPendingActionWorker::class.java)
             .setInputData(Data.Builder()
                 .putString(TaskPendingActionWorker.KEY_ACTION_ID, action.id)
@@ -85,9 +106,69 @@ object TaskPendingActionWork {
                 .build())
             .build()
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
-            "$WORK_NAME_PREFIX${action.id}", ExistingWorkPolicy.KEEP, request)
+            "$WORK_NAME_PREFIX${action.id}", policy, request)
         true
     }.getOrDefault(false)
+
+    /** Requeues already-approved module calls when an Activity gives them a visible WebView host. */
+    fun resumeWaitingForVisibleApp(context: Context) {
+        TaskPendingActionStore(context.applicationContext).waitingForVisibleApp()
+            .forEach { enqueue(context, it, ExistingWorkPolicy.REPLACE) }
+    }
+
+    internal fun execution(
+        context: Context,
+        pendingStore: TaskPendingActionStore,
+        taskStore: TaskStore = TaskStore(context.applicationContext),
+        notifications: ScheduledTaskNotifications = TaskNotifier,
+        now: () -> Long = System::currentTimeMillis,
+    ): TaskPendingActionExecution = TaskPendingActionExecution(
+        context = context.applicationContext,
+        store = pendingStore,
+        currentTask = taskStore::get,
+        onVisibleAppRequired = { task, _ ->
+            val current = taskStore.get(task.id)
+            if (current != null && current.revision == task.revision) {
+                val cause = TaskRunCause.VISIBLE_APP_REQUIRED
+                runCatching {
+                    taskStore.updateRuntimeSnapshot(
+                        current.copy(
+                            state = TaskState.NeedsAttention(cause.code),
+                            nextRunAt = null,
+                            openIncidentCause = cause,
+                            updatedAt = maxOf(current.updatedAt, now()),
+                        ),
+                        current.revision,
+                        current,
+                    )
+                }.onSuccess { notifications.attention(context.applicationContext, it, cause) }
+            }
+        },
+        onVisibleAppActionExecuted = { task, action ->
+            val current = taskStore.get(task.id)
+            if (current != null && current.revision == task.revision &&
+                current.openIncidentCause == TaskRunCause.VISIBLE_APP_REQUIRED) {
+                val completedAt = maxOf(current.updatedAt, now())
+                val resumedState = if (action.resumeState == "PAUSED") TaskState.Paused else TaskState.Active
+                val nextRun = if (resumedState == TaskState.Active) {
+                    ScheduleCalculator().nextRunAfter(current.copy(state = TaskState.Active), completedAt)
+                } else current.nextRunAt
+                runCatching {
+                    taskStore.updateRuntimeSnapshot(
+                        current.copy(
+                            state = resumedState,
+                            nextRunAt = nextRun,
+                            openIncidentCause = null,
+                            lastIncidentRecoveredAt = completedAt,
+                            updatedAt = completedAt,
+                        ),
+                        current.revision,
+                        current,
+                    )
+                }.onSuccess { notifications.recovered(context.applicationContext, it) }
+            }
+        },
+    )
 
     internal const val WORK_NAME_PREFIX = "scheduled-task-approved-action:"
 }
@@ -102,8 +183,14 @@ class TaskPendingActionWorker(context: Context, parameters: WorkerParameters) : 
             ?: TaskPendingActionExecutor { _, _, _ -> error("Task action executor is unavailable") }
         val pendingStore = TaskPendingActionStore(app)
         val pending = pendingStore.get(actionId)
-        val status = TaskPendingActionExecution(app, pendingStore, TaskStore(app)::get)
+        val taskStore = TaskStore(app)
+        val status = TaskPendingActionWork.execution(app, pendingStore, taskStore)
             .execute(actionId, taskId, executor)
+        if (status == TaskPendingActionExecutionStatus.WAITING_VISIBLE_APP &&
+            com.jarvys.agent.modules.ModuleHostVisibility.isVisible()) {
+            // Close the race where the Activity resumed just before WAITING_VISIBLE_APP was persisted.
+            TaskPendingActionWork.resumeWaitingForVisibleApp(app)
+        }
         if (status == TaskPendingActionExecutionStatus.STALE && pending?.taskId == taskId) {
             TaskStore(app).get(taskId)?.let { current -> TaskNotifier.pendingActionExpired(app, current, pending) }
         }

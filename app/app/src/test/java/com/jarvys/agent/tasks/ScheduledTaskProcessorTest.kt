@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.AgentRunUiState
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.CoreAgentRuntime
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
@@ -23,6 +24,8 @@ import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.modules.ModuleHostVisibility
+import com.jarvys.agent.modules.ModuleRegistry
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
 import com.jarvys.agent.proactive.ProactiveCoreLoopFactory
@@ -157,6 +160,80 @@ class ScheduledTaskProcessorTest {
         assertEquals(TaskState.AwaitingUser,
             pendingStore.stateForTask(task.id, task.revision, task.state))
         assertEquals(1, notifications.pendingActionCalls.get())
+    }
+
+    @Test fun approvedModuleWriteWaitsForVisibleAppWithoutRequestingApprovalAgain() {
+        val moduleId = "com.test.module.scheduled-write"
+        val modules = ModuleRegistry.fromManifests(listOf("""{"schemaVersion":1,"id":"$moduleId",
+            "version":"1.0.0","name":"Scheduled write","artifactTypes":[],"skills":[],"capabilities":[],
+            "tools":[{"name":"write_items","description":"Write an item",
+              "inputSchema":{"type":"object","properties":{"name":{"type":"string"}},
+                "required":["name"],"additionalProperties":false},
+              "access":"write","handler":"logic/tools.js#writeItems"}]}"""))
+        val preferences = object : ConnectorConnectionPreferences {
+            private val values = mutableMapOf<String, Boolean>()
+            override fun isConnected(id: String) = values[id] == true
+            override fun setConnected(id: String, connected: Boolean) { values[id] = connected }
+            override fun hasConnectionChoice(id: String) = values.containsKey(id)
+        }
+        val connectorRegistry = ConnectorRegistry.createForTests(preferences, { true }, ApprovalGate.INSTANCE)
+        val taskName = "write_items"
+        val scheduledTask = task(toolScope = TaskToolScope("LISTED", listOf(taskName), writes = "ALLOW"))
+            .copy(creatorToolNames = listOf(taskName))
+        val taskStore = TaskStore(Files.createTempDirectory("scheduled-module-visible").resolve("tasks.jsonl").toFile())
+        val persistedTask = taskStore.create(scheduledTask)
+        val pendingStore = TaskPendingActionStore(
+            Files.createTempDirectory("scheduled-module-visible-actions").resolve("pending.jsonl").toFile())
+        val notifications = FakeNotifications()
+        val factory = FakeLoopFactory { turn, transcript, declarations, _ ->
+            assertEquals(setOf(taskName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("module-write", taskName, mapOf("name" to "report"))))
+            else {
+                assertTrue(transcript.joinToString("\n") { it.content }.contains("pending_user_approval"))
+                ModelReply("The write is waiting for approval.", emptyList())
+            }
+        }
+
+        val result = processor(factory, connectorRegistry, notifications = notifications,
+            pendingActions = pendingStore, moduleRegistry = modules)
+            .execute(persistedTask, 700L, 701L, "run-module-write-ask", CancellationToken.cancellable())
+
+        assertEquals("OK", result.status)
+        assertEquals("PENDING", result.toolsCalled.single().outcome)
+        assertEquals(1, notifications.pendingActionCalls.get())
+        val action = pendingStore.listForTask(persistedTask.id).single()
+        assertEquals(TaskPendingActionStatus.PENDING, action.status)
+
+        ModuleHostVisibility.setVisibleForTests(false)
+        try {
+            val approvalExecution = TaskPendingActionWork.execution(
+                context, pendingStore, taskStore, notifications, now = { 800L },
+            )
+            val approvalResult = approvalExecution.execute(action.id, persistedTask.id,
+                TaskPendingActionExecutor { _, approvedTask, queued ->
+                    CoreAgentRuntime.executeScheduledTaskAction(
+                        context, approvedTask, queued.toolName, mapOf("name" to "report"),
+                        CancellationToken.cancellable(), connectorRegistry, modules, taskStore,
+                    )
+                })
+
+            assertEquals(TaskPendingActionExecutionStatus.WAITING_VISIBLE_APP, approvalResult)
+            assertEquals(TaskPendingActionStatus.WAITING_VISIBLE_APP, pendingStore.get(action.id)?.status)
+            assertEquals(1, pendingStore.waitingForVisibleApp().size)
+            assertEquals(1, pendingStore.listForTask(persistedTask.id).size)
+            assertEquals(1, notifications.pendingActionCalls.get())
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED, notifications.attentionCause)
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED,
+                taskStore.get(persistedTask.id)?.openIncidentCause)
+            assertEquals(TaskState.NeedsAttention(TaskRunCause.VISIBLE_APP_REQUIRED.code),
+                taskStore.get(persistedTask.id)?.state)
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED.localized(context), notifications.attentionText)
+            assertTrue(notifications.attentionText!!.contains("app", ignoreCase = true))
+            assertFalse(pendingStore.stateForTask(persistedTask.id, persistedTask.revision,
+                taskStore.get(persistedTask.id)?.state) == TaskState.AwaitingUser)
+        } finally {
+            ModuleHostVisibility.setVisibleForTests(null)
+        }
     }
 
     @Test fun askReadIsQueuedInsteadOfRunningInTheBackground() {
@@ -571,8 +648,9 @@ class ScheduledTaskProcessorTest {
         store: com.jarvys.agent.LocalRunStore = com.jarvys.agent.LocalRunStore(context),
         notifications: FakeNotifications,
         pendingActions: TaskPendingActionStore = TaskPendingActionStore(context),
+        moduleRegistry: ModuleRegistry = ModuleRegistry.get(context),
     ) = ScheduledTaskProcessor(context, factory, registry, store, fixedClock(), notifications,
-        TaskStore(context), pendingActions)
+        TaskStore(context), pendingActions, moduleRegistry)
 
     private fun task(toolScope: TaskToolScope = TaskToolScope("READ_ONLY", emptyList()),
                      delivery: TaskDelivery = TaskDelivery.ONLY_IF_NOTABLE,
@@ -686,6 +764,8 @@ class ScheduledTaskProcessorTest {
         val attentionCalls = AtomicInteger()
         val recoveryCalls = AtomicInteger()
         val pendingActionCalls = AtomicInteger()
+        var attentionCause: TaskRunCause? = null
+        var attentionText: String? = null
         var postResult = true
         override fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
                             messageId: String, title: String, body: String, urgency: String,
@@ -695,6 +775,8 @@ class ScheduledTaskProcessorTest {
         }
         override fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean {
             attentionCalls.incrementAndGet()
+            attentionCause = cause
+            attentionText = cause.localized(context)
             return true
         }
         override fun recovered(context: Context, task: ScheduledTask): Boolean {

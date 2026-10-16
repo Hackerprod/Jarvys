@@ -187,7 +187,7 @@ data class AgentRunUiEvent(
             generatedImageMimeType = mimeType, generatedImageSize = size,
             generatedImageStatus = status, generatedImageError = error,
             presentationArtifact = PresentationArtifact(
-                id = relativePath ?: "generated:$timestampMillis",
+                id = relativePath?.let { "generated:$it" } ?: "generated:$timestampMillis",
                 artifactType = mimeType,
                 moduleId = null,
                 name = relativePath?.substringAfterLast('/') ?: "artifact",
@@ -199,7 +199,6 @@ data class AgentRunUiEvent(
                 manifestJson = null,
                 thumbnailRef = null,
                 storageKind = "IMAGE",
-                isGeneratedImage = true,
             ),
         )
 

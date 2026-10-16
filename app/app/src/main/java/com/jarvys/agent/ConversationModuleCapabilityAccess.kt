@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Looper
 import com.jarvys.agent.modules.ModuleCapabilityAccess
 import com.jarvys.agent.modules.ModuleExecutionRequest
+import com.jarvys.agent.modules.ModuleManifest
 import com.jarvys.agent.modules.ModuleWorkspacePath
 import org.json.JSONObject
 import java.io.File
@@ -12,13 +13,19 @@ import java.util.concurrent.CancellationException
 /** Host implementation for one module invocation, pinned to the executing conversation. */
 internal class ConversationModuleCapabilityAccess(
     context: Context,
-    request: ModuleExecutionRequest,
+    override val conversationId: String,
+    private val module: ModuleManifest,
     private val token: CancellationToken,
     private val progress: CoreTool.ProgressListener?,
 ) : ModuleCapabilityAccess {
+    constructor(
+        context: Context,
+        request: ModuleExecutionRequest,
+        token: CancellationToken,
+        progress: CoreTool.ProgressListener?,
+    ) : this(context, requireNotNull(request.conversationId), request.module, token, progress)
+
     private val appContext = context.applicationContext
-    override val conversationId = requireNotNull(request.conversationId)
-    private val module = request.module
     private val workspace = WorkspaceStore(
         File(appContext.filesDir, "jarvys/workspaces"),
         WorkspaceStore.projectIdForSession(conversationId),

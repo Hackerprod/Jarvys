@@ -697,11 +697,10 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         manifestJson = manifest_json,
         thumbnailRef = thumbnail_ref,
         storageKind = kind,
-        isGeneratedImage = kind.equals("IMAGE", ignoreCase = true) && artifact_id.startsWith("generated:"),
     )
 
     private fun GeneratedImage.toPresentationArtifact(itemKey: String) = PresentationArtifact(
-        id = itemKey,
+        id = image_path?.let { "generated:$it" } ?: itemKey,
         artifactType = mime_type ?: "application/octet-stream",
         moduleId = null,
         name = image_path?.substringAfterLast('/') ?: "artifact",
@@ -713,7 +712,6 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         manifestJson = null,
         thumbnailRef = null,
         storageKind = "IMAGE",
-        isGeneratedImage = true,
     )
 
     private fun ConversationArtifact.toChatAttachment(): ChatAttachment? = runCatching {

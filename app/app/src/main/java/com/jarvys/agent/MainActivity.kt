@@ -267,10 +267,13 @@ private object Routes {
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
     const val WORKSPACE_SESSION_PREVIEW = AppNavigationBackPolicy.WORKSPACE_SESSION_PREVIEW
     const val ARTIFACT_PREVIEW = AppNavigationBackPolicy.ARTIFACT_PREVIEW
+    const val MODULE_ARTIFACT_VIEWER = "module-artifact-viewer"
     fun crew(missionId: String) = CrewNavigationRoutes.mission(missionId)
     fun crewBot(missionId: String, botId: String) = CrewNavigationRoutes.bot(missionId, botId)
     fun connectorDevice(id: String) = AppNavigationBackPolicy.connectorDevice(id)
     fun connectorRemote(id: String, title: String) = AppNavigationBackPolicy.connectorRemote(id, title)
+    fun moduleArtifactViewer(sessionId: String, artifactId: String) =
+        "$MODULE_ARTIFACT_VIEWER/${Uri.encode(sessionId)}/${Uri.encode(artifactId)}"
     fun connectorGoogle(id: String, title: String) = AppNavigationBackPolicy.connectorGoogle(id, title)
     fun providerService(id: String) = AppNavigationBackPolicy.providerService(id)
     fun taskDetail(id: String) = TasksNavigationRoutes.detail(id)
@@ -1995,7 +1998,8 @@ private fun JarvysApp(
         },
         onConversationAction = onConversationAction,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW
-            && route != Routes.WORKSPACE_SESSION_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
+            && route != Routes.WORKSPACE_SESSION_PREVIEW && route != Routes.ARTIFACT_PREVIEW
+            && route != Routes.MODULE_ARTIFACT_VIEWER,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
@@ -2178,9 +2182,14 @@ private fun JarvysApp(
                         showAgentEvents = showAgentEvents,
                         onOpenPreview = { projectId ->
                             val sessionId = state.executionSessionId
-                            val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
-                                "artifact-preview/${Uri.encode(sessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
-                            else "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(sessionId)}/${Uri.encode(projectId)}"
+                            val moduleArtifactId = com.jarvys.agent.modules.ModuleArtifactViewerLaunch
+                                .artifactIdFromToken(projectId)
+                            val destination = when {
+                                moduleArtifactId != null -> Routes.moduleArtifactViewer(sessionId, moduleArtifactId)
+                                HtmlPreviewDescriptor.isSnapshotToken(projectId) ->
+                                    "artifact-preview/${Uri.encode(sessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                                else -> "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(sessionId)}/${Uri.encode(projectId)}"
+                            }
                             navController.navigate(destination) { launchSingleTop = true }
                         },
                         onOpenSkillFile = { skillFileLink = it },
@@ -2268,9 +2277,14 @@ private fun JarvysApp(
                             emptyReport = null,
                             connectorRegistry = connectorRegistry,
                             onOpenPreview = { projectId ->
-                                val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
-                                    "artifact-preview/${Uri.encode(conversationSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
-                                else "workspace-preview/${Uri.encode(projectId)}"
+                                val moduleArtifactId = com.jarvys.agent.modules.ModuleArtifactViewerLaunch
+                                    .artifactIdFromToken(projectId)
+                                val destination = when {
+                                    moduleArtifactId != null -> Routes.moduleArtifactViewer(conversationSessionId, moduleArtifactId)
+                                    HtmlPreviewDescriptor.isSnapshotToken(projectId) ->
+                                        "artifact-preview/${Uri.encode(conversationSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                                    else -> "workspace-preview/${Uri.encode(projectId)}"
+                                }
                                 navController.navigate(destination) { launchSingleTop = true }
                             },
                             onOpenSkillFile = { skillFileLink = it },
@@ -2389,11 +2403,16 @@ private fun JarvysApp(
                     onBoardReferenceConsumed = { crewBoardReference = null },
                     onBoardReference = { _, reference -> crewBoardReference = reference; navController.popBackStack() },
                     onOpenPreview = { projectId ->
-                        val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
-                            "artifact-preview/${Uri.encode(crewSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
-                        else if (activeWorkspaceCrewSessionId != null)
-                            "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(crewSessionId)}/${Uri.encode(projectId)}"
-                        else "workspace-preview/${Uri.encode(projectId)}"
+                        val moduleArtifactId = com.jarvys.agent.modules.ModuleArtifactViewerLaunch
+                            .artifactIdFromToken(projectId)
+                        val destination = when {
+                            moduleArtifactId != null -> Routes.moduleArtifactViewer(crewSessionId, moduleArtifactId)
+                            HtmlPreviewDescriptor.isSnapshotToken(projectId) ->
+                                "artifact-preview/${Uri.encode(crewSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                            activeWorkspaceCrewSessionId != null ->
+                                "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(crewSessionId)}/${Uri.encode(projectId)}"
+                            else -> "workspace-preview/${Uri.encode(projectId)}"
+                        }
                         navController.navigate(destination) { launchSingleTop = true }
                     },
                 )
@@ -2418,6 +2437,17 @@ private fun JarvysApp(
                 ) { entry ->
                     WorkspacePreviewScreen(HtmlPreviewDescriptor.TOKEN_PREFIX + entry.arguments?.getString("artifactId").orEmpty(),
                         sessionId = entry.arguments?.getString("sessionId"))
+                }
+                composable(
+                    route = "${Routes.MODULE_ARTIFACT_VIEWER}/{sessionId}/{artifactId}",
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType },
+                        navArgument("artifactId") { type = NavType.StringType }),
+                ) { entry ->
+                    com.jarvys.agent.modules.ModuleArtifactViewerScreen(
+                        conversationId = entry.arguments?.getString("sessionId").orEmpty(),
+                        artifactId = entry.arguments?.getString("artifactId").orEmpty(),
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
     }

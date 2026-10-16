@@ -1,7 +1,5 @@
 package com.jarvys.agent.modules
 
-import com.jarvys.agent.connectors.ActionPolicyDefaults
-import com.jarvys.agent.connectors.AutonomyPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -65,10 +63,6 @@ object ModuleManifestParser {
         require(artifactTypes.map { canonicalType(it.type) }.distinct().size == artifactTypes.size) {
             "Module artifact type declarations must be unique"
         }
-
-        ActionPolicyDefaults.registerDefaults(id, tools.associate { tool ->
-            tool.name to if (tool.access == ModuleToolAccess.READ) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK
-        })
 
         return ModuleManifest(
             schemaVersion = 1,

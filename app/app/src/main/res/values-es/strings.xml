@@ -1201,6 +1201,7 @@ Después:
     <string name="task_cause_effect_occurred">La ejecuci&#243;n se detuvo despu&#233;s de un efecto</string>
     <string name="task_cause_task_changed">La tarea cambi&#243; o se elimin&#243; antes de la ejecuci&#243;n manual</string>
     <string name="task_cause_awaiting_user">Una acci&#243;n pendiente necesita tu aprobaci&#243;n.</string>
+    <string name="task_cause_visible_app_required">Abre la app para continuar esta tarea. La acci&#243;n aprobada se reanudar&#225; autom&#225;ticamente.</string>
     <string name="task_cause_unknown">Causa desconocida</string>
 
     <string name="task_detail_error_detail">Detalle del fallo: %1$s</string>

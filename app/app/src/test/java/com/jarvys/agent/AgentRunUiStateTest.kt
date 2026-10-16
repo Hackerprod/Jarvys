@@ -156,6 +156,31 @@ class AgentRunUiStateTest {
     }
 
     @Test
+    fun liveGeneratedImageUsesPersistedArtifactIdentityDuringRefresh() {
+        val session = "generated-image-refresh-${System.nanoTime()}"
+        val relativePath = "generated/$session/image.png"
+        AgentRunUiState.beginRun(session, "Make an image")
+        AgentRunUiState.generatedImageAdded(session, AgentRunUiEvent.generatedImageEvent(
+            20L, relativePath, "A test image", null, "image/png", null, "COMPLETED", null, 20L,
+        ))
+        val restoredImageEvent = AgentRunUiEvent.generatedImageEvent(
+            30L, relativePath, "A test image", null, "image/png", null, "COMPLETED", null, 30L,
+        )
+        val persisted = restoredImageEvent.copy(presentationArtifact = requireNotNull(
+            restoredImageEvent.presentationArtifact,
+        ).copy(id = "generated:$relativePath"))
+
+        AgentRunUiState.refreshPersistedSession(session, listOf(persisted))
+
+        val images = AgentRunUiState.snapshotForSession(session).events.filter {
+            it.kind == "artifact" && it.presentationArtifact?.isGeneratedImage == true
+        }
+        assertEquals(1, images.size)
+        assertEquals("generated:$relativePath", images.single().presentationArtifact?.id)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
     fun deletingAssistantHidesItsTurnToolsAndPriorCompactionsInLoadedWindow() {
         val session = "assistant-delete-turn-effects-${System.nanoTime()}"
         val events = listOf(
