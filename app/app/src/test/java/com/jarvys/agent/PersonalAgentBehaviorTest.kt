@@ -39,7 +39,7 @@ class PersonalAgentBehaviorTest {
         context = TestFilesContext(ApplicationProvider.getApplicationContext(), files)
         bridge = ChatDatabaseBridge.getInstance(context)
         listOf(
-            "profile-chat", "next-session", "claim-chat", "claim-chat-blocked", "bootstrap-pending",
+            "profile-chat", "next-session", "bootstrap-pending",
             "fresh-session", "compacted-session", "private-session", "disabled-session", "task-run",
             "proactive-run", "child-run", "fresh-ui",
         ).forEach(::ensureConversation)
@@ -48,6 +48,8 @@ class PersonalAgentBehaviorTest {
     @Test fun scenario01_explicitProfileFactIsPersistedInTheSameModelTurnWithReceiptEvidence() {
         val calls = AtomicInteger()
         val tools = PersonalMemoryTools.create(context, "user-message-1", "profile-chat")
+        val registry = CoreToolRegistry(tools)
+        val runtime = CoreAgentRuntime(context, "profile-chat", emptyList(), CorePromptBudget.standard(), false)
         val loop = CoreAgentLoop(
             CoreAgentLoop.Model { _, _, declarations, _ ->
                 when (calls.getAndIncrement()) {
@@ -63,7 +65,7 @@ class PersonalAgentBehaviorTest {
                     else -> ModelReply("I saved your profile.", emptyList())
                 }
             },
-            CoreToolRegistry(tools), configuredClaimRules(), "profile-chat",
+            registry, runtime.instructions(registry, true), "profile-chat",
         )
 
         val result = loop.run("Me dicen Hackerprod, soy dev", emptyList(), CancellationToken.uncancellable(), null)
@@ -78,44 +80,22 @@ class PersonalAgentBehaviorTest {
         assertTrue(receipts.all { it.content.contains("id=") && it.content.contains("revision=") })
     }
 
-    @Test fun scenario02_followupDoesNotClaimNewSaveWithoutReceiptAndNamesBlocker() {
-        bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "prior-message", "explicit", conversationId = "claim-chat")
-        val previousDialogue = listOf(
-            ConversationTurn("user", "Me dicen Hackerprod, soy dev"),
-            ConversationTurn("assistant", "I have the profile context."),
-        )
-        val prompts = mutableListOf<String>()
-        val tools = CoreToolRegistry(PersonalMemoryTools.create(context, "followup-message", "claim-chat"))
-        val runtime = CoreAgentRuntime(context, "claim-chat", emptyList(), CorePromptBudget.standard(), false)
-        val instructions = runtime.instructions(tools, true)
-        assertTrue(instructions.contains("Hackerprod"))
+    @Test fun scenario02_withoutMemoryWriteToolNothingIsPersisted() {
+        val session = "next-session"
+        val registry = CoreToolRegistry(emptyList())
+        val runtime = CoreAgentRuntime(context, session, emptyList(), CorePromptBudget.standard(), false)
         val loop = CoreAgentLoop(
-            CoreAgentLoop.Model { _, prompt, _, _ ->
-                prompts += prompt
-                if (prompts.size == 1) ModelReply("I saved that to memory.", emptyList())
-                else ModelReply("No new record was created in this turn.", emptyList())
-            }, tools, instructions, "claim-chat",
+            CoreAgentLoop.Model { _, _, declarations, _ ->
+                assertTrue(declarations.none { it.name == "user_profile_set" || it.name.startsWith("memory_") })
+                ModelReply("Understood.", emptyList())
+            }, registry, runtime.instructions(registry, true), session,
         )
-        val followup = loop.run("Guarda los datos", previousDialogue, CancellationToken.uncancellable(), null)
 
-        assertEquals("COMPLETED", followup.outcome)
-        assertEquals(2, prompts.size)
-        assertTrue(prompts[1].contains("successful memory-write result"))
-        assertTrue(followup.text.contains("No new record"))
+        val result = loop.run("Remember that my nickname is Hackerprod", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertTrue(bridge.personalAgentBrowse().isEmpty())
         assertTrue(loop.transcriptSnapshot().none { it.kind == ConversationTurn.Kind.TOOL_RESULT })
-
-        val blockedPrompts = mutableListOf<String>()
-        val blockedLoop = CoreAgentLoop(
-            CoreAgentLoop.Model { _, prompt, _, _ ->
-                blockedPrompts += prompt
-                if (blockedPrompts.size == 1) ModelReply("I saved that to memory.", emptyList())
-                else ModelReply("The memory write tool is unavailable in this conversation.", emptyList())
-            }, CoreToolRegistry(emptyList()), configuredClaimRules(), "claim-chat-blocked",
-        )
-        val blocked = blockedLoop.run("Guarda los datos", previousDialogue, CancellationToken.uncancellable(), null)
-        assertEquals("COMPLETED", blocked.outcome)
-        assertEquals(1, blockedPrompts.size)
-        assertEquals("I saved that to memory.", blocked.text)
     }
 
     @Test fun scenario03_newSessionPromptReinjectsProfileWithoutSearch() {
@@ -203,7 +183,6 @@ class PersonalAgentBehaviorTest {
 
         assertFalse(prompt.contains("Hackerprod"))
         assertFalse(prompt.contains("User likes hiking"))
-        assertFalse(prompt.contains("<memory_claim_patterns"))
         assertFalse(tools.names().any { it.startsWith("memory_") || it == "user_profile_set" })
 
         val preferences = context.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
@@ -307,144 +286,8 @@ class PersonalAgentBehaviorTest {
         assertTrue(observedHistory!!.isEmpty())
     }
 
-    @Test fun scenario08_claimPatternsAreVersionedAndRecognizeEnglishAndSpanish() {
-        val rules = configuredClaimRules()
-
-        assertTrue(MemoryClaimValidator.claimsPersistence("I saved your profile.", rules))
-        assertTrue(MemoryClaimValidator.claimsPersistence("I've saved your nickname as Hackerprod.", rules))
-        assertTrue("Spanish claim patterns were not applied: $rules", MemoryClaimValidator.claimsPersistence("Ya lo guardé en memoria.", rules))
-        assertFalse(MemoryClaimValidator.claimsPersistence("No puedo guardar eso.", rules))
-        listOf(
-            "He guardado tu apodo: Hackerprod.",
-            "I've saved your nickname as Hackerprod.",
-            "No te preocupes, he guardado tu nombre en memoria.",
-            "No problem, I saved your name to memory.",
-            "Guardé tu nombre en memoria.",
-            "Listo, anoté tu profesión en tu perfil.",
-            "I've remembered your preferences.",
-            "Ya está guardado en tu memoria.",
-            "I saved the file and your name to memory.",
-            "Guardé el archivo y tu nombre en memoria.",
-            "I'll remember your name.",
-            "I saved the file to /project/notes.md and your name to memory.",
-            "Guardé el archivo en /project/notes.md y tu nombre en memoria.",
-            "I saved v1.2 of the doc and your name to memory.",
-        ).forEach { claim ->
-            assertTrue("Expected unsupported claim to be caught: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
-        }
-        listOf(
-            "No he guardado esto en memoria",
-            "I haven't saved that yet",
-            "Guardé el archivo en /project/notes.md",
-            "I saved the file ... and it is ready",
-            "I saved the file to /project/notes.md and it is ready",
-            "Archivo guardado; esto incluye los cambios",
-            "Todavía no lo he guardado en memoria",
-            "I saved the memory.md file and it is ready.",
-        ).forEach { nonClaim ->
-            assertFalse("Should not report an unsupported memory claim: $nonClaim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(nonClaim, rules))
-        }
-    }
-
-    @Test fun scenario08_additionalPersistenceVerbsAreRecognized() {
-        val rules = configuredClaimRules()
-        listOf(
-            "Anoté tu apodo en memoria.",
-            "Apunté tu profesión en el perfil.",
-            "Registré tus preferencias en memoria.",
-            "Memoricé tu cumpleaños.",
-            "I noted your name in memory.",
-            "I remembered your name in memory.",
-            "I stored your nickname in memory.",
-            "I recorded your profession in the profile.",
-            "I added your preferences to memory.",
-        ).forEach { claim ->
-            assertTrue("Expected persistence verb to be recognized: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
-        }
-    }
-
-    @Test fun scenario08_rejectedDraftIsRecheckedOnceAndHonestCorrectionEndsTheTurn() {
-        val session = ordinarySession("claim-correction")
-        val prompts = mutableListOf<String>()
-        val calls = AtomicInteger()
-        val loop = CoreAgentLoop(
-            CoreAgentLoop.Model { _, prompt, _, _ ->
-                prompts += prompt
-                if (calls.getAndIncrement() == 0) ModelReply("I saved your profile.", emptyList())
-                else ModelReply("No he guardado esto en memoria.", emptyList())
-            },
-            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-draft", session)),
-            configuredClaimRules(), session,
-        )
-
-        val result = loop.run("Guarda los datos", emptyList(), CancellationToken.uncancellable(), null)
-
-        assertEquals("COMPLETED", result.outcome)
-        assertEquals(2, calls.get())
-        assertTrue(prompts[1].contains("I saved your profile."))
-        assertTrue(result.text.startsWith("No he guardado"))
-    }
-
-    @Test fun scenario08_persistentUnsupportedClaimFallsBackAfterOneCorrection() {
-        val session = ordinarySession("claim-fallback")
-        val calls = AtomicInteger()
-        val loop = CoreAgentLoop(
-            CoreAgentLoop.Model { _, _, _, _ ->
-                calls.incrementAndGet()
-                ModelReply("I saved your profile.", emptyList())
-            },
-            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback", session)),
-            configuredClaimRules(), session,
-        )
-
-        val result = loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null)
-
-        assertEquals("COMPLETED", result.outcome)
-        assertEquals(2, calls.get())
-        assertEquals("I couldn't confirm a successful memory write, so I haven't saved this information.", result.text)
-    }
-
-    @Test fun scenario08_fallbackKeepsUsefulDraftContentAndAddsHonestNotice() {
-        val notice = "I couldn't confirm a successful memory write, so I haven't saved this information."
-        fun fallback(draft: String, tag: String): String {
-            val session = ordinarySession("claim-fallback-$tag")
-            val loop = CoreAgentLoop(
-                CoreAgentLoop.Model { _, _, _, _ -> ModelReply(draft, emptyList()) },
-                CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback-$tag", session)),
-                configuredClaimRules(), session,
-            )
-            return loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null).text
-        }
-
-        val mixed = fallback("I saved your profile: the answer is 42.", "mixed")
-        assertTrue(mixed, mixed.contains("the answer is 42"))
-        assertFalse(mixed, mixed.contains("saved your profile"))
-        assertTrue(mixed.endsWith(notice))
-
-        val comforted = fallback("No problem, I saved your name to memory.", "comfort")
-        assertFalse(comforted, comforted.contains("saved your name"))
-        assertTrue(comforted.endsWith(notice))
-
-        val onlyClaim = fallback("I saved your name and your nickname to memory.", "only")
-        assertEquals(onlyClaim, notice, onlyClaim)
-
-        // No fragment of a claim may survive, whatever punctuation surrounds it.
-        val inciso = fallback("I saved your name, Hackerprod, and your nickname to memory.", "inciso")
-        assertEquals(inciso, notice, inciso)
-        val multi = fallback("Hello there. He guardado tu nombre y tu apodo, pero no la edad. Bye.", "multi")
-        assertFalse(multi, multi.contains("apodo") || multi.contains("guardado"))
-        assertTrue(multi, multi.startsWith("Hello there. Bye."))
-
-        val file = fallback("I saved the file to /project/notes.md and it is ready", "file")
-        assertTrue(file, file.contains("/project/notes.md"))
-    }
-
-    @Test fun scenario09_secretsAreRejectedAndRedactedBeforeMaintenanceModelSeesTranscript() {
+    @Test fun scenario09_secretsAreRedactedBeforeMaintenanceModelSeesTranscript() {
         val secret = "My password=correct-horse-battery-staple"
-        val rejection = assertThrows(IllegalStateException::class.java) {
-            bridge.personalAgentSaveMemory(secret, "curated", null, .5, "m1")
-        }
-        assertTrue(generateSequence(rejection as Throwable?) { it.cause }.any { it.message == "secret_not_saved" })
         val session = ordinarySession("secret")
         var modelText = ""
         val provider = provider { _, history, _, _, _, _ ->
@@ -528,12 +371,6 @@ class PersonalAgentBehaviorTest {
 
     private fun ensureConversation(id: String) {
         check(bridge.ensureConversationSync(id) is ChatDbResult.Success) { "Could not create test conversation $id" }
-    }
-
-    private fun configuredClaimRules(): String = buildString {
-        append("<memory_claim_patterns version=\"1\">\n")
-        append(AgentDocDefaults.ALL.getValue("memory_claim_patterns"))
-        append("\n</memory_claim_patterns>\n<memory_claim_correction>Claim needs a successful persistence receipt.</memory_claim_correction>")
     }
 
     private fun provider(

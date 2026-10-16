@@ -70,16 +70,13 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
         }
         val prompt = buildString {
             append(context.rules).append("\n\n")
-            append(context.consolidationPrompt).append("\n\n")
-            append("<persisted_daily_notes>\n").append(records).append("\n</persisted_daily_notes>")
+            append(context.consolidationPrompt)
         }
         val tools = CoreToolRegistry(PersonalMemoryTools.createForConsolidation(applicationContext, sourceIds))
         val sessionId = "personal-memory-daily-consolidation"
         val loop = CoreAgentLoop(CoreAgentModel(applicationContext, sessionId), tools, prompt, sessionId)
-        val result = loop.run(
-            "Consolidate these persisted daily notes with the declared memory tool, or return no user-facing reply if there is nothing durable.",
-            emptyList(), token, null,
-        )
+        val notes = ConversationTurn("user", "<persisted_daily_notes>\n$records\n</persisted_daily_notes>")
+        val result = loop.run("", listOf(notes), token, null)
         if (result.outcome != "COMPLETED") throw IllegalStateException("memory_consolidation_incomplete")
     }
 

@@ -19,7 +19,7 @@ public final class CoreToolResult {
     public final boolean finishRun;
     /** Exact result of this invocation only; generic tool results intentionally have no sidecar. */
     public final IncomingBatch incomingBatch;
-    /** Durable persistence receipt used by generic post-turn evidence validation. */
+    /** Durable receipt returned by memory writes and checked by memory maintenance. */
     public final String persistenceEvidence;
 
     public static final class IncomingBatch {

@@ -39,7 +39,7 @@ public interface CoreTool {
     return false;
   }
 
-  /** Generic effect metadata used by post-turn evidence checks; it does not depend on tool names. */
+  /** Generic access and persistence-effect metadata; it does not depend on tool names. */
   default AccessClassification accessClassification() { return AccessClassification.READ; }
   default PersistenceEffect persistenceEffect() { return PersistenceEffect.NONE; }
 

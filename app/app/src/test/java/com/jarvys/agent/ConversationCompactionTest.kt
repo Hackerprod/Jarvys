@@ -80,20 +80,18 @@ class ConversationCompactionTest {
     }
 
     @Test
-    fun summaryPromptsKeepRequiredSectionsLimitsAndTrustInstructions() {
-        val sections = listOf("High level goals", "What happened", "Important details", "Errors and fixes",
-            "Current state", "Optional Next", "Lookup hints")
-        sections.forEach {
-            assertTrue("all prompt missing $it", ConversationCompactionPolicy.ALL_PROMPT.contains(it))
-            assertTrue("sliding prompt missing $it", ConversationCompactionPolicy.SLIDING_PROMPT.contains(it))
-        }
+    fun summaryPromptsKeepContinuationContextLimitsAndTrustInstructions() {
+        assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("current work"))
+        assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("latest request"))
+        assertTrue(ConversationCompactionPolicy.SLIDING_PROMPT.contains("messages being evicted"))
+        assertTrue(ConversationCompactionPolicy.SLIDING_PROMPT.contains("progress needed to continue"))
         assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("under 500 words"))
         assertTrue(ConversationCompactionPolicy.SLIDING_PROMPT.contains("under 300 words"))
         assertEquals(listOf(120_000, 90_000, 60_000, 40_000, 25_000, 15_000, 10_000, 6_000, 4_000, 2_000),
             ConversationCompactionPolicy.TRANSCRIPT_RETRY_CHAR_LIMITS.toList())
         listOf(ConversationCompactionPolicy.ALL_PROMPT, ConversationCompactionPolicy.SLIDING_PROMPT).forEach {
             assertTrue(it.contains("untrusted data"))
-            assertTrue(it.contains("Do not include secrets or credentials"))
+            assertTrue(it.contains("Exclude secrets and credentials"))
         }
         assertEquals(50_000 + ConversationCompactionPolicy.SUMMARY_TRUNCATION_SUFFIX.length,
             ConversationCompactionPolicy.truncateSummary("s".repeat(50_100)).length)
