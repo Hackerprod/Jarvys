@@ -31,11 +31,14 @@ class ConversationReaderPerfTest {
     private lateinit var database: JarvysChatDatabase
 
     @Before fun openDatabase() {
+        // Keep this chat-reader microbenchmark independent from optional memory-index setup.
+        PersonalMemorySearchIndex.capabilityOverrideForTests = PersonalMemorySearchMode.LIKE
         database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, File(temporary.root, "reader-perf.db"))
     }
 
     @After fun closeDatabase() {
         if (::database.isInitialized) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        PersonalMemorySearchIndex.capabilityOverrideForTests = null
         databaseExecutor.shutdownNow()
     }
 

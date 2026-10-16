@@ -1,4 +1,4 @@
-package com.jarvys.agent
+package com.jarvys.agent.memory
 
 import android.app.Application
 import android.content.Context
@@ -14,7 +14,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.memory.PersonalMemoryScreen
+import com.jarvys.agent.ChatTestStore
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatDbResult
 import org.junit.Assert.assertEquals

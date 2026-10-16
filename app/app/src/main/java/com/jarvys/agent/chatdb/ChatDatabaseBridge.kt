@@ -207,6 +207,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun personalAgentSearch(query: String, limit: Int = 8): List<PersonalMemoryHit> =
         withAgentMemory("search memory") { it.search(query, limit) }
 
+    fun personalAgentSearchCapability(): String =
+        withAgentMemory("read memory search capability") { it.searchCapability() }
+
     fun personalAgentGet(ids: List<String>): List<PersonalMemoryHit> =
         withAgentMemory("read memory") { it.get(ids) }
 

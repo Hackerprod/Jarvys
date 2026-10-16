@@ -117,12 +117,12 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(if (item.kind == "profile") "Perfil · ${item.section}" else "Recuerdo · ${item.section}", style = MaterialTheme.typography.labelLarge)
                             Text(item.text)
-                            if (item.kind == "memory") {
+                            if (item.kind == "memory" || item.kind == "profile") {
                                 TextButton(onClick = {
                                     scope.launch {
                                         try {
-                                            withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentForget(item.id) }
-                                            notice = "Recuerdo eliminado con revisión de auditoría."
+                                            val receipt = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentForget(item.id) }
+                                            notice = "Olvidado con evidencia: ${receipt.id} · revision ${receipt.revision}."
                                             reload()
                                         } catch (failure: Exception) { error = failure.message ?: "No se pudo eliminar." }
                                     }

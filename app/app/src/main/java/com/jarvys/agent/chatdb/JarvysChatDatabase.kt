@@ -393,7 +393,7 @@ internal object JarvysChatDatabaseProvider {
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
             .addMigrations(*Migrations.ALL)
-            .addCallback(connectionPragmasCallback())
+            .addCallback(connectionPragmasCallback(context.applicationContext))
             .build()
     }
 
@@ -434,7 +434,7 @@ internal object JarvysChatDatabaseProvider {
         }
     }
 
-    internal fun connectionPragmasCallback(): Callback = object : Callback() {
+    internal fun connectionPragmasCallback(context: Context): Callback = object : Callback() {
         private val driverTriggersInstalled = AtomicBoolean(false)
         private val driverTriggerInstallLock = Any()
 
@@ -442,7 +442,7 @@ internal object JarvysChatDatabaseProvider {
             if (driverTriggersInstalled.get()) return
             synchronized(driverTriggerInstallLock) {
                 if (driverTriggersInstalled.get()) return
-                DatabaseTriggers.create(connection)
+                DatabaseTriggers.create(connection, context)
                 driverTriggersInstalled.set(true)
             }
         }
@@ -463,7 +463,7 @@ internal object JarvysChatDatabaseProvider {
         // AndroidSQLiteDriver and calls the SQLiteConnection overloads above.
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
-            DatabaseTriggers.create(db)
+            DatabaseTriggers.create(db, context)
         }
 
         override fun onOpen(db: SupportSQLiteDatabase) {
@@ -508,20 +508,15 @@ internal object JarvysChatDatabaseProvider {
 
 /** Invariants Room cannot encode. Every future migration that rebuilds these tables must call [create]. */
 internal object DatabaseTriggers {
-    fun create(connection: SQLiteConnection) {
+    fun create(connection: SQLiteConnection, context: Context? = null) {
         val sql = DriverChatSqlDatabase(connection)
-        create(sql)
+        create(sql, context)
     }
 
-    fun create(db: SupportSQLiteDatabase) = create(SupportChatSqlDatabase(db))
+    fun create(db: SupportSQLiteDatabase, context: Context? = null) = create(SupportChatSqlDatabase(db), context)
 
-    fun create(db: ChatSqlDatabase) {
-        if (!java.lang.Boolean.getBoolean("jarvys.test.sqlite.skipMemoryFts5")) {
-            db.execSQL(PersonalMemoryFtsSql.CREATE_INDEX)
-            db.execSQL(PersonalMemoryFtsSql.INSERT_TRIGGER)
-            db.execSQL(PersonalMemoryFtsSql.DELETE_TRIGGER)
-            db.execSQL(PersonalMemoryFtsSql.UPDATE_TRIGGER)
-        }
+    fun create(db: ChatSqlDatabase, context: Context? = null) {
+        PersonalMemorySearchIndex.install(db, context)
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_replace " +
                 "BEFORE INSERT ON conversations " +

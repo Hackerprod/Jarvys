@@ -99,11 +99,11 @@ final class PersonalMemoryTools {
           break;
         case "memory_forget":
           properties.put("id", "string"); required = Collections.singletonList("id");
-          description = "Forget a saved memory entry by id. The result confirms the durable tombstone revision.";
+          description = "Forget an active profile directive or saved memory entry by id. The result confirms the audited supersession or tombstone revision.";
           break;
         default:
           properties.put("id", "string"); properties.put("new_text", "string"); required = Arrays.asList("id", "new_text");
-          description = "Correct a saved memory entry by id. The prior entry is retained in revision history and superseded by a new entry.";
+          description = "Correct an active profile directive or saved memory entry by id. The prior value is retained in revision history and superseded by a new value.";
       }
       declaration = new ToolSpec(name, "agent_memory", description, "memory", ToolSpec.Status.IMPLEMENTED, properties, required);
     }

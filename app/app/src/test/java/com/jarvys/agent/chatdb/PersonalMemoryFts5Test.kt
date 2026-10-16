@@ -11,10 +11,11 @@ class PersonalMemoryFts5Test {
         val connection = BundledSQLiteDriver().open(":memory:")
         try {
             exec(connection, "CREATE TABLE memory_entries(id TEXT PRIMARY KEY, scope TEXT, layer TEXT, text TEXT, updated_at INTEGER, deleted_at INTEGER)")
-            exec(connection, PersonalMemoryFtsSql.CREATE_INDEX)
-            exec(connection, PersonalMemoryFtsSql.INSERT_TRIGGER)
-            exec(connection, PersonalMemoryFtsSql.DELETE_TRIGGER)
-            exec(connection, PersonalMemoryFtsSql.UPDATE_TRIGGER)
+            exec(connection, PersonalMemoryFtsSql.FTS5_CREATE)
+            exec(connection, PersonalMemoryFtsSql.FTS5_INSERT_TRIGGER)
+            exec(connection, PersonalMemoryFtsSql.FTS5_DELETE_TRIGGER)
+            exec(connection, PersonalMemoryFtsSql.FTS5_UPDATE_TRIGGER)
+            exec(connection, PersonalMemoryFtsSql.FTS5_REBUILD)
             exec(connection, "INSERT INTO memory_entries VALUES('relevant','user','curated','Hackerprod develops Android applications',1,NULL)")
             exec(connection, "INSERT INTO memory_entries VALUES('other','user','daily','Hackerprod enjoys gardening',2,NULL)")
 
@@ -35,7 +36,7 @@ class PersonalMemoryFts5Test {
 
     private fun search(connection: androidx.sqlite.SQLiteConnection, query: String): List<Pair<String, Double>> {
         val match = checkNotNull(PersonalMemoryFtsSql.matchExpression(query))
-        return connection.prepare(PersonalMemoryFtsSql.SEARCH).use { statement ->
+        return connection.prepare(PersonalMemoryFtsSql.FTS5_SEARCH).use { statement ->
             statement.bindText(1, match)
             statement.bindLong(2, 8)
             buildList {

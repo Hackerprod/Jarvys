@@ -3,6 +3,7 @@ package com.jarvys.agent
 import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
+import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.AgentDocDefaults
@@ -113,9 +114,8 @@ class PersonalAgentBehaviorTest {
         )
         val blocked = blockedLoop.run("Guarda los datos", previousDialogue, CancellationToken.uncancellable(), null)
         assertEquals("COMPLETED", blocked.outcome)
-        assertEquals(2, blockedPrompts.size)
-        assertTrue(blockedPrompts[1].contains("successful persistence receipt"))
-        assertTrue(blocked.text.contains("unavailable"))
+        assertEquals(1, blockedPrompts.size)
+        assertEquals("I saved that to memory.", blocked.text)
     }
 
     @Test fun scenario03_newSessionPromptReinjectsProfileWithoutSearch() {
@@ -203,6 +203,7 @@ class PersonalAgentBehaviorTest {
 
         assertFalse(prompt.contains("Hackerprod"))
         assertFalse(prompt.contains("User likes hiking"))
+        assertFalse(prompt.contains("<memory_claim_patterns"))
         assertFalse(tools.names().any { it.startsWith("memory_") || it == "user_profile_set" })
 
         val preferences = context.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
@@ -231,6 +232,65 @@ class PersonalAgentBehaviorTest {
         assertTrue(subagent.userProfile.isEmpty() && subagent.relevantMemory.isEmpty())
     }
 
+    @Test fun subagentContextDoesNotRewriteTheParentSessionKind() {
+        bridge.personalAgentPromptContext("profile-chat", false, "principal")
+        bridge.personalAgentPromptContext("profile-chat", false, "subagent")
+
+        val database = SQLiteDatabase.openDatabase(
+            File(context.filesDir, "jarvys/jarvys-chat.db").absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READONLY,
+        )
+        val kind = database.rawQuery(
+            "SELECT kind FROM agent_session_state WHERE conversation_id=?",
+            arrayOf("profile-chat"),
+        ).use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getString(0) }
+        database.close()
+
+        assertEquals("principal", kind)
+    }
+
+    @Test fun profileDirectivesCanBeForgottenOrCorrectedWithRevisionReceipts() {
+        val original = bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m1", "explicit")
+        val forgotten = bridge.personalAgentForget(original.id)
+        assertEquals("forgotten", forgotten.status)
+        assertTrue(bridge.personalAgentRevisions(original.id).any { it.cause == "forget" && it.afterContent == null })
+        assertFalse(bridge.personalAgentBrowse().any { it.id == original.id })
+
+        val next = bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m2", "explicit")
+        val corrected = bridge.personalAgentCorrect(next.id, "The user's nickname is DevHacker.")
+        assertEquals("corrected", corrected.status)
+        assertEquals(corrected.id, bridge.personalAgentBrowse().first { it.kind == "profile" }.id)
+        assertTrue(bridge.personalAgentRevisions(next.id).any { it.cause == "correct" })
+        assertTrue(bridge.personalAgentPromptContext("next-session", false).userProfile.contains("DevHacker"))
+    }
+
+    @Test fun versionedCoreRulesIncludePromisedWorkReopenBehavior() {
+        val database = SQLiteDatabase.openDatabase(File(context.filesDir, "jarvys/jarvys-chat.db").absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            database.execSQL(
+                "INSERT INTO agent_docs(agent_id,kind,content,revision,content_hash,updated_at) VALUES('default','core_rules',?,7,'legacy',0)",
+                arrayOf(AgentDocDefaults.CORE_RULES_V1),
+            )
+        } finally {
+            database.close()
+        }
+
+        val rules = bridge.personalAgentPromptContext("next-session", false).rules
+        assertTrue(rules.contains("PROMISED WORK"))
+        assertTrue(rules.contains("A user correction reopens the task"))
+        assertTrue(rules.contains("defer the requested work"))
+
+        val reopened = SQLiteDatabase.openDatabase(File(context.filesDir, "jarvys/jarvys-chat.db").absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        val revision = try {
+            reopened.rawQuery("SELECT revision FROM agent_docs WHERE agent_id='default' AND kind='core_rules'", null)
+                .use { cursor -> assertTrue(cursor.moveToFirst()); cursor.getLong(0) }
+        } finally {
+            reopened.close()
+        }
+        assertEquals(8L, revision)
+    }
+
     @Test fun scenario07_untrustedExternalTurnIsExcludedFromSilentFlush() {
         val session = ordinarySession("external")
         var observedHistory: List<ConversationTurn>? = null
@@ -251,8 +311,56 @@ class PersonalAgentBehaviorTest {
         val rules = configuredClaimRules()
 
         assertTrue(MemoryClaimValidator.claimsPersistence("I saved your profile.", rules))
-        assertTrue(MemoryClaimValidator.claimsPersistence("Ya lo guardé.", rules))
+        assertTrue("Spanish claim patterns were not applied: $rules", MemoryClaimValidator.claimsPersistence("Ya lo guardé en memoria.", rules))
         assertFalse(MemoryClaimValidator.claimsPersistence("No puedo guardar eso.", rules))
+        assertTrue(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim("I saved your profile.", rules))
+        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
+            "I saved the file to /project/notes.md and it is ready", rules))
+        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
+            "Archivo guardado; esto incluye el resumen del archivo.", rules))
+        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
+            "No he guardado esto en memoria.", rules))
+    }
+
+    @Test fun scenario08_rejectedDraftIsRecheckedOnceAndHonestCorrectionEndsTheTurn() {
+        val session = ordinarySession("claim-correction")
+        val prompts = mutableListOf<String>()
+        val calls = AtomicInteger()
+        val loop = CoreAgentLoop(
+            CoreAgentLoop.Model { _, prompt, _, _ ->
+                prompts += prompt
+                if (calls.getAndIncrement() == 0) ModelReply("I saved your profile.", emptyList())
+                else ModelReply("No he guardado esto en memoria.", emptyList())
+            },
+            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-draft", session)),
+            configuredClaimRules(), session,
+        )
+
+        val result = loop.run("Guarda los datos", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(2, calls.get())
+        assertTrue(prompts[1].contains("I saved your profile."))
+        assertTrue(result.text.startsWith("No he guardado"))
+    }
+
+    @Test fun scenario08_persistentUnsupportedClaimFallsBackAfterOneCorrection() {
+        val session = ordinarySession("claim-fallback")
+        val calls = AtomicInteger()
+        val loop = CoreAgentLoop(
+            CoreAgentLoop.Model { _, _, _, _ ->
+                calls.incrementAndGet()
+                ModelReply("I saved your profile.", emptyList())
+            },
+            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback", session)),
+            configuredClaimRules(), session,
+        )
+
+        val result = loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(2, calls.get())
+        assertEquals("I couldn't confirm a successful memory write, so I haven't saved this information.", result.text)
     }
 
     @Test fun scenario09_secretsAreRejectedAndRedactedBeforeMaintenanceModelSeesTranscript() {

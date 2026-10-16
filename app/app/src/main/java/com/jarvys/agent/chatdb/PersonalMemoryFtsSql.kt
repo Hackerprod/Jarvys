@@ -1,29 +1,191 @@
 package com.jarvys.agent.chatdb
 
-/** Shared production FTS5 schema/query contract, also exercised on sqlite-bundled in unit tests. */
+import android.content.Context
+import android.database.Cursor
+import com.jarvys.agent.AgentErrorReporter
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** SQL for each optional memory-search implementation. Never let an FTS failure block chat DB open. */
 internal object PersonalMemoryFtsSql {
-    const val CREATE_INDEX =
-        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(text, content='memory_entries', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')"
-    const val INSERT_TRIGGER =
-        "CREATE TRIGGER IF NOT EXISTS trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
+    const val FTS5_CREATE =
+        "CREATE VIRTUAL TABLE memory_fts USING fts5(text, content='memory_entries', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')"
+    const val FTS5_INSERT_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
             "INSERT INTO memory_fts(rowid,text) VALUES(NEW.rowid,NEW.text); END"
-    const val DELETE_TRIGGER =
-        "CREATE TRIGGER IF NOT EXISTS trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
+    const val FTS5_DELETE_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
             "INSERT INTO memory_fts(memory_fts,rowid,text) VALUES('delete',OLD.rowid,OLD.text); END"
-    const val UPDATE_TRIGGER =
-        "CREATE TRIGGER IF NOT EXISTS trg_memory_fts_update AFTER UPDATE OF text ON memory_entries BEGIN " +
+    const val FTS5_UPDATE_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF text ON memory_entries BEGIN " +
             "INSERT INTO memory_fts(memory_fts,rowid,text) VALUES('delete',OLD.rowid,OLD.text); " +
             "INSERT INTO memory_fts(rowid,text) VALUES(NEW.rowid,NEW.text); END"
-    const val SEARCH =
-        "SELECT m.id,m.text,m.scope,m.layer,bm25(memory_fts) AS score FROM memory_fts " +
+    const val FTS5_REBUILD = "INSERT INTO memory_fts(memory_fts) VALUES('rebuild')"
+
+    const val FTS4_CREATE = "CREATE VIRTUAL TABLE memory_fts USING fts4(text, tokenize=unicode61)"
+    const val FTS4_INSERT_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
+            "INSERT INTO memory_fts(docid,text) VALUES(NEW.rowid,NEW.text); END"
+    const val FTS4_DELETE_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
+            "DELETE FROM memory_fts WHERE docid=OLD.rowid; END"
+    const val FTS4_UPDATE_TRIGGER =
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF text ON memory_entries BEGIN " +
+            "DELETE FROM memory_fts WHERE docid=OLD.rowid; " +
+            "INSERT INTO memory_fts(docid,text) VALUES(NEW.rowid,NEW.text); END"
+    const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,text) SELECT rowid,text FROM memory_entries"
+
+    const val FTS5_SEARCH =
+        "SELECT m.id,m.text,m.scope,m.layer,bm25(memory_fts) AS score,m.updated_at FROM memory_fts " +
             "JOIN memory_entries m ON m.rowid=memory_fts.rowid " +
             "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL AND m.scope='user' " +
             "ORDER BY score,m.updated_at DESC LIMIT ?"
+    const val FTS4_SEARCH =
+        "SELECT m.id,m.text,m.scope,m.layer,matchinfo(memory_fts,'pcx'),m.updated_at FROM memory_fts " +
+            "JOIN memory_entries m ON m.rowid=memory_fts.docid " +
+            "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL AND m.scope='user'"
 
-    fun matchExpression(query: String): String? {
-        val terms = query.split(Regex("[^\\p{L}\\p{N}_]+"))
-            .filter(String::isNotBlank)
-        if (terms.isEmpty()) return null
-        return terms.joinToString(" OR ") { "\"$it\"*" }
+    fun matchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
+        ?.joinToString(" OR ") { "$it*" }
+
+    fun exactMatchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
+        ?.joinToString(" OR ") { "\"$it\"" }
+
+    fun terms(query: String): List<String> = query.split(Regex("[^\\p{L}\\p{N}_]+"))
+        .filter(String::isNotBlank).distinctBy { it.lowercase() }
+
+    /** FTS4 matchinfo('pcx') rank: term frequency weighted by inverse document frequency. */
+    fun fts4Score(blob: ByteArray, documentCount: Int): Double {
+        if (blob.size < 8 || blob.size % Int.SIZE_BYTES != 0) return 0.0
+        val values = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN)
+        val phrases = values.int
+        val columns = values.int
+        if (phrases <= 0 || columns <= 0 || blob.size < 8 + phrases * columns * 3 * Int.SIZE_BYTES) return 0.0
+        var score = 0.0
+        repeat(phrases * columns) {
+            val documentFrequency = values.int
+            val thisDocumentCount = values.int
+            values.int // corpus-wide occurrence count
+            if (thisDocumentCount > 0) {
+                val idf = kotlin.math.ln((documentCount + 1.0) / (documentFrequency + 1.0))
+                score += thisDocumentCount * (1.0 + idf)
+            }
+        }
+        return score
+    }
+}
+
+internal enum class PersonalMemorySearchMode(val storedValue: String) {
+    FTS5("fts5"), FTS4("fts4"), LIKE("like");
+
+    companion object {
+        fun from(value: String?): PersonalMemorySearchMode = entries.firstOrNull { it.storedValue == value } ?: LIKE
+    }
+}
+
+/** Installs and migrates the optional search index independently of the critical chat schema. */
+internal object PersonalMemorySearchIndex {
+    private const val STATE_DOC_KIND = "memory_search_capability"
+    private const val TEST_FTS5 = "__jarvys_memory_fts5_probe"
+    private const val TEST_FTS4 = "__jarvys_memory_fts4_probe"
+    private val failureReported = AtomicBoolean(false)
+
+    @Volatile internal var capabilityOverrideForTests: PersonalMemorySearchMode? = null
+
+    fun install(db: ChatSqlDatabase, context: Context?) {
+        try {
+            val previous = readMode(db)
+            val wanted = capabilityOverrideForTests ?: detect(db)
+            if (hasStoredMode(db) && previous == wanted && indexExists(db, wanted)) return
+            rebuild(db, wanted)
+            saveMode(db, wanted)
+        } catch (failure: Throwable) {
+            runCatching { clearIndex(db) }
+            runCatching { saveMode(db, PersonalMemorySearchMode.LIKE) }
+            if (failureReported.compareAndSet(false, true)) {
+                runCatching { AgentErrorReporter.reportChatDatabaseFailure(context, failure) }
+            }
+        }
+    }
+
+    fun currentMode(db: ChatSqlDatabase): PersonalMemorySearchMode =
+        runCatching { readMode(db) }.getOrDefault(PersonalMemorySearchMode.LIKE)
+
+    private fun detect(db: ChatSqlDatabase): PersonalMemorySearchMode {
+        if (probe(db, TEST_FTS5, "fts5(text, tokenize='unicode61 remove_diacritics 2')")) return PersonalMemorySearchMode.FTS5
+        if (probe(db, TEST_FTS4, "fts4(text, tokenize=unicode61)")) return PersonalMemorySearchMode.FTS4
+        return PersonalMemorySearchMode.LIKE
+    }
+
+    private fun probe(db: ChatSqlDatabase, table: String, module: String): Boolean = try {
+        db.execSQL("DROP TABLE IF EXISTS temp.$table")
+        db.execSQL("CREATE VIRTUAL TABLE temp.$table USING $module")
+        db.execSQL("DROP TABLE temp.$table")
+        true
+    } catch (_: Throwable) {
+        runCatching { db.execSQL("DROP TABLE IF EXISTS temp.$table") }
+        false
+    }
+
+    private fun rebuild(db: ChatSqlDatabase, mode: PersonalMemorySearchMode) {
+        clearIndex(db)
+        when (mode) {
+            PersonalMemorySearchMode.FTS5 -> {
+                db.execSQL(PersonalMemoryFtsSql.FTS5_CREATE)
+                db.execSQL(PersonalMemoryFtsSql.FTS5_INSERT_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS5_DELETE_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS5_UPDATE_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS5_REBUILD)
+            }
+            PersonalMemorySearchMode.FTS4 -> {
+                db.execSQL(PersonalMemoryFtsSql.FTS4_CREATE)
+                db.execSQL(PersonalMemoryFtsSql.FTS4_INSERT_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS4_DELETE_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS4_UPDATE_TRIGGER)
+                db.execSQL(PersonalMemoryFtsSql.FTS4_REBUILD)
+            }
+            PersonalMemorySearchMode.LIKE -> Unit
+        }
+    }
+
+    private fun clearIndex(db: ChatSqlDatabase) {
+        listOf(
+            "DROP TRIGGER IF EXISTS trg_memory_fts_insert",
+            "DROP TRIGGER IF EXISTS trg_memory_fts_delete",
+            "DROP TRIGGER IF EXISTS trg_memory_fts_update",
+            "DROP TABLE IF EXISTS memory_fts",
+        ).forEach { statement -> runCatching { db.execSQL(statement) } }
+    }
+
+    private fun indexExists(db: ChatSqlDatabase, mode: PersonalMemorySearchMode): Boolean {
+        if (mode == PersonalMemorySearchMode.LIKE) return true
+        return db.query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE (type='table' AND name='memory_fts') OR " +
+                "(type='trigger' AND name IN ('trg_memory_fts_insert','trg_memory_fts_delete','trg_memory_fts_update'))",
+        ).use { it.moveToFirst() && it.getInt(0) == 4 }
+    }
+
+    private fun readMode(db: ChatSqlDatabase): PersonalMemorySearchMode =
+        db.query("SELECT content FROM agent_docs WHERE agent_id='default' AND kind=?", arrayOf(STATE_DOC_KIND)).use {
+            if (it.moveToFirst()) PersonalMemorySearchMode.from(it.getString(0)) else PersonalMemorySearchMode.LIKE
+        }
+
+    private fun hasStoredMode(db: ChatSqlDatabase): Boolean =
+        db.query("SELECT 1 FROM agent_docs WHERE agent_id='default' AND kind=? LIMIT 1", arrayOf(STATE_DOC_KIND)).use {
+            it.moveToFirst()
+        }
+
+    private fun saveMode(db: ChatSqlDatabase, mode: PersonalMemorySearchMode) {
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(mode.storedValue.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val now = System.currentTimeMillis()
+        db.execSQL("UPDATE agent_docs SET content=?,revision=revision+1,content_hash=?,updated_at=? WHERE agent_id='default' AND kind=?",
+            arrayOf(mode.storedValue, hash, now, STATE_DOC_KIND))
+        val updated = db.query("SELECT changes()").use { it.moveToFirst(); it.getInt(0) > 0 }
+        if (!updated) db.execSQL(
+            "INSERT INTO agent_docs(agent_id,kind,content,revision,content_hash,updated_at) VALUES('default',?,?,1,?,?)",
+            arrayOf(STATE_DOC_KIND, mode.storedValue, hash, now),
+        )
     }
 }

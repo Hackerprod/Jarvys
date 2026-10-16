@@ -48,6 +48,9 @@ class JarvysChatDatabaseM0Test {
 
     @Before
     fun openDatabase() {
+        // This suite asserts Room's declared schema and critical chat triggers. Search index
+        // capability is exercised separately with explicit FTS4/LIKE injection.
+        PersonalMemorySearchIndex.capabilityOverrideForTests = PersonalMemorySearchMode.LIKE
         databaseFile = temporary.newFile("jarvys-chat.db")
         database = JarvysChatDatabaseProvider.openDatabaseFileForTests(context, databaseFile)
     }
@@ -55,6 +58,7 @@ class JarvysChatDatabaseM0Test {
     @After
     fun closeDatabase() {
         if (::database.isInitialized) JarvysChatDatabaseProvider.closeDatabaseFileForTests(database)
+        PersonalMemorySearchIndex.capabilityOverrideForTests = null
         testExecutor.shutdownNow()
     }
 
@@ -452,7 +456,12 @@ class JarvysChatDatabaseM0Test {
         assertEquals(1L, rowCount(sqlite, "file_refs"))
         assertEquals(0L, rowCount(sqlite, "storage_meta"))
         listOf("agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions").forEach {
-            assertEquals("global memory table should survive conversation deletion: $it", 1L, rowCount(sqlite, it))
+            val capabilityRows = if (it == "agent_docs") scalarLong(
+                sqlite,
+                "SELECT COUNT(*) FROM agent_docs WHERE kind='memory_search_capability'",
+                emptyArray(),
+            ) else 0L
+            assertEquals("global memory table should survive conversation deletion: $it", 1L, rowCount(sqlite, it) - capabilityRows)
         }
         assertTrue(database.conversationDao().isTombstoned(id))
         assertNull(database.conversationDao().getById(id))
