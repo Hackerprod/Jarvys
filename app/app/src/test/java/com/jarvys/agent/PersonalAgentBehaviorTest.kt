@@ -326,6 +326,9 @@ class PersonalAgentBehaviorTest {
             "I saved the file and your name to memory.",
             "Guardé el archivo y tu nombre en memoria.",
             "I'll remember your name.",
+            "I saved the file to /project/notes.md and your name to memory.",
+            "Guardé el archivo en /project/notes.md y tu nombre en memoria.",
+            "I saved v1.2 of the doc and your name to memory.",
         ).forEach { claim ->
             assertTrue("Expected unsupported claim to be caught: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
         }
@@ -337,6 +340,7 @@ class PersonalAgentBehaviorTest {
             "I saved the file to /project/notes.md and it is ready",
             "Archivo guardado; esto incluye los cambios",
             "Todavía no lo he guardado en memoria",
+            "I saved the memory.md file and it is ready.",
         ).forEach { nonClaim ->
             assertFalse("Should not report an unsupported memory claim: $nonClaim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(nonClaim, rules))
         }

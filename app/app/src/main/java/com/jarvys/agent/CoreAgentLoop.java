@@ -33,7 +33,7 @@ public final class CoreAgentLoop {
     private static final java.util.regex.Pattern FILE_OR_PROJECT_SAVE = java.util.regex.Pattern.compile(
             "(?iu)\\b(?:file|files|fichero|ficheros|archivo|archivos|project|proyecto|proyectos)\\b|\\b/+(?:project|projects)/|\\b[\\p{Alnum}_-]+\\.(?:md|txt|pdf|docx?|xlsx?|csv|json|ya?ml|kt|java|py|js|ts|html|css)\\b");
     private static final java.util.regex.Pattern EXPLICIT_MEMORY_TARGET = java.util.regex.Pattern.compile(
-            "(?iu)\\b(?:memory|memoria|profile|perfil)\\b");
+            "(?iu)\\b(?:memory|memoria|profile|perfil)\\b(?!\\.\\w)");
     private static final java.util.regex.Pattern SPANISH_REQUEST = java.util.regex.Pattern.compile(
             "(?iu)\\b(?:guarda|guardar|guard[aé]|memoria|perfil|olvida|recuerda|me\\s+dicen|mi\\s+nombre|tus\\s+datos|no\\s+he|todav[ií]a)\\b|[áéíóúñ]");
     private static final AtomicInteger TOOL_THREAD_ID = new AtomicInteger();
@@ -823,7 +823,7 @@ public final class CoreAgentLoop {
         if (answer == null || answer.isEmpty() || instructions == null) return false;
         // Keep separate clauses independent so a negated save cannot hide an affirmative claim
         // elsewhere in the sentence, and an unrelated file operation cannot hide another claim.
-        for (String sentence : answer.split("(?<=[.!?;\\n])\\s*")) {
+        for (String sentence : answer.split("(?:(?<=[.!?;])(?:\\s+|$)|(?<=\\n))")) {
             for (String clause : sentence.split("(?iu)(?:[,：:]\\s*|\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b)")) {
                 if (!MemoryClaimValidator.claimsPersistence(clause, instructions)) continue;
                 if (PERSISTENCE_NEGATION.matcher(clause).find()) continue;
@@ -860,7 +860,7 @@ public final class CoreAgentLoop {
                 : "I couldn't confirm a successful memory write, so I haven't saved this information.";
         if (rejectedDraft == null || rejectedDraft.isBlank()) return notice;
         StringBuilder kept = new StringBuilder();
-        for (String piece : rejectedDraft.split("(?<=[.!?;:\\n])\\s*")) {
+        for (String piece : rejectedDraft.split("(?:(?<=[.!?;:])(?:\\s+|$)|(?<=\\n))")) {
             String text = piece.trim();
             if (text.codePoints().noneMatch(Character::isLetterOrDigit)) continue;
             if (hasUnsupportedMemoryPersistenceClaim(text, instructions)) continue;
