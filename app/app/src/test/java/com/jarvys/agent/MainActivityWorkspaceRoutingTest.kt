@@ -42,7 +42,7 @@ class MainActivityWorkspaceRoutingTest {
     // present, while tests advance finite frames instead of draining Robolectric's Choreographer.
     private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private val compose = createEmptyComposeRule()
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(compose)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(ExistingUserSetupWizardRule()).around(chatTestStore).around(compose)
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val store: LocalRunStore get() = LocalRunStore(context)

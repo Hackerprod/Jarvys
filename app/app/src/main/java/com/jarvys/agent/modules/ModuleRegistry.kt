@@ -12,7 +12,6 @@ import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
 import com.jarvys.agent.connectors.ActionPolicyDefaults
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ApprovalSummary
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreToolResult
@@ -78,15 +77,13 @@ class ModuleRegistry private constructor(manifests: List<ModuleManifest>) {
 
     fun moduleIdForArtifactType(type: String): String? = artifactModuleForType(type)?.id
 
-    /** Builds generic connector catalog rows and installs them into the existing policy registry. */
+    /** Registers module-backed operations with the shared execution and autonomy registry. */
     fun installConnectorDefinitions(
         connectorRegistry: ConnectorRegistry,
         runtime: ModuleRuntime,
     ): List<ConnectorDefinition> {
-        val definitions = modules().filter { it.tools.isNotEmpty() }.map { manifest ->
-            ActionPolicyDefaults.registerDefaults(manifest.id, manifest.tools.associate { tool ->
-                tool.name to if (tool.access == ModuleToolAccess.READ) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK
-            })
+        val definitions = modules().map { manifest ->
+            ActionPolicyDefaults.register(manifest.id, manifest.tools.map { it.name })
             connectorDefinition(manifest, runtime)
         }
         definitions.forEach { definition ->

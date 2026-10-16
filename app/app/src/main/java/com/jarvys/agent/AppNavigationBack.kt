@@ -29,6 +29,7 @@ object AppNavigationBackPolicy {
     const val SETTINGS = "settings"
     const val SETTINGS_PREFERENCES = "settings/preferences"
     const val SETTINGS_DEVELOPER = "settings/developer"
+    const val SETUP_WIZARD = "settings/setup-wizard"
     const val ARCHIVED_CHATS = "settings/archived-chats"
     const val PROVIDERS = "providers"
     const val PROVIDERS_OPENAI = "providers/openai"
@@ -40,6 +41,7 @@ object AppNavigationBackPolicy {
     const val MCP_SERVER = "mcp/server/{serverId}"
     const val MCP_SERVER_EDIT = "mcp/server/{serverId}/edit"
     const val SKILLS = "skills"
+    const val MODULES = "modules"
     const val CONNECTORS = "connectors"
     const val CONNECTOR_DEVICE = "connectors/device/{connectorId}"
     const val CONNECTOR_REMOTE = "connectors/remote/{serviceId}?title={title}"
@@ -58,6 +60,8 @@ object AppNavigationBackPolicy {
     const val WORKSPACE_PREVIEW = "workspace-preview/{projectId}"
     const val WORKSPACE_SESSION_PREVIEW = "workspace-session-preview/{sessionId}/{projectId}"
     const val ARTIFACT_PREVIEW = "artifact-preview/{sessionId}/{artifactId}"
+    const val MODULE_ARTIFACT_VIEWER = "module-artifact-viewer/{sessionId}/{artifactId}"
+    const val MODULE_ARTIFACT_VIEWER_PREFIX = "module-artifact-viewer"
     fun mcpServer(serverId: String) = "mcp/server/${android.net.Uri.encode(serverId)}"
     fun editMcpServer(serverId: String) = "${mcpServer(serverId)}/edit"
     fun connectorDevice(id: String) = "connectors/device/${android.net.Uri.encode(id)}"
@@ -70,13 +74,13 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, WORKSPACES, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, ARCHIVED_CHATS,
+        CHAT_ROOT, WORKSPACES, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD, ARCHIVED_CHATS,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
-        MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, CONNECTORS,
+        MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
         TASKS, TASK_DETAIL,
         BOTS, CREW_EMPTY, CREW, CREW_BOT, COORDINATED_WORKSPACE, COORDINATED_FILES, WORKSPACE_PREVIEW,
-        WORKSPACE_SESSION_PREVIEW, ARTIFACT_PREVIEW,
+        WORKSPACE_SESSION_PREVIEW, ARTIFACT_PREVIEW, MODULE_ARTIFACT_VIEWER,
     )
     val rootRoutes = setOf(CHAT_ROOT, WORKSPACES)
 
@@ -90,6 +94,7 @@ object AppNavigationBackPolicy {
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         SETTINGS_DEVELOPER -> AppRouteMeta(context.getString(R.string.settings_developer), false)
+        SETUP_WIZARD -> AppRouteMeta(context.getString(R.string.setup_wizard_entry), false, showTopBar = false)
         PROVIDERS -> AppRouteMeta(context.getString(R.string.settings_providers), false)
         PROVIDERS_OPENAI -> AppRouteMeta(context.getString(R.string.provider_openai_name), false)
         PROVIDERS_OPENROUTER -> AppRouteMeta(context.getString(R.string.provider_openrouter_name), false)
@@ -101,6 +106,7 @@ object AppNavigationBackPolicy {
         MCP_SERVER_EDIT -> AppRouteMeta(context.getString(R.string.mcp_server_edit_title,
             detailTitle ?: context.getString(R.string.mcp_screen_title)), false)
         SKILLS -> AppRouteMeta(context.getString(R.string.settings_skills), false, action = AppRouteAction.SKILL_IMPORT)
+        MODULES -> AppRouteMeta(context.getString(R.string.settings_modules), false)
         CONNECTORS -> AppRouteMeta(context.getString(R.string.connectors_title), false)
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE ->
             AppRouteMeta(detailTitle ?: context.getString(R.string.connectors_title), false)
@@ -115,7 +121,8 @@ object AppNavigationBackPolicy {
         COORDINATED_WORKSPACE -> AppRouteMeta(context.getString(R.string.workspace_title), false)
         COORDINATED_FILES -> AppRouteMeta(context.getString(R.string.workspace_open_files), false)
         WORKSPACE_PREVIEW, ARTIFACT_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
-        WORKSPACE_SESSION_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
+        WORKSPACE_SESSION_PREVIEW, MODULE_ARTIFACT_VIEWER ->
+            AppRouteMeta(context.getString(R.string.chat_open_preview), false)
         else -> AppRouteMeta(context.getString(R.string.drawer_chat_fallback), false,
             action = AppRouteAction.HOME_FALLBACK)
     }

@@ -87,6 +87,10 @@ data class ConnectorDefinition(
     fun usageNote(): String = usageNoteProvider?.invoke().orEmpty()
 }
 
+/** Definitions consumed by a dedicated adapter belong to that adapter's settings surface. */
+fun visibleConnectorCatalogEntries(definitions: Collection<ConnectorDefinition>): List<ConnectorDefinition> =
+    definitions.filterNot { it.usesDedicatedToolAdapter }
+
 enum class ConnectorConnectionFlow { PERMISSIONS, NOTIFICATION_LISTENER_SETTINGS }
 enum class ConnectorPresentationGroup { ON_DEVICE, SERVICES }
 
@@ -206,7 +210,7 @@ class ConnectorRegistry private constructor(
         configuredAutonomyPolicy(definition, operation)
 
     fun configuredAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy =
-        runCatching { autonomyStore.policy(definition.id, operation.name) }.getOrDefault(AutonomyPolicy.ASK)
+        runCatching { autonomyStore.policy(definition.id, operation.name) }.getOrDefault(ActionPolicyDefaults.selectedDefaultPolicy())
 
     fun configuredAutonomyOrigin(definition: ConnectorDefinition, operation: ConnectorOperation): ActionPolicyOrigin =
         runCatching { autonomyStore.snapshot(definition.id, operation.name).origin }.getOrDefault(ActionPolicyOrigin.INVALID)
@@ -253,6 +257,11 @@ class ConnectorRegistry private constructor(
     fun setAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation, policy: AutonomyPolicy) {
         require(get(definition.id)?.operations?.any { it.name == operation.name } == true) { "Action is no longer available" }
         autonomyStore.setPolicyChecked(definition.id, operation.name, policy)
+        synchronized(lock) { _autonomyRevision.value += 1L }
+    }
+
+    /** Refreshes policy rows after the shared default changes; this does not write per-action choices. */
+    fun notifyDefaultAutonomyPolicyChanged() {
         synchronized(lock) { _autonomyRevision.value += 1L }
     }
 

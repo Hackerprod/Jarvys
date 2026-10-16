@@ -83,7 +83,8 @@ fun ConnectorsScreen(
     Column(Modifier.fillMaxSize().testTag("connectors-list-screen")) {
         Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            val deviceDefinitions = definitions.filter { it.presentationGroup == ConnectorPresentationGroup.ON_DEVICE }
+            val catalogDefinitions = visibleConnectorCatalogEntries(definitions)
+            val deviceDefinitions = catalogDefinitions.filter { it.presentationGroup == ConnectorPresentationGroup.ON_DEVICE }
             if (deviceDefinitions.isNotEmpty()) {
                 Text(stringResource(R.string.connectors_device_section), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp))
@@ -111,7 +112,7 @@ fun ConnectorsScreen(
                     { ConnectorsGoogleServicesHost(googleServicesOverride, null, onOpenGoogle, rowsOnly = true) }
                 } else null,
             )
-            if (deviceDefinitions.isEmpty() && definitions.isEmpty()) Text(stringResource(R.string.connector_empty),
+            if (deviceDefinitions.isEmpty() && catalogDefinitions.isEmpty()) Text(stringResource(R.string.connector_empty),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp), fontSize = 14.sp)
         }
     }

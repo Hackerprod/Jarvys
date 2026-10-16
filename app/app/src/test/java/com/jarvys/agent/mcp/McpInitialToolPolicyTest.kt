@@ -1,6 +1,7 @@
 package com.jarvys.agent.mcp
 
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.ActionPolicyDefaults
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,14 +14,14 @@ class McpInitialToolPolicyTest {
         McpToolConfig("delete_file", "", "", "{}", annotations = McpToolAnnotations(destructiveHint = true)),
     )
 
-    @Test fun everyInitialPolicyLeavesNewCapabilitiesUnselectedAndAvoidsPolicySeeds() {
+    @Test fun legacyPerServerInitialPolicyDoesNotOverrideTheSharedWizardDefault() {
         McpInitialToolPolicy.values().forEach { initial ->
             val config = server(initial)
             val result = McpInitialToolPolicy.apply(config, discovered())
             assertEquals(McpToolSecurity.mergeDiscoveredTools(config, discovered()), result.tools)
             assertTrue(result.tools.none { it.enabled })
             assertTrue(result.newWritePolicies.isEmpty())
-            assertEquals(AutonomyPolicy.valueOf(initial.name), config.inheritedActionPolicy())
+            assertEquals(ActionPolicyDefaults.selectedDefaultPolicy(), config.inheritedActionPolicy())
         }
     }
 
@@ -41,6 +42,7 @@ class McpInitialToolPolicyTest {
     }
 
     @Test fun freshCustomServerUsesTheCommonAllowDefault() {
-        assertEquals(McpInitialToolPolicy.ALLOW, McpServerConfig("fresh", "Fresh", "https://example.test/mcp").initialToolPolicy)
+        assertEquals(ActionPolicyDefaults.selectedDefaultPolicy().name,
+            McpServerConfig("fresh", "Fresh", "https://example.test/mcp").initialToolPolicy.name)
     }
 }

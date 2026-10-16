@@ -9,8 +9,10 @@ import com.jarvys.agent.connectors.ActionPolicyDefaults
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorDefinition
 import com.jarvys.agent.connectors.ConnectorPresentationGroup
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.connectors.visibleConnectorCatalogEntries
 import com.jarvys.agent.mcp.McpServerRepository
 import com.jarvys.agent.skills.SkillMarkdownParser
 import com.jarvys.agent.skills.SkillRepository
@@ -117,12 +119,16 @@ class ModuleBundleIntegrationTest {
             CoreToolResult.success("ok")
         }).associateBy { it.id }
 
-        assertEquals(setOf(chart.id, presentation.id), installed.keys)
+        val ordinaryConnector = ConnectorDefinition("fixture.connector", "Fixture connector", "1", "A regular connector")
+        connectors.register(ordinaryConnector)
+
+        assertEquals(registry.modules().map { it.id }.toSet(), installed.keys)
         assertEquals(ConnectorPresentationGroup.ON_DEVICE, installed.getValue(chart.id).presentationGroup)
         assertEquals("create_chart", installed.getValue(chart.id).operations.single().name)
         assertEquals("create_presentation", installed.getValue(presentation.id).operations.single().name)
-        assertEquals(AutonomyPolicy.ASK, ActionPolicyDefaults.descriptor(chart.id, "create_chart").defaultPolicy)
-        assertEquals(AutonomyPolicy.ASK, ActionPolicyDefaults.descriptor(presentation.id, "create_presentation").defaultPolicy)
+        assertEquals(listOf(ordinaryConnector), visibleConnectorCatalogEntries(connectors.definitions.value))
+        assertEquals(AutonomyPolicy.ALLOW, ActionPolicyDefaults.descriptor(chart.id, "create_chart").defaultPolicy)
+        assertEquals(AutonomyPolicy.ALLOW, ActionPolicyDefaults.descriptor(presentation.id, "create_presentation").defaultPolicy)
 
         val discoveredSkills = SkillRepository.get(context).enabledForRun().associateBy { it.metadata.id }
         assertEquals(listOf("create_chart"), discoveredSkills.getValue("jarvys-chart").metadata.allowedTools)

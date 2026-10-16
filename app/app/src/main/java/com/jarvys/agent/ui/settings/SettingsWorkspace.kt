@@ -68,6 +68,8 @@ fun SettingsWorkspace(
     onNavigate: (SettingsWorkspacePage) -> Unit,
     archivedChatsAvailable: Boolean = false,
     onArchivedChats: () -> Unit = {},
+    onModules: () -> Unit = {},
+    onSetupWizard: () -> Unit = {},
 ) {
     var languageChoiceOpen by remember { mutableStateOf(false) }
     var appearanceChoiceOpen by remember { mutableStateOf(false) }
@@ -91,6 +93,8 @@ fun SettingsWorkspace(
                 onProviders = { onNavigateRoute(AppNavigationBackPolicy.PROVIDERS) },
                 onMcp = onMcp,
                 onSkills = onSkills,
+                onModules = onModules,
+                onSetupWizard = onSetupWizard,
                 onConnectors = onConnectors,
                 onDeveloper = { onNavigate(SettingsWorkspacePage.DEVELOPER) },
                 onAccessibility = onAccessibilitySettings,
@@ -144,6 +148,8 @@ private fun SettingsIndex(
     onProviders: () -> Unit,
     onMcp: () -> Unit,
     onSkills: () -> Unit,
+    onModules: () -> Unit,
+    onSetupWizard: () -> Unit,
     onConnectors: () -> Unit,
     onDeveloper: () -> Unit,
     onAccessibility: () -> Unit,
@@ -166,6 +172,9 @@ private fun SettingsIndex(
             stringResource(languageResource(languageChoice)), onLanguage, testTag = "settings-language-row")
         SettingsRule()
         SettingsIndexRow(LucideIcons.Eye, stringResource(R.string.settings_preferences), null, onPreferences)
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.WandSparkles, stringResource(R.string.setup_wizard_entry), null, onSetupWizard,
+            testTag = "settings-setup-wizard-row")
     }
     Spacer(Modifier.height(22.dp))
     SettingsSection(stringResource(R.string.settings_models_services)) {
@@ -174,6 +183,9 @@ private fun SettingsIndex(
         SettingsIndexRow(LucideIcons.Terminal, stringResource(R.string.settings_mcp), null, onMcp)
         SettingsRule()
         SettingsIndexRow(LucideIcons.WandSparkles, stringResource(R.string.settings_skills), null, onSkills)
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Layers2, stringResource(R.string.settings_modules), null, onModules,
+            testTag = "settings-modules-row")
         SettingsRule()
         SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.settings_connectors), null, onConnectors)
         SettingsRule()

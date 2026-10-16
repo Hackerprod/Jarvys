@@ -83,6 +83,7 @@ import com.jarvys.agent.connectors.ConnectorPolicySelector
 import com.jarvys.agent.connectors.ConnectorPermissionRow
 import com.jarvys.agent.connectors.ConnectorPolicyButton
 import com.jarvys.agent.connectors.DeviceConnectorIconTile
+import com.jarvys.agent.ui.settings.SetupWizardPreferences
 
 @Composable
 fun McpServersScreen(
@@ -285,7 +286,6 @@ internal fun McpServerDetailPage(
     onToolEnabled: (String, Boolean) -> Unit,
 ) {
     var toolSearch by remember(server.id) { mutableStateOf("") }
-    var showInheritedPolicyInfo by rememberSaveable(server.id) { mutableStateOf(true) }
     val connected = status.status == McpConnectionStatus.READY
     val reauthorize = status.status in setOf(McpConnectionStatus.AUTH_REQUIRED, McpConnectionStatus.REAUTH_REQUIRED,
         McpConnectionStatus.PERMISSION_REQUIRED) && server.authMode == McpAuthMode.OAUTH
@@ -316,16 +316,9 @@ internal fun McpServerDetailPage(
         onDisconnect = onDisconnect,
         error = status.message.takeIf { it.isNotBlank() && !connected },
         content = {
-            if (showInheritedPolicyInfo && server.catalogServiceId == null && server.initialToolPolicyOrigin in
-                setOf(McpInitialPolicyOrigin.LEGACY_UNKNOWN, McpInitialPolicyOrigin.INVALID)) {
-                Text(stringResource(if (server.initialToolPolicyOrigin == McpInitialPolicyOrigin.INVALID)
-                    R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
-                    style = MaterialTheme.typography.bodySmall)
-                Row {
-                    TextButton(onClick = onEdit) { Text(stringResource(R.string.ux44_mcp_edit_fallback)) }
-                    TextButton(onClick = { showInheritedPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
-                }
-            }
+            if (server.catalogServiceId == null) McpSharedDefaultPolicyInfo(
+                modifier = Modifier.fillMaxWidth().testTag("mcp-server-shared-default-policy"),
+            )
             if (server.tools.size > 12) JarvysTextField(
                 value = toolSearch,
                 onValueChange = { toolSearch = it },
@@ -505,20 +498,15 @@ private fun McpServerEditor(
     var trusted by rememberSaveable(initial?.id) { mutableStateOf(initial?.trustInsecureServer ?: false) }
     var enabled by rememberSaveable(initial?.id) { mutableStateOf(initial?.enabled ?: true) }
     var clientId by rememberSaveable(initial?.id) { mutableStateOf(initial?.oauthClientId.orEmpty()) }
-    var initialToolPolicy by rememberSaveable(initial?.id) {
-        mutableStateOf(initial?.initialToolPolicy ?: McpInitialToolPolicy.defaultPolicy())
-    }
-    var initialPolicyEdited by rememberSaveable(initial?.id) { mutableStateOf(false) }
-    var showInitialPolicyInfo by rememberSaveable(initial?.id) { mutableStateOf(true) }
     var bearer by rememberSaveable(initial?.id) { mutableStateOf("") }
     var error by rememberSaveable(initial?.id) { mutableStateOf<String?>(null) }
     var confirmDiscard by rememberSaveable(initial?.id) { mutableStateOf(false) }
     val dirty = if (initial == null) {
         alias.isNotBlank() || endpoint.isNotBlank() || transport != McpTransport.AUTO || authMode != McpAuthMode.NONE ||
-            trusted || !enabled || clientId.isNotBlank() || bearer.isNotBlank() || initialPolicyEdited
+            trusted || !enabled || clientId.isNotBlank() || bearer.isNotBlank()
     } else {
         alias != initial.alias || endpoint != initial.endpoint || transport != initial.transport || authMode != initial.authMode ||
-            trusted != initial.trustInsecureServer || enabled != initial.enabled || clientId != initial.oauthClientId || bearer.isNotBlank() || initialPolicyEdited
+            trusted != initial.trustInsecureServer || enabled != initial.enabled || clientId != initial.oauthClientId || bearer.isNotBlank()
     }
     fun requestClose() {
         val decision = McpEditorNavigationPolicy.back(dirty, editingExistingServer = initial != null)
@@ -562,10 +550,10 @@ private fun McpServerEditor(
                     oauthClientId = clientId.trim(),
                     tools = initial?.tools.orEmpty(),
                     toolSelectionMode = initial?.toolSelectionMode ?: McpToolSelectionMode.DEFAULT_ALL,
-                    initialToolPolicy = initialToolPolicy,
-                    initialToolPolicyOrigin = if (initialPolicyEdited) McpInitialPolicyOrigin.EXPLICIT_CURRENT
-                        else initial?.initialToolPolicyOrigin ?: McpInitialPolicyOrigin.COMMON_DEFAULT,
-                    invalidInitialToolPolicyJson = if (initialPolicyEdited) null else initial?.invalidInitialToolPolicyJson,
+                    // Retain legacy server metadata on edit. New tool policy now comes from the shared Wizard choice.
+                    initialToolPolicy = initial?.initialToolPolicy ?: McpInitialToolPolicy.defaultPolicy(),
+                    initialToolPolicyOrigin = initial?.initialToolPolicyOrigin ?: McpInitialPolicyOrigin.COMMON_DEFAULT,
+                    invalidInitialToolPolicyJson = initial?.invalidInitialToolPolicyJson,
                 ),
                 bearer,
             )
@@ -640,23 +628,7 @@ private fun McpServerEditor(
             if (initial?.catalogServiceId == null) {
                 JarvysGroup(modifier = Modifier.testTag("mcp-editor-tool-policy"),
                     contentPadding = PaddingValues(JarvysUiTokens.ScreenPadding)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ConnectorPermissionRow(content = {
-                            JarvysSectionLabel(stringResource(R.string.mcp_initial_tool_permissions))
-                        }, permission = {
-                            McpInitialToolPolicySelector(id, initialToolPolicy, { initialToolPolicy = it; initialPolicyEdited = true })
-                        })
-                        Text(stringResource(R.string.ux44_mcp_initial_policy_help),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                        if (showInitialPolicyInfo && !initialPolicyEdited && initial?.initialToolPolicyOrigin in
-                            setOf(McpInitialPolicyOrigin.LEGACY_UNKNOWN, McpInitialPolicyOrigin.INVALID)) {
-                            Text(stringResource(if (initial?.initialToolPolicyOrigin == McpInitialPolicyOrigin.INVALID)
-                                R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
-                                style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { showInitialPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
-                        }
-                    }
+                    McpSharedDefaultPolicyInfo(Modifier.testTag("mcp-editor-shared-default-policy"))
                 }
             }
             error?.let { Text(it, Modifier.testTag("mcp-editor-error"), color = MaterialTheme.colorScheme.error,
@@ -673,23 +645,21 @@ private fun McpServerEditor(
 }
 
 @Composable
-private fun McpInitialToolPolicySelector(
-    serverId: String,
-    selected: McpInitialToolPolicy,
-    onSelect: (McpInitialToolPolicy) -> Unit,
-) {
-    val choices = listOf(
-        McpInitialToolPolicy.ASK to R.string.remote_service_policy_ask,
-        McpInitialToolPolicy.ALLOW to R.string.remote_service_policy_allow,
-        McpInitialToolPolicy.DENY to R.string.remote_service_policy_deny,
-    )
-    ConnectorPolicySelector(
-        selectedLabelResource = choices.first { it.first == selected }.second,
-        choices = choices.map { (policy, label) -> ConnectorPolicyChoice(label) { onSelect(policy) } },
-        subjectKey = "$serverId/initial-policy",
-        optionTags = choices.associate { (policy, label) -> label to "mcp-editor-tool-policy-option-${policy.name.lowercase(java.util.Locale.ROOT)}" },
-        modifier = Modifier.testTag("mcp-editor-tool-policy-selector"),
-    )
+private fun McpSharedDefaultPolicyInfo(modifier: Modifier = Modifier) {
+    val selectedPolicy = SetupWizardPreferences(LocalContext.current).selectedPolicy()
+    val policyLabel = when (selectedPolicy) {
+        AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
+        AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
+        AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        JarvysSectionLabel(stringResource(R.string.mcp_initial_tool_permissions))
+        Text(stringResource(R.string.mcp_shared_default_policy_value, stringResource(policyLabel)),
+            modifier = Modifier.testTag("mcp-shared-default-policy-value"),
+            color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.mcp_initial_tool_permissions_help),
+            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 @Composable

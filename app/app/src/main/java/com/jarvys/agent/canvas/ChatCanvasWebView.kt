@@ -209,7 +209,7 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
         }
         if (!benchmarkStarted && update.benchmark) {
             benchmarkStarted = true
-            postDelayed({ evaluateJavascript("window.ChatCanvas.runBenchmark();", null) }, 100)
+            postDelayed({ evaluateJavascript("window.ChatCanvas.runBenchmark($CHAT_CANVAS_BENCHMARK_SCROLL_VIEWPORT_FRACTION);", null) }, 100)
         }
     }
 
@@ -226,7 +226,7 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
                 uri, 405, WebViewDiagnosticTrace.REASON_METHOD_NOT_ALLOWED, "Canvas is read-only",
                 request.isForMainFrame,
             )
-            if (!uri.scheme.equals("https", true) || uri.host != "jarvys-chat-canvas.invalid" || uri.port != -1 || uri.query != null) {
+            if (!isCanvasRequestInOrigin(uri.scheme, uri.host, uri.port, uri.query)) {
                 return deny(
                     uri, 403, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, "External resources are disabled",
                     request.isForMainFrame,
@@ -234,6 +234,10 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
             }
             return try {
                 val path = uri.path ?: return deny(
+                    uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable",
+                    request.isForMainFrame,
+                )
+                if (canvasPathHasTraversal(path)) return deny(
                     uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable",
                     request.isForMainFrame,
                 )
@@ -367,6 +371,7 @@ internal class ChatCanvasNativeBridge(
 
     internal fun session(): String = sessionId
     internal fun event(seq: Long): AgentRunUiEvent? = currentEvents().firstOrNull { it.id == seq }
+    internal fun events(): List<AgentRunUiEvent> = currentEvents()
     internal fun hasSyntheticImages(): Boolean = currentEvents().any {
         it.generatedImageStatus == "SYNTHETIC" || it.presentationArtifact?.thumbnailRef == "benchmark"
     }
@@ -374,36 +379,94 @@ internal class ChatCanvasNativeBridge(
 
 private data class CanvasResource(val stream: InputStream, val mimeType: String)
 
-private fun resolveConversationResource(context: Context, bridge: ChatCanvasNativeBridge?, path: String): CanvasResource? {
+internal fun isCanvasRequestInOrigin(scheme: String?, host: String?, port: Int, query: String?): Boolean =
+    scheme.equals("https", ignoreCase = true) && host == "jarvys-chat-canvas.invalid" && port == -1 && query == null
+
+internal fun canvasPathHasTraversal(path: String): Boolean =
+    path.split('/').any { it == "." || it == ".." }
+
+internal sealed interface CanvasConversationResourceRoute<out T> {
+    data class MessageAttachment(val event: AgentRunUiEvent, val attachment: com.jarvys.agent.ChatAttachment) : CanvasConversationResourceRoute<Nothing>
+    data class GeneratedImage(val event: AgentRunUiEvent, val artifactId: String) : CanvasConversationResourceRoute<Nothing>
+    data class ArtifactThumbnail<T>(
+        val event: AgentRunUiEvent,
+        val artifact: com.jarvys.agent.PresentationArtifact,
+        val reference: T,
+    ) : CanvasConversationResourceRoute<T>
+}
+
+/** Resolves a local resource only from an event in the active conversation and its owned file metadata. */
+internal fun <T> resolveCanvasConversationResourceRoute(
+    path: String,
+    sessionId: String?,
+    events: List<AgentRunUiEvent>,
+    attachmentIsOwned: (String, com.jarvys.agent.ChatAttachment) -> Boolean,
+    generatedImageIsOwned: (String, AgentRunUiEvent) -> Boolean,
+    findThumbnailReference: (String, String) -> T?,
+    thumbnailReferenceId: (T) -> String,
+): CanvasConversationResourceRoute<T>? {
+    if (sessionId == null || canvasPathHasTraversal(path)) return null
     val chunks = path.split('/').filter(String::isNotBlank)
     if (chunks.size < 3 || chunks[0] != "chat-assets") return null
     val eventSeq = chunks.getOrNull(2)?.toLongOrNull() ?: return null
-    val event = bridge?.event(eventSeq) ?: return null
+    val event = events.firstOrNull { it.id == eventSeq } ?: return null
     return when (chunks[1]) {
         "message" -> {
             if (chunks.size != 4) return null
             val index = chunks[3].toIntOrNull() ?: return null
             val attachment = event.attachments.getOrNull(index)?.takeIf { it.isImage } ?: return null
-            val request = com.jarvys.agent.ui.chat.ChatFileRequest.attachment(bridge.session(), attachment)
-            request.requireOwnership(context)
-            CanvasResource(FileInputStream(AttachmentStore(context).resolve(bridge.session(), attachment)), attachment.mimeType)
+            if (!attachmentIsOwned(sessionId, attachment)) return null
+            CanvasConversationResourceRoute.MessageAttachment(event, attachment)
         }
         "generated" -> {
-            if (chunks.size != 3 || event.generatedImagePath.isNullOrBlank()) return null
-            val request = com.jarvys.agent.ui.chat.ChatFileRequest.generated(bridge.session(), event) ?: return null
-            request.requireOwnership(context)
-            CanvasResource(FileInputStream(GeneratedImageStore(context).resolve(bridge.session(), request.artifactId)),
-                event.generatedImageMimeType ?: "image/png")
+            if (chunks.size != 3 || event.generatedImagePath.isNullOrBlank() ||
+                !generatedImageIsOwned(sessionId, event)) return null
+            CanvasConversationResourceRoute.GeneratedImage(event, event.generatedImagePath)
         }
         "artifact" -> {
-            if (chunks.size != 4) return null
-            if (chunks[3] != "thumbnail") return null
+            if (chunks.size != 4 || chunks[3] != "thumbnail") return null
             val artifact = event.presentationArtifact ?: return null
-            val reference = ChatDatabaseBridge.getInstance(context).findArtifactThumbnailSync(bridge.session(), artifact.id) ?: return null
-            if (reference.id != artifact.thumbnailRef) return null
-            CanvasResource(FileInputStream(DeliveredArtifactStore(context).resolveThumbnail(bridge.session(), artifact.id, reference)),
-                reference.mime_type ?: "image/png")
+            val reference = findThumbnailReference(sessionId, artifact.id) ?: return null
+            if (thumbnailReferenceId(reference) != artifact.thumbnailRef) return null
+            CanvasConversationResourceRoute.ArtifactThumbnail(event, artifact, reference)
         }
         else -> null
+    }
+}
+
+private fun resolveConversationResource(context: Context, bridge: ChatCanvasNativeBridge?, path: String): CanvasResource? {
+    val sessionId = bridge?.session()
+    val route = resolveCanvasConversationResourceRoute(
+        path = path,
+        sessionId = sessionId,
+        events = bridge?.events().orEmpty(),
+        attachmentIsOwned = { session, attachment ->
+            com.jarvys.agent.ui.chat.ChatFileRequest.attachment(session, attachment).requireOwnership(context)
+            true
+        },
+        generatedImageIsOwned = { session, event ->
+            val request = com.jarvys.agent.ui.chat.ChatFileRequest.generated(session, event)
+                ?: return@resolveCanvasConversationResourceRoute false
+            request.requireOwnership(context)
+            true
+        },
+        findThumbnailReference = { session, artifactId ->
+            ChatDatabaseBridge.getInstance(context).findArtifactThumbnailSync(session, artifactId)
+        },
+        thumbnailReferenceId = { it.id },
+    ) ?: return null
+    return when (route) {
+        is CanvasConversationResourceRoute.MessageAttachment -> {
+            CanvasResource(FileInputStream(AttachmentStore(context).resolve(requireNotNull(sessionId), route.attachment)), route.attachment.mimeType)
+        }
+        is CanvasConversationResourceRoute.GeneratedImage -> {
+            CanvasResource(FileInputStream(GeneratedImageStore(context).resolve(requireNotNull(sessionId), route.artifactId)),
+                route.event.generatedImageMimeType ?: "image/png")
+        }
+        is CanvasConversationResourceRoute.ArtifactThumbnail -> {
+            val reference = route.reference
+            CanvasResource(FileInputStream(DeliveredArtifactStore(context).resolveThumbnail(requireNotNull(sessionId), route.artifact.id, reference)),
+                reference.mime_type ?: "image/png")
+        }
     }
 }

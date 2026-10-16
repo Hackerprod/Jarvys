@@ -159,6 +159,7 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     private val lock = actionPolicies.lock
 
     init {
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
         synchronized(lock) {
             preferences.edit().remove("autonomy_hourly_reservations").apply()
             listOf("email", "sms_draft").forEach { connectorId ->

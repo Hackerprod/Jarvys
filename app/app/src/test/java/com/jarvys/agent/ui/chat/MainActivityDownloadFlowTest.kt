@@ -23,6 +23,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.RuleChain
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
@@ -35,7 +36,8 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
 class MainActivityDownloadFlowTest {
-    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(ExistingUserSetupWizardRule()).around(chatTestStore)
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val secretSingleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
     private var controller: ActivityController<MainActivity>? = null

@@ -13,8 +13,9 @@ enum class McpInitialToolPolicy {
     ASK, ALLOW, DENY;
 
     companion object {
-        fun defaultPolicy(): McpInitialToolPolicy = valueOf(com.jarvys.agent.connectors.ActionPolicyDefaults
-            .descriptor("mcp-server", "initial_tool_policy").defaultPolicy.name)
+        fun defaultPolicy(): McpInitialToolPolicy = valueOf(
+            com.jarvys.agent.connectors.ActionPolicyDefaults.selectedDefaultPolicy().name,
+        )
 
         fun apply(config: McpServerConfig, discovered: List<McpToolConfig>): McpInitialToolPolicyResult =
             McpInitialToolPolicyApplication.apply(config, discovered)

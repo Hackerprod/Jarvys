@@ -27,8 +27,34 @@ import java.util.concurrent.atomic.AtomicInteger
 class McpActionLeaseIntegrationTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val fixtures = mutableListOf<Harness>()
-    @Before fun clear() { context.getSharedPreferences("jarvys_mcp_servers", Context.MODE_PRIVATE).edit().clear().commit() }
-    @After fun close() { fixtures.forEach(Harness::close); clear() }
+    private val actionPolicyPreferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
+    private var priorDefaultPolicy: String? = null
+    private var hadPriorDefaultPolicy = false
+    private var priorWizardCompleted = false
+    private var hadPriorWizardCompleted = false
+
+    @Before fun clear() {
+        context.getSharedPreferences("jarvys_mcp_servers", Context.MODE_PRIVATE).edit().clear().commit()
+        hadPriorDefaultPolicy = actionPolicyPreferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+        priorDefaultPolicy = actionPolicyPreferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)
+        hadPriorWizardCompleted = actionPolicyPreferences.contains(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        priorWizardCompleted = actionPolicyPreferences.getBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, false)
+        actionPolicyPreferences.edit().remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            .remove(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY).commit()
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(actionPolicyPreferences)
+    }
+
+    @After fun close() {
+        fixtures.forEach(Harness::close)
+        context.getSharedPreferences("jarvys_mcp_servers", Context.MODE_PRIVATE).edit().clear().commit()
+        actionPolicyPreferences.edit().apply {
+            if (hadPriorDefaultPolicy) putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, priorDefaultPolicy)
+            else remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            if (hadPriorWizardCompleted) putBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, priorWizardCompleted)
+            else remove(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        }.commit()
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
+    }
 
     @Test fun defaultAllowDispatchesOnceWithoutSelectingAnyNewCapability() {
         val h = harness()
@@ -116,9 +142,10 @@ class McpActionLeaseIntegrationTest {
         assertTrue(h.calls.isEmpty())
     }
 
-    @Test fun serverAskFallbackDoesNotRequireMaterializedPerToolRows() {
+    @Test fun wizardAskFallbackDoesNotRequireMaterializedPerToolRows() {
+        com.jarvys.agent.ui.settings.SetupWizardPreferences(actionPolicyPreferences).complete(AutonomyPolicy.ASK)
         val h = harness(); h.enable()
-        h.repository.upsert(h.current().copy(initialToolPolicy = McpInitialToolPolicy.ASK))
+        assertEquals(McpInitialToolPolicy.ASK, h.current().initialToolPolicy)
         val pending = h.worker.submit<JSONObject> { h.call() }
         val (id, _) = h.awaitApproval()
         h.gate.resolve(id, ApprovalDecision.APPROVED)

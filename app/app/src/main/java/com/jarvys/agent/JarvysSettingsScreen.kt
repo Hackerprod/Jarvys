@@ -31,6 +31,8 @@ fun JarvysSettingsScreen(
     onNavigate: (JarvysSettingsPage) -> Unit,
     archivedChatsAvailable: Boolean = false,
     onArchivedChats: () -> Unit = {},
+    onModules: () -> Unit = {},
+    onSetupWizard: () -> Unit = {},
 ) = SettingsWorkspace(
     page = page,
     themeMode = themeMode,
@@ -54,4 +56,6 @@ fun JarvysSettingsScreen(
     onNavigate = onNavigate,
     archivedChatsAvailable = archivedChatsAvailable,
     onArchivedChats = onArchivedChats,
+    onModules = onModules,
+    onSetupWizard = onSetupWizard,
 )

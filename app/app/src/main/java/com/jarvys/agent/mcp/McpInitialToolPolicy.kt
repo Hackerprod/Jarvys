@@ -21,6 +21,6 @@ internal object McpInitialToolPolicyApplication {
     ): McpInitialToolPolicyResult = apply(config, discovered)
 }
 
-/** The legacy initial policy remains an applicable ancestor, including for late/returning tools. */
+/** New tools inherit the same Wizard-selected autonomy default as connectors and modules. */
 fun McpServerConfig.inheritedActionPolicy(): AutonomyPolicy? =
-    if (catalogServiceId != null) null else AutonomyPolicy.valueOf(initialToolPolicy.name)
+    if (catalogServiceId != null) null else com.jarvys.agent.connectors.ActionPolicyDefaults.selectedDefaultPolicy()

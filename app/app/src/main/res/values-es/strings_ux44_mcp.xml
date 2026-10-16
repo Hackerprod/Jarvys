@@ -2,9 +2,7 @@
 <resources>
     <string name="ux44_mcp_enabled">Activada para el contexto del modelo</string>
     <string name="ux44_mcp_policy_save_error">No se pudo guardar la política. Abre de nuevo los ajustes antes de ejecutar esta acción.</string>
-    <string name="ux44_mcp_initial_policy_help">Política predeterminada de este servidor. Las opciones guardadas por herramienta tienen prioridad. La selección de herramientas y los permisos reales de la cuenta se mantienen separados.</string>
     <string name="ux44_mcp_retained_policy">Se conservó una opción anterior porque se desconoce su origen. Puedes cambiarla en este menú.</string>
     <string name="ux44_mcp_invalid_policy">La política guardada no es válida y sigue restringida. Selecciona una opción para repararla.</string>
     <string name="ux44_mcp_dismiss">Cerrar</string>
-    <string name="ux44_mcp_edit_fallback">Editar política predeterminada</string>
 </resources>

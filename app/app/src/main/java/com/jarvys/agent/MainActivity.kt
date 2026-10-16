@@ -27,6 +27,8 @@ import com.jarvys.agent.ui.chat.ChatFileRequest
 import com.jarvys.agent.ui.chat.ChatFileTransfers
 import com.jarvys.agent.ui.chat.ChatFileTransferHost
 import com.jarvys.agent.ui.chat.LocalChatFileActions
+import com.jarvys.agent.ui.settings.SetupWizardPreferences
+import com.jarvys.agent.ui.settings.SetupWizardScreen
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
@@ -241,6 +243,7 @@ private object Routes {
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
     const val SETTINGS_DEVELOPER = AppNavigationBackPolicy.SETTINGS_DEVELOPER
+    const val SETUP_WIZARD = AppNavigationBackPolicy.SETUP_WIZARD
     const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
@@ -250,6 +253,7 @@ private object Routes {
     const val MCP = AppNavigationBackPolicy.MCP_LIST
     const val MCP_NEW = AppNavigationBackPolicy.MCP_NEW
     const val SKILLS = AppNavigationBackPolicy.SKILLS
+    const val MODULES = AppNavigationBackPolicy.MODULES
     const val CONNECTORS = AppNavigationBackPolicy.CONNECTORS
     const val CONNECTOR_DEVICE = AppNavigationBackPolicy.CONNECTOR_DEVICE
     const val CONNECTOR_REMOTE = AppNavigationBackPolicy.CONNECTOR_REMOTE
@@ -267,7 +271,7 @@ private object Routes {
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
     const val WORKSPACE_SESSION_PREVIEW = AppNavigationBackPolicy.WORKSPACE_SESSION_PREVIEW
     const val ARTIFACT_PREVIEW = AppNavigationBackPolicy.ARTIFACT_PREVIEW
-    const val MODULE_ARTIFACT_VIEWER = "module-artifact-viewer"
+    const val MODULE_ARTIFACT_VIEWER = AppNavigationBackPolicy.MODULE_ARTIFACT_VIEWER_PREFIX
     fun crew(missionId: String) = CrewNavigationRoutes.mission(missionId)
     fun crewBot(missionId: String, botId: String) = CrewNavigationRoutes.bot(missionId, botId)
     fun connectorDevice(id: String) = AppNavigationBackPolicy.connectorDevice(id)
@@ -297,6 +301,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var proactivePreferences: ProactivePreferences
     private lateinit var assistantSpeechController: AssistantSpeechController
     private lateinit var reflectionPreferences: MemoryReflectionPreferences
+    private lateinit var setupWizardPreferences: SetupWizardPreferences
     private lateinit var skillRepository: SkillRepository
     private lateinit var connectorRegistry: ConnectorRegistry
     private lateinit var attachmentDrafts: AttachmentDraftViewModel
@@ -391,6 +396,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         languageChoice = AppLanguageRuntime.current(this)
+        setupWizardPreferences = SetupWizardPreferences(this)
         CodexModelCatalog.loadCached(this)
         providersRepository = com.jarvys.agent.providers.ProvidersRepository.get(applicationContext)
         com.jarvys.agent.connectors.ApprovalNotificationCenter.attach(applicationContext)
@@ -628,6 +634,7 @@ class MainActivity : ComponentActivity() {
                     mcpOAuthManager = mcpOAuthManager,
                     skillRepository = skillRepository,
                     connectorRegistry = connectorRegistry,
+                    setupWizardPreferences = setupWizardPreferences,
                 )
                 ChatFileTransferHost(fileTransfers) { intent -> startActivity(intent) }
                 }
@@ -1766,6 +1773,7 @@ private fun JarvysApp(
     mcpOAuthManager: McpOAuthManager,
     skillRepository: com.jarvys.agent.skills.SkillRepository,
     connectorRegistry: com.jarvys.agent.connectors.ConnectorRegistry,
+    setupWizardPreferences: SetupWizardPreferences,
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit,
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit,
 ) {
@@ -2129,6 +2137,8 @@ private fun JarvysApp(
                     onNavigateRoute = { navController.navigate(it) { launchSingleTop = true } },
                     onMcp = { navController.navigate(Routes.MCP) { launchSingleTop = true } },
                     onSkills = { navController.navigate(Routes.SKILLS) { launchSingleTop = true } },
+                    onModules = { navController.navigate(Routes.MODULES) { launchSingleTop = true } },
+                    onSetupWizard = { navController.navigate(Routes.SETUP_WIZARD) { launchSingleTop = true } },
                     onConnectors = { navController.navigate(Routes.CONNECTORS) { launchSingleTop = true } },
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
                     archivedChatsAvailable = runHistory.any { it.archived },
@@ -2144,7 +2154,11 @@ private fun JarvysApp(
                     },
                 )
             }
-            NavHost(navController = navController, startDestination = Routes.CHAT, modifier = Modifier.padding(padding)) {
+            NavHost(
+                navController = navController,
+                startDestination = if (setupWizardPreferences.shouldShowOnLaunch()) Routes.SETUP_WIZARD else Routes.CHAT,
+                modifier = Modifier.padding(padding),
+            ) {
                 composable(Routes.WORKSPACES) {
                     com.jarvys.agent.workspaces.WorkspaceListScreen(
                         workspaces = workspaceRows,
@@ -2338,9 +2352,29 @@ private fun JarvysApp(
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
                 composable(Routes.SETTINGS_DEVELOPER) { settingsPageContent(JarvysSettingsPage.DEVELOPER) }
+                composable(Routes.SETUP_WIZARD) {
+                    SetupWizardScreen(
+                        preferences = setupWizardPreferences,
+                        onFinish = {
+                            connectorRegistry.notifyDefaultAutonomyPolicyChanged()
+                            if (!navController.popBackStack()) {
+                                navController.navigate(Routes.CHAT) {
+                                    popUpTo(Routes.SETUP_WIZARD) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            }
+                        },
+                    )
+                }
                 providersDestinations(navController, providersRepository)
                 mcpDestinations(navController, mcpServerRepository, mcpConnectionManager, mcpOAuthManager)
                 composable(Routes.SKILLS) { SkillsScreen(skillRepository) }
+                composable(Routes.MODULES) {
+                    com.jarvys.agent.modules.ModulesScreen(
+                        moduleRegistry = com.jarvys.agent.modules.ModuleRegistry.get(context),
+                        connectorRegistry = connectorRegistry,
+                    )
+                }
                 connectorsDestinations(navController, connectorRegistry)
                 memoryDestinations(
                     navController = navController,

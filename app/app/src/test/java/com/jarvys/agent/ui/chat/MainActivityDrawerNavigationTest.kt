@@ -86,7 +86,8 @@ class MainActivityDrawerNavigationTest {
     }
 
     private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(fixtures).around(compose)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(com.jarvys.agent.ExistingUserSetupWizardRule())
+        .around(chatTestStore).around(fixtures).around(compose)
 
     @Test fun newChatDrawerTapSelectsANewSessionWithoutChangingThePreviousTranscriptOrAttachment() {
         awaitCurrentChat()

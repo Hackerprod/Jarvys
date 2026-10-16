@@ -259,7 +259,9 @@ class ProvidersNavigationTest {
                         languageChoice = AppLanguageChoice.ENGLISH,
                         onLanguageChange = {}, onThemeChange = {}, onShowAgentEventsChange = {},
                         onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
-                        onNavigateRoute = { destination.set(it) }, onMcp = {}, onSkills = {}, onConnectors = {},
+                        onNavigateRoute = { destination.set(it) }, onMcp = {}, onSkills = {},
+                        onModules = { destination.set(AppNavigationBackPolicy.MODULES) }, onConnectors = {},
+                        onSetupWizard = { destination.set(AppNavigationBackPolicy.SETUP_WIZARD) },
                         onMemory = {}, onAccessibilitySettings = {}, onNavigate = {},
                     )
                 }
@@ -269,12 +271,19 @@ class ProvidersNavigationTest {
             densityScale.value = scale
             compose.waitForIdle()
             val providers = compose.onNodeWithText(context.getString(R.string.settings_providers)).performScrollTo()
+            val setupWizard = compose.onNodeWithText(context.getString(R.string.setup_wizard_entry)).performScrollTo()
             val mcp = compose.onNodeWithText(context.getString(R.string.settings_mcp)).performScrollTo()
             val skills = compose.onNodeWithText(context.getString(R.string.settings_skills)).performScrollTo()
+            val modules = compose.onNodeWithText(context.getString(R.string.settings_modules)).performScrollTo()
             val connectors = compose.onNodeWithText(context.getString(R.string.settings_connectors)).performScrollTo()
+            setupWizard.performClick()
+            assertEquals(AppNavigationBackPolicy.SETUP_WIZARD, destination.get())
             assertTrue(providers.fetchSemanticsNode().boundsInRoot.top < mcp.fetchSemanticsNode().boundsInRoot.top)
             assertTrue(mcp.fetchSemanticsNode().boundsInRoot.top < skills.fetchSemanticsNode().boundsInRoot.top)
-            assertTrue(skills.fetchSemanticsNode().boundsInRoot.top < connectors.fetchSemanticsNode().boundsInRoot.top)
+            assertTrue(skills.fetchSemanticsNode().boundsInRoot.top < modules.fetchSemanticsNode().boundsInRoot.top)
+            assertTrue(modules.fetchSemanticsNode().boundsInRoot.top < connectors.fetchSemanticsNode().boundsInRoot.top)
+            modules.performClick()
+            assertEquals(AppNavigationBackPolicy.MODULES, destination.get())
             providers.performClick()
             assertEquals(AppNavigationBackPolicy.PROVIDERS, destination.get())
         }

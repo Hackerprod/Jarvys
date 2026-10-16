@@ -260,24 +260,26 @@
       loadedMessages: model.seqs.length, patchCount: model.patches, fullRenders: model.fullRenders,
       anchorSeq: lastViewportAnchor ? lastViewportAnchor.seq : null, anchorOffset: lastViewportAnchor ? lastViewportAnchor.offset : null };
   }
-  function runBenchmark() {
+  function runBenchmark(scrollStepViewportFraction) {
     if (!booted) { pendingBenchmark = true; return; }
     pendingBenchmark = false;
-    frameTimes = []; lastFrame = 0; samplingFrames = true; requestAnimationFrame(noteFrame);
-    var start = performance.now();
-    var scrollMs = 0;
+    frameTimes = []; lastFrame = 0; samplingFrames = false;
     var viewport = rootElement.clientHeight || 1;
-    var distance = Math.max(0, rootElement.scrollHeight - viewport);
+    var fraction = Number(scrollStepViewportFraction);
+    if (!(fraction > 0)) fraction = 0.75;
+    var scrollStep = Math.max(1, viewport * fraction);
+    var scrollMs = 0;
     rootElement.scrollTop = 0;
     requestAnimationFrame(function () {
-      rootElement.scrollTo({ top: distance, behavior: "smooth" });
-      var previousTop = -1, stableFrames = 0;
-      function waitForScroll() {
+      var start = performance.now();
+      samplingFrames = true;
+      requestAnimationFrame(noteFrame);
+      function finishScroll() {
         requestAnimationFrame(function () {
-          if (Math.abs(rootElement.scrollTop - previousTop) <= 1) stableFrames++;
-          else stableFrames = 0;
-          previousTop = rootElement.scrollTop;
-          if (stableFrames < 2 && Math.abs(distance - rootElement.scrollTop) > 1) { waitForScroll(); return; }
+          if (rootElement.scrollHeight - viewport - rootElement.scrollTop > 0) {
+            scrollOneFrame();
+            return;
+          }
           samplingFrames = false;
           scrollMs = performance.now() - start;
           var anchor = visibleAnchor();
@@ -306,7 +308,15 @@
           });
         });
       }
-      waitForScroll();
+      function scrollOneFrame() {
+        var bottom = Math.max(0, rootElement.scrollHeight - viewport);
+        var remaining = Math.max(0, bottom - rootElement.scrollTop);
+        rootElement.scrollTop += Math.min(scrollStep, remaining);
+        bottom = Math.max(0, rootElement.scrollHeight - viewport);
+        if (bottom - rootElement.scrollTop > 0) requestAnimationFrame(scrollOneFrame);
+        else requestAnimationFrame(finishScroll);
+      }
+      scrollOneFrame();
     });
   }
   if (typeof document !== "undefined") {

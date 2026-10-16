@@ -13,24 +13,29 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.junit.Test
+import org.junit.rules.RuleChain
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class AppNavigationBackPolicyTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    private val compose = createEmptyComposeRule()
+    @get:Rule val rules = RuleChain.outerRule(ExistingUserSetupWizardRule()).around(compose)
 
     @Test fun explicitNavigationGraphHasChatAndWorkspacesRootsWithBackForEveryOtherRoute() {
         assertEquals(listOf(
-            "chat", "workspaces", "settings", "settings/preferences", "settings/developer", "settings/archived-chats",
+            "chat", "workspaces", "settings", "settings/preferences", "settings/developer", "settings/setup-wizard",
+            "settings/archived-chats",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
-            "skills", "connectors", "connectors/device/{connectorId}",
+            "skills", "modules", "connectors", "connectors/device/{connectorId}",
             "connectors/remote/{serviceId}?title={title}", "connectors/google/{serviceId}?title={title}",
             "memory", "memory/history", "memory/file?path={path}&new={new}",
             "tasks", "tasks/detail/{taskId}", "bots", "crew", "crew/{missionId}",
-            "crew/{missionId}/bot/{botId}", "workspace/{workspaceId}", "workspace/{workspaceId}/files", "workspace-preview/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
+            "crew/{missionId}/bot/{botId}", "workspace/{workspaceId}", "workspace/{workspaceId}/files", "workspace-preview/{projectId}",
+            "workspace-session-preview/{sessionId}/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
+            "module-artifact-viewer/{sessionId}/{artifactId}",
         ), AppNavigationBackPolicy.registeredRoutePatterns)
         assertEquals(setOf("chat", "workspaces"), AppNavigationBackPolicy.rootRoutes)
         AppNavigationBackPolicy.registeredRoutePatterns.forEach { route ->

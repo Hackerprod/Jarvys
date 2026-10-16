@@ -51,7 +51,7 @@ class ModuleRegistryTest {
         assertNull(registry.artifactViewerForType(""))
     }
 
-    @Test fun parsingHasNoPolicySideEffectsAndInstallationRegistersAccessDerivedDefaults() {
+    @Test fun parsingHasNoPolicySideEffectsAndInstallationUsesTheSharedDefaultSource() {
         val registry = ModuleRegistry.fromManifests(listOf(toolManifest()))
         val module = registry.module("com.test.module.tools")
 
@@ -69,7 +69,7 @@ class ModuleRegistryTest {
 
         assertEquals(AutonomyPolicy.ALLOW,
             ActionPolicyDefaults.descriptor(module.id, "read_items").defaultPolicy)
-        assertEquals(AutonomyPolicy.ASK,
+        assertEquals(AutonomyPolicy.ALLOW,
             ActionPolicyDefaults.descriptor(module.id, "write_items").defaultPolicy)
     }
 

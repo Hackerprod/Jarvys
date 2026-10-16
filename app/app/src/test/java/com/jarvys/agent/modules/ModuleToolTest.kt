@@ -54,7 +54,7 @@ class ModuleToolTest {
         assertEquals(1, executions)
     }
 
-    @Test fun writeAccessIsSequentialAndDefaultsToAsk() {
+    @Test fun writeAccessIsSequentialAndUsesTheSharedAllowDefault() {
         val runtime = ModuleRuntime { _, _, _ -> CoreToolResult.success("ran") }
         val modules = ModuleRegistry.fromManifests(listOf(manifest()))
         val registry = ConnectorRegistry.createForTests(Preferences(), { true })
@@ -64,7 +64,7 @@ class ModuleToolTest {
 
         assertEquals(com.jarvys.agent.CoreTool.ExecutionMode.SEQUENTIAL, tool.executionMode())
         assertEquals(com.jarvys.agent.CoreTool.UnattendedAccess.WRITE, tool.unattendedAccess())
-        assertEquals(com.jarvys.agent.connectors.AutonomyPolicy.ASK, tool.effectiveAutonomyPolicy())
+        assertEquals(com.jarvys.agent.connectors.AutonomyPolicy.ALLOW, tool.effectiveAutonomyPolicy())
     }
 
     private class Preferences : ConnectorConnectionPreferences {

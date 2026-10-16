@@ -50,6 +50,7 @@ import com.jarvys.agent.mcp.McpWriteApprovalCoordinator
 import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.mcp.McpServerDetailPage
 import com.jarvys.agent.ui.mcp.McpServerEditorScreen
+import com.jarvys.agent.ui.settings.SetupWizardPreferences
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -180,6 +181,7 @@ class Ux21ConnectorPermissionInteractionTest {
                     })
             }
         }
+        compose.onNodeWithTag("mcp-server-shared-default-policy").performScrollTo().assertIsDisplayed()
         val search = compose.onNode(hasSetTextAction()).performScrollTo().performClick()
         search.performTextInput("operation 12")
         search.assertIsFocused().assertTextContains("operation 12")
@@ -206,9 +208,15 @@ class Ux21ConnectorPermissionInteractionTest {
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h900dp-port-mdpi")
-    fun actualNewMcpEditorKeepsInitialPolicyAndFullWidthHelpClearAtDoubleSpanishText() {
+    fun actualNewMcpEditorShowsSharedWizardPolicyAndFullWidthHelpAtDoubleSpanishText() {
         compose.configureFontScale(2f)
         val repository = McpServerRepository(compose.activity, Ux21EmptyVault())
+        val selectedPolicy = SetupWizardPreferences(compose.activity).selectedPolicy()
+        val policyLabel = when (selectedPolicy) {
+            AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
+            AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
+            AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
+        }
         var saved = 0
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
@@ -219,31 +227,24 @@ class Ux21ConnectorPermissionInteractionTest {
         compose.onNodeWithTag("mcp-editor-tool-policy").performScrollTo().assertIsDisplayed()
         val title = compose.onNodeWithText(compose.activity.getString(R.string.mcp_initial_tool_permissions),
             useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-        val control = compose.onNodeWithTag("mcp-editor-tool-policy-selector").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val help = compose.onNodeWithText(compose.activity.getString(R.string.ux44_mcp_initial_policy_help),
+        val valueInteraction = compose.onNodeWithTag("mcp-shared-default-policy-value").assertIsDisplayed()
+        valueInteraction.assertTextContains(compose.activity.getString(R.string.mcp_shared_default_policy_value,
+            compose.activity.getString(policyLabel)))
+        val value = valueInteraction.fetchSemanticsNode().boundsInRoot
+        val help = compose.onNodeWithText(compose.activity.getString(R.string.mcp_initial_tool_permissions_help),
             useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val density = compose.activity.resources.displayMetrics.density
-        assertTrue("Editor title clears fixed trailing control", title.right + 7f * density <= control.left)
-        assertEquals("Editor title and control vertically align", title.center.y, control.center.y, 1f)
-        assertTrue("Full-width help remains below the complete permission row", help.top >= maxOf(title.bottom, control.bottom))
+        assertTrue("Shared policy value follows its heading", value.top >= title.bottom)
+        assertTrue("Full-width help remains below the shared policy value", help.top >= value.bottom)
         assertEquals("Help starts at the left content edge", title.left, help.left, 1f)
-        assertTrue("Help is not squeezed into the title column", help.right > control.left)
-        assertTrue("Control stays within the narrow editor", control.right <= 320f * density)
-        assertTrue("Editor target remains at least 48dp", control.height >= 48f * density)
-        val label = compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and
-            hasAnyAncestor(hasTestTag("mcp-editor-tool-policy-selector")), useUnmergedTree = true)
-        label.assertPolicyTextFits()
-        assertEquals("Editor label is centered within its target", control.center.y, label.fetchSemanticsNode().boundsInRoot.center.y, 1f)
+        assertTrue("Help spans the available editor width", help.right > value.left)
+        assertTrue("Shared policy text stays within the narrow editor", value.right <= 320f * density)
+        valueInteraction.assertPolicyTextFits()
+        compose.onAllNodesWithTag("mcp-editor-tool-policy-selector").assertCountEquals(0)
         val captures = Ux21NativeCapture(compose, "mcp-editor-es-320dp-light-font2")
-        captures.capture("initial-policy")
-        compose.onNodeWithTag("mcp-editor-tool-policy-selector").performClick()
-        assertExactChoices(listOf(R.string.remote_service_policy_ask, R.string.remote_service_policy_allow, R.string.remote_service_policy_deny))
-        captures.capture("initial-policy-menu", includePopup = true)
-        compose.onNodeWithTag("mcp-editor-tool-policy-option-allow").performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and
-            hasAnyAncestor(hasTestTag("mcp-editor-tool-policy-selector")), useUnmergedTree = true).assertPolicyTextFits()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        assertEquals("Changing the unsaved policy does not save the server", 0, saved)
+        captures.capture("shared-default-policy")
+        assertEquals("Showing the shared default does not save the server", 0, saved)
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h900dp-port-mdpi")

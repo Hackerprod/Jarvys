@@ -1,6 +1,7 @@
 package com.jarvys.agent.tasks
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.Manifest
 import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
@@ -24,6 +25,8 @@ import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.ActionPolicyDefaults
+import com.jarvys.agent.connectors.ConnectorStateStore
 import com.jarvys.agent.modules.ModuleHostVisibility
 import com.jarvys.agent.modules.ModuleRuntime
 import com.jarvys.agent.modules.ModuleRegistry
@@ -31,6 +34,7 @@ import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
 import com.jarvys.agent.proactive.ProactiveCoreLoopFactory
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.ui.settings.SetupWizardPreferences
 import com.jarvys.agent.proactive.ProactiveThreadMessage
 import java.nio.file.Files
 import java.time.Clock
@@ -63,9 +67,22 @@ class ScheduledTaskProcessorTest {
     @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @get:Rule val secretStoreTest = com.jarvys.agent.TestSecretStoreRule()
     private lateinit var context: android.app.Application
+    private lateinit var actionPolicyPreferences: SharedPreferences
+    private var priorDefaultPolicy: String? = null
+    private var hadPriorDefaultPolicy = false
+    private var priorWizardCompleted = false
+    private var hadPriorWizardCompleted = false
 
     @Before fun setUp() {
         context = RuntimeEnvironment.getApplication()
+        actionPolicyPreferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
+        hadPriorDefaultPolicy = actionPolicyPreferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+        priorDefaultPolicy = actionPolicyPreferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)
+        hadPriorWizardCompleted = actionPolicyPreferences.contains(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        priorWizardCompleted = actionPolicyPreferences.getBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, false)
+        actionPolicyPreferences.edit().remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            .remove(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY).commit()
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(actionPolicyPreferences)
         BackgroundRunController.cancelAll()
         BackgroundRunController.interactiveFinished()
         AgentRunUiState.resetSession("st1-processor-test")
@@ -75,6 +92,13 @@ class ScheduledTaskProcessorTest {
         BackgroundRunController.cancelAll()
         BackgroundRunController.interactiveFinished()
         AgentRunUiState.resetSession("st1-processor-test-cleanup")
+        actionPolicyPreferences.edit().apply {
+            if (hadPriorDefaultPolicy) putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, priorDefaultPolicy)
+            else remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            if (hadPriorWizardCompleted) putBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, priorWizardCompleted)
+            else remove(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        }.commit()
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
     }
 
     @Test fun silentRunGetsExactReadOnlyScopeRedactsToolDataAndDeliversOnceToTaskConversation() {
@@ -164,6 +188,7 @@ class ScheduledTaskProcessorTest {
     }
 
     @Test fun approvedModuleWriteWaitsForVisibleAppWithoutRequestingApprovalAgain() {
+        SetupWizardPreferences(actionPolicyPreferences).complete(AutonomyPolicy.ASK)
         val moduleId = "com.test.module.scheduled-write"
         val modules = ModuleRegistry.fromManifests(listOf("""{"schemaVersion":1,"id":"$moduleId",
             "version":"1.0.0","name":"Scheduled write","artifactTypes":[],"skills":[],"capabilities":[],

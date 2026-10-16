@@ -23,7 +23,13 @@ private class EncryptedMcpCredentialVault(private val store: SecretStore) : McpC
 }
 
 class McpServerRepository internal constructor(context: Context, private val secrets: McpCredentialVault) {
-    private val preferences = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val preferences = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).also {
+        com.jarvys.agent.connectors.ActionPolicyDefaults.bindDefaultPolicyPreferences(
+            context.applicationContext.getSharedPreferences(
+                com.jarvys.agent.connectors.ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE,
+            ),
+        )
+    }
     private val lock = Any()
     private var observedServerJson = preferences.getString(KEY_SERVERS, "[]")
     private val authorityRevisions = mutableMapOf<String, Long>()
