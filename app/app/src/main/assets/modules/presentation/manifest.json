@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "id": "com.jarvys.module.presentation",
+  "version": "1.0.0",
+  "name": "Presentaciones",
+  "artifactTypes": [
+    {
+      "type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "viewer": "viewer/presentation.html",
+      "thumbnail": "viewer/thumbnail.svg"
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_presentation",
+      "description": "Genera una presentación PowerPoint local con títulos, texto, formas e imágenes, y entrega el PPTX con una miniatura PNG de su primera diapositiva.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Título de la presentación." },
+          "slides": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string" },
+                "body": { "type": "string" },
+                "bullets": { "type": "array", "items": { "type": "string" } },
+                "backgroundColor": { "type": "string", "description": "Color hexadecimal sin #." },
+                "shapes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": { "type": "string", "description": "Tipo de forma admitido por PptxGenJS, como rect, ellipse o line." },
+                      "x": { "type": "number", "description": "Posición horizontal en pulgadas." },
+                      "y": { "type": "number", "description": "Posición vertical en pulgadas." },
+                      "w": { "type": "number", "description": "Ancho en pulgadas." },
+                      "h": { "type": "number", "description": "Alto en pulgadas." },
+                      "fillColor": { "type": "string" },
+                      "lineColor": { "type": "string" },
+                      "lineWidth": { "type": "number" },
+                      "text": { "type": "string" },
+                      "fontSize": { "type": "number" },
+                      "color": { "type": "string" }
+                    },
+                    "required": ["type", "x", "y", "w", "h"],
+                    "additionalProperties": false
+                  }
+                },
+                "images": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "dataUrl": { "type": "string", "description": "Imagen incorporada como data URL, sin descargar recursos." },
+                      "x": { "type": "number" },
+                      "y": { "type": "number" },
+                      "w": { "type": "number" },
+                      "h": { "type": "number" },
+                      "altText": { "type": "string" }
+                    },
+                    "required": ["dataUrl", "x", "y", "w", "h"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            "description": "Diapositivas en orden de presentación. Usa posiciones en pulgadas para formas e imágenes."
+          }
+        },
+        "required": ["title", "slides"],
+        "additionalProperties": false
+      },
+      "access": "write",
+      "handler": "logic/tools.js#createPresentation"
+    }
+  ],
+  "skills": ["skills/presentation/SKILL.md"],
+  "capabilities": ["artifact.deliver"]
+}

@@ -111,6 +111,9 @@ class WebViewModuleRuntime @JvmOverloads constructor(
             access = accessFactory(request, token, progress),
             complete = { raw -> result.complete(decodeResult(raw)) },
             fail = { message -> result.complete(CoreToolResult.failure(message.ifBlank { "Module handler failed." })) },
+            declaredThumbnails = module.artifactTypes.mapNotNull { artifact ->
+                artifact.thumbnail?.let { artifact.type to it }
+            }.toMap(),
         )
         return WebView(appContext).apply {
             ModuleWebViewSecurity.configure(this)

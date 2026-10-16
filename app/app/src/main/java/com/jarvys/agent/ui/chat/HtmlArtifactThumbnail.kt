@@ -84,8 +84,10 @@ internal fun HtmlArtifactThumbnail(request: ChatFileRequest, descriptor: HtmlPre
 /** Presentation only: pixels still come from the bounded, scripts-disabled local renderer. */
 @Composable
 internal fun HtmlThumbnailCardSurface(request: ChatFileRequest, image: Bitmap?, loading: Boolean,
-    modifier: Modifier = Modifier, showActions: Boolean = true, onOpen: (() -> Unit)?) {
-    val label = stringResource(R.string.chat_html_thumbnail_open, request.displayName)
+    modifier: Modifier = Modifier, showActions: Boolean = true, onOpen: (() -> Unit)?,
+    openLabel: String? = null, loadingLabel: String? = null, unavailableLabel: String? = null,
+    statusTagPrefix: String = "html-thumbnail", title: String? = null) {
+    val label = openLabel ?: stringResource(R.string.chat_html_thumbnail_open, request.displayName)
     Surface(modifier.fillMaxWidth().aspectRatio(1.5f).testTag("chat-attachment-file-${request.artifactId}"),
         shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
@@ -99,10 +101,11 @@ internal fun HtmlThumbnailCardSurface(request: ChatFileRequest, image: Bitmap?, 
             if (image != null) Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             else Box(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 12.dp,
                 bottom = if (showActions) 72.dp else 12.dp), contentAlignment = Alignment.Center) {
-                Column(Modifier.testTag("html-thumbnail-status-${request.artifactId}"),
+                Column(Modifier.testTag("$statusTagPrefix-status-${request.artifactId}"),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Text(stringResource(if (loading) R.string.chat_html_thumbnail_loading else R.string.chat_html_thumbnail_unavailable),
+                    Text(if (loading) loadingLabel ?: stringResource(R.string.chat_html_thumbnail_loading)
+                    else unavailableLabel ?: stringResource(R.string.chat_html_thumbnail_unavailable),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -113,6 +116,13 @@ internal fun HtmlThumbnailCardSurface(request: ChatFileRequest, image: Bitmap?, 
                     .testTag("html-thumbnail-gradient-${request.artifactId}"))
                 ChatFileIconButtons(request, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
                     tagPrefix = "delivered-file", overlay = true)
+            }
+            title?.takeIf(String::isNotBlank)?.let { labelText ->
+                Text(labelText, Modifier.align(Alignment.TopStart).padding(12.dp)
+                    .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 9.dp, vertical = 6.dp), maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLarge, color = Color.White)
             }
         }
     }

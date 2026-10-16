@@ -80,6 +80,38 @@ internal class ConversationModuleCapabilityAccess(
         }
     }
 
+    override fun deliverArtifact(
+        bytes: ByteArray,
+        name: String,
+        artifactType: String,
+        title: String?,
+        thumbnailBytes: ByteArray,
+        thumbnailMimeType: String,
+    ): JSONObject {
+        check(Looper.myLooper() != Looper.getMainLooper()) { "Artifact persistence cannot run on the main thread." }
+        token.throwIfCancelled()
+        return try {
+            val store = DeliveredArtifactStore(appContext)
+            val artifact = store.snapshotBytes(conversationId, bytes, name, artifactType, token)
+            val thumbnail = store.snapshotThumbnailBytes(conversationId, artifact, thumbnailBytes, thumbnailMimeType, token)
+            token.throwIfCancelled()
+            val thumbnailRef = LocalRunStore(appContext).appendDeliveredModuleArtifact(
+                conversationId, artifact, artifactType, module.id, module.manifestJson, title, thumbnail,
+            )
+            AgentRunUiState.moduleArtifactDelivered(
+                conversationId, artifact, artifactType, module.id, module.manifestJson, title, thumbnailRef,
+            )
+            JSONObject().put("id", artifact.id).put("artifactType", artifactType)
+                .put("moduleId", module.id).put("name", artifact.name)
+                .put("relativePath", artifact.relativePath).put("mimeType", artifact.mimeType)
+                .put("sizeBytes", artifact.sizeBytes).put("sha256", store.sha256(conversationId, artifact))
+                .put("thumbnailRef", thumbnailRef)
+        } catch (failure: Exception) {
+            if (failure !is CancellationException) AgentErrorReporter.reportBackgroundFailure(appContext, failure)
+            throw failure
+        }
+    }
+
     override fun reportProgress(message: String) {
         try { progress?.onProgress(message) } catch (_: RuntimeException) { }
     }

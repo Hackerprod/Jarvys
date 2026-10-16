@@ -18,6 +18,10 @@ data class DeliveredArtifactInput(
     val manifestJson: String? = null,
     val title: String? = null,
     val thumbnailRef: String? = null,
+    val thumbnailPath: String? = null,
+    val thumbnailSha256: String? = null,
+    val thumbnailSizeBytes: Long? = null,
+    val thumbnailMimeType: String? = null,
     val createdAtSeconds: Double? = null,
 )
 
@@ -61,32 +65,57 @@ sealed interface ChatFileOwnership {
  * thumbnail and privacy lookups remain indexed.
  */
 internal class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
+    private data class FileRefContent(val id: String, val sha256: String, val bytes: Long, val mimeType: String?)
+
     /** Stores one generic artifact event; duplicate identity/content is idempotent, changed content conflicts. */
     suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||
             input.sha256.isBlank() || input.sizeBytes < 0L || input.kind.isBlank())
             return@transaction ChatDbResult.Invalid("delivered artifact metadata is required")
+        val hasThumbnailMetadata = input.thumbnailPath != null || input.thumbnailSha256 != null ||
+            input.thumbnailSizeBytes != null || input.thumbnailMimeType != null
+        val hasCompleteThumbnailMetadata = input.thumbnailPath != null && input.thumbnailSha256 != null &&
+            input.thumbnailSizeBytes != null && input.thumbnailMimeType != null
+        if (hasThumbnailMetadata && (!hasCompleteThumbnailMetadata || input.thumbnailRef != null))
+            return@transaction ChatDbResult.Invalid("thumbnail path, digest, byte count, and MIME type must be supplied together")
+        if (hasCompleteThumbnailMetadata && (input.thumbnailPath.isNullOrBlank() ||
+                !input.thumbnailSha256.orEmpty().matches(Regex("[a-f0-9]{64}")) ||
+                input.thumbnailSizeBytes!! < 0L ||
+                normalizeMimeType(input.thumbnailMimeType)?.startsWith("image/") != true))
+            return@transaction ChatDbResult.Invalid("thumbnail metadata is invalid")
         ensureConversationExists(input.conversationId)
         val mime = normalizeMimeType(input.mimeType)
         val type = input.artifactType?.takeIf(String::isNotBlank) ?: mime ?: "application/octet-stream"
         val existing = readArtifact(input.conversationId, input.artifactId)
         if (existing != null) {
+            val expectedThumbnailRef = when {
+                hasCompleteThumbnailMetadata -> findFileRef(input.thumbnailPath!!)?.takeIf { fileRef ->
+                    fileRef.sha256 == input.thumbnailSha256 && fileRef.bytes == input.thumbnailSizeBytes &&
+                        fileRef.mimeType == normalizeMimeType(input.thumbnailMimeType)
+                }?.id
+                else -> input.thumbnailRef
+            }
             val same = existing.name == input.name && existing.mime_type == mime && existing.size_bytes == input.sizeBytes &&
                 existing.kind == input.kind && existing.relative_path == input.relativePath && existing.sha256 == input.sha256 &&
                 existing.artifact_type == type && existing.module_id == input.moduleId && existing.manifest_json == input.manifestJson &&
-                existing.title == input.title && existing.thumbnail_ref == input.thumbnailRef
+                existing.title == input.title && existing.thumbnail_ref == expectedThumbnailRef
             return@transaction if (same) ChatDbResult.Success(existing) else ChatDbResult.Conflict("delivered artifact identity has different content")
         }
         if (input.thumbnailRef != null && !fileRefExists(input.thumbnailRef))
             return@transaction ChatDbResult.Conflict("artifact thumbnail file reference is missing")
         val timestamp = input.createdAtSeconds ?: nowSeconds()
         val fileRef = ensureFileRef(input.relativePath, input.sha256, input.sizeBytes, mime ?: "application/octet-stream", (timestamp * 1000.0).toLong())
+        val thumbnailRef = if (hasCompleteThumbnailMetadata) ensureFileRef(
+            input.thumbnailPath!!, input.thumbnailSha256!!, input.thumbnailSizeBytes!!,
+            normalizeMimeType(input.thumbnailMimeType) ?: return@transaction ChatDbResult.Invalid("thumbnail MIME type is invalid"),
+            (timestamp * 1000.0).toLong(),
+        ) else input.thumbnailRef
         val seq = insertLedgerItem(input.conversationId, "artifact", input.artifactId, timestamp)
         sql.execSQL(
             "INSERT INTO artifacts(conversation_id,artifact_id,seq,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id,artifact_type,module_id,manifest_json,title,thumbnail_ref,created_at) " +
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf(input.conversationId, input.artifactId, seq, input.name, mime, input.sizeBytes, input.kind,
-                input.relativePath, input.sha256, fileRef, type, input.moduleId, input.manifestJson, input.title, input.thumbnailRef, timestamp),
+                input.relativePath, input.sha256, fileRef, type, input.moduleId, input.manifestJson, input.title, thumbnailRef, timestamp),
         )
         ChatDbResult.Success(readArtifact(input.conversationId, input.artifactId)!!)
     }
@@ -177,6 +206,24 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
         sql.query("SELECT * FROM artifacts WHERE conversation_id=? ORDER BY seq", arrayOf(conversationId)).use { c ->
             buildList { while (c.moveToNext()) add(c.toConversationArtifact()) }
         }
+    }
+
+    /** Resolves the persisted thumbnail file reference for one exact transcript artifact. */
+    suspend fun artifactThumbnailRef(conversationId: String, artifactId: String): FileRef? = readSnapshot {
+        sql.query(
+            "SELECT f.* FROM artifacts a JOIN file_refs f ON f.id=a.thumbnail_ref WHERE a.conversation_id=? AND a.artifact_id=?",
+            arrayOf(conversationId, artifactId),
+        ).use { c -> if (!c.moveToFirst()) null else FileRef(
+            c.getString(c.getColumnIndexOrThrow("id")),
+            c.getString(c.getColumnIndexOrThrow("sha256")),
+            c.getString(c.getColumnIndexOrThrow("relative_path")),
+            c.getLong(c.getColumnIndexOrThrow("bytes")),
+            c.getStringOrNullM1b("mime_type"),
+            c.getLong(c.getColumnIndexOrThrow("last_referenced_at")),
+            c.getLongOrNullM1b("not_before"),
+            c.getInt(c.getColumnIndexOrThrow("attempts")),
+            c.getLong(c.getColumnIndexOrThrow("generation")),
+        ) }
     }
 
     /**
@@ -313,6 +360,15 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     private fun fileRefExists(id: String): Boolean = sql.query("SELECT EXISTS(SELECT 1 FROM file_refs WHERE id=?)", arrayOf(id))
         .use { it.moveToFirst(); it.getInt(0) != 0 }
 
+    private fun findFileRef(path: String): FileRefContent? = sql.query(
+        "SELECT id,sha256,bytes,mime_type FROM file_refs WHERE relative_path=?", arrayOf(path),
+    ).use { c -> if (!c.moveToFirst()) null else FileRefContent(
+        c.getString(c.getColumnIndexOrThrow("id")),
+        c.getString(c.getColumnIndexOrThrow("sha256")),
+        c.getLong(c.getColumnIndexOrThrow("bytes")),
+        c.getStringOrNullM1b("mime_type"),
+    ) }
+
     private fun ensureFileRef(path: String, sha256: String, bytes: Long, mimeType: String, nowMillis: Long): String {
         val existing = sql.query("SELECT id,sha256,bytes,mime_type FROM file_refs WHERE relative_path=?", arrayOf(path)).use { c ->
             if (c.moveToFirst()) listOf(c.getString(0), c.getString(1), c.getLong(2).toString(), c.getStringOrNullM1b("mime_type")) else null
@@ -340,3 +396,6 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             database.withChatReadTransaction { block() }
         }
 }
+
+private fun android.database.Cursor.getLongOrNullM1b(name: String): Long? =
+    getColumnIndex(name).let { if (it < 0 || isNull(it)) null else getLong(it) }

@@ -100,8 +100,8 @@ fun ModuleArtifactViewerScreen(
                 val bridge = remember(conversationId, artifactId, current.module, access) {
                     ModuleCapabilityBridge(
                         conversationId = conversationId,
-                        declaredCapabilities = current.module.capabilities,
-                        declaredArtifactTypes = current.module.artifactTypes.map { it.type },
+                        declaredCapabilities = emptySet(),
+                        declaredArtifactTypes = emptyList(),
                         access = access,
                         complete = {},
                         fail = {},

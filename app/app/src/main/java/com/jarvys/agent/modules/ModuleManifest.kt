@@ -87,9 +87,7 @@ object ModuleManifestParser {
             "Module artifact type is invalid"
         }
         val viewer = optionalString(value, "viewer")?.also(::requireBundlePath)
-        val thumbnail = optionalString(value, "thumbnail")?.also {
-            require(it.isNotBlank() && it.none(Char::isISOControl)) { "Module thumbnail declaration is invalid" }
-        }
+        val thumbnail = optionalString(value, "thumbnail")?.also(::requireBundlePath)
         ModuleArtifactType(type, viewer, thumbnail)
     }
 

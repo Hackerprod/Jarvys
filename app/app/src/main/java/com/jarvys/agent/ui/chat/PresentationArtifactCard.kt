@@ -100,14 +100,19 @@ private object ModuleWebViewerCardPresenter : ArtifactModuleCardPresenter {
         onShareGeneratedImage: (AgentRunUiEvent) -> Unit,
     ) {
         val launchToken = event.presentationArtifact?.id?.let(ModuleArtifactViewerLaunch::token)
-        Column(Modifier.fillMaxWidth()) {
-            DeliveredArtifactEventCard(event, conversationId)
-            if (launchToken != null) {
-                androidx.compose.material3.TextButton(
-                    onClick = { onOpenPreview(launchToken) },
-                    modifier = Modifier.padding(top = 4.dp),
-                ) {
-                    Text(stringResource(R.string.chat_view_in_jarvys))
+        val hasThumbnail = !event.presentationArtifact?.thumbnailRef.isNullOrBlank()
+        if (launchToken != null && hasThumbnail) {
+            ModuleArtifactThumbnailCard(event, conversationId) { onOpenPreview(launchToken) }
+        } else {
+            Column(Modifier.fillMaxWidth()) {
+                DeliveredArtifactEventCard(event, conversationId)
+                if (launchToken != null) {
+                    androidx.compose.material3.TextButton(
+                        onClick = { onOpenPreview(launchToken) },
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        Text(stringResource(R.string.chat_view_in_jarvys))
+                    }
                 }
             }
         }

@@ -120,6 +120,47 @@ public class DeliveredArtifactTest {
         assertArrayEquals(bytes, Files.readAllBytes(artifacts.resolve(session, file).toPath()));
         assertEquals(bytes.length, file.sizeBytes);
     }
+
+    @Test public void moduleArtifactThumbnailAndBytesRestoreFromTheExistingRoomReference() throws Exception {
+        byte[] presentationBytes = new byte[] { 80, 75, 3, 4, 1, 2, 3 };
+        byte[] thumbnailBytes = pngFixture();
+        ChatAttachment artifact = artifacts.snapshotBytes(session, presentationBytes, "report.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", CancellationToken.uncancellable());
+        DeliveredArtifactStore.ThumbnailFile thumbnail = artifacts.snapshotThumbnailBytes(session, artifact,
+                thumbnailBytes, "image/png", CancellationToken.uncancellable());
+        String moduleId = "com.test.module.presentation";
+        String manifest = "{\"schemaVersion\":1}";
+        String thumbnailRef = ledger.appendDeliveredModuleArtifact(session, artifact,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", moduleId, manifest,
+                "Quarterly report", thumbnail);
+
+        assertNotNull(thumbnailRef);
+        com.jarvys.agent.chatdb.ChatDatabaseBridge bridge = com.jarvys.agent.chatdb.ChatDatabaseBridge
+                .findInstanceForFilesDirectory(files);
+        assertNotNull(bridge);
+        com.jarvys.agent.chatdb.FileRef reference = bridge.findArtifactThumbnailSync(session, artifact.id);
+        assertEquals(thumbnailRef, reference.getId());
+        assertArrayEquals(thumbnailBytes, Files.readAllBytes(
+                artifacts.resolveThumbnail(session, artifact.id, reference).toPath()));
+        assertArrayEquals(presentationBytes, Files.readAllBytes(artifacts.resolve(session, artifact).toPath()));
+
+        AgentRunUiEvent restored = chatTestStore.localRunStore(files).readConversationTimeline(session).stream()
+                .filter(event -> event.getPresentationArtifact() != null).findFirst().get();
+        assertEquals("application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                restored.getPresentationArtifact().getArtifactType());
+        assertEquals(moduleId, restored.getPresentationArtifact().getModuleId());
+        assertEquals(thumbnailRef, restored.getPresentationArtifact().getThumbnailRef());
+    }
+
+    private byte[] pngFixture() throws IOException {
+        android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(24, 16, android.graphics.Bitmap.Config.ARGB_8888);
+        try {
+            bitmap.eraseColor(android.graphics.Color.rgb(38, 116, 184));
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output));
+            return output.toByteArray();
+        } finally { bitmap.recycle(); }
+    }
     @Test public void appPrivateAbsoluteTraversalMemorySkillsAndOtherChatCannotBeDelivered() throws Exception {
         File secret = new File(files, "secret-token"); Files.write(secret.toPath(), "sentinel".getBytes(StandardCharsets.UTF_8));
         for (String path : Arrays.asList(secret.getPath(), "../secret-token", "/memory/private.md", "/skills/private.md", "memory/private.md", "./memory/private.md", "skills/private.md", "attachments/private.txt", "/project/../secret-token"))

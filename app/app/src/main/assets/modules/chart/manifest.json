@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "com.jarvys.module.chart",
+  "version": "1.0.0",
+  "name": "Gráficas",
+  "artifactTypes": [
+    {
+      "type": "application/vnd.jarvys.chart+json",
+      "viewer": "viewer/chart.html",
+      "thumbnail": "viewer/thumbnail.svg"
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_chart",
+      "description": "Crea una gráfica local a partir de etiquetas y series de datos, y la entrega como artefacto con una miniatura PNG.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Título que se muestra en la gráfica y en su tarjeta." },
+          "chartType": { "type": "string", "description": "Tipo admitido por Chart.js, por ejemplo bar, line, pie, doughnut, radar o polarArea." },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Etiquetas que corresponden a los valores de las series." },
+          "datasets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": { "type": "string" },
+                "data": { "type": "array", "items": { "type": "number" } },
+                "backgroundColor": { "anyOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" } } ] },
+                "borderColor": { "anyOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" } } ] },
+                "borderWidth": { "type": "number" },
+                "fill": { "type": "boolean" }
+              },
+              "required": ["label", "data"],
+              "additionalProperties": false
+            },
+            "description": "Una o más series con un valor por etiqueta."
+          },
+          "options": { "type": "object", "description": "Opciones adicionales de Chart.js en formato JSON." }
+        },
+        "required": ["title", "chartType", "labels", "datasets"],
+        "additionalProperties": false
+      },
+      "access": "write",
+      "handler": "logic/tools.js#createChart"
+    }
+  ],
+  "skills": ["skills/chart/SKILL.md"],
+  "capabilities": ["artifact.deliver"]
+}

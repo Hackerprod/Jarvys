@@ -1056,6 +1056,7 @@ object AgentRunUiState {
         moduleId: String,
         manifestJson: String,
         title: String?,
+        thumbnailRef: String? = null,
     ) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
@@ -1071,7 +1072,7 @@ object AgentRunUiState {
             relativePath = artifact.relativePath,
             sha256 = null,
             manifestJson = manifestJson,
-            thumbnailRef = null,
+            thumbnailRef = thumbnailRef,
             storageKind = artifact.kind.name,
         )
         val event = AgentRunUiEvent.artifactEvent(nextEventId++, presentation, System.currentTimeMillis(), artifact)

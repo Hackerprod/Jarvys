@@ -36,6 +36,20 @@ public final class DeliveredArtifactStore {
     private final String expected;
     private final Object lock;
 
+    /** Disk-backed thumbnail metadata used by the existing file_refs/artifacts relationship. */
+    public static final class ThumbnailFile {
+        public final String relativePath;
+        public final String sha256;
+        public final long sizeBytes;
+        public final String mimeType;
+        private ThumbnailFile(String relativePath, String sha256, long sizeBytes, String mimeType) {
+            this.relativePath = relativePath;
+            this.sha256 = sha256;
+            this.sizeBytes = sizeBytes;
+            this.mimeType = mimeType;
+        }
+    }
+
     public DeliveredArtifactStore(Context context) { this(new File(context.getApplicationContext().getFilesDir(), "jarvys")); }
     DeliveredArtifactStore(File jarvysRoot) {
         root = new File(jarvysRoot.getAbsoluteFile(), "delivered");
@@ -220,6 +234,90 @@ public final class DeliveredArtifactStore {
             finally { if (staged.exists()) staged.delete(); }
         }
         }
+    }
+
+    /** Stores module-produced preview pixels beside their immutable delivered artifact. */
+    ThumbnailFile snapshotThumbnailBytes(String session, ChatAttachment artifact, byte[] bytes, String requestedMime,
+            CancellationToken token) throws IOException {
+        if (bytes == null || bytes.length > MAX_BYTES) throw new IOException("Artifact thumbnail exceeds the existing byte limit");
+        if (artifact == null) throw new IOException("Thumbnail owner is missing");
+        String mime = ChatAttachment.normalizeMimeType(requestedMime);
+        if (mime == null || !mime.toLowerCase(Locale.ROOT).startsWith("image/"))
+            throw new IOException("Artifact thumbnail must have an image MIME type");
+        synchronized (DELIVERY_ACTION_LOCK) {
+        synchronized (lock) {
+            token.throwIfCancelled();
+            resolve(session, artifact);
+            File directory = directory(session, false);
+            String relative = artifact.id + ".thumbnail";
+            File target = path(session, relative);
+            File metadata = path(session, artifact.id + ".thumbnail.json");
+            String checksum = sha256(bytes);
+            final JSONObject thumbnailRecord;
+            try {
+                thumbnailRecord = new JSONObject().put("conversation", session)
+                        .put("artifactId", artifact.id).put("path", relative).put("sha256", checksum)
+                        .put("bytes", bytes.length).put("mimeType", mime);
+            } catch (org.json.JSONException invalid) {
+                throw new IOException("Could not prepare artifact thumbnail metadata", invalid);
+            }
+            if (metadata.isFile()) {
+                JSONObject existing = readManifestIo(metadata, "Could not read artifact thumbnail metadata");
+                if (!thumbnailRecord.toString().equals(existing.toString()))
+                    throw new IOException("Artifact identity already has different thumbnail content");
+                verify(target);
+                if (!target.isFile() || target.length() != bytes.length || !hash(target).equals(checksum))
+                    throw new IOException("Saved artifact thumbnail is missing or changed");
+                return new ThumbnailFile(relative, checksum, bytes.length, mime);
+            }
+            File staged = File.createTempFile(".thumbnail-", ".tmp", directory);
+            try {
+                try (FileOutputStream output = new FileOutputStream(staged)) {
+                    for (int offset = 0; offset < bytes.length; offset += 8192) {
+                        token.throwIfCancelled();
+                        output.write(bytes, offset, Math.min(8192, bytes.length - offset));
+                    }
+                    output.getFD().sync();
+                }
+                token.throwIfCancelled();
+                verify(staged); verify(target);
+                if (target.exists()) {
+                    if (target.length() != bytes.length || !hash(target).equals(checksum))
+                        throw new IOException("An interrupted artifact thumbnail must be inspected before retrying");
+                } else if (!staged.renameTo(target)) throw new IOException("Could not save artifact thumbnail");
+                ArtifactSnapshotIO.syncDirectory(directory);
+                writeManifest(metadata, thumbnailRecord);
+                return new ThumbnailFile(relative, checksum, bytes.length, mime);
+            } finally { if (staged.exists()) staged.delete(); }
+        }
+        }
+    }
+
+    /** Opens thumbnail bytes only when the persisted file reference belongs to this exact artifact. */
+    public File resolveThumbnail(String session, String artifactId, com.jarvys.agent.chatdb.FileRef reference)
+            throws IOException {
+        if (reference == null || artifactId == null || artifactId.isBlank()) throw new IOException("Artifact thumbnail reference is missing");
+        synchronized (lock) {
+            JSONObject metadata = readManifestIo(path(session, artifactId + ".thumbnail.json"),
+                    "Could not read artifact thumbnail metadata");
+            String relative = artifactId + ".thumbnail";
+            if (!session.equals(metadata.optString("conversation")) || !artifactId.equals(metadata.optString("artifactId")) ||
+                    !relative.equals(metadata.optString("path")) || !relative.equals(reference.getRelative_path()) ||
+                    !metadata.optString("sha256").equals(reference.getSha256()) ||
+                    metadata.optLong("bytes", -1L) != reference.getBytes() ||
+                    !metadata.optString("mimeType").equals(reference.getMime_type()))
+                throw new IOException("Artifact thumbnail reference does not match its stored file");
+            File target = path(session, relative);
+            verify(target);
+            if (!target.isFile() || target.length() != reference.getBytes() || !hash(target).equals(reference.getSha256()))
+                throw new IOException("Artifact thumbnail is missing or changed");
+            return target;
+        }
+    }
+
+    public InputStream openThumbnail(String session, String artifactId, com.jarvys.agent.chatdb.FileRef reference)
+            throws IOException {
+        return new FileInputStream(resolveThumbnail(session, artifactId, reference));
     }
 
     public File resolve(String session, ChatAttachment attachment) {
@@ -562,6 +660,12 @@ public final class DeliveredArtifactStore {
         }
     }
 
+    private JSONObject readManifestIo(File file, String failureMessage) throws IOException {
+        try { return readManifest(file); }
+        catch (IOException failure) { throw failure; }
+        catch (Exception failure) { throw new IOException(failureMessage, failure); }
+    }
+
     private String hash(File file) throws IOException {
         verify(file);
         try (InputStream input = new FileInputStream(file)) {
@@ -572,6 +676,11 @@ public final class DeliveredArtifactStore {
             }
             verify(file); return ArtifactSnapshotIO.hex(digest.digest());
         } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    private String sha256(byte[] bytes) throws IOException {
+        try { return ArtifactSnapshotIO.hex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
 
     static String mime(String name) {

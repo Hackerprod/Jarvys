@@ -3,8 +3,14 @@ package com.jarvys.agent.modules
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertArrayEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class ModuleCapabilityBridgeTest {
     @Test fun grantsOnlyDeclaredCapabilitiesAndOnlyDeclaredArtifactTypes() {
         val access = RecordingAccess("conversation-a")
@@ -34,6 +40,30 @@ class ModuleCapabilityBridgeTest {
         assertEquals(listOf("charts/result.json"), access.writtenPaths)
         assertEquals("image/png", access.deliveredType)
         assertEquals(listOf("Rendering"), access.progressMessages)
+    }
+
+    @Test fun deliversGeneratedBytesAndOnlyTheDeclaredThumbnailType() {
+        val access = RecordingAccess("conversation-a")
+        val bridge = ModuleCapabilityBridge(
+            conversationId = "conversation-a",
+            declaredCapabilities = setOf(ModuleCapabilities.ARTIFACT_DELIVER),
+            declaredArtifactTypes = listOf("application/vnd.example.chart+json"),
+            access = access,
+            complete = {},
+            fail = {},
+            declaredThumbnails = mapOf("application/vnd.example.chart+json" to "image/png"),
+        )
+
+        assertEquals("{\"id\":\"delivered-bytes\"}", bridge.artifactDeliverBytes(
+            android.util.Base64.encodeToString(byteArrayOf(1, 2), android.util.Base64.NO_WRAP),
+            "chart.json", "application/vnd.example.chart+json", "Chart",
+            android.util.Base64.encodeToString(byteArrayOf(3, 4), android.util.Base64.NO_WRAP), "image/png",
+        ))
+        assertArrayEquals(byteArrayOf(1, 2), access.deliveredBytes)
+        assertArrayEquals(byteArrayOf(3, 4), access.thumbnailBytes)
+        assertThrows(IllegalArgumentException::class.java) {
+            bridge.artifactDeliverBytes("AQI=", "chart.json", "application/vnd.example.chart+json", null, "AwQ=", "application/json")
+        }
     }
 
     @Test fun deniesUndeclaredNetworkOutOfScopePathsAndUndeclaredArtifactTypes() {
@@ -87,12 +117,21 @@ class ModuleCapabilityBridgeTest {
         val writtenPaths = mutableListOf<String>()
         val progressMessages = mutableListOf<String>()
         var deliveredType: String? = null
+        var deliveredBytes = byteArrayOf()
+        var thumbnailBytes = byteArrayOf()
 
         override fun readWorkspace(path: String) = "read:$path"
         override fun writeWorkspace(path: String, content: String) { writtenPaths += path }
         override fun deliverArtifact(path: String, name: String, artifactType: String, title: String?): JSONObject {
             deliveredType = artifactType
             return JSONObject().put("id", "delivered")
+        }
+        override fun deliverArtifact(bytes: ByteArray, name: String, artifactType: String, title: String?,
+            thumbnailBytes: ByteArray, thumbnailMimeType: String): JSONObject {
+            deliveredType = artifactType
+            deliveredBytes = bytes
+            this.thumbnailBytes = thumbnailBytes
+            return JSONObject().put("id", "delivered-bytes")
         }
         override fun reportProgress(message: String) { progressMessages += message }
         override fun log(message: String) = Unit

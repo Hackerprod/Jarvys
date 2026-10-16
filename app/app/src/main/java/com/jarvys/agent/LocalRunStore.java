@@ -829,6 +829,13 @@ public final class LocalRunStore {
     /** Commits one module-produced artifact with its opaque manifest and declared presentation type. */
     public void appendDeliveredFile(String sessionId, ChatAttachment artifact, String artifactType,
                                     String moduleId, String manifestJson, String title) {
+        appendDeliveredModuleArtifact(sessionId, artifact, artifactType, moduleId, manifestJson, title, null);
+    }
+
+    /** Commits a module artifact and its disk-backed thumbnail through the existing Room v2 references. */
+    public String appendDeliveredModuleArtifact(String sessionId, ChatAttachment artifact, String artifactType,
+                                    String moduleId, String manifestJson, String title,
+                                    DeliveredArtifactStore.ThumbnailFile thumbnail) {
         DeliveredArtifactStore store = new DeliveredArtifactStore(root.getParentFile());
         store.resolve(sessionId, artifact);
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -839,12 +846,17 @@ public final class LocalRunStore {
                     : com.jarvys.agent.modules.ModuleRegistry.get(appContext).artifactModuleForType(effectiveType);
             String effectiveModuleId = moduleId == null && owner != null ? owner.getId() : moduleId;
             String effectiveManifest = manifestJson == null && owner != null ? owner.getManifestJson() : manifestJson;
-            requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
+            com.jarvys.agent.chatdb.ConversationArtifact persisted = requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
                     new com.jarvys.agent.chatdb.DeliveredArtifactInput(sessionId, artifact.id, artifact.name,
                             artifact.mimeType, artifact.sizeBytes, artifact.kind.name(), artifact.relativePath,
                             store.sha256(sessionId, artifact), effectiveType, effectiveModuleId, effectiveManifest,
                             title, null,
+                            thumbnail == null ? null : thumbnail.relativePath,
+                            thumbnail == null ? null : thumbnail.sha256,
+                            thumbnail == null ? null : thumbnail.sizeBytes,
+                            thumbnail == null ? null : thumbnail.mimeType,
                             System.currentTimeMillis() / 1000.0)), "append delivered artifact");
+            return persisted.getThumbnail_ref();
         } catch (IOException error) { throw new IllegalStateException("Could not verify delivered artifact", error); }
     }
 

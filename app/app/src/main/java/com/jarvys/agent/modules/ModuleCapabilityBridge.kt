@@ -21,6 +21,14 @@ interface ModuleCapabilityAccess {
     fun readWorkspace(path: String): String
     fun writeWorkspace(path: String, content: String)
     fun deliverArtifact(path: String, name: String, artifactType: String, title: String?): JSONObject
+    fun deliverArtifact(
+        bytes: ByteArray,
+        name: String,
+        artifactType: String,
+        title: String?,
+        thumbnailBytes: ByteArray,
+        thumbnailMimeType: String,
+    ): JSONObject
     fun reportProgress(message: String)
     fun log(message: String)
     fun fetchNetwork(url: String): String
@@ -34,9 +42,11 @@ class ModuleCapabilityBridge(
     private val access: ModuleCapabilityAccess,
     private val complete: (String) -> Unit,
     private val fail: (String) -> Unit,
+    declaredThumbnails: Map<String, String> = emptyMap(),
 ) {
     private val capabilities = declaredCapabilities.toSet()
     private val artifactTypes = declaredArtifactTypes.map(::canonicalType)
+    private val thumbnailPaths = declaredThumbnails.entries.associate { canonicalType(it.key) to it.value }
 
     init {
         require(conversationId.isNotBlank() && access.conversationId == conversationId) {
@@ -44,6 +54,10 @@ class ModuleCapabilityBridge(
         }
         require(capabilities.all { it in ModuleCapabilities.supported }) {
             "Module declares an unsupported host capability"
+        }
+        require(thumbnailPaths.all { (key, path) -> artifactTypes.any { it == key } &&
+            ModuleWorkspacePath.isSafeBundlePath(path) }) {
+            "Module thumbnail declarations must refer to declared artifact types and safe bundle paths"
         }
     }
 
@@ -70,6 +84,36 @@ class ModuleCapabilityBridge(
             "Artifact type is not declared by this module"
         }
         return access.deliverArtifact(path, name, concreteType, title).toString()
+    }
+
+    /** Delivers bytes produced in the module WebView, with the declared raster thumbnail. */
+    @JavascriptInterface
+    fun artifactDeliverBytes(
+        base64: String,
+        name: String,
+        artifactType: String,
+        title: String?,
+        thumbnailBase64: String?,
+        thumbnailMimeType: String?,
+    ): String {
+        requireCapability(ModuleCapabilities.ARTIFACT_DELIVER)
+        val concreteType = canonicalType(artifactType)
+        require(CONCRETE_MIME_TYPE.matches(concreteType) && artifactTypes.any { it.matchesArtifactType(concreteType) }) {
+            "Artifact type is not declared by this module"
+        }
+        val declaredThumbnail = thumbnailPaths.keys.firstOrNull { declaredType ->
+            declaredType.matchesArtifactType(concreteType)
+        }
+        require(declaredThumbnail != null) { "This artifact declaration does not permit a generated thumbnail" }
+        val concreteThumbnailType = canonicalType(thumbnailMimeType.orEmpty())
+        require(CONCRETE_MIME_TYPE.matches(concreteThumbnailType) &&
+            concreteThumbnailType.startsWith("image/") && thumbnailBase64 != null) {
+            "Thumbnail must be a declared image artifact"
+        }
+        return access.deliverArtifact(
+            decodeBase64(base64), name, concreteType, title,
+            decodeBase64(thumbnailBase64), concreteThumbnailType,
+        ).toString()
     }
 
     @JavascriptInterface
@@ -102,6 +146,16 @@ class ModuleCapabilityBridge(
     }
 
     private fun canonicalType(type: String): String = type.substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
+
+    private fun decodeBase64(value: String): ByteArray {
+        val encodedLimit = ((com.jarvys.agent.ConnectorArtifactAccess.MAX_BYTES + 2L) / 3L) * 4L
+        require(value.length.toLong() <= encodedLimit) { "Encoded artifact exceeds the existing connector delivery limit" }
+        return try {
+            android.util.Base64.decode(value, android.util.Base64.DEFAULT)
+        } catch (invalid: IllegalArgumentException) {
+            throw IllegalArgumentException("Artifact bytes are not valid base64", invalid)
+        }
+    }
 
     private fun String.matchesArtifactType(value: String): Boolean {
         val actual = canonicalType(value)

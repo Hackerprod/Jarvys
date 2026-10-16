@@ -7,6 +7,7 @@ import com.jarvys.agent.WorkspaceTools
 import com.jarvys.agent.mcp.McpServerRepository
 import com.jarvys.agent.mcp.McpServerToolRegistry
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.modules.ModuleRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -214,7 +215,21 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
             require(parsed.metadata.id == BUNDLED_SKILL_CREATOR_ID) { "Bundled skill storage does not match its frontmatter id" }
             toEntry(parsed, SkillSource.BUNDLED)
         }.getOrNull()
-        return if (creator == null) fromAssets else fromAssets + creator
+        val knownIds = fromAssets.mapTo(mutableSetOf()) { it.metadata.id }.apply { creator?.let { add(it.metadata.id) } }
+        val fromModules = runCatching { ModuleRegistry.get(appContext) }.getOrNull()?.modules().orEmpty()
+            .flatMap { module -> module.skills.mapNotNull { relativePath ->
+                runCatching {
+                    require(com.jarvys.agent.modules.ModuleWorkspacePath.isSafeBundlePath(relativePath)) {
+                        "Module skill path is invalid"
+                    }
+                    val assetPath = "${module.bundleAssetDirectory}/$relativePath"
+                    val markdown = appContext.assets.open(assetPath).use(::readBoundedUtf8)
+                    val parsed = SkillMarkdownParser.parse(markdown)
+                    require(knownIds.add(parsed.metadata.id)) { "Bundled skill id is already in use" }
+                    toEntry(parsed, SkillSource.BUNDLED)
+                }.getOrNull()
+            } }
+        return fromAssets + fromModules + listOfNotNull(creator)
     }
 
     private fun loadImported(): List<SkillEntry> {
@@ -253,6 +268,8 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
             add("read_skill")
             add(SkillScopePolicy.APK_FACTORY_TOOL)
             addAll(McpServerToolRegistry(mcpServers).all().map { it.modelName })
+            runCatching { ModuleRegistry.get(appContext).modules().flatMap { module -> module.tools.map { it.name } } }
+                .getOrNull()?.let(::addAll)
             connectors.definitions.value.forEach { definition ->
                 definition.operations.forEach { operation ->
                     add(com.jarvys.agent.CoreConnectorTool.toolName(definition.id, operation.name))

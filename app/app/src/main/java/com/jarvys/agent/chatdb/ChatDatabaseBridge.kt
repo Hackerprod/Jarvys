@@ -678,6 +678,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun artifactsForConversationSync(conversationId: String): List<ConversationArtifact> =
         execute { it.reader.artifactsForConversation(conversationId) }
 
+    fun findArtifactThumbnailSync(conversationId: String, artifactId: String): FileRef? =
+        execute { it.artifacts.artifactThumbnailRef(conversationId, artifactId) }
+
     fun ownsGeneratedFileSync(conversationId: String, relativePath: String): Boolean =
         execute { it.reader.ownsGeneratedFile(conversationId, relativePath) }
 
