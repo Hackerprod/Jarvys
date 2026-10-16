@@ -52,7 +52,6 @@ private data class ComposeCanvasMeasurements(
     val p95FrameMs: Double?,
     val visibleItems: Int,
     val processPssKb: Int,
-    val rendererPssKb: Int?,
     val streamDeltaMs: Double,
     val paginationPaintMs: Double,
     val anchorPreserved: Boolean,
@@ -141,11 +140,11 @@ internal fun ChatCanvasBenchmarkScreen(onClose: () -> Unit) {
         val afterAnchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchorKey }
         val anchorPreserved = anchorKey == null || (afterAnchor != null && afterAnchor.offset == anchorOffset)
         val (meanFrameMs, p95FrameMs) = frameSampler.stop()
-        val memory = processMemory(context)
+        val memory = processMemory(context, includeRenderer = false)
         visibleCount = listState.layoutInfo.visibleItemsInfo.size
         composeMetrics = ComposeCanvasMeasurements(
             firstPaintMs, meanFrameMs, p95FrameMs, visibleCount,
-            memory.processPssKb, memory.rendererPssKb, streamDeltaMs, paginationPaintMs, anchorPreserved,
+            memory.processPssKb, streamDeltaMs, paginationPaintMs, anchorPreserved,
         )
         canvasStartedAtNanos = SystemClock.elapsedRealtimeNanos()
         phase = BenchmarkPhase.CANVAS
@@ -214,7 +213,7 @@ internal fun ChatCanvasBenchmarkScreen(onClose: () -> Unit) {
                 canvasReport = runCatching { JSONObject(raw) }.getOrNull()
                 val compose = composeMetrics
                 val canvas = canvasReport
-                val memory = processMemory(context)
+                val memory = processMemory(context, includeRenderer = true)
                 report = buildReport(compose, canvas, canvasFirstPaintMs, memory)
                 phase = BenchmarkPhase.DONE
             }, benchmarkFirstPaint = { canvasFirstPaintMs = it }),
@@ -248,7 +247,12 @@ private fun syntheticMessage(seq: Int, old: Boolean = false): AgentRunUiEvent {
     }
 }
 
-private fun processMemory(context: Context): ProcessMemory {
+private fun processMemory(context: Context, includeRenderer: Boolean): ProcessMemory {
+    if (!includeRenderer) {
+        val ownInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(ownInfo)
+        return ProcessMemory(ownInfo.totalPss, null)
+    }
     val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     val running = manager.runningAppProcesses.orEmpty()
     val renderer = running.filter {
@@ -256,11 +260,17 @@ private fun processMemory(context: Context): ProcessMemory {
             (it.processName.contains("sandboxed_process", ignoreCase = true) ||
                 it.processName.contains("renderer", ignoreCase = true))
     }
-    val pids = (listOf(Process.myPid()) + renderer.map { it.pid }).distinct().toIntArray()
+    val rendererPids = renderer.map { it.pid }.distinct()
+    val pids = (listOf(Process.myPid()) + rendererPids).toIntArray()
     val infos = runCatching { manager.getProcessMemoryInfo(pids) }.getOrNull().orEmpty()
     val ownInfo = infos.firstOrNull()
     val ownPss = ownInfo?.totalPss ?: Debug.MemoryInfo().let { info -> Debug.getMemoryInfo(info); info.totalPss }
-    val rendererPss = if (renderer.isEmpty()) null else infos.drop(1).sumOf { it.totalPss }
+    val rendererReadings = rendererPids.indices.map { infos.getOrNull(it + 1)?.totalPss }
+    val rendererPss = if (rendererReadings.isEmpty() || rendererReadings.any { it == null || it <= 0 }) {
+        null
+    } else {
+        rendererReadings.filterNotNull().sum()
+    }
     return ProcessMemory(ownPss, rendererPss)
 }
 
@@ -271,8 +281,8 @@ private fun buildReport(
     memory: ProcessMemory,
 ): String {
     if (compose == null || canvas == null) return "Benchmark incompleto: faltan mediciones de Compose o lienzo."
-    val composePss = compose.processPssKb + (compose.rendererPssKb ?: 0)
-    val canvasPss = memory.processPssKb + (memory.rendererPssKb ?: 0)
+    val composePss = ChatCanvasMemoryPolicy.composeTotalPssKb(compose.processPssKb)
+    val canvasPss = ChatCanvasMemoryPolicy.canvasTotalPssKb(memory.processPssKb, memory.rendererPssKb)
     val comparisons = listOf(
         gate("primer pintado", canvasFirstPaintMs?.let { it <= compose.firstPaintMs }),
         gate("scroll media", canvas.optDoubleOrNull("meanFrameMs")?.let { mean -> compose.meanFrameMs?.let { mean <= it } }),
@@ -282,12 +292,14 @@ private fun buildReport(
         gate("delta de streaming", canvas.optDoubleOrNull("streamDeltaPaintMs")?.let { it <= compose.streamDeltaMs }),
         gate("paginación y ancla", canvas.optDoubleOrNull("pagingPaintMs")?.let { it <= compose.paginationPaintMs }
             ?.and(canvas.optBoolean("anchorPreserved"))),
-        gate("PSS total incluida renderer", if (memory.rendererPssKb == null || compose.rendererPssKb == null) null else canvasPss <= composePss),
+        gate("PSS total incluida renderer", ChatCanvasMemoryPolicy.canvasWithinCompose(
+            compose.processPssKb, memory.processPssKb, memory.rendererPssKb,
+        )),
     )
     return buildString {
         appendLine("Benchmark lienzo de chat · carga sintética en memoria · ${SYNTHETIC_MESSAGE_COUNT} mensajes")
-        appendLine("Compose: primer pintado ${compose.firstPaintMs.fmt()} ms; frames media/p95 ${compose.meanFrameMs.fmt()} / ${compose.p95FrameMs.fmt()} ms; delta ${compose.streamDeltaMs.fmt()} ms; página ${compose.paginationPaintMs.fmt()} ms; ancla ${compose.anchorPreserved}; visibles ${compose.visibleItems}; proceso ${compose.processPssKb} KB; renderer ${compose.rendererPssKb?.let { "$it KB" } ?: "no expuesto por Android"}.")
-        appendLine("Lienzo: primer pintado ${canvasFirstPaintMs.fmt()} ms; frames media/p95 ${canvas.optDoubleOrNull("meanFrameMs").fmt()} / ${canvas.optDoubleOrNull("p95FrameMs").fmt()} ms; delta ${canvas.optDoubleOrNull("streamDeltaPaintMs").fmt()} ms; página ${canvas.optDoubleOrNull("pagingPaintMs").fmt()} ms; ancla ${canvas.optBoolean("anchorPreserved")}; DOM visible ${canvas.optInt("virtualizedNodes")}; mensajes cargados ${canvas.optInt("loadedMessages")}; proceso ${memory.processPssKb} KB; renderer ${memory.rendererPssKb?.let { "$it KB" } ?: "no expuesto por Android"}.")
+        appendLine("Compose: primer pintado ${compose.firstPaintMs.fmt()} ms; frames media/p95 ${compose.meanFrameMs.fmt()} / ${compose.p95FrameMs.fmt()} ms; delta ${compose.streamDeltaMs.fmt()} ms; página ${compose.paginationPaintMs.fmt()} ms; ancla ${compose.anchorPreserved}; visibles ${compose.visibleItems}; proceso ${compose.processPssKb} KB; renderer 0 KB (sin WebView durante Compose); total ${composePss} KB.")
+        appendLine("Lienzo: primer pintado ${canvasFirstPaintMs.fmt()} ms; frames media/p95 ${canvas.optDoubleOrNull("meanFrameMs").fmt()} / ${canvas.optDoubleOrNull("p95FrameMs").fmt()} ms; delta ${canvas.optDoubleOrNull("streamDeltaPaintMs").fmt()} ms; página ${canvas.optDoubleOrNull("pagingPaintMs").fmt()} ms; ancla ${canvas.optBoolean("anchorPreserved")}; DOM visible ${canvas.optInt("virtualizedNodes")}; mensajes cargados ${canvas.optInt("loadedMessages")}; proceso ${memory.processPssKb} KB; renderer ${memory.rendererPssKb?.let { "$it KB" } ?: "no expuesto por Android"}; total ${canvasPss?.let { "$it KB" } ?: "no medido"}.")
         comparisons.forEach { appendLine("${it.first}: ${it.second} (umbral = medición Compose de esta ejecución).") }
         append("Selección/copia real y TalkBack: PENDIENTE de prueba manual en móvil.")
     }
