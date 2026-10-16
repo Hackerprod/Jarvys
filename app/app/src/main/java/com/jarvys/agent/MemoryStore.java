@@ -1680,13 +1680,28 @@ public final class MemoryStore {
             }
             // Temporary and destination files share a directory. NIO's replacement move works on
             // Windows host tests too, where File.renameTo does not replace an existing target.
-            java.nio.file.Files.move(temp.toPath(), target.toPath(),
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            // File.toPath() needs API 26; on API 24/25 POSIX rename already replaces atomically.
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                Nio.replace(temp, target);
+            } else {
+                android.system.Os.rename(temp.getPath(), target.getPath());
+            }
         } catch (Exception error) {
             throw new IllegalStateException("Could not atomically persist memory data", error);
         } finally {
             if (temp != null && temp.exists()) temp.delete();
+        }
+    }
+
+    @androidx.annotation.RequiresApi(26)
+    private static final class Nio {
+        private Nio() {
+        }
+
+        static void replace(File source, File target) throws java.io.IOException {
+            java.nio.file.Files.move(source.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
