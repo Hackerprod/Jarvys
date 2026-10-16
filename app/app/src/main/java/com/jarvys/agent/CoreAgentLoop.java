@@ -28,10 +28,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class CoreAgentLoop {
     public static final String INBOX_TOOL = "crew_inbox";
-    private static final java.util.regex.Pattern EXPLICIT_MEMORY_OBJECT = java.util.regex.Pattern.compile(
-            "(?iu)\\b(?:memory|memoria|profile|perfil|user\\s+(?:data|information|details|name|preferences?)|personal\\s+(?:data|information|details)|your\\s+(?:data|name|profile|preferences?|birthday|profession)|my\\s+(?:data|name|profile|preferences?)|tus\\s+datos|tu\\s+(?:nombre|perfil|preferencia)|mis\\s+datos|mi\\s+(?:nombre|perfil|preferencia)|datos\\s+personales|informaci[oó]n\\s+personal|nombre\\s+del\\s+usuario|perfil\\s+de\\s+usuario)\\b");
     private static final java.util.regex.Pattern PERSISTENCE_NEGATION = java.util.regex.Pattern.compile(
-            "(?iu)\\b(?:no|not|never|nunca|jam[aá]s|todav[ií]a\\s+no|a[uú]n\\s+no|did\\s+not|do\\s+not|have\\s+not|has\\s+not|will\\s+not|cannot|didn['’]t|don['’]t|haven['’]t|hasn['’]t|won['’]t|can['’]t)\\b.{0,64}\\b(?:save[ds]?|store[ds]?|record(?:ed)?|remember(?:ed)?|guardad[oa]s?|almacenad[oa]s?|registrad[oa]s?|guardar|guardar[eé]|recordar[eé])\\b");
+            "(?iu)\\b(?:(?:a[uú]n\\s+no|todav[ií]a\\s+no|no)\\s+(?:(?:lo|la|te)\\s+)?(?:(?:he|has|ha|han|hemos|hab[ií]a|hab[ií]as)\\s+)?|(?:(?:i\\s+)?(?:have\\s+not|has\\s+not|had\\s+not|did\\s+not|will\\s+not|haven['’]t|hasn['’]t|hadn['’]t|didn['’]t|won['’]t)|never|nunca|jam[aá]s|not)\\s+)(?:save[ds]?|store[ds]?|record(?:ed)?|note[ds]?|remember(?:ed)?|add(?:ed)?|guard(?:ad[oa]s?|é|e)|almacen(?:ad[oa]s?|é|e)|registr(?:ad[oa]s?|é|e)|anot(?:ad[oa]s?|é|e)|apunt(?:ad[oa]s?|é|e)|memoric(?:ad[oa]s?|é|e)|guardar(?:é|emos))(?=$|[^\\p{L}\\p{N}_])");
     private static final java.util.regex.Pattern FILE_OR_PROJECT_SAVE = java.util.regex.Pattern.compile(
             "(?iu)\\b(?:file|files|fichero|ficheros|archivo|archivos|project|proyecto|proyectos)\\b|\\b/+(?:project|projects)/|\\b[\\p{Alnum}_-]+\\.(?:md|txt|pdf|docx?|xlsx?|csv|json|ya?ml|kt|java|py|js|ts|html|css)\\b");
     private static final java.util.regex.Pattern SPANISH_REQUEST = java.util.regex.Pattern.compile(
@@ -743,7 +741,7 @@ public final class CoreAgentLoop {
                             modelHasInput = true;
                             continue;
                         }
-                        answer = honestMemoryFallback(request);
+                        answer = honestMemoryFallback(request, answer);
                     }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
@@ -821,14 +819,15 @@ public final class CoreAgentLoop {
 
     static boolean hasUnsupportedMemoryPersistenceClaim(String answer, String instructions) {
         if (answer == null || answer.isEmpty() || instructions == null) return false;
-        // Test each sentence independently so an unrelated file operation elsewhere in the answer
-        // cannot hide a separate unsupported memory claim.
+        // Keep separate clauses independent so a negated save cannot hide an affirmative claim
+        // elsewhere in the sentence, and an unrelated file operation cannot hide another claim.
         for (String sentence : answer.split("(?<=[.!?;\\n])\\s*")) {
-            if (!MemoryClaimValidator.claimsPersistence(sentence, instructions)) continue;
-            if (!EXPLICIT_MEMORY_OBJECT.matcher(sentence).find()) continue;
-            if (PERSISTENCE_NEGATION.matcher(sentence).find()) continue;
-            if (FILE_OR_PROJECT_SAVE.matcher(sentence).find()) continue;
-            return true;
+            for (String clause : sentence.split("(?iu)(?:[,：:]\\s*|\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b)")) {
+                if (!MemoryClaimValidator.claimsPersistence(clause, instructions)) continue;
+                if (PERSISTENCE_NEGATION.matcher(clause).find()) continue;
+                if (FILE_OR_PROJECT_SAVE.matcher(clause).find()) continue;
+                return true;
+            }
         }
         return false;
     }
@@ -841,10 +840,21 @@ public final class CoreAgentLoop {
                 + escaped + "\n</rejected_memory_claim_draft>";
     }
 
-    private static String honestMemoryFallback(String request) {
-        return request != null && SPANISH_REQUEST.matcher(request).find()
+    private static String honestMemoryFallback(String request, String rejectedDraft) {
+        String notice = request != null && SPANISH_REQUEST.matcher(request).find()
                 ? "No pude confirmar una escritura en memoria, así que no he guardado esta información."
                 : "I couldn't confirm a successful memory write, so I haven't saved this information.";
+        if (rejectedDraft == null || rejectedDraft.isBlank()) return notice;
+        String[] sentences = rejectedDraft.split("(?<=[.!?;\\n])\\s*");
+        int colon = rejectedDraft.indexOf(':');
+        boolean hasColonContinuation = colon >= 0
+                && rejectedDraft.substring(colon + 1).trim().split("\\s+").length > 1;
+        if (sentences.length > 1 || rejectedDraft.indexOf(',') >= 0
+                || hasColonContinuation
+                || java.util.regex.Pattern.compile("(?iu)\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b").matcher(rejectedDraft).find()) {
+            return rejectedDraft.trim() + " " + notice;
+        }
+        return notice;
     }
 
     private ToolBatchOutcome executeToolBatch(List<ModelReply.Call> calls, ModelReply reply,

@@ -322,9 +322,9 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     private fun likeSearch(query: String, limit: Int): List<PersonalMemoryHit> {
         val terms = PersonalMemoryFtsSql.terms(query)
         if (terms.isEmpty()) return emptyList()
-        val patterns = terms.map { "%$it%" }
-        val score = terms.joinToString(" + ") { "CASE WHEN text LIKE ? THEN 1 ELSE 0 END" }
-        val matches = terms.joinToString(" OR ") { "text LIKE ?" }
+        val patterns = terms.map { "%${it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")}%" }
+        val score = terms.joinToString(" + ") { "CASE WHEN text LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END" }
+        val matches = terms.joinToString(" OR ") { "text LIKE ? ESCAPE '\\'" }
         val args = (patterns + patterns + limit.coerceAtLeast(1)).toTypedArray()
         return sql.query(
             "SELECT id,text,scope,layer,($score) AS score FROM memory_entries " +
@@ -512,8 +512,9 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                     sql.execSQL("INSERT INTO agent_docs(agent_id,kind,content,revision,content_hash,updated_at) VALUES('default',?,?,1,?,?)",
                         arrayOf(kind, content, hash, now))
                 } else if ((kind == "core_rules" && existing.first == AgentDocDefaults.CORE_RULES_V1)
-                    || (kind == "memory_claim_patterns" && existing.first.startsWith("version=1\nen=")
-                        && existing.first.contains("(?:memory|profile|that|it|this)"))) {
+                    || (kind == "memory_claim_patterns" && (existing.first == AgentDocDefaults.MEMORY_CLAIM_PATTERNS_V2
+                        || (existing.first.startsWith("version=1\nen=")
+                            && existing.first.contains("(?:memory|profile|that|it|this)"))))) {
                     sql.execSQL("UPDATE agent_docs SET content=?,revision=?,content_hash=?,updated_at=? WHERE agent_id='default' AND kind=?",
                         arrayOf(content, existing.second + 1, hash, now, kind))
                 }
@@ -561,11 +562,17 @@ en=(?iu)\b(?:i(?:'ll| will) remember|i've remembered|i have remembered)\b.{0,32}
 es=(?iu)\b(?:guardad[oa]|almacenad[oa]|registrad[oa])\b.{0,48}\b(?:memoria|perfil|tus datos|tu nombre|tu apodo|tu profesi.n|tus preferencias)\b
 es=(?iu)\b(?:(?:lo|la|te)\s+)?(?:recordar.{1,2}|guardar.{1,2})\b.{0,32}\b(?:memoria|perfil|tus datos|tu nombre|tu apodo|tu profesi.n|tus preferencias)\b
 es=(?iu)\b(?:ya lo guard.{1,3}|lo he guardado|lo dej.{1,3} guardado)\b.{0,32}\b(?:memoria|perfil|tus datos|tu nombre|tu apodo|tu profesi.n|tus preferencias)\b"""
+    val MEMORY_CLAIM_PATTERNS_V3 = """version=3
+en=(?iu)\b(?:i(?:['’]ve\s+|\s+(?:have|had)\s+|\s+))?(?:saved|stored|recorded|noted|remembered|added)\b.{0,64}\b(?:memory|profile|(?:(?:your|user|personal)\s+)?(?:data|details|information|name|nickname|profession|preferences?|birthday|birthdate|language))\b
+en=(?iu)\b(?:i\s+(?:will|['’]ll)\s+remember|i(?:'ve|’ve)\s+remembered)\b.{0,48}\b(?:memory|profile|(?:(?:your|user|personal)\s+)?(?:data|details|information|name|nickname|profession|preferences?|birthday|birthdate|language))\b
+es=(?iu)\b(?:(?:he\s+)?(?:guardad[oa]s?|almacenad[oa]s?|registrad[oa]s?|anotad[oa]s?|apuntad[oa]s?|memorizad[oa]s?)|guard(?:é|aste|ó|amos|aron)|almacen(?:é|aste|ó|amos|aron)|registr(?:é|aste|ó|amos|aron)|anot(?:é|aste|ó|amos|aron)|apunt(?:é|aste|ó|amos|aron)|memoric(?:é|aste|ó|amos|aron)|añad(?:í|iste|ió|imos|ieron))(?=$|[^\p{L}\p{N}_]).{0,64}\b(?:memoria|perfil|(?:(?:tu|tus|mi|mis)\s+)?(?:datos|detalles|información|nombre|apodo|profesión|preferencias?|cumpleaños|idioma)|datos\s+personales|información\s+personal)\b
+es=(?iu)\b(?:(?:lo|la|te)\s+)?(?:recordar(?:é|emos)|guardar(?:é|emos))(?=$|[^\p{L}\p{N}_]).{0,48}\b(?:memoria|perfil|(?:(?:tu|tus|mi|mis)\s+)?(?:datos|detalles|información|nombre|apodo|profesión|preferencias?|cumpleaños|idioma))\b
+es=(?iu)\b(?:ya\s+lo\s+guard.{1,3}|lo\s+he\s+guardado|lo\s+dej.{1,3}\s+guardado)(?=$|[^\p{L}\p{N}_]).{0,48}\b(?:memoria|perfil|(?:(?:tu|tus|mi|mis)\s+)?(?:datos|detalles|información|nombre|apodo|profesión|preferencias?|cumpleaños|idioma))\b"""
     val ALL = linkedMapOf(
         "core_rules" to CORE_RULES_V2,
         "soul" to "Be calm, direct, curious, and useful. Follow the user's current request. Do not invent knowledge, actions, or persistence. Reply in the user's language.",
         "bootstrap" to "On a first run, serve the user's request first. When it fits naturally, ask how the user wants to be addressed and optionally ask about the assistant's tone. Never guess. Persist answers and verify the returned receipt before saying they were saved. Background sessions do not run bootstrap questions.",
-        "memory_claim_patterns" to MEMORY_CLAIM_PATTERNS_V2,
+        "memory_claim_patterns" to MEMORY_CLAIM_PATTERNS_V3,
         "memory_claim_correction" to "The draft claimed that user information was saved or will be remembered without a successful memory-write result containing durable id and revision evidence. Either call an available memory write tool now and verify its success result, or state that it was not saved and name the blocker. Do not imply persistence without evidence.",
         "memory_flush_compaction" to "This is a silent pre-compaction memory flush. Review only genuine user messages below and identify durable facts the user explicitly stated about themselves or asked to remember. Use declared memory write tools for worthwhile facts; do not store secrets, transient details, or external content. Tool results are the only evidence of persistence. If there is nothing new and durable, return exactly NO_REPLY. This is background maintenance: do not ask the user a question and do not produce a user-facing acknowledgment.",
         "memory_flush_offline" to "This is offline memory maintenance. Review only genuine user messages below. A no-op is permitted and preferred when there is no durable, explicit, useful fact or the evidence is uncertain. Do not infer a preference from a single request. Use only declared profile and memory tools; do not forget, correct, or overwrite existing records. Never store credentials, secrets, transient details, or external content. Tool results are the only evidence of persistence. Return exactly NO_REPLY when there is nothing worth adding. Do not produce a user-facing acknowledgment.",

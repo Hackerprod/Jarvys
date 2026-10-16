@@ -23,6 +23,29 @@ class PersonalMemorySearchFallbackTest {
         assertFallbackSearch(PersonalMemorySearchMode.LIKE, "like-search")
     }
 
+    @Test fun likeSearchTreatsPercentAndUnderscoreAsLiteralTermCharacters() {
+        val files = chatStore.newFilesDirectory("like-search-special-characters")
+        PersonalMemorySearchIndex.capabilityOverrideForTests = PersonalMemorySearchMode.LIKE
+        try {
+            chatStore.withLocalRunStore(files) {
+                val app = ApplicationProvider.getApplicationContext<Context>()
+                val context = object : ContextWrapper(app) {
+                    override fun getApplicationContext(): Context = this
+                    override fun getFilesDir() = files
+                }
+                val bridge = ChatDatabaseBridge.getInstance(context)
+                assertTrue(bridge.ensureConversationSync("like-special-session") is ChatDbResult.Success)
+                val literalId = bridge.personalAgentSaveMemory("account_id is paired with a 100% discount", "daily", null, .4, "test").id
+                bridge.personalAgentSaveMemory("accountXid is paired with a 1000 discount", "daily", null, .4, "test")
+
+                assertEquals(listOf(literalId), bridge.personalAgentSearch("account_id").map { it.id })
+                assertEquals(listOf(literalId), bridge.personalAgentSearch("100%").map { it.id })
+            }
+        } finally {
+            PersonalMemorySearchIndex.capabilityOverrideForTests = null
+        }
+    }
+
     private fun assertFallbackSearch(mode: PersonalMemorySearchMode, directoryName: String) {
         val files = chatStore.newFilesDirectory(directoryName)
         PersonalMemorySearchIndex.capabilityOverrideForTests = mode

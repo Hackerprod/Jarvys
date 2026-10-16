@@ -311,15 +311,43 @@ class PersonalAgentBehaviorTest {
         val rules = configuredClaimRules()
 
         assertTrue(MemoryClaimValidator.claimsPersistence("I saved your profile.", rules))
+        assertTrue(MemoryClaimValidator.claimsPersistence("I've saved your nickname as Hackerprod.", rules))
         assertTrue("Spanish claim patterns were not applied: $rules", MemoryClaimValidator.claimsPersistence("Ya lo guardé en memoria.", rules))
         assertFalse(MemoryClaimValidator.claimsPersistence("No puedo guardar eso.", rules))
-        assertTrue(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim("I saved your profile.", rules))
-        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
-            "I saved the file to /project/notes.md and it is ready", rules))
-        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
-            "Archivo guardado; esto incluye el resumen del archivo.", rules))
-        assertFalse(CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(
-            "No he guardado esto en memoria.", rules))
+        listOf(
+            "He guardado tu apodo: Hackerprod.",
+            "I've saved your nickname as Hackerprod.",
+            "No te preocupes, he guardado tu nombre en memoria.",
+            "No problem, I saved your name to memory.",
+            "Guardé tu nombre en memoria.",
+        ).forEach { claim ->
+            assertTrue("Expected unsupported claim to be caught: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
+        }
+        listOf(
+            "No he guardado esto en memoria",
+            "I haven't saved that yet",
+            "Guardé el archivo en /project/notes.md",
+            "I saved the file ... and it is ready",
+        ).forEach { nonClaim ->
+            assertFalse("Should not report an unsupported memory claim: $nonClaim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(nonClaim, rules))
+        }
+    }
+
+    @Test fun scenario08_additionalPersistenceVerbsAreRecognized() {
+        val rules = configuredClaimRules()
+        listOf(
+            "Anoté tu apodo en memoria.",
+            "Apunté tu profesión en el perfil.",
+            "Registré tus preferencias en memoria.",
+            "Memoricé tu cumpleaños.",
+            "I noted your name in memory.",
+            "I remembered your name in memory.",
+            "I stored your nickname in memory.",
+            "I recorded your profession in the profile.",
+            "I added your preferences to memory.",
+        ).forEach { claim ->
+            assertTrue("Expected persistence verb to be recognized: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
+        }
     }
 
     @Test fun scenario08_rejectedDraftIsRecheckedOnceAndHonestCorrectionEndsTheTurn() {
@@ -361,6 +389,20 @@ class PersonalAgentBehaviorTest {
         assertEquals("COMPLETED", result.outcome)
         assertEquals(2, calls.get())
         assertEquals("I couldn't confirm a successful memory write, so I haven't saved this information.", result.text)
+    }
+
+    @Test fun scenario08_fallbackKeepsUsefulDraftContentAndAddsHonestNotice() {
+        val session = ordinarySession("claim-fallback-content")
+        val loop = CoreAgentLoop(
+            CoreAgentLoop.Model { _, _, _, _ -> ModelReply("I saved your profile: the answer is 42.", emptyList()) },
+            CoreToolRegistry(PersonalMemoryTools.create(context, "claim-fallback-content", session)),
+            configuredClaimRules(), session,
+        )
+
+        val result = loop.run("Save my details", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertTrue(result.text.startsWith("I saved your profile: the answer is 42."))
+        assertTrue(result.text.endsWith("I couldn't confirm a successful memory write, so I haven't saved this information."))
     }
 
     @Test fun scenario09_secretsAreRejectedAndRedactedBeforeMaintenanceModelSeesTranscript() {

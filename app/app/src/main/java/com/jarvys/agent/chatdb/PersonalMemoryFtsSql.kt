@@ -47,12 +47,12 @@ internal object PersonalMemoryFtsSql {
             "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL AND m.scope='user'"
 
     fun matchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
-        ?.joinToString(" OR ") { "$it*" }
+        ?.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"*" }
 
     fun exactMatchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
-        ?.joinToString(" OR ") { "\"$it\"" }
+        ?.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"" }
 
-    fun terms(query: String): List<String> = query.split(Regex("[^\\p{L}\\p{N}_]+"))
+    fun terms(query: String): List<String> = query.split(Regex("[^\\p{L}\\p{N}_%]+"))
         .filter(String::isNotBlank).distinctBy { it.lowercase() }
 
     /** FTS4 matchinfo('pcx') rank: term frequency weighted by inverse document frequency. */
