@@ -76,4 +76,10 @@ public final class AgentErrorReporter {
         if (attachmentReportsSuppressed() || context == null || failure == null) return;
         LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.ACTIVITY, failure);
     }
+
+    /** Records only structural failure data for background memory maintenance. */
+    public static void reportBackgroundFailure(Context context, Throwable failure) {
+        if (attachmentReportsSuppressed() || context == null || failure == null) return;
+        LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.RUNTIME, failure);
+    }
 }

@@ -8,6 +8,8 @@ import java.util.Map;
 public interface CoreTool {
   enum ExecutionMode { PARALLEL, SEQUENTIAL }
   enum UnattendedAccess { EXCLUDED, READ, WRITE }
+  enum AccessClassification { READ, WRITE }
+  enum PersistenceEffect { NONE, MEMORY }
 
   interface ProgressListener {
     void onProgress(String message);
@@ -36,6 +38,10 @@ public interface CoreTool {
   default boolean requiresMemoryScopeForScheduledTask() {
     return false;
   }
+
+  /** Generic effect metadata used by post-turn evidence checks; it does not depend on tool names. */
+  default AccessClassification accessClassification() { return AccessClassification.READ; }
+  default PersistenceEffect persistenceEffect() { return PersistenceEffect.NONE; }
 
   /**
    * Tools keep ReAct's original call order unless their implementation explicitly opts into

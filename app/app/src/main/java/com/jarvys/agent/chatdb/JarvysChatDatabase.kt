@@ -83,6 +83,13 @@ import kotlin.coroutines.ContinuationInterceptor
         FileRef::class,
         GenerationRun::class,
         StorageMeta::class,
+        AgentProfile::class,
+        AgentDoc::class,
+        UserDirective::class,
+        MemoryEntry::class,
+        MemoryRevision::class,
+        AgentSessionState::class,
+        MemoryJob::class,
     ],
     version = 1,
     exportSchema = true,
@@ -141,6 +148,13 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "file_refs",
             "generation_run",
             "storage_meta",
+            "agent_profiles",
+            "agent_docs",
+            "user_directives",
+            "memory_entries",
+            "memory_revisions",
+            "agent_session_state",
+            "memory_jobs",
         )
     }
 }
@@ -502,6 +516,12 @@ internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase) = create(SupportChatSqlDatabase(db))
 
     fun create(db: ChatSqlDatabase) {
+        if (!java.lang.Boolean.getBoolean("jarvys.test.sqlite.skipMemoryFts5")) {
+            db.execSQL(PersonalMemoryFtsSql.CREATE_INDEX)
+            db.execSQL(PersonalMemoryFtsSql.INSERT_TRIGGER)
+            db.execSQL(PersonalMemoryFtsSql.DELETE_TRIGGER)
+            db.execSQL(PersonalMemoryFtsSql.UPDATE_TRIGGER)
+        }
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_replace " +
                 "BEFORE INSERT ON conversations " +
@@ -528,7 +548,8 @@ internal object DatabaseTriggers {
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_tombstone_after_delete " +
                 "AFTER DELETE ON conversations " +
-                "BEGIN INSERT INTO tombstones(scope,entity_id,deleted_at) " +
+                "BEGIN DELETE FROM agent_session_state WHERE conversation_id=OLD.id; " +
+                "INSERT INTO tombstones(scope,entity_id,deleted_at) " +
                 "SELECT 'conversation',OLD.id,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) " +
                 "WHERE NOT EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=OLD.id); END",
         )

@@ -80,7 +80,8 @@ public final class WorkspaceStore {
 
     public WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed) {
         this(context, projectId, conversationId, memoryAccessAllowed,
-                new MemoryStore(context.getApplicationContext()), MemoryStore.Actor.AGENT, null, false);
+                memoryAccessAllowed ? new MemoryStore(context.getApplicationContext()) : null,
+                MemoryStore.Actor.AGENT, null, false);
     }
 
     WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed,

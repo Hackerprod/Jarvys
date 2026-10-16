@@ -69,6 +69,8 @@ android {
             it.systemProperty("room.schemaDir", "$projectDir/schemas")
             // Robolectric runs every test on the main looper; production keeps the chat-database main-thread guard on.
             it.systemProperty("jarvys.unitTests.mainThreadGuardOff", "true")
+            // Robolectric's framework SQLite build does not include FTS5; exercise the index SQL with sqlite-bundled.
+            it.systemProperty("jarvys.test.sqlite.skipMemoryFts5", "true")
         }
     }
     compileOptions {
@@ -121,6 +123,7 @@ dependencies {
     implementation("androidx.sqlite:sqlite-framework:2.5.0")
     ksp("androidx.room:room-compiler:2.7.2")
     testImplementation("androidx.room:room-testing:2.7.2")
+    testImplementation("androidx.sqlite:sqlite-bundled-jvm:2.5.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

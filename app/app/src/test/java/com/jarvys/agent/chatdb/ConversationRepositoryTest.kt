@@ -666,8 +666,12 @@ class ConversationRepositoryTest {
                 "${sourceFile.name}: every raw INSERT INTO statement must have an explicit column list",
                 insertIntoPattern.findAll(source).count(), inserts.size,
             )
-            inserts.forEach { match ->
+            inserts.forEach insertLoop@{ match ->
                 val table = match.groupValues[1]
+                // FTS5's external-content index is a virtual table. Its INSERTs live in
+                // synchronization triggers and are exercised with bundled SQLite in
+                // PersonalMemoryFts5Test; this Room/Robolectric audit covers real tables.
+                if (table == "memory_fts") return@insertLoop
                 val insertedColumnList = splitSqlExpressions(match.groupValues[2])
                     .map { it.trim().trim('`', '\"', '[', ']') }
                 val line = source.substring(0, match.range.first).count { it == '\n' } + 1

@@ -304,6 +304,7 @@ public final class CoreAgentLoop {
         boolean allCallsTerminal;
         boolean noProgress;
         boolean steeringReceived;
+        boolean successfulMemoryWrite;
     }
     static final String TIMEOUT_MESSAGE = "The requested deadline was reached. Progress may be partial; inspect existing results before continuing.";
     static final String LOOP_MESSAGE = "Jarvys paused after repeated calls without progress. Inspect existing results before continuing.";
@@ -597,6 +598,7 @@ public final class CoreAgentLoop {
         boolean modelHasInput = hasRunRequest || ConversationTurn.hasCurrentUserMessage(transcript)
                 || ConversationTurn.endsWithToolResult(transcript);
         int modelTurns = 0;
+        boolean successfulMemoryWriteThisTurn = false;
         long startedAtMs = System.currentTimeMillis();
         int overflowCompactions = 0;
         boolean truncateToolResultsForProvider = false;
@@ -721,6 +723,13 @@ public final class CoreAgentLoop {
                         }
                         return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                     }
+                    if (MemoryClaimValidator.claimsPersistence(answer, instructions) && !successfulMemoryWriteThisTurn) {
+                        // Evidence, not a retry counter, releases this guard. The next model request
+                        // can persist the fact or correct its draft without showing the unsupported claim.
+                        prompt = MemoryClaimValidator.correctionInstruction(instructions);
+                        modelHasInput = true;
+                        continue;
+                    }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
                         transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
@@ -747,6 +756,7 @@ public final class CoreAgentLoop {
                 }
                 ToolBatchOutcome batch = executeToolBatch(reply.calls, reply, runId, modelTurns, tools,
                         transcript, token, listener, loopDetector, activeActivities);
+                successfulMemoryWriteThisTurn |= batch.successfulMemoryWrite;
                 if (batch.noProgress) {
                     closeTurnContextProvider();
                     return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL",
@@ -859,6 +869,7 @@ public final class CoreAgentLoop {
                 }
                 token.throwIfCancelled();
                 outcome.executedCalls++;
+                outcome.successfulMemoryWrite |= hasDurableMemoryEvidence(item);
                 item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
                         item.result.success, item.result.content);
                 item.loopRecorded = true;
@@ -971,6 +982,7 @@ public final class CoreAgentLoop {
                             item.result.success, item.result.content);
                     item.loopRecorded = true;
                     if (item.result.finishRun && item.result.success) outcome.terminalText = item.result.content;
+                    outcome.successfulMemoryWrite |= hasDurableMemoryEvidence(item);
                 }
                 if (item.repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) outcome.noProgress = true;
             }
@@ -1020,6 +1032,15 @@ public final class CoreAgentLoop {
                     && item.result.success && item.result.finishRun;
         }
         return outcome;
+    }
+
+    private static boolean hasDurableMemoryEvidence(PreparedToolCall item) {
+        return item.tool != null
+                && item.tool.accessClassification() == CoreTool.AccessClassification.WRITE
+                && item.tool.persistenceEffect() == CoreTool.PersistenceEffect.MEMORY
+                && item.result != null && item.result.success
+                && item.result.persistenceEvidence != null
+                && !item.result.persistenceEvidence.trim().isEmpty();
     }
 
     private static CoreToolResult cancelledToolResult(CancellationException cancelled) {

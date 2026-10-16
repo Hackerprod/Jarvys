@@ -59,13 +59,6 @@ public final class AgentForegroundService extends Service {
             thread.setDaemon(true);
             return thread;
           });
-  private final ExecutorService reflectionWorker =
-      Executors.newSingleThreadExecutor(
-          r -> {
-            Thread thread = new Thread(r, "JarvysMemoryReflection");
-            thread.setDaemon(true);
-            return thread;
-          });
   /** Instance seam for testing the real service lifecycle without external provider calls. */
   interface MainChatRunner {
     CoreAgentLoop.Result run(CoreAgentRuntime runtime, String goal, List<ConversationTurn> history,
@@ -82,7 +75,6 @@ public final class AgentForegroundService extends Service {
   volatile Runnable beforeGenerationBindForTesting;
   volatile Runnable afterPendingInputRecoveryScanForTesting;
 
-  private final AtomicInteger activeReflectionTasks = new AtomicInteger();
   private final AtomicInteger pendingStopTasks = new AtomicInteger();
   private final Set<java.util.concurrent.CompletableFuture<Void>> pendingStopCompletions =
       ConcurrentHashMap.newKeySet();
@@ -466,14 +458,7 @@ public final class AgentForegroundService extends Service {
 
   public static void startMemoryReflection(
       Context context, String sessionId, String trigger, boolean manual) {
-    Intent intent =
-        new Intent(context, AgentForegroundService.class)
-            .setAction(ACTION_REFLECT_MEMORY)
-            .putExtra("chat_session_id", sessionId)
-            .putExtra("reflection_trigger", trigger == null ? "post_turn" : trigger)
-            .putExtra("reflection_manual", manual);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
-    else context.startService(intent);
+    PersonalMemoryExtractionWorker.enqueue(context, sessionId, false);
   }
 
   public static void ensureCrewKeepalive(Context context) {
@@ -1071,12 +1056,8 @@ public final class AgentForegroundService extends Service {
         stopServiceIfIdle();
         return START_NOT_STICKY;
       }
-      CancellationToken reflectionToken = MemoryReflectionRuntime.begin(session);
-      if (reflectionToken == null) return START_NOT_STICKY;
-      String trigger = intent.getStringExtra("reflection_trigger");
-      boolean manual = intent.getBooleanExtra("reflection_manual", false);
-      enqueueMemoryReflection(
-          session, trigger == null ? "post_turn" : trigger, manual, null, reflectionToken);
+      PersonalMemoryExtractionWorker.enqueue(this, session, false);
+      stopServiceIfIdle();
       return START_NOT_STICKY;
     }
     boolean manualDeviceTest =
@@ -1249,7 +1230,8 @@ public final class AgentForegroundService extends Service {
           new CoreAgentRuntime(
               this, sessionId, skills, CorePromptBudget.standard(), memoryDisabled);
       int contextWindow = model.contextWindow(token);
-      ConversationCompactor compactor = new ConversationCompactor(sessionId, model, store);
+      ConversationCompactor compactor = new ConversationCompactor(
+          sessionId, model, store, true, runtime.compactionMemoryLifecycle(model));
       ConversationCompactor.Outcome outcome =
           compactor.compact(
               transcript,
@@ -1658,7 +1640,7 @@ public final class AgentForegroundService extends Service {
     for (String sessionId : serviceSessions) stopSessionRun(sessionId);
     AgentStopActions.stopAll(
         StopController::stopAllRuns,
-        MemoryReflectionRuntime::cancelAll,
+        () -> { },
         CoreAgentRuntime::stopAllCrews);
     for (ActiveRun active : activeRuns.values()) {
       AgentRunUiState.stopPendingGeneration(active.sessionId, active.generation);
@@ -1669,114 +1651,14 @@ public final class AgentForegroundService extends Service {
   private void stopServiceIfIdle() {
     boolean noCrew = !CoreAgentRuntime.hasActiveCrewBots();
     if (pendingStopTasks.get() == 0 && activeRuns.isEmpty() && sessionLanes.isEmpty() && !StopController.hasActiveRuns()
-        && activeReflectionTasks.get() == 0 && noCrew) {
+        && noCrew) {
       stopSelf();
     }
   }
 
-  private boolean enqueueMemoryReflection(
-      String sessionId,
-      String trigger,
-      boolean manual,
-      String throughMessageId,
-      CancellationToken token) {
-    activeReflectionTasks.incrementAndGet();
-    try {
-      reflectionWorker.execute(
-          () -> runMemoryReflection(sessionId, trigger, manual, throughMessageId, token));
-      return true;
-    } catch (RuntimeException rejected) {
-      MemoryReflectionRuntime.finish(sessionId, token);
-      activeReflectionTasks.decrementAndGet();
-      stopServiceIfIdle();
-      return false;
-    }
-  }
-
   private void enqueueAutomaticReflection(String sessionId, String throughMessageId) {
-    try {
-      LocalRunStore privacyStore = new LocalRunStore(this);
-      if (privacyStore.conversationHasPrivateImagesOrAttachments(sessionId)
-          || privacyStore.conversationHasPrivateCode(sessionId)) return;
-    } catch (CancellationException cancelled) {
-      // The completed chat remains completed; a teardown must not turn it into a failed run.
-      Thread.interrupted();
-      return;
-    } catch (RuntimeException failure) {
-      reportStopPersistenceFailure(failure);
-      return;
-    }
-    activeReflectionTasks.incrementAndGet();
-    try {
-      reflectionWorker.execute(
-          () -> {
-            boolean transferred = false;
-            try {
-              if (!MemoryReflectionCoordinator.shouldScheduleAutomatic(
-                  this, sessionId, throughMessageId)) return;
-              CancellationToken token = MemoryReflectionRuntime.begin(sessionId);
-              if (token == null) return;
-              AgentRunUiState.reflectionStarted(
-                  sessionId, getString(R.string.reflection_status_running));
-              transferred = true;
-              runMemoryReflection(sessionId, "post_turn", false, throughMessageId, token);
-            } catch (CancellationException cancelled) {
-              // shutdownNow may interrupt a database wait before the reflection token is created.
-            } catch (RuntimeException failure) {
-              reportStopPersistenceFailure(failure);
-            } finally {
-              if (!transferred) {
-                activeReflectionTasks.decrementAndGet();
-                stopServiceIfIdle();
-              }
-              Thread.interrupted();
-            }
-          });
-    } catch (RuntimeException rejected) {
-      activeReflectionTasks.decrementAndGet();
-      stopServiceIfIdle();
-    }
-  }
-
-  private void runMemoryReflection(
-      String sessionId,
-      String trigger,
-      boolean manual,
-      String throughMessageId,
-      CancellationToken token) {
-    AgentRunUiState.reflectionStarted(sessionId, getString(R.string.reflection_status_running));
-    try {
-      MemoryReflectionCoordinator.Outcome outcome =
-          MemoryReflectionCoordinator.run(
-              this, sessionId, trigger, manual, throughMessageId, token);
-      AgentRunUiState.reflectionFinished(
-          sessionId,
-          outcome.reflectionId,
-          outcome.summary.isEmpty() ? outcome.status : outcome.summary,
-          outcome.revisionIds,
-          outcome.partial ? "partial" : outcome.status,
-          outcome.successful);
-    } catch (RuntimeException failure) {
-      if (token.isCancelled()) {
-        new MemoryReflectionPreferences(this)
-            .cancelled(sessionId, getString(R.string.reflection_cancelled));
-        try {
-          AgentRunUiState.refreshPersistedSession(
-              sessionId, new LocalRunStore(this).readRecentConversationTimeline(sessionId));
-        } catch (RuntimeException ignored) {
-        }
-        AgentRunUiState.reflectionCancelled(sessionId, getString(R.string.reflection_cancelled));
-      } else {
-        String status = getString(R.string.reflection_failed_backoff);
-        new MemoryReflectionPreferences(this).failed(sessionId, System.currentTimeMillis(), status);
-        AgentRunUiState.reflectionFinished(
-            sessionId, "", status, java.util.Collections.emptyList(), status, false);
-      }
-    } finally {
-      MemoryReflectionRuntime.finish(sessionId, token);
-      activeReflectionTasks.decrementAndGet();
-      stopServiceIfIdle();
-    }
+    try { PersonalMemoryExtractionWorker.enqueue(this, sessionId, false); }
+    catch (RuntimeException failure) { AgentErrorReporter.reportBackgroundFailure(this, failure); }
   }
 
   private void createNotificationChannel() {
@@ -1857,8 +1739,6 @@ public final class AgentForegroundService extends Service {
   public void onDestroy() {
     if (currentInstance == this) currentInstance = null;
     StopController.stopAllRuns();
-    MemoryReflectionRuntime.cancelAll();
-    reflectionWorker.shutdownNow();
     if (pendingStopTasks.get() > 0) worker.shutdown();
     else worker.shutdownNow();
     super.onDestroy();

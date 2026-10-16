@@ -19,6 +19,11 @@ public final class ConversationCompactor {
         }
     }
 
+    interface MemoryFlush {
+        boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token);
+        default void onCompacted(boolean memoryFlushCompleted) { }
+    }
+
     public static final class Outcome {
         public final List<ConversationTurn> context;
         public final String summary;
@@ -39,17 +44,24 @@ public final class ConversationCompactor {
     private final LocalRunStore store;
     private final CrewConversationCompaction crew;
     private final boolean conversationArtifactRecovery;
+    private final MemoryFlush memoryFlush;
 
     public ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store) {
-        this(sessionId, model, store, true);
+        this(sessionId, model, store, true, null);
     }
 
     ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store, boolean conversationArtifactRecovery) {
+        this(sessionId, model, store, conversationArtifactRecovery, null);
+    }
+
+    ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store,
+                          boolean conversationArtifactRecovery, MemoryFlush memoryFlush) {
         this.sessionId = sessionId;
         this.model = model;
         this.store = store;
         this.crew = null;
         this.conversationArtifactRecovery = conversationArtifactRecovery;
+        this.memoryFlush = memoryFlush;
     }
 
     private ConversationCompactor(String sessionId, CrewConversationCompaction crew) {
@@ -58,6 +70,7 @@ public final class ConversationCompactor {
         this.store = null;
         this.crew = crew;
         this.conversationArtifactRecovery = false;
+        this.memoryFlush = null;
     }
 
     public static ConversationCompactor forCrew(String scopeId, CoreAgentModel model, CrewContextArtifacts artifacts) {
@@ -103,6 +116,8 @@ public final class ConversationCompactor {
             token.throwIfCancelled();
             ConversationCompactionPolicy.Plan plan = requestedMode == ConversationCompactionPolicy.Mode.ALL ? ConversationCompactionPolicy.planAll(transcript) : ConversationCompactionPolicy.planSliding(transcript, contextWindow, ConversationCompactionPolicy.DEFAULT_SLIDING_PERCENTAGE);
             if (plan.summarize.isEmpty()) return null;
+            boolean memoryFlushCompleted = memoryFlush != null
+                    && memoryFlush.beforeCompact(new ArrayList<>(transcript), token);
             String summary = summarize(plan.summarize, plan.mode, token);
             if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
                 plan = ConversationCompactionPolicy.planAll(transcript);
@@ -134,6 +149,7 @@ public final class ConversationCompactor {
             int summarizedCount = firstKept;
             token.throwIfCancelled();
             store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount);
+            if (memoryFlush != null) memoryFlush.onCompacted(memoryFlushCompleted);
             List<ConversationTurn> updated = new ArrayList<>();
             updated.add(ConversationTurn.compactionSummary(summary, summarizedCount));
             if (currentUserIndex >= 0 && currentUserTurn != null && !plan.keep.contains(currentUserTurn))

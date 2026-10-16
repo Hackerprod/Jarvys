@@ -30,7 +30,7 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "59dbb821b38fbe0c3db6d6adfac48897"
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "de7e6264d00602304b41af71b49bf862"
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -438,8 +438,11 @@ class JarvysChatDatabaseM0Test {
         val seeded = seedEveryConversationChild(sqlite, id)
         val childTables = JarvysChatDatabase.ENTITY_TABLE_NAMES - setOf(
             "conversations", "tombstones", "storage_meta", "file_refs",
+            "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions",
         )
-        assertEquals(childTables, seeded.keys - setOf("conversations", "file_refs"))
+        assertEquals(childTables, seeded.keys - setOf(
+            "conversations", "file_refs", "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions",
+        ))
         childTables.forEach { table -> assertEquals("fixture row in $table", 1L, rowCount(sqlite, table)) }
         assertEmptyForeignKeyCheck(sqlite)
 
@@ -448,6 +451,9 @@ class JarvysChatDatabaseM0Test {
         assertEquals(1L, rowCount(sqlite, "tombstones"))
         assertEquals(1L, rowCount(sqlite, "file_refs"))
         assertEquals(0L, rowCount(sqlite, "storage_meta"))
+        listOf("agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions").forEach {
+            assertEquals("global memory table should survive conversation deletion: $it", 1L, rowCount(sqlite, it))
+        }
         assertTrue(database.conversationDao().isTombstoned(id))
         assertNull(database.conversationDao().getById(id))
         assertTrue(runCatching {
@@ -1354,6 +1360,9 @@ class JarvysChatDatabaseM0Test {
                 val previous = values.put(child, value)
                 check(previous == null || previous == value) { "Conflicting fixture values for $table.$child" }
             }
+        }
+        if (table == "agent_session_state") {
+            values["conversation_id"] = parentRows.getValue("conversations").getValue("id")
         }
         included.forEach { name ->
             if (name !in values) {

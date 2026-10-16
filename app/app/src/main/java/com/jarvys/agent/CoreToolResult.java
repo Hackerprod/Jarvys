@@ -19,6 +19,8 @@ public final class CoreToolResult {
     public final boolean finishRun;
     /** Exact result of this invocation only; generic tool results intentionally have no sidecar. */
     public final IncomingBatch incomingBatch;
+    /** Durable persistence receipt used by generic post-turn evidence validation. */
+    public final String persistenceEvidence;
 
     public static final class IncomingBatch {
         public final List<String> messageIds;
@@ -50,7 +52,13 @@ public final class CoreToolResult {
 
     private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
                            boolean finishRun, IncomingBatch incomingBatch) {
+        this(success, content, completeContentRequired, previewId, finishRun, incomingBatch, null);
+    }
+
+    private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
+                           boolean finishRun, IncomingBatch incomingBatch, String persistenceEvidence) {
         this.incomingBatch = incomingBatch;
+        this.persistenceEvidence = persistenceEvidence;
         this.success = success;
         this.content = content == null ? "" : content;
         this.completeContentRequired = completeContentRequired;
@@ -73,4 +81,8 @@ public final class CoreToolResult {
         return new CoreToolResult(true, content, false, previewId, false);
     }
     public static CoreToolResult failure(String content) { return new CoreToolResult(false, content, false, null, false); }
+    public static CoreToolResult persisted(String content, String evidence) {
+        if (evidence == null || evidence.trim().isEmpty()) throw new IllegalArgumentException("Persistence evidence is required");
+        return new CoreToolResult(true, content, false, null, false, null, evidence);
+    }
 }

@@ -293,7 +293,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var uiPreferences: JarvysUiPreferences
     private lateinit var proactivePreferences: ProactivePreferences
     private lateinit var assistantSpeechController: AssistantSpeechController
-    private lateinit var memoryStore: MemoryStore
     private lateinit var reflectionPreferences: MemoryReflectionPreferences
     private lateinit var skillRepository: SkillRepository
     private lateinit var connectorRegistry: ConnectorRegistry
@@ -345,8 +344,6 @@ class MainActivity : ComponentActivity() {
     private var manualReflectionAfterDisclosure by mutableStateOf(false)
     private var chatWithoutMemory by mutableStateOf(false)
     private var pendingTaskId: String? = null
-    private var memoryChangeListener: MemoryStore.MemoryChangeListener? = null
-    private var observedMemoryStore: MemoryStore? = null
     private val historyExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysRunHistory").apply { isDaemon = true }
     }
@@ -358,9 +355,6 @@ class MainActivity : ComponentActivity() {
     }
     private val sessionTitleExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysSessionTitle").apply { isDaemon = true }
-    }
-    private val memoryExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "JarvysMemoryUi").apply { isDaemon = true }
     }
     private val skillImportExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysSkillImport").apply { isDaemon = true }
@@ -411,10 +405,11 @@ class MainActivity : ComponentActivity() {
             onSpeakingChanged = { messageId -> runOnUiThread { speakingMessageId = messageId } },
             onUnavailable = { runOnUiThread { toast(getString(R.string.chat_footer_tts_unavailable), Toast.LENGTH_LONG) } },
         )
-        memoryStore = MemoryStore(this)
         reflectionPreferences = MemoryReflectionPreferences(this)
-        memoryEnabled = memoryStore.isEnabled()
-        showMemoryDisclosure = memoryEnabled && !memoryStore.hasShownDisclosure()
+        val memoryPreferences = getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE)
+        memoryEnabled = memoryPreferences.getBoolean(MemoryConstants.ENABLED_KEY, true)
+        PersonalMemoryConsolidationWorker.refreshSchedule(this)
+        showMemoryDisclosure = memoryEnabled && !memoryPreferences.getBoolean(MemoryConstants.DISCLOSURE_SHOWN_KEY, false)
         refreshReflectionUiState(conversationSessionId)
         showReflectionDisclosure = false // Action policy owns any required reflection review.
         uiPreferences = JarvysUiPreferences(this)
@@ -458,7 +453,6 @@ class MainActivity : ComponentActivity() {
         conversationTitle = if (openingProactiveThread) ProactiveConversation.title(this)
             else savedInstanceState?.getString(STATE_SESSION_TITLE)
         persistConversationSession(conversationSessionId)
-        migrateMemorySeedsAsync()
         showingNewChat = if (openingProactiveThread) false else savedInstanceState?.getBoolean(STATE_NEW_CHAT, false) ?: false
         selectedSkillIds = if (openingProactiveThread) emptySet()
             else savedInstanceState?.getStringArrayList(STATE_SELECTED_SKILLS)?.toSet().orEmpty()
@@ -531,7 +525,6 @@ class MainActivity : ComponentActivity() {
                     crewMode = crewModeChoice,
                     onCrewModeChange = ::persistCrewMode,
                     conversationTitle = conversationTitle,
-                    memoryStore = memoryStore,
                     memoryEnabled = memoryEnabled,
                     memoryCoreCharacters = memoryCoreCharacters,
                     showMemoryDisclosure = showMemoryDisclosure,
@@ -605,9 +598,9 @@ class MainActivity : ComponentActivity() {
                     onMemoryDisclosureShow = ::showMemoryDisclosureAgain,
                     onMemoryToggleForChat = ::toggleMemoryForCurrentChat,
                     onManualCompact = ::startManualCompaction,
-                    onMemoryChanged = ::refreshMemoryStatus,
-                    onUndoMemoryRevision = ::undoMemoryRevisionFromChat,
-                    onUndoReflectionGroup = ::undoReflectionGroupFromChat,
+                    onMemoryChanged = {},
+                    onUndoMemoryRevision = {},
+                    onUndoReflectionGroup = {},
                     themeMode = themeMode,
                     onThemeChange = ::persistThemeMode,
                     onShowAgentEventsChange = ::persistShowAgentEvents,
@@ -642,12 +635,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         languageChoice = AppLanguageRuntime.synchronizeSystemChoice(this)
-        migrateMemorySeedsAsync()
         if (::providersRepository.isInitialized) providersRepository.refresh()
         refreshUi()
         WorkspaceResultDelivery.scheduleCatalog(applicationContext)
         if (::connectorRegistry.isInitialized) connectorRegistry.refreshStates()
-        if (::memoryStore.isInitialized) refreshMemoryStatus()
         if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
         if (::proactivePreferences.isInitialized) refreshProactiveStatus()
     }
@@ -696,9 +687,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        memoryChangeListener?.let { observedMemoryStore?.removeChangeListener(it) }
-        observedMemoryStore = null
-        memoryChangeListener = null
         if (::assistantSpeechController.isInitialized) assistantSpeechController.shutdown()
         translationFuture?.cancel(true)
         super.onDestroy()
@@ -738,18 +726,8 @@ class MainActivity : ComponentActivity() {
         if (languageChoice == choice) return
         AppLanguageRuntime.select(this, choice)
         languageChoice = choice
-        migrateMemorySeedsAsync()
         if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
         if (Build.VERSION.SDK_INT < 33) recreate()
-    }
-
-    private fun migrateMemorySeedsAsync() {
-        if (!::memoryStore.isInitialized) return
-        val store = memoryStore.forConversation(conversationSessionId)
-        lifecycleScope.launch(Dispatchers.IO) {
-            runCatching { store.ensureInitialized() }
-                .onFailure { android.util.Log.w("JarvysMemory", "Could not migrate starter memory seeds", it) }
-        }
     }
 
     private fun interruptAndSend() {
@@ -856,50 +834,20 @@ class MainActivity : ComponentActivity() {
 
     private fun getChatPreferences() = getSharedPreferences("jarvys_chat", MODE_PRIVATE)
 
-    private fun bindMemoryObserver(sessionId: String) {
-        if (!::memoryStore.isInitialized || observedMemoryStore?.conversationId() == sessionId) return
-        memoryChangeListener?.let { observedMemoryStore?.removeChangeListener(it) }
-        val scoped = memoryStore.forConversation(sessionId)
-        observedMemoryStore = scoped
-        memoryChangeListener = object : MemoryStore.MemoryChangeListener {
-            override fun onMemoryChanged(revision: MemoryStore.Revision) {
-                runOnUiThread {
-                    if (conversationSessionId == sessionId) {
-                        AgentRunUiState.memoryChanged(revision)
-                        refreshMemoryStatus()
-                    }
-                }
-            }
-            override fun onMemoryCleared() {
-                runOnUiThread { if (conversationSessionId == sessionId) refreshMemoryStatus() }
-            }
-        }.also(scoped::addChangeListener)
-    }
-
-    private fun refreshMemoryStatus() {
-        if (!::memoryStore.isInitialized) return
-        memoryEnabled = memoryStore.isEnabled()
-        val sessionId = conversationSessionId
-        memoryExecutor.execute {
-            val used = runCatching { memoryStore.forConversation(sessionId).coreCharactersUsed() }.getOrDefault(0)
-            runOnUiThread { if (conversationSessionId == sessionId) memoryCoreCharacters = used }
-        }
-    }
-
     private fun updateMemoryEnabled(enabled: Boolean) {
-        memoryStore.setEnabled(enabled)
+        getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE).edit()
+            .putBoolean(MemoryConstants.ENABLED_KEY, enabled).apply()
         memoryEnabled = enabled
-        if (!enabled) {
-            MemoryReflectionRuntime.cancelAll()
-            advanceAllReflectionCheckpoints("memory disabled")
-        }
-        if (enabled && !memoryStore.hasShownDisclosure()) showMemoryDisclosure = true
+        PersonalMemoryConsolidationWorker.refreshSchedule(this)
+        if (!enabled) PersonalMemoryExtractionWorker.cancelAll(this)
+        if (enabled && !getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE)
+                .getBoolean(MemoryConstants.DISCLOSURE_SHOWN_KEY, false)) showMemoryDisclosure = true
         if (!enabled) showReflectionDisclosure = false
-        refreshMemoryStatus()
     }
 
     private fun dismissMemoryDisclosure() {
-        memoryStore.markDisclosureShown()
+        getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE).edit()
+            .putBoolean(MemoryConstants.DISCLOSURE_SHOWN_KEY, true).apply()
         showMemoryDisclosure = false
     }
 
@@ -913,8 +861,6 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshReflectionUiState(sessionId: String) {
         if (!::reflectionPreferences.isInitialized) return
-        if (!MemoryReflectionRuntime.isAnyRunning()) reflectionPreferences.recoverGlobalInterrupted(
-            System.currentTimeMillis(), getString(R.string.reflection_interrupted))
         reflectionEnabled = reflectionPreferences.enabled()
         reflectionStatus = reflectionPreferences.localizedStatus(
             reflectionPreferences.globalStatus().ifBlank { reflectionPreferences.status(sessionId) })
@@ -924,22 +870,10 @@ class MainActivity : ComponentActivity() {
     private fun updateReflectionEnabled(value: Boolean) {
         reflectionPreferences.setEnabled(value)
         reflectionEnabled = value
-        if (!value) {
-            MemoryReflectionRuntime.cancelAll()
-            advanceAllReflectionCheckpoints("automatic reflection disabled")
-        }
         refreshReflectionUiState(conversationSessionId)
     }
 
     private fun showReflectionDisclosureAgain() { showReflectionDisclosure = true }
-
-    private fun advanceAllReflectionCheckpoints(reason: String) {
-        historyExecutor.execute {
-            val store = LocalRunStore(this)
-            val sessions = chatDatabaseResult { store.listConversationSessionIds() }.getOrElse { return@execute }
-            sessions.forEach { sessionId -> chatDatabaseResult { store.advanceReflectionCheckpoint(sessionId, reason) } }
-        }
-    }
 
     private fun acceptReflectionDisclosure() {
         reflectionPreferences.markDisclosureShown()
@@ -958,7 +892,6 @@ class MainActivity : ComponentActivity() {
         reflectionEnabled = false
         showReflectionDisclosure = false
         manualReflectionAfterDisclosure = false
-        advanceAllReflectionCheckpoints("reflection disabled from disclosure")
     }
 
     private fun toggleMemoryForCurrentChat() {
@@ -968,11 +901,7 @@ class MainActivity : ComponentActivity() {
             .apply()
         chatWithoutMemory = next
         if (next) {
-            MemoryReflectionRuntime.cancel(conversationSessionId)
-            val sessionId = conversationSessionId
-            lifecycleScope.launch(Dispatchers.IO) {
-                chatDatabaseResult { localRunStore.advanceReflectionCheckpoint(sessionId, "chat without memory") }
-            }
+            PersonalMemoryExtractionWorker.cancelConversation(this, conversationSessionId)
         }
     }
 
@@ -1192,68 +1121,19 @@ ${event.text}
         ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::download)
     }
 
-    private fun undoMemoryRevisionFromChat(revisionId: Long) {
-        val sessionId = conversationSessionId
-        memoryExecutor.execute {
-            val selected = memoryStore.forConversation(sessionId)
-            val result = runCatching {
-                MemoryNativeActions(this).run(selected, CancellationToken.uncancellable(),
-                    { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
-                    selected.undoRevision(revisionId, MemoryStore.Actor.USER, sessionId)
-                }
-            }
-            runOnUiThread {
-                result.onSuccess {
-                    toast(getString(R.string.memory_chat_undo_done))
-                    refreshMemoryStatus()
-                }.onFailure { error ->
-                    toast(getString(R.string.memory_chat_undo_conflict), Toast.LENGTH_LONG)
-                }
-            }
-        }
-    }
-
-    private fun undoReflectionGroupFromChat(reflectionId: String) {
-        val sessionId = conversationSessionId
-        memoryExecutor.execute {
-            val result = runCatching {
-                val selected = memoryStore.forConversation(sessionId)
-                val revisions = MemoryNativeActions(this).run(selected, CancellationToken.uncancellable(),
-                    { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
-                    selected.undoReflectionGroup(reflectionId, sessionId)
-                }
-                chatDatabaseResult { localRunStore.appendReflectionUndoEvent(sessionId, reflectionId) }.getOrThrow()
-                revisions
-            }
-            runOnUiThread {
-                result.onSuccess {
-                    AgentRunUiState.reflectionUndone(sessionId, reflectionId)
-                    toast(getString(R.string.reflection_undo_done))
-                    refreshMemoryStatus()
-                }.onFailure {
-                    toast(getString(R.string.reflection_undo_conflict), Toast.LENGTH_LONG)
-                }
-            }
-        }
-    }
-
     private fun startManualReflection() {
         if (!memoryEnabled || chatWithoutMemory) {
             toast(getString(R.string.reflection_unavailable))
             return
         }
-        if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting
-            || MemoryReflectionRuntime.isAnyRunning()) return
-        AgentForegroundService.startMemoryReflection(this, conversationSessionId,
-            MemoryReflectionCoordinator.TRIGGER_MANUAL, true)
+        if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting) return
+        PersonalMemoryExtractionWorker.enqueue(this, conversationSessionId, snapshot = false, manual = true)
+        toast(getString(R.string.reflection_status_running))
     }
 
     private fun stopCurrentWork() {
         attachmentDrafts.cancelSubmission(conversationSessionId)
         val state = AgentRunUiState.snapshotForSession(conversationSessionId)
-        if (state.reflecting && state.reflectionSessionId != null) {
-            MemoryReflectionRuntime.cancel(state.reflectionSessionId)
-        }
         if (state.running || state.compacting) {
             AgentForegroundService.stopRun(conversationSessionId)
         }
@@ -1657,7 +1537,6 @@ ${event.text}
     private fun persistConversationSession(sessionId: String) {
         conversationSessionId = sessionId
         AgentRunUiState.showSession(sessionId)
-        bindMemoryObserver(sessionId)
         if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
             .putString("active_session_id", sessionId)
@@ -1678,8 +1557,7 @@ ${event.text}
         fun blocked() = conversationRemovalBlocked(AgentRunUiState.snapshotForSession(sessionId),
             attachmentDrafts.isSending(sessionId), activeTranslationMessageId != null,
             !AgentRunUiState.isRunning(sessionId) && !AgentForegroundService.hasActiveRun(sessionId),
-            CoreAgentRuntime.hasActiveCrewBots(sessionId)) ||
-            MemoryReflectionRuntime.isRunning(sessionId)
+            CoreAgentRuntime.hasActiveCrewBots(sessionId))
         val removal = action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE
         if (removal && blocked()) { toast(getString(R.string.drawer_busy)); return }
         conversationActionPending = true
@@ -1689,7 +1567,10 @@ ${event.text}
                 when (action) {
                     ConversationAction.PIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, true); true }.getOrThrow()
                     ConversationAction.UNPIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, false); true }.getOrThrow()
-                    ConversationAction.ARCHIVE -> chatDatabaseResult { localRunStore.setConversationArchived(sessionId, true); true }.getOrThrow()
+                    ConversationAction.ARCHIVE -> {
+                        PersonalMemoryExtractionWorker.enqueue(this@MainActivity, sessionId, snapshot = true, manual = true)
+                        chatDatabaseResult { localRunStore.setConversationArchived(sessionId, true); true }.getOrThrow()
+                    }
                     ConversationAction.RESTORE -> chatDatabaseResult { localRunStore.setConversationArchived(sessionId, false); true }.getOrThrow()
                     ConversationAction.RENAME -> chatDatabaseResult { localRunStore.renameConversation(sessionId, title.orEmpty()); true }.getOrThrow()
                     ConversationAction.DELETE -> {
@@ -1805,7 +1686,6 @@ private fun JarvysApp(
     crewMode: CrewMode,
     onCrewModeChange: (CrewMode) -> Unit,
     conversationTitle: String?,
-    memoryStore: MemoryStore,
     memoryEnabled: Boolean,
     memoryCoreCharacters: Int,
     showMemoryDisclosure: Boolean,
@@ -2450,22 +2330,7 @@ private fun JarvysApp(
                 connectorsDestinations(navController, connectorRegistry)
                 memoryDestinations(
                     navController = navController,
-                    store = memoryStore,
-                    enabled = memoryEnabled,
-                    onEnabledChange = onMemoryEnabledChange,
                     conversationId = conversationSessionId,
-                    onShowDisclosure = onMemoryDisclosureShow,
-                    onMemoryChanged = onMemoryChanged,
-                    reflectionEnabled = reflectionEnabled,
-                    reflectionStatus = if (agentState.reflecting && agentState.reflectionStatus != null) {
-                        agentState.reflectionStatus.orEmpty()
-                    } else if (agentState.reflectionSessionId == conversationSessionId) agentState.reflectionStatus.orEmpty() else reflectionStatus,
-                    lastReflectionMillis = if (agentState.reflectionSessionId == conversationSessionId) {
-                        maxOf(reflectionLastSuccessMillis, agentState.reflectionLastSuccessMillis)
-                    } else reflectionLastSuccessMillis,
-                    reflecting = agentState.reflecting,
-                    onReflectionEnabledChange = onReflectionEnabledChange,
-                    onReflectionDisclosure = onReflectionDisclosureShow,
                 )
                 tasksDestinations(
                     navController = navController,

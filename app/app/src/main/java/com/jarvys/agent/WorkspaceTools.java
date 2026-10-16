@@ -95,7 +95,7 @@ public final class WorkspaceTools {
     Context app = context.getApplicationContext();
     String projectId = WorkspaceStore.projectIdForSession(sessionId);
     WorkspaceStore workspace = new WorkspaceStore(app, projectId, sessionId, memoryAccessAllowed,
-        new MemoryStore(app), MemoryStore.Actor.AGENT, null, true);
+        memoryAccessAllowed ? new MemoryStore(app) : null, MemoryStore.Actor.AGENT, null, true);
     boolean effectiveMemoryAllowed = workspace.memoryEnabled();
     MemorySearchIndexCoordinator coordinator = MemorySearchIndexCoordinator.forContext(
         app, projectId, effectiveMemoryAllowed);

@@ -84,6 +84,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
         val strictJournals: StrictJournalRepository,
         val reader: ConversationReader,
         val modelTurnWriter: ConversationModelTurnWriter,
+        val agentMemory: PersonalAgentRepository,
     )
 
     companion object {
@@ -161,6 +162,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
                     StrictJournalRepository(database),
                     ConversationReader(database),
                     ConversationModelTurnWriter(database, conversations, transcript),
+                    PersonalAgentRepository(database),
                 ).also { repositories = it }
             } catch (failure: Exception) {
                 // A corrupt or inaccessible database must not trigger an open/retry loop. Keep the
@@ -172,6 +174,80 @@ class ChatDatabaseBridge private constructor(context: Context) {
             }
         }
     }
+
+    /** Agent memory is an ordinary Room repository. These methods retain the bridge's background and error-reporting contract. */
+    private fun <T> withAgentMemory(operation: String, block: suspend (PersonalAgentRepository) -> T): T = try {
+        execute { repositories -> block(repositories.agentMemory) }
+    } catch (failure: Exception) {
+        AgentErrorReporter.reportChatDatabaseFailure(applicationContext, failure)
+        throw IllegalStateException("Could not $operation in the personal agent database", failure)
+    }
+
+    fun personalAgentPromptContext(conversationId: String, privateMode: Boolean): PersonalAgentPromptContext =
+        personalAgentPromptContext(conversationId, privateMode, "principal")
+
+    fun personalAgentPromptContext(conversationId: String, privateMode: Boolean,
+                                   sessionKind: String): PersonalAgentPromptContext =
+        withAgentMemory("read personal context") { it.promptContext(conversationId, privateMode, sessionKind) }
+
+    fun personalAgentSetDirective(section: String, directive: String, sourceMessageId: String?, evidence: String,
+                                  supersedesId: String? = null, conversationId: String? = null): PersonalMemoryReceipt =
+        withAgentMemory("save user directive") { it.setDirective(section, directive, sourceMessageId, evidence, supersedesId, conversationId) }
+
+    fun personalAgentSaveMemory(text: String, layer: String, category: String?, importance: Double,
+                                sourceRef: String?): PersonalMemoryReceipt =
+        withAgentMemory("save memory") { it.saveMemory(text, layer, category, importance, sourceRef) }
+
+    fun personalAgentDailyConsolidationCandidates(): List<PersonalMemoryCandidate> =
+        withAgentMemory("read daily consolidation candidates") { it.dailyConsolidationCandidates() }
+
+    fun personalAgentConsolidateDailyNotes(sourceIds: List<String>, summary: String): PersonalMemoryReceipt =
+        withAgentMemory("consolidate daily notes") { it.consolidateDailyNotes(sourceIds, summary) }
+
+    fun personalAgentSearch(query: String, limit: Int = 8): List<PersonalMemoryHit> =
+        withAgentMemory("search memory") { it.search(query, limit) }
+
+    fun personalAgentGet(ids: List<String>): List<PersonalMemoryHit> =
+        withAgentMemory("read memory") { it.get(ids) }
+
+    fun personalAgentBrowse(): List<PersonalMemoryItem> =
+        withAgentMemory("browse memory") { it.browse() }
+
+    fun personalAgentRevisions(targetId: String): List<PersonalMemoryRevision> =
+        withAgentMemory("read directive revision history") { it.revisions(targetId) }
+
+    fun personalAgentForget(id: String): PersonalMemoryReceipt =
+        withAgentMemory("forget memory") { it.forget(id) }
+
+    fun personalAgentCorrect(id: String, text: String): PersonalMemoryReceipt =
+        withAgentMemory("correct memory") { it.correct(id, text) }
+
+    fun personalAgentSetProfile(name: String, vibe: String, emoji: String, bootstrapCompleted: Boolean = true): PersonalMemoryReceipt =
+        withAgentMemory("save assistant profile") { it.saveAgentProfile(name, vibe, emoji, bootstrapCompleted) }
+
+    fun personalAgentCompleteBootstrap(conversationId: String): Boolean =
+        withAgentMemory("complete bootstrap") { it.setBootstrapComplete(conversationId) }
+
+    fun personalAgentMarkCompacted(conversationId: String, kind: String, flushCompleted: Boolean): Long =
+        withAgentMemory("record compaction state") { it.markCompacted(conversationId, kind, flushCompleted) }
+
+    fun personalAgentNeedsMemoryFlush(conversationId: String): Boolean =
+        withAgentMemory("read memory flush state") { it.needsMemoryFlush(conversationId) }
+
+    fun personalAgentMarkMemoryFlushCompleted(conversationId: String, kind: String): Boolean =
+        withAgentMemory("record memory flush") { it.markMemoryFlushCompleted(conversationId, kind) }
+
+    fun personalAgentEnqueueJob(conversationId: String?, type: String = "extract"): String =
+        withAgentMemory("queue memory maintenance") { it.enqueueMemoryJob(conversationId, type) }
+
+    fun personalAgentClaimJob(id: String, owner: String, now: Long, leaseUntil: Long): PersonalMemoryJob? =
+        withAgentMemory("claim memory maintenance") { it.claimExtractionJob(id, owner, now, leaseUntil) }
+
+    fun personalAgentCompleteJob(id: String, owner: String): Boolean =
+        withAgentMemory("complete memory maintenance") { it.completeJob(id, owner) }
+
+    fun personalAgentRetryJob(id: String, owner: String, error: String, availableAt: Long): Boolean =
+        withAgentMemory("retry memory maintenance") { it.retryJob(id, owner, error, availableAt) }
 
     private fun <T> execute(block: suspend (Repositories) -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
