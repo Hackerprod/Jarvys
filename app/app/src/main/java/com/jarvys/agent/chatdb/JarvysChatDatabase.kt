@@ -91,7 +91,7 @@ import kotlin.coroutines.ContinuationInterceptor
         AgentSessionState::class,
         MemoryJob::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -161,7 +161,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
 
 /** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 1
+    private const val DATABASE_VERSION = 2
     private const val DATABASE_NAME = "jarvys-chat.db"
     private const val DATABASE_DIRECTORY = "jarvys"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
@@ -392,6 +392,8 @@ internal object JarvysChatDatabaseProvider {
             // Our own concurrent reads use the separate read pool and never touch Room's connection.
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
+            // v1 shipped with an incomplete schema identity; the owner chose a clean reset. Keep future versions loud.
+            .fallbackToDestructiveMigrationFrom(true, 1)
             .addMigrations(*Migrations.ALL)
             .addCallback(connectionPragmasCallback(context.applicationContext))
             .build()
