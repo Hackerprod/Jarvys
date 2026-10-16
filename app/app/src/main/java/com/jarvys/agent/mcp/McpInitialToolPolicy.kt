@@ -21,6 +21,11 @@ internal object McpInitialToolPolicyApplication {
     ): McpInitialToolPolicyResult = apply(config, discovered)
 }
 
-/** New tools inherit the same Wizard-selected autonomy default as connectors and modules. */
-fun McpServerConfig.inheritedActionPolicy(): AutonomyPolicy? =
-    if (catalogServiceId != null) null else com.jarvys.agent.connectors.ActionPolicyDefaults.selectedDefaultPolicy()
+/** A server's saved policy remains authoritative unless it has no explicit/legacy choice. */
+fun McpServerConfig.inheritedActionPolicy(): AutonomyPolicy? = when {
+    catalogServiceId != null -> null
+    initialToolPolicyOrigin == McpInitialPolicyOrigin.COMMON_DEFAULT ->
+        com.jarvys.agent.connectors.ActionPolicyDefaults.selectedDefaultPolicy()
+    initialToolPolicyOrigin == McpInitialPolicyOrigin.INVALID -> AutonomyPolicy.DENY
+    else -> AutonomyPolicy.valueOf(initialToolPolicy.name)
+}

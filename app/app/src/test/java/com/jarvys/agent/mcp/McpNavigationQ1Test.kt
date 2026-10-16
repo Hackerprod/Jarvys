@@ -29,6 +29,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.test.core.app.ApplicationProvider
+import android.content.Context
 import com.jarvys.agent.AppNavigationBackPolicy
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AppRouteBackButton
@@ -36,7 +37,10 @@ import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.ActionPolicyDefaults
+import com.jarvys.agent.connectors.ConnectorStateStore
 import com.jarvys.agent.ui.settings.SetupWizardPreferences
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -58,9 +62,22 @@ class McpNavigationQ1Test {
     private lateinit var connections: McpConnectionManager
     private lateinit var oauth: McpOAuthManager
     private val nav = AtomicReference<NavHostController>()
+    private val actionPolicyPreferences by lazy {
+        ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
+    }
+    private var previousDefaultPolicy: String? = null
+    private var hadPreviousDefaultPolicy = false
+    private var previousWizardCompleted = false
+    private var hadPreviousWizardCompleted = false
 
     @Before fun clearServers() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        hadPreviousDefaultPolicy = actionPolicyPreferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+        previousDefaultPolicy = actionPolicyPreferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)
+        hadPreviousWizardCompleted = actionPolicyPreferences.contains(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        previousWizardCompleted = actionPolicyPreferences.getBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, false)
+        SetupWizardPreferences(actionPolicyPreferences).complete(AutonomyPolicy.ALLOW)
         repository = McpServerRepository(context, TestCredentialVault())
         oauth = McpOAuthManager(repository)
         connections = McpConnectionManager(repository, oauth, McpWriteApprovalCoordinator.get(context))
@@ -70,6 +87,16 @@ class McpNavigationQ1Test {
             repository.clearBearerToken(server.id)
             oauth.clear(server.id)
         }
+    }
+
+    @After fun restoreWizardDefault() {
+        actionPolicyPreferences.edit().apply {
+            if (hadPreviousDefaultPolicy) putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, previousDefaultPolicy)
+            else remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            if (hadPreviousWizardCompleted) putBoolean(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY, previousWizardCompleted)
+            else remove(ActionPolicyDefaults.WIZARD_COMPLETED_PREFERENCE_KEY)
+        }.commit()
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
     }
 
     private fun showGraph() {
@@ -224,45 +251,56 @@ class McpNavigationQ1Test {
         assertFalse(source.contains("localListRow"))
     }
 
-    @Test fun addRouteShowsWizardDefaultAndKeepsServerControls() {
+    @Test fun addRouteDefaultsAllowAndExistingServerPolicyRemainsEditable() {
+        SetupWizardPreferences(compose.activity).complete(AutonomyPolicy.ALLOW)
         showGraph()
         compose.onNodeWithTag("mcp-add-server").performClick()
         compose.onNodeWithTag("mcp-editor-tool-policy").performScrollTo().assertIsDisplayed()
-        val selectedPolicy = SetupWizardPreferences(compose.activity).selectedPolicy()
-        val policyLabel = when (selectedPolicy) {
-            AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
-            AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
-            AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
-        }
-        compose.onNodeWithTag("mcp-shared-default-policy-value").performScrollTo()
-            .assertTextContains(compose.activity.getString(R.string.mcp_shared_default_policy_value,
-                compose.activity.getString(policyLabel)))
-        compose.onAllNodesWithTag("mcp-editor-tool-policy-selector").assertCountEquals(0)
+        val allow = compose.activity.getString(R.string.remote_service_policy_allow)
+        compose.onNodeWithTag("mcp-editor-tool-policy-selector").performScrollTo().assertTextContains(allow)
+        compose.onNodeWithTag("mcp-editor-tool-policy-selector").performClick()
+        compose.onNodeWithTag("mcp-editor-tool-policy-option-deny").assertIsDisplayed().performClick()
         compose.onNodeWithTag("mcp-editor-alias").performTextInput("Deny default server")
         compose.onNodeWithTag("mcp-editor-endpoint").performTextInput("https://deny.example/mcp")
         compose.onNodeWithTag("mcp-editor-enabled-switch").performClick()
         compose.onNodeWithTag("mcp-editor-save").performScrollTo().performClick()
         compose.waitForIdle()
         val saved = repository.servers.value.single { it.alias == "Deny default server" }
-        assertEquals("New MCP tools inherit the selected Wizard default", selectedPolicy, saved.inheritedActionPolicy())
+        assertEquals(McpInitialToolPolicy.DENY, saved.initialToolPolicy)
+        assertEquals(McpInitialPolicyOrigin.EXPLICIT_CURRENT, saved.initialToolPolicyOrigin)
         assertEquals(AppNavigationBackPolicy.MCP_LIST, nav.get().currentDestination?.route)
 
         nav.get().navigate(AppNavigationBackPolicy.editMcpServer(saved.id))
         compose.waitForIdle()
         compose.onNodeWithTag("mcp-server-editor").assertIsDisplayed()
         compose.onNodeWithTag("mcp-editor-tool-policy").performScrollTo().assertIsDisplayed()
-        compose.onAllNodesWithTag("mcp-editor-tool-policy-selector").assertCountEquals(0)
-    }
-
-    @Test fun newServerDefaultIsResolvedFromTheWizardAfterSave() {
-        val selectedPolicy = SetupWizardPreferences(compose.activity).selectedPolicy()
-        showGraph()
-        compose.onNodeWithTag("mcp-add-server").performClick()
-        compose.onNodeWithTag("mcp-editor-alias").performTextInput("Allow default server")
-        compose.onNodeWithTag("mcp-editor-endpoint").performTextInput("https://allow.example/mcp")
+        compose.onNodeWithTag("mcp-editor-tool-policy-selector").assertTextContains(
+            compose.activity.getString(R.string.remote_service_policy_deny)).performClick()
+        compose.onNodeWithTag("mcp-editor-tool-policy-option-allow").assertIsDisplayed().performClick()
+        assertEquals("Changing the editor selection does not save until confirmation", McpInitialToolPolicy.DENY,
+            repository.servers.value.single { it.alias == "Deny default server" }.initialToolPolicy)
         compose.onNodeWithTag("mcp-editor-save").performScrollTo().performClick()
         compose.waitForIdle()
-        assertEquals(selectedPolicy, repository.servers.value.single { it.alias == "Allow default server" }.inheritedActionPolicy())
+        assertEquals(McpInitialToolPolicy.ALLOW,
+            repository.servers.value.single { it.alias == "Deny default server" }.initialToolPolicy)
+    }
+
+    @Test fun addRouteCanPersistInitialAllowPolicy() {
+        SetupWizardPreferences(compose.activity).complete(AutonomyPolicy.ALLOW)
+        showGraph()
+        compose.onNodeWithTag("mcp-add-server").performClick()
+        compose.onNodeWithTag("mcp-editor-tool-policy-selector").performScrollTo().assertTextContains(
+            compose.activity.getString(R.string.remote_service_policy_allow))
+        compose.onNodeWithTag("mcp-editor-tool-policy-selector").performClick()
+        compose.onNodeWithTag("mcp-editor-tool-policy-option-allow").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("mcp-editor-alias").performTextInput("Allow default server")
+        compose.onNodeWithTag("mcp-editor-endpoint").performTextInput("https://allow.example/mcp")
+        compose.onNodeWithTag("mcp-editor-enabled-switch").performClick()
+        compose.onNodeWithTag("mcp-editor-save").performScrollTo().performClick()
+        compose.waitForIdle()
+        val saved = repository.servers.value.single { it.alias == "Allow default server" }
+        assertEquals(McpInitialToolPolicy.ALLOW, saved.initialToolPolicy)
+        assertEquals(McpInitialPolicyOrigin.EXPLICIT_CURRENT, saved.initialToolPolicyOrigin)
     }
 
     @Test fun metadataResolvesTheToolbarTitleForEveryMcpRoute() {

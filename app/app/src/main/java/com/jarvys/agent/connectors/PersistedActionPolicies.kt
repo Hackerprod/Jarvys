@@ -29,7 +29,7 @@ internal class PersistedActionPolicies(private val preferences: SharedPreference
 
     private fun snapshotLocked(id: String, operation: String, fallback: AutonomyPolicy?): ActionPolicySnapshot {
         requireHealthy()
-        val descriptor = ActionPolicyDefaults.descriptor(id, operation)
+        ActionPolicyDefaults.descriptor(id, operation)
         val key = metadataKey(id, operation)
         var values = preferences.all
         val policyRaw = raw(values, policyKey(id, operation))
@@ -58,7 +58,8 @@ internal class PersistedActionPolicies(private val preferences: SharedPreference
             authority.observations[key] = rawToken to it
         }
         val origin = if (!policyRaw.present && fallback != null) ActionPolicyOrigin.INHERITED_SERVER_DEFAULT else currentRecord.origin
-        return ActionPolicySnapshot(id, operation, saved ?: fallback ?: descriptor.defaultPolicy, currentRecord.revision,
+        val defaultPolicy = ActionPolicyDefaults.selectedDefaultPolicy(preferences)
+        return ActionPolicySnapshot(id, operation, saved ?: fallback ?: defaultPolicy, currentRecord.revision,
             origin, authority, "$rawToken:$observation", fallback)
     }
 

@@ -55,4 +55,18 @@ class ConnectorServiceCapabilityTest {
         assertTrue(runCatching { registry.invoke(definition, ConnectorOperation("old", "Old", JSONObject()), JSONObject(), CancellationToken.uncancellable()) }.isFailure)
         assertEquals(0, runtime.effects)
     }
+
+    @Test fun failedPolicyStoreKeepsTheDisplayedChoiceRestricted() {
+        val store = object : ConnectorAutonomyStore by InMemoryConnectorAutonomyStore() {
+            override fun policy(connectorId: String, operationName: String): AutonomyPolicy = error("fixture store failure")
+            override fun unavailablePolicy(): AutonomyPolicy = AutonomyPolicy.ASK
+        }
+        val operation = ConnectorOperation("read", "Read", JSONObject())
+        val definition = ConnectorDefinition("test", "Test", "1", "Test", operations = listOf(operation))
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { true }, ApprovalGate.INSTANCE, store, NoopAutonomyActionNotifier,
+        )
+        registry.register(definition)
+        assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(definition, operation))
+    }
 }

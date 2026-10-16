@@ -158,6 +158,7 @@ class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     init {
+        ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
         preferences.edit().remove("connected_email").remove("connected_sms_draft").apply()
     }
 
@@ -210,7 +211,7 @@ class ConnectorRegistry private constructor(
         configuredAutonomyPolicy(definition, operation)
 
     fun configuredAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy =
-        runCatching { autonomyStore.policy(definition.id, operation.name) }.getOrDefault(ActionPolicyDefaults.selectedDefaultPolicy())
+        runCatching { autonomyStore.policy(definition.id, operation.name) }.getOrElse { autonomyStore.unavailablePolicy() }
 
     fun configuredAutonomyOrigin(definition: ConnectorDefinition, operation: ConnectorOperation): ActionPolicyOrigin =
         runCatching { autonomyStore.snapshot(definition.id, operation.name).origin }.getOrDefault(ActionPolicyOrigin.INVALID)

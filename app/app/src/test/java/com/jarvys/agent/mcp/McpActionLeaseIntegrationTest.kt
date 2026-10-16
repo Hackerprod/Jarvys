@@ -142,10 +142,25 @@ class McpActionLeaseIntegrationTest {
         assertTrue(h.calls.isEmpty())
     }
 
+    @Test fun serverAskFallbackDoesNotRequireMaterializedPerToolRows() {
+        val h = harness(); h.enable()
+        h.repository.upsert(h.current().copy(
+            initialToolPolicy = McpInitialToolPolicy.ASK,
+            initialToolPolicyOrigin = McpInitialPolicyOrigin.EXPLICIT_CURRENT,
+        ))
+        val pending = h.worker.submit<JSONObject> { h.call() }
+        val (id, _) = h.awaitApproval()
+        h.gate.resolve(id, ApprovalDecision.APPROVED)
+        pending.get(5, TimeUnit.SECONDS)
+        assertEquals(1, h.calls.size)
+        assertNull(h.store.savedPolicy("mcp:${h.config.id}", "update_record"))
+    }
+
     @Test fun wizardAskFallbackDoesNotRequireMaterializedPerToolRows() {
         com.jarvys.agent.ui.settings.SetupWizardPreferences(actionPolicyPreferences).complete(AutonomyPolicy.ASK)
         val h = harness(); h.enable()
         assertEquals(McpInitialToolPolicy.ASK, h.current().initialToolPolicy)
+        assertEquals(McpInitialPolicyOrigin.COMMON_DEFAULT, h.current().initialToolPolicyOrigin)
         val pending = h.worker.submit<JSONObject> { h.call() }
         val (id, _) = h.awaitApproval()
         h.gate.resolve(id, ApprovalDecision.APPROVED)

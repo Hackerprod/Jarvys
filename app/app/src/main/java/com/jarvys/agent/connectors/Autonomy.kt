@@ -29,6 +29,8 @@ data class AutonomyAuditRecord(
 
 interface ConnectorAutonomyStore {
     fun policy(connectorId: String, operationName: String): AutonomyPolicy
+    /** A failed store must render as restricted; execution separately fails closed at admission. */
+    fun unavailablePolicy(): AutonomyPolicy = AutonomyPolicy.ASK
     /** Null means no saved choice. Older/custom stores conservatively retain their effective policy. */
     fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = policy(connectorId, operationName)
     fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy)

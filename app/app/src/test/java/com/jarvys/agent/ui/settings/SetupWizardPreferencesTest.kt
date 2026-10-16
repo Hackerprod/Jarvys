@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.connectors.ActionPolicyDefaults
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.ConnectorStateStore
+import com.jarvys.agent.connectors.PersistedActionPolicies
 import com.jarvys.agent.connectors.SharedPreferencesConnectorAutonomyStore
 import com.jarvys.agent.mcp.McpInitialToolPolicy
 import com.jarvys.agent.mcp.McpServerConfig
@@ -66,6 +68,39 @@ class SetupWizardPreferencesTest {
             assertEquals(AutonomyPolicy.ALLOW, ActionPolicyDefaults.selectedDefaultPolicy())
         } finally {
             preferences.edit().clear().commit()
+            ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
+        }
+    }
+
+    @Test
+    fun persistedActionStoreReadsTheSavedWizardChoiceWithoutTheGlobalPreferencesBinding() {
+        val preferences = context.getSharedPreferences("setup-unbound-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+        try {
+            preferences.edit().putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, AutonomyPolicy.DENY.name).commit()
+            ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
+            val store = PersistedActionPolicies(preferences, "unbound-${UUID.randomUUID()}")
+            assertEquals(AutonomyPolicy.DENY, store.snapshot("fixture", "new_action").policy)
+        } finally {
+            preferences.edit().clear().commit()
+            ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
+        }
+    }
+
+    @Test
+    fun connectorStateStoreLinksThePersistedWizardChoiceBeforePolicyReads() {
+        val preferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
+        val hadPreviousPolicy = preferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+        val previousPolicy = preferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)
+        try {
+            preferences.edit().putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, AutonomyPolicy.DENY.name).commit()
+            ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
+            ConnectorStateStore(context)
+            assertEquals(AutonomyPolicy.DENY, ActionPolicyDefaults.selectedDefaultPolicy())
+        } finally {
+            preferences.edit().apply {
+                if (hadPreviousPolicy) putString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, previousPolicy)
+                else remove(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
+            }.commit()
             ActionPolicyDefaults.bindDefaultPolicyPreferences(null)
         }
     }
