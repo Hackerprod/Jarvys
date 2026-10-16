@@ -56,7 +56,7 @@ class DeliveredFileUiTest {
     private fun restoredFile(dark: Boolean) {
         val session = "delivered-ui-${UUID.randomUUID()}"
         val attachment = deliver(session, "research-notes.txt", "The exported notes remain immutable.")
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         val downloads = mutableListOf<ChatFileRequest>()
         val shares = mutableListOf<ChatFileRequest>()
         var states by mutableStateOf(emptyMap<String, ChatFileTransfer>())
@@ -91,7 +91,7 @@ class DeliveredFileUiTest {
         image.recycle()
         val attachment = DeliveredArtifactStore(compose.activity).snapshot(session, workspace, "landscape.png", null, CancellationToken.uncancellable())
         LocalRunStore(compose.activity).appendDeliveredFile(session, attachment)
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         val downloaded = mutableListOf<ChatFileRequest>()
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.DARK) {
@@ -118,7 +118,7 @@ class DeliveredFileUiTest {
         val session = "delivered-svg-${UUID.randomUUID()}"
         val attachment = deliver(session, "diagram.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\"/>")
         assertTrue(attachment.isImage)
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         val requests = mutableListOf<ChatFileRequest>()
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
@@ -140,7 +140,7 @@ class DeliveredFileUiTest {
         val store = DeliveredArtifactStore(compose.activity)
         val file = store.resolve(session, attachment)
         check(file.delete())
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         compose.setContent { JarvysOwnTheme(JarvysThemeMode.LIGHT) { DeliveredArtifactEventCard(event, session) } }
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("attachment-unavailable-${attachment.id}").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("attachment-unavailable-${attachment.id}").assertIsDisplayed()

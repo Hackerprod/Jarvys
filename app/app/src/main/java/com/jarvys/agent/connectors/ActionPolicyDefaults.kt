@@ -6,8 +6,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 enum class ActionPolicyOrigin { CATALOG_DEFAULT, INHERITED_SERVER_DEFAULT, USER, LEGACY_UNKNOWN, INVALID }
 
 /** A descriptor never makes an unavailable operation available or broadens a capability scope. */
-data class ActionPolicyDescriptor(val connectorId: String, val operationName: String) {
-    val defaultPolicy: AutonomyPolicy get() = AutonomyPolicy.ALLOW
+data class ActionPolicyDescriptor(
+    val connectorId: String,
+    val operationName: String,
+    val defaultPolicy: AutonomyPolicy = AutonomyPolicy.ALLOW,
+) {
     val family: String get() = when {
         connectorId.startsWith("mcp:") -> "mcp"
         else -> connectorId
@@ -34,6 +37,7 @@ object ActionPolicyDefaults {
     const val METADATA_VERSION = 1
     private val lock = Any()
     private val actions = linkedMapOf<Pair<String, String>, ActionPolicyDescriptor>()
+    private val explicitDefaults = mutableSetOf<Pair<String, String>>()
 
     init {
         register("linux", listOf("linux_exec", "linux_setup", "linux_uninstall"))
@@ -61,7 +65,32 @@ object ActionPolicyDefaults {
     }
 
     fun register(connectorId: String, operationNames: Collection<String>): List<ActionPolicyDescriptor> =
-        operationNames.map { descriptor(connectorId, it) }
+        registerDefaults(connectorId, operationNames.associateWith { AutonomyPolicy.ALLOW })
+
+    /** Registers catalog-derived defaults while retaining the same persisted connector action policy. */
+    fun registerDefaults(
+        connectorId: String,
+        operationDefaults: Map<String, AutonomyPolicy>,
+    ): List<ActionPolicyDescriptor> = synchronized(lock) {
+        require(connectorId.isNotEmpty() && operationDefaults.keys.all(String::isNotEmpty)) {
+            "Action identity is required"
+        }
+        operationDefaults.map { (operationName, defaultPolicy) ->
+            val key = connectorId to operationName
+            val existing = actions[key]
+            if (key in explicitDefaults) {
+                require(existing?.defaultPolicy == defaultPolicy) {
+                    "An action default cannot change after it has been registered"
+                }
+                existing
+            } else {
+                ActionPolicyDescriptor(connectorId, operationName, defaultPolicy).also {
+                    actions[key] = it
+                    explicitDefaults += key
+                }
+            }
+        }
+    }
 
     fun registeredActions(): List<ActionPolicyDescriptor> = synchronized(lock) { actions.values.toList() }
 }

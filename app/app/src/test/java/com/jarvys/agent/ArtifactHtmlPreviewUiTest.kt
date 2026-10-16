@@ -100,7 +100,7 @@ class ArtifactHtmlPreviewUiTest {
         compose.activityRule.scenario.recreate()
         assertNotSame(originalActivity, compose.activity)
         val restoredEvent = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
-            .single { it.kind == "delivered_file" }
+            .single { it.kind == "artifact" }
         assertEquals(fixture.attachment, restoredEvent.deliveredArtifact)
         val downloads = mutableListOf<ChatFileRequest>()
         val shares = mutableListOf<ChatFileRequest>()
@@ -172,7 +172,7 @@ class ArtifactHtmlPreviewUiTest {
         val provider = FakeDownloadsProvider.install()
         val fixture = snapshot()
         val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
-            .single { it.kind == "delivered_file" }
+            .single { it.kind == "artifact" }
         val request = ChatFileRequest.attachment(fixture.session, fixture.attachment, delivered = true)
         lateinit var transfers: ChatFileTransfers
         compose.runOnUiThread {
@@ -250,7 +250,7 @@ class ArtifactHtmlPreviewUiTest {
     @Test fun missingDeliveredSourceHasNoPreviewOrExportControls() {
         val fixture = snapshot()
         val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
-            .single { it.kind == "delivered_file" }
+            .single { it.kind == "artifact" }
         assertTrue(DeliveredArtifactStore(compose.activity).resolve(fixture.session, fixture.attachment).delete())
         val callbacks = mutableListOf<String>()
         compose.setContent {
@@ -272,7 +272,7 @@ class ArtifactHtmlPreviewUiTest {
     @Test fun resolvingHtmlCardNeverFlashesFilenameMimeOrStaticCaptionInObservedFrames() {
         val fixture = snapshot()
         val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
-            .single { it.kind == "delivered_file" }
+            .single { it.kind == "artifact" }
         compose.mainClock.autoAdvance = false
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) { DeliveredArtifactEventCard(event, fixture.session) }
@@ -362,7 +362,7 @@ class ArtifactHtmlPreviewUiTest {
                 CancellationToken.uncancellable()).also { LocalRunStore(compose.activity).appendDeliveredFile(session, it) }
         }
         for (attachment in attachments) assertNull(DeliveredArtifactStore(compose.activity).previewForAttachment(session, attachment))
-        val events = LocalRunStore(compose.activity).readConversationTimeline(session).filter { it.kind == "delivered_file" }
+        val events = LocalRunStore(compose.activity).readConversationTimeline(session).filter { it.kind == "artifact" }
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                 Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp)) {

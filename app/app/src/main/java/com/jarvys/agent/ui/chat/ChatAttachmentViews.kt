@@ -185,7 +185,7 @@ internal fun DeliveredArtifactEventCard(event: AgentRunUiEvent, sessionId: Strin
     val attachment = event.deliveredArtifact
     Column(Modifier.fillMaxWidth().testTag("delivered-file-${event.id}")) {
         if (attachment == null) UnavailableAttachment(event.id.toString())
-        else if (attachment.isImage) AttachmentImage(attachment, sessionId,
+        else if (event.presentationArtifact?.artifactType?.startsWith("image/", ignoreCase = true) == true) AttachmentImage(attachment, sessionId,
             Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 360.dp).clip(RoundedCornerShape(14.dp)),
             tagPrefix = "delivered", delivered = true)
         else AttachmentFileCard(attachment, sessionId, delivered = true, onOpenPreview = onOpenPreview)

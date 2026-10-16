@@ -400,16 +400,28 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                     val snapshot = crewSnapshots[missionId] ?: continue
                     events += AgentRunUiEvent.crewMissionEvent(seq, snapshot)
                 }
-                "delivered_file" -> {
-                    val artifact = artifactsBySeq[seq]?.toChatAttachment() ?: continue
-                    events += AgentRunUiEvent.deliveredFileEvent(seq, artifact, timestamp)
-                }
-                "generated_image" -> {
-                    val image = generatedImagesBySeq[seq] ?: continue
-                    events += AgentRunUiEvent.generatedImageEvent(
-                        seq, image.image_path, image.prompt, image.revised_prompt.orEmpty(), image.mime_type ?: "image/png",
-                        image.size.orEmpty(), image.status, image.error.orEmpty(), timestamp,
-                    )
+                // Older on-device ledgers used these two item kinds. Keep projecting them
+                // through the generic event so upgrading never hides existing presentations.
+                "artifact", "delivered_file", "generated_image" -> {
+                    val artifact = artifactsBySeq[seq]
+                    val image = generatedImagesBySeq[seq]
+                    if (artifact != null) {
+                        if (image == null) {
+                            events += AgentRunUiEvent.artifactEvent(
+                                seq, artifact.toPresentationArtifact(), timestamp, artifact.toChatAttachment(),
+                            )
+                        } else {
+                            events += AgentRunUiEvent.generatedImageEvent(
+                                seq, image.image_path, image.prompt, image.revised_prompt.orEmpty(), image.mime_type ?: "image/png",
+                                image.size.orEmpty(), image.status, image.error.orEmpty(), timestamp,
+                            ).copy(presentationArtifact = artifact.toPresentationArtifact())
+                        }
+                    } else if (image != null) {
+                        events += AgentRunUiEvent.generatedImageEvent(
+                            seq, image.image_path, image.prompt, image.revised_prompt.orEmpty(), image.mime_type ?: "image/png",
+                            image.size.orEmpty(), image.status, image.error.orEmpty(), timestamp,
+                        ).copy(presentationArtifact = image.toPresentationArtifact(slot.item.item_key))
+                    }
                 }
                 "workspace_result_notice" -> {
                     if (!WorkspaceIdentity.isCentral(conversationId)) continue
@@ -671,6 +683,38 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         "SELECT mission_id,last_snapshot_seq FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq",
         arrayOf(conversationId),
     ).use { c -> buildMap { while (c.moveToNext()) put(c.getString(0), c.getLong(1)) } }
+
+    private fun ConversationArtifact.toPresentationArtifact() = PresentationArtifact(
+        id = artifact_id,
+        artifactType = artifact_type,
+        moduleId = module_id,
+        name = name,
+        title = title,
+        mimeType = mime_type,
+        sizeBytes = size_bytes,
+        relativePath = relative_path,
+        sha256 = sha256,
+        manifestJson = manifest_json,
+        thumbnailRef = thumbnail_ref,
+        storageKind = kind,
+        isGeneratedImage = kind.equals("IMAGE", ignoreCase = true) && artifact_id.startsWith("generated:"),
+    )
+
+    private fun GeneratedImage.toPresentationArtifact(itemKey: String) = PresentationArtifact(
+        id = itemKey,
+        artifactType = mime_type ?: "application/octet-stream",
+        moduleId = null,
+        name = image_path?.substringAfterLast('/') ?: "artifact",
+        title = prompt.takeIf(String::isNotBlank),
+        mimeType = mime_type,
+        sizeBytes = 0L,
+        relativePath = image_path,
+        sha256 = null,
+        manifestJson = null,
+        thumbnailRef = null,
+        storageKind = "IMAGE",
+        isGeneratedImage = true,
+    )
 
     private fun ConversationArtifact.toChatAttachment(): ChatAttachment? = runCatching {
         ChatAttachment(artifact_id, name, mime_type, size_bytes,

@@ -56,7 +56,7 @@ class GeneratedImageStoreTest {
         runStore.appendConversationMessage(session, "user", "Make a lighthouse.")
         runStore.appendGeneratedImageEvent(session, relativePath, "A cobalt lighthouse", "A blue lighthouse",
             "1024x1024", "image/png")
-        val event = runStore.readConversationTimeline(session).single { it.kind == "generated_image" }
+        val event = runStore.readConversationTimeline(session).single { it.kind == "artifact" }
         assertEquals(relativePath, event.generatedImagePath)
         assertEquals("A cobalt lighthouse", event.generatedImagePrompt)
         assertEquals("A blue lighthouse", event.generatedImageRevisedPrompt)
@@ -64,7 +64,7 @@ class GeneratedImageStoreTest {
         assertEquals("COMPLETED", event.generatedImageStatus)
         assertTrue(images.resolve(session, relativePath).isFile)
         assertTrue(images.deleteImage(session, relativePath))
-        val missing = runStore.readConversationTimeline(session).single { it.kind == "generated_image" }
+        val missing = runStore.readConversationTimeline(session).single { it.kind == "artifact" }
         assertEquals(relativePath, missing.generatedImagePath)
         assertFalse(images.sessionDirectory(session).resolve(relativePath).exists())
 
@@ -144,17 +144,17 @@ class GeneratedImageStoreTest {
         val restored = store.readConversationTimeline(session)
         AgentRunUiState.resetSession(session)
         AgentRunUiState.restoreSession(session, restored)
-        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "generated_image" })
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "artifact" })
         AgentRunUiState.resetSession(session)
         AgentRunUiState.beginRun(session, "Another request")
-        AgentRunUiState.generatedImageAdded(session, restored.single { it.kind == "generated_image" })
+        AgentRunUiState.generatedImageAdded(session, restored.single { it.kind == "artifact" })
         AgentRunUiState.refreshPersistedSession(session, restored)
-        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "generated_image" })
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "artifact" })
         val failedText = "The provider returned an incomplete stream."
         store.appendGeneratedImageFailure(session, "An image prompt", failedText)
         AgentRunUiState.refreshPersistedSession(session, store.readConversationTimeline(session))
-        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "generated_image" && it.generatedImageStatus == "COMPLETED" })
-        assertTrue(AgentRunUiState.state.value.events.any { it.kind == "generated_image" && it.generatedImageError == failedText })
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "artifact" && it.generatedImageStatus == "COMPLETED" })
+        assertTrue(AgentRunUiState.state.value.events.any { it.kind == "artifact" && it.generatedImageError == failedText })
     }
 
     @Test

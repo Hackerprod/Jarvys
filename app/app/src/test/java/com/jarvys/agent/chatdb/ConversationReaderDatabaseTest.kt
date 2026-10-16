@@ -223,6 +223,83 @@ class ConversationReaderDatabaseTest {
         assertTrue(older.events.all { olderEvent -> newest.events.none { it.id == olderEvent.id } })
     }
 
+    @Test fun timelineRestoresDeliveredAndGeneratedArtifactsThroughOneGenericEvent() = onDatabaseThread {
+        val id = "reader-artifacts"
+        success(conversations.ensureConversation(id))
+        val repository = ConversationArtifactsRepository(database)
+        val deliveredInput = DeliveredArtifactInput(
+            conversationId = id,
+            artifactId = "file-artifact-1",
+            name = "report.pdf",
+            mimeType = "application/pdf",
+            sizeBytes = 24L,
+            kind = "FILE",
+            relativePath = "delivered/$id/report.pdf",
+            sha256 = "file-digest",
+            artifactType = "application/pdf",
+            moduleId = "com.jarvys.module.file",
+            manifestJson = """{"schemaVersion":1,"id":"com.jarvys.module.file"}""",
+            title = "Quarterly report",
+        )
+        val delivered = success(repository.appendDeliveredArtifact(deliveredInput))
+        assertEquals(delivered.seq, success(repository.appendDeliveredArtifact(deliveredInput)).seq)
+        assertTrue(repository.appendDeliveredArtifact(deliveredInput.copy(name = "changed.pdf")) is ChatDbResult.Conflict)
+        val generatedInput = GeneratedImageInput(
+            conversationId = id,
+            prompt = "blue lighthouse",
+            status = "COMPLETED",
+            imagePath = "generated/$id/blue.png",
+            sha256 = "image-digest",
+            bytes = 18L,
+            artifactType = "image/png",
+            moduleId = "com.jarvys.module.image",
+            title = "Blue lighthouse",
+            manifestJson = """{"schemaVersion":1,"id":"com.jarvys.module.image"}""",
+        )
+        val generated = success(repository.appendGeneratedImage(generatedInput))
+        assertEquals(generated.seq, success(repository.appendGeneratedImage(generatedInput)).seq)
+        assertTrue(repository.appendGeneratedImage(generatedInput.copy(sha256 = "changed-digest")) is ChatDbResult.Conflict)
+        assertTrue(repository.appendGeneratedImage(generatedInput.copy(manifestJson = "{}")) is ChatDbResult.Conflict)
+        val failedImageRecord = success(repository.appendGeneratedImage(GeneratedImageInput(
+            conversationId = id,
+            prompt = "unfinished",
+            status = "FAILED",
+            error = "generation failed",
+        )))
+
+        val events = reader.readRecentConversationTimeline(id, 10).events
+        assertEquals(listOf("artifact", "artifact", "artifact"), events.map { it.kind })
+        val file = events.single { it.presentationArtifact?.moduleId == "com.jarvys.module.file" }
+        assertEquals("application/pdf", file.presentationArtifact?.artifactType)
+        assertEquals("Quarterly report", file.presentationArtifact?.title)
+        val image = events.single { it.presentationArtifact?.moduleId == "com.jarvys.module.image" }
+        assertEquals("image/png", image.presentationArtifact?.artifactType)
+        assertEquals(generatedInput.manifestJson, image.presentationArtifact?.manifestJson)
+        assertEquals("blue lighthouse", image.generatedImagePrompt)
+        val failedEvent = events.single { it.generatedImageStatus == "FAILED" }
+        assertEquals("artifact", failedEvent.kind)
+        assertEquals("generation failed", failedEvent.generatedImageError)
+        assertEquals(2L, database.testChatSql.query("SELECT COUNT(*) FROM artifacts WHERE conversation_id=?", arrayOf(id))
+            .use { cursor -> cursor.moveToFirst(); cursor.getLong(0) })
+
+        // The pre-module ledger used these event keys. Restores continue to use the generic UI event.
+        database.testChatSql.execSQL(
+            "UPDATE conversation_items SET item_kind='delivered_file' WHERE conversation_id=? AND seq=?",
+            arrayOf(id, file.id),
+        )
+        database.testChatSql.execSQL(
+            "UPDATE conversation_items SET item_kind='generated_image' WHERE conversation_id=? AND seq IN (?,?)",
+            arrayOf(id, image.id, failedImageRecord.seq),
+        )
+        val restoredLegacyEvents = reader.readRecentConversationTimeline(id, 10).events
+        assertEquals(listOf("artifact", "artifact", "artifact"), restoredLegacyEvents.map { it.kind })
+        assertEquals("file-artifact-1", restoredLegacyEvents.single { it.presentationArtifact?.moduleId == "com.jarvys.module.file" }
+            .presentationArtifact?.id)
+        assertEquals("generated:generated/$id/blue.png", restoredLegacyEvents.single { it.generatedImageStatus == "COMPLETED" }
+            .presentationArtifact?.id)
+        assertTrue(restoredLegacyEvents.any { it.generatedImageStatus == "FAILED" })
+    }
+
     @Test fun readerUsesCompactionSummaryAcknowledgementsAndUtf16ContextLimits() = onDatabaseThread {
         val id = "reader-compaction"
         success(conversations.ensureConversation(id))

@@ -226,7 +226,7 @@ class AgentRunUiStateTest {
             val live = AgentRunUiState.state.value
             val sessionSnapshot = AgentRunUiState.snapshotForSession(session)
             listOf(live, sessionSnapshot, requireNotNull(workerSnapshot.get())).forEach { snapshot ->
-                assertTrue(snapshot.events.any { it.kind == "delivered_file"
+                assertTrue(snapshot.events.any { it.kind == "artifact"
                     && it.deliveredArtifact?.id == artifact.id })
                 assertTrue(snapshot.events.any { it.kind == "user" && it.text == "Steering message" })
                 assertEquals(session, snapshot.headerMascotAvailability.sessionId)

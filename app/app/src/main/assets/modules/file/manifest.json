@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "com.jarvys.module.file",
+  "version": "1.0.0",
+  "name": "File presentation",
+  "artifactTypes": [
+    { "type": "*/*" }
+  ],
+  "tools": [],
+  "skills": [],
+  "capabilities": []
+}

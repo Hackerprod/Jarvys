@@ -66,6 +66,8 @@ data class AgentRunUiEvent(
     val generatedImageStatus: String? = null,
     val generatedImageError: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
+    val presentationArtifact: PresentationArtifact? = null,
+    /** Compatibility projection used by the existing download/share controls. */
     val deliveredArtifact: ChatAttachment? = null,
     val workspaceResultReference: com.jarvys.agent.workspaces.WorkspaceResultReference? = null,
     val toolAuditDetail: String? = null,
@@ -153,19 +155,52 @@ data class AgentRunUiEvent(
             workspaceResultReference = reference, timestampMillis = timestampMillis)
 
         @JvmStatic
+        fun artifactEvent(id: Long, artifact: PresentationArtifact, timestampMillis: Long,
+                          deliveredFile: ChatAttachment? = null): AgentRunUiEvent =
+            AgentRunUiEvent(id = id, kind = "artifact", text = artifact.title?.takeIf(String::isNotBlank) ?: artifact.name,
+                timestampMillis = timestampMillis, presentationArtifact = artifact, deliveredArtifact = deliveredFile)
+
+        @JvmStatic
         fun deliveredFileEvent(id: Long, artifact: ChatAttachment, timestampMillis: Long): AgentRunUiEvent =
-            AgentRunUiEvent(id = id, kind = "delivered_file", text = artifact.name,
-                deliveredArtifact = artifact, timestampMillis = timestampMillis)
+            artifactEvent(id, PresentationArtifact(
+                id = artifact.id,
+                artifactType = artifact.mimeType,
+                moduleId = null,
+                name = artifact.name,
+                title = artifact.name,
+                mimeType = artifact.mimeType,
+                sizeBytes = artifact.sizeBytes,
+                relativePath = artifact.relativePath,
+                sha256 = null,
+                manifestJson = null,
+                thumbnailRef = null,
+                storageKind = artifact.kind.name,
+            ), timestampMillis, deliveredFile = artifact)
 
         @JvmStatic
         fun generatedImageEvent(id: Long, relativePath: String?, prompt: String, revisedPrompt: String?,
                                 mimeType: String, size: String?, status: String, error: String?,
                                 timestampMillis: Long): AgentRunUiEvent = AgentRunUiEvent(
-            id = id, kind = "generated_image", stage = status, text = prompt,
+            id = id, kind = "artifact", stage = status, text = prompt,
             timestampMillis = timestampMillis, generatedImagePath = relativePath,
             generatedImagePrompt = prompt, generatedImageRevisedPrompt = revisedPrompt,
             generatedImageMimeType = mimeType, generatedImageSize = size,
             generatedImageStatus = status, generatedImageError = error,
+            presentationArtifact = PresentationArtifact(
+                id = relativePath ?: "generated:$timestampMillis",
+                artifactType = mimeType,
+                moduleId = null,
+                name = relativePath?.substringAfterLast('/') ?: "artifact",
+                title = prompt.takeIf(String::isNotBlank),
+                mimeType = mimeType,
+                sizeBytes = 0L,
+                relativePath = relativePath,
+                sha256 = null,
+                manifestJson = null,
+                thumbnailRef = null,
+                storageKind = "IMAGE",
+                isGeneratedImage = true,
+            ),
         )
 
         @JvmStatic
@@ -752,7 +787,7 @@ object AgentRunUiState {
     fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
-        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file", "workspace_result")
+        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "artifact", "workspace_result")
         val liveInFlightTools = if (current.running) current.events.mapNotNull { event ->
             if (event.kind == "tool" && event.stage in setOf("tool_call", "tool_progress", "approval_waiting"))
                 event.toolCallId?.let { event to refreshToolIdentity(event) }
@@ -792,14 +827,15 @@ object AgentRunUiState {
             event.kind !in durableKinds || event.kind == "tool"
                     && !persistedToolMatch
                     || event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
-                    || event.kind == "generated_image" && persistedEvents.none {
-                        it.kind == "generated_image" && it.generatedImagePath == event.generatedImagePath
+                    || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage == true && persistedEvents.none {
+                        it.kind == "artifact" && it.presentationArtifact?.isGeneratedImage == true &&
+                            it.generatedImagePath == event.generatedImagePath
                     }
                     || event.kind == "workspace_result" && persistedEvents.none {
                         it.kind == "workspace_result" && it.workspaceResultReference?.referenceId == event.workspaceResultReference?.referenceId
                     }
-                    || event.kind == "delivered_file" && persistedEvents.none {
-                        it.kind == "delivered_file" && it.deliveredArtifact?.id == event.deliveredArtifact?.id
+                    || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage != true && persistedEvents.none {
+                        it.kind == "artifact" && it.presentationArtifact?.id == event.presentationArtifact?.id
                     }
             if (isTransient) event else null
         } else emptyList()
@@ -899,8 +935,7 @@ object AgentRunUiState {
             "tool" -> event.toolIdentity?.takeIf(String::isNotBlank)
             "user_decision" -> event.decisionId?.takeIf(String::isNotBlank)
             "workspace_result" -> event.workspaceResultReference?.referenceId?.takeIf(String::isNotBlank)
-            "delivered_file" -> event.deliveredArtifact?.id?.toString()?.takeIf(String::isNotBlank)
-            "generated_image" -> event.generatedImagePath?.takeIf(String::isNotBlank)
+            "artifact" -> event.presentationArtifact?.id?.takeIf(String::isNotBlank)
             "crew_mission" -> event.crewMissionSnapshot?.missionId?.takeIf(String::isNotBlank)
             "memory" -> event.memoryRevisionId?.toString()
                 ?: event.memoryRevisionIds.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(",")
@@ -965,7 +1000,7 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error",
-            "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file", "workspace_result")
+            "memory", "crew_mission", "tool", "user_decision", "artifact", "workspace_result")
         val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
         val liveEvents = current.events.filter { event ->
             event.kind !in durableKinds
@@ -1008,18 +1043,50 @@ object AgentRunUiState {
     fun deliveredFileAdded(sessionId: String, artifact: ChatAttachment) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
-        if (current.events.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == artifact.id }) return@synchronized
+        if (current.events.any { it.kind == "artifact" && it.presentationArtifact?.id == artifact.id }) return@synchronized
         _state.value = current.copy(events = append(current.events,
             AgentRunUiEvent.deliveredFileEvent(nextEventId++, artifact, System.currentTimeMillis())))
+    } }
+
+    /** Publishes a delivered module artifact immediately while retaining the durable transfer row. */
+    @JvmStatic
+    fun moduleArtifactDelivered(
+        sessionId: String,
+        artifact: ChatAttachment,
+        artifactType: String,
+        moduleId: String,
+        manifestJson: String,
+        title: String?,
+    ) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        if (current.events.any { it.kind == "artifact" && it.presentationArtifact?.id == artifact.id }) return@synchronized
+        val presentation = PresentationArtifact(
+            id = artifact.id,
+            artifactType = artifactType,
+            moduleId = moduleId,
+            name = artifact.name,
+            title = title?.takeIf(String::isNotBlank) ?: artifact.name,
+            mimeType = artifact.mimeType,
+            sizeBytes = artifact.sizeBytes,
+            relativePath = artifact.relativePath,
+            sha256 = null,
+            manifestJson = manifestJson,
+            thumbnailRef = null,
+            storageKind = artifact.kind.name,
+        )
+        val event = AgentRunUiEvent.artifactEvent(nextEventId++, presentation, System.currentTimeMillis(), artifact)
+        _state.value = current.copy(events = append(current.events, event))
     } }
 
     @JvmStatic
     fun generatedImageAdded(sessionId: String, image: AgentRunUiEvent) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
-        if (current.sessionId != sessionId || image.kind != "generated_image") return@synchronized
+        if (current.sessionId != sessionId || image.kind != "artifact" || image.presentationArtifact?.isGeneratedImage != true) return@synchronized
         val visibleImage = image.copy(id = nextEventId++)
         val events = current.events.filterNot {
-            it.kind == "generated_image" && it.generatedImagePath == image.generatedImagePath
+            it.kind == "artifact" && it.presentationArtifact?.isGeneratedImage == true &&
+                it.generatedImagePath == image.generatedImagePath
         }
         _state.value = current.copy(events = append(events, visibleImage))
     } }
@@ -1882,7 +1949,7 @@ object AgentRunUiState {
 
     private fun append(existing: List<AgentRunUiEvent>, item: AgentRunUiEvent): List<AgentRunUiEvent> {
         val result = existing + item
-        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "generated_image", "delivered_file", "workspace_result")
+        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "artifact", "workspace_result")
         // Pending approvals are live requests with blocked workers behind them; evicting one
         // would orphan the ApprovalGate latch. Keep all pending cards even when history is busy.
         fun evictable(event: AgentRunUiEvent) = event.kind !in durableKinds

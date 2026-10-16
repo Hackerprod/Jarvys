@@ -181,7 +181,7 @@ class HtmlThumbnailCardUiTest {
 
     private fun longFilenameCard(dark: Boolean, captureName: String) {
         val (session, attachment) = delivered("quarterly-garden-performance-dashboard-final-export-for-review.html")
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         val previews = mutableListOf<String>()
         compose.setContent { CardTestTheme(dark) { DeliveredArtifactEventCard(event, session, previews::add) } }
         awaitTag("delivered-file-preview-${attachment.id}")
@@ -209,7 +209,7 @@ class HtmlThumbnailCardUiTest {
 
     @Test fun deliveredHtmlCardInAnotherConversationHasNoPreviewOrExportControls() {
         val (session, attachment) = delivered("private-preview.html")
-        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "delivered_file" }
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
         compose.setContent { CardTestTheme { DeliveredArtifactEventCard(event, "different-conversation") } }
         awaitTag("attachment-unavailable-${attachment.id}")
         compose.onNodeWithTag("attachment-unavailable-${attachment.id}").assertIsDisplayed()

@@ -371,11 +371,9 @@ private fun JarvysConversationEvent(
         "workspace_result" -> TimelineArrival(animateEntry) {
             event.workspaceResultReference?.let { com.jarvys.agent.workspaces.WorkspaceResultNotice(it) }
         }
-        "delivered_file" -> TimelineArrival(animateEntry) {
-            DeliveredArtifactEventCard(event, generatedImageSessionId, onOpenPreview)
-        }
-        "generated_image" -> TimelineArrival(animateEntry) {
-            GeneratedImageEventCard(event, generatedImageSessionId, onSaveGeneratedImage, onShareGeneratedImage)
+        "artifact" -> TimelineArrival(animateEntry) {
+            PresentationArtifactCard(event, generatedImageSessionId, onOpenPreview,
+                onSaveGeneratedImage, onShareGeneratedImage)
         }
         else -> ResultNote(event, onOpenSkillFile)
     }

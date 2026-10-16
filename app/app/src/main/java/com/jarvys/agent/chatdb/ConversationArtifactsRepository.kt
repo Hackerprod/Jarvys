@@ -33,6 +33,10 @@ data class GeneratedImageInput(
     val bytes: Long? = null,
     val error: String? = null,
     val createdAtSeconds: Double? = null,
+    val artifactType: String? = null,
+    val moduleId: String? = null,
+    val title: String? = null,
+    val manifestJson: String? = null,
 )
 
 /** Ordered legacy image-reference candidates; invalid generated paths are filtered by the domain factory. */
@@ -57,7 +61,7 @@ sealed interface ChatFileOwnership {
  * thumbnail and privacy lookups remain indexed.
  */
 internal class ConversationArtifactsRepository internal constructor(database: JarvysChatDatabase) : M1bWriteSupport(database) {
-    /** Stores one `delivered_file`; duplicate `(conversation_id,artifact_id)` content is idempotent, differing content conflicts. */
+    /** Stores one generic artifact event; duplicate identity/content is idempotent, changed content conflicts. */
     suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||
             input.sha256.isBlank() || input.sizeBytes < 0L || input.kind.isBlank())
@@ -77,7 +81,7 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             return@transaction ChatDbResult.Conflict("artifact thumbnail file reference is missing")
         val timestamp = input.createdAtSeconds ?: nowSeconds()
         val fileRef = ensureFileRef(input.relativePath, input.sha256, input.sizeBytes, mime ?: "application/octet-stream", (timestamp * 1000.0).toLong())
-        val seq = insertLedgerItem(input.conversationId, "delivered_file", input.artifactId, timestamp)
+        val seq = insertLedgerItem(input.conversationId, "artifact", input.artifactId, timestamp)
         sql.execSQL(
             "INSERT INTO artifacts(conversation_id,artifact_id,seq,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id,artifact_type,module_id,manifest_json,title,thumbnail_ref,created_at) " +
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -88,7 +92,7 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     }
 
     /**
-     * Stores a `generated_image` event, replacing `LocalRunStore.appendGeneratedImageEvent` and
+     * Stores generated-image metadata and a generic artifact event when bytes exist, replacing `LocalRunStore.appendGeneratedImageEvent` and
      * `appendGeneratedImageFailure` (`LocalRunStore.java:appendGeneratedImageEvent`,
      * `LocalRunStore.java:appendGeneratedImageFailure`); image bytes stay on disk and `file_refs` records metadata.
      */
@@ -101,18 +105,48 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             return@transaction ChatDbResult.Invalid("generated image path, digest, and byte count must be supplied together")
         ensureConversationExists(input.conversationId)
         val time = input.createdAtSeconds ?: nowSeconds()
+        val type = input.artifactType?.takeIf(String::isNotBlank) ?: normalizeMimeType(input.mimeType) ?: "application/octet-stream"
+        val name = input.imagePath?.substringAfterLast('/')?.ifBlank { "artifact" } ?: "artifact"
+        val artifactId = input.imagePath?.let(::generatedArtifactId) ?: "generated:$time"
+        if (hasCompleteFileMetadata && input.status == "COMPLETED") {
+            val existing = readArtifact(input.conversationId, artifactId)
+            if (existing != null) {
+                val existingImage = readGeneratedImage(input.conversationId, existing.seq)
+                val same = existingImage != null && existing.name == name && existing.mime_type == normalizeMimeType(input.mimeType) &&
+                    existing.size_bytes == input.bytes && existing.kind == "IMAGE" && existing.relative_path == input.imagePath &&
+                    existing.sha256 == input.sha256 && existing.artifact_type == type && existing.module_id == input.moduleId &&
+                    existing.manifest_json == input.manifestJson && existing.title == (input.title ?: name) &&
+                    existingImage.image_path == input.imagePath &&
+                    existingImage.prompt == input.prompt && existingImage.revised_prompt == input.revisedPrompt &&
+                    existingImage.size == input.size && existingImage.mime_type == input.mimeType &&
+                    existingImage.status == input.status && existingImage.error == input.error
+                return@transaction if (same) ChatDbResult.Success(existingImage!!)
+                    else ChatDbResult.Conflict("generated artifact identity has different content")
+            }
+        }
         val fileRef = if (!hasCompleteFileMetadata) null else ensureFileRef(
             input.imagePath!!, input.sha256!!, input.bytes!!, input.mimeType, (time * 1000.0).toLong(),
         )
-        val seq = insertLedgerItem(input.conversationId, "generated_image", input.imagePath ?: "", time)
+        val seq = insertLedgerItem(input.conversationId, "artifact", "generated:$time:${input.imagePath.orEmpty()}", time)
         sql.execSQL(
             "INSERT INTO generated_images(conversation_id,seq,image_path,prompt,revised_prompt,size,mime_type,status,error,file_ref_id,created_at) " +
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf(input.conversationId, seq, input.imagePath, input.prompt, input.revisedPrompt, input.size, input.mimeType,
                 input.status, input.error, fileRef, time),
         )
+        if (hasCompleteFileMetadata && input.status == "COMPLETED") {
+            val mime = normalizeMimeType(input.mimeType)
+            sql.execSQL(
+                "INSERT INTO artifacts(conversation_id,artifact_id,seq,name,mime_type,size_bytes,kind,relative_path,sha256,file_ref_id,artifact_type,module_id,manifest_json,title,thumbnail_ref,created_at) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf(input.conversationId, artifactId, seq, name, mime, input.bytes!!, "IMAGE", input.imagePath,
+                    input.sha256, fileRef, type, input.moduleId, input.manifestJson, input.title ?: name, null, time),
+            )
+        }
         ChatDbResult.Success(readGeneratedImage(input.conversationId, seq)!!)
     }
+
+    private fun generatedArtifactId(path: String): String = "generated:$path"
 
     /** Indexed equivalent of `LocalRunStore.findChatFile` (`LocalRunStore.java:findChatFile`) for delivered and message-attachment ownership. */
     suspend fun findChatFile(conversationId: String, kind: String, id: String): ChatFileOwnership? = readSnapshot {

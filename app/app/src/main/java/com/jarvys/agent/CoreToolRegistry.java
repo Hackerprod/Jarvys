@@ -155,8 +155,8 @@ public final class CoreToolRegistry {
     for (CoreTool tool : this.tools.values()) {
       if (tool instanceof CoreConnectorTool) {
         requested.add(((CoreConnectorTool) tool).withRequester(requester, requesterColorKey));
-      } else if (tool instanceof CoreMcpTool) {
-        requested.add(((CoreMcpTool) tool).withRequester(requester, requesterColorKey));
+      } else if (tool instanceof PolicyGatedTool) {
+        requested.add(((PolicyGatedTool) tool).withRequester(requester, requesterColorKey));
       } else {
         requested.add(tool);
       }
@@ -166,8 +166,8 @@ public final class CoreToolRegistry {
 
   public String displayName(String name) {
     CoreTool tool = this.tools.get(name);
-    if (tool instanceof CoreMcpTool) {
-      return ((CoreMcpTool) tool).displayName();
+    if (tool instanceof PolicyGatedTool) {
+      return ((PolicyGatedTool) tool).policyDisplayName();
     }
     return tool instanceof CoreConnectorTool
         ? ((CoreConnectorTool) tool).displayName()
@@ -179,8 +179,8 @@ public final class CoreToolRegistry {
     if (tool == null) {
       return "workspace";
     }
-    if (tool instanceof CoreMcpTool) {
-      return "mcp";
+    if (tool instanceof PolicyGatedTool) {
+      return ((PolicyGatedTool) tool).policyReflectionSource();
     }
     if (tool instanceof CoreConnectorTool) {
       return "connector:" + ((CoreConnectorTool) tool).connectorId();

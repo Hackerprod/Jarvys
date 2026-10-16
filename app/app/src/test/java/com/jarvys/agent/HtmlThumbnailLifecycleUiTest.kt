@@ -254,7 +254,7 @@ class HtmlThumbnailLifecycleUiTest {
         store.appendConversationMessage(session, "user", "Show the delivered page")
         store.appendDeliveredFile(session, attachment)
         val descriptor = requireNotNull(artifacts.previewForAttachment(session, attachment))
-        return Fixture(session, attachment, store.readConversationTimeline(session).single { it.kind == "delivered_file" },
+        return Fixture(session, attachment, store.readConversationTimeline(session).single { it.kind == "artifact" },
             WorkspacePreviewContent(compose.activity, null, session, descriptor, thumbnail = true).entryUrl)
     }
 

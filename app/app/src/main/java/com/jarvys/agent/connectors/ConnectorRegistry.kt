@@ -96,10 +96,26 @@ interface ConnectorRuntime {
     fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation
     fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                        token: CancellationToken): JSONObject = invoke(operation, arguments, token)
+    fun invokePreparedWithContext(operation: String, arguments: JSONObject,
+                                  preparation: ConnectorWritePreparation, token: CancellationToken,
+                                  context: ConnectorInvocationContext): JSONObject =
+        invokePrepared(operation, arguments, preparation, token)
     fun invokeReadPrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                            token: CancellationToken): JSONObject = invoke(operation, arguments, token)
+    fun invokeReadPreparedWithContext(operation: String, arguments: JSONObject,
+                                      preparation: ConnectorWritePreparation, token: CancellationToken,
+                                      context: ConnectorInvocationContext): JSONObject =
+        invokeReadPrepared(operation, arguments, preparation, token)
     fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject
 }
+
+/** Invocation context forwarded only to runtimes that need conversation-scoped host access. */
+data class ConnectorInvocationContext(
+    val requester: String? = null,
+    val requesterColorKey: String? = null,
+    val conversationId: String? = null,
+    val progress: ((String) -> Unit)? = null,
+)
 
 /** Optional run-scoped context for high-risk connectors that bind data reads to later writes. */
 interface AgentRunScopedConnectorRuntime {
@@ -337,6 +353,15 @@ class ConnectorRegistry private constructor(
                requesterColorKey: String?): JSONObject = invokeInternal(
         definition, operation, arguments, token, requester, requesterColorKey,
         unattended = false, approvedPendingAction = false, deferAskWrite = null,
+        invocationContext = ConnectorInvocationContext(requester, requesterColorKey),
+    )
+
+    fun invoke(definition: ConnectorDefinition, operation: ConnectorOperation,
+               arguments: JSONObject, token: CancellationToken,
+               invocationContext: ConnectorInvocationContext): JSONObject = invokeInternal(
+        definition, operation, arguments, token, invocationContext.requester, invocationContext.requesterColorKey,
+        unattended = false, approvedPendingAction = false, deferAskWrite = null,
+        invocationContext = invocationContext,
     )
 
     /** Background-task invocation never enters ApprovalGate: ASK writes are handed to the durable queue. */
@@ -352,6 +377,7 @@ class ConnectorRegistry private constructor(
     ): JSONObject = invokeInternal(
         definition, operation, arguments, token, requester, requesterColorKey,
         unattended = true, approvedPendingAction = approvedPendingAction, deferAskWrite = deferAskWrite,
+        invocationContext = ConnectorInvocationContext(requester, requesterColorKey),
     )
 
     private fun invokeInternal(
@@ -364,6 +390,7 @@ class ConnectorRegistry private constructor(
         unattended: Boolean,
         approvedPendingAction: Boolean,
         deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        invocationContext: ConnectorInvocationContext,
     ): JSONObject {
         val current = get(definition.id) ?: error("El conector ${definition.name} ya no está disponible")
         val selectedOperation = current.operations.firstOrNull { it.name == operation.name }
@@ -404,7 +431,7 @@ class ConnectorRegistry private constructor(
                 permission = permissions.firstOrNull { !permissionGranted(it) },
                 allowAlwaysAvailable = true,
                 autonomyConnectorId = current.id, autonomyOperationName = selectedOperation.name,
-                requester = requester, requesterColorKey = requesterColorKey,
+                requester = invocationContext.requester, requesterColorKey = invocationContext.requesterColorKey,
                 enableAlways = { alwaysDecision = autonomyStore.setPolicyAndSnapshot(current.id, selectedOperation.name, AutonomyPolicy.ALLOW) },
             ), token)
             when (decision) {
@@ -451,11 +478,12 @@ class ConnectorRegistry private constructor(
             authorizeEffect()
             launchIntent(intent)
         }
-        val result = if (selectedOperation.write) runtime.invokePrepared(
+        val result = if (selectedOperation.write) runtime.invokePreparedWithContext(
             selectedOperation.name, preparation.executionArguments,
             preparation.copy(permissionDeniedFallback = permissionDeniedFallback, authorizeEffect = ::authorizeEffect), token,
-        ) else runtime.invokeReadPrepared(selectedOperation.name, preparation.executionArguments,
-            preparation.copy(authorizeEffect = ::authorizeEffect), token)
+            invocationContext,
+        ) else runtime.invokeReadPreparedWithContext(selectedOperation.name, preparation.executionArguments,
+            preparation.copy(authorizeEffect = ::authorizeEffect), token, invocationContext)
         if (autonomous) {
             val record = AutonomyAuditRecord(
                 timestampMillis = clock(),

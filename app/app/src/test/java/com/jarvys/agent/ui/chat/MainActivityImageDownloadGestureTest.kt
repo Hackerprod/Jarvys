@@ -56,7 +56,7 @@ class MainActivityImageDownloadGestureTest {
                 val store = LocalRunStore(context)
                 store.appendConversationMessage(session, "user", "Create a blue image for my notes")
                 store.appendGeneratedImageEvent(session, path, "Blue image", null, "64x48", "image/png")
-                store.readConversationTimeline(session).single { it.kind == "generated_image" }
+                store.readConversationTimeline(session).single { it.kind == "artifact" }
             }
             context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE).edit().putString("active_session_id", session).commit()
         }

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "com.jarvys.module.html",
+  "version": "1.0.0",
+  "name": "HTML presentation",
+  "artifactTypes": [
+    { "type": "text/html" }
+  ],
+  "tools": [],
+  "skills": [],
+  "capabilities": []
+}

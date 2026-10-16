@@ -111,6 +111,10 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val userPrompt = userRequest(task)
             val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
             token.throwIfCancelled()
+            if (toolCalls.any { it.outcome == "WAITING_VISIBLE_APP" }) return permanentFailure(
+                task, scheduledFor, TaskRunCause.AWAITING_USER,
+                "Open the app to complete the deferred action.", toolCalls, currentModel(), occurrenceId,
+            )
             val failedConnectorCall = toolCalls.firstOrNull { it.name in scope.connectorNames && it.outcome == "ERROR" }
             if (failedConnectorCall != null) return permanentFailure(task, scheduledFor,
                 TaskRunCause.CONNECTOR_UNAVAILABLE, failedConnectorCall.name, toolCalls, currentModel(), occurrenceId)
@@ -375,10 +379,11 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val name = delegate.declaration().name
             try {
                 val result = delegate.execute(arguments, token)
+                val resultStatus = runCatching { JSONObject(result.content).optString("status") }.getOrDefault("")
                 val outcome = when {
                     !result.success -> "ERROR"
-                    runCatching { JSONObject(result.content).optString("status") == "pending_user_approval" }
-                        .getOrDefault(false) -> "PENDING"
+                    resultStatus == "pending_user_approval" -> "PENDING"
+                    resultStatus == "deferred_visible_app_required" -> "WAITING_VISIBLE_APP"
                     else -> "OK"
                 }
                 synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, outcome) }

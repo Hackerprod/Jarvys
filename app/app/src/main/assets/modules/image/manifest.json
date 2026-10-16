@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "com.jarvys.module.image",
+  "version": "1.0.0",
+  "name": "Image presentation",
+  "artifactTypes": [
+    { "type": "image/*" }
+  ],
+  "tools": [],
+  "skills": [],
+  "capabilities": []
+}

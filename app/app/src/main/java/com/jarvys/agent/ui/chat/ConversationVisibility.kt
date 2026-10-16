@@ -27,11 +27,11 @@ internal object ConversationVisibility {
     /** Replaces successful structured tool results with their first-class timeline cards. */
     fun project(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> {
         val deliveredArtifactIds = events.asSequence()
-            .filter { it.kind == "delivered_file" }
-            .mapNotNull { it.deliveredArtifact?.id }
+            .filter { it.kind == "artifact" }
+            .mapNotNull { it.presentationArtifact?.id }
             .toSet()
         val generatedImageIds = events.asSequence()
-            .filter { it.kind == "generated_image" }
+            .filter { it.kind == "artifact" && it.presentationArtifact?.isGeneratedImage == true }
             .mapNotNull { it.generatedImagePath?.removeSuffix(".png")?.takeIf(String::isNotBlank) }
             .toSet()
 

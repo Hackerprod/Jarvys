@@ -253,7 +253,7 @@ class MainActivityDownloadFlowTest {
         val event = chatTestStore.onDatabaseWorker {
             val store = LocalRunStore(context)
             store.appendGeneratedImageEvent(session, path, "Activity download fixture", null, "32x24", "image/png")
-            store.readConversationTimeline(session).single { it.kind == "generated_image" }
+            store.readConversationTimeline(session).single { it.kind == "artifact" }
         }
         return GeneratedFixture(session, event, bytes)
     }

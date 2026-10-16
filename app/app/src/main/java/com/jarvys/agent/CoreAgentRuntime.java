@@ -33,6 +33,8 @@ import com.jarvys.agent.mcp.McpServerRepository;
 import com.jarvys.agent.mcp.McpServerToolRegistry;
 import com.jarvys.agent.mcp.McpToolDefinition;
 import com.jarvys.agent.mcp.McpWriteApprovalCoordinator;
+import com.jarvys.agent.modules.ModuleRegistry;
+import com.jarvys.agent.modules.WebViewModuleRuntime;
 import com.jarvys.agent.proactive.ProactiveConversation;
 import com.jarvys.agent.proactive.ProactiveStatusCoreTool;
 import com.jarvys.agent.skills.SkillEntry;
@@ -1608,8 +1610,8 @@ public final class CoreAgentRuntime {
     if (tool == null || tool.unattendedAccess() == CoreTool.UnattendedAccess.EXCLUDED) return false;
     if (tool instanceof CoreConnectorTool)
       return ((CoreConnectorTool) tool).autonomyPolicy() != AutonomyPolicy.DENY;
-    if (tool instanceof CoreMcpTool)
-      return ((CoreMcpTool) tool).autonomyPolicy() != AutonomyPolicy.DENY;
+    if (tool instanceof PolicyGatedTool)
+      return ((PolicyGatedTool) tool).effectiveAutonomyPolicy() != AutonomyPolicy.DENY;
     return true;
   }
 
@@ -1672,8 +1674,8 @@ public final class CoreAgentRuntime {
       if (delegate.unattendedAccess() == UnattendedAccess.WRITE && !approvedPendingAction) {
         if ((delegate instanceof CoreConnectorTool
                 && ((CoreConnectorTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)
-            || (delegate instanceof CoreMcpTool
-                && ((CoreMcpTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)) {
+            || (delegate instanceof PolicyGatedTool
+                && ((PolicyGatedTool) delegate).effectiveAutonomyPolicy() == AutonomyPolicy.DENY)) {
           return CoreToolResult.failure("Operation is unavailable under current policy");
         }
         if (!writesAllowed) return defer(arguments, token);
@@ -1681,8 +1683,8 @@ public final class CoreAgentRuntime {
       if (delegate instanceof CoreConnectorTool)
         return ((CoreConnectorTool) delegate).executeScheduledTask(arguments, token,
             approvedPendingAction, () -> deferredJson(arguments, token));
-      if (delegate instanceof CoreMcpTool)
-        return ((CoreMcpTool) delegate).executeScheduledTask(arguments, token,
+      if (delegate instanceof PolicyGatedTool)
+        return ((PolicyGatedTool) delegate).executeScheduledTask(arguments, token,
             approvedPendingAction, () -> deferredJson(arguments, token));
       return delegate.execute(arguments, token);
     }
@@ -1739,8 +1741,8 @@ public final class CoreAgentRuntime {
   }
 
   private static String groupName(CoreTool tool) {
-    if (tool instanceof CoreMcpTool) {
-      return ((CoreMcpTool) tool).groupName();
+    if (tool instanceof PolicyGatedTool) {
+      return ((PolicyGatedTool) tool).policyGroupName();
     }
     if (tool instanceof CoreConnectorTool) {
       return ((CoreConnectorTool) tool).groupName();
@@ -2328,7 +2330,27 @@ public final class CoreAgentRuntime {
         result.add(new CoreConnectorTool(registry, definition, operation).withConversation(context, sessionId));
       }
     }
+    result.addAll(discoverModuleTools(context, sessionId, registry));
     return result;
+  }
+
+  /** Bundled modules enter the same connector policy catalog and tool list as other connectors. */
+  private static List<CoreTool> discoverModuleTools(
+      Context context, String sessionId, ConnectorRegistry registry) {
+    if (context == null) return Collections.emptyList();
+    ModuleRegistry modules = ModuleRegistry.get(context);
+    WebViewModuleRuntime runtime = new WebViewModuleRuntime(context);
+    List<ConnectorDefinition> definitions = modules.installConnectorDefinitions(registry, runtime);
+    for (ConnectorDefinition definition : definitions) {
+      if (registry.state(definition) == ConnectorState.DISCONNECTED
+          && definition.getReadPermissions().isEmpty()
+          && definition.getConnectionPermissions().isEmpty()) {
+        // These manifests are bundled app code with no external permission grant. Their tools
+        // remain individually governed by the existing Allow/Ask/Deny action policy.
+        registry.connect(definition.getId());
+      }
+    }
+    return new ArrayList<CoreTool>(modules.tools(registry, runtime, sessionId));
   }
 
   private String connectorNotes() {

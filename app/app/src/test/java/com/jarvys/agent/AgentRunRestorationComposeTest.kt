@@ -60,10 +60,10 @@ class AgentRunRestorationComposeTest {
         }
         val timeline = prepared.second
         val matchingResult = timeline.single { it.toolCallId == "preview-call" }
-        val deliveredCard = timeline.single { it.kind == "delivered_file" }
+        val deliveredCard = timeline.single { it.kind == "artifact" }
         val projected = ConversationVisibility.project(timeline)
         assertFalse(projected.any { it.id == matchingResult.id })
-        assertTrue(projected.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == prepared.first })
+        assertTrue(projected.any { it.kind == "artifact" && it.deliveredArtifact?.id == prepared.first })
         val toolGroup = ToolGrouping.project(projected).filterIsInstance<ConversationTimelineItem.ToolGroup>().single()
         assertEquals(2, toolGroup.toolCount)
         assertFalse(toolGroup.events.any { it.id == matchingResult.id })

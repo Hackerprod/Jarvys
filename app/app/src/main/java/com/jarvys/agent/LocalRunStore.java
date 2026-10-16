@@ -820,14 +820,28 @@ public final class LocalRunStore {
 
     /** Commits ownership before the runtime reports a successful native attachment. Repeats are idempotent. */
     public void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
+        appendDeliveredFile(sessionId, artifact, null, null, null, null);
+    }
+
+    /** Commits one module-produced artifact with its opaque manifest and declared presentation type. */
+    public void appendDeliveredFile(String sessionId, ChatAttachment artifact, String artifactType,
+                                    String moduleId, String manifestJson, String title) {
         DeliveredArtifactStore store = new DeliveredArtifactStore(root.getParentFile());
         store.resolve(sessionId, artifact);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         try {
+            String effectiveType = artifactType == null || artifactType.trim().isEmpty()
+                    ? artifact.mimeType : artifactType;
+            com.jarvys.agent.modules.ModuleManifest owner =
+                    com.jarvys.agent.modules.ModuleRegistry.currentOrNull() == null ? null
+                            : com.jarvys.agent.modules.ModuleRegistry.currentOrNull().artifactModuleForType(effectiveType);
+            String effectiveModuleId = moduleId == null && owner != null ? owner.getId() : moduleId;
+            String effectiveManifest = manifestJson == null && owner != null ? owner.getManifestJson() : manifestJson;
             requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
                     new com.jarvys.agent.chatdb.DeliveredArtifactInput(sessionId, artifact.id, artifact.name,
                             artifact.mimeType, artifact.sizeBytes, artifact.kind.name(), artifact.relativePath,
-                            store.sha256(sessionId, artifact), null, null, null, null, null,
+                            store.sha256(sessionId, artifact), effectiveType, effectiveModuleId, effectiveManifest,
+                            title, null,
                             System.currentTimeMillis() / 1000.0)), "append delivered artifact");
         } catch (IOException error) { throw new IllegalStateException("Could not verify delivered artifact", error); }
     }
@@ -865,11 +879,17 @@ public final class LocalRunStore {
         File image = new GeneratedImageStore(root.getParentFile()).resolve(sessionId, relativePath);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         try {
+            String effectiveType = mimeType == null ? "image/png" : mimeType;
+            com.jarvys.agent.modules.ModuleManifest owner =
+                    com.jarvys.agent.modules.ModuleRegistry.currentOrNull() == null ? null
+                            : com.jarvys.agent.modules.ModuleRegistry.currentOrNull().artifactModuleForType(effectiveType);
             requireChatDbSuccess(chatDatabaseBridge.appendGeneratedImageSync(
                     new com.jarvys.agent.chatdb.GeneratedImageInput(sessionId, prompt == null ? "" : prompt,
                             revisedPrompt == null ? "" : revisedPrompt, size == null ? "" : size,
                             mimeType == null ? "image/png" : mimeType, "COMPLETED", relativePath,
-                            fileSha256(image), image.length(), null, System.currentTimeMillis() / 1000.0)),
+                            fileSha256(image), image.length(), null, System.currentTimeMillis() / 1000.0,
+                            effectiveType, owner == null ? null : owner.getId(), prompt,
+                            owner == null ? null : owner.getManifestJson())),
                     "append generated image");
         } catch (IOException error) { throw new IllegalStateException("Could not verify generated image", error); }
     }
@@ -880,7 +900,7 @@ public final class LocalRunStore {
                 new com.jarvys.agent.chatdb.GeneratedImageInput(sessionId, prompt == null ? "" : prompt,
                         "", "", "image/png", "FAILED", null, null, null,
                         error == null ? "Image generation failed." : error,
-                        System.currentTimeMillis() / 1000.0)), "append generated image failure");
+                        System.currentTimeMillis() / 1000.0, "image/png", null, prompt, null)), "append generated image failure");
     }
 
     private static String fileSha256(File file) throws IOException {
