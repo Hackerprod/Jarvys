@@ -323,6 +323,9 @@ class PersonalAgentBehaviorTest {
             "Listo, anoté tu profesión en tu perfil.",
             "I've remembered your preferences.",
             "Ya está guardado en tu memoria.",
+            "I saved the file and your name to memory.",
+            "Guardé el archivo y tu nombre en memoria.",
+            "I'll remember your name.",
         ).forEach { claim ->
             assertTrue("Expected unsupported claim to be caught: $claim", CoreAgentLoop.hasUnsupportedMemoryPersistenceClaim(claim, rules))
         }
@@ -420,6 +423,13 @@ class PersonalAgentBehaviorTest {
 
         val onlyClaim = fallback("I saved your name and your nickname to memory.", "only")
         assertEquals(onlyClaim, notice, onlyClaim)
+
+        // No fragment of a claim may survive, whatever punctuation surrounds it.
+        val inciso = fallback("I saved your name, Hackerprod, and your nickname to memory.", "inciso")
+        assertEquals(inciso, notice, inciso)
+        val multi = fallback("Hello there. He guardado tu nombre y tu apodo, pero no la edad. Bye.", "multi")
+        assertFalse(multi, multi.contains("apodo") || multi.contains("guardado"))
+        assertTrue(multi, multi.startsWith("Hello there. Bye."))
 
         val file = fallback("I saved the file to /project/notes.md and it is ready", "file")
         assertTrue(file, file.contains("/project/notes.md"))

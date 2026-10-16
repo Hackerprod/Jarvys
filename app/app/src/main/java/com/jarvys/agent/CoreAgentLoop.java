@@ -32,6 +32,8 @@ public final class CoreAgentLoop {
             "(?iu)\\b(?:(?:a[uú]n\\s+no|todav[ií]a\\s+no|no)\\s+(?:(?:lo|la|te)\\s+)?(?:(?:he|has|ha|han|hemos|hab[ií]a|hab[ií]as)\\s+)?|(?:(?:i\\s+)?(?:have\\s+not|has\\s+not|had\\s+not|did\\s+not|will\\s+not|haven['’]t|hasn['’]t|hadn['’]t|didn['’]t|won['’]t)|never|nunca|jam[aá]s|not)\\s+)(?:save[ds]?|store[ds]?|record(?:ed)?|note[ds]?|remember(?:ed)?|add(?:ed)?|guard(?:ad[oa]s?|é|e)|almacen(?:ad[oa]s?|é|e)|registr(?:ad[oa]s?|é|e)|anot(?:ad[oa]s?|é|e)|apunt(?:ad[oa]s?|é|e)|memoric(?:ad[oa]s?|é|e)|guardar(?:é|emos))(?=$|[^\\p{L}\\p{N}_])");
     private static final java.util.regex.Pattern FILE_OR_PROJECT_SAVE = java.util.regex.Pattern.compile(
             "(?iu)\\b(?:file|files|fichero|ficheros|archivo|archivos|project|proyecto|proyectos)\\b|\\b/+(?:project|projects)/|\\b[\\p{Alnum}_-]+\\.(?:md|txt|pdf|docx?|xlsx?|csv|json|ya?ml|kt|java|py|js|ts|html|css)\\b");
+    private static final java.util.regex.Pattern EXPLICIT_MEMORY_TARGET = java.util.regex.Pattern.compile(
+            "(?iu)\\b(?:memory|memoria|profile|perfil)\\b");
     private static final java.util.regex.Pattern SPANISH_REQUEST = java.util.regex.Pattern.compile(
             "(?iu)\\b(?:guarda|guardar|guard[aé]|memoria|perfil|olvida|recuerda|me\\s+dicen|mi\\s+nombre|tus\\s+datos|no\\s+he|todav[ií]a)\\b|[áéíóúñ]");
     private static final AtomicInteger TOOL_THREAD_ID = new AtomicInteger();
@@ -828,6 +830,13 @@ public final class CoreAgentLoop {
                 if (FILE_OR_PROJECT_SAVE.matcher(clause).find()) continue;
                 return true;
             }
+            // Verb and object may sit in different clauses ("saved the file and your name to memory"):
+            // a file mention only exempts the sentence when it never names memory or the profile explicitly.
+            if (MemoryClaimValidator.claimsPersistence(sentence, instructions)
+                    && !PERSISTENCE_NEGATION.matcher(sentence).find()
+                    && (!FILE_OR_PROJECT_SAVE.matcher(sentence).find() || EXPLICIT_MEMORY_TARGET.matcher(sentence).find())) {
+                return true;
+            }
         }
         return false;
     }
@@ -840,20 +849,10 @@ public final class CoreAgentLoop {
                 + escaped + "\n</rejected_memory_claim_draft>";
     }
 
-    private static final java.util.regex.Pattern CLAUSE_DELIMITER = java.util.regex.Pattern.compile(
-            "(?iu)(?:[,：:]\\s*|\\b(?:and|but|also|however|so|y|pero|adem[aá]s|aunque|porque|por\\s+eso)\\b)");
-
-    private static final java.util.regex.Pattern COORDINATING = java.util.regex.Pattern.compile("(?iu)\\s*(?:and|also|y|adem[aá]s)\\s*");
-
-    private static boolean isUnsupportedClaimClause(String clause, String instructions) {
-        return MemoryClaimValidator.claimsPersistence(clause, instructions)
-                && !PERSISTENCE_NEGATION.matcher(clause).find()
-                && !FILE_OR_PROJECT_SAVE.matcher(clause).find();
-    }
-
     /**
-     * Keeps every part of the rejected draft that does not claim a memory write and appends one honest notice;
-     * the unsupported claim itself never reaches the user. Nothing useful left means the notice alone.
+     * Keeps every sentence (or colon-separated piece) of the rejected draft that does not claim a memory write
+     * and appends one honest notice. Any piece containing a claim is dropped whole, so no part of an unsupported
+     * claim can survive as a fragment. Nothing useful left means the notice alone.
      */
     private static String honestMemoryFallback(String request, String rejectedDraft, String instructions) {
         String notice = request != null && SPANISH_REQUEST.matcher(request).find()
@@ -861,33 +860,10 @@ public final class CoreAgentLoop {
                 : "I couldn't confirm a successful memory write, so I haven't saved this information.";
         if (rejectedDraft == null || rejectedDraft.isBlank()) return notice;
         StringBuilder kept = new StringBuilder();
-        for (String sentence : rejectedDraft.split("(?<=[.!?;\\n])\\s*")) {
-            if (sentence.isBlank()) continue;
-            java.util.regex.Matcher matcher = CLAUSE_DELIMITER.matcher(sentence);
-            StringBuilder rebuilt = new StringBuilder();
-            int position = 0;
-            String pendingDelimiter = "";
-            boolean any = false;
-            boolean droppedClaim = false;
-            while (true) {
-                boolean found = matcher.find();
-                String clause = sentence.substring(position, found ? matcher.start() : sentence.length());
-                // A clause coordinated ("and"/"y") right after a dropped claim continues its object: drop it too.
-                boolean continuesDropped = droppedClaim && COORDINATING.matcher(pendingDelimiter).matches();
-                if (!clause.isBlank() && !continuesDropped && !isUnsupportedClaimClause(clause, instructions)) {
-                    if (any) rebuilt.append(pendingDelimiter);
-                    rebuilt.append(clause);
-                    any = true;
-                    droppedClaim = false;
-                } else if (!clause.isBlank()) {
-                    droppedClaim = true;
-                }
-                if (!found) break;
-                pendingDelimiter = matcher.group();
-                position = matcher.end();
-            }
-            String text = rebuilt.toString().trim().replaceAll("^[,：:;\\s]+", "");
+        for (String piece : rejectedDraft.split("(?<=[.!?;:\\n])\\s*")) {
+            String text = piece.trim();
             if (text.codePoints().noneMatch(Character::isLetterOrDigit)) continue;
+            if (hasUnsupportedMemoryPersistenceClaim(text, instructions)) continue;
             if (kept.length() > 0) kept.append(' ');
             kept.append(text);
         }
