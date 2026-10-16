@@ -42,9 +42,8 @@ class ModuleToolTest {
             mapOf("count" to 3), CancellationToken.uncancellable(),
             approvedPendingAction = false, deferAskWrite = null,
         )
-        val scheduledResult = JSONObject(scheduled.content)
-        assertEquals(ModuleTool.VISIBLE_APP_REQUIRED_STATUS, scheduledResult.optString("status"))
-        assertFalse(scheduledResult.optBoolean("executed", true))
+        assertFalse(scheduled.success)
+        assertTrue(scheduled.content.contains("no resumable pending action"))
         assertEquals(1, executions)
 
         val approvedInBackground = tool.executeScheduledTask(

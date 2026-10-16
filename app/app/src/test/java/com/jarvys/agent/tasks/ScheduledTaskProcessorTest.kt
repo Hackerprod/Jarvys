@@ -25,6 +25,7 @@ import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
 import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.modules.ModuleHostVisibility
+import com.jarvys.agent.modules.ModuleRuntime
 import com.jarvys.agent.modules.ModuleRegistry
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
@@ -231,6 +232,89 @@ class ScheduledTaskProcessorTest {
             assertTrue(notifications.attentionText!!.contains("app", ignoreCase = true))
             assertFalse(pendingStore.stateForTask(persistedTask.id, persistedTask.revision,
                 taskStore.get(persistedTask.id)?.state) == TaskState.AwaitingUser)
+        } finally {
+            ModuleHostVisibility.setVisibleForTests(null)
+        }
+    }
+
+    @Test fun allowedModuleReadWaitsForVisibleAppAndExecutesWhenResumed() {
+        val moduleId = "com.test.module.allowed-visible-read"
+        val modules = ModuleRegistry.fromManifests(listOf("""{"schemaVersion":1,"id":"$moduleId",
+            "version":"1.0.0","name":"Allowed scheduled read","artifactTypes":[],"skills":[],"capabilities":[],
+            "tools":[{"name":"read_items","description":"Read an item",
+              "inputSchema":{"type":"object","properties":{"name":{"type":"string"}},
+                "required":["name"],"additionalProperties":false},
+              "access":"read","handler":"logic/tools.js#readItems"}]}"""))
+        val executions = AtomicInteger()
+        val preferences = object : ConnectorConnectionPreferences {
+            private val values = mutableMapOf<String, Boolean>()
+            override fun isConnected(id: String) = values[id] == true
+            override fun setConnected(id: String, connected: Boolean) { values[id] = connected }
+            override fun hasConnectionChoice(id: String) = values.containsKey(id)
+        }
+        val connectorRegistry = ConnectorRegistry.createForTests(preferences, { true }, ApprovalGate.INSTANCE)
+        val definition = modules.installConnectorDefinitions(connectorRegistry, ModuleRuntime { request, _, _ ->
+            assertEquals(mapOf("name" to "report"), request.arguments)
+            executions.incrementAndGet()
+            CoreToolResult.success("read completed")
+        }).single()
+        connectorRegistry.connect(definition.id)
+        assertEquals(AutonomyPolicy.ALLOW,
+            connectorRegistry.configuredAutonomyPolicy(definition, definition.operations.single()))
+
+        val toolName = "read_items"
+        val task = task(toolScope = TaskToolScope("LISTED", listOf(toolName)))
+            .copy(creatorToolNames = listOf(toolName))
+        val taskStore = TaskStore(context)
+        val persistedTask = taskStore.create(task)
+        val pendingStore = TaskPendingActionStore(
+            Files.createTempDirectory("task-allowed-visible-actions").resolve("pending.jsonl").toFile())
+        val notifications = FakeNotifications()
+        val factory = FakeLoopFactory { turn, _, declarations, _ ->
+            assertEquals(setOf(toolName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("module-read", toolName,
+                mapOf("name" to "report"))))
+            else ModelReply("The read is waiting for the app to return.", emptyList())
+        }
+
+        ModuleHostVisibility.setVisibleForTests(false)
+        try {
+            val result = ScheduledTaskProcessor(context, factory, connectorRegistry,
+                com.jarvys.agent.LocalRunStore(context), fixedClock(), notifications, taskStore,
+                pendingStore, modules)
+                .execute(persistedTask, 900L, 901L, "run-module-read-allow", CancellationToken.cancellable())
+
+            assertEquals("ERROR", result.status)
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED, result.causeCode)
+            assertEquals("WAITING_VISIBLE_APP", result.toolsCalled.single().outcome)
+            assertEquals(0, executions.get())
+            assertEquals(0, notifications.pendingActionCalls.get())
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED, notifications.attentionCause)
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED.localized(context), notifications.attentionText)
+            assertTrue(notifications.attentionText!!.contains("resume automatically", ignoreCase = true))
+            assertEquals(TaskRunCause.VISIBLE_APP_REQUIRED,
+                taskStore.get(persistedTask.id)?.openIncidentCause)
+
+            val action = pendingStore.listForTask(persistedTask.id).single()
+            assertEquals(TaskPendingActionStatus.WAITING_VISIBLE_APP, action.status)
+            assertEquals("read_items", action.toolName)
+            assertEquals("report", JSONObject(action.argumentsJson).getString("name"))
+
+            ModuleHostVisibility.setVisibleForTests(true)
+            val resumedStatus = TaskPendingActionWork.execution(
+                context, pendingStore, taskStore, notifications, now = { 1_000L },
+            ).execute(action.id, persistedTask.id, TaskPendingActionExecutor { _, approvedTask, queued ->
+                CoreAgentRuntime.executeScheduledTaskAction(
+                    context, approvedTask, queued.toolName, mapOf("name" to "report"),
+                    CancellationToken.cancellable(), connectorRegistry, modules, taskStore,
+                )
+            })
+
+            assertEquals(TaskPendingActionExecutionStatus.EXECUTED, resumedStatus)
+            assertEquals(TaskPendingActionStatus.EXECUTED, pendingStore.get(action.id)?.status)
+            assertEquals(1, executions.get())
+            assertEquals(TaskState.Active, taskStore.get(persistedTask.id)?.state)
+            assertEquals(1, notifications.recoveryCalls.get())
         } finally {
             ModuleHostVisibility.setVisibleForTests(null)
         }

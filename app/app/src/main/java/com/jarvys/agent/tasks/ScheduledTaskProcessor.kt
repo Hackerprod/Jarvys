@@ -11,6 +11,7 @@ import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
+import com.jarvys.agent.ModuleTool
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderSettings
 import com.jarvys.agent.ProviderTransportException
@@ -18,7 +19,9 @@ import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.WebSearchTools
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.modules.ModuleHostVisibility
 import com.jarvys.agent.modules.ModuleRegistry
+import com.jarvys.agent.modules.ModuleToolAccess
 import com.jarvys.agent.modules.WebViewModuleRuntime
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
@@ -232,6 +235,35 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 token.throwIfCancelled()
                 val canonicalArguments = TaskPendingActionStore.canonicalizeArguments(arguments)
                 val pending = pendingActions.enqueue(task, runId, toolName, canonicalArguments)
+                val module = moduleRegistry.moduleForTool(toolName)
+                val moduleToolAccess = moduleRegistry.declaredTool(toolName)?.access
+                val moduleDefinition = module?.let { connectorRegistry.get(it.id) }
+                val moduleOperation = moduleDefinition?.operations?.firstOrNull { it.name == toolName }
+                val modulePolicy = if (moduleDefinition != null && moduleOperation != null) {
+                    connectorRegistry.configuredAutonomyPolicy(moduleDefinition, moduleOperation)
+                } else null
+                // Writes still need the task's explicit grant; module ALLOW alone cannot grant one.
+                val taskAllowsModuleTool = moduleToolAccess == ModuleToolAccess.READ || task.toolScope.writesAllowed
+                val deferAllowedModuleUntilVisible = !ModuleHostVisibility.isVisible() && taskAllowsModuleTool &&
+                    modulePolicy == AutonomyPolicy.ALLOW
+                if (deferAllowedModuleUntilVisible) {
+                    val deferred = JSONObject()
+                        .put("status", ModuleTool.VISIBLE_APP_REQUIRED_STATUS)
+                        .put("executed", false)
+                        .put("pending_action_id", pending.id)
+                        .put("message", ModuleTool.VISIBLE_APP_REQUIRED_MESSAGE)
+                    val waiting = pendingActions.deferUntilVisibleApp(
+                        pending.id,
+                        pending.actionBinding,
+                        JSONObject().put("success", true).put("content", deferred.toString()).toString(),
+                    )
+                    if (waiting?.status != TaskPendingActionStatus.WAITING_VISIBLE_APP) {
+                        return@ScheduledTaskWriteDeferrer CoreToolResult.failure(
+                            "Could not persist this action until the app is visible.",
+                        )
+                    }
+                    return@ScheduledTaskWriteDeferrer CoreToolResult.success(deferred.toString())
+                }
                 notifications.pendingAction(app, task, pending)
                 CoreToolResult.success(JSONObject()
                     .put("status", "pending_user_approval")

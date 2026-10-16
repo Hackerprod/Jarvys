@@ -40,6 +40,7 @@ import com.jarvys.agent.DeliveredArtifactStore
 import com.jarvys.agent.HtmlPreviewDescriptor
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.modules.ModuleRegistry
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -185,8 +186,21 @@ internal fun DeliveredArtifactEventCard(
     event: AgentRunUiEvent,
     sessionId: String,
     onOpenPreview: (String) -> Unit = {},
-) = DeliveredArtifactEventCardContent(event, sessionId, renderAsImage = false,
-    renderHtmlPreview = false, onOpenPreview = onOpenPreview)
+) {
+    val context = LocalContext.current
+    val modules = remember(context) { ModuleRegistry.get(context) }
+    val artifactType = event.presentationArtifact?.artifactType ?: event.deliveredArtifact?.mimeType
+    val presenter = artifactType?.let {
+        PresentationArtifactViewerRegistry.viewerForArtifactType(modules, it)
+    }
+    DeliveredArtifactEventCardContent(
+        event,
+        sessionId,
+        renderAsImage = presenter?.viewer == "native/image",
+        renderHtmlPreview = presenter?.viewer == "native/html",
+        onOpenPreview = onOpenPreview,
+    )
+}
 
 @Composable
 internal fun DeliveredArtifactEventCard(

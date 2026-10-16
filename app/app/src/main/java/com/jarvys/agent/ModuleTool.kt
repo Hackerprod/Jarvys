@@ -112,7 +112,24 @@ class ModuleTool internal constructor(
             if (deferAskWrite == null) return CoreToolResult.failure("Pending action queue is unavailable")
             return CoreToolResult.success(deferAskWrite.get().toString())
         }
-        if (!ModuleHostVisibility.isVisible()) return visibleAppRequiredResult()
+        if (!ModuleHostVisibility.isVisible()) {
+            if (effectiveAutonomyPolicy() == AutonomyPolicy.ALLOW && !approvedPendingAction) {
+                if (deferAskWrite == null) {
+                    return CoreToolResult.failure(
+                        "This scheduled action requires the app to be visible and has no resumable pending action.",
+                    )
+                }
+                val deferred = deferAskWrite.get()
+                return if (deferred.optString("status") == VISIBLE_APP_REQUIRED_STATUS) {
+                    CoreToolResult.success(deferred.toString())
+                } else {
+                    CoreToolResult.failure(
+                        "This scheduled action could not be deferred until the app is visible.",
+                    )
+                }
+            }
+            return visibleAppRequiredResult()
+        }
         val validated = ToolArgumentValidator.coerceAndValidate(
             arguments?.mapValues { it.value as Any? }, inputSchema,
         )

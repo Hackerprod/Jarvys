@@ -166,6 +166,17 @@ class TaskPendingActionStore private constructor(
             .also(::appendLocked)
     }
 
+    /** Persists an already-authorized ALLOW action for dispatch when the app becomes visible. */
+    fun deferUntilVisibleApp(id: String, expectedBinding: String, resultJson: String): TaskPendingAction? = withLock {
+        recoverForeignClaimsLocked()
+        val current = readLatestLocked()[id] ?: return@withLock null
+        if (current.actionBinding != expectedBinding || !validActionBinding(current)) return@withLock current
+        if (current.status == TaskPendingActionStatus.WAITING_VISIBLE_APP) return@withLock current
+        if (current.status != TaskPendingActionStatus.PENDING) return@withLock current
+        current.copy(status = TaskPendingActionStatus.WAITING_VISIBLE_APP, resultJson = resultJson, claimOwner = null)
+            .also(::appendLocked)
+    }
+
     fun markInterruptedUncertain(
         id: String,
         expectedBinding: String,
