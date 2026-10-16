@@ -35,6 +35,7 @@ android {
 
     defaultConfig {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 35
         versionCode = 96
@@ -130,6 +131,9 @@ dependencies {
     testImplementation("androidx.work:work-testing:2.12.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
 
 // Compile the reusable native runtime once for this Jarvys build. Per-app generation uses

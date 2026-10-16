@@ -5,6 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -15,6 +18,7 @@ import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.PreviewResponsePolicy
+import com.jarvys.agent.WebViewDiagnosticTrace
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.CancellationException
@@ -101,6 +105,15 @@ class WebViewModuleRuntime @JvmOverloads constructor(
         require(ModuleWorkspacePath.isSafeBundlePath(handlerPath)) { "The module handler path is invalid." }
         val bundleAssetPath = module.bundleAssetDirectory.split('/').joinToString("/") { Uri.encode(it) }
         val baseUrl = "https://appassets.androidplatform.net/assets/$bundleAssetPath/"
+        val diagnostics = WebViewDiagnosticTrace(
+            localResourceLabel = { uri ->
+                ModuleWebViewSecurity.moduleAssetPath(uri, module.bundleAssetDirectory)
+                    ?: if (uri.scheme.equals("https", ignoreCase = true) &&
+                        uri.host == ModuleWebViewSecurity.ASSET_AUTHORITY &&
+                        uri.path?.startsWith("/module-artifacts/") == true) "delivered-artifact" else null
+            },
+            logMessage = { Log.w("ModuleWebView", it) },
+        )
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(appContext))
             .build()
@@ -110,34 +123,85 @@ class WebViewModuleRuntime @JvmOverloads constructor(
             declaredArtifactTypes = module.artifactTypes.map { it.type },
             access = accessFactory(request, token, progress),
             complete = { raw -> result.complete(decodeResult(raw)) },
-            fail = { message -> result.complete(CoreToolResult.failure(message.ifBlank { "Module handler failed." })) },
+            fail = { code ->
+                when {
+                    code == FAILURE_SCRIPT_LOAD -> diagnostics.recordScriptLoadFailure(handlerPath)
+                    code == FAILURE_EXPORT_MISSING -> diagnostics.recordExportMissing("$handlerPath#$exportName")
+                    code.startsWith(FAILURE_EVALUATION_PREFIX) -> diagnostics.recordHandlerException(
+                        "$handlerPath#$exportName", code.removePrefix(FAILURE_EVALUATION_PREFIX),
+                    )
+                }
+                val fallback = "Module handler evaluation failed: $handlerPath#$exportName"
+                result.complete(CoreToolResult.failure(diagnostics.failureMessage(fallback)))
+            },
             thumbnailArtifactTypes = module.artifactTypes.filter { it.generatedThumbnail }.map { it.type },
         )
+        val allowInitialBootstrapDocument = AtomicBoolean(true)
         return WebView(appContext).apply {
             ModuleWebViewSecurity.configure(this)
             addJavascriptInterface(bridge, JAVASCRIPT_BRIDGE_NAME)
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                    diagnostics.recordConsoleMessage(
+                        consoleMessage.sourceId(), consoleMessage.lineNumber(),
+                        consoleMessage.messageLevel().name, consoleMessage.message(),
+                    )
+                    return true
+                }
+            }
             webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
-                    if (ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null)
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
+                    if (request.isForMainFrame && request.url.scheme.equals("data", ignoreCase = true) &&
+                        allowInitialBootstrapDocument.compareAndSet(true, false)) {
+                        // loadDataWithBaseURL creates this host-owned document as data:; it is not a subresource.
+                        return null
+                    }
+                    if (ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null) {
+                        diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, request.isForMainFrame)
                         return ModuleWebViewSecurity.blockedResponse()
-                    return assetLoader.shouldInterceptRequest(request.url) ?: ModuleWebViewSecurity.blockedResponse()
+                    }
+                    return try {
+                        assetLoader.shouldInterceptRequest(request.url) ?: run {
+                            diagnostics.recordAssetHandlerMiss(request.url)
+                            ModuleWebViewSecurity.blockedResponse()
+                        }
+                    } catch (_: Exception) {
+                        diagnostics.recordAssetHandlerError(request.url)
+                        ModuleWebViewSecurity.blockedResponse()
+                    }
                 }
 
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean =
-                    ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
+                    val denied = ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null
+                    if (denied) diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, request.isForMainFrame)
+                    return denied
+                }
 
                 @Deprecated("Required for older WebView callbacks")
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean =
-                    ModuleWebViewSecurity.moduleAssetPath(Uri.parse(url), module.bundleAssetDirectory) == null
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean {
+                    val uri = Uri.parse(url)
+                    val denied = ModuleWebViewSecurity.moduleAssetPath(uri, module.bundleAssetDirectory) == null
+                    if (denied) diagnostics.recordDenied(uri, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE)
+                    return denied
+                }
 
                 override fun onReceivedError(
                     view: WebView?,
                     request: WebResourceRequest?,
                     error: android.webkit.WebResourceError?,
                 ) {
+                    diagnostics.recordResourceError(request?.url, error?.errorCode ?: 0, request?.isForMainFrame)
                     if (request?.isForMainFrame == true) {
-                        result.complete(CoreToolResult.failure("The module bundle could not be loaded."))
+                        result.complete(CoreToolResult.failure(diagnostics.failureMessage("Module document failed to load.")))
                     }
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    errorResponse: WebResourceResponse?,
+                ) {
+                    diagnostics.recordHttpError(request?.url, errorResponse?.statusCode ?: 0, request?.isForMainFrame)
                 }
             }
             loadDataWithBaseURL(baseUrl, bootstrapHtml(handlerPath, exportName, request.arguments), "text/html", "UTF-8", null)
@@ -147,12 +211,11 @@ class WebViewModuleRuntime @JvmOverloads constructor(
     private fun bootstrapHtml(handlerPath: String, exportName: String, arguments: Map<String, Any?>): String {
         val csp = ModuleWebViewSecurity.executionCsp()
         val handler = handlerPath.split('/').joinToString("/") { Uri.encode(it) }
-        val export = JSONObject.quote(exportName)
+        val export = jsStringLiteral(exportName)
         val args = JSONObject(arguments).toString()
-        val argsJson = JSONObject.quote(args)
+        val argsJson = jsStringLiteral(args)
         return """<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${htmlAttribute(csp)}"></head><body>
-            <script src="${htmlAttribute(handler)}"></script>
-            <script>(async function(){try{const fn=window[${export}];if(typeof fn!=="function")throw new Error("Declared module handler is missing");const result=await fn(JSON.parse(${argsJson}),window.${JAVASCRIPT_BRIDGE_NAME});window.${JAVASCRIPT_BRIDGE_NAME}.complete(JSON.stringify(result===undefined?{}:result));}catch(e){window.${JAVASCRIPT_BRIDGE_NAME}.fail(String(e&&e.message||e));}})();</script>
+            <script>(function(){const host=window.${JAVASCRIPT_BRIDGE_NAME};const script=document.createElement("script");let failed=false;function fail(code){if(!failed){failed=true;host.fail(code);}}function failEvaluation(error){let name="Error";try{if(error&&typeof error.name==="string")name=error.name;}catch(_){}fail("$FAILURE_EVALUATION_PREFIX"+name);}script.onerror=function(){fail("$FAILURE_SCRIPT_LOAD");};script.onload=function(){try{const fn=window[${export}];if(typeof fn!=="function"){fail("$FAILURE_EXPORT_MISSING");return;}Promise.resolve().then(function(){return fn(JSON.parse(${argsJson}),host);}).then(function(value){host.complete(JSON.stringify(value===undefined?{}:value));},failEvaluation);}catch(error){failEvaluation(error);}};script.src=${jsStringLiteral(handler)};document.head.appendChild(script);})();</script>
             </body></html>""".trimIndent()
     }
 
@@ -182,8 +245,13 @@ class WebViewModuleRuntime @JvmOverloads constructor(
     private fun htmlAttribute(value: String): String = value
         .replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
 
+    private fun jsStringLiteral(value: String): String = JSONObject.quote(value).replace("<", "\\u003c")
+
     private companion object {
         const val JAVASCRIPT_BRIDGE_NAME = "Jarvys"
+        const val FAILURE_SCRIPT_LOAD = "handler-script-load-failed"
+        const val FAILURE_EXPORT_MISSING = "handler-export-missing"
+        const val FAILURE_EVALUATION_PREFIX = "handler-evaluation-failed:"
     }
 }
 

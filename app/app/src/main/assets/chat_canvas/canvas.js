@@ -1,8 +1,8 @@
 (function (root, factory) {
-  var api = factory();
+  var api = factory(root);
   if (typeof module === "object" && module.exports) module.exports = api;
   root.ChatCanvas = api;
-}(this, function () {
+}(this, function (root) {
   "use strict";
 
   function createModel() { return { bySeq: Object.create(null), seqs: [], patches: 0, fullRenders: 0 }; }

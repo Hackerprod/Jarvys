@@ -19,3 +19,13 @@ The presentation timeline now exposes durable presentation output through the ge
 | `MainActivityImageDownloadGestureTest.realImageViewerSaveGestureExportsAndOpenIsOnlyLaunchedAfterTheOpenGesture` | Generated-image fixture selector; save/open gesture behavior retained. |
 
 In total, 24 event-selector expressions were migrated, and one kind-only visibility sample now uses the generic event factory. No tests were removed or weakened. Schema tests that refer to the physical `generated_images` table remain unchanged; they do not select timeline event kinds.
+
+## WebView real de módulos y lienzo
+
+El AVD `JarvysModuleWebView34` (Android 14 / API 34, Google APIs x86_64; System WebView 113.0.5672.136) reprodujo el fallo antes de la corrección. Los diagnósticos instrumentados mostraron `Resource denied: data://no-host ... (main frame)` y HTTP 403. `loadDataWithBaseURL` entrega el documento bootstrap inicial como una carga `data:` aun cuando recibe una base HTTPS; el filtro del runtime aplicaba la allowlist de subrecursos al documento principal y lo bloqueaba antes de cargar `logic/tools.js`. El error CSP aparecía como consecuencia. `blockNetworkLoads` permaneció activo.
+
+El runtime ahora deja pasar una sola carga inicial `data:` de main frame, creada por el propio anfitrión. Los subrecursos y las navegaciones siguientes siguen sujetos al filtro del bundle, la CSP y la red bloqueada. Los mensajes de fallo registran recurso/motivo o el tipo seguro de excepción; consola cruda, parámetros, queries y fragmentos no se conservan.
+
+`WebViewModuleRuntimeInstrumentedTest` ejecuta `create_chart` y `create_presentation` contra los assets de producción en Chromium del sistema, comprueba la entrega del JSON/PPTX y valida miniaturas PNG decodificables de 1280×720 con píxeles no vacíos. `ChatCanvasWebViewInstrumentedTest` carga HTML, CSS y JS de producción con red deshabilitada. Esa prueba encontró además que `canvas.js` no pasaba el objeto global a su factory, lo que causaba un `ReferenceError` al inicializar el scroll; el factory ahora recibe el global.
+
+Estas pruebas usan el AVD y son distintas de los tests JVM/Robolectric. Para instalar el APK debug, que el proyecto produce sin firma, se firmaron copias temporales de los APK en `%LOCALAPPDATA%\Temp`; no se cambió la configuración ni el artefacto firmado del proyecto. No hubo cambios al esquema Room v2 ni se debilitaron tests existentes.

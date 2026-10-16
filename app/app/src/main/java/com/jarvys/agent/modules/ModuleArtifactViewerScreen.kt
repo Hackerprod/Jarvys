@@ -3,6 +3,9 @@ package com.jarvys.agent.modules
 import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -32,6 +35,7 @@ import com.jarvys.agent.ChatAttachment
 import com.jarvys.agent.ConversationModuleCapabilityAccess
 import com.jarvys.agent.DeliveredArtifactStore
 import com.jarvys.agent.R
+import com.jarvys.agent.WebViewDiagnosticTrace
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatFileOwnership
 import com.jarvys.agent.chatdb.ConversationArtifact
@@ -126,6 +130,7 @@ fun ModuleArtifactViewerScreen(
                         webView.stopLoading()
                         webView.removeJavascriptInterface("Jarvys")
                         webView.webViewClient = WebViewClient()
+                        webView.webChromeClient = null
                         webView.onPause()
                         webView.destroy()
                     }
@@ -176,29 +181,88 @@ private fun createViewerWebView(
     val encodedDirectory = module.bundleAssetDirectory.split('/').joinToString("/") { Uri.encode(it) }
     val encodedViewer = viewerPath.split('/').joinToString("/") { Uri.encode(it) }
     val viewerUrl = "https://${ModuleWebViewSecurity.ASSET_AUTHORITY}/assets/$encodedDirectory/$encodedViewer"
+    val diagnostics = WebViewDiagnosticTrace(
+        localResourceLabel = { uri ->
+            ModuleWebViewSecurity.moduleAssetPath(uri, module.bundleAssetDirectory)
+                ?: if (ModuleWebViewSecurity.isArtifactUrl(uri, token)) "delivered-artifact" else null
+        },
+        logMessage = { Log.w("ArtifactViewer", it) },
+    )
     val view = WebView(context)
     ModuleWebViewSecurity.configure(view)
     view.addJavascriptInterface(bridge, "Jarvys")
+    view.webChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+            diagnostics.recordConsoleMessage(
+                consoleMessage.sourceId(), consoleMessage.lineNumber(),
+                consoleMessage.messageLevel().name, consoleMessage.message(),
+            )
+            return true
+        }
+    }
     view.webViewClient = object : WebViewClient() {
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse {
-            if (!request.method.equals("GET", ignoreCase = true)) return ModuleWebViewSecurity.blockedResponse()
+            if (!request.method.equals("GET", ignoreCase = true)) {
+                diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_METHOD_NOT_ALLOWED, request.isForMainFrame)
+                return ModuleWebViewSecurity.blockedResponse()
+            }
             if (ModuleWebViewSecurity.isArtifactUrl(request.url, token)) {
-                return artifactResponse(context, conversationId, artifactId, module.id)
+                val response = artifactResponse(context, conversationId, artifactId, module.id)
+                if (response.statusCode != 200) {
+                    diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_ARTIFACT_UNAVAILABLE, request.isForMainFrame)
+                }
+                return response
             }
             val relative = ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory)
-                ?: return ModuleWebViewSecurity.blockedResponse()
+                ?: run {
+                    diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, request.isForMainFrame)
+                    return ModuleWebViewSecurity.blockedResponse()
+                }
             if (relative == viewerPath) {
-                return viewerHtmlResponse(context, module, artifact, token, viewerPath)
+                val response = viewerHtmlResponse(context, module, artifact, token, viewerPath)
+                if (response.statusCode != 200) diagnostics.recordAssetHandlerError(request.url)
+                return response
             }
-            return assetLoader.shouldInterceptRequest(request.url) ?: ModuleWebViewSecurity.blockedResponse()
+            return try {
+                assetLoader.shouldInterceptRequest(request.url) ?: run {
+                    diagnostics.recordAssetHandlerMiss(request.url)
+                    ModuleWebViewSecurity.blockedResponse()
+                }
+            } catch (_: Exception) {
+                diagnostics.recordAssetHandlerError(request.url)
+                ModuleWebViewSecurity.blockedResponse()
+            }
         }
 
-        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean =
-            ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
+            val denied = ModuleWebViewSecurity.moduleAssetPath(request.url, module.bundleAssetDirectory) == null
+            if (denied) diagnostics.recordDenied(request.url, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, request.isForMainFrame)
+            return denied
+        }
 
         @Deprecated("Required for older WebView callbacks")
-        override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean =
-            ModuleWebViewSecurity.moduleAssetPath(Uri.parse(url), module.bundleAssetDirectory) == null
+        override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean {
+            val uri = Uri.parse(url)
+            val denied = ModuleWebViewSecurity.moduleAssetPath(uri, module.bundleAssetDirectory) == null
+            if (denied) diagnostics.recordDenied(uri, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE)
+            return denied
+        }
+
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: android.webkit.WebResourceError?,
+        ) {
+            diagnostics.recordResourceError(request?.url, error?.errorCode ?: 0, request?.isForMainFrame)
+        }
+
+        override fun onReceivedHttpError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            errorResponse: WebResourceResponse?,
+        ) {
+            diagnostics.recordHttpError(request?.url, errorResponse?.statusCode ?: 0, request?.isForMainFrame)
+        }
     }
     view.loadUrl(viewerUrl)
     return view

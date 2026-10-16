@@ -6,7 +6,10 @@ import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -23,6 +26,7 @@ import com.jarvys.agent.AttachmentStore
 import com.jarvys.agent.DeliveredArtifactStore
 import com.jarvys.agent.GeneratedImageStore
 import com.jarvys.agent.PreviewResponsePolicy
+import com.jarvys.agent.WebViewDiagnosticTrace
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
@@ -171,7 +175,20 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
             @JavascriptInterface fun benchmarkFirstPaint() { nativeBridge?.benchmarkFirstPaint() }
             @JavascriptInterface fun benchmarkResult(report: String) { nativeBridge?.benchmarkResult(report) }
         }, "Android")
-        webViewClient = CanvasClient(context.applicationContext, this)
+        val diagnostics = WebViewDiagnosticTrace(
+            localResourceLabel = ::canvasDiagnosticResourceLabel,
+            logMessage = { Log.w("ChatCanvasWeb", it) },
+        )
+        webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                diagnostics.recordConsoleMessage(
+                    consoleMessage.sourceId(), consoleMessage.lineNumber(),
+                    consoleMessage.messageLevel().name, consoleMessage.message(),
+                )
+                return true
+            }
+        }
+        webViewClient = CanvasClient(context.applicationContext, this, diagnostics)
     }
 
     fun setBridge(bridge: ChatCanvasNativeBridge) { nativeBridge = bridge }
@@ -198,26 +215,45 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
 
     private var bootstrapped = false
 
-    private class CanvasClient(private val appContext: Context, private val view: ChatCanvasWebView) : WebViewClient() {
+    private class CanvasClient(
+        private val appContext: Context,
+        private val view: ChatCanvasWebView,
+        private val diagnostics: WebViewDiagnosticTrace,
+    ) : WebViewClient() {
         override fun shouldInterceptRequest(webView: WebView?, request: WebResourceRequest): WebResourceResponse {
-            if (request.method != "GET" && request.method != "HEAD") return denied(405, "Canvas is read-only")
             val uri = request.url
+            if (request.method != "GET" && request.method != "HEAD") return deny(
+                uri, 405, WebViewDiagnosticTrace.REASON_METHOD_NOT_ALLOWED, "Canvas is read-only",
+                request.isForMainFrame,
+            )
             if (!uri.scheme.equals("https", true) || uri.host != "jarvys-chat-canvas.invalid" || uri.port != -1 || uri.query != null) {
-                return denied(403, "External resources are disabled")
+                return deny(
+                    uri, 403, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, "External resources are disabled",
+                    request.isForMainFrame,
+                )
             }
             return try {
-                val path = uri.path ?: return denied(404, "Resource unavailable")
+                val path = uri.path ?: return deny(
+                    uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable",
+                    request.isForMainFrame,
+                )
                 val resource = when (path) {
                     "/index.html" -> CanvasResource(appContext.assets.open("chat_canvas/index.html"), "text/html")
                     "/canvas.css" -> CanvasResource(appContext.assets.open("chat_canvas/canvas.css"), "text/css")
                     "/canvas.js" -> CanvasResource(appContext.assets.open("chat_canvas/canvas.js"), "application/javascript")
                     "/benchmark-image.svg" -> {
                         val synthetic = view.nativeBridge?.hasSyntheticImages() == true
-                        if (!synthetic) return denied(404, "Resource unavailable")
+                        if (!synthetic) return deny(
+                            uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable",
+                            request.isForMainFrame,
+                        )
                         CanvasResource(appContext.assets.open("chat_canvas/benchmark-image.svg"), "image/svg+xml")
                     }
                     else -> resolveConversationResource(appContext, view.nativeBridge, path)
-                        ?: return denied(404, "Resource unavailable")
+                        ?: return deny(
+                            uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable",
+                            request.isForMainFrame,
+                        )
                 }
                 val mime = resource.mimeType
                 WebResourceResponse(mime, if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("svg")) "UTF-8" else null,
@@ -226,19 +262,62 @@ internal class ChatCanvasWebView(context: Context) : WebView(context) {
                     } else resource.stream)
             } catch (failure: RuntimeException) {
                 AgentErrorReporter.reportChatDatabaseFailure(appContext, failure)
-                denied(404, "Resource unavailable")
-            } catch (_: Exception) { denied(404, "Resource unavailable") }
+                deny(uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable", request.isForMainFrame)
+            } catch (_: Exception) {
+                deny(uri, 404, WebViewDiagnosticTrace.REASON_RESOURCE_UNAVAILABLE, "Resource unavailable", request.isForMainFrame)
+            }
         }
 
-        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean =
-            request.url.host != "jarvys-chat-canvas.invalid" || request.url.scheme != "https"
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
+            val uri = request.url
+            val denied = !uri.scheme.equals("https", ignoreCase = true) ||
+                uri.host != "jarvys-chat-canvas.invalid" || uri.port != -1 ||
+                uri.query != null || uri.fragment != null
+            if (denied) diagnostics.recordDenied(uri, WebViewDiagnosticTrace.REASON_OUTSIDE_ALLOWED_SCOPE, request.isForMainFrame)
+            return denied
+        }
+
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: android.webkit.WebResourceError?,
+        ) {
+            diagnostics.recordResourceError(request?.url, error?.errorCode ?: 0, request?.isForMainFrame)
+        }
+
+        override fun onReceivedHttpError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            errorResponse: WebResourceResponse?,
+        ) {
+            diagnostics.recordHttpError(request?.url, errorResponse?.statusCode ?: 0, request?.isForMainFrame)
+        }
 
         override fun onPageFinished(view: WebView, url: String) { this.view.pageFinished() }
+
+        private fun deny(uri: android.net.Uri, code: Int, reason: String, message: String, mainFrame: Boolean): WebResourceResponse {
+            diagnostics.recordDenied(uri, reason, mainFrame)
+            return denied(code, message)
+        }
 
         private fun denied(code: Int, message: String) = WebResourceResponse(
             "text/plain", "UTF-8", code, when (code) { 403 -> "Forbidden"; 405 -> "Method Not Allowed"; else -> "Not Found" },
             PreviewResponsePolicy.interactiveHeaders(), ByteArrayInputStream(message.toByteArray(Charsets.UTF_8)))
     }
+}
+
+private fun canvasDiagnosticResourceLabel(uri: android.net.Uri): String? {
+    if (!uri.scheme.equals("https", ignoreCase = true) || uri.host != "jarvys-chat-canvas.invalid" ||
+        uri.port != -1 || uri.query != null || uri.fragment != null) return null
+    val parts = uri.path.orEmpty().split('/').filter(String::isNotEmpty)
+    if (parts.size == 1) return parts.single().takeIf { it in setOf("index.html", "canvas.css", "canvas.js", "benchmark-image.svg") }
+    if (parts.size == 4 && parts[0] == "chat-assets" && parts[1] == "message" &&
+        parts[2].all(Char::isDigit) && parts[3].all(Char::isDigit)) return "chat-assets/message/image"
+    if (parts.size == 3 && parts[0] == "chat-assets" && parts[1] == "generated" &&
+        parts[2].all(Char::isDigit)) return "chat-assets/generated/image"
+    if (parts.size == 4 && parts[0] == "chat-assets" && parts[1] == "artifact" &&
+        parts[2].all(Char::isDigit) && parts[3] == "thumbnail") return "chat-assets/artifact/thumbnail"
+    return null
 }
 
 /** WebView JS callbacks run off-main. Recheck against the current event snapshot before dispatch. */

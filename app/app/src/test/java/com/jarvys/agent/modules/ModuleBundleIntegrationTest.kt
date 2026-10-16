@@ -1,6 +1,7 @@
 package com.jarvys.agent.modules
 
 import android.content.Context
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.SecretStore
 import com.jarvys.agent.CoreToolResult
@@ -83,6 +84,16 @@ class ModuleBundleIntegrationTest {
                 val handler = context.assets.open("${module.bundleAssetDirectory}/$handlerPath")
                     .bufferedReader(Charsets.UTF_8).use { it.readText() }
                 assertTrue("${module.id} must export its manifest handler", handler.contains("global.$exportName"))
+                val encodedDirectory = module.bundleAssetDirectory.split('/').joinToString("/") { Uri.encode(it) }
+                val encodedHandler = handlerPath.split('/').joinToString("/") { Uri.encode(it) }
+                val handlerUrl = Uri.parse(
+                    "https://${ModuleWebViewSecurity.ASSET_AUTHORITY}/assets/$encodedDirectory/$encodedHandler",
+                )
+                assertEquals(
+                    "${module.id} handler URL must pass the WebView asset filter",
+                    handlerPath,
+                    ModuleWebViewSecurity.moduleAssetPath(handlerUrl, module.bundleAssetDirectory),
+                )
                 assertTrue("${module.id} must deliver bytes through the host capability", handler.contains("artifactDeliverBytes"))
                 assertFalse("${module.id} handler must not load remote scripts", Regex("https?://", RegexOption.IGNORE_CASE).containsMatchIn(handler))
             }
