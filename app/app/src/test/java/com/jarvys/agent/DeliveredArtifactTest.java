@@ -143,9 +143,18 @@ public class DeliveredArtifactTest {
         workspace.write("folder/file.txt", "safe");
         File root = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(session));
         File parent = new File(root,"folder"), kept = new File(root,"kept");
-        File outside = chatTestStore.newFilesDirectory("outside"); Files.write(new File(outside,"file.txt").toPath(), "evil".getBytes(StandardCharsets.UTF_8));
-        ArtifactOsShadow.beforeOpen = () -> { try { Files.move(parent.toPath(), kept.toPath()); Files.createSymbolicLink(parent.toPath(), outside.toPath()); } catch(Exception e) { throw new RuntimeException(e); } };
-        ArtifactOsShadow.afterOpen = () -> { try { Files.delete(parent.toPath()); Files.move(kept.toPath(), parent.toPath()); } catch(Exception e) { throw new RuntimeException(e); } };
+        ArtifactOsShadow.hookTargetPath = new File(parent, "file.txt").toPath();
+        ArtifactOsShadow.beforeOpen = () -> { try {
+            Files.move(parent.toPath(), kept.toPath());
+            Files.createDirectory(parent.toPath());
+            // Same-size replacement bytes ensure identity checks do not rely on size alone.
+            Files.write(new File(parent,"file.txt").toPath(), "evil".getBytes(StandardCharsets.UTF_8));
+        } catch(Exception e) { throw new RuntimeException(e); } };
+        ArtifactOsShadow.afterClose = () -> { try {
+            Files.delete(new File(parent,"file.txt").toPath());
+            Files.delete(parent.toPath());
+            Files.move(kept.toPath(), parent.toPath());
+        } catch(Exception e) { throw new RuntimeException(e); } };
         assertFalse(tool().execute(args("folder/file.txt"), CancellationToken.uncancellable()).success);
         assertFalse(ledger.readConversationTimeline(session).stream().anyMatch(e -> e.getDeliveredArtifact()!=null));
         assertEquals("safe",workspace.read("folder/file.txt"));

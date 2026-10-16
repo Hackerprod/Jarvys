@@ -28,8 +28,7 @@ class ProactiveWorker(
         var proactiveRunActive = false
         var token: CancellationToken? = null
         preferences.captureIfEnabled {
-            val snapshot = AgentRunUiState.state.value
-            if (snapshot.running || snapshot.compacting) {
+            if (hasInteractiveRun()) {
                 agentRunActive = true
             } else {
                 token = ProactiveRunController.tryStart()
@@ -49,14 +48,26 @@ class ProactiveWorker(
         try {
             runToken.throwIfCancelled()
             val batches = ProactiveCandidateQueue(ProactiveEventStore(app)).nextBatches()
+            if (hasInteractiveRun()) {
+                runToken.cancel()
+                ProactiveReviewStateStore(app).recordFailure("run_active")
+                return@withContext Result.retry()
+            }
+            runToken.throwIfCancelled()
             when (val result = processor.review(batches, runToken)) {
                 ProactiveProcessingResult.Completed -> Result.success()
                 is ProactiveProcessingResult.Retryable -> Result.retry()
                 is ProactiveProcessingResult.Failed -> Result.failure()
-                ProactiveProcessingResult.Stopped -> Result.success()
+                ProactiveProcessingResult.Stopped -> if (hasInteractiveRun()) {
+                    ProactiveReviewStateStore(app).recordFailure("run_active")
+                    Result.retry()
+                } else Result.success()
             }
         } catch (cancelled: CancellationException) {
-            if (runToken.isCancelled) Result.success() else throw cancelled
+            if (hasInteractiveRun()) {
+                ProactiveReviewStateStore(app).recordFailure("run_active")
+                Result.retry()
+            } else if (runToken.isCancelled) Result.success() else throw cancelled
         } finally {
             cancellationRegistration.dispose()
             ProactiveRunController.finish(runToken)
@@ -64,5 +75,10 @@ class ProactiveWorker(
                 runCatching { com.jarvys.agent.tasks.TaskScheduler.rearm(app) }
             }
         }
+    }
+
+    private fun hasInteractiveRun(): Boolean {
+        val snapshot = AgentRunUiState.state.value
+        return snapshot.running || snapshot.compacting || BackgroundRunController.isInteractiveActive()
     }
 }

@@ -609,17 +609,19 @@ class ProactiveAgentProcessorTest {
     @Test fun cancellationLeavesCandidatePendingAndStatusToolReturnsReviewState() {
         val event = event("Private title", "Private body", receivedAt = 60)
         ProactiveEventStore(context).append(event)
+        val reviewState = ProactiveReviewStateStore(context)
+        reviewState.recordReview(1234L, 2)
         val factory = FakeLoopFactory({ _, _ -> response(false) })
         val processor = processor(factory, fakeConnectedRegistry())
         val token = CancellationToken.cancellable().also(CancellationToken::cancel)
         assertEquals(ProactiveProcessingResult.Stopped,
             processor.review(listOf(ProactiveEventBatch("bank\u001fAva", listOf(event))), token))
         assertEquals(ProactiveEvent.PENDING, ProactiveEventStore(context).readAll().single().state)
+        assertEquals(1234L, reviewState.lastCheckMillis())
 
         context.getSharedPreferences("jarvys_proactive_preferences", Context.MODE_PRIVATE)
             .edit().putBoolean("enabled", true).commit()
-        ProactiveReviewStateStore(context).recordReview(1234L, 2)
-        ProactiveReviewStateStore(context).recordFailure("429")
+        reviewState.recordFailure("429")
         ProactiveEventStore(context).recordDiscard(event.copy(
             id = "discarded", dedupKey = "discarded-key", sourceInstanceKey = "discarded-source-key",
         ), "empty_content")

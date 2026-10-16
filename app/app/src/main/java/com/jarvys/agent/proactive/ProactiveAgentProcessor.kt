@@ -155,12 +155,13 @@ class ProactiveAgentProcessor(
         batches: List<ProactiveEventBatch>,
         token: CancellationToken,
     ): ProactiveProcessingResult {
-        reviewRecorder.recordReview(batches.size)
-        if (batches.isEmpty()) {
-            reviewRecorder.clearFailure()
-            return ProactiveProcessingResult.Completed
-        }
         try {
+            token.throwIfCancelled()
+            reviewRecorder.recordReview(batches.size)
+            if (batches.isEmpty()) {
+                reviewRecorder.clearFailure()
+                return ProactiveProcessingResult.Completed
+            }
             loopFactory.providerUnavailableReason(app)?.let { return retry(it) }
             for (batch in batches) {
                 token.throwIfCancelled()

@@ -5,6 +5,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -108,8 +109,20 @@ public class LocalRunAttachmentRecoveryTest {
         File otherFiles = chatTestStore.newFilesDirectory("other-files");
         File jarvys = new File(otherFiles, "jarvys");
         assertTrue(jarvys.mkdirs());
-        Files.createSymbolicLink(new File(jarvys, "runs").toPath(), files.toPath());
-        assertThrows(IllegalStateException.class, () -> chatTestStore.localRunStore(otherFiles));
+        File alias = new File(jarvys, "runs");
+        try {
+            if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {
+                String command = "mklink /J \"" + alias.getAbsolutePath() + "\" \"" + files.getAbsolutePath() + "\"";
+                Process process = new ProcessBuilder("cmd.exe", "/c", command).redirectErrorStream(true).start();
+                String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                assertEquals("Could not create test junction: " + output, 0, process.waitFor());
+            } else {
+                Files.createSymbolicLink(alias.toPath(), files.toPath());
+            }
+            assertThrows(IllegalStateException.class, () -> chatTestStore.localRunStore(otherFiles));
+        } finally {
+            if (Files.exists(alias.toPath(), LinkOption.NOFOLLOW_LINKS)) Files.delete(alias.toPath());
+        }
     }
 
     @Test public void drawerListsOnlyLiveDatabaseConversationsAndTheirRuns() throws Exception {

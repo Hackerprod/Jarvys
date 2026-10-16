@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import android.content.Context;
+import android.os.Build;
 import android.util.Base64;
 import java.io.IOException;
 import java.util.Collections;
@@ -1062,6 +1063,25 @@ public final class LocalRunStore {
         String expected = relative.isEmpty() ? runBoundary : new File(runBoundary, relative).getPath();
         if (!root.getCanonicalPath().equals(runBoundary) || !file.getCanonicalPath().equals(expected)) {
             throw new IOException("Run paths cannot use symbolic links");
+        }
+        if (Build.VERSION.SDK_INT >= 26 && Nio.containsPathAlias(new File(expected))) {
+            throw new IOException("Run paths cannot use directory aliases");
+        }
+    }
+
+    @androidx.annotation.RequiresApi(26)
+    private static final class Nio {
+        private Nio() { }
+
+        static boolean containsPathAlias(File expected) throws IOException {
+            java.nio.file.Path cursor = expected.toPath().toAbsolutePath().normalize();
+            while (cursor != null && !java.nio.file.Files.exists(cursor, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                cursor = cursor.getParent();
+            }
+            if (cursor == null) throw new IOException("Run path has no existing ancestor");
+            java.nio.file.Path logical = cursor.toAbsolutePath().normalize();
+            java.nio.file.Path resolved = cursor.toRealPath();
+            return !resolved.equals(logical);
         }
     }
 

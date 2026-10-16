@@ -47,7 +47,7 @@ import org.json.JSONObject;
 public final class LocalDiagnostics {
     public enum Origin { UNCAUGHT, PROVIDER, TOOL, FACTORY, SERVICE, ACTIVITY, RUNTIME }
 
-    /** Legacy closed categories retained only to validate records written by earlier versions. */
+    /** Legacy categories retained for API compatibility; old observations are ignored and never exposed. */
     public enum AnimationStage { INDEX, DOWNLOAD, INTEGRITY, CACHE, INIT, IMPORT, DECODE, ATTACH, SURFACE, FIRST_FRAME, TIMEOUT, CONTEXT_LOSS }
     public enum AnimationStatus { STARTED, READY, FAILED, UNAVAILABLE }
     public enum AnimationId { IDLE, SAD, THINKING, WORKING, WAITING, INTERRUPTED, TAUNT, CATALOG }
@@ -409,13 +409,10 @@ public final class LocalDiagnostics {
 
     private static JSONObject validate(JSONObject raw, long now, boolean includeFrames) {
         try {
-            boolean animation = "animation".equals(raw.opt("kind"));
+            // Animation observations are no longer retained. Ignore old slots as well as new writes.
+            if ("animation".equals(raw.opt("kind"))) return null;
             boolean responseShape = "response_shape".equals(raw.opt("kind"));
-            if (animation) {
-                if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
-                        "severity", "kind", "http_status", "causes", "truncated",
-                        "animation_stage", "animation_status", "animation_id")) return null;
-            } else if (responseShape) {
+            if (responseShape) {
                 if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                         "severity", "kind", "http_status", "causes", "truncated", "response_shape")) return null;
             } else if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
@@ -427,10 +424,9 @@ public final class LocalDiagnostics {
             long sdk = integer(raw.opt("sdk"), 1, 1000, -1);
             if (time < 0 || expired(time, now) || future(time, now) || version < 0 || sdk < 0) return null;
             String flavor = fixed(raw.opt("flavor"), "play", "full");
-            String severity = animation ? fixed(raw.opt("severity"), "recoverable", "info")
-                    : fixed(raw.opt("severity"), "recoverable", "fatal");
+            String severity = fixed(raw.opt("severity"), "recoverable", "fatal");
             if (responseShape) severity = fixed(raw.opt("severity"), "recoverable");
-            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "animation", "response_shape");
+            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "response_shape");
             String origin = raw.opt("origin") instanceof String ? (String) raw.opt("origin") : "";
             try { Origin.valueOf(origin); } catch (IllegalArgumentException invalid) { return null; }
             if (flavor == null || severity == null || kind == null || !(raw.opt("truncated") instanceof Boolean)) return null;
@@ -446,14 +442,6 @@ public final class LocalDiagnostics {
                     || !"recoverable".equals(severity));
             if (inputCauses.length() > MAX_CAUSES || ("exception".equals(kind) && inputCauses.length() == 0)
                     || invalidCompatibility || invalidResponseShape) return null;
-            if (animation) {
-                AnimationStage.valueOf(raw.getString("animation_stage"));
-                AnimationId.valueOf(raw.getString("animation_id"));
-                AnimationStatus animationStatus = AnimationStatus.valueOf(raw.getString("animation_status"));
-                if (!"RUNTIME".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
-                        || raw.getBoolean("truncated")
-                        || !(animationStatus == AnimationStatus.FAILED ? "recoverable" : "info").equals(severity)) return null;
-            }
             JSONObject cleanResponseShape = null;
             if (responseShape) {
                 if (!"PROVIDER".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
@@ -462,11 +450,6 @@ public final class LocalDiagnostics {
                 if (cleanResponseShape == null) return null;
             }
             JSONObject result = new JSONObject();
-            if (animation) {
-                result.put("animation_stage", raw.getString("animation_stage"));
-                result.put("animation_status", raw.getString("animation_status"));
-                result.put("animation_id", raw.getString("animation_id"));
-            }
             result.put("schema", 1); result.put("id", raw.getString("id")); result.put("time_ms", time);
             result.put("version_code", version); result.put("flavor", flavor); result.put("sdk", sdk);
             result.put("origin", origin); result.put("severity", severity); result.put("kind", kind);
