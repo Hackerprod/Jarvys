@@ -125,6 +125,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.mozilla:rhino:1.7.15")
     testImplementation("org.robolectric:robolectric:4.16")
     testImplementation("androidx.work:work-testing:2.12.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")

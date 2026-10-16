@@ -191,6 +191,23 @@ public final class DeliveredArtifactStore {
     /** Bounded native connector download; no intermediate agent-editable workspace file. */
     ChatAttachment snapshotBytes(String session, byte[] bytes, String name, String requestedMime,
             CancellationToken token) throws IOException {
+        return snapshotBytes(session, bytes, name, requestedMime, null, token);
+    }
+
+    /**
+     * Module outputs use a fresh delivery identity for each tool request. A retry with the same
+     * identity reuses the saved immutable copy, while another request for identical bytes gets a
+     * distinct artifact id.
+     */
+    ChatAttachment snapshotModuleBytes(String session, byte[] bytes, String name, String requestedMime,
+            String deliveryId, CancellationToken token) throws IOException {
+        if (deliveryId == null || !deliveryId.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"))
+            throw new IOException("Artifact delivery identity is invalid");
+        return snapshotBytes(session, bytes, name, requestedMime, deliveryId, token);
+    }
+
+    private ChatAttachment snapshotBytes(String session, byte[] bytes, String name, String requestedMime,
+            String deliveryId, CancellationToken token) throws IOException {
         if (bytes == null || bytes.length > ConnectorArtifactAccess.MAX_BYTES)
             throw new IOException("Connector attachment exceeds the byte limit");
         synchronized (DELIVERY_ACTION_LOCK) {
@@ -206,13 +223,21 @@ public final class DeliveredArtifactStore {
                 String checksum;
                 try { checksum = ArtifactSnapshotIO.hex(MessageDigest.getInstance("SHA-256").digest(immutable)); }
                 catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
-                String id = UUID.nameUUIDFromBytes((session + "\0" + filename + "\0" + mime + "\0" + checksum)
-                        .getBytes(StandardCharsets.UTF_8)).toString();
+                String identity = deliveryId == null
+                        ? session + "\0" + filename + "\0" + mime + "\0" + checksum
+                        : session + "\0module-delivery\0" + deliveryId;
+                String id = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
                 ChatAttachment attachment = new ChatAttachment(id, filename, mime, immutable.length,
                         mime.startsWith("image/") ? ChatAttachment.Kind.IMAGE : ChatAttachment.Kind.FILE, id + "-" + filename);
                 File target = path(session, attachment.relativePath);
                 File manifest = path(session, id + ".json");
-                if (manifest.exists()) { resolve(session, attachment); return attachment; }
+                if (manifest.exists()) {
+                    resolve(session, attachment);
+                    if (deliveryId != null && !checksum.equals(readManifestIo(manifest,
+                            "Could not read artifact delivery metadata").optString("sha256")))
+                        throw new IOException("Artifact delivery identity already has different content");
+                    return attachment;
+                }
                 try (FileOutputStream output = new FileOutputStream(staged)) {
                     for (int offset = 0; offset < immutable.length; offset += 8192) {
                         token.throwIfCancelled();
@@ -239,7 +264,8 @@ public final class DeliveredArtifactStore {
     /** Stores module-produced preview pixels beside their immutable delivered artifact. */
     ThumbnailFile snapshotThumbnailBytes(String session, ChatAttachment artifact, byte[] bytes, String requestedMime,
             CancellationToken token) throws IOException {
-        if (bytes == null || bytes.length > MAX_BYTES) throw new IOException("Artifact thumbnail exceeds the existing byte limit");
+        if (bytes == null || bytes.length > com.jarvys.agent.modules.ModuleThumbnailBudget.MAX_ENCODED_BYTES)
+            throw new IOException("Artifact thumbnail exceeds the displayed-card byte budget");
         if (artifact == null) throw new IOException("Thumbnail owner is missing");
         String mime = ChatAttachment.normalizeMimeType(requestedMime);
         if (mime == null || !mime.toLowerCase(Locale.ROOT).startsWith("image/"))
@@ -263,12 +289,21 @@ public final class DeliveredArtifactStore {
             }
             if (metadata.isFile()) {
                 JSONObject existing = readManifestIo(metadata, "Could not read artifact thumbnail metadata");
-                if (!thumbnailRecord.toString().equals(existing.toString()))
-                    throw new IOException("Artifact identity already has different thumbnail content");
+                String existingSha = existing.optString("sha256");
+                long existingBytes = existing.optLong("bytes", -1L);
+                String existingMime = existing.optString("mimeType");
+                if (!session.equals(existing.optString("conversation")) ||
+                        !artifact.id.equals(existing.optString("artifactId")) ||
+                        !relative.equals(existing.optString("path")) || !existingSha.matches("[a-f0-9]{64}") ||
+                        existingBytes < 0L || existingBytes > com.jarvys.agent.modules.ModuleThumbnailBudget.MAX_ENCODED_BYTES ||
+                        !existingMime.toLowerCase(Locale.ROOT).startsWith("image/"))
+                    throw new IOException("Saved artifact thumbnail metadata is invalid");
                 verify(target);
-                if (!target.isFile() || target.length() != bytes.length || !hash(target).equals(checksum))
+                if (!target.isFile() || target.length() != existingBytes || !hash(target).equals(existingSha))
                     throw new IOException("Saved artifact thumbnail is missing or changed");
-                return new ThumbnailFile(relative, checksum, bytes.length, mime);
+                // A retry may rasterize equivalent artifact content to different PNG bytes.
+                // Keep the first immutable thumbnail and make the delivery idempotent.
+                return new ThumbnailFile(relative, existingSha, existingBytes, existingMime);
             }
             File staged = File.createTempFile(".thumbnail-", ".tmp", directory);
             try {

@@ -7,7 +7,7 @@
     {
       "type": "application/vnd.jarvys.chart+json",
       "viewer": "viewer/chart.html",
-      "thumbnail": "viewer/thumbnail.svg"
+      "generatedThumbnail": true
     }
   ],
   "tools": [

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#dbeafe"/>
+  <path d="M0 280 150 120l115 120 95-105 280 225H0z" fill="#60a5fa"/>
+  <circle cx="500" cy="78" r="38" fill="#fbbf24"/>
+  <text x="28" y="326" font-family="sans-serif" font-size="22" fill="#172554">Imagen sintética de benchmark</text>
+</svg>

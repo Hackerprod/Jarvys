@@ -11,6 +11,7 @@ const declaration = manifest.tools[0];
 const handlerFile = path.join(moduleDirectory, declaration.handler.split("#")[0]);
 const thumbnailPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=";
 const renderedTexts = [];
+const canvases = [];
 
 function decodeXmlText(value) {
   return value.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
@@ -95,6 +96,7 @@ function makeCanvas() {
     getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; },
     toDataURL() { return "data:image/png;base64," + thumbnailPng; },
   };
+  canvases.push(canvas);
   const context = new Proxy({
     canvas,
     measureText(text) { return { width: String(text).length * 8 }; },
@@ -128,8 +130,13 @@ globalThis.cancelAnimationFrame = clearTimeout;
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => "" });
 
 const deliveries = [];
+let deliveryOrdinal = 0;
 const host = {
-  artifactDeliverBytes(base64, name, artifactType, title, thumbnailBase64, thumbnailMimeType) {
+  newArtifactDeliveryId() {
+    deliveryOrdinal += 1;
+    return "00000000-0000-4000-8000-" + String(deliveryOrdinal).padStart(12, "0");
+  },
+  artifactDeliverBytes(base64, name, artifactType, title, thumbnailBase64, thumbnailMimeType, deliveryId) {
     const delivery = {
       bytes: Buffer.from(base64, "base64"),
       name,
@@ -137,6 +144,7 @@ const host = {
       title,
       thumbnail: Buffer.from(thumbnailBase64, "base64"),
       thumbnailMimeType,
+      deliveryId,
     };
     deliveries.push(delivery);
     return JSON.stringify({ id: "node-contract-artifact" });
@@ -151,7 +159,10 @@ async function main() {
     globalThis.Chart = class {
       constructor(context, config) {
         assert.ok(context && context.canvas);
+        assert.equal(context.canvas.width, 1280);
+        assert.equal(context.canvas.height, 720);
         assert.equal(config.type, "bar");
+        assert.equal(config.options.devicePixelRatio, 1);
         this.context = context;
       }
       update() {}
@@ -191,7 +202,10 @@ async function main() {
   const delivery = deliveries[0];
   assert.equal(delivery.artifactType, manifest.artifactTypes[0].type);
   assert.equal(delivery.thumbnailMimeType, "image/png");
+  assert.match(delivery.deliveryId, /^[0-9a-f-]{36}$/);
   assert.deepEqual(Array.from(delivery.thumbnail.subarray(0, 4)), [0x89, 0x50, 0x4e, 0x47]);
+  assert.equal(canvases[canvases.length - 1].width, 1280);
+  assert.equal(canvases[canvases.length - 1].height, 720);
 
   if (manifest.id === "com.jarvys.module.chart") {
     const artifact = JSON.parse(delivery.bytes.toString("utf8"));

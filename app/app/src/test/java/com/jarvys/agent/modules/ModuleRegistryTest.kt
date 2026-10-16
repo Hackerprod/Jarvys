@@ -99,6 +99,28 @@ class ModuleRegistryTest {
         }
     }
 
+    @Test fun generatedThumbnailCapabilityIsBooleanAndDoesNotReplaceViewerPathValidation() {
+        val module = ModuleRegistry.fromManifests(listOf(manifest(
+            "com.test.module.thumbnail", "Thumbnail",
+            artifacts = """[{"type":"application/example","viewer":"viewer/index.html","generatedThumbnail":true}]""",
+        ))).module("com.test.module.thumbnail")!!
+        assertEquals("viewer/index.html", module.artifactTypes.single().viewer)
+        assertEquals(true, module.artifactTypes.single().generatedThumbnail)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ModuleRegistry.fromManifests(listOf(manifest("com.test.module.bad-thumbnail", "Bad",
+                artifacts = """[{"type":"application/example","generatedThumbnail":"viewer/thumb.svg"}]""")))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ModuleRegistry.fromManifests(listOf(manifest("com.test.module.legacy-thumbnail", "Legacy",
+                artifacts = """[{"type":"application/example","thumbnail":"viewer/thumb.svg"}]""")))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ModuleRegistry.fromManifests(listOf(manifest("com.test.module.unsafe-viewer", "Unsafe",
+                artifacts = """[{"type":"application/example","viewer":"../outside.html","generatedThumbnail":true}]""")))
+        }
+    }
+
     @Test fun rejectsAmbiguousArtifactDeclarationAndCrossModuleToolCollision() {
         assertThrows(IllegalArgumentException::class.java) {
             ModuleRegistry.fromManifests(listOf(

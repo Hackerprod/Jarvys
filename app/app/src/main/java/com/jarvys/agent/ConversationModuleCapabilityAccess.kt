@@ -87,12 +87,13 @@ internal class ConversationModuleCapabilityAccess(
         title: String?,
         thumbnailBytes: ByteArray,
         thumbnailMimeType: String,
+        deliveryId: String,
     ): JSONObject {
         check(Looper.myLooper() != Looper.getMainLooper()) { "Artifact persistence cannot run on the main thread." }
         token.throwIfCancelled()
         return try {
             val store = DeliveredArtifactStore(appContext)
-            val artifact = store.snapshotBytes(conversationId, bytes, name, artifactType, token)
+            val artifact = store.snapshotModuleBytes(conversationId, bytes, name, artifactType, deliveryId, token)
             val thumbnail = store.snapshotThumbnailBytes(conversationId, artifact, thumbnailBytes, thumbnailMimeType, token)
             token.throwIfCancelled()
             val thumbnailRef = LocalRunStore(appContext).appendDeliveredModuleArtifact(

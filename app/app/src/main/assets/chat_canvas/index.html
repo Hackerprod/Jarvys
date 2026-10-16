@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Jarvys chat</title>
+  <link rel="stylesheet" href="canvas.css">
+</head>
+<body>
+  <main id="timeline" role="log" aria-label="Mensajes de la conversación" aria-live="off">
+    <div id="history-status" role="status" aria-live="polite" hidden></div>
+    <div id="top-spacer" aria-hidden="true"></div>
+    <div id="items"></div>
+    <div id="bottom-spacer" aria-hidden="true"></div>
+  </main>
+  <button id="jump-to-end" class="jump" type="button" aria-label="Saltar al final" hidden>Saltar al final</button>
+  <script src="canvas.js"></script>
+</body>
+</html>

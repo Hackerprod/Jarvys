@@ -1,6 +1,9 @@
 (function (global) {
   "use strict";
 
+  // Match the host's 640x360 decode target and its existing 2x card-density margin.
+  var MAX_THUMBNAIL_BASE64_CHARS = Math.ceil(1280 * 720 * 4 / 3) * 4;
+
   function loadAssetScript(path) {
     return new Promise(function (resolve, reject) {
       var script = document.createElement("script");
@@ -108,13 +111,17 @@
     var thumbnailCanvas = document.createElement("canvas");
     await global.PptxDeckRenderer.renderFirstSlide(pptxBytes, thumbnailCanvas);
     var thumbnailBase64 = thumbnailCanvas.toDataURL("image/png").split(",")[1];
+    if (thumbnailBase64.length > MAX_THUMBNAIL_BASE64_CHARS) {
+      throw new Error("The presentation thumbnail exceeds the displayed-card budget.");
+    }
     var delivered = parseDeliveryResult(host.artifactDeliverBytes(
       pptxBase64,
       argumentsObject.title + ".pptx",
       "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       argumentsObject.title,
       thumbnailBase64,
-      "image/png"
+      "image/png",
+      host.newArtifactDeliveryId()
     ));
     if (!delivered.id) throw new Error("The host did not confirm the presentation artifact id.");
     return {

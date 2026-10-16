@@ -1,0 +1,28 @@
+:root { color-scheme: light dark; --pad: 16px; --gap: 12px; --line: rgba(128,128,128,.2); }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; font: 16px/1.48 system-ui, sans-serif; }
+body { background: transparent; color: CanvasText; }
+#timeline { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: var(--pad); scrollbar-gutter: stable; }
+#history-status { position: absolute; z-index: 1; top: 6px; left: 50%; transform: translateX(-50%); padding: 6px 10px; border-radius: 9px; background: Canvas; color: CanvasText; box-shadow: 0 1px 5px rgba(0,0,0,.14); }
+#history-status[hidden] { display: none; }
+#items { display: flex; flex-direction: column; gap: var(--gap); }
+.message { max-width: 100%; border-radius: 16px; padding: 12px 14px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.message.user { align-self: flex-end; max-width: 88%; background: color-mix(in srgb, Highlight 13%, Canvas); }
+.message.assistant, .message.result { align-self: stretch; background: color-mix(in srgb, CanvasText 3%, Canvas); }
+.message.tool, .message.artifact, .message.user_decision, .message.approval { align-self: stretch; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+.label { font-size: .76rem; opacity: .72; margin-bottom: 5px; }
+.body { white-space: normal; }
+.body p { margin: .45em 0; }
+.body p:first-child { margin-top: 0; }
+.body p:last-child { margin-bottom: 0; }
+.body pre { overflow-x: auto; padding: 12px; border-radius: 10px; background: color-mix(in srgb, CanvasText 9%, Canvas); white-space: pre; }
+.body code { font-family: ui-monospace, monospace; font-size: .92em; }
+.body :not(pre) > code { padding: .1em .35em; border-radius: 4px; background: color-mix(in srgb, CanvasText 9%, Canvas); }
+.tool-detail { opacity: .78; white-space: pre-wrap; margin-top: 5px; }
+.artifact img, .body img { display: block; width: 100%; max-height: 280px; object-fit: contain; margin: 8px auto; border-radius: 10px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+button { min-height: 44px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 10px; background: ButtonFace; color: ButtonText; font: inherit; }
+button:focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }
+.decision-option { display: block; width: 100%; text-align: start; margin-top: 7px; }
+.jump { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); }
+.jump[hidden] { display: none; }

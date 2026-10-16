@@ -2,6 +2,7 @@ package com.jarvys.agent.modules
 
 import android.webkit.JavascriptInterface
 import org.json.JSONObject
+import java.util.UUID
 
 /** Native capabilities available to bundled module handlers. Web code cannot add capabilities. */
 object ModuleCapabilities {
@@ -28,6 +29,7 @@ interface ModuleCapabilityAccess {
         title: String?,
         thumbnailBytes: ByteArray,
         thumbnailMimeType: String,
+        deliveryId: String,
     ): JSONObject
     fun reportProgress(message: String)
     fun log(message: String)
@@ -42,11 +44,11 @@ class ModuleCapabilityBridge(
     private val access: ModuleCapabilityAccess,
     private val complete: (String) -> Unit,
     private val fail: (String) -> Unit,
-    declaredThumbnails: Map<String, String> = emptyMap(),
+    thumbnailArtifactTypes: List<String> = emptyList(),
 ) {
     private val capabilities = declaredCapabilities.toSet()
     private val artifactTypes = declaredArtifactTypes.map(::canonicalType)
-    private val thumbnailPaths = declaredThumbnails.entries.associate { canonicalType(it.key) to it.value }
+    private val thumbnailTypes = thumbnailArtifactTypes.map(::canonicalType)
 
     init {
         require(conversationId.isNotBlank() && access.conversationId == conversationId) {
@@ -55,9 +57,8 @@ class ModuleCapabilityBridge(
         require(capabilities.all { it in ModuleCapabilities.supported }) {
             "Module declares an unsupported host capability"
         }
-        require(thumbnailPaths.all { (key, path) -> artifactTypes.any { it == key } &&
-            ModuleWorkspacePath.isSafeBundlePath(path) }) {
-            "Module thumbnail declarations must refer to declared artifact types and safe bundle paths"
+        require(thumbnailTypes.all { it in artifactTypes }) {
+            "Generated thumbnail declarations must refer to declared artifact types"
         }
     }
 
@@ -95,16 +96,18 @@ class ModuleCapabilityBridge(
         title: String?,
         thumbnailBase64: String?,
         thumbnailMimeType: String?,
+        deliveryId: String,
     ): String {
         requireCapability(ModuleCapabilities.ARTIFACT_DELIVER)
         val concreteType = canonicalType(artifactType)
         require(CONCRETE_MIME_TYPE.matches(concreteType) && artifactTypes.any { it.matchesArtifactType(concreteType) }) {
             "Artifact type is not declared by this module"
         }
-        val declaredThumbnail = thumbnailPaths.keys.firstOrNull { declaredType ->
+        val declaredThumbnail = thumbnailTypes.firstOrNull { declaredType ->
             declaredType.matchesArtifactType(concreteType)
         }
         require(declaredThumbnail != null) { "This artifact declaration does not permit a generated thumbnail" }
+        require(DELIVERY_ID.matches(deliveryId)) { "Artifact delivery identity is invalid" }
         val concreteThumbnailType = canonicalType(thumbnailMimeType.orEmpty())
         require(CONCRETE_MIME_TYPE.matches(concreteThumbnailType) &&
             concreteThumbnailType.startsWith("image/") && thumbnailBase64 != null) {
@@ -112,9 +115,13 @@ class ModuleCapabilityBridge(
         }
         return access.deliverArtifact(
             decodeBase64(base64), name, concreteType, title,
-            decodeBase64(thumbnailBase64), concreteThumbnailType,
+            decodeThumbnailBase64(thumbnailBase64), concreteThumbnailType, deliveryId,
         ).toString()
     }
+
+    /** Generates one idempotency key for a single module artifact delivery. */
+    @JavascriptInterface
+    fun newArtifactDeliveryId(): String = UUID.randomUUID().toString()
 
     @JavascriptInterface
     fun progress(message: String) {
@@ -157,6 +164,18 @@ class ModuleCapabilityBridge(
         }
     }
 
+    private fun decodeThumbnailBase64(value: String?): ByteArray {
+        require(value != null) { "Thumbnail bytes are missing" }
+        require(value.length.toLong() <= ModuleThumbnailBudget.MAX_BASE64_CHARS) {
+            "Artifact thumbnail exceeds the displayed-card transport budget"
+        }
+        val bytes = decodeBase64(value)
+        require(bytes.size <= ModuleThumbnailBudget.MAX_ENCODED_BYTES) {
+            "Artifact thumbnail exceeds the displayed-card transport budget"
+        }
+        return bytes
+    }
+
     private fun String.matchesArtifactType(value: String): Boolean {
         val actual = canonicalType(value)
         if (this == "*/*") return '/' in actual
@@ -166,5 +185,6 @@ class ModuleCapabilityBridge(
 
     private companion object {
         val CONCRETE_MIME_TYPE = Regex("[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*")
+        val DELIVERY_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")
     }
 }

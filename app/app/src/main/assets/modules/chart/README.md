@@ -11,6 +11,6 @@ El módulo entrega un documento JSON `application/vnd.jarvys.chart+json`. Chart.
 
 ## Contrato con el anfitrión
 
-El handler llama a `Jarvys.artifactDeliverBytes(base64, name, artifactType, title, thumbnailBase64, thumbnailMimeType)`. Espera que el anfitrión devuelva JSON con el id persistido (`id`); ese id aparece en el resultado de la tool. El mismo artefacto JSON contiene la configuración que lee el visor.
+El manifiesto declara `generatedThumbnail: true`: el permiso indica que el handler entrega sus propios píxeles, no una ruta de imagen del bundle. El handler llama a `artifactDeliverBytes(base64, name, artifactType, title, thumbnailBase64, thumbnailMimeType, deliveryId)` y recibe el id persistido. Cada solicitud crea una identidad de entrega; el anfitrión conserva esa identidad para que reintentar la misma entrega sea idempotente.
 
-La ilustración `viewer/thumbnail.svg` es un recurso de reserva del módulo. La tarjeta de cada artefacto debe usar el PNG dinámico que entrega el handler.
+La tarjeta decodifica con objetivo 640×360 píxeles y el decodificador actual admite hasta el doble por lado para pantallas de alta densidad. La miniatura se rasteriza a ese máximo de 1280×720 con `devicePixelRatio: 1`; el anfitrión limita el base64 y los bytes recibidos al presupuesto RGBA de esa superficie.

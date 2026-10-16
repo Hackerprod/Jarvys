@@ -4,14 +4,13 @@ Raw UTF-8/file bytes packaged under this module asset directory. APK ZIP compres
 
 | File | Bytes |
 |---|---:|
-| logic/tools.js | 3167 |
-| manifest.json | 2154 |
-| README.md | 1080 |
+| logic/tools.js | 3651 |
+| manifest.json | 2145 |
+| README.md | 1373 |
 | skills/chart/SKILL.md | 738 |
 | vendor/chart.umd.min.js | 208522 |
 | vendor/CHARTJS-LICENSE.md | 1093 |
 | viewer/chart.html | 1199 |
 | viewer/chart.js | 1503 |
-| viewer/thumbnail.svg | 624 |
-| ASSET-SIZES.md | 000000540 |
-| **Total module assets** | 000220620 |
+| ASSET-SIZES.md | 000000492 |
+| **Total module assets** | 000220716 |

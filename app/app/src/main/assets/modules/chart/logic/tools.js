@@ -1,6 +1,11 @@
 (function (global) {
   "use strict";
 
+  // The host decodes cards to 640x360 and allows the decoder's existing 2x density margin.
+  var THUMBNAIL_WIDTH = 1280;
+  var THUMBNAIL_HEIGHT = 720;
+  var MAX_THUMBNAIL_BASE64_CHARS = Math.ceil(THUMBNAIL_WIDTH * THUMBNAIL_HEIGHT * 4 / 3) * 4;
+
   function loadAssetScript(path) {
     return new Promise(function (resolve, reject) {
       var script = document.createElement("script");
@@ -31,8 +36,8 @@
     if (!global.Chart) await loadAssetScript("vendor/chart.umd.min.js");
 
     var canvas = document.createElement("canvas");
-    canvas.width = 1280;
-    canvas.height = 720;
+    canvas.width = THUMBNAIL_WIDTH;
+    canvas.height = THUMBNAIL_HEIGHT;
     canvas.setAttribute("aria-label", argumentsObject.title);
     document.body.appendChild(canvas);
 
@@ -41,6 +46,7 @@
     var suppliedTitle = suppliedPlugins.title || {};
     var options = Object.assign({}, suppliedOptions, {
       responsive: false,
+      devicePixelRatio: 1,
       animation: false,
       maintainAspectRatio: false,
       plugins: Object.assign({}, suppliedPlugins, {
@@ -57,6 +63,9 @@
     chart.draw();
     var thumbnailDataUrl = canvas.toDataURL("image/png");
     var thumbnailBase64 = thumbnailDataUrl.substring(thumbnailDataUrl.indexOf(",") + 1);
+    if (thumbnailBase64.length > MAX_THUMBNAIL_BASE64_CHARS) {
+      throw new Error("The chart thumbnail exceeds the displayed-card budget.");
+    }
     var artifact = {
       schemaVersion: 1,
       title: argumentsObject.title,
@@ -71,7 +80,8 @@
       "application/vnd.jarvys.chart+json",
       argumentsObject.title,
       thumbnailBase64,
-      "image/png"
+      "image/png",
+      host.newArtifactDeliveryId()
     ));
     if (!delivered.id) throw new Error("The host did not confirm the chart artifact id.");
     return {

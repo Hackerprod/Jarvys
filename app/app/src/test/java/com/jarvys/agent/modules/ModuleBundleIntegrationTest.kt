@@ -71,9 +71,9 @@ class ModuleBundleIntegrationTest {
         assertEquals(listOf("create_chart"), chart.tools.map { it.name })
         assertEquals(listOf("create_presentation"), presentation.tools.map { it.name })
         assertEquals("viewer/chart.html", chart.artifactTypes.single().viewer)
-        assertEquals("viewer/thumbnail.svg", chart.artifactTypes.single().thumbnail)
+        assertTrue(chart.artifactTypes.single().generatedThumbnail)
         assertEquals("viewer/presentation.html", presentation.artifactTypes.single().viewer)
-        assertEquals("viewer/thumbnail.svg", presentation.artifactTypes.single().thumbnail)
+        assertTrue(presentation.artifactTypes.single().generatedThumbnail)
         assertEquals(listOf("skills/chart/SKILL.md"), chart.skills)
         assertEquals(listOf("skills/presentation/SKILL.md"), presentation.skills)
 
@@ -88,7 +88,7 @@ class ModuleBundleIntegrationTest {
             }
             val artifact = module.artifactTypes.single()
             context.assets.open("${module.bundleAssetDirectory}/${artifact.viewer}").use { assertTrue(it.read() >= 0) }
-            context.assets.open("${module.bundleAssetDirectory}/${artifact.thumbnail}").use { assertTrue(it.read() >= 0) }
+            assertFalse(context.assets.list("${module.bundleAssetDirectory}/viewer").orEmpty().contains("thumbnail.svg"))
             module.skills.forEach { path ->
                 val markdown = context.assets.open("${module.bundleAssetDirectory}/$path")
                     .bufferedReader(Charsets.UTF_8).use { it.readText() }

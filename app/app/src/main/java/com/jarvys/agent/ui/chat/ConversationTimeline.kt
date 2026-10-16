@@ -2,6 +2,7 @@ package com.jarvys.agent.ui.chat
 
 import android.content.Intent
 import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,12 +24,15 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
@@ -54,6 +58,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModelProvider
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -108,6 +114,9 @@ import com.jarvys.agent.connectors.FlavorAutonomyUi
 import com.jarvys.agent.connectors.approvalPrimaryActionResourceId
 import com.jarvys.agent.connectors.approvalStatusPresentation
 import com.jarvys.agent.connectors.approveAndAllowAlways
+import com.jarvys.agent.canvas.ChatCanvasCallbacks
+import com.jarvys.agent.canvas.ChatCanvasPreferences
+import com.jarvys.agent.canvas.ChatCanvasTimeline
 import com.jarvys.agent.crew.CrewApprovalAttribution
 import com.jarvys.agent.crew.CrewMissionCard
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
@@ -160,8 +169,48 @@ fun ConversationTimeline(
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
+    benchmarkListState: LazyListState? = null,
+    modifier: Modifier = Modifier,
 ) {
     val visibleEvents = remember(events) { ConversationVisibility.project(events) }
+    val context = LocalContext.current
+    val canvasEnabled = remember(conversationKey, benchmarkListState) {
+        benchmarkListState == null && ChatCanvasPreferences.enabled(context)
+    }
+    if (canvasEnabled) {
+        ChatCanvasTimeline(
+            sessionId = generatedImageSessionId,
+            events = visibleEvents,
+            running = isRunning,
+            allowRetry = allowRegeneration,
+            hasOlder = hasOlderHistory,
+            loadingOlder = isLoadingOlderHistory || isRefreshingHistory,
+            callbacks = ChatCanvasCallbacks(action = { action, event, value ->
+                when (action) {
+                    "copy" -> {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Jarvys", event.text))
+                    }
+                    "retry" -> onRegenerateAssistant(event)
+                    "open_viewer" -> {
+                        val target = event.presentationArtifact?.let {
+                            com.jarvys.agent.modules.ModuleArtifactViewerLaunch.token(it.id)
+                        } ?: event.previewId
+                        when {
+                            target != null -> onOpenPreview(target)
+                            event.crewMissionSnapshot != null -> onOpenCrewMission(event.crewMissionSnapshot.missionId)
+                            event.scheduledTaskArtifact != null -> onOpenScheduledTask(event.scheduledTaskArtifact)
+                        }
+                    }
+                    "download", "share" -> canvasTransfer(context, generatedImageSessionId, event, action == "share")
+                    "resolve_decision" -> resolveCanvasDecision(event, value)
+                    "respond" -> value.toIntOrNull()?.let { index -> onProactiveSuggestedReply(event.messageId, index) }
+                }
+            }, requestOlder = onLoadOlderHistory),
+            modifier = modifier.fillMaxSize(),
+        )
+        return
+    }
     val timelineItems = remember(visibleEvents) { ToolGrouping.project(visibleEvents) }
     val latestAnswerId = remember(visibleEvents) {
         visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
@@ -198,7 +247,8 @@ fun ConversationTimeline(
                 is ConversationTimelineItem.ToolGroup -> item.events.last().id
             } },
             isUserMessage = { it is ConversationTimelineItem.Event && it.event.kind == "user" },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth(),
+            listState = benchmarkListState ?: rememberLazyListState(),
             itemContent = { item ->
                 when (item) {
                     is ConversationTimelineItem.Event -> {
@@ -290,6 +340,35 @@ fun ConversationTimeline(
             },
         )
     }
+}
+
+private fun canvasTransfer(context: Context, sessionId: String, event: AgentRunUiEvent, share: Boolean) {
+    val request = when {
+        !event.generatedImagePath.isNullOrBlank() -> ChatFileRequest.generated(sessionId, event)
+        event.deliveredArtifact != null -> ChatFileRequest.attachment(sessionId, event.deliveredArtifact, delivered = true)
+        event.attachments.isNotEmpty() -> ChatFileRequest.attachment(sessionId, event.attachments.first())
+        else -> null
+    } ?: return
+    val activity = context.findCanvasActivity()
+    val transfers = ViewModelProvider(activity)[ChatFileTransfers::class.java]
+    if (share) transfers.share(request) else transfers.download(request)
+}
+
+private fun Context.findCanvasActivity(): ComponentActivity = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findCanvasActivity()
+    else -> error("Chat canvas actions require an Activity")
+}
+
+internal fun resolveCanvasDecision(event: AgentRunUiEvent, optionId: String): Boolean {
+    if (event.kind != "user_decision" || event.decisionStatus != "PENDING") return false
+    val result = when {
+        optionId == "dismiss" && event.decisionAllowDismiss -> UserDecisionResult.Dismissed
+        else -> event.decisionOptions.firstOrNull { it.id == optionId }
+            ?.let(UserDecisionResult::Selected) ?: return false
+    }
+    UserDecisionResolutionDispatcher.resolve(event.decisionId.orEmpty(), result)
+    return true
 }
 
 internal fun assistantReplyIsGenerating(

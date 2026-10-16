@@ -152,6 +152,54 @@ public class DeliveredArtifactTest {
         assertEquals(thumbnailRef, restored.getPresentationArtifact().getThumbnailRef());
     }
 
+    @Test public void moduleDeliveriesAreUniquePerRequestAndRetriesReuseThePersistedArtifactAndThumbnail() throws Exception {
+        byte[] artifactBytes = new byte[] { 80, 75, 3, 4, 5, 6 };
+        byte[] thumbnailBytes = pngFixture();
+        String deliveryId = UUID.randomUUID().toString();
+        ChatAttachment first = artifacts.snapshotModuleBytes(session, artifactBytes, "report.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                deliveryId, CancellationToken.uncancellable());
+        DeliveredArtifactStore.ThumbnailFile firstThumbnail = artifacts.snapshotThumbnailBytes(session, first,
+                thumbnailBytes, "image/png", CancellationToken.uncancellable());
+        String firstRef = ledger.appendDeliveredModuleArtifact(session, first,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", "com.test.module.presentation",
+                "{\"schemaVersion\":1}", "Quarterly report", firstThumbnail);
+
+        // A second user request for identical output is a new card with its own delivery identity.
+        ChatAttachment second = artifacts.snapshotModuleBytes(session, artifactBytes, "report.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                UUID.randomUUID().toString(), CancellationToken.uncancellable());
+        assertNotEquals(first.id, second.id);
+        DeliveredArtifactStore.ThumbnailFile secondThumbnail = artifacts.snapshotThumbnailBytes(session, second,
+                thumbnailBytes, "image/png", CancellationToken.uncancellable());
+        ledger.appendDeliveredModuleArtifact(session, second,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", "com.test.module.presentation",
+                "{\"schemaVersion\":1}", "Quarterly report", secondThumbnail);
+
+        // Re-opening the same delivery identity returns the stored copy, even after store recreation.
+        DeliveredArtifactStore restoredStore = new DeliveredArtifactStore(new File(files, "jarvys"));
+        ChatAttachment retry = restoredStore.snapshotModuleBytes(session, artifactBytes, "report.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", deliveryId,
+                CancellationToken.uncancellable());
+        assertEquals(first.id, retry.id);
+        assertThrows(IOException.class, () -> restoredStore.snapshotModuleBytes(session,
+                new byte[] { 80, 75, 3, 4, 5, 7 }, "report.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", deliveryId,
+                CancellationToken.uncancellable()));
+        DeliveredArtifactStore.ThumbnailFile changedRasterRetry = restoredStore.snapshotThumbnailBytes(session, retry,
+                new byte[] { 1, 2, 3 }, "image/png", CancellationToken.uncancellable());
+        assertEquals(firstThumbnail.sha256, changedRasterRetry.sha256);
+        com.jarvys.agent.chatdb.ChatDatabaseBridge restoredBridge =
+                com.jarvys.agent.chatdb.ChatDatabaseBridge.findInstanceForFilesDirectory(files);
+        assertNotNull(restoredBridge);
+        assertArrayEquals(thumbnailBytes, Files.readAllBytes(restoredStore.resolveThumbnail(session, retry.id,
+                restoredBridge.findArtifactThumbnailSync(session, retry.id)).toPath()));
+        assertEquals(firstRef, ledger.appendDeliveredModuleArtifact(session, retry,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation", "com.test.module.presentation",
+                "{\"schemaVersion\":1}", "Quarterly report", changedRasterRetry));
+
+        assertEquals(2, ledger.readConversationTimeline(session).stream()
+                .filter(event -> event.getPresentationArtifact() != null).count());
+    }
+
     private byte[] pngFixture() throws IOException {
         android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(24, 16, android.graphics.Bitmap.Config.ARGB_8888);
         try {

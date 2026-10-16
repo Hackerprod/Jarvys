@@ -15,6 +15,7 @@ import com.jarvys.agent.DeliveredArtifactStore
 import com.jarvys.agent.R
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatFileOwnership
+import com.jarvys.agent.modules.ModuleThumbnailBudget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -67,5 +68,6 @@ private suspend fun loadModuleThumbnail(context: Context, conversationId: String
         .findArtifactThumbnailSync(conversationId, artifactId) ?: return null
     if (reference.id != thumbnailRef) return null
     val file = DeliveredArtifactStore(context).resolveThumbnail(conversationId, artifactId, reference)
-    return decodeChatAttachmentPreview(file, 640, 360)
+    return decodeChatAttachmentPreview(file, ModuleThumbnailBudget.DECODE_TARGET_WIDTH_PX,
+        ModuleThumbnailBudget.DECODE_TARGET_HEIGHT_PX)
 }

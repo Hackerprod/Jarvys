@@ -4,6 +4,8 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -51,19 +53,46 @@ class ModuleCapabilityBridgeTest {
             access = access,
             complete = {},
             fail = {},
-            declaredThumbnails = mapOf("application/vnd.example.chart+json" to "image/png"),
+            thumbnailArtifactTypes = listOf("application/vnd.example.chart+json"),
         )
 
         assertEquals("{\"id\":\"delivered-bytes\"}", bridge.artifactDeliverBytes(
             android.util.Base64.encodeToString(byteArrayOf(1, 2), android.util.Base64.NO_WRAP),
             "chart.json", "application/vnd.example.chart+json", "Chart",
             android.util.Base64.encodeToString(byteArrayOf(3, 4), android.util.Base64.NO_WRAP), "image/png",
+            "123e4567-e89b-42d3-a456-426614174000",
         ))
         assertArrayEquals(byteArrayOf(1, 2), access.deliveredBytes)
         assertArrayEquals(byteArrayOf(3, 4), access.thumbnailBytes)
+        assertEquals("123e4567-e89b-42d3-a456-426614174000", access.deliveryId)
         assertThrows(IllegalArgumentException::class.java) {
-            bridge.artifactDeliverBytes("AQI=", "chart.json", "application/vnd.example.chart+json", null, "AwQ=", "application/json")
+            bridge.artifactDeliverBytes("AQI=", "chart.json", "application/vnd.example.chart+json", null, "AwQ=", "application/json", "123e4567-e89b-42d3-a456-426614174000")
         }
+    }
+
+    @Test fun generatedDeliveryIdsAreDistinctAndThumbnailTransportIsBoundedByCardPixels() {
+        val bridge = ModuleCapabilityBridge(
+            conversationId = "conversation-a",
+            declaredCapabilities = setOf(ModuleCapabilities.ARTIFACT_DELIVER),
+            declaredArtifactTypes = listOf("application/vnd.example.chart+json"),
+            access = RecordingAccess("conversation-a"),
+            complete = {},
+            fail = {},
+            thumbnailArtifactTypes = listOf("application/vnd.example.chart+json"),
+        )
+        val first = bridge.newArtifactDeliveryId()
+        val second = bridge.newArtifactDeliveryId()
+        assertNotEquals(first, second)
+
+        val tooLarge = "A".repeat(ModuleThumbnailBudget.MAX_BASE64_CHARS.toInt() + 1)
+        assertThrows(IllegalArgumentException::class.java) {
+            bridge.artifactDeliverBytes(
+                "AQI=", "chart.json", "application/vnd.example.chart+json", "Chart",
+                tooLarge, "image/png", first,
+            )
+        }
+        assertEquals(ModuleThumbnailBudget.MAX_CARD_BITMAP_WIDTH_PX * ModuleThumbnailBudget.MAX_CARD_BITMAP_HEIGHT_PX * 4,
+            ModuleThumbnailBudget.MAX_ENCODED_BYTES)
     }
 
     @Test fun deniesUndeclaredNetworkOutOfScopePathsAndUndeclaredArtifactTypes() {
@@ -84,6 +113,10 @@ class ModuleCapabilityBridgeTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             bridge.artifactDeliver("charts/result.png", "chart.png", "image/../../private", null)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            bridge.artifactDeliverBytes("AQI=", "image.png", "image/png", null, "AwQ=", "image/png",
+                "123e4567-e89b-42d3-a456-426614174000")
         }
     }
 
@@ -119,6 +152,7 @@ class ModuleCapabilityBridgeTest {
         var deliveredType: String? = null
         var deliveredBytes = byteArrayOf()
         var thumbnailBytes = byteArrayOf()
+        var deliveryId: String? = null
 
         override fun readWorkspace(path: String) = "read:$path"
         override fun writeWorkspace(path: String, content: String) { writtenPaths += path }
@@ -127,10 +161,11 @@ class ModuleCapabilityBridgeTest {
             return JSONObject().put("id", "delivered")
         }
         override fun deliverArtifact(bytes: ByteArray, name: String, artifactType: String, title: String?,
-            thumbnailBytes: ByteArray, thumbnailMimeType: String): JSONObject {
+            thumbnailBytes: ByteArray, thumbnailMimeType: String, deliveryId: String): JSONObject {
             deliveredType = artifactType
             deliveredBytes = bytes
             this.thumbnailBytes = thumbnailBytes
+            this.deliveryId = deliveryId
             return JSONObject().put("id", "delivered-bytes")
         }
         override fun reportProgress(message: String) { progressMessages += message }

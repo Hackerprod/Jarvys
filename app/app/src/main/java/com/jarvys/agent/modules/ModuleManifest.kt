@@ -9,7 +9,7 @@ enum class ModuleToolAccess { READ, WRITE }
 data class ModuleArtifactType(
     val type: String,
     val viewer: String? = null,
-    val thumbnail: String? = null,
+    val generatedThumbnail: Boolean = false,
 )
 
 data class ModuleToolDeclaration(
@@ -86,9 +86,12 @@ object ModuleManifestParser {
         require(MIME_PATTERN.matches(canonicalType) && (!canonicalType.startsWith("*") || canonicalType == "*/*")) {
             "Module artifact type is invalid"
         }
+        require(!value.has("thumbnail")) {
+            "Module thumbnail permission must use generatedThumbnail instead of a bundle path"
+        }
         val viewer = optionalString(value, "viewer")?.also(::requireBundlePath)
-        val thumbnail = optionalString(value, "thumbnail")?.also(::requireBundlePath)
-        ModuleArtifactType(type, viewer, thumbnail)
+        val generatedThumbnail = optionalBoolean(value, "generatedThumbnail")
+        ModuleArtifactType(type, viewer, generatedThumbnail)
     }
 
     private fun parseTools(values: JSONArray): List<ModuleToolDeclaration> = (0 until values.length()).map { index ->
@@ -181,6 +184,12 @@ object ModuleManifestParser {
         !value.has(key) || value.isNull(key) -> null
         value.opt(key) is String -> value.getString(key)
         else -> throw IllegalArgumentException("Module manifest field '$key' must be a string")
+    }
+
+    private fun optionalBoolean(value: JSONObject, key: String): Boolean = when {
+        !value.has(key) -> false
+        value.opt(key) is Boolean -> value.getBoolean(key)
+        else -> throw IllegalArgumentException("Module manifest field '$key' must be a boolean")
     }
 
     private fun requireBundlePath(path: String) {
