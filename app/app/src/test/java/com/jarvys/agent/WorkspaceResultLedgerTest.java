@@ -403,22 +403,26 @@ public class WorkspaceResultLedgerTest {
         assertEquals(foreign.evidenceId, store.readCrewResultEvidence(foreignSession, foreign.evidenceId).evidenceId);
     }
 
-    @Test public void referenceBeforeItsEvidenceAndConflictingFrozenRevisionFailClosed() {
+    @Test public void referenceBeforeEvidenceFailsAndRetryKeepsItsFirstFrozenRevision() {
         CrewResultEvidence evidence = evidence("a", "result");
         WorkspaceResultReference proposed = reference(evidence, 1);
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultReferenceIfAbsent(proposed, () -> { }));
         store.appendCrewResultEvidence(evidence);
         WorkspaceResultReference recorded = store.appendWorkspaceResultReferenceIfAbsent(proposed, () -> { });
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultReferenceIfAbsent(reference(evidence, 2), () -> { }));
+        WorkspaceResultReference retry = store.appendWorkspaceResultReferenceIfAbsent(reference(evidence, 2), () -> { });
+        assertEquals(1, retry.observedAssignmentRevision);
+        assertTrue(recorded.samePayload(retry));
         assertTrue(recorded.samePayload(store.readWorkspaceResultReference(SOURCE, recorded.referenceId)));
         assertTrue(store.listWorkspaceResultNotices(CENTRAL, 10, null).isEmpty());
     }
 
-    @Test public void conflictingPersistedRevisionCannotCreateAnotherResult() {
+    @Test public void persistedReferenceWinsRevisionRetryAndStaleRevisionCannotCreateNotice() {
         CrewResultEvidence evidence = evidence("a", "result");
         WorkspaceResultReference first = persistReference(evidence);
         List<String> before = resultState(SOURCE);
-        assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultReferenceIfAbsent(reference(evidence, 99), () -> { }));
+        WorkspaceResultReference retry = store.appendWorkspaceResultReferenceIfAbsent(reference(evidence, 99), () -> { });
+        assertEquals(first.observedAssignmentRevision, retry.observedAssignmentRevision);
+        assertTrue(first.samePayload(retry));
         assertTrue(first.samePayload(store.readWorkspaceResultReference(SOURCE, first.referenceId)));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultNoticeIfAbsent(reference(evidence, 99), () -> { }));
         assertEquals(before, resultState(SOURCE));

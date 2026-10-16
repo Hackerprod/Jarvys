@@ -1198,6 +1198,9 @@ public final class CrewManager implements AutoCloseable {
                 if (complete) return;
             }
         } catch (java.util.concurrent.CancellationException stopped) {
+            // Cancellation interrupts the worker to release blocking provider/DB waits. Clear
+            // that stale interrupt before terminal checkpoint persistence gets its own wait.
+            Thread.interrupted();
             synchronized (bot.cycleLock) {
                 terminalReport = new TerminalReport(Status.STOPPED, bot.cycleResult, System.currentTimeMillis());
             }
@@ -1211,7 +1214,7 @@ public final class CrewManager implements AutoCloseable {
                 if (bot.error.isEmpty()) bot.error = "Stopped";
                 terminalReport = new TerminalReport(Status.STOPPED, terminalReport.text, bot.finishedAtMillis);
             }
-            publishMission(bot.missionId);
+            publishMissionAfterWorker(bot);
         } catch (RuntimeException failure) {
             String failureText = "Bot " + bot.name + " failed: "
                     + (failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
@@ -1230,49 +1233,68 @@ public final class CrewManager implements AutoCloseable {
                 terminalReport = new TerminalReport(Status.FAILED, failureText, bot.finishedAtMillis);
             }
             bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
-            publishMission(bot.missionId);
+            publishMissionAfterWorker(bot);
         } finally {
-            if (lifecycleStarted) try {
-                lifecycle.end(bot);
-            } catch (RuntimeException ignored) {
-            }
-            boolean restart = false;
-            CrewResultEvidence evidence = null;
             java.util.concurrent.CountDownLatch completedLatch = bot.terminated;
-            synchronized (bot.cycleLock) {
-                invalidateCoordinationLocked(bot);
-                // Capture before replacing the generation, but never call persistence/model code here.
-                if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
-                    evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
-                            terminalReport.status, terminalReport.text, terminalReport.producedAtMillis);
-                    bot.cycleMetadata = new CycleMetadata(cycleId, evidence);
+            try {
+                if (lifecycleStarted) try {
+                    lifecycle.end(bot);
+                } catch (RuntimeException ignored) {
                 }
-                bot.thread = null;
-                if (!bot.requiresExplicitResume && bot.reanimationRequested && bus.hasMessages(bot.id)) {
-                    bot.reanimationRequested = false;
+                boolean restart = false;
+                CrewResultEvidence evidence = null;
+                synchronized (bot.cycleLock) {
                     invalidateCoordinationLocked(bot);
-                bot.token = bot.freshToken();
-                    bot.cycleMetadata = CycleMetadata.fresh();
-                    bot.cycleResult = "";
-                    bot.stopping = false;
-                    bot.status = Status.RUNNING;
-                    bot.waitingReason = "";
-                    bot.error = "";
-                    bot.reported = false;
-                    bot.terminated = new java.util.concurrent.CountDownLatch(1);
-                    restart = true;
-                } else {
-                    bot.cycleScheduled = false;
+                    // Capture before replacing the generation, but never call persistence/model code here.
+                    if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
+                        evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
+                                terminalReport.status, terminalReport.text, terminalReport.producedAtMillis);
+                        bot.cycleMetadata = new CycleMetadata(cycleId, evidence);
+                    }
+                    bot.thread = null;
+                    if (!bot.requiresExplicitResume && bot.reanimationRequested && bus.hasMessages(bot.id)) {
+                        bot.reanimationRequested = false;
+                        invalidateCoordinationLocked(bot);
+                        bot.token = bot.freshToken();
+                        bot.cycleMetadata = CycleMetadata.fresh();
+                        bot.cycleResult = "";
+                        bot.stopping = false;
+                        bot.status = Status.RUNNING;
+                        bot.waitingReason = "";
+                        bot.error = "";
+                        bot.reported = false;
+                        bot.terminated = new java.util.concurrent.CountDownLatch(1);
+                        restart = true;
+                    } else {
+                        bot.cycleScheduled = false;
+                    }
                 }
-            }
-            // Delivery is separate from execution. Its failure cannot become a second FAILED result.
-            // It also cannot suppress termination signaling or the already admitted next cycle.
-            try { deliverResultEvidence(evidence); }
-            finally {
+                // Delivery and final persistence are complete before waiters observe termination.
+                try { deliverResultEvidence(evidence); }
+                finally {
+                    bus.signalWaiters();
+                    publishMissionAfterWorker(bot);
+                    if (restart) {
+                        try {
+                            executor.execute(() -> runBot(bot));
+                        } catch (java.util.concurrent.RejectedExecutionException closing) {
+                            synchronized (bot.cycleLock) {
+                                bot.cycleScheduled = false;
+                                bot.requiresExplicitResume = true;
+                                bot.status = Status.STOPPED;
+                                bot.waitingReason = "";
+                                bot.finishedAtMillis = System.currentTimeMillis();
+                                bot.recoveryNote = "Worker could not restart because its manager is closing; reopen this chat and resume explicitly";
+                            }
+                            bot.terminated.countDown();
+                            bus.signalWaiters();
+                            publishMissionAfterWorker(bot);
+                        }
+                    }
+                }
+            } finally {
+                // Always release the generation that entered this run, including failed finalization.
                 completedLatch.countDown();
-                bus.signalWaiters();
-                publishMission(bot.missionId);
-                if (restart) executor.execute(()->runBot(bot));
             }
         }
     }
@@ -1787,6 +1809,16 @@ public final class CrewManager implements AutoCloseable {
         publishPresentation(missionId);
     }
 
+    private void publishMissionAfterWorker(Bot bot) {
+        try {
+            publishMission(bot.missionId);
+        } catch (RuntimeException persistenceFailure) {
+            bot.recoveryNote = "Worker stopped, but its final checkpoint could not be saved; retained evidence may be incomplete";
+            try { publishPresentation(bot.missionId); }
+            catch (RuntimeException ignored) { }
+        }
+    }
+
     private void publishPresentation(String missionId) {
         MissionState mission = missions.get(missionId);
         if (mission == null) return;
@@ -1865,7 +1897,9 @@ public final class CrewManager implements AutoCloseable {
         unregisterProfiles.getAndSet(() -> { }).run();
         unregisterCaptain.getAndSet(()->{
         }).run();
-        executor.shutdownNow();
+        // stopAll already cancels and interrupts active workers. A second interruption here
+        // can cancel their terminal Room writes, so let the executor drain its queued cleanup.
+        executor.shutdown();
         boolean interrupted = false;
         while (!executor.isTerminated()) {
             try {

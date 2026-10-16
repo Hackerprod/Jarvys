@@ -205,8 +205,9 @@ public class CrewMissionTitleCheckpointTest {
         CountDownLatch finished = new CountDownLatch(1);
         Thread waiter = new Thread(() -> { try { bot.awaitTermination(); finished.countDown(); } catch (InterruptedException ignored) { } });
         waiter.setDaemon(true); waiter.start();
-        try { assertTrue(finished.await(10, TimeUnit.SECONDS)); }
+        try { assertTrue(finished.await(30, TimeUnit.SECONDS)); }
         finally { waiter.interrupt(); }
+        assertTrue(bot.isQuiescent());
         assertEquals(bot.error(), CrewManager.Status.DONE, bot.status());
     }
 

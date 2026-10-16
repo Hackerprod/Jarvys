@@ -37,6 +37,8 @@ public class ToolTimelinePersistenceTest {
                 .filter(e -> "tool".equals(e.getKind())).findFirst().get();
         assertNull(missing.getPreviewId());
         assertTrue(missing.getDetail().contains("no longer available"));
+        assertFalse(missing.getDetail().contains("hidden-sentinel"));
+        assertEquals("read index.html", missing.getToolAuditDetail());
     }
 
     @Test public void legacyPreviewRequiresOwnExistingCanonicalFileAndNeverReconstructsOutput() throws Exception {

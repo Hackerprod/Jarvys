@@ -53,6 +53,9 @@ object WorkspaceChanges {
 class WorkspaceCoordinator internal constructor(context: Context,
     private val managerFor: (String) -> CrewManager,
     private val keepalive: () -> Unit,
+    private val persistMissionSnapshot: (Context, CrewMissionSnapshot) -> Unit = { target, snapshot ->
+        LocalRunStore(target).appendCrewMissionSnapshot(snapshot)
+    },
 ) : CentralWorkspaceTool.Backend {
     constructor(context: Context) : this(context,
         { session -> CoreAgentRuntime.prepareWorkspaceCrew(context.applicationContext, session) },
@@ -296,7 +299,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         }
                         // Do not accept a swallowed snapshot-listener failure as a durable control result.
                         val currentSnapshot = manager.missionSnapshots().first { it.missionId == assignment.missionId }
-                        LocalRunStore(app).appendCrewMissionSnapshot(currentSnapshot)
+                        persistMissionSnapshot(app, currentSnapshot)
                         WorkspaceChanges.snapshotSaved(scope.executionSessionId, assignment.missionId)
                         store.completeControl(controlId, started!!.revision)
                         WorkspaceResultDelivery.schedule(app, scope.executionSessionId)

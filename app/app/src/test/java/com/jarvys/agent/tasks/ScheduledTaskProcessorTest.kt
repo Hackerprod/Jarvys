@@ -57,6 +57,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ScheduledTaskProcessorTest {
     @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val secretStoreTest = com.jarvys.agent.TestSecretStoreRule()
     private lateinit var context: android.app.Application
 
     @Before fun setUp() {
@@ -150,7 +151,9 @@ class ScheduledTaskProcessorTest {
         val action = pendingStore.listForTask(task.id).single()
         assertEquals(TaskPendingActionStatus.PENDING, action.status)
         assertEquals(toolName, action.toolName)
-        assertEquals(JSONObject(arguments).toString(), JSONObject(action.argumentsJson).toString())
+        val savedArguments = JSONObject(action.argumentsJson)
+        assertEquals(arguments.size, savedArguments.length())
+        arguments.forEach { (name, value) -> assertEquals(value, savedArguments.getString(name)) }
         assertEquals(TaskState.AwaitingUser,
             pendingStore.stateForTask(task.id, task.revision, task.state))
         assertEquals(1, notifications.pendingActionCalls.get())
@@ -177,7 +180,7 @@ class ScheduledTaskProcessorTest {
 
         assertEquals("PENDING", result.toolsCalled.single().outcome)
         assertEquals(0, reads.get())
-        assertEquals("calendar_search", pendingStore.listForTask(task.id).single().toolName)
+        assertEquals(toolName, pendingStore.listForTask(task.id).single().toolName)
     }
 
     @Test fun allowedWriteExecutesOnlyWhenTheTaskHasAnExplicitWriteGrant() {
@@ -269,11 +272,12 @@ class ScheduledTaskProcessorTest {
 
     @Test fun successfulSilentRunClosesAnIncidentAndSendsOneRecoveryNotification() {
         val notifications = FakeNotifications()
-        val result = processor(FakeLoopFactory { _, _, _, _ ->
-            ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList())
-        }, emptyRegistry(), notifications = notifications).execute(
-            task(state = TaskState.NeedsAttention(TaskRunCause.EXECUTION_FAILED.code)),
-            1L, 2L, "run-silent-recovery", CancellationToken.cancellable())
+        val taskStore = TaskStore(context)
+        val incident = taskStore.create(task(state = TaskState.NeedsAttention(TaskRunCause.EXECUTION_FAILED.code)))
+        val result = ScheduledTaskProcessor(context,
+            FakeLoopFactory { _, _, _, _ -> ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList()) },
+            emptyRegistry(), clock = fixedClock(), notifications = notifications, tasks = taskStore)
+            .execute(incident, 1L, 2L, "run-silent-recovery", CancellationToken.cancellable())
 
         assertEquals("SILENT", result.status)
         assertEquals("DELIVERED", result.deliveryStatus)

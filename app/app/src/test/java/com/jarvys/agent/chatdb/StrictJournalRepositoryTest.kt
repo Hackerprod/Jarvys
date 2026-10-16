@@ -120,7 +120,9 @@ class StrictJournalRepositoryTest {
         assertTrue(ref.samePayload(success(repository.appendWorkspaceResultReference(ref))))
         assertTrue(ref.samePayload(success(repository.appendWorkspaceResultReference(ref))))
         val changedObservation = WorkspaceResultReference.create(fixture.result, WorkspaceIdentity.CENTRAL_SESSION, fixture.workspace, uuid(12), "request-a", 2L)
-        assertTrue(repository.appendWorkspaceResultReference(changedObservation) is ChatDbResult.Conflict)
+        val firstObservation = success(repository.appendWorkspaceResultReference(changedObservation))
+        assertEquals(1L, firstObservation.observedAssignmentRevision)
+        assertTrue(ref.samePayload(firstObservation))
 
         assertTrue(ref.samePayload(success(repository.appendWorkspaceResultNotice(ref))))
         assertTrue(ref.samePayload(successValue(repository.readWorkspaceResultReference(fixture.execution, ref.referenceId, false))))

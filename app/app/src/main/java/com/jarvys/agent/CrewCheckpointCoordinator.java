@@ -19,6 +19,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.function.Function;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -33,7 +34,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
     CrewCheckpointCoordinator(Context context, String conversation, Function<CrewManager.Bot, CrewRole> currentRole) {
         this.context = context.getApplicationContext();
         this.conversation = conversation;
-        this.store = new CrewCheckpointStore(context.getFilesDir());
+        this.store = new CrewCheckpointStore(this.context.getFilesDir(), directory -> { },
+                failure -> AgentErrorReporter.reportChatDatabaseFailure(this.context, failure));
         this.currentRole = currentRole;
     }
 
@@ -58,6 +60,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                     .put("title", title.title).put("titleSource", title.source)
                     .put("originalInstructions", bot.originalInstructions()));
             this.store.save(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
+        } catch (CancellationException cancelled) {
+            throw cancelled;
         } catch (Exception failure) {
             throw new IllegalStateException("Could not save the bot checkpoint; no further work is safe", failure);
         }

@@ -300,10 +300,11 @@ public class BotMascotPersistenceTest {
         JSONObject row = new JSONObject().put("profile", profile.toJson()).put("revision", 65).put("enabled", true).put("iconRef", ICON)
                 .put("mascot", last.toJson()).put("mascotReceipts", receipts);
         File catalog = new File(temporary.getRoot(), "crew_profiles/profiles.json"); assertTrue(catalog.getParentFile().mkdirs());
-        Files.write(catalog.toPath(), new JSONObject().put("schemaVersion", 4).put("bots", new JSONArray().put(row)).toString().getBytes(StandardCharsets.UTF_8));
+        Files.write(catalog.toPath(), new JSONObject().put("schemaVersion", CrewProfileRepository.SCHEMA_VERSION)
+                .put("bots", new JSONArray().put(row)).put("mascotOverlays", new JSONArray()).toString().getBytes(StandardCharsets.UTF_8));
         CrewProfileRepository repository = repository();
         IllegalArgumentException full = assertThrows(IllegalArgumentException.class, () -> repository.setMascot(BOT, 65, null, "op-new", PAYLOAD));
-        assertTrue(full.getMessage().contains("receipt limit reached (64)"));
+        assertTrue(full.getMessage() + " cause=" + full.getCause(), full.getMessage().contains("receipt limit reached (64)"));
         assertTrue(repository.setMascot(BOT, 1, null, "op0", PAYLOAD).alreadyExisted);
         assertEquals(65, repository.definition(BOT).revision);
         assertEquals(64, repository.definition(BOT).mascotReceipts.size());

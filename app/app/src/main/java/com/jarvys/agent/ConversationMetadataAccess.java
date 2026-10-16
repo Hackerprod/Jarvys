@@ -2,6 +2,9 @@ package com.jarvys.agent;
 
 import com.jarvys.agent.chatdb.ChatDatabaseBridge;
 import com.jarvys.agent.chatdb.ConversationMetadataValue;
+import java.util.concurrent.CancellationException;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** DB-backed conversation metadata access and identity policy. */
 public final class ConversationMetadataAccess {
@@ -53,8 +56,13 @@ public final class ConversationMetadataAccess {
   }
 
   public Snapshot read(String sessionId) {
+    return read(sessionId, null);
+  }
+
+  Snapshot read(String sessionId, Consumer<Throwable> databaseFailureReporter) {
     validateSessionId(sessionId);
-    ConversationMetadataValue value = database().readConversationMetadataSync(sessionId);
+    ConversationMetadataValue value = databaseCall(databaseFailureReporter,
+        () -> database().readConversationMetadataSync(sessionId));
     if (value == null) return new Snapshot(null, false, false, false, false);
     return new Snapshot(value.getTitle(), value.getPinned(), value.getArchived(), value.getDeleted(),
         value.getPrivateCode());
@@ -80,32 +88,54 @@ public final class ConversationMetadataAccess {
   }
 
   void update(String sessionId, String key, Object value) {
+    update(sessionId, key, value, null);
+  }
+
+  void update(String sessionId, String key, Object value, Consumer<Throwable> databaseFailureReporter) {
     validateSessionId(sessionId);
-    ChatDatabaseBridge bridge = database();
+    ChatDatabaseBridge bridge = databaseCall(databaseFailureReporter, this::database);
     switch (key) {
       case "deleted":
         if (!Boolean.TRUE.equals(value)) throw new IllegalArgumentException("Conversation deletion is irreversible");
-        ChatDatabaseBridge.requireSuccessSync(bridge.deleteConversationSync(sessionId), "Could not delete conversation");
+        ChatDatabaseBridge.requireSuccessSync(databaseCall(databaseFailureReporter,
+            () -> bridge.deleteConversationSync(sessionId)), "Could not delete conversation");
         return;
       case "title":
         ChatDatabaseBridge.requireSuccessSync(
-            bridge.renameConversationSync(sessionId, (String) value), "Could not rename conversation");
+            databaseCall(databaseFailureReporter, () -> bridge.renameConversationSync(sessionId, (String) value)),
+            "Could not rename conversation");
         return;
       case "pinned":
         ChatDatabaseBridge.requireSuccessSync(
-            bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null, null), "Could not update pinned state");
+            databaseCall(databaseFailureReporter,
+                () -> bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null, null)),
+            "Could not update pinned state");
         return;
       case "archived":
         ChatDatabaseBridge.requireSuccessSync(
-            bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value, null), "Could not update archived state");
+            databaseCall(databaseFailureReporter,
+                () -> bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value, null)),
+            "Could not update archived state");
         return;
       case "privateCode":
         ChatDatabaseBridge.requireSuccessSync(
-            bridge.updateMetadataSync(sessionId, null, null, null, null, Boolean.TRUE.equals(value)),
+            databaseCall(databaseFailureReporter,
+                () -> bridge.updateMetadataSync(sessionId, null, null, null, null, Boolean.TRUE.equals(value))),
             "Could not update conversation privacy state");
         return;
       default:
         throw new IllegalArgumentException("Unsupported conversation metadata field: " + key);
+    }
+  }
+
+  private static <T> T databaseCall(Consumer<Throwable> failureReporter, Supplier<T> operation) {
+    try {
+      return operation.get();
+    } catch (RuntimeException | Error failure) {
+      if (failureReporter != null && !(failure instanceof CancellationException)) {
+        try { failureReporter.accept(failure); } catch (Throwable ignored) { }
+      }
+      throw failure;
     }
   }
 }

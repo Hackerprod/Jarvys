@@ -524,6 +524,7 @@ class WorkspaceCoordinatorIntegrationTest {
 
     @Test fun failedDurableControlSnapshotRemainsUncertainAndFreshPauseSafelyStopsTheExactWorker() {
         val correctionEntered = CountDownLatch(1)
+        val failSnapshot = AtomicBoolean(false)
         managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, token ->
             if (modelCalls.incrementAndGet() == 2) {
                 correctionEntered.countDown()
@@ -537,18 +538,18 @@ class WorkspaceCoordinatorIntegrationTest {
         await(worker)
         val local = LocalRunStore(context)
         local.appendCrewMissionSnapshot(managers.getValue(scope.executionSessionId).missionSnapshots().single())
-        val ledger = File(context.filesDir, "jarvys/conversations/${scope.executionSessionId}.jsonl")
-        val priorLedger = ledger.readBytes()
-        assertTrue(ledger.delete())
-        assertTrue("Synthetic file-as-directory failure could not be installed", ledger.mkdir())
+        coordinator = freshCoordinator { target, snapshot ->
+            if (failSnapshot.get()) throw IllegalStateException("Synthetic durable snapshot failure")
+            LocalRunStore(target).appendCrewMissionSnapshot(snapshot)
+        }
         val correction = submit(scope, assignment, WorkspaceControlType.CORRECT, "Continue selected worker")
+        failSnapshot.set(true)
         try {
             fails<IllegalStateException> {
                 coordinator.executeNativeControl(correction.requestId, CancellationToken.cancellable())
             }
         } finally {
-            assertTrue(ledger.delete())
-            ledger.writeBytes(priorLedger)
+            failSnapshot.set(false)
         }
         requireLatch(correctionEntered, "Admitted correction did not begin")
         assertEquals(WorkspaceControlState.UNCERTAIN, savedControl(correction).state)
@@ -576,10 +577,14 @@ class WorkspaceCoordinatorIntegrationTest {
         assertEquals(2, modelCalls.get())
     }
 
-    private fun freshCoordinator() = WorkspaceCoordinator(context, { session ->
+    private fun freshCoordinator(
+        persistMissionSnapshot: ((android.content.Context, CrewMissionSnapshot) -> Unit)? = null,
+    ) = WorkspaceCoordinator(context, { session ->
         managerLookups.add(session)
         managers.computeIfAbsent(session) { managerFactory(it) }
-    }, { keepalives.incrementAndGet(); Unit })
+    }, { keepalives.incrementAndGet(); Unit }, persistMissionSnapshot ?: { target, snapshot ->
+        LocalRunStore(target).appendCrewMissionSnapshot(snapshot)
+    })
 
     private fun workspace(key: String): WorkspaceRecord {
         val id = coordinator.create(key, "Workspace $key", "create-$key", "Create synthetic workspace", noAdmission)

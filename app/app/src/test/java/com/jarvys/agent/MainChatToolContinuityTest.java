@@ -240,20 +240,33 @@ public class MainChatToolContinuityTest {
             testTool("read", (args, token) -> CoreToolResult.success(output)))), "system", session);
     new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
     loop.run("Inspect data", Collections.emptyList(), CancellationToken.uncancellable(), null);
-    List<ConversationTurn> restored = chatTestStore.localRunStore(files).loadConversationContext(session);
+    LocalRunStore restartedStore = chatTestStore.localRunStore(files);
+    List<ConversationTurn> restored = restartedStore.loadConversationContext(session);
     String evidence = restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT).findFirst().get().content;
     assertTrue(evidence.length() < 12_000);
     assertFalse(evidence.contains(secret));
     java.util.regex.Matcher id = java.util.regex.Pattern.compile("artifact_id=\"([0-9a-f]{64})\"").matcher(evidence);
     assertTrue(evidence, id.find());
+    String artifactId = id.group(1);
+    JSONObject restoredArtifact = restartedStore.readModelTranscriptRows(session).stream()
+        .filter(row -> "model_artifact".equals(row.optString("type")) && artifactId.equals(row.optString("artifactId")))
+        .findFirst().orElseThrow(AssertionError::new);
+    JSONObject metadata = restoredArtifact.getJSONObject("artifact");
+    assertEquals(artifactId, restoredArtifact.getString("artifactId"));
+    assertEquals(artifactId + ".txt", metadata.getString("path"));
+    assertEquals(artifactId, metadata.getString("sha256"));
+    assertTrue(metadata.getLong("chars") > 0L);
+    assertTrue(metadata.getLong("bytes") > 0L);
     Map<String, Object> request = arguments("artifact_id", id.group(1));
     request.put("limit_chars", 30_000);
-    CoreToolResult page = new MainChatTranscriptStore(files, session, chatTestStore.localRunStore(files))
+    CoreToolResult page = new MainChatTranscriptStore(files, session, restartedStore)
         .recoveryTool().execute(request, CancellationToken.uncancellable());
     assertTrue(page.content, page.success);
     assertFalse(page.content.contains(secret));
-    assertFalse(new MainChatTranscriptStore(files, "another-chat", chatTestStore.localRunStore(files))
+    assertFalse(new MainChatTranscriptStore(files, "another-chat", restartedStore)
         .recoveryTool().execute(request, CancellationToken.uncancellable()).success);
+    assertTrue(restartedStore.readModelTranscriptRows("another-chat").stream()
+        .noneMatch(row -> "model_artifact".equals(row.optString("type")) && artifactId.equals(row.optString("artifactId"))));
     try (java.util.stream.Stream<java.nio.file.Path> paths = java.nio.file.Files.walk(files.toPath())) {
       for (java.nio.file.Path path : (Iterable<java.nio.file.Path>) paths.filter(java.nio.file.Files::isRegularFile)::iterator)
         assertFalse(new String(java.nio.file.Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8).contains(secret));

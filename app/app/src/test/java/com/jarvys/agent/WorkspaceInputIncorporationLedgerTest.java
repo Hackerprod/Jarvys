@@ -292,6 +292,7 @@ public class WorkspaceInputIncorporationLedgerTest {
         assertThrows(IllegalStateException.class, () -> read(value));
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceInputIncorporationIfAbsent(value, () -> { }));
         assertThrows(IllegalStateException.class, () -> store.listWorkspaceInputIncorporations(CENTRAL, 10, null));
+        assertTrue(store.listConversations().stream().noneMatch(row -> CENTRAL.equals(row.optString("session_id"))));
         ensureCentral();
         assertTrue(store.deleteConversation(CENTRAL));
         assertThrows(IllegalStateException.class, () -> read(value));
@@ -363,7 +364,9 @@ public class WorkspaceInputIncorporationLedgerTest {
             assertTrue(page.size() <= 2); if (page.isEmpty()) break;
             for (WorkspaceInputIncorporation value : page) observed.add(value.receiptId);
             cursor = page.get(page.size() - 1).receiptId;
+            List<String> pageReceipts = page.stream().map(value -> value.receiptId).collect(java.util.stream.Collectors.toList());
             assertThrows(UnsupportedOperationException.class, () -> page.add(nativeReceipt("forbidden")));
+            assertEquals(pageReceipts, page.stream().map(value -> value.receiptId).collect(java.util.stream.Collectors.toList()));
         }
         assertEquals(expected, observed);
         assertTrue(store.listWorkspaceResultNotices(CENTRAL, 10, null).isEmpty());

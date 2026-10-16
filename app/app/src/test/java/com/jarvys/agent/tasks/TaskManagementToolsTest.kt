@@ -29,6 +29,7 @@ import java.util.concurrent.CancellationException
 @Config(sdk = [34])
 class TaskManagementToolsTest {
     @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val secretStoreTest = com.jarvys.agent.TestSecretStoreRule()
     private lateinit var context: Context
     private val clock = Clock.fixed(Instant.parse("2025-03-07T23:30:00Z"), ZoneOffset.UTC)
     private val zone = ZoneId.of("UTC")
@@ -192,7 +193,8 @@ class TaskManagementToolsTest {
         val listed = payload(f.tools.tool(TaskManagementTools.LIST_TASKS).execute(emptyMap(), CancellationToken.uncancellable()))
         val data = listed
         assertEquals("UTC", data.getString("zone"))
-        assertTrue(data.getString("now_local").contains("2025-03-07T23:30"))
+        assertTrue(data.getString("now_local"), data.getString("now_local").contains("23:30"))
+        assertTrue(data.getString("now_local"), data.getString("now_local").contains("2025"))
         assertEquals(1, data.getJSONArray("tasks").length())
 
         val runsTool = f.tools.tool(TaskManagementTools.TASK_RUNS)

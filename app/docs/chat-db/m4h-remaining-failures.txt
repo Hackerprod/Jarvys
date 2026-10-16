@@ -1,0 +1,11 @@
+[msg] StrictJournalRepositoryTest > resultReferenceAndCentralNoticeRequireExactExecutionEvidence :: java.lang.AssertionError java.lang.AssertionError
+	at org.junit.Assert.fail(Assert.java:87)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at org.junit.Assert
+[msg] CrewCheckpointDurabilityTest > fileAndDirectorySyncPreserveAnExistingThreadInterrupt :: java.lang.IllegalStateException: Crew checkpoint durability is unconfirmed; original evidence is preserved java.lang.IllegalStateException: Crew checkpoint dura
+[LOTE CAIDO] group 9 : *.CrewMissionTitleCheckpointTest *.CrewMissionTitleManagerTest *.CrewMissionTitleRuntimeTest *.CrewModelPhaseComposeTest *.CrewModelPhaseTest *.CrewPartialPresentationUx38Test *.CrewProviderUnavailableRecoveryTest *.CrewResultCaptureTest
+[msg] StrictJournalRepositoryTest > resultReferenceAndCentralNoticeRequireExactExecutionEvidence :: java.lang.AssertionError java.lang.AssertionError
+	at org.junit.Assert.fail(Assert.java:87)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at org.junit.Assert
+[msg] WorkspaceCoordinationLedgerTest > deletionAtReplyBoundaryLeavesNoFalseReceiptOrResurrection :: java.lang.IllegalStateException: Corrupt workspace_coordination_refs: execution evidence is missing java.lang.IllegalStateException: Corrupt workspace_coordinat

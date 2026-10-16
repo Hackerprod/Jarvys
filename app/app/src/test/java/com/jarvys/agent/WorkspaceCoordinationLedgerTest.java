@@ -4,6 +4,8 @@ import static org.junit.Assert.*;
 import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
 import androidx.test.core.app.ApplicationProvider;
 import com.jarvys.agent.chatdb.ChatDatabaseBridge;
 import com.jarvys.agent.chatdb.ChatDbResult;
@@ -79,7 +81,11 @@ public class WorkspaceCoordinationLedgerTest {
                 state.add("notice:" + row.toNoticeJson());
             for (WorkspaceCoordinationReference notice : store.listWorkspaceCoordinationNotices(session, 100, null)) {
                 WorkspaceCoordinationReply reply = store.readWorkspaceCoordinationReply(session, notice.referenceId);
-                if (reply != null) state.add("reply:" + reply.toJson() + ":" + reply.toStateJson());
+                if (reply != null) {
+                    String row = "reply:" + reply.toJson();
+                    if (reply.state != WorkspaceCoordinationReply.State.PREPARED) row += ":" + reply.toStateJson();
+                    state.add(row);
+                }
             }
         }
         return state;
@@ -263,8 +269,9 @@ public class WorkspaceCoordinationLedgerTest {
         store.appendCrewCoordinationEvidence(evidence);
         WorkspaceCoordinationReference first = store.appendWorkspaceCoordinationReferenceIfAbsent(proposed, () -> { });
         assertEquals(1, first.observedAssignmentRevision);
-        assertThrows(IllegalStateException.class,
-                () -> store.appendWorkspaceCoordinationReferenceIfAbsent(reference(evidence, 99), () -> { }));
+        WorkspaceCoordinationReference retry = store.appendWorkspaceCoordinationReferenceIfAbsent(reference(evidence, 99), () -> { });
+        assertEquals(1, retry.observedAssignmentRevision);
+        assertTrue(first.samePayload(retry));
         assertEquals(first.toJson().toString(), store.readWorkspaceCoordinationReference(SOURCE, first.referenceId).toJson().toString());
         assertTrue(store.listWorkspaceCoordinationNotices(CENTRAL, 10, null).isEmpty());
     }
@@ -478,8 +485,36 @@ public class WorkspaceCoordinationLedgerTest {
         WorkspaceCoordinationReply initial = store.prepareWorkspaceCoordinationReply(reply(reference, "key", "answer"), () -> { });
         assertTrue(store.deleteConversation(SOURCE));
         assertThrows(IllegalStateException.class, () -> store.markWorkspaceCoordinationReplyStarted(initial, () -> { }));
-        assertEquals(WorkspaceCoordinationReply.State.PREPARED, store.readWorkspaceCoordinationReply(CENTRAL, reference.referenceId).state);
+        assertThrows(IllegalStateException.class, () -> store.readWorkspaceCoordinationReply(CENTRAL, reference.referenceId));
+        File databaseFile = new File(new File(context.getFilesDir(), "jarvys"), "jarvys-chat.db");
+        try (SQLiteDatabase database = SQLiteDatabase.openDatabase(databaseFile.getPath(), null, SQLiteDatabase.OPEN_READONLY)) {
+            try (Cursor replyRow = database.rawQuery(
+                    "SELECT state FROM workspace_coordination_replies WHERE conversation_id=? AND reference_id=?",
+                    new String[]{CENTRAL, reference.referenceId})) {
+                assertTrue("the durable reply intent remains present", replyRow.moveToFirst());
+                assertEquals(WorkspaceCoordinationReply.State.PREPARED.name(), replyRow.getString(0));
+            }
+            assertEquals("a failed reply transition creates no transition row", 0L, scalarLong(database,
+                    "SELECT COUNT(*) FROM workspace_coordination_reply_transitions WHERE conversation_id=? AND reply_id=?",
+                    CENTRAL, initial.replyId));
+            assertEquals("no incorporation receipt is created for the reply", 0L, scalarLong(database,
+                    "SELECT COUNT(*) FROM workspace_input_incorporations WHERE conversation_id=? AND source_kind='REPLY' AND source_reference_id=?",
+                    CENTRAL, reference.referenceId));
+            assertEquals("the deleted execution conversation stays absent", 0L, scalarLong(database,
+                    "SELECT COUNT(*) FROM conversations WHERE id=?", SOURCE));
+            assertEquals("the execution conversation tombstone stays present", 1L, scalarLong(database,
+                    "SELECT COUNT(*) FROM tombstones WHERE scope='conversation' AND entity_id=?", SOURCE));
+            assertEquals("deletion cascades the execution evidence", 0L, scalarLong(database,
+                    "SELECT COUNT(*) FROM crew_coordination_evidence WHERE conversation_id=?", SOURCE));
+        }
         assertThrows(IllegalStateException.class, () -> store.requireWorkspaceCoordinationDisclosureLive(reference, true));
+    }
+
+    private static long scalarLong(SQLiteDatabase database, String query, String... args) {
+        try (Cursor cursor = database.rawQuery(query, args)) {
+            assertTrue("scalar SQL query returns a row", cursor.moveToFirst());
+            return cursor.getLong(0);
+        }
     }
 
     @Test public void immutableReplyInputBoundsAndHashIncludeRuntimeProvenanceAndRevision() throws Exception {

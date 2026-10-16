@@ -3,8 +3,10 @@ package com.jarvys.agent.tasks
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
+import androidx.work.Configuration
 import androidx.work.WorkerFactory
 import androidx.work.testing.TestListenableWorkerBuilder
+import androidx.work.testing.WorkManagerTestInitHelper
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreToolRegistry
@@ -22,6 +24,8 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +36,20 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class TaskManualRunWorkerTest {
     @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val secretStoreTest = com.jarvys.agent.TestSecretStoreRule()
+    private lateinit var context: Context
+
+    @Before fun initializeWorkManager() {
+        context = ApplicationProvider.getApplicationContext()
+        WorkManagerTestInitHelper.initializeTestWorkManager(context,
+            Configuration.Builder().setExecutor { command -> command.run() }.build(),
+            WorkManagerTestInitHelper.ExecutorsMode.LEGACY_OVERRIDE_WITH_SYNCHRONOUS_EXECUTORS)
+    }
+
+    @After fun closeWorkManager() {
+        com.jarvys.agent.WorkManagerTestCleanup.close(context)
+    }
+
     @Test fun manualWorkUsesTheNormalProcessorAndKeepsManualOccurrenceDistinctFromScheduledRun() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val root = Files.createTempDirectory("st2-manual-worker").toFile()

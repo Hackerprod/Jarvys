@@ -9,6 +9,7 @@ import com.jarvys.agent.workspaces.WorkspaceCoordinationReply as CoordinationRep
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceInputIncorporation as InputIncorporation
 import com.jarvys.agent.workspaces.WorkspaceResultReference as ResultReference
+import java.util.Collections
 
 /**
  * Normalized persistence for the fail-closed workspace and crew journals. It validates the same
@@ -566,7 +567,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         beforeWrite: () -> Unit = {},
     ): ChatDbResult<InputIncorporation> = transaction {
         InputIncorporation.fromJsonStrict(proposed.toJson())
-        ensureCentralConversationForWrite(proposed.ownerCentralSessionId)
+        requireCentralConversation(proposed.ownerCentralSessionId)
         if (proposed.sourceKind == InputIncorporation.SourceKind.REPLY) {
             requireIncorporationSource(proposed)
         } else {
@@ -758,7 +759,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             }
             emit()
         }
-        ChatDbResult.Success(values)
+        ChatDbResult.Success(Collections.unmodifiableList(values))
     }
 
     private suspend fun transitionReply(

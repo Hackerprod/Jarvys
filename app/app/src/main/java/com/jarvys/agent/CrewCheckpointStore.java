@@ -31,6 +31,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.function.Consumer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -40,6 +42,7 @@ public final class CrewCheckpointStore {
     private final ConversationMetadataAccess conversationMetadata;
     private final File filesDirectory;
     private final DirectorySyncFaultInjector directorySyncFaultInjector;
+    private final Consumer<Throwable> databaseFailureReporter;
 
     /** Package-private failure seam; production always performs the real directory fsync. */
     interface DirectorySyncFaultInjector {
@@ -127,16 +130,22 @@ public final class CrewCheckpointStore {
     }
 
     public CrewCheckpointStore(File filesDirectory) {
-        this(filesDirectory, directory -> { });
+        this(filesDirectory, directory -> { }, null);
     }
 
     CrewCheckpointStore(File filesDirectory, DirectorySyncFaultInjector directorySyncFaultInjector) {
+        this(filesDirectory, directorySyncFaultInjector, null);
+    }
+
+    CrewCheckpointStore(File filesDirectory, DirectorySyncFaultInjector directorySyncFaultInjector,
+            Consumer<Throwable> databaseFailureReporter) {
         if (directorySyncFaultInjector == null) throw new IllegalArgumentException("Directory sync hook is required");
         try {
             this.filesDirectory = filesDirectory.getCanonicalFile();
             verify(this.filesDirectory);
             this.conversationMetadata = new ConversationMetadataAccess(this.filesDirectory);
             this.directorySyncFaultInjector = directorySyncFaultInjector;
+            this.databaseFailureReporter = databaseFailureReporter;
         } catch (IOException failure) {
             throw new IllegalStateException("Unsafe Crew checkpoint directory", failure);
         }
@@ -187,7 +196,7 @@ public final class CrewCheckpointStore {
                     throw new IOException("Could not create checkpoint directory");
                 }
                 verify(directory);
-                this.conversationMetadata.update(conversationId, "privateCode", true);
+                this.conversationMetadata.update(conversationId, "privateCode", true, databaseFailureReporter);
                 File pending = File.createTempFile("checkpoint-pending-", ".json", directory);
                 verify(pending);
                 try (FileOutputStream output = new FileOutputStream(pending);) {
@@ -199,10 +208,12 @@ public final class CrewCheckpointStore {
                 verify(directory);
                 verify(target);
                 verify(pending);
-                if (!pending.renameTo(target)) throw new IOException("Could not atomically commit Crew checkpoint");
+                atomicReplace(pending, target);
                 syncDirectoryChain(directory);
             } catch (StackOverflowError invalidDepth) {
                 throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
+            } catch (CancellationException cancelled) {
+                throw cancelled;
             } catch (Exception failure) {
                 throw new IllegalStateException("Could not save Crew checkpoint; original evidence is preserved", failure);
             }
@@ -219,6 +230,8 @@ public final class CrewCheckpointStore {
                 }
                 rejectIncompleteOnly(target.getParentFile());
                 return null;
+            } catch (CancellationException cancelled) {
+                throw cancelled;
             } catch (Exception failure) {
                 throw new IllegalStateException("Crew checkpoint is unavailable; original evidence is preserved", failure);
             } catch (StackOverflowError invalidDepth) {
@@ -245,10 +258,16 @@ public final class CrewCheckpointStore {
                 }
                 ObservedCheckpoint observed = readAndSync(target, conversationId, botId, expectedScopeIdentity);
                 syncDirectoryChain(target.getParentFile());
-                requireActive(conversationId);
+                // Directory sync deliberately preserves interruption. Clear that preexisting
+                // flag while making the final blocking DB read, then restore it to the caller.
+                boolean interrupted = Thread.interrupted();
+                try { requireActive(conversationId); }
+                finally { if (interrupted) Thread.currentThread().interrupt(); }
                 return new ConfirmedSnapshot(observed);
             } catch (StackOverflowError invalidDepth) {
                 throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
+            } catch (CancellationException cancelled) {
+                throw cancelled;
             } catch (Exception failure) {
                 throw new IllegalStateException("Crew checkpoint durability is unconfirmed; original evidence is preserved", failure);
             }
@@ -379,6 +398,18 @@ public final class CrewCheckpointStore {
         }
     }
 
+    private static void atomicReplace(File source, File target) throws IOException {
+        if (Build.VERSION.SDK_INT >= 26) {
+            Nio.atomicReplace(source, target);
+            return;
+        }
+        try {
+            Os.rename(source.getPath(), target.getPath());
+        } catch (ErrnoException failure) {
+            throw new IOException("Could not atomically commit Crew checkpoint", failure);
+        }
+    }
+
     @androidx.annotation.RequiresApi(26)
     private static final class Nio {
 
@@ -405,6 +436,12 @@ public final class CrewCheckpointStore {
             } finally {
                 if (interrupted) Thread.currentThread().interrupt();
             }
+        }
+
+        static void atomicReplace(File source, File target) throws IOException {
+            java.nio.file.Files.move(source.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
 
         static ObservedCheckpoint readAndSync(File file, String conversationId, String botId,
@@ -520,7 +557,7 @@ public final class CrewCheckpointStore {
     }
 
     private void requireActive(String conversationId) {
-        if (this.conversationMetadata.read(conversationId).deleted) {
+        if (this.conversationMetadata.read(conversationId, databaseFailureReporter).deleted) {
             throw new IllegalStateException("This chat has been deleted; Crew checkpoint access is disabled");
         }
     }

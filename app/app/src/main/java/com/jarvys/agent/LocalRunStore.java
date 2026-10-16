@@ -2237,7 +2237,9 @@ public final class LocalRunStore {
                     history.add(row);
                     bySession.put(summary.getId(), row);
                 }
-                row.put("goal", summary.getGoal() == null ? row.optString("goal", "") : summary.getGoal())
+                String runGoal = row.optString("goal", "");
+                if (runGoal.isEmpty() && summary.getGoal() != null) runGoal = summary.getGoal();
+                row.put("goal", runGoal)
                         .put("timestamp", timestampMillis / 1000.0)
                         .put("turns", Math.max(row.optLong("turns"), summary.getTurnCount()))
                         .put("pinned", summary.getPinned()).put("archived", summary.getArchived());

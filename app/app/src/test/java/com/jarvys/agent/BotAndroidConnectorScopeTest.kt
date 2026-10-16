@@ -11,6 +11,9 @@ import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
 import com.jarvys.agent.crew.CrewRoleTemplates
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -21,6 +24,25 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class BotAndroidConnectorScopeTest {
+    @get:Rule val chatTestStore = ChatTestStore(false, true)
+    private var previousSecrets: Any? = null
+
+    @Before fun installTestSecretStorage() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("android-connector-scope-secrets", Context.MODE_PRIVATE)
+        check(preferences.edit().clear().commit())
+        val singleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
+        previousSecrets = singleton.get(null)
+        singleton.set(null, SecretStore(preferences))
+    }
+
+    @After fun restoreSecretStorage() {
+        SecretStore::class.java.getDeclaredField("singleton").apply {
+            isAccessible = true
+            set(null, previousSecrets)
+        }
+    }
+
     @Test fun androidRoleExcludesServiceConnectorsWithoutChangingGenericOperator() {
         val preferences = object : ConnectorConnectionPreferences {
             val connected = mutableSetOf<String>()

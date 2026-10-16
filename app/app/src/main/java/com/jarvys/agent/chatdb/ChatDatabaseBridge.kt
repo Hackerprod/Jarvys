@@ -879,6 +879,13 @@ class ChatDatabaseBridge private constructor(context: Context) {
             .put("userMessageId", value.owner_user_message_id)
             .put("messageIndex", value.message_index)
             .put("items", runCatching { JSONArray(value.items_json) }.getOrElse { JSONArray() })
-        is ModelTranscriptEntry.Artifact -> JSONObject().put("type", "model_artifact")
+        is ModelTranscriptEntry.Artifact -> JSONObject()
+            .put("type", "model_artifact")
+            .put("artifactId", value.artifact_id)
+            .put("artifact", JSONObject()
+                .put("path", value.path)
+                .put("sha256", value.sha256)
+                .put("chars", value.chars)
+                .put("bytes", value.bytes))
     }
 }

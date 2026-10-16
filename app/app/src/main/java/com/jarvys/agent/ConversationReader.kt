@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import com.jarvys.agent.chatdb.ChatFileOwnership
 import com.jarvys.agent.chatdb.ConversationArtifactsRepository
 import com.jarvys.agent.chatdb.ConversationDecisionValue
 import com.jarvys.agent.chatdb.ConversationMessageAt
@@ -10,6 +11,7 @@ import com.jarvys.agent.chatdb.FileRef
 import com.jarvys.agent.chatdb.GlobalTimelineMarkers
 import com.jarvys.agent.chatdb.InterruptRequestValue
 import com.jarvys.agent.chatdb.JarvysChatDatabase
+import com.jarvys.agent.chatdb.JarvysChatDatabaseProvider
 import com.jarvys.agent.chatdb.MemoryTimelineRepository
 import com.jarvys.agent.chatdb.Compaction
 import com.jarvys.agent.chatdb.GeneratedImage
@@ -24,7 +26,6 @@ import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
 import com.jarvys.agent.chatdb.StoredMessage
 import com.jarvys.agent.chatdb.chatSql
 import com.jarvys.agent.chatdb.withChatReadTransaction
-import com.jarvys.agent.chatdb.JarvysChatDatabaseProvider
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.workspaces.WorkspaceIdentity
@@ -32,6 +33,7 @@ import com.jarvys.agent.ToolActivity as UiToolActivity
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import java.io.File
 import java.util.Locale
 
 /**
@@ -472,10 +474,17 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                     val owner = presentation.owner_user_message_id.orEmpty()
                     if (owner.isEmpty() || isInvalidated(owner, seq, invalidations) || key in typedCalls) continue
                     if (!presentation.stage.isTimelineToolResultStage()) continue
+                    val previewId = if (presentation.preview_expected) {
+                        presentation.preview_id?.let { verifiedTimelinePreview(conversationId, it) }
+                    } else null
+                    val previewUnavailable = (presentation.preview_expected || !presentation.preview_id.isNullOrBlank()) && previewId == null
+                    val detail = presentation.detail?.takeIf(String::isNotEmpty)
+                    val displayedDetail = if (previewUnavailable) {
+                        listOfNotNull(detail, "The recorded preview is no longer available.").joinToString("\n\n")
+                    } else detail
                     events += AgentRunUiEvent.toolEvent(
                         seq, presentation.stage, presentation.tool_name,
-                        presentation.detail?.takeIf(String::isNotEmpty), presentation.call_id,
-                        presentation.preview_id, timestamp,
+                        displayedDetail, presentation.call_id, previewId, timestamp,
                     ).copyToolPresentation(presentation.audit_detail, false)
                         .copyToolTimelineIdentity(key, owner)
                 }
@@ -587,6 +596,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             c.getString(c.getColumnIndexOrThrow("stage")),
             c.getStringOrNull(c.getColumnIndexOrThrow("detail")),
             c.getStringOrNull(c.getColumnIndexOrThrow("audit_detail")),
+            c.getInt(c.getColumnIndexOrThrow("preview_expected")) != 0,
             c.getStringOrNull(c.getColumnIndexOrThrow("preview_id")),
         ))
     } }
@@ -679,6 +689,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val stage: String,
         val detail: String?,
         val audit_detail: String?,
+        val preview_expected: Boolean,
         val preview_id: String?,
     )
 
@@ -817,6 +828,36 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         return rows.sortedBy { it.position }
     }
 
+    private suspend fun verifiedTimelinePreview(conversationId: String, recordedId: String): String? {
+        return try {
+            if (HtmlPreviewDescriptor.isSnapshotToken(recordedId)) {
+                val artifactId = recordedId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX)
+                val owned = artifacts.findChatFile(conversationId, "delivered", artifactId) as? ChatFileOwnership.Delivered
+                    ?: return null
+                val artifact = owned.value
+                val kind = if (artifact.kind.equals("IMAGE", ignoreCase = true)) ChatAttachment.Kind.IMAGE else ChatAttachment.Kind.FILE
+                val attachment = runCatching {
+                    ChatAttachment(artifact.artifact_id, artifact.name, artifact.mime_type, artifact.size_bytes, kind, artifact.relative_path)
+                }.getOrNull() ?: return null
+                val jarvysRoot = JarvysChatDatabaseProvider.databaseFileForRawQuery(database).parentFile ?: return null
+                DeliveredArtifactStore(jarvysRoot).previewMetadataForAttachment(conversationId, attachment)
+                    .token.takeIf { it == recordedId }
+            } else {
+                val expected = WorkspaceStore.projectIdForSession(conversationId)
+                if (recordedId != expected) return null
+                val databaseFile = JarvysChatDatabaseProvider.databaseFileForRawQuery(database)
+                val filesDirectory = databaseFile.parentFile?.parentFile ?: return null
+                val workspaces = File(filesDirectory.canonicalFile, "jarvys/workspaces")
+                val project = File(workspaces, expected)
+                if (!project.isDirectory || project.canonicalFile != project.absoluteFile) return null
+                val index = WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html")
+                expected.takeIf { index.isFile && index.canRead() }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun ModelTranscriptEntry.toModelRestoreRow(): JSONObject? = when (this) {
         is ModelTranscriptEntry.Batch -> {
             val batch = value.batch
@@ -857,7 +898,14 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             .put("userMessageId", value.owner_user_message_id)
             .put("messageIndex", value.message_index)
             .put("items", runCatching { JSONArray(value.items_json) }.getOrElse { JSONArray() })
-        is ModelTranscriptEntry.Artifact -> JSONObject().put("type", "model_artifact")
+        is ModelTranscriptEntry.Artifact -> JSONObject()
+            .put("type", "model_artifact")
+            .put("artifactId", value.artifact_id)
+            .put("artifact", JSONObject()
+                .put("path", value.path)
+                .put("sha256", value.sha256)
+                .put("chars", value.chars)
+                .put("bytes", value.bytes))
     }
 
     private fun toChatAttachment(value: com.jarvys.agent.chatdb.MessageAttachmentInput): ChatAttachment =
