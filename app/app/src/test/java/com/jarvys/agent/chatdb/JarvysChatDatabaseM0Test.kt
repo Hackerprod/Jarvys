@@ -23,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -30,7 +31,9 @@ import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.system.measureNanoTime
 
-private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "de7e6264d00602304b41af71b49bf862"
+private const val EXPECTED_SCHEMA_V1_IDENTITY_HASH = "59dbb821b38fbe0c3db6d6adfac48897"
+private const val EXPECTED_SCHEMA_V1_GIT_BLOB = "e5c528a5c678f8a57dad5f1ad05540386adce422"
+private const val EXPECTED_SCHEMA_V2_IDENTITY_HASH = "de7e6264d00602304b41af71b49bf862"
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -841,12 +844,15 @@ class JarvysChatDatabaseM0Test {
     @Test
     fun futureSchemaVersionIsRejectedWithoutChangingDatabaseBytes() {
         val futureFile = File(temporary.root, "future.db")
+        val declaredVersion = onDatabaseThreadBlocking { pragmaLong(database.testChatSql, "user_version").toInt() }
+        val futureVersion = declaredVersion + 1
+        assertTrue("fixture must be newer than DATABASE_VERSION", futureVersion > declaredVersion)
         onDatabaseThreadBlocking {
             SQLiteDatabase.openDatabase(
                 futureFile.absolutePath,
                 null,
                 SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY
-            ).use { sqlite -> sqlite.execSQL("PRAGMA user_version = 2") }
+            ).use { sqlite -> sqlite.execSQL("PRAGMA user_version = $futureVersion") }
         }
         val before = futureFile.readBytes()
         val failure = try {
@@ -859,36 +865,143 @@ class JarvysChatDatabaseM0Test {
         assertArrayEquals(before, futureFile.readBytes())
     }
 
-    /**
-     * Pins v1's identity hash and checks it against both Room's export and the opened database.
-     * Any v1 schema change requires a version bump plus an explicit migration; after the final
-     * schema export, update the pinned constant deliberately because KSP regenerates the JSON.
-     */
+    /** v1 is published; schema changes require a version bump and a migration or owner-approved reset. */
     @Test
-    fun exportedSchemaV1MatchesRealDatabaseStructure() = onDatabaseThreadBlocking {
-        val schemaDirectory = System.getProperty("room.schemaDir")
-        assertTrue(
-            "Missing required system property room.schemaDir; configure it to the Room schemas directory",
-            !schemaDirectory.isNullOrBlank(),
-        )
-        val schemaFile = File(
-            File(schemaDirectory!!, JarvysChatDatabase::class.java.name),
-            "1.json",
-        )
-        assertTrue("Exported Room schema JSON is missing: ${schemaFile.absolutePath}", schemaFile.isFile)
+    fun exportedSchemaV2MatchesRealDatabaseAndV1RemainsThePublishedFixture() = onDatabaseThreadBlocking {
+        val v1File = exportedSchemaFile(1)
+        val v1Bytes = v1File.readBytes()
+        val v1Database = JSONObject(String(v1Bytes, Charsets.UTF_8)).getJSONObject("database")
+        assertEquals("Published schema v1 version", 1, v1Database.getInt("version"))
+        assertEquals("Published schema v1 identity hash", EXPECTED_SCHEMA_V1_IDENTITY_HASH, v1Database.getString("identityHash"))
+        assertEquals("schema v1 must remain byte-for-byte the sqlite2 export", EXPECTED_SCHEMA_V1_GIT_BLOB, gitBlobHash(v1Bytes))
 
-        val exportedDatabase = JSONObject(schemaFile.readText(Charsets.UTF_8)).getJSONObject("database")
-        assertEquals("Exported schema version", 1, exportedDatabase.getInt("version"))
-        assertEquals("Pinned v1 identity hash", EXPECTED_SCHEMA_V1_IDENTITY_HASH, exportedDatabase.getString("identityHash"))
+        val v2File = exportedSchemaFile(2)
+        assertTrue("Exported Room schema JSON is missing: ${v2File.absolutePath}", v2File.isFile)
+        val exportedDatabase = JSONObject(v2File.readText(Charsets.UTF_8)).getJSONObject("database")
+        assertEquals("Exported schema version", 2, exportedDatabase.getInt("version"))
+        assertEquals("Pinned v2 identity hash", EXPECTED_SCHEMA_V2_IDENTITY_HASH, exportedDatabase.getString("identityHash"))
 
         val sqlite = database.testChatSql
-        assertEquals("Room database version", 1L, pragmaLong(sqlite, "user_version"))
+        assertEquals("Room database version", 2L, pragmaLong(sqlite, "user_version"))
         assertEquals(
             "Room identity hash",
-            EXPECTED_SCHEMA_V1_IDENTITY_HASH,
+            EXPECTED_SCHEMA_V2_IDENTITY_HASH,
             scalarString(sqlite, "SELECT identity_hash FROM room_master_table WHERE id=42"),
         )
         assertExportedSchemaMatchesDatabase(exportedDatabase, sqlite)
+    }
+
+    @Test
+    fun publishedV1DatabaseResetsAndSupportsNewChatAndPersonalMemory() {
+        val legacyFile = File(temporary.root, "published-v1.db")
+        createPublishedV1DatabaseWithConversation(legacyFile)
+
+        // Exercise the strongest optional index available; production falls back to LIKE if this
+        // SQLite runtime cannot create FTS4. The stale callback-owned table must be replaced either way.
+        PersonalMemorySearchIndex.capabilityOverrideForTests = PersonalMemorySearchMode.FTS4
+        val migrated = onDatabaseThreadBlocking {
+            JarvysChatDatabaseProvider.openDatabaseFileForTests(context, legacyFile)
+        }
+        var fresh: JarvysChatDatabase? = null
+        try {
+            val freshFile = File(temporary.root, "fresh-v2.db")
+            fresh = onDatabaseThreadBlocking {
+                JarvysChatDatabaseProvider.openDatabaseFileForTests(context, freshFile)
+            }
+            val freshDatabase = checkNotNull(fresh)
+            onDatabaseThread {
+                val migratedSql = migrated.testChatSql
+                assertEquals(2L, pragmaLong(migratedSql, "user_version"))
+                assertEquals(
+                    EXPECTED_SCHEMA_V2_IDENTITY_HASH,
+                    scalarString(migratedSql, "SELECT identity_hash FROM room_master_table WHERE id=42"),
+                )
+                assertEquals("old v1 conversation was not discarded", 0L, rowCount(migratedSql, "conversations"))
+                assertTrue("old v1 callback trigger was not replaced",
+                    scalarString(migratedSql, "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_conversation_tombstone_after_delete'")
+                        .contains("DELETE FROM agent_session_state"),
+                )
+                assertEquals("SQLite integrity", "ok", scalarString(migratedSql, "PRAGMA integrity_check"))
+                assertTrue("foreign_key_check found rows", !hasAnyRow(migratedSql, "PRAGMA foreign_key_check"))
+                assertEquals("post-reset schema must match a fresh install", schemaObjects(freshDatabase.testChatSql), schemaObjects(migratedSql))
+                assertEquals("WAL journal mode", "wal", pragmaString(migratedSql, "journal_mode").lowercase())
+
+                val conversations = ConversationRepository(migrated)
+                val stored = conversations.appendMessage(
+                    AppendMessageInput(
+                        conversationId = "after-v1-reset",
+                        role = "user",
+                        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, "hello after reset")),
+                    ),
+                )
+                assertTrue("first post-reset message did not persist: $stored", stored is ChatDbResult.Success)
+                val storedMessage = (stored as? ChatDbResult.Success<StoredMessage>)?.value
+                assertNotNull("successful append did not return its stored message", storedMessage)
+                assertEquals("hello after reset", storedMessage!!.text)
+
+                val personalAgent = PersonalAgentRepository(migrated)
+                val initialized = personalAgent.promptContext("", privateMode = false)
+                assertTrue("PersonalAgentRepository.initialize did not seed profile/docs", initialized.identity.contains("Jarvys"))
+                val receipt = personalAgent.saveMemory(
+                    text = "The user prefers concise replies",
+                    layer = "curated",
+                    category = null,
+                    importance = 0.8,
+                    sourceRef = "v1-reset-test",
+                )
+                assertEquals("saved", receipt.status)
+                assertTrue("memory could not be searched after reset", personalAgent.search("concise replies").any {
+                    it.id == receipt.id && it.text == "The user prefers concise replies"
+                })
+                assertTrue("memory could not be read after reset", personalAgent.browse().any {
+                    it.id == receipt.id && it.text == "The user prefers concise replies"
+                })
+                val searchCapability = personalAgent.searchCapability()
+                if (searchCapability == "fts4") {
+                    assertEquals("personal memory FTS triggers must be installed together", 3L,
+                        countWhere(migratedSql, "sqlite_master", "type='trigger' AND name LIKE 'trg_memory_fts_%'"),
+                    )
+                    assertEquals("FTS insert trigger did not index the new memory", 1L,
+                        scalarLong(migratedSql, "SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH 'concise'"),
+                    )
+                } else {
+                    assertEquals("LIKE fallback must not leave a stale FTS table", 0L,
+                        countWhere(migratedSql, "sqlite_master", "type='table' AND name='memory_fts'"),
+                    )
+                }
+            }
+        } finally {
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(migrated)
+            fresh?.let { JarvysChatDatabaseProvider.closeDatabaseFileForTests(it) }
+        }
+
+        // Reopen after both handles have checkpointed/closed WAL: the old conversation must not
+        // reappear, and new writes must have reached the durable v2 database behind -wal/-shm.
+        val reopened = onDatabaseThreadBlocking {
+            JarvysChatDatabaseProvider.openDatabaseFileForTests(context, legacyFile)
+        }
+        try {
+            onDatabaseThread {
+                val reopenedSql = reopened.testChatSql
+                assertEquals(2L, pragmaLong(reopenedSql, "user_version"))
+                assertEquals("SQLite integrity after WAL reopen", "ok", scalarString(reopenedSql, "PRAGMA integrity_check"))
+                assertTrue("foreign_key_check found rows after WAL reopen", !hasAnyRow(reopenedSql, "PRAGMA foreign_key_check"))
+                assertEquals(0L, scalarLong(
+                    reopenedSql,
+                    "SELECT COUNT(*) FROM conversations WHERE id='old-v1-conversation'",
+                ))
+                assertEquals(1L, scalarLong(
+                    reopenedSql,
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id='after-v1-reset' AND role='user'",
+                ))
+                assertEquals(1L, scalarLong(
+                    reopenedSql,
+                    "SELECT COUNT(*) FROM memory_entries WHERE text='The user prefers concise replies' AND deleted_at IS NULL",
+                ))
+            }
+        } finally {
+            JarvysChatDatabaseProvider.closeDatabaseFileForTests(reopened)
+        }
     }
 
     @Test
@@ -1071,6 +1184,93 @@ class JarvysChatDatabaseM0Test {
             assertTrue("PRAGMA $name returned no row", cursor.moveToFirst())
             cursor.getString(0)
         }
+
+    private fun exportedSchemaFile(version: Int): File {
+        val schemaDirectory = System.getProperty("room.schemaDir")
+        assertTrue(
+            "Missing required system property room.schemaDir; configure it to the Room schemas directory",
+            !schemaDirectory.isNullOrBlank(),
+        )
+        return File(File(schemaDirectory!!, JarvysChatDatabase::class.java.name), "$version.json").also {
+            assertTrue("Exported Room schema JSON is missing: ${it.absolutePath}", it.isFile)
+        }
+    }
+
+    private fun gitBlobHash(contents: ByteArray): String {
+        val header = "blob ${contents.size}\u0000".toByteArray(Charsets.US_ASCII)
+        val blob = ByteArray(header.size + contents.size)
+        header.copyInto(blob)
+        contents.copyInto(blob, header.size)
+        return MessageDigest.getInstance("SHA-1").digest(blob).joinToString("") { "%02x".format(it) }
+    }
+
+    /** Rebuilds the exact published v1 Room tables and indexes from its frozen export. */
+    private fun createPublishedV1DatabaseWithConversation(file: File) {
+        val schema = JSONObject(exportedSchemaFile(1).readText(Charsets.UTF_8)).getJSONObject("database")
+        assertEquals(1, schema.getInt("version"))
+        assertEquals(EXPECTED_SCHEMA_V1_IDENTITY_HASH, schema.getString("identityHash"))
+        SQLiteDatabase.openDatabase(
+            file.absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+        ).use { sqlite ->
+            val entities = schema.getJSONArray("entities")
+            for (index in 0 until entities.length()) {
+                val entity = entities.getJSONObject(index)
+                val tableName = entity.getString("tableName")
+                sqlite.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", tableName))
+                val indexes = entity.optJSONArray("indices") ?: JSONArray()
+                for (indexNumber in 0 until indexes.length()) {
+                    val exportedIndex = indexes.getJSONObject(indexNumber)
+                    sqlite.execSQL(exportedIndex.getString("createSql").replace("\${TABLE_NAME}", tableName))
+                }
+            }
+            sqlite.execSQL("CREATE TABLE room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
+            sqlite.execSQL(
+                "INSERT INTO room_master_table (id,identity_hash) VALUES(42,?)",
+                arrayOf(EXPECTED_SCHEMA_V1_IDENTITY_HASH),
+            )
+            sqlite.execSQL("PRAGMA user_version = 1")
+            sqlite.execSQL(
+                "CREATE TRIGGER trg_conversation_tombstone_after_delete AFTER DELETE ON conversations " +
+                    "BEGIN INSERT INTO tombstones(scope,entity_id,deleted_at) " +
+                    "SELECT 'conversation',OLD.id,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) " +
+                    "WHERE NOT EXISTS (SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=OLD.id); END",
+            )
+            // A callback-owned object can outlive Room's known-table drop, so the v2 callback must
+            // clear and rebuild it during the reset.
+            if (runCatching { sqlite.execSQL("CREATE VIRTUAL TABLE memory_fts USING fts4(text)") }.isFailure) {
+                sqlite.execSQL("CREATE TABLE memory_fts (text TEXT NOT NULL)")
+            }
+            sqlite.execSQL("INSERT INTO memory_fts(text) VALUES('stale v1 search row')")
+            sqlite.execSQL(
+                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
+                    "VALUES('old-v1-conversation','chat',0,0,0,1,1,0,1)",
+            )
+            sqlite.rawQuery(
+                "SELECT COUNT(*) FROM conversations WHERE id='old-v1-conversation'",
+                null,
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("fixture must contain a v1 conversation", 1, cursor.getInt(0))
+            }
+        }
+    }
+
+    private fun schemaObjects(database: ChatSqlDatabase): List<String> = database.query(
+        "SELECT type || ':' || name || ':' || tbl_name || ':' || COALESCE(sql,'') " +
+            "FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' " +
+            "AND name NOT IN ('android_metadata','room_master_table') " +
+            "AND (type!='index' OR name NOT LIKE 'sqlite_autoindex_%') ORDER BY type,name",
+    ).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+    }
+
+    private fun countWhere(database: ChatSqlDatabase, table: String, where: String): Long =
+        scalarLong(database, "SELECT COUNT(*) FROM $table WHERE $where")
+
+    private fun hasAnyRow(database: ChatSqlDatabase, query: String): Boolean =
+        database.query(query).use { it.moveToFirst() }
 
     private fun rowCount(database: ChatSqlDatabase, table: String): Long =
         database.query("SELECT COUNT(*) FROM `$table`").use { cursor ->

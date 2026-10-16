@@ -1,6 +1,6 @@
 # Diseño de chatdb sobre SQLite
 
-> **Estado del esquema v1 (2026-10-15):** la versión aún no se publica. M4a elimina campos y tablas del importador; el build del arquitecto regenerará el esquema Room y fijará el `identityHash` en `JarvysChatDatabaseM0Test`.
+> **Política de versiones (2026-10-16):** v1 quedó publicada con sqlite2 (`20f48cd`). v2 conserva v1 como histórico y aplica un reset destructivo solo al abrir v1, por decisión del dueño; no se recuperan sus chats ni datos. Todo cambio posterior de esquema requiere subir la versión y añadir una migración o acordar explícitamente otro reset.
 
 ## Decisión de almacenamiento
 
