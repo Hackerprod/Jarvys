@@ -61,7 +61,27 @@ public final class CoreAgentModel {
       String prompt,
       List<ToolSpec> tools,
       CancellationToken token) {
-    if (context == null) return complete(instructions, transcript, prompt, tools, token);
+    return completeMainChat(instructions, transcript, prompt, tools, token, null);
+  }
+
+  ModelReply completeMainChat(
+      String instructions,
+      List<ConversationTurn> transcript,
+      String prompt,
+      List<ToolSpec> tools,
+      CancellationToken token,
+      ModelProviderClient.TextDeltaListener listener) {
+    if (context == null) {
+      if (listener == null) return complete(instructions, transcript, prompt, tools, token);
+      try {
+        return provider.completeConversation(instructions,
+            AttachmentModelContext.withoutAttachments(transcript), prompt,
+            java.util.Collections.emptyList(), tools, sessionId, token, listener);
+      } catch (RuntimeException failure) {
+        recordProviderFailure(failure, token);
+        throw failure;
+      }
+    }
     Context localized = AppLanguageRuntime.localizedContext(context);
     List<ConversationTurn> prepared =
         AttachmentModelContext.prepare(localized, sessionId, transcript, token);
@@ -75,7 +95,8 @@ public final class CoreAgentModel {
           java.util.Collections.emptyList(),
           tools,
           sessionId,
-          token);
+          token,
+          listener);
       } catch (RuntimeException failure) {
         recordProviderFailure(failure, token);
         throw failure;

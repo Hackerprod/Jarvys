@@ -17,6 +17,55 @@ import java.util.concurrent.atomic.AtomicReference
 @org.robolectric.annotation.Config(sdk = [28])
 class AgentRunUiStateTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
+
+    @Test
+    fun codexAssistantStreamUsesStableTransientRowAndIsReplacedByDurableCompletion() {
+        val session = "codex-stream-${System.nanoTime()}"
+        val generation = 9_101L
+        val runId = "loop-run-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "streamed prompt")
+        AgentRunUiState.bindGeneration(session, generation)
+
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "Hello ")
+        val first = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+        AgentRunUiState.assistantTextStreamEnded(session, generation, runId)
+        assertFalse(AgentRunUiState.snapshotForSession(session).events.any { it.kind == "assistant_stream" })
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "Retry")
+        val retry = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+
+        assertEquals(first.id, retry.id)
+        assertEquals(runId, retry.messageId)
+        assertEquals("Retry", retry.text)
+        assertTrue(retry.id < 0L)
+
+        AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", "Final answer", "durable-answer", 1L)
+
+        val completed = AgentRunUiState.snapshotForSession(session).events
+        assertFalse(completed.any { it.kind == "assistant_stream" })
+        assertTrue(completed.any { it.kind == "assistant" && it.messageId == "durable-answer" && it.text == "Final answer" })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun stoppingGenerationImmediatelyRemovesTransientAssistantText() {
+        val session = "codex-stream-stop-${System.nanoTime()}"
+        val generation = 9_102L
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "streamed prompt")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.assistantTextStreamStarted(session, generation, "stopped-loop")
+        AgentRunUiState.assistantTextStreamDelta(session, generation, "stopped-loop", "partial")
+
+        AgentRunUiState.stopPendingGeneration(session, generation)
+
+        assertFalse(AgentRunUiState.snapshotForSession(session).events.any { it.kind == "assistant_stream" })
+        AgentRunUiState.finishPendingGeneration(session, generation)
+        AgentRunUiState.resetSession(session)
+    }
+
     @Test
     fun selectingUncachedSessionPublishesItsEmptyStateInsteadOfPriorConversation() {
         val firstSession = "uncached-selection-a-${System.nanoTime()}"

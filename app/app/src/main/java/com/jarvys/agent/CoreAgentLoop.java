@@ -49,6 +49,15 @@ public final class CoreAgentLoop {
         /** User-facing assistant text only, after durable tool intent and before any tool effect. */
         default void onAssistantProgress(String callId, String message) { }
 
+        /** Starts or resets this run's transient answer row before an individual provider attempt. */
+        default void onAssistantTextStreamStarted(String runId) { }
+
+        /** Incremental user-facing text only; tool arguments and reasoning are excluded upstream. */
+        default void onAssistantTextDelta(String runId, String delta) { }
+
+        /** Removes a streamed answer when the provider turn is a tool-call turn. */
+        default void onAssistantTextStreamEnded(String runId) { }
+
         /** A completed assistant turn that precedes a newly incorporated durable user message. */
         default void onAssistantAnswerBeforeInput(String runId, String message, IncomingMessage nextInput) { }
 
@@ -144,6 +153,11 @@ public final class CoreAgentLoop {
     public interface Model {
 
         ModelReply complete(List<ConversationTurn> transcript, String prompt, List<ToolSpec> tools, CancellationToken token);
+
+        default ModelReply complete(List<ConversationTurn> transcript, String prompt, List<ToolSpec> tools,
+                                    CancellationToken token, ModelProviderClient.TextDeltaListener listener) {
+            return complete(transcript, prompt, tools, token);
+        }
 
         default int contextWindow(CancellationToken token) {
             return ProviderContextWindowResolver.FALLBACK_CONTEXT_WINDOW;
@@ -652,7 +666,12 @@ public final class CoreAgentLoop {
                     while (true) {
                         try {
                             emit(listener, "model_wait", "Esperando respuesta del modelo");
-                            reply = model.complete(requestTranscript, turnPrompt, declarations, token);
+                            if (listener != null) listener.onAssistantTextStreamStarted(runId);
+                            reply = model.complete(requestTranscript, turnPrompt, declarations, token,
+                                    delta -> {
+                                        if (listener != null && delta != null && !delta.isEmpty())
+                                            listener.onAssistantTextDelta(runId, delta);
+                                    });
                             emit(listener, "model_response", "Respuesta del modelo recibida");
                             break;
                         } catch (RuntimeException failure) {
@@ -704,6 +723,7 @@ public final class CoreAgentLoop {
                 overflowCompactions = 0;
                 token.throwIfCancelled();
                 if (reply == null) throw new IllegalStateException("Provider returned no response");
+                if (!reply.calls.isEmpty() && listener != null) listener.onAssistantTextStreamEnded(runId);
                 if (reply.calls.isEmpty()) {
                     String answer = reply.text == null ? "" : reply.text.trim();
                     if (answer.isEmpty()) {

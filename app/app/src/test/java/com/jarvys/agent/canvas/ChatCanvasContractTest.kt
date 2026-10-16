@@ -66,6 +66,24 @@ class ChatCanvasContractTest {
     }
 
     @Test
+    fun transientAssistantStreamUsesCanvasAssistantPresentationAndCopyPolicy() {
+        val stream = AgentRunUiEvent(
+            id = -1L, kind = "assistant_stream", stage = "STREAMING", text = "partial",
+            messageId = "loop-run",
+        )
+
+        val serialized = ChatCanvasEventSerializer.page(listOf(stream), running = true)
+            .getJSONArray("events").getJSONObject(0)
+
+        assertEquals("assistant", serialized.getString("kind"))
+        assertEquals("STREAMING", serialized.getString("stage"))
+        assertTrue(serialized.getBoolean("canCopy"))
+        assertFalse(serialized.getBoolean("canRetry"))
+        assertTrue(allowed("copy", stream, running = true))
+        assertFalse(allowed("retry", stream, latestAssistant = "loop-run"))
+    }
+
+    @Test
     fun canvasResponsePolicyDisablesNetworkAndActiveEmbedding() {
         val csp = PreviewResponsePolicy.interactiveHeaders().getValue("Content-Security-Policy")
         assertTrue(csp.contains("connect-src 'none'"))

@@ -396,6 +396,16 @@ public final class CoreAgentRuntime {
           String prompt,
           List<ToolSpec> declarations,
           CancellationToken runToken) {
+        return complete(transcript, prompt, declarations, runToken, null);
+      }
+
+      @Override
+      public ModelReply complete(
+          List<ConversationTurn> transcript,
+          String prompt,
+          List<ToolSpec> declarations,
+          CancellationToken runToken,
+          ModelProviderClient.TextDeltaListener listener) {
         // Recompile scoped memory for each request so a native revocation or source edit
         // cannot survive in a run-cached system prompt. Previously sent text cannot be recalled.
         String requestInstructions = instructions(runToolRegistry, mainChat)
@@ -405,10 +415,10 @@ public final class CoreAgentRuntime {
         if (mainChat && context != null
             && new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(sessionId)) {
           try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
-            reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken);
+            reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener);
           }
         } else {
-          reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken)
+          reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener)
               : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
         }
         if (reactionTool != null) reactionTool.modelRequestCompleted();

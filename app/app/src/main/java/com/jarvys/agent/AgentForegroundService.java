@@ -1405,6 +1405,23 @@ public final class AgentForegroundService extends Service {
             }
 
             @Override
+            public void onAssistantTextStreamStarted(String runId) {
+              token.runIfActive(() -> AgentRunUiState.withGeneration(sessionId, token.generation(),
+                  () -> AgentRunUiState.assistantTextStreamStarted(sessionId, token.generation(), runId)));
+            }
+
+            @Override
+            public void onAssistantTextDelta(String runId, String delta) {
+              token.runIfActive(() -> AgentRunUiState.withGeneration(sessionId, token.generation(),
+                  () -> AgentRunUiState.assistantTextStreamDelta(sessionId, token.generation(), runId, delta)));
+            }
+
+            @Override
+            public void onAssistantTextStreamEnded(String runId) {
+              AgentRunUiState.assistantTextStreamEnded(sessionId, token.generation(), runId);
+            }
+
+            @Override
             public void onProgress(String node, String message) {
               token.runIfActive(() -> {
                 AgentRunUiState.withGeneration(sessionId, token.generation(),
@@ -1554,6 +1571,7 @@ public final class AgentForegroundService extends Service {
           enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
       }
     } finally {
+      AgentRunUiState.clearAssistantTextStreams(sessionId, token.generation());
       if (steeringProvider != null) {
         synchronized (interruptAdmissionLock(sessionId)) {
           steeringProvider.closeForRunExit();

@@ -84,9 +84,22 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       List<ToolSpec> tools,
       String sessionId,
       CancellationToken token) {
+    return completeConversation(systemPrompt, history, userPrompt, images, tools, sessionId, token, null);
+  }
+
+  @Override
+  public ModelReply completeConversation(
+      String systemPrompt,
+      List<ConversationTurn> history,
+      String userPrompt,
+      List<ScreenData> images,
+      List<ToolSpec> tools,
+      String sessionId,
+      CancellationToken token,
+      TextDeltaListener listener) {
     JSONObject request =
         buildRequest(systemPrompt, userPrompt, images, tools, history, false, null);
-    return execute(request, sessionId, token, AttachmentModelContext.hasImages(history));
+    return execute(request, sessionId, token, AttachmentModelContext.hasImages(history), listener);
   }
 
   private ModelReply execute(
@@ -94,6 +107,15 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       String sessionId,
       CancellationToken token,
       boolean attachmentImages) {
+    return execute(request, sessionId, token, attachmentImages, null);
+  }
+
+  private ModelReply execute(
+      JSONObject request,
+      String sessionId,
+      CancellationToken token,
+      boolean attachmentImages,
+      TextDeltaListener listener) {
     String requestModel = request.optString("model", settings.getModel());
     ProviderHttp.Response response =
         CodexAuthenticatedRequestExecutor.execute(
@@ -110,7 +132,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
                     currentToken,
                     true,
                     false,
-                    connectionFactory));
+                    connectionFactory,
+                    listener));
     if (response.status < 200 || response.status >= 300) {
       throw new CodexHttpException(
           response.status, response.rawBody, settings.getModel(), null, response.retryAfterMillis);
@@ -356,6 +379,19 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       boolean logErrors,
       boolean captureRetryAfter,
       ProviderHttp.ConnectionFactory connectionFactory) {
+    return send(request, credentials, sessionId, token, logErrors, captureRetryAfter,
+        connectionFactory, null);
+  }
+
+  private static ProviderHttp.Response send(
+      JSONObject request,
+      SecretStore.CodexCredentials credentials,
+      String sessionId,
+      CancellationToken token,
+      boolean logErrors,
+      boolean captureRetryAfter,
+      ProviderHttp.ConnectionFactory connectionFactory,
+      TextDeltaListener listener) {
     HttpURLConnection connection = null;
     InputStream responseStream = null;
     Runnable unregister = () -> {};
@@ -400,7 +436,10 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       boolean successful = status >= 200 && status < 300;
       responseStream =
           successful ? connection.getInputStream() : connection.getErrorStream();
-      String rawResponseBody = responseStream == null ? "" : CodexResponseStream.read(responseStream, token, captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE, successful);
+      String rawResponseBody = responseStream == null ? "" : CodexResponseStream.read(
+          responseStream, token,
+          captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE,
+          successful, listener);
       String responseBody = successful ? normalizeSseBody(rawResponseBody) : rawResponseBody;
       if (!successful && logErrors) {
         logHttpError(status, sessionId, rawResponseBody);

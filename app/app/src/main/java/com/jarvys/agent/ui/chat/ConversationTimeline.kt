@@ -426,7 +426,7 @@ private fun JarvysConversationEvent(
 ) {
     when (event.kind) {
         "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
-        "assistant" -> TimelineArrival(animateEntry) {
+        "assistant", "assistant_stream" -> TimelineArrival(animateEntry) {
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
                 onCancelTranslation, onDeleteAssistant, activeTranslationMessageId, translationErrorMessageId,

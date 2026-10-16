@@ -143,6 +143,29 @@ public class CodexResponsesTerminalTest {
         assertTrue(reply.calls.isEmpty());
     }
 
+    @Test public void streamingListenerReceivesOutputTextButNeverToolArgumentsOrReasoning() throws Exception {
+        JSONObject output = completed("Authoritative answer").getJSONObject("response");
+        output.put("output", new JSONArray().put(message("Authoritative answer")).put(call()));
+        JSONObject messageAdded = new JSONObject().put("type", "response.output_item.added")
+                .put("output_index", 0).put("item", new JSONObject().put("type", "message").put("id", "stream-message"));
+        JSONObject toolDelta = new JSONObject().put("type", "response.function_call_arguments.delta")
+                .put("output_index", 1).put("item_id", "stream-call").put("delta", "SECRET_TOOL_ARGUMENTS");
+        JSONObject reasoningDelta = new JSONObject().put("type", "response.reasoning_summary_text.delta")
+                .put("delta", "PRIVATE_REASONING");
+        JSONObject textDelta = new JSONObject().put("type", "response.output_text.delta")
+                .put("output_index", 0).put("item_id", "stream-message").put("delta", "Visible text");
+        Fixture fixture = fixture(sse(messageAdded) + sse(toolDelta) + sse(reasoningDelta)
+                + sse(textDelta) + sse(new JSONObject().put("type", "response.completed").put("response", output)), true, 2);
+        List<String> deltas = new ArrayList<>();
+
+        ModelReply reply = fixture.complete(deltas::add);
+
+        assertEquals(Collections.singletonList("Visible text"), deltas);
+        assertEquals("Authoritative answer", reply.text);
+        assertEquals(1, reply.calls.size());
+        fixture.assertClosedOnce();
+    }
+
     @Test public void failedAfterPartialCallNeverReturnsExecutableReply() throws Exception {
         assertRejected(partialCall() + sse(new JSONObject().put("type", "response.failed")
                 .put("response", new JSONObject().put("status", "failed").put("output", new JSONArray().put(call())))), true);
@@ -351,13 +374,16 @@ public class CodexResponsesTerminalTest {
             return connection;
         }
         ModelReply complete() {
+            return complete(null);
+        }
+        ModelReply complete(ModelProviderClient.TextDeltaListener listener) {
             OpenAICodexResponsesClient client = new OpenAICodexResponsesClient(settings, (refresh, ignored) -> {
                 credentialRequests++;
                 assertFalse("No refresh/replay for stream failures", refresh);
                 return secrets.getCodexCredentials();
             }, this);
             return client.completeConversation("synthetic system", Collections.emptyList(), "synthetic user",
-                    Collections.emptyList(), "synthetic-terminal", token);
+                    Collections.emptyList(), Collections.emptyList(), "synthetic-terminal", token, listener);
         }
         void assertClosedOnce() {
             assertEquals(1, opens);

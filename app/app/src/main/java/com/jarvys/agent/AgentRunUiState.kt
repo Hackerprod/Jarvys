@@ -362,6 +362,9 @@ object AgentRunUiState {
     private val sessionSnapshots = mutableMapOf<String, AgentRunUiSnapshot>()
     private val sessionOwners = mutableMapOf<String, RunOwnership>()
     private val sessionProgress = mutableMapOf<String, MutableList<AgentRunUiEvent>>()
+    /** In-process-only Codex text rows. These never enter a Room timeline or checkpoint. */
+    private val assistantTextStreams = mutableMapOf<String, AgentRunUiEvent>()
+    private var nextAssistantTextStreamId = -1L
     private var visibleSessionId: String? = null
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
     private val _state = object {
@@ -1254,6 +1257,70 @@ object AgentRunUiState {
         if (ownedRunActive && ownsGeneration(sessionId, generation) && _state.value.running) update.run()
     } }
 
+    /** Begins a clean transient answer buffer for one provider attempt in this agent run. */
+    @JvmStatic
+    fun assistantTextStreamStarted(sessionId: String, generation: Long, runId: String) =
+        inSession(sessionId) { synchronized(lock) {
+            if (!ownsAssistantStreamLocked(sessionId, generation)) return@synchronized
+            val key = assistantTextStreamKey(sessionId, generation, runId)
+            val event = assistantTextStreams[key]?.copy(text = "", timestampMillis = System.currentTimeMillis())
+                ?: AgentRunUiEvent(id = nextAssistantTextStreamId--, kind = "assistant_stream",
+                    stage = "STREAMING", text = "", messageId = runId)
+            assistantTextStreams[key] = event
+            val current = _state.value
+            _state.value = current.copy(events = current.events.filterNot { it.id == event.id })
+        } }
+
+    /** Appends only provider-classified output_text.delta text to transient Kotlin UI state. */
+    @JvmStatic
+    fun assistantTextStreamDelta(sessionId: String, generation: Long, runId: String, delta: String) =
+        inSession(sessionId) { synchronized(lock) {
+            if (delta.isEmpty() || !ownsAssistantStreamLocked(sessionId, generation)) return@synchronized
+            val key = assistantTextStreamKey(sessionId, generation, runId)
+            val prior = assistantTextStreams[key] ?: return@synchronized
+            val updated = prior.copy(text = prior.text + delta, timestampMillis = System.currentTimeMillis())
+            assistantTextStreams[key] = updated
+            val current = _state.value
+            val index = current.events.indexOfFirst { it.id == updated.id }
+            val events = current.events.toMutableList()
+            if (index < 0) events.add(updated) else events[index] = updated
+            _state.value = current.copy(events = events)
+        } }
+
+    /** A provider turn that returned calls is not a user-facing answer; remove its partial row. */
+    @JvmStatic
+    fun assistantTextStreamEnded(sessionId: String, generation: Long, runId: String) =
+        inSession(sessionId) { synchronized(lock) {
+            val key = assistantTextStreamKey(sessionId, generation, runId)
+            val event = assistantTextStreams[key] ?: return@synchronized
+            val current = _state.value
+            _state.value = current.copy(events = current.events.filterNot { it.id == event.id })
+            assistantTextStreams[key] = event.copy(text = "")
+        } }
+
+    /** Clears all transient answer events owned by a run, including cancellation and failure paths. */
+    @JvmStatic
+    fun clearAssistantTextStreams(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        clearAssistantTextStreamsLocked(sessionId, generation)
+    } }
+
+    private fun ownsAssistantStreamLocked(sessionId: String, generation: Long): Boolean =
+        ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation
+            && _state.value.sessionId == sessionId && _state.value.running
+
+    private fun assistantTextStreamKey(sessionId: String, generation: Long, runId: String) =
+        "$sessionId:$generation:$runId"
+
+    private fun clearAssistantTextStreamsLocked(sessionId: String, generation: Long) {
+        val prefix = "$sessionId:$generation:"
+        val keys = assistantTextStreams.keys.filter { it.startsWith(prefix) }
+        if (keys.isEmpty()) return
+        val ids = keys.mapNotNull { assistantTextStreams.remove(it)?.id }.toSet()
+        val current = _state.value
+        if (ids.isNotEmpty() && current.events.any { it.id in ids })
+            _state.value = current.copy(events = current.events.filterNot { it.id in ids })
+    }
+
     @JvmStatic
     fun rejectUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         if (_state.value.sessionId != sessionId) return@synchronized
@@ -1460,6 +1527,7 @@ object AgentRunUiState {
 
     @JvmStatic
     fun stopPendingGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        clearAssistantTextStreamsLocked(sessionId, generation)
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             resolveHeaderMascotAnimationForExecutionLocked(
                 sessionId, "$sessionId:$generation", "cancelled", null,
@@ -1481,6 +1549,7 @@ object AgentRunUiState {
 
     @JvmStatic
     fun finishPendingGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        clearAssistantTextStreamsLocked(sessionId, generation)
         val ownership = owner()
         if (ownership.stoppingGeneration != generation || ownership.generation != generation) return@synchronized
         // The drain thread can still have a pre-STOP ThreadLocal snapshot. Use the latest
@@ -1515,6 +1584,7 @@ object AgentRunUiState {
     @JvmStatic
     fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
         text: String, messageId: String, durationMs: Long) = inSession(sessionId) { synchronized(lock) {
+        clearAssistantTextStreamsLocked(sessionId, generation)
         val ownership = owner()
         if (ownership.stoppingGeneration == generation) {
             ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs)

@@ -24,7 +24,7 @@ El spike compila y tiene pruebas JVM para el contrato del puente, la serializaci
 
 El informe incluye tiempo hasta el primer pintado de cada vista, media y p95 de intervalos entre frames, tiempo de pintado del parche, tiempo de pintado de la página, estado del ancla, eventos cargados/nodos DOM, PSS del proceso y PSS de procesos renderer cuando Android los expone. Compose usa `Choreographer`; el lienzo usa `requestAnimationFrame`. Las comparaciones de tiempo usan el valor observado de Compose en esa misma ejecución como umbral. La virtualización pasa si se cargan los 5 000 eventos y el DOM contiene menos nodos de mensaje que el total cargado. La comparación de memoria total queda **NO MEDIDO** si Android no expone PSS del renderer en alguno de los dos pasos; no se sustituye por una estimación.
 
-El benchmark de parches usa una mutación sintética para poder medir el render incremental sin hacer una llamada al proveedor. El flujo actual de proveedores acumula la respuesta antes de publicarla como mensaje final; por eso el informe del spike aún no demuestra deltas de tokens del proveedor en tiempo real. El modelo JS y el camino de parche están cubiertos por la prueba JVM; falta conectar una fuente de deltas de texto reales antes de dar por cumplido ese criterio de la puerta.
+El benchmark de parches usa una mutación sintética para medir el render incremental sin hacer una llamada al proveedor. En el chat real, el transporte SSE de Codex ahora envía `response.output_text.delta` al estado transitorio de Kotlin y el lienzo aplica el cambio por el mismo `seq`; los argumentos de herramientas y los eventos de razonamiento no pasan por ese canal. Al comenzar un nuevo intento se limpia el texto anterior; los turnos que terminan en llamadas a herramientas se quitan, y el mensaje final durable reemplaza la fila transitoria. Cancelación y fallo también la limpian. El texto parcial solo vive en el estado de UI del proceso y no se añade al transcript ni a Room. Esta ruta cubre el proveedor Codex que ya usa SSE; los proveedores que envían `stream=false` siguen publicando la respuesta al completarse.
 
 ## Pruebas manuales necesarias en TCL y S23
 
@@ -39,7 +39,7 @@ El benchmark de parches usa una mutación sintética para poder medir el render 
 - El scroll usa alturas estimadas hasta medir cada fila. Diferencias grandes en contenido con imágenes o tarjetas pueden corregir la posición; el benchmark móvil debe confirmar que la corrección no produce saltos.
 - Android puede no exponer el PSS del proceso aislado de Chromium. En ese caso la memoria conjunta no se declara aprobada.
 - TalkBack, selección/copia y comportamiento del teclado no se pueden confirmar sin dispositivo.
-- El spike no añade deltas reales del proveedor. Las actualizaciones de eventos existentes se envían como parches por `seq`; el benchmark simula una actualización incremental. El cableado del token streaming queda como trabajo pendiente para poder medir la condición completa.
+- La prueba JVM confirma la clasificación de los eventos SSE y el ciclo de vida transitorio del texto Codex, pero no sustituye una medición en teléfono del parpadeo o del ancla durante una respuesta larga. Los proveedores con `stream=false` no tienen streaming en esta etapa.
 - El ajuste es global para desarrolladores, no por conversación. Sigue siendo opt-in y Compose continúa como valor predeterminado.
 - No se modificó Room ni otro esquema. El historial sintético vive únicamente mientras está abierta la pantalla de benchmark.
 

@@ -15,6 +15,11 @@ final class CodexResponseStream {
 
   static String read(InputStream input, CancellationToken token, int limit, boolean successful)
       throws IOException {
+    return read(input, token, limit, successful, null);
+  }
+
+  static String read(InputStream input, CancellationToken token, int limit, boolean successful,
+      ModelProviderClient.TextDeltaListener listener) throws IOException {
     // The caller disconnects before closing the stream, avoiding a close-time socket drain.
     try (ByteArrayOutputStream raw = new ByteArrayOutputStream()) {
       ByteArrayOutputStream line = new ByteArrayOutputStream();
@@ -41,7 +46,7 @@ final class CodexResponseStream {
             line.reset();
             if (firstLine) { current = stripBom(current); firstLine = false; }
             if (current.endsWith("\r")) current = current.substring(0, current.length() - 1);
-            if (acceptLine(current, data)) {
+            if (acceptLine(current, data, token, listener)) {
               token.throwIfCancelled();
               return raw.toString(StandardCharsets.UTF_8.name());
             }
@@ -65,14 +70,24 @@ final class CodexResponseStream {
     }
   }
 
-  private static boolean acceptLine(String line, StringBuilder data) {
+  private static boolean acceptLine(String line, StringBuilder data, CancellationToken token,
+      ModelProviderClient.TextDeltaListener listener) {
     if (line.isEmpty()) {
       if (data.length() == 0) return false;
       String payload = data.toString();
       data.setLength(0);
       if ("[DONE]".equals(payload.trim()))
         throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
-      return terminal(parseObject(payload), true);
+      JSONObject event = parseObject(payload);
+      boolean complete = terminal(event, true);
+      if (!complete && listener != null && "response.output_text.delta".equals(event.optString("type", ""))) {
+        String delta = event.optString("delta", "");
+        if (!delta.isEmpty()) {
+          token.throwIfCancelled();
+          listener.onTextDelta(delta);
+        }
+      }
+      return complete;
     }
     if (line.startsWith("data:")) {
       if (data.length() > 0) data.append('\n');

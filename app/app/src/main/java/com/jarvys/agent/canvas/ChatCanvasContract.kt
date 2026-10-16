@@ -37,7 +37,7 @@ internal object ChatCanvasEventSerializer {
         val value = JSONObject()
             .put("seq", event.id)
             .put("order", order)
-            .put("kind", event.kind)
+            .put("kind", if (event.kind == "assistant_stream") "assistant" else event.kind)
             .put("stage", event.stage)
             .put("text", event.text)
             .put("detail", event.detail)
@@ -68,7 +68,7 @@ internal object ChatCanvasEventSerializer {
         val canTransfer = event.deliveredArtifact != null || !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
         val canRetry = allowRetry && !running && event.kind == "assistant" && event.stage == null &&
             event.messageId.isNotBlank() && event.messageId == latestAssistant
-        value.put("canCopy", event.kind == "user" || event.kind == "assistant")
+        value.put("canCopy", event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream")
             .put("canOpen", canOpen).put("canTransfer", canTransfer).put("canRetry", canRetry)
         val options = JSONArray()
         event.decisionOptions.forEach { option ->
@@ -112,7 +112,7 @@ internal object ChatCanvasActionPolicy {
         if (action == "request_older") return decision(hasOlderPage, "older page unavailable")
         if (event == null) return ChatCanvasActionDecision(false, "event is not in this conversation window")
         val allowed = when (action) {
-            "copy" -> event.kind == "user" || event.kind == "assistant"
+            "copy" -> event.kind == "user" || event.kind == "assistant" || event.kind == "assistant_stream"
             "retry" -> allowRetry && !running && event.kind == "assistant" && event.messageId.isNotBlank() &&
                 (event.stage == "FAILED" || event.messageId == latestAssistantMessageId)
             "open_viewer" -> event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||
