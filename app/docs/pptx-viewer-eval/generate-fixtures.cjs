@@ -228,7 +228,11 @@ async function main() {
     reports.push({ key, artifactId: content.artifactId, measurementReport: content.measurementReport });
     process.stdout.write(input.key + " " + fs.statSync(path.join(fixtureDirectory, input.key + ".pptx")).size + " bytes\n");
   }
-  fs.writeFileSync(path.join(__dirname, "composition-measurement-reports.json"), JSON.stringify(reports, null, 2) + "\n");
+  fs.writeFileSync(path.join(__dirname, "composition-measurement-reports.json"), JSON.stringify({
+    evidence: "Node test double; these values are not measurements from a browser canvas or Android WebView.",
+    measurement_method: "measureText width = string length × 8; use the instrumented WebView test for real canvas metrics.",
+    reports,
+  }, null, 2) + "\n");
 }
 
 main().catch((error) => {

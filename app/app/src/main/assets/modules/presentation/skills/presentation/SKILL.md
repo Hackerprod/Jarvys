@@ -52,9 +52,9 @@ The tool takes one presentation object:
 }
 ```
 
-The example is illustrative, not a default layout. Each slide's `elements` array is ordered and each element uses explicit coordinates. Text and shape options follow the supported PptxGenJS 4.0.1 options listed by `create_presentation`; images use a decodable PNG data URL; charts and tables also require a box. Unknown properties are rejected with the slide and element location.
+These examples are illustrative, not templates. Each slide's `elements` array is ordered and each element uses explicit coordinates. The handler validates type-specific properties against PptxGenJS 4.0.1. Text `margin` is in points: a number applies to all sides; a four-number array is `[left, right, bottom, top]`. Table `margin` follows PptxGenJS table semantics: a scalar applies to each side; a four-number array is `[top, right, bottom, left]`; values below 1 are interpreted as inches and values at least 1 as points. The handler accepts any base64 `data:image/...` URL without checking that its bytes decode. PptxGenJS 4.0.1 documents common PNG, JPG, and GIF inputs as well as SVG; SVG is stored with a PNG fallback in the PPTX. The bundled viewer and thumbnail renderer are verified with PNG. They omit SVG and the handler warns; other image formats have not been verified end to end in this viewer. Use PNG when in-app rendering must be dependable. Unknown properties are rejected with the slide and element location.
 
-Text can use `text` or rich-text `runs`. Shapes use PptxGenJS shape names. Charts use `chartType`, `labels`, and `datasets` with values aligned to labels. Tables use `rows` and may specify column widths and row heights. Add slide speaker notes with `notes`.
+Text can use `text` or rich-text `runs`. Shapes use PptxGenJS shape names. Charts use `chartType`, `labels`, and `datasets` with values aligned to labels; scatter charts are not accepted by this labels-and-values interface. Tables use `rows` and may specify column widths and row heights. Cell `colspan` and `rowspan` participate in the logical grid. Add slide speaker notes with `notes`.
 
 An optional `theme` sets the presentation fonts and shared background. Its `colors` map supplies the selected chart palette when a chart does not declare its own colors. PptxGenJS 4.0.1 exposes font fields in its theme hook but keeps the OOXML theme color scheme fixed; set hex colors on text and shapes when they need the same chosen colors. With no theme, PptxGenJS defaults apply and the module adds no palette. Keep all content positions explicit.
 
@@ -68,8 +68,8 @@ These small examples show different ways to use the same free-positioned element
 {
   "elements": [
     { "type": "shape", "shape": "ellipse", "x": 9.8, "y": 0.5, "w": 2.6, "h": 2.6, "fill": { "color": "DDEBFF" }, "line": { "color": "DDEBFF" } },
-    { "type": "text", "text": "A clearer view of regional growth", "x": 0.9, "y": 2.1, "w": 8.5, "h": 1.8, "fontSize": 38, "bold": true, "color": "18253A" },
-    { "type": "text", "text": "Quarterly outlook", "x": 0.95, "y": 4.2, "w": 6.4, "h": 0.6, "fontSize": 19, "color": "526176" }
+    { "type": "text", "text": "A clearer view of regional growth", "x": 2.0, "y": 2.0, "w": 9.3, "h": 1.4, "fontSize": 38, "bold": true, "align": "center", "color": "18253A" },
+    { "type": "text", "text": "Quarterly outlook", "x": 3.4, "y": 3.65, "w": 6.5, "h": 0.6, "fontSize": 19, "align": "center", "color": "526176" }
   ]
 }
 ```
@@ -79,9 +79,9 @@ These small examples show different ways to use the same free-positioned element
 ```json
 {
   "elements": [
-    { "type": "text", "text": "Local teams made the gains repeatable", "x": 0.8, "y": 0.6, "w": 11.7, "h": 0.9, "fontSize": 30, "bold": true },
-    { "type": "text", "text": "North and South used the same field playbook, then adapted it to local demand.", "x": 0.9, "y": 2.0, "w": 5.0, "h": 2.2, "fontSize": 20, "valign": "top" },
-    { "type": "image", "dataUrl": "data:image/png;base64,...", "x": 6.7, "y": 1.8, "w": 5.6, "h": 4.3, "sizing": "contain", "altText": "Regional team at work" }
+    { "type": "text", "text": "Local teams made the gains repeatable", "x": 0.8, "y": 1.1, "w": 3.5, "h": 2.0, "fontSize": 30, "bold": true, "valign": "middle" },
+    { "type": "text", "text": "North and South used the same field playbook, then adapted it to local demand.", "x": 0.8, "y": 3.45, "w": 3.5, "h": 2.1, "fontSize": 19, "valign": "top" },
+    { "type": "image", "dataUrl": "data:image/png;base64,...", "x": 4.8, "y": 0.8, "w": 7.6, "h": 5.8, "sizing": "contain", "altText": "Regional team at work" }
   ]
 }
 ```
@@ -91,23 +91,23 @@ These small examples show different ways to use the same free-positioned element
 ```json
 {
   "elements": [
-    { "type": "text", "text": "North and South led the quarter", "x": 0.8, "y": 0.5, "w": 11.8, "h": 0.9, "fontSize": 30, "bold": true },
-    { "type": "chart", "chartType": "bar", "labels": ["North", "South", "West"], "datasets": [{ "name": "Revenue", "values": [42, 57, 39] }], "x": 0.8, "y": 1.7, "w": 6.0, "h": 4.9, "options": { "showValue": true, "showLegend": false } },
-    { "type": "text", "text": "South reached the highest total", "x": 7.4, "y": 1.9, "w": 4.7, "h": 0.9, "fontSize": 21, "bold": true },
-    { "type": "text", "text": "North grew from its lower starting point", "x": 7.4, "y": 3.2, "w": 4.7, "h": 0.9, "fontSize": 21 },
-    { "type": "text", "text": "West remained close to the prior quarter", "x": 7.4, "y": 4.5, "w": 4.7, "h": 0.9, "fontSize": 21 }
+    { "type": "chart", "chartType": "bar", "labels": ["North", "South", "West"], "datasets": [{ "name": "Revenue", "values": [42, 57, 39] }], "x": 0.9, "y": 0.6, "w": 7.0, "h": 5.4, "options": { "showValue": true, "showLegend": false } },
+    { "type": "text", "text": "South reached the highest total", "x": 8.5, "y": 1.1, "w": 3.9, "h": 0.9, "fontSize": 21, "bold": true },
+    { "type": "text", "text": "North grew from its lower starting point", "x": 8.5, "y": 2.65, "w": 3.9, "h": 0.9, "fontSize": 21 },
+    { "type": "text", "text": "West remained close to the prior quarter", "x": 8.5, "y": 4.2, "w": 3.9, "h": 0.9, "fontSize": 21 },
+    { "type": "text", "text": "Regional revenue rose across the quarter", "x": 2.1, "y": 6.25, "w": 9.2, "h": 0.65, "fontSize": 25, "bold": true, "align": "center" }
   ]
 }
 ```
 
-### Table under a two-line title
+### Table led by a large figure (no title)
 
 ```json
 {
   "elements": [
-    { "type": "text", "text": "Every region improved while operating costs stayed within plan", "x": 0.8, "y": 0.45, "w": 10.4, "h": 1.35, "fontSize": 29, "bold": true },
-    { "type": "text", "text": "Quarterly operating summary", "x": 0.8, "y": 2.0, "w": 7.2, "h": 0.55, "fontSize": 18 },
-    { "type": "table", "rows": [["Region", "Revenue", "Change"], ["North", "$42M", "+18%"], ["South", "$57M", "+27%"], ["West", "$39M", "+8%"]], "x": 0.8, "y": 2.8, "w": 11.6, "h": 3.7, "colW": [4.4, 3.6, 3.6], "fontSize": 18 }
+    { "type": "text", "text": "+27%", "x": 0.9, "y": 0.6, "w": 3.6, "h": 1.7, "fontSize": 52, "bold": true, "color": "2D6A72" },
+    { "type": "text", "text": "Regional revenue growth", "x": 0.95, "y": 2.15, "w": 4.5, "h": 0.5, "fontSize": 18, "color": "526176" },
+    { "type": "table", "rows": [["Region", "Revenue", "Change"], ["North", "$42M", "+18%"], ["South", "$57M", "+27%"], ["West", "$39M", "+8%"]], "x": 5.2, "y": 0.85, "w": 7.3, "h": 4.8, "colW": [2.8, 2.3, 2.2], "fontSize": 18 }
   ]
 }
 ```
@@ -117,20 +117,31 @@ These small examples show different ways to use the same free-positioned element
 ```json
 {
   "elements": [
-    { "type": "text", "text": "“The same playbook gave each team room to respond to its market.”", "x": 1.3, "y": 1.5, "w": 9.8, "h": 2.4, "fontSize": 31, "italic": true, "align": "center", "valign": "middle" },
-    { "type": "text", "text": "Field operations lead", "x": 3.1, "y": 4.4, "w": 6.2, "h": 0.6, "fontSize": 18, "align": "center", "color": "526176" }
+    { "type": "shape", "shape": "line", "x": 0.8, "y": 5.6, "w": 11.7, "h": 0, "line": { "color": "AAB4C4", "width": 1 } },
+    { "type": "text", "text": "“The same playbook gave each team room to respond to its market.”", "x": 1.3, "y": 1.0, "w": 9.8, "h": 2.4, "fontSize": 31, "italic": true, "align": "center", "valign": "middle" },
+    { "type": "text", "text": "FIELD OPERATIONS LEAD", "x": 7.2, "y": 5.95, "w": 4.8, "h": 0.5, "fontSize": 15, "align": "right", "color": "526176" }
   ]
 }
 ```
 
 ## Use the measurement report to revise
 
-The handler returns the editable artifact and a JSON measurement report in the tool result. Each element report includes its requested box and type. Text reports include measured required height and box height, plus `overflow`. The report also lists intersecting element pairs, out-of-bounds elements, the smallest font size used, and contrast ratios when text and background colors are known.
+The handler returns the editable artifact and a compact JSON measurement report in the tool result. Elements are identified by slide, index, and type; a box is included for elements with findings. Text entries include required height, line count, and numeric contrast when known, or `contrast: null` with a reason. The report lists overlaps, out-of-bounds elements, and the smallest font size used per slide.
 
-- If `overflow` is true, compare `needed_h` with `box_h`; increase the element height, shorten the wording, or divide the content across slides.
+- If `overflow` is true, compare `needed_h` with the input box's `h`; increase the element height, shorten the wording, or divide the content across slides.
 - If two element boxes overlap, move or resize one of the elements if that intersection is unintended.
 - If an element is outside the slide bounds, revise its coordinates or dimensions to fit the 13.333 × 7.5 inch canvas.
 - Review contrast and the reported smallest text size in the actual viewing context; the report gives measurements, while you decide whether the composition reads well.
 - A measured overlap or overflow is feedback, not a generation failure. Regenerate with changed coordinates or content when the evidence calls for it.
 
-The browser canvas uses the fonts available to the WebView. A different viewer or font installation can wrap text differently, so inspect the rendered deck as well as the report.
+The report identifies elements by slide number, zero-based element index, and type; it does not repeat input text. Each element includes measured height and line count for text. A box and overflow flag appear only when a finding needs review; low or unknown contrast, overlaps, and out-of-bounds boxes are listed with the relevant elements. `contrast` is a number when the background is known, otherwise `null` with `contrast_reason`. Reports also identify the metrics source (`canvas-font-metrics` in WebView; deterministic width fallback in the Node contract). The browser canvas uses the fonts available to the WebView. A different viewer or font installation can wrap text differently, so inspect the rendered deck as well as the report.
+
+### Accepted element properties
+
+All five element types require `type`, `x`, `y`, `w`, and `h`. The handler rejects properties outside these PptxGenJS 4.0.1 lists; compound values such as fill, line, and hyperlink are validated by the handler too.
+
+- `text`: `text`, `runs`, `align`, `bold`, `breakLine`, `bullet`, `color`, `fontFace`, `fontSize`, `highlight`, `italic`, `lang`, `softBreakBefore`, `tabStops`, `textDirection`, `transparency`, `underline`, `valign`, `baseline`, `charSpacing`, `fit`, `fill`, `flipH`, `flipV`, `glow`, `hyperlink`, `indentLevel`, `isTextBox`, `line`, `lineSpacing`, `lineSpacingMultiple`, `margin`, `outline`, `paraSpaceAfter`, `paraSpaceBefore`, `placeholder`, `rectRadius`, `rotate`, `rtlMode`, `shadow`, `shape`, `strike`, `subscript`, `superscript`, `vert`, `wrap`, `autoFit`, `shrinkText`, `inset`, `lineDash`, `lineHead`, `lineSize`, `lineTail`, `objectName`.
+- `shape`: `shape`, `align`, `angleRange`, `arcThicknessRatio`, `fill`, `flipH`, `flipV`, `hyperlink`, `line`, `points`, `rectRadius`, `rotate`, `shadow`, `lineSize`, `lineDash`, `lineHead`, `lineTail`, `objectName`.
+- `image`: `dataUrl`, `sizing`, `altText`, `flipH`, `flipV`, `hyperlink`, `rotate`, `rounding`, `shadow`, `transparency`, `objectName`.
+- `chart`: `chartType`, `labels`, `datasets`, `options`. Chart options accepted by the handler are: `objectName`, `axisPos`, `chartColors`, `chartColorsOpacity`, `dataBorder`, `displayBlanksAs`, `invertedColors`, `lang`, `layout`, `shadow`, `showLabel`, `showLeaderLines`, `showLegend`, `showPercent`, `showSerName`, `showTitle`, `showValue`, `v3DPerspective`, `v3DRAngAx`, `v3DRotX`, `v3DRotY`, `chartArea`, `plotArea`, `border`, `fill`, `catAxes`, `catAxisBaseTimeUnit`, `catAxisCrossesAt`, `catAxisHidden`, `catAxisLabelColor`, `catAxisLabelFontBold`, `catAxisLabelFontFace`, `catAxisLabelFontItalic`, `catAxisLabelFontSize`, `catAxisLabelFrequency`, `catAxisLabelPos`, `catAxisLabelRotate`, `catAxisLineColor`, `catAxisLineShow`, `catAxisLineSize`, `catAxisLineStyle`, `catAxisMajorTickMark`, `catAxisMajorTimeUnit`, `catAxisMajorUnit`, `catAxisMaxVal`, `catAxisMinorTickMark`, `catAxisMinorTimeUnit`, `catAxisMinorUnit`, `catAxisMinVal`, `catAxisMultiLevelLabels`, `catAxisOrientation`, `catAxisTitle`, `catAxisTitleColor`, `catAxisTitleFontFace`, `catAxisTitleFontSize`, `catAxisTitleRotate`, `catGridLine`, `catLabelFormatCode`, `secondaryCatAxis`, `showCatAxisTitle`, `serAxes`, `serAxisBaseTimeUnit`, `serAxisHidden`, `serAxisLabelColor`, `serAxisLabelFontBold`, `serAxisLabelFontFace`, `serAxisLabelFontItalic`, `serAxisLabelFontSize`, `serAxisLabelFrequency`, `serAxisLabelPos`, `serAxisLineColor`, `serAxisLineShow`, `serAxisMajorTimeUnit`, `serAxisMajorUnit`, `serAxisMinorTimeUnit`, `serAxisMinorUnit`, `serAxisOrientation`, `serAxisTitle`, `serAxisTitleColor`, `serAxisTitleFontFace`, `serAxisTitleFontSize`, `serAxisTitleRotate`, `serGridLine`, `serLabelFormatCode`, `showSerAxisTitle`, `secondaryValAxis`, `showValAxisTitle`, `valAxes`, `valAxisCrossesAt`, `valAxisDisplayUnit`, `valAxisDisplayUnitLabel`, `valAxisHidden`, `valAxisLabelColor`, `valAxisLabelFontBold`, `valAxisLabelFontFace`, `valAxisLabelFontItalic`, `valAxisLabelFontSize`, `valAxisLabelFormatCode`, `valAxisLabelPos`, `valAxisLabelRotate`, `valAxisLineColor`, `valAxisLineShow`, `valAxisLineSize`, `valAxisLineStyle`, `valAxisLogScaleBase`, `valAxisMajorTickMark`, `valAxisMajorUnit`, `valAxisMaxVal`, `valAxisMinorTickMark`, `valAxisMinVal`, `valAxisOrientation`, `valAxisTitle`, `valAxisTitleColor`, `valAxisTitleFontFace`, `valAxisTitleFontSize`, `valAxisTitleRotate`, `valGridLine`, `valLabelFormatCode`, `bar3DShape`, `barDir`, `barGapDepthPct`, `barGapWidthPct`, `barGrouping`, `barOverlapPct`, `dataNoEffects`, `holeSize`, `lineCap`, `lineDash`, `lineDataSymbol`, `lineDataSymbolLineColor`, `lineDataSymbolLineSize`, `lineDataSymbolSize`, `lineSize`, `lineSmooth`, `firstSliceAng`, `radarStyle`, `dataLabelBkgrdColors`, `dataLabelColor`, `dataLabelFontBold`, `dataLabelFontFace`, `dataLabelFontItalic`, `dataLabelFontSize`, `dataLabelFormatCode`, `dataLabelFormatScatter`, `dataLabelPosition`, `dataTableFontSize`, `dataTableShowHorzBorder`, `dataTableShowKeys`, `dataTableShowOutline`, `dataTableShowVertBorder`, `legendColor`, `legendFontBold`, `legendFontFace`, `legendFontItalic`, `legendFontSize`, `legendPos`, `showDataTable`, `showDataTableHorzBorder`, `showDataTableKeys`, `showDataTableOutline`, `showDataTableVertBorder`, `title`, `titleColor`, `titleFontBold`, `titleFontFace`, `titleFontItalic`, `titleFontSize`, `titlePos`, `showCatName`.
+- `table`: `rows`, `align`, `bold`, `breakLine`, `bullet`, `color`, `fontFace`, `fontSize`, `highlight`, `italic`, `lang`, `margin`, `paraSpaceAfter`, `paraSpaceBefore`, `valign`, `underline`, `border`, `colW`, `fill`, `rowH`, `transparency`, `rotate`, `rtlMode`, `vert`, `wrap`, `objectName`. Cell options also accept `colspan`, `rowspan`, `hyperlink`, `line`, `shadow`, `fit`, `strike`, `subscript`, `superscript`, and `outline`.

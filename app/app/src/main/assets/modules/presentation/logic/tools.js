@@ -228,6 +228,12 @@
     ["fontSize", "lineSpacing", "lineSpacingMultiple", "paraSpaceBefore", "paraSpaceAfter", "charSpacing", "indentLevel", "baseline", "rotate", "transparency", "rectRadius", "lineSize", "inset"].forEach(function (key) {
       if (style[key] !== undefined) validateNumber(style[key], context, field + "." + key, false);
     });
+    ["colspan", "rowspan"].forEach(function (key) {
+      if (style[key] !== undefined) {
+        validateNumber(style[key], context, field + "." + key, true);
+        if (!Number.isInteger(style[key])) fail(context + ": " + field + "." + key + " must be an integer.");
+      }
+    });
     if (style.fontSize !== undefined && style.fontSize <= 0) fail(context + ": " + field + ".fontSize must be greater than zero.");
     if (style.color !== undefined) validateColor(style.color, context, field + ".color");
     if (style.fill !== undefined) validateFillOrLine(style.fill, context, field + ".fill", false);
@@ -364,28 +370,55 @@
   function validateTableRows(rows, context) {
     if (!Array.isArray(rows) || rows.length === 0) fail(context + ": rows must be a non-empty array.");
     var columns = null;
+    var occupiedUntil = [];
     rows.forEach(function (row, rowIndex) {
-      if (!Array.isArray(row) || row.length === 0) fail(context + ": rows[" + rowIndex + "] must be a non-empty array.");
-      if (columns === null) columns = row.length;
-      if (row.length !== columns) fail(context + ": rows[" + rowIndex + "] has a different number of cells than the first row.");
+      if (!Array.isArray(row)) fail(context + ": rows[" + rowIndex + "] must be an array.");
+      var cursor = 0;
       row.forEach(function (cell, cellIndex) {
         var cellField = "rows[" + rowIndex + "][" + cellIndex + "]";
-        if (typeof cell === "string") return;
-        objectValue(cell, context, cellField);
-        allowProperties(cell, ["text", "options"], context, cellField);
-        if (typeof cell.text !== "string" && !Array.isArray(cell.text)) fail(context + ": " + cellField + ".text must be a string or rich-text array.");
-        if (Array.isArray(cell.text)) {
-          if (cell.text.length === 0) fail(context + ": " + cellField + ".text must contain text runs.");
-          cell.text.forEach(function (run, runIndex) {
-            var runField = cellField + ".text[" + runIndex + "]";
-            objectValue(run, context, runField);
-            allowProperties(run, ["text", "options"], context, runField);
-            requireType(run.text, "string", context, runField + ".text");
-            if (run.options !== undefined) validateTextStyle(run.options, TABLE_CELL_PROPERTIES, context, runField + ".options");
-          });
+        var options = {};
+        if (typeof cell !== "string") {
+          objectValue(cell, context, cellField);
+          allowProperties(cell, ["text", "options"], context, cellField);
+          if (typeof cell.text !== "string" && !Array.isArray(cell.text)) fail(context + ": " + cellField + ".text must be a string or rich-text array.");
+          if (Array.isArray(cell.text)) {
+            if (cell.text.length === 0) fail(context + ": " + cellField + ".text must contain text runs.");
+            cell.text.forEach(function (run, runIndex) {
+              var runField = cellField + ".text[" + runIndex + "]";
+              objectValue(run, context, runField);
+              allowProperties(run, ["text", "options"], context, runField);
+              requireType(run.text, "string", context, runField + ".text");
+              if (run.options !== undefined) validateTextStyle(run.options, TABLE_CELL_PROPERTIES, context, runField + ".options");
+            });
+          }
+          if (cell.options !== undefined) {
+            options = cell.options;
+            validateTextStyle(options, TABLE_CELL_PROPERTIES, context, cellField + ".options");
+          }
         }
-        if (cell.options !== undefined) validateTextStyle(cell.options, TABLE_CELL_PROPERTIES, context, cellField + ".options");
+        var colspan = options.colspan === undefined ? 1 : options.colspan;
+        var rowspan = options.rowspan === undefined ? 1 : options.rowspan;
+        while (true) {
+          while (occupiedUntil[cursor] > rowIndex) cursor += 1;
+          var covered = false;
+          for (var column = cursor; column < cursor + colspan; column += 1) {
+            if (occupiedUntil[column] > rowIndex) { covered = true; break; }
+          }
+          if (!covered) break;
+          cursor += 1;
+        }
+        for (var spanColumn = cursor; spanColumn < cursor + colspan; spanColumn += 1) {
+          occupiedUntil[spanColumn] = Math.max(occupiedUntil[spanColumn] || 0, rowIndex + rowspan);
+        }
+        cursor += colspan;
       });
+      var logicalColumns = cursor;
+      for (var occupiedColumn = 0; occupiedColumn < occupiedUntil.length; occupiedColumn += 1) {
+        if (occupiedUntil[occupiedColumn] > rowIndex) logicalColumns = Math.max(logicalColumns, occupiedColumn + 1);
+      }
+      if (logicalColumns === 0) fail(context + ": rows[" + rowIndex + "] does not define any table columns.");
+      if (columns === null) columns = logicalColumns;
+      if (logicalColumns !== columns) fail(context + ": rows[" + rowIndex + "] resolves to " + logicalColumns + " logical columns; expected " + columns + ".");
     });
     return columns;
   }
@@ -493,6 +526,7 @@
           allowProperties(element, ["type", "chartType", "labels", "datasets", "x", "y", "w", "h", "options"], context, "element");
           validateCoordinates(element, context, "element", false, false);
           if (typeof element.chartType !== "string" || Object.values(pptx.ChartType).indexOf(element.chartType) === -1) fail(context + ": chartType is not a supported PptxGenJS chart type.");
+          if (element.chartType === "scatter") fail(context + ": chartType scatter is not supported by the labels and numeric values input format; use another chart type.");
           if (!Array.isArray(element.labels) || element.labels.length === 0) fail(context + ": labels must contain chart data.");
           element.labels.forEach(function (label, labelIndex) { requireType(label, "string", context, "labels[" + labelIndex + "]"); });
           if (!Array.isArray(element.datasets) || element.datasets.length === 0) fail(context + ": datasets must contain chart data.");
@@ -588,9 +622,16 @@
   }
 
   function marginPoints(value) {
-    if (value === undefined) return [3.5, 7, 3.5, 7];
+    if (value === undefined) return [7.2, 7.2, 3.6, 3.6];
     if (typeof value === "number") return [value, value, value, value];
     return value;
+  }
+
+  function bulletIndentPoints(element) {
+    if (!element.bullet) return 0;
+    var indent = typeof element.bullet === "object" && element.bullet.indent ? element.bullet.indent : 27;
+    var level = typeof element.indentLevel === "number" && element.indentLevel > 0 ? element.indentLevel : 0;
+    return indent * (level ? 1 + level : 1);
   }
 
   function fontCss(fontSizePt, fontFace) {
@@ -604,6 +645,71 @@
 
   function flattenText(element) {
     return textRuns(element).map(function (run) { return run.text; }).join("");
+  }
+
+  function fillBackground(fill) {
+    if (fill === undefined || fill === null || fill.type === "none") return null;
+    if (typeof fill !== "object") return { color: null, reason: "background is unknown" };
+    if (fill.transparency !== undefined && fill.transparency !== 0) return { color: null, reason: "background is transparent/unknown" };
+    if (fill.alpha !== undefined) return { color: null, reason: "background is transparent/unknown" };
+    if (fill.color !== undefined) return { color: fill.color, reason: null };
+    return { color: null, reason: "background is a gradient/unknown" };
+  }
+
+  function coversMostOfBox(candidate, target) {
+    var left = Math.max(candidate.x, target.x);
+    var top = Math.max(candidate.y, target.y);
+    var right = Math.min(candidate.x + candidate.w, target.x + target.w);
+    var bottom = Math.min(candidate.y + candidate.h, target.y + target.h);
+    var intersectionArea = Math.max(0, right - left) * Math.max(0, bottom - top);
+    var targetArea = target.w * target.h;
+    var contains = candidate.x <= target.x && candidate.y <= target.y &&
+      candidate.x + candidate.w >= target.x + target.w && candidate.y + candidate.h >= target.y + target.h;
+    return contains || (targetArea > 0 && intersectionArea > targetArea / 2);
+  }
+
+  function effectiveTextBackground(source, args, element, elementIndex) {
+    if (element.fill !== undefined && element.fill !== null && element.fill.type !== "none") {
+      return fillBackground(element.fill) || { color: null, reason: "background is transparent/unknown" };
+    }
+    var textBox = { x: element.x, y: element.y, w: element.w, h: element.h };
+    for (var previousIndex = elementIndex - 1; previousIndex >= 0; previousIndex -= 1) {
+      var candidate = source.elements[previousIndex];
+      if ((candidate.type !== "shape" && candidate.type !== "image") || !coversMostOfBox(candidate, textBox)) continue;
+      if (candidate.type === "image") return { color: null, reason: "background is an image/unknown" };
+      if (candidate.fill === undefined || candidate.fill === null || candidate.fill.type === "none") continue;
+      return fillBackground(candidate.fill) || { color: null, reason: "background is transparent/unknown" };
+    }
+    var slideBackground = source.background !== undefined
+      ? source.background
+      : (args.theme && args.theme.background !== undefined ? args.theme.background : "FFFFFF");
+    var color = backgroundColor(slideBackground);
+    return color === undefined || color === null
+      ? { color: null, reason: "background is unknown" }
+      : { color: color, reason: null };
+  }
+
+  function textContrast(element, background) {
+    if (background.reason) return { contrast: null, reason: background.reason, low: false };
+    var runContrasts = textRuns(element).map(function (run, runIndex) {
+      var foreground = run.color || element.color || "000000";
+      var result = contrastRatio(foreground, background.color);
+      return { run: runIndex, foreground: foreground, ratio: result.known ? result.ratio : null };
+    });
+    if (runContrasts.some(function (entry) { return entry.ratio === null; })) {
+      return { contrast: null, reason: "foreground color is unknown", low: false };
+    }
+    var uniqueRatios = runContrasts.filter(function (entry, index) {
+      return runContrasts.findIndex(function (candidate) { return candidate.ratio === entry.ratio; }) === index;
+    });
+    var minimum = Math.min.apply(Math, runContrasts.map(function (entry) { return entry.ratio; }));
+    return {
+      contrast: uniqueRatios.length > 1
+        ? { ratio: minimum, runs: runContrasts }
+        : minimum,
+      reason: null,
+      low: minimum < 4.5
+    };
   }
 
   function runFontSize(element, run) { return run.fontSize !== undefined ? run.fontSize : (element.fontSize !== undefined ? element.fontSize : 18); }
@@ -623,8 +729,8 @@
   function measureText(element, context, themeBodyFontFace) {
     var runs = textRuns(element);
     var margins = marginPoints(element.margin);
-    var available = Math.max(0, (element.w - (margins[1] + margins[3]) / 72) * 96);
-    if (element.bullet && typeof element.bullet === "object" && element.bullet.indent !== undefined) available = Math.max(0, available - element.bullet.indent * 96 / 72);
+    var available = Math.max(0, (element.w - (margins[0] + margins[1]) / 72) * 96);
+    available = Math.max(0, available - bulletIndentPoints(element) * 96 / 72);
     var lines = [];
     var current = { width: 0, baseHeightPx: 0, allReal: true };
     var paragraphCount = 1;
@@ -687,15 +793,12 @@
       pxHeight += lineHeightPt * 96 / 72;
       allRealMetrics = allRealMetrics && line.allReal;
     });
-    pxHeight += (margins[0] + margins[2]) * 96 / 72;
+    pxHeight += (margins[2] + margins[3]) * 96 / 72;
     pxHeight += paragraphCount * ((element.paraSpaceBefore || 0) + (element.paraSpaceAfter || 0)) * 96 / 72;
     var requestedSizes = [];
     runs.forEach(function (run) { requestedSizes.push(runFontSize(element, run)); });
     return {
-      text: flattenText(element),
       needed_h: pxHeight / 96,
-      box_h: element.h,
-      overflow: pxHeight / 96 > element.h,
       line_count: lines.length,
       minimum_font_size_pt: Math.min.apply(Math, requestedSizes),
       metrics_source: allRealMetrics ? "canvas-font-metrics" : "canvas-width-with-font-size-fallback"
@@ -825,50 +928,62 @@
 
   async function createMeasurementReport(args, pptxBytes, textMeasurements) {
     var archive = await global.JSZip.loadAsync(pptxBytes);
-    var report = {
-      layout: { name: "LAYOUT_WIDE", width_in: SLIDE_WIDTH, height_in: SLIDE_HEIGHT },
-      slides: [],
-      warnings: []
-    };
+    var report = { layout: { name: "LAYOUT_WIDE", width_in: SLIDE_WIDTH, height_in: SLIDE_HEIGHT }, slides: [] };
+    var metricsSources = [];
     args.slides.forEach(function (source, slideIndex) {
       var slideNumber = slideIndex + 1;
       var xmlPromise = archive.file("ppt/slides/slide" + slideNumber + ".xml").async("string");
       report.slides.push(xmlPromise.then(function (xml) {
         var generated = presentationObjectsFromXml(xml);
+        var boxes = source.elements.map(function (element, elementIndex) {
+          var geometry = generated[elementIndex];
+          return geometry ? geometry.box : { x: element.x, y: element.y, w: element.w, h: element.h };
+        });
+        var overlaps = [];
+        var overlappingElements = Object.create(null);
+        for (var firstIndex = 0; firstIndex < boxes.length; firstIndex += 1) {
+          for (var secondIndex = firstIndex + 1; secondIndex < boxes.length; secondIndex += 1) {
+            var first = boxes[firstIndex];
+            var second = boxes[secondIndex];
+            var overlapWidth = Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x);
+            var overlapHeight = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y);
+            if (overlapWidth > 0 && overlapHeight > 0) {
+              overlaps.push({ elements: [firstIndex, secondIndex], area_in2: overlapWidth * overlapHeight });
+              overlappingElements[firstIndex] = true;
+              overlappingElements[secondIndex] = true;
+            }
+          }
+        }
         var elements = [];
         var outsideBounds = [];
         var minimumFontSize = null;
         source.elements.forEach(function (element, elementIndex) {
           var geometry = generated[elementIndex];
-          var box = geometry ? geometry.box : { x: element.x, y: element.y, w: element.w, h: element.h };
+          var box = boxes[elementIndex];
+          var outside = box.x < 0 || box.y < 0 || box.x + box.w > SLIDE_WIDTH || box.y + box.h > SLIDE_HEIGHT;
           var entry = {
             index: elementIndex,
-            type: objectTypeFromXml(geometry ? geometry.node : { localName: "sp" }, element.type),
-            box: box,
-            outside_slide: box.x < 0 || box.y < 0 || box.x + box.w > SLIDE_WIDTH || box.y + box.h > SLIDE_HEIGHT
+            type: objectTypeFromXml(geometry ? geometry.node : { localName: "sp" }, element.type)
           };
+          var hasFinding = outside || Boolean(overlappingElements[elementIndex]);
+          if (outside) outsideBounds.push({ index: elementIndex, type: element.type, box: box });
           if (element.type === "text") {
             var measurement = textMeasurements[slideIndex][elementIndex];
-            measurement.box_h = box.h;
-            measurement.overflow = measurement.needed_h > box.h;
-            entry.text = measurement;
+            metricsSources.push(measurement.metrics_source);
+            var overflow = measurement.needed_h > box.h;
+            var background = effectiveTextBackground(source, args, element, elementIndex);
+            var contrast = textContrast(element, background);
+            entry.needed_h = measurement.needed_h;
+            entry.line_count = measurement.line_count;
+            if (contrast.contrast !== null) entry.contrast = contrast.contrast;
+            else {
+              entry.contrast = null;
+              entry.contrast_reason = contrast.reason;
+            }
+            hasFinding = hasFinding || overflow || contrast.low || contrast.contrast === null;
+            if (overflow) entry.overflow = true;
             var currentMin = measurement.minimum_font_size_pt;
             minimumFontSize = minimumFontSize === null ? currentMin : Math.min(minimumFontSize, currentMin);
-            entry.minimum_font_size_pt = currentMin;
-            var slideBg = source.background !== undefined ? backgroundColor(source.background) : (args.theme && args.theme.background !== undefined ? backgroundColor(args.theme.background) : "FFFFFF");
-            var fillColor = element.fill && element.fill.color ? element.fill.color : slideBg;
-            var runContrasts = textRuns(element).map(function (run, runIndex) {
-              var textColor = run.color || element.color || "000000";
-              return Object.assign({ run: runIndex, foreground: textColor, background: fillColor }, contrastRatio(textColor, fillColor));
-            });
-            var knownContrasts = runContrasts.filter(function (contrast) { return contrast.known; });
-            entry.contrast = {
-              known: knownContrasts.length === runContrasts.length,
-              ratio: knownContrasts.length === runContrasts.length
-                ? Math.min.apply(Math, knownContrasts.map(function (contrast) { return contrast.ratio; }))
-                : null,
-              runs: runContrasts
-            };
           } else {
             var explicitFontSizes = elementFontSizes(element);
             if (explicitFontSizes.length > 0) {
@@ -878,34 +993,26 @@
                 : Math.min(minimumFontSize, entry.minimum_font_size_pt);
             }
           }
-          if (entry.outside_slide) outsideBounds.push({ index: elementIndex, type: element.type, box: box });
           if (element.type === "image" && element.dataUrl.slice(0, 30).toLowerCase().indexOf("data:image/svg+xml") === 0) {
+            if (!report.warnings) report.warnings = [];
             report.warnings.push({ slide: slideNumber, element: elementIndex, type: "image", field: "dataUrl", fact: "SVG image data is not supported by the presentation viewer or thumbnail renderer." });
           }
+          if (hasFinding) entry.box = box;
           elements.push(entry);
         });
-        var overlaps = [];
-        for (var firstIndex = 0; firstIndex < elements.length; firstIndex += 1) {
-          for (var secondIndex = firstIndex + 1; secondIndex < elements.length; secondIndex += 1) {
-            var first = elements[firstIndex].box;
-            var second = elements[secondIndex].box;
-            var overlapWidth = Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x);
-            var overlapHeight = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y);
-            if (overlapWidth > 0 && overlapHeight > 0) {
-              overlaps.push({ elements: [firstIndex, secondIndex], area_in2: overlapWidth * overlapHeight });
-            }
-          }
-        }
-        return {
+        var slideReport = {
           slide: slideNumber,
           elements: elements,
-          overlaps: overlaps,
-          outside_bounds: outsideBounds,
           minimum_font_size_pt: minimumFontSize
         };
+        if (overlaps.length) slideReport.overlaps = overlaps;
+        if (outsideBounds.length) slideReport.outside_bounds = outsideBounds;
+        return slideReport;
       }));
     });
     report.slides = await Promise.all(report.slides);
+    var distinctMetricsSources = metricsSources.filter(function (source, index) { return metricsSources.indexOf(source) === index; });
+    if (distinctMetricsSources.length) report.metrics_source = distinctMetricsSources.length === 1 ? distinctMetricsSources[0] : "mixed";
     return report;
   }
 
@@ -979,5 +1086,6 @@
     };
   }
 
+  global.presentationChartOptionProperties = Object.freeze(CHART_PROPERTIES.slice());
   global.createPresentation = createPresentation;
 }(window));

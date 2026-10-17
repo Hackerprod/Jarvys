@@ -157,6 +157,11 @@ object ModuleManifestParser {
             if (additional is JSONObject) validateSchema(additional, "$path.additionalProperties")
             else require(additional is Boolean) { "$path.additionalProperties must be a boolean or schema object" }
         }
+        schema.opt("enum")?.let { values ->
+            val alternatives = values as? JSONArray
+                ?: throw IllegalArgumentException("$path.enum must be an array")
+            require(alternatives.length() > 0) { "$path.enum must not be empty" }
+        }
         schema.opt("anyOf")?.let { options ->
             val alternatives = options as? JSONArray
                 ?: throw IllegalArgumentException("$path.anyOf must be an array")
@@ -219,7 +224,7 @@ object ModuleManifestParser {
 
     private val JSON_TYPES = setOf("object", "array", "string", "number", "integer", "boolean", "null")
     private val SCHEMA_KEYWORDS = setOf(
-        "type", "properties", "required", "items", "additionalProperties", "anyOf", "description", "title",
+        "type", "properties", "required", "items", "additionalProperties", "anyOf", "enum", "description", "title",
     )
     private val MODULE_ID = Regex("[A-Za-z][A-Za-z0-9._-]*")
     private val TOOL_NAME = Regex("[A-Za-z][A-Za-z0-9_]*")

@@ -9,6 +9,19 @@ const moduleDirectory = path.resolve(process.argv[2] || path.join(__dirname, "..
 const manifest = JSON.parse(fs.readFileSync(path.join(moduleDirectory, "manifest.json"), "utf8"));
 const declaration = manifest.tools[0];
 const handlerFile = path.join(moduleDirectory, declaration.handler.split("#")[0]);
+const benchmarkOnly = process.env.PPTX_REPORT_BENCH_ONLY === "1";
+if (manifest.id === "com.jarvys.module.presentation" && !benchmarkOnly) {
+  const schema = declaration.inputSchema;
+  const elementSchema = schema.properties.slides.items.properties.elements.items;
+  assert.deepEqual(elementSchema.properties.type.enum, ["text", "shape", "image", "chart", "table"]);
+  assert.deepEqual(elementSchema.required, ["type", "x", "y", "w", "h"]);
+  assert.match(elementSchema.properties.margin.description, /Text: points.*Table:/,
+    "the compact schema documents PptxGenJS margin units and orders");
+  assert.equal(elementSchema.additionalProperties, true, "the handler remains authoritative for secondary element options");
+  assert.equal(elementSchema.properties.options.additionalProperties, true, "chart options pass through the compact schema");
+  assert.doesNotMatch(JSON.stringify(schema), /valAxisLabelFontSize|catAxisLabelFontFace/,
+    "the compact manifest must not duplicate the chart option allowlist");
+}
 const thumbnailPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=";
 const canvases = [];
 const thumbnailDrawCalls = [];
@@ -177,6 +190,26 @@ function makeCanvas() {
   context.getContext = () => context;
   canvas.getContext = () => context;
   return canvas;
+}
+
+function makeReportBenchInput() {
+  return {
+    title: "Report size 20 by 8",
+    slides: Array.from({ length: 20 }, (_, slideIndex) => ({
+      elements: Array.from({ length: 8 }, (_, elementIndex) => ({
+        type: "text",
+        text: "Slide " + (slideIndex + 1) + " item " + (elementIndex + 1),
+        x: 0.3 + (elementIndex % 4) * 3.2,
+        y: 0.3 + Math.floor(elementIndex / 4) * 1.0,
+        w: 3.0,
+        h: 0.7,
+        fontSize: 12,
+        fontFace: "Arial",
+        color: "111111",
+        margin: 0,
+      })),
+    })),
+  };
 }
 
 const document = {
@@ -349,8 +382,19 @@ async function main() {
   new vm.Script(handlerSource, handlerOptions).runInThisContext();
   const exportName = declaration.handler.split("#")[1];
   assert.equal(typeof globalThis[exportName], "function");
+  if (!benchmarkOnly && manifest.id === "com.jarvys.module.presentation") {
+    assert.ok(Array.isArray(globalThis.presentationChartOptionProperties));
+    assert.ok(globalThis.presentationChartOptionProperties.includes("valAxisLabelFontSize"));
+    assert.ok(globalThis.presentationChartOptionProperties.includes("dataLabelFormatScatter"));
+  }
   const result = await globalThis[exportName](argumentsObject, host);
   assert.equal(result.success, true);
+  if (benchmarkOnly && manifest.id === "com.jarvys.module.presentation") {
+    const bench = await globalThis[exportName](makeReportBenchInput(), host);
+    const benchReport = JSON.parse(bench.content).measurementReport;
+    process.stdout.write("report-size-20x8=" + Buffer.byteLength(JSON.stringify(benchReport), "utf8") + " B\n");
+    return;
+  }
   assert.equal(result.artifactType, manifest.artifactTypes[0].type);
   assert.equal(deliveries.length, 1);
 
@@ -393,20 +437,23 @@ async function main() {
         const measured = reportSlide.elements[elementIndex];
         assert.equal(measured.index, elementIndex);
         assert.equal(measured.type, element.type);
-        assert.equal(measured.box.x, boxes[elementIndex].x / 914400);
-        assert.equal(measured.box.y, boxes[elementIndex].y / 914400);
-        assert.equal(measured.box.x, element.x === undefined ? measured.box.x : element.x);
-        assert.equal(measured.box.y, element.y);
+        assert.equal(boxes[elementIndex].x / 914400, element.x === undefined ? boxes[elementIndex].x / 914400 : element.x);
+        assert.equal(boxes[elementIndex].y / 914400, element.y);
         if (element.type !== "table") {
-          assert.equal(measured.box.w, element.w);
-          assert.equal(measured.box.h, element.h);
+          assert.equal(boxes[elementIndex].w / 914400, element.w);
+          assert.equal(boxes[elementIndex].h / 914400, element.h);
         } else {
-          assert.equal(measured.box.w, element.w);
+          assert.equal(boxes[elementIndex].w / 914400, element.w);
         }
-        assert.equal(measured.outside_slide, false);
+        if (measured.box) assert.deepEqual(measured.box, {
+          x: boxes[elementIndex].x / 914400,
+          y: boxes[elementIndex].y / 914400,
+          w: boxes[elementIndex].w / 914400,
+          h: boxes[elementIndex].h / 914400,
+        });
       });
-      assert.deepEqual(reportSlide.outside_bounds, [], "accepted explicit elements stay within slide bounds");
-      assert.deepEqual(reportSlide.overlaps, [], "the four authored examples have no intersecting boxes");
+      assert.equal(reportSlide.outside_bounds?.length || 0, 0, "accepted explicit elements stay within slide bounds");
+      assert.equal(reportSlide.overlaps?.length || 0, 0, "the four authored examples have no intersecting boxes");
     }
 
     const coverXml = await zip.file("ppt/slides/slide1.xml").async("string");
@@ -415,7 +462,8 @@ async function main() {
     assert.match(coverXml, /<a:prstGeom prst="ellipse"/);
     assert.match(coverXml, /<a:rPr[^>]*b="1"/);
     assert.match(coverXml, /<a:rPr[^>]*i="1"/);
-    assert.equal(response.measurementReport.slides[0].elements[1].contrast.known, true);
+    assert.ok(response.measurementReport.slides[0].elements[1].contrast.ratio > 1);
+    assert.equal(response.measurementReport.metrics_source, "canvas-width-with-font-size-fallback");
     assert.ok(response.measurementReport.slides[0].minimum_font_size_pt > 0);
 
     const imageXml = await zip.file("ppt/slides/slide2.xml").async("string");
@@ -445,11 +493,11 @@ async function main() {
     const ownerResult = await globalThis.createPresentation({ title: "Owner overlap regression", slides: [{ elements: ownerElements }] }, host);
     assert.equal(ownerResult.success, true, "overflow and overlap are feedback, not delivery errors");
     const ownerReport = JSON.parse(ownerResult.content).measurementReport.slides[0];
-    assert.equal(ownerReport.elements[0].text.overflow, true);
-    assert.equal(ownerReport.elements[0].text.line_count, 2, "the owner regression title wraps onto two lines");
-    assert.ok(ownerReport.elements[0].text.needed_h > ownerReport.elements[0].text.box_h);
+    assert.equal(ownerReport.elements[0].overflow, true);
+    assert.equal(ownerReport.elements[0].line_count, 2, "the owner regression title wraps onto two lines");
+    assert.ok(ownerReport.elements[0].needed_h > ownerReport.elements[0].box.h);
     assert.deepEqual(ownerReport.overlaps.map((entry) => entry.elements), [[0, 1]]);
-    assert.equal(ownerReport.elements[0].contrast.known, true);
+    assert.ok(ownerReport.elements[0].contrast > 1);
     assert.ok(ownerReport.minimum_font_size_pt > 0);
 
     const correctedElements = ownerElements.map((element, index) => index === 0
@@ -458,16 +506,95 @@ async function main() {
         : { ...element, y: 2.7 + (index - 2) * 0.8 });
     const correctedResult = await globalThis.createPresentation({ title: "Owner corrected layout", slides: [{ elements: correctedElements }] }, host);
     const correctedReport = JSON.parse(correctedResult.content).measurementReport.slides[0];
-    assert.equal(correctedReport.elements[0].text.overflow, false);
-    assert.deepEqual(correctedReport.overlaps, []);
+    assert.equal(correctedReport.elements[0].overflow, undefined);
+    assert.equal(correctedReport.overlaps?.length || 0, 0);
 
     const generatedOutOfBounds = await globalThis.createPresentation({
       title: "Generated table crosses slide edge",
       slides: [{ elements: [{ type: "table", rows: [["A"], ["B"]], x: 0.8, y: 7.1, w: 4.0, rowH: [1.0, 1.0] }] }],
     }, host);
     const generatedBoundsReport = JSON.parse(generatedOutOfBounds.content).measurementReport.slides[0];
-    assert.equal(generatedBoundsReport.elements[0].outside_slide, true);
+    assert.equal(generatedBoundsReport.elements[0].box.y + generatedBoundsReport.elements[0].box.h > 7.5, true);
     assert.equal(generatedBoundsReport.outside_bounds.length, 1);
+
+    const exactMargin = await globalThis.createPresentation({
+      title: "PptxGenJS margin order",
+      slides: [{ elements: [{ type: "text", text: "X", x: 0.8, y: 0.8, w: 0.6, h: 0.6, fontSize: 18, color: "000000", margin: [0, 0, 18, 18] }] }],
+    }, host);
+    const exactMarginReport = JSON.parse(exactMargin.content).measurementReport.slides[0].elements[0];
+    assert.equal(exactMarginReport.overflow, true, "bottom and top margin insets are included in required height");
+    assert.ok(exactMarginReport.needed_h > 0.7 && exactMarginReport.needed_h < 0.8,
+      "18 pt font plus 18 pt top and bottom insets needs about 0.75 in");
+    const exactMarginXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const exactBodyPr = descendants(parseXml(exactMarginXml)).find((node) => node.localName === "bodyPr");
+    assert.equal(exactBodyPr.getAttribute("lIns"), "0");
+    assert.equal(exactBodyPr.getAttribute("rIns"), "0");
+    assert.equal(exactBodyPr.getAttribute("bIns"), "228600");
+    assert.equal(exactBodyPr.getAttribute("tIns"), "228600");
+
+    const scalarMargin = await globalThis.createPresentation({
+      title: "Scalar text margin",
+      slides: [{ elements: [{ type: "text", text: "Scalar margin", x: 0.8, y: 0.8, w: 4, h: 1, fontSize: 18, color: "000000", margin: 6 }] }],
+    }, host);
+    const scalarMarginXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const scalarBodyPr = descendants(parseXml(scalarMarginXml)).find((node) => node.localName === "bodyPr");
+    assert.deepEqual(["lIns", "rIns", "bIns", "tIns"].map((key) => scalarBodyPr.getAttribute(key)),
+      ["76200", "76200", "76200", "76200"], "scalar margin is applied in points on all sides");
+
+    const bulletResult = await globalThis.createPresentation({
+      title: "Bullet indentation measurement",
+      slides: [{ elements: [
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 0.8, y: 1, w: 1.3, h: 2, fontSize: 12, color: "000000", margin: 0 },
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 4, y: 1, w: 1.3, h: 2, fontSize: 12, color: "000000", margin: 0, bullet: true },
+        { type: "text", text: "alpha beta gamma delta epsilon zeta eta theta", x: 7, y: 1, w: 2.5, h: 2, fontSize: 12, color: "000000", margin: 0, bullet: { indent: 36 }, indentLevel: 1 },
+      ] }],
+    }, host);
+    const bulletReport = JSON.parse(bulletResult.content).measurementReport.slides[0];
+    assert.ok(bulletReport.elements[1].line_count > bulletReport.elements[0].line_count,
+      "the default bullet hanging indent reduces the measured line width");
+    const bulletXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const paragraphProperties = descendants(parseXml(bulletXml)).filter((node) => node.localName === "pPr");
+    assert.equal(paragraphProperties[1].getAttribute("marL"), "342900");
+    assert.equal(paragraphProperties[1].getAttribute("indent"), "-342900");
+    assert.equal(paragraphProperties[2].getAttribute("marL"), "914400");
+    assert.equal(paragraphProperties[2].getAttribute("indent"), "-457200");
+
+    const contrastResult = await globalThis.createPresentation({
+      title: "Effective background contrast",
+      slides: [{ background: "FFFFFF", elements: [
+        { type: "shape", shape: "rect", x: 1, y: 1, w: 4, h: 2, fill: { color: "112244" } },
+        { type: "text", text: "White on dark card", x: 1.5, y: 1.5, w: 3, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "text", text: "Light grey on white", x: 6, y: 1, w: 3, h: 0.5, fontSize: 18, color: "D8D8D8", margin: 0 },
+        { type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 1, y: 4, w: 4, h: 2 },
+        { type: "text", text: "Text over image", x: 1.5, y: 4.5, w: 3, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+      ] }],
+    }, host);
+    const contrastReport = JSON.parse(contrastResult.content).measurementReport.slides[0];
+    assert.ok(contrastReport.elements[1].contrast > 7, "white text inherits the preceding opaque dark shape fill");
+    assert.ok(contrastReport.elements[2].contrast < 4.5, "light grey text on white reports its low ratio");
+    assert.equal(contrastReport.elements[4].contrast, null, "the image does not produce a fabricated ratio");
+    assert.equal(contrastReport.elements[4].contrast_reason, "background is an image/unknown");
+
+    const tableSpans = await globalThis.createPresentation({
+      title: "Logical table spans",
+      slides: [{ elements: [
+        { type: "table", rows: [[{ text: "AB", options: { colspan: 2 } }], ["A", "B"]], x: 0.8, y: 0.8, w: 4, h: 1.4 },
+        { type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C"]], x: 0.8, y: 3, w: 4, h: 1.4 },
+      ] }],
+    }, host);
+    const spanXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    assert.match(spanXml, /gridSpan="2"/, "a colspan cell occupies two logical columns");
+    assert.match(spanXml, /rowSpan="2"/, "a rowspan cell occupies a column in the next row");
+    assert.match(spanXml, /vMerge="1"/, "PptxGenJS writes the covered continuation cell");
+    await assert.rejects(globalThis.createPresentation({
+      title: "Malformed table span",
+      slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C", "D"]], x: 0.8, y: 0.8, w: 4 }] }],
+    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
+      error.message.includes("rows[1]") && error.message.includes("logical columns"));
 
     const beforeInvalidInputs = deliveries.length;
     const invalidCases = [
@@ -481,6 +608,7 @@ async function main() {
       [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "datasets"],
       [{ type: "chart", chartType: "bar", labels: ["North", "South"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "values"],
       [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [NaN] }], x: 0, y: 0, w: 2, h: 2 }, "values[0]"],
+      [{ type: "chart", chartType: "scatter", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "chartType scatter is not supported"],
       [{ type: "image", dataUrl: "https://example.invalid/image.png", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
       [{ type: "image", dataUrl: "data:image/png;base64,not-an-image", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
       [{ type: "table", rows: [["A", "B"], ["only one"]], x: 0, y: 0, w: 3 }, "rows[1]"]
@@ -501,6 +629,9 @@ async function main() {
     const svgReport = JSON.parse(svgResult.content).measurementReport;
     assert.equal(svgReport.warnings[0].field, "dataUrl");
     assert.match(svgReport.warnings[0].fact, /SVG/);
+    const reportSizeResult = await globalThis.createPresentation(makeReportBenchInput(), host);
+    const reportSize = Buffer.byteLength(JSON.stringify(JSON.parse(reportSizeResult.content).measurementReport), "utf8");
+    process.stdout.write("report-size-20x8=" + reportSize + " B\n");
     const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
     assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
     assert.doesNotMatch(viewerHtml, /<h1\b/, "the host already provides the presentation title");

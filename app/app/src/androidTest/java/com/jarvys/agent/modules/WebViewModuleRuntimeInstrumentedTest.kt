@@ -124,16 +124,58 @@ class WebViewModuleRuntimeInstrumentedTest {
         assertEquals(13.333333333333334, measurementReport.getJSONObject("layout").getDouble("width_in"), 0.000001)
         val measuredSlide = measurementReport.getJSONArray("slides").getJSONObject(0)
         val measuredTitle = measuredSlide.getJSONArray("elements").getJSONObject(0)
-        val textMetrics = measuredTitle.getJSONObject("text")
-        assertEquals("canvas-font-metrics", textMetrics.getString("metrics_source"))
-        assertEquals(0.8, measuredTitle.getJSONObject("box").getDouble("x"), 0.000001)
-        assertEquals(1.0, textMetrics.getDouble("box_h"), 0.000001)
-        assertTrue("canvas measurement must return a positive required text height", textMetrics.getDouble("needed_h") > 0.0)
-        assertFalse("the explicit title box must fit", textMetrics.getBoolean("overflow"))
-        assertTrue(measuredTitle.getJSONObject("contrast").getBoolean("known"))
-        assertTrue(measuredTitle.getJSONObject("contrast").getDouble("ratio") > 20.0)
+        assertEquals("canvas-font-metrics", measurementReport.getString("metrics_source"))
+        assertTrue("the requested x/y in EMU must remain exact", requireNotNull(slideXml).contains("<a:off x=\"731520\" y=\"731520\"/>"))
+        assertTrue("the requested w/h in EMU must remain exact", requireNotNull(slideXml).contains("<a:ext cx=\"7315200\" cy=\"914400\"/>"))
+        assertTrue("canvas measurement must return a positive required text height", measuredTitle.getDouble("needed_h") > 0.0)
+        assertFalse("a fitting title omits the overflow finding", measuredTitle.has("overflow"))
+        assertFalse("a clean element omits its box", measuredTitle.has("box"))
+        assertTrue(measuredTitle.getDouble("contrast") > 20.0)
         assertEquals(2, measuredSlide.getJSONArray("elements").length())
-        assertEquals(0, measuredSlide.getJSONArray("overlaps").length())
+        assertFalse("a clean slide omits the overlap list", measuredSlide.has("overlaps"))
+        assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
+    }
+
+    @Test
+    fun createPresentationMeasuresRealMarginsBulletsAndEffectiveContrast() {
+        val module = ModuleRegistry.fromAssets(context).module("com.jarvys.module.presentation")!!
+        val tool = module.tools.single { it.name == "create_presentation" }
+        val access = CapturingModuleAccess(CONVERSATION_ID)
+
+        val result = executeInWebView(module, tool, mapOf(
+            "title" to "Canvas measurement regressions",
+            "slides" to listOf(mapOf(
+                "background" to "FFFFFF",
+                "elements" to listOf(
+                    mapOf("type" to "shape", "shape" to "rect", "x" to 0.8, "y" to 1.0, "w" to 3.2, "h" to 1.4, "fill" to mapOf("color" to "112244")),
+                    mapOf("type" to "text", "text" to "White on dark card", "x" to 1.0, "y" to 1.2, "w" to 2.8, "h" to 0.6, "fontSize" to 18, "color" to "FFFFFF", "margin" to 0),
+                    mapOf("type" to "text", "text" to "Light grey on white", "x" to 4.5, "y" to 1.2, "w" to 2.8, "h" to 0.6, "fontSize" to 18, "color" to "D8D8D8", "margin" to 0),
+                    mapOf("type" to "text", "text" to "X", "x" to 0.8, "y" to 3.0, "w" to 0.6, "h" to 0.6, "fontSize" to 18, "color" to "000000", "margin" to listOf(0, 0, 18, 18)),
+                    mapOf("type" to "text", "text" to "Scalar inset", "x" to 2.0, "y" to 3.0, "w" to 4.0, "h" to 1.0, "fontSize" to 18, "color" to "000000", "margin" to 6),
+                    mapOf("type" to "text", "text" to "A long bullet paragraph wraps after the PptxGenJS hanging indent", "x" to 7.0, "y" to 1.0, "w" to 1.2, "h" to 2.0, "fontSize" to 16, "color" to "000000", "margin" to 0, "bullet" to true),
+                ),
+            )),
+        ), access)
+
+        assertTrue("create_presentation failed in Android WebView: ${result.content}", result.success)
+        val delivery = requireNotNull(access.delivery.get()) { "create_presentation did not deliver an artifact" }
+        val content = JSONObject(result.content)
+        val report = content.getJSONObject("measurementReport")
+        assertEquals("canvas-font-metrics", report.getString("metrics_source"))
+        val elements = report.getJSONArray("slides").getJSONObject(0).getJSONArray("elements")
+        assertTrue("white text must use the dark rectangle beneath it", elements.getJSONObject(1).getDouble("contrast") > 7.0)
+        assertTrue("light grey text on white must report low contrast", elements.getJSONObject(2).getDouble("contrast") < 4.5)
+        val exactMargin = elements.getJSONObject(3)
+        assertTrue("18 pt font with 18 pt top and bottom margins must overflow a 0.6 in box", exactMargin.getBoolean("overflow"))
+        assertTrue(exactMargin.getDouble("needed_h") > 0.6)
+
+        val slideXml = requireNotNull(readZipEntry(delivery.bytes, "ppt/slides/slide1.xml"))
+        assertTrue(slideXml.contains("bIns=\"228600\""))
+        assertTrue(slideXml.contains("tIns=\"228600\""))
+        assertTrue(slideXml.contains("lIns=\"76200\""))
+        assertTrue(slideXml.contains("rIns=\"76200\""))
+        assertTrue(slideXml.contains("marL=\"342900\""))
+        assertTrue(slideXml.contains("indent=\"-342900\""))
         assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
     }
 
