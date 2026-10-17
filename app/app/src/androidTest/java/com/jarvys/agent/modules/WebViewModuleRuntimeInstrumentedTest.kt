@@ -137,6 +137,51 @@ class WebViewModuleRuntimeInstrumentedTest {
     }
 
     @Test
+    fun createPresentationReturnsCorrectableValidationMessageThroughCoreToolResult() {
+        val module = ModuleRegistry.fromAssets(context).module("com.jarvys.module.presentation")!!
+        val tool = module.tools.single { it.name == "create_presentation" }
+        val access = CapturingModuleAccess(CONVERSATION_ID)
+
+        val result = executeInWebView(module, tool, mapOf(
+            "title" to "Invalid element type",
+            "slides" to listOf(mapOf("elements" to listOf(mapOf(
+                "type" to "audio",
+                "x" to 0,
+                "y" to 0,
+                "w" to 1,
+                "h" to 1,
+            )))),
+        ), access)
+
+        assertFalse("invalid input must fail through the normal tool result", result.success)
+        assertEquals("Slide 1, element 0 (audio): type is unknown.", result.content)
+        assertEquals("invalid input must not deliver a partial artifact", null, access.delivery.get())
+    }
+
+    @Test
+    fun createPresentationKeepsUnexpectedHandlerExceptionOpaque() {
+        val module = ModuleRegistry.fromAssets(context).module("com.jarvys.module.presentation")!!
+        val tool = module.tools.single { it.name == "create_presentation" }
+        val access = CapturingModuleAccess(CONVERSATION_ID).apply { omitArtifactId = true }
+
+        val result = executeInWebView(module, tool, mapOf(
+            "title" to "Unexpected handler error",
+            "slides" to listOf(mapOf("elements" to listOf(mapOf(
+                "type" to "text",
+                "text" to "Valid element",
+                "x" to 0.8,
+                "y" to 0.8,
+                "w" to 4.0,
+                "h" to 0.8,
+            )))),
+        ), access)
+
+        assertFalse("the handler exception must remain a failed tool result", result.success)
+        assertEquals("Module handler raised JavaScript error: logic/tools.js#createPresentation", result.content)
+        assertFalse("the exception message must not reach the tool result", result.content.contains("The host did not confirm"))
+    }
+
+    @Test
     fun createPresentationMeasuresRealMarginsBulletsAndEffectiveContrast() {
         val module = ModuleRegistry.fromAssets(context).module("com.jarvys.module.presentation")!!
         val tool = module.tools.single { it.name == "create_presentation" }
@@ -781,6 +826,7 @@ class WebViewModuleRuntimeInstrumentedTest {
 
     private class CapturingModuleAccess(override val conversationId: String) : ModuleCapabilityAccess {
         val delivery = AtomicReference<CapturedDelivery?>()
+        var omitArtifactId = false
 
         override fun readWorkspace(path: String): String = error("Workspace access is not expected in this test")
         override fun writeWorkspace(path: String, content: String): Unit = error("Workspace access is not expected in this test")
@@ -799,7 +845,7 @@ class WebViewModuleRuntimeInstrumentedTest {
             check(delivery.compareAndSet(null, CapturedDelivery(
                 bytes.copyOf(), name, artifactType, title, thumbnailBytes.copyOf(), thumbnailMimeType, deliveryId,
             ))) { "Module delivered more than one artifact" }
-            return JSONObject().put("id", "instrumented-artifact")
+            return if (omitArtifactId) JSONObject() else JSONObject().put("id", "instrumented-artifact")
         }
 
         override fun reportProgress(message: String): Unit = error("Progress is not expected in this test")

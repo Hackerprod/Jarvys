@@ -29,7 +29,11 @@ For each slide:
 
 ## Input contract
 
-The tool takes one presentation object:
+The tool takes one presentation object. Every slide must contain `elements`; the accepted structure is `slides[].elements[]` only. The former slide-level `title`, `body`, `bullets`, `shapes`, `images`, `chart`, and `table` format no longer exists. Give each element explicit `x`, `y`, `w`, and `h` coordinates; the current handler may derive `h` for tables.
+
+For input or construction errors that you can correct, the handler returns `{ "success": false, "content": "..." }` with slide, element, and field context. Revise the named value and call the tool again. Uncaught exceptions are internal or runtime failures; their text is intentionally hidden by the host.
+
+Use this presentation object:
 
 ```json
 {

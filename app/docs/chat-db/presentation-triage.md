@@ -92,3 +92,47 @@ La compactación del manifiesto describe los cinco tipos en `type.description`, 
 El cierre de la puerta Opus añadió cobertura para fondos de contraste parcialmente cubiertos, fondos transparentes, gráficos/tablas detrás de texto, tablas sin `h`, y `rowspan` fuera de las filas disponibles. Los fondos de forma que cubren solo parte de la caja producen `contrast: null` con `background is mixed`; fondos de gráficos/tablas producen `contrast: null` con `background is a chart/table`. Las cajas de forma completamente cubiertas conservan el ratio cuando el color es opaco. `rowspan` que excede las filas de la tabla se rechaza con contexto, porque PptxGenJS emite el atributo OOXML sin crear filas de continuación. El contrato comprueba que las listas documentadas en el skill coinciden con las exportadas por el handler. La prueba `ToolArgumentValidatorTest.bundledPresentationTableMayOmitHeightAtTheHostValidationBoundary` pasa una tabla sin `h` por la validación real del anfitrión.
 
 El doble de Node proporciona anchos deterministas (`string.length × 8`) y no suplanta un canvas de fuentes del navegador; `metrics_source` refleja ese fallback. `composition-measurement-reports.json` está etiquetado como salida de ese doble y no es evidencia de medidas reales. La prueba instrumentada ejecuta el handler offscreen en el Android WebView y exige `canvas-font-metrics`, altura necesaria positiva, caja, overflow y contraste. El historial de renderizado Android y sus capturas queda en [pptx-viewer-eval/README.md](../pptx-viewer-eval/README.md).
+
+## Transporte de errores corregibles (2026-10-17)
+
+Los handlers devuelven `{ success: false, content }` cuando la entrada o la construcción tiene un problema que el agente puede corregir. Se conservaron los textos objetivos completos. Las excepciones fuera de esa marca siguen lanzándose: el runtime las mantiene opacas.
+
+### Aserciones de Node migradas de excepción a resultado
+
+Cada cambio de abajo conserva el mensaje exacto que antes se examinaba en la excepción:
+
+- Rich text con propiedad plana en el run: `Slide 1, element 0 (text), run 0: unsupported property run.bold.`
+- `rowspan` que rebasa la última fila: `Slide 1, element 0 (table): rows[0][0].options.rowspan extends beyond the final table row.`
+- Tabla con spans que no resuelven la misma cantidad de columnas: `Slide 1, element 0 (table): rows[1] resolves to 3 logical columns; expected 2.`
+- Elemento sin `type`: `Slide 1, element 1 (missing type): type is unknown.`
+
+Las 18 entradas de `invalidCases` ahora comparan `success: false` y `content` completo en vez de buscar fragmentos en una excepción:
+
+| Entrada | Mensaje exacto comprobado |
+|---|---|
+| Tipo de elemento desconocido | `Slide 1, element 0 (audio): type is unknown.` |
+| Propiedad no admitida | `Slide 1, element 0 (text): unsupported property element.autoPlace.` |
+| Falta `h` en texto | `Slide 1, element 0 (text): element.h is required for this element type.` |
+| Falta `h` en shape | `Slide 1, element 0 (shape): element.h is required for this element type.` |
+| Falta `h` en imagen | `Slide 1, element 0 (image): element.h is required for this element type.` |
+| Falta `h` en gráfico | `Slide 1, element 0 (chart): element.h is required for this element type.` |
+| `w` no finito | `Slide 1, element 0 (text): element.w must be a finite number.` |
+| `w` negativo | `Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension.` |
+| `h` negativo | `Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension.` |
+| Caja fuera del lienzo | `Slide 1, element 0 (text): element is outside the slide bounds (13.333333333333334 × 7.5 in).` |
+| Etiquetas de chart vacías | `Slide 1, element 0 (chart): labels must contain chart data.` |
+| Datasets de chart vacíos | `Slide 1, element 0 (chart): datasets must contain chart data.` |
+| Valores y etiquetas desalineados | `Slide 1, element 0 (chart): datasets[0].values has 1 entries but labels has 2.` |
+| Valor de chart no finito | `Slide 1, element 0 (chart): datasets[0].values[0] must be a finite number.` |
+| Scatter con interfaz labels/values | `Slide 1, element 0 (chart): chartType scatter is not supported by the labels and numeric values input format; use another chart type.` |
+| Imagen que no es data URL | `Slide 1, element 0 (image): dataUrl must be an image data URL.` |
+| Datos de imagen ilegibles | `Slide 1, element 0 (image): dataUrl image data cannot be decoded.` |
+| Filas con columnas incompatibles | `Slide 1, element 0 (table): rows[1] resolves to 1 logical columns; expected 2.` |
+
+La nueva aserción para el formato de diapositiva antiguo comprueba exactamente: `Slide 1: the old slide-level title/body/bullets/shapes/images/chart/table format is no longer supported; use slides[].elements[] and give each element explicit x, y, w, and h (tables may derive h).` La aserción de rechazo de construcción comprueba el resultado exacto `Slide 1, element 0 (text): PptxGenJS rejected the element: simulated build rejection.` La prueba de bug simulado conserva `assert.rejects` y exige el mensaje exacto `simulated internal module bug`, para comprobar que un fallo ajeno a la validación se relanza.
+
+El contrato Node del módulo chart también comprueba que `chartType: "timeline"` devuelve exactamente `Chart: chartType is not supported by Chart.js; choose bar, bubble, doughnut, line, pie, polarArea, radar, or scatter.` y no entrega artefacto. La miniatura que rebasa el presupuesto comprobado devuelve exactamente `The chart thumbnail exceeds the displayed-card budget. Reduce the chart's data or visual complexity and retry.` y tampoco entrega artefacto.
+
+### Cobertura anfitrión/WebView añadida
+
+La prueba instrumentada ejecuta el handler empaquetado de presentación con `type: "audio"` y comprueba que el `CoreToolResult` es failure con el contenido exacto `Slide 1, element 0 (audio): type is unknown.`. Otra llamada hace que la respuesta del anfitrión omita el id del artefacto; el handler lanza su `Error` de protocolo y el resultado esperado es exactamente `Module handler raised JavaScript error: logic/tools.js#createPresentation`, sin el texto de la excepción.

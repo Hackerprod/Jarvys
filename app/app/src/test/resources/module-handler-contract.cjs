@@ -29,6 +29,7 @@ const canvases = [];
 const thumbnailDrawCalls = [];
 let thumbnailRendererInput = null;
 let thumbnailRendererOptions = null;
+let oversizedCanvasThumbnail = null;
 const thumbnailSlideSvgs = [0, 1, 2, 3].map((index) =>
   '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>');
 
@@ -166,7 +167,7 @@ function makeCanvas() {
     addEventListener() {},
     removeEventListener() {},
     getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; },
-    toDataURL() { return "data:image/png;base64," + thumbnailPng; },
+    toDataURL() { return "data:image/png;base64," + (oversizedCanvasThumbnail || thumbnailPng); },
   };
   canvases.push(canvas);
   const context = new Proxy({
@@ -290,6 +291,11 @@ const host = {
   },
 };
 
+async function assertFailureResult(promise, content, message) {
+  const result = await promise;
+  assert.deepEqual(result, { success: false, content }, message);
+}
+
 async function main() {
   let argumentsObject;
   let handlerDynamicImport;
@@ -400,6 +406,22 @@ async function main() {
         "the skill's " + name + " list matches the handler's accepted property list");
     }
   }
+  if (manifest.id === "com.jarvys.module.chart") {
+    await assertFailureResult(
+      globalThis[exportName]({ ...argumentsObject, chartType: "timeline" }, host),
+      "Chart: chartType is not supported by Chart.js; choose bar, bubble, doughnut, line, pie, polarArea, radar, or scatter.",
+      "an unsupported Chart.js type returns a correctable module failure",
+    );
+    assert.equal(deliveries.length, 0, "an unsupported chart type does not deliver an artifact");
+    oversizedCanvasThumbnail = "A".repeat(Math.ceil(1280 * 720 * 4 / 3) * 4 + 1);
+    const oversizedChart = await globalThis[exportName](argumentsObject, host);
+    oversizedCanvasThumbnail = null;
+    assert.deepEqual(oversizedChart, {
+      success: false,
+      content: "The chart thumbnail exceeds the displayed-card budget. Reduce the chart's data or visual complexity and retry.",
+    }, "a chart that cannot fit the thumbnail budget returns the exact correction");
+    assert.equal(deliveries.length, 0, "an oversized chart thumbnail does not deliver an artifact");
+  }
   const result = await globalThis[exportName](argumentsObject, host);
   assert.equal(result.success, true);
   if (benchmarkOnly && manifest.id === "com.jarvys.module.presentation") {
@@ -496,12 +518,11 @@ async function main() {
     assert.equal(richRunProperties[0].getAttribute("b"), "1");
     assert.equal(richRunProperties[0].getAttribute("sz"), "2400");
     assert.equal(descendants(richRunProperties[0]).find((node) => node.localName === "srgbClr").getAttribute("val"), "C00000");
-    await assert.rejects(globalThis.createPresentation({
+    await assertFailureResult(globalThis.createPresentation({
       title: "Flat rich-text run form",
       slides: [{ elements: [{ type: "text", runs: [{ text: "Flat", bold: true }], x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
-    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
-      error.message.includes("run 0") && error.message.includes("bold"),
-    "unsupported flat run properties fail with slide, element and run context");
+    }, host), "Slide 1, element 0 (text), run 0: unsupported property run.bold.",
+    "unsupported flat run properties return the exact slide, element, run and field context");
 
     const imageXml = await zip.file("ppt/slides/slide2.xml").async("string");
     assert.match(imageXml, /shared field playbook/i);
@@ -669,59 +690,93 @@ async function main() {
     const tableWithoutHeightXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
       .file("ppt/slides/slide1.xml").async("string");
     assert.match(tableWithoutHeightXml, /<a:tbl>/);
-    await assert.rejects(globalThis.createPresentation({
+    await assertFailureResult(globalThis.createPresentation({
       title: "Rowspan extends beyond table",
       slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 3 } }], ["B"]], x: 0.8, y: 0.8, w: 4 }] }],
-    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
-      error.message.includes("rowspan") && error.message.includes("final table row"),
-    "a rowspan past the final table row is rejected with its cell context");
-    await assert.rejects(globalThis.createPresentation({
+    }, host), "Slide 1, element 0 (table): rows[0][0].options.rowspan extends beyond the final table row.",
+    "a rowspan past the final table row returns the exact cell context");
+    await assertFailureResult(globalThis.createPresentation({
       title: "Malformed table span",
       slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C", "D"]], x: 0.8, y: 0.8, w: 4 }] }],
-    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
-      error.message.includes("rows[1]") && error.message.includes("logical columns"));
+    }, host), "Slide 1, element 0 (table): rows[1] resolves to 3 logical columns; expected 2.",
+    "malformed table spans return the exact slide, element and row message");
 
     const beforeInvalidInputs = deliveries.length;
     const invalidCases = [
-      [{ type: "audio", x: 0, y: 0, w: 1, h: 1 }, "type"],
-      [{ type: "text", text: "Unknown prop", x: 0, y: 0, w: 1, h: 1, autoPlace: true }, "autoPlace"],
-      [{ type: "text", text: "No height", x: 0, y: 0, w: 1 }, "h"],
-      [{ type: "shape", shape: "rect", x: 0, y: 0, w: 1 }, "h"],
-      [{ type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 0, y: 0, w: 1 }, "h"],
-      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2 }, "h"],
-      [{ type: "text", text: "Non-finite", x: 0, y: 0, w: Infinity, h: 1 }, "w"],
-      [{ type: "text", text: "Negative", x: 0, y: 0, w: -1, h: 1 }, "w"],
-      [{ type: "text", text: "Negative height", x: 0, y: 0, w: 1, h: -1 }, "h"],
-      [{ type: "text", text: "Outside", x: 13, y: 0, w: 1, h: 1 }, "bounds"],
-      [{ type: "chart", chartType: "bar", labels: [], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "labels"],
-      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "datasets"],
-      [{ type: "chart", chartType: "bar", labels: ["North", "South"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "values"],
-      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [NaN] }], x: 0, y: 0, w: 2, h: 2 }, "values[0]"],
-      [{ type: "chart", chartType: "scatter", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "chartType scatter is not supported"],
-      [{ type: "image", dataUrl: "https://example.invalid/image.png", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
-      [{ type: "image", dataUrl: "data:image/png;base64,not-an-image", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
-      [{ type: "table", rows: [["A", "B"], ["only one"]], x: 0, y: 0, w: 3 }, "rows[1]"]
+      [{ type: "audio", x: 0, y: 0, w: 1, h: 1 }, "Slide 1, element 0 (audio): type is unknown."],
+      [{ type: "text", text: "Unknown prop", x: 0, y: 0, w: 1, h: 1, autoPlace: true }, "Slide 1, element 0 (text): unsupported property element.autoPlace."],
+      [{ type: "text", text: "No height", x: 0, y: 0, w: 1 }, "Slide 1, element 0 (text): element.h is required for this element type."],
+      [{ type: "shape", shape: "rect", x: 0, y: 0, w: 1 }, "Slide 1, element 0 (shape): element.h is required for this element type."],
+      [{ type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 0, y: 0, w: 1 }, "Slide 1, element 0 (image): element.h is required for this element type."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2 }, "Slide 1, element 0 (chart): element.h is required for this element type."],
+      [{ type: "text", text: "Non-finite", x: 0, y: 0, w: Infinity, h: 1 }, "Slide 1, element 0 (text): element.w must be a finite number."],
+      [{ type: "text", text: "Negative", x: 0, y: 0, w: -1, h: 1 }, "Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension."],
+      [{ type: "text", text: "Negative height", x: 0, y: 0, w: 1, h: -1 }, "Slide 1, element 0 (text): element.w and .h must be positive; a line may have one zero dimension."],
+      [{ type: "text", text: "Outside", x: 13, y: 0, w: 1, h: 1 }, "Slide 1, element 0 (text): element is outside the slide bounds (13.333333333333334 × 7.5 in)."],
+      [{ type: "chart", chartType: "bar", labels: [], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): labels must contain chart data."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets must contain chart data."],
+      [{ type: "chart", chartType: "bar", labels: ["North", "South"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets[0].values has 1 entries but labels has 2."],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [NaN] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): datasets[0].values[0] must be a finite number."],
+      [{ type: "chart", chartType: "scatter", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (chart): chartType scatter is not supported by the labels and numeric values input format; use another chart type."],
+      [{ type: "image", dataUrl: "https://example.invalid/image.png", x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (image): dataUrl must be an image data URL."],
+      [{ type: "image", dataUrl: "data:image/png;base64,not-an-image", x: 0, y: 0, w: 2, h: 2 }, "Slide 1, element 0 (image): dataUrl image data cannot be decoded."],
+      [{ type: "table", rows: [["A", "B"], ["only one"]], x: 0, y: 0, w: 3 }, "Slide 1, element 0 (table): rows[1] resolves to 1 logical columns; expected 2."]
     ];
-    for (const [element, field] of invalidCases) {
-      await assert.rejects(
+    for (const [element, expectedMessage] of invalidCases) {
+      await assertFailureResult(
         globalThis.createPresentation({ title: "Invalid input", slides: [{ elements: [element] }] }, host),
-        (error) => error.message.includes("Slide 1") && error.message.includes("element 0") && error.message.includes(field),
-        "invalid " + element.type + " input reports slide, element and field " + field,
+        expectedMessage,
+        "invalid " + element.type + " input returns the exact slide, element, field and correction detail",
       );
     }
-    await assert.rejects(
+    await assertFailureResult(
       globalThis.createPresentation({ title: "Missing type", slides: [{ elements: [
         { type: "text", text: "First", x: 0, y: 0, w: 1, h: 1 },
         { text: "No type", x: 2, y: 0, w: 1, h: 1 },
       ] }] }, host),
-      (error) => {
-        assert.match(error.message, /Slide 1.*element 1 \(missing type\)/);
-        assert.doesNotMatch(error.message, /element 1 \(undefined\)/);
-        return true;
-      },
-      "a missing element type has clear slide and element context",
+      "Slide 1, element 1 (missing type): type is unknown.",
+      "a missing element type returns the exact slide and element context",
     );
+    await assertFailureResult(globalThis.createPresentation({ title: "Legacy slide format", slides: [{
+      title: "Old title", body: "Old body", bullets: ["one"], shapes: [], images: [], chart: {}, table: {},
+    }] }, host),
+    "Slide 1: the old slide-level title/body/bullets/shapes/images/chart/table format is no longer supported; use slides[].elements[] and give each element explicit x, y, w, and h (tables may derive h).",
+    "the old slide-level format returns a direct correction to the current schema");
     assert.equal(deliveries.length, beforeInvalidInputs, "invalid input never delivers a partial presentation");
+
+    const originalAddSlide = globalThis.PptxGenJS.prototype.addSlide;
+    assert.equal(typeof originalAddSlide, "function", "the generation API exposes addSlide for the construction-failure contract");
+    let constructionFailure;
+    try {
+      globalThis.PptxGenJS.prototype.addSlide = function (...args) {
+        const slide = originalAddSlide.apply(this, args);
+        slide.addText = function () { throw new Error("simulated build rejection"); };
+        return slide;
+      };
+      constructionFailure = await globalThis.createPresentation({
+        title: "Expected build rejection",
+        slides: [{ elements: [{ type: "text", text: "Valid input", x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+      }, host);
+    } finally {
+      globalThis.PptxGenJS.prototype.addSlide = originalAddSlide;
+    }
+    assert.deepEqual(constructionFailure, {
+      success: false,
+      content: "Slide 1, element 0 (text): PptxGenJS rejected the element: simulated build rejection",
+    }, "an expected PptxGenJS construction rejection returns its exact element context");
+    assert.equal(deliveries.length, beforeInvalidInputs, "a failed construction never delivers a partial presentation");
+
+    const bugHost = {
+      ...host,
+      artifactDeliverBytes() { throw new Error("simulated internal module bug"); },
+    };
+    await assert.rejects(globalThis.createPresentation({
+      title: "Simulated internal failure",
+      slides: [{ elements: [{ type: "text", text: "Valid input", x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+    }, bugHost), (error) => {
+      assert.equal(error.message, "simulated internal module bug");
+      return true;
+    }, "a non-validation exception still propagates unchanged from createPresentation");
 
     const svgResult = await globalThis.createPresentation({
       title: "SVG support notice",
@@ -987,6 +1042,7 @@ async function main() {
     assert.equal(failedLoadViewerNodes.counter.textContent, "", "a failed presentation load must clear the loading counter");
     assert.equal(failedLoadViewerNodes.status.hidden, false, "a failed presentation load must show its alert");
     assert.equal(viewerFallbackReadyCalls, 1, "a visible load failure must stop the standalone watchdog");
+
   }
 
   process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");
