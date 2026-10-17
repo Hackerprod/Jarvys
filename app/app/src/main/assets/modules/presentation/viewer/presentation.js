@@ -29,7 +29,6 @@
   };
 
   var stage = document.getElementById("stage");
-  var screenTitle = document.getElementById("screen-title");
   var navigation = document.getElementById("navigation");
   var counter = document.getElementById("counter");
   var previous = document.getElementById("previous");
@@ -42,7 +41,6 @@
 
   document.documentElement.lang = isSpanish ? "es" : "en";
   document.title = labels.title;
-  screenTitle.textContent = labels.title;
   navigation.setAttribute("aria-label", labels.navigation);
   previous.textContent = labels.previous;
   next.textContent = labels.next;
@@ -122,7 +120,7 @@
     slideImage = null;
     previous.disabled = true;
     next.disabled = true;
-    counter.textContent = labels.loading;
+    counter.textContent = "";
     status.textContent = labels.loadFailure;
     status.hidden = false;
   }

@@ -42,8 +42,17 @@ async function main() {
   if (!bundleName) throw new Error("Vite did not emit the single browser bundle.");
   const bundle = path.join(outputDirectory, bundleName);
   const target = path.join(packageRoot, "dist/browser.js");
-  fs.copyFileSync(bundle, target);
-  const bytes = fs.readFileSync(bundle);
+  const source = fs.readFileSync(bundle, "utf8");
+  const portableSource = source.replace(/^\/\/#region (.*)$/gm, (line, sourcePath) => {
+    const normalizedPath = sourcePath.replaceAll("\\", "/");
+    const nodeModulesMarker = "/node_modules/";
+    const nodeModulesIndex = normalizedPath.lastIndexOf(nodeModulesMarker);
+    return nodeModulesIndex < 0
+      ? line
+      : `//#region node_modules/${normalizedPath.slice(nodeModulesIndex + nodeModulesMarker.length)}`;
+  });
+  fs.writeFileSync(target, portableSource);
+  const bytes = Buffer.from(portableSource, "utf8");
   process.stdout.write(`Vite browser bundle: ${bytes.length} B; ${gzipSync(bytes).length} B gzip\n`);
   process.stdout.write(`Installed in evaluation package: ${target}\n`);
 }

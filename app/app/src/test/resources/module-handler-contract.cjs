@@ -325,6 +325,7 @@ async function main() {
     const chartXml = await chartFile.async("string");
     assert.ok(chartXml.includes("2459D3"));
     assert.match(chartXml, /<c:showVal val="1"\/>/, "chart data values must be enabled");
+    assert.ok(chartXml.includes("#,##0"), "integer chart labels must not retain a trailing decimal point");
     assert.match(chartXml, /<c:v>North<\/c:v>/);
     assert.match(chartXml, /<c:v>42<\/c:v>/);
     const tableXml = visualSlide;
@@ -332,8 +333,36 @@ async function main() {
     assert.ok(tableXml.includes("101828"), "table text must contrast with its pale cell fills");
     assert.ok(rendererInputs.some((input) => input.equals(delivery.bytes)), "the generated PPTX bytes must reach the thumbnail renderer");
 
+    const denseSlides = [
+      {
+        title: "Dense slide",
+        body: "The chart and table share the remaining slide area.",
+        bullets: Array.from({ length: 16 }, (_, index) => "Detail " + (index + 1)),
+        chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
+        table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
+      },
+      {
+        title: "Empty chart data",
+        chart: { labels: [], datasets: [] },
+      },
+    ];
+    const deliveryCountBeforeDenseSlides = deliveries.length;
+    await globalThis.createPresentation({ title: "Dense layout", slides: denseSlides }, host);
+    assert.equal(deliveries.length, deliveryCountBeforeDenseSlides + 1, "dense content and empty datasets must still deliver a presentation");
+    const denseZip = await globalThis.JSZip.loadAsync(deliveries[deliveryCountBeforeDenseSlides].bytes);
+    const denseSlideXml = await denseZip.file("ppt/slides/slide1.xml").async("string");
+    assert.doesNotMatch(denseSlideXml, /<a:tbl>/, "visuals are omitted when the slide has no available area");
+    assert.ok(!Object.keys(denseZip.files).some((name) => name.startsWith("ppt/charts/chart")), "an overfull slide must not emit a chart outside its usable area");
+    const denseShapeXml = [...denseSlideXml.matchAll(/<p:sp\b[\s\S]*?<\/p:sp>/g)].map((match) => match[0]).join("");
+    const denseHeights = [...denseShapeXml.matchAll(/<a:ext\b[^>]*\bcy="(-?\d+)"/g)].map((match) => Number(match[1]));
+    assert.ok(denseHeights.length > 0 && denseHeights.every((height) => height > 0), "dense slide OOXML must not contain zero or negative shape heights");
+    const emptyDataSlideXml = await denseZip.file("ppt/slides/slide2.xml").async("string");
+    assert.ok(emptyDataSlideXml.includes("Empty chart data"));
+    assert.ok(!emptyDataSlideXml.includes("<c:chart"), "empty chart datasets are ignored without producing an invalid chart");
+
     const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
-    assert.match(viewerHtml, /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto\s+auto/);
+    assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
+    assert.doesNotMatch(viewerHtml, /<h1\b/, "the host already provides the presentation title");
     assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
     assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
     assert.match(viewerHtml, /<script src="presentation\.js"><\/script>/);
@@ -355,7 +384,6 @@ async function main() {
           children: [],
           replaceChildren(...children) { this.children = children; },
         },
-        "screen-title": { textContent: "" },
         navigation: { setAttribute(name, value) { this[name] = value; } },
         counter: { textContent: "" },
         previous: { disabled: true, textContent: "", addEventListener(name, handler) { this[name] = handler; }, click() { if (!this.disabled) this.clickHandler && this.clickHandler(); } },
@@ -475,6 +503,10 @@ async function main() {
     assert.equal(failedViewerNodes.status.hidden, false, "a failed slide render must show an on-screen alert");
     assert.match(failedViewerNodes.status.textContent, /No se pudo mostrar la diapositiva/);
     assert.equal(failedViewerNodes.stage.children.length, 0, "a failed render must not leave a silent empty slide");
+
+    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("fixture-load-failed"); });
+    assert.equal(failedLoadViewerNodes.counter.textContent, "", "a failed presentation load must clear the loading counter");
+    assert.equal(failedLoadViewerNodes.status.hidden, false, "a failed presentation load must show its alert");
   }
 
   process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");

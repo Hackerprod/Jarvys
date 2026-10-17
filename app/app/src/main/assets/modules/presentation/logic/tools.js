@@ -68,16 +68,25 @@
       x: source.x === undefined ? 0.8 : source.x,
       y: source.y === undefined ? y : source.y,
       w: source.w === undefined ? 11.75 : source.w,
-      h: source.h === undefined ? height : source.h
+      h: Number.isFinite(source.h) && source.h > 0 ? source.h : height
     };
   }
 
+  function hasChartData(chart) {
+    return Boolean(chart && Array.isArray(chart.datasets) && chart.datasets.some(function (dataset) {
+      return dataset && Array.isArray(dataset.values) && dataset.values.length > 0;
+    }));
+  }
+
   function addChart(pptx, slide, chart, backgroundColor, textColor, bounds) {
-    var data = chart.datasets.map(function (dataset) {
+    var datasets = chart.datasets.filter(function (dataset) {
+      return dataset && Array.isArray(dataset.values) && dataset.values.length > 0;
+    });
+    var data = datasets.map(function (dataset) {
       return { name: dataset.name, labels: chart.labels, values: dataset.values };
     });
     var palette = relativeLuminance(backgroundColor) < 0.15 ? COLORS.accentDark : COLORS.accent;
-    var chartColors = chart.datasets.map(function (dataset, index) {
+    var chartColors = datasets.map(function (dataset, index) {
       return hexColor(dataset.color || palette[index % palette.length]);
     });
     slide.addChart(pptx.ChartType.bar, data, {
@@ -105,7 +114,7 @@
       dataLabelColor: textColor,
       dataLabelFontFace: "Arial",
       dataLabelFontSize: 15,
-      dataLabelFormatCode: "#,##0.##",
+      dataLabelFormatCode: "#,##0",
       showSerName: false,
       showBorder: false
     });
@@ -143,7 +152,8 @@
     slide.background = { color: backgroundColor };
 
     var contentY = source.title ? 1.55 : 0.72;
-    var visualCount = Number(Boolean(source.chart)) + Number(Boolean(source.table));
+    var renderChart = hasChartData(source.chart);
+    var visualCount = Number(renderChart) + Number(Boolean(source.table));
     if (source.title) {
       slide.addText(source.title, {
         x: 0.65, y: 0.55, w: 12.0, h: 0.78,
@@ -186,14 +196,17 @@
     });
 
     var visualGap = 0.3;
-    var visualHeight = visualCount ? (7.5 - contentY - 0.55 - visualGap * (visualCount - 1)) / visualCount : 0;
-    if (source.chart) {
-      addChart(pptx, slide, source.chart, backgroundColor, textColor,
-        placeVisual(source.chart, contentY, visualHeight));
-      contentY += visualHeight + visualGap;
+    var availableVisualHeight = 7.5 - contentY - 0.55 - visualGap * (visualCount - 1);
+    var visualHeight = visualCount && availableVisualHeight > 0 ? availableVisualHeight / visualCount : 0;
+    if (visualHeight > 0) {
+      if (renderChart) {
+        addChart(pptx, slide, source.chart, backgroundColor, textColor,
+          placeVisual(source.chart, contentY, visualHeight));
+        contentY += visualHeight + visualGap;
+      }
+      if (source.table) addTable(slide, source.table, textColor,
+        placeVisual(source.table, contentY, visualHeight));
     }
-    if (source.table) addTable(slide, source.table, textColor,
-      placeVisual(source.table, contentY, visualHeight));
 
     (source.images || []).forEach(function (image) {
       slide.addImage({ data: image.dataUrl, x: image.x, y: image.y, w: image.w, h: image.h, altText: image.altText || "" });

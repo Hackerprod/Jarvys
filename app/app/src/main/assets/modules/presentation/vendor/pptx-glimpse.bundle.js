@@ -8770,7 +8770,7 @@ async function _c(e, t) {
 	return gc(a, r);
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/pptx-glimpse/dist/chunk-JSBRDJBE.js
+//#region node_modules/pptx-glimpse/dist/chunk-JSBRDJBE.js
 var vc = Object.create, yc = Object.defineProperty, bc = Object.getOwnPropertyDescriptor, xc = Object.getOwnPropertyNames, Sc = Object.getPrototypeOf, Cc = Object.prototype.hasOwnProperty, wc = (e, t) => function() {
 	return t || (0, e[xc(e)[0]])((t = { exports: {} }).exports, t), t.exports;
 }, Tc = (e, t, n, r) => {
@@ -9387,7 +9387,7 @@ function Rl(e, t) {
 	return n;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/util.js
+//#region node_modules/fast-xml-parser/src/util.js
 var zl = /* @__PURE__ */ RegExp("^[:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD][:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\-.\\d\\u00B7\\u0300-\\u036F\\u203F-\\u2040]*$");
 function Bl(e, t) {
 	let n = [], r = t.exec(e);
@@ -9630,7 +9630,7 @@ function su(e) {
 	return e.startIndex + e[1].length;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/@nodable/entities/src/entities.js
+//#region node_modules/@nodable/entities/src/entities.js
 var cu = {
 	cent: "¢",
 	pound: "£",
@@ -10167,7 +10167,7 @@ function Gu(e, t) {
 	throw Error(`Invalid entity name ${e}`);
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/anynum/digitTable.js
+//#region node_modules/anynum/digitTable.js
 var Ku = [
 	48,
 	1632,
@@ -10236,7 +10236,7 @@ for (let e of Ku) for (let t = 0; t < 10; t++) {
 	n <= Ju ? Xu[n - Yu] = t : qu.set(n, t);
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/anynum/anynum.js
+//#region node_modules/anynum/anynum.js
 var Zu = 48, Qu = 57, $u = 45, ed = /* @__PURE__ */ new Set([
 	8722,
 	65293,
@@ -10309,7 +10309,7 @@ function td(e) {
 	return r.join("");
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/strnum/strnum.js
+//#region node_modules/strnum/strnum.js
 var nd = /^[-+]?0x[a-fA-F0-9]+$/, rd = /^0b[01]+$/, id = /^0o[0-7]+$/, ad = /^([\-\+])?(0*)([0-9]*(\.[0-9]*)?)$/, od = {
 	hex: !0,
 	binary: !1,
@@ -10385,14 +10385,14 @@ function fd(e, t, n) {
 	}
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/ignoreAttributes.js
+//#region node_modules/fast-xml-parser/src/ignoreAttributes.js
 function pd(e) {
 	return typeof e == "function" ? e : Array.isArray(e) ? (t) => {
 		for (let n of e) if (typeof n == "string" && t === n || n instanceof RegExp && n.test(t)) return !0;
 	} : () => !1;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/path-expression-matcher/src/Expression.js
+//#region node_modules/path-expression-matcher/src/Expression.js
 var md = class {
 	constructor(e, t = {}, n) {
 		this.pattern = e, this.separator = t.separator || ".", this.segments = this._parse(e), this.data = n, this._hasDeepWildcard = this.segments.some((e) => e.type === "deep-wildcard"), this._hasAttributeCondition = this.segments.some((e) => e.attrName !== void 0), this._hasPositionSelector = this.segments.some((e) => e.position !== void 0);
@@ -11353,7 +11353,7 @@ function Nd(e, t) {
 	return !1;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/xmlparser/OrderedObjParser.js
+//#region node_modules/fast-xml-parser/src/xmlparser/OrderedObjParser.js
 function Pd(e, t) {
 	if (!e) return {};
 	let n = t.attributesGroupName ? e[t.attributesGroupName] : e;
@@ -11660,7 +11660,7 @@ function $d(e, t) {
 	return Ul.includes(e) ? t.onDangerousProperty(e) : e;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/xmlparser/node2json.js
+//#region node_modules/fast-xml-parser/src/xmlparser/node2json.js
 var ef = ku.getMetaDataSymbol();
 function tf(e, t) {
 	if (!e || typeof e != "object") return {};
@@ -11718,7 +11718,7 @@ function sf(e, t) {
 	return !!(r === 0 || r === 1 && (e[n] || typeof e[n] == "boolean" || e[n] === 0));
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/xmlparser/XMLParser.js
+//#region node_modules/fast-xml-parser/src/xmlparser/XMLParser.js
 var cf = class {
 	constructor(e) {
 		this.externalEntities = {}, this.options = Du(e);
@@ -11745,7 +11745,7 @@ var cf = class {
 	}
 };
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-builder/src/util.js
+//#region node_modules/fast-xml-builder/src/util.js
 function lf(e) {
 	return typeof e == "number" && Object.is(e, -0) ? "-0" : String(e);
 }
@@ -11759,7 +11759,7 @@ function ff(e) {
 	return lf(e).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-builder/src/orderedJs2Xml.js
+//#region node_modules/fast-xml-builder/src/orderedJs2Xml.js
 var pf = "\n";
 function mf(e, t) {
 	if (!Array.isArray(e) || e.length === 0) return "1.0";
@@ -11898,14 +11898,14 @@ function wf(e, t) {
 	return e;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-builder/src/ignoreAttributes.js
+//#region node_modules/fast-xml-builder/src/ignoreAttributes.js
 function Tf(e) {
 	return typeof e == "function" ? e : Array.isArray(e) ? (t) => {
 		for (let n of e) if (typeof n == "string" && t === n || n instanceof RegExp && n.test(t)) return !0;
 	} : () => !1;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-builder/src/fxb.js
+//#region node_modules/fast-xml-builder/src/fxb.js
 var Ef = {
 	attributeNamePrefix: "@_",
 	attributesGroupName: !1,
@@ -12167,10 +12167,10 @@ function Mf(e) {
 	return e.startsWith(this.options.attributeNamePrefix) && e !== this.options.textNodeName ? e.substr(this.attrPrefixLen) : !1;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/fast-xml-parser/src/xmlbuilder/json2xml.js
+//#region node_modules/fast-xml-parser/src/xmlbuilder/json2xml.js
 var Nf = Df;
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/@pptx-glimpse/document/dist/index.js
+//#region node_modules/@pptx-glimpse/document/dist/index.js
 function Pf(e) {
 	if (Ff(e, [
 		137,
@@ -23146,7 +23146,7 @@ function JM(e) {
 	return Ll(a);
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+//#region node_modules/pptx-glimpse/dist/chunk-HYCC6Y6P.js
 var YM = wc({ "../../node_modules/.pnpm/@xmldom+xmldom@0.9.12/node_modules/@xmldom/xmldom/lib/conventions.js"(e) {
 	function t(e, t, n) {
 		if (n === void 0 && (n = Array.prototype), e && typeof n.find == "function") return n.find.call(e, t);
@@ -34434,7 +34434,7 @@ function dR(e) {
 	return e?.skipSystemFonts !== !0 || (e?.fontDirs?.length ?? 0) > 0;
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/@pptx-glimpse/editor/dist/index.js
+//#region node_modules/@pptx-glimpse/editor/dist/index.js
 var fR = class {
 	#e;
 	#t;
@@ -35416,7 +35416,7 @@ function Ez(e, t, n) {
 	};
 }
 //#endregion
-//#region ../../../Users/danil/AppData/Local/Temp/jarvys-pptx-glimpse-browser-build/node_modules/pptx-glimpse/dist/chunk-5DFPT6RR.js
+//#region node_modules/pptx-glimpse/dist/chunk-5DFPT6RR.js
 var Dz = 914400, Oz = 96, kz = Dz / Oz, Az = {
 	x: 96,
 	y: 96,
