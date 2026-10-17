@@ -97,6 +97,13 @@ class ModuleRegistryTest {
                  "access":"write","handler":"logic/tool.js#makeItem"}
             ]""")))
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            ModuleRegistry.fromManifests(listOf(manifest("com.test.unenforced-enum", "Unenforced enum", tools = """[
+                {"name":"make_item","description":"Make an item","inputSchema":{"type":"object",
+                 "properties":{"kind":{"type":"string","enum":["one","two"]}}},
+                 "access":"write","handler":"logic/tool.js#makeItem"}
+            ]""")))
+        }
     }
 
     @Test fun generatedThumbnailCapabilityIsBooleanAndDoesNotReplaceViewerPathValidation() {

@@ -13,8 +13,10 @@ const benchmarkOnly = process.env.PPTX_REPORT_BENCH_ONLY === "1";
 if (manifest.id === "com.jarvys.module.presentation" && !benchmarkOnly) {
   const schema = declaration.inputSchema;
   const elementSchema = schema.properties.slides.items.properties.elements.items;
-  assert.deepEqual(elementSchema.properties.type.enum, ["text", "shape", "image", "chart", "table"]);
-  assert.deepEqual(elementSchema.required, ["type", "x", "y", "w", "h"]);
+  assert.equal(elementSchema.properties.type.enum, undefined, "the host does not validate enum, so the manifest must not claim it does");
+  assert.match(elementSchema.properties.type.description, /text.*shape.*image.*chart.*table/,
+    "the compact schema describes the element types for callers");
+  assert.deepEqual(elementSchema.required, ["type", "x", "y", "w"], "h is type-specific and validated by the handler");
   assert.match(elementSchema.properties.margin.description, /Text: points.*Table:/,
     "the compact schema documents PptxGenJS margin units and orders");
   assert.equal(elementSchema.additionalProperties, true, "the handler remains authoritative for secondary element options");
@@ -345,7 +347,7 @@ async function main() {
           notes: "Cover slide notes",
           elements: [
             { type: "shape", shape: "ellipse", x: 10.0, y: 0.5, w: 2.2, h: 2.2, fill: { color: "DDEBFF" }, line: { color: "DDEBFF" } },
-            { type: "text", runs: [{ text: "Regional ", bold: true, color: "18253A" }, { text: "outlook", italic: true, color: "2459D3" }], x: 0.8, y: 2.0, w: 8.5, h: 1.2, fontSize: 34, fontFace: "Arial", color: "18253A", margin: 0 },
+            { type: "text", runs: [{ text: "Regional ", options: { bold: true, color: "18253A" } }, { text: "outlook", options: { italic: true, color: "2459D3" } }], x: 0.8, y: 2.0, w: 8.5, h: 1.2, fontSize: 34, fontFace: "Arial", color: "18253A", margin: 0 },
           ],
         },
         {
@@ -386,6 +388,17 @@ async function main() {
     assert.ok(Array.isArray(globalThis.presentationChartOptionProperties));
     assert.ok(globalThis.presentationChartOptionProperties.includes("valAxisLabelFontSize"));
     assert.ok(globalThis.presentationChartOptionProperties.includes("dataLabelFormatScatter"));
+    const skillMarkdown = fs.readFileSync(path.join(moduleDirectory, manifest.skills[0]), "utf8");
+    const documentedPropertyLists = Object.fromEntries(Array.from(skillMarkdown.matchAll(/^- `([^`]+)`: ([^\r\n]+)$/gm), (match) => [
+      match[1], Array.from(match[2].matchAll(/`([^`]+)`/g), (property) => property[1]),
+    ]));
+    const propertyListNames = ["text", "textRun", "textRunOptions", "shape", "image", "chart", "chartOptions", "table", "tableCell"];
+    assert.deepEqual(Object.keys(documentedPropertyLists).sort(), propertyListNames.slice().sort(),
+      "the skill documents each exported property list exactly once");
+    for (const name of propertyListNames) {
+      assert.deepEqual([...new Set(documentedPropertyLists[name])].sort(), [...new Set(globalThis.presentationPropertyLists[name])].sort(),
+        "the skill's " + name + " list matches the handler's accepted property list");
+    }
   }
   const result = await globalThis[exportName](argumentsObject, host);
   assert.equal(result.success, true);
@@ -463,8 +476,32 @@ async function main() {
     assert.match(coverXml, /<a:rPr[^>]*b="1"/);
     assert.match(coverXml, /<a:rPr[^>]*i="1"/);
     assert.ok(response.measurementReport.slides[0].elements[1].contrast.ratio > 1);
+    assert.equal(response.measurementReport.slides[0].elements[1].contrast.runs.length, 2,
+      "different run ratios are reported per run");
     assert.equal(response.measurementReport.metrics_source, "canvas-width-with-font-size-fallback");
     assert.ok(response.measurementReport.slides[0].minimum_font_size_pt > 0);
+
+    const richRunResult = await globalThis.createPresentation({
+      title: "PptxGenJS rich-text run options",
+      slides: [{ elements: [{
+        type: "text",
+        runs: [{ text: "Styled run", options: { bold: true, color: "C00000", fontSize: 24 } }],
+        x: 0.8, y: 0.8, w: 4, h: 0.8, margin: 0,
+      }] }],
+    }, host);
+    assert.equal(richRunResult.success, true, "rich text runs in PptxGenJS options form are accepted");
+    const richRunXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    const richRunProperties = descendants(parseXml(richRunXml)).filter((node) => node.localName === "rPr");
+    assert.equal(richRunProperties[0].getAttribute("b"), "1");
+    assert.equal(richRunProperties[0].getAttribute("sz"), "2400");
+    assert.equal(descendants(richRunProperties[0]).find((node) => node.localName === "srgbClr").getAttribute("val"), "C00000");
+    await assert.rejects(globalThis.createPresentation({
+      title: "Flat rich-text run form",
+      slides: [{ elements: [{ type: "text", runs: [{ text: "Flat", bold: true }], x: 0.8, y: 0.8, w: 4, h: 0.8 }] }],
+    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
+      error.message.includes("run 0") && error.message.includes("bold"),
+    "unsupported flat run properties fail with slide, element and run context");
 
     const imageXml = await zip.file("ppt/slides/slide2.xml").async("string");
     assert.match(imageXml, /shared field playbook/i);
@@ -578,6 +615,40 @@ async function main() {
     assert.equal(contrastReport.elements[4].contrast, null, "the image does not produce a fabricated ratio");
     assert.equal(contrastReport.elements[4].contrast_reason, "background is an image/unknown");
 
+    const coverageContrastResult = await globalThis.createPresentation({
+      title: "Background coverage and opacity",
+      slides: [{ background: "FFFFFF", elements: [
+        { type: "shape", shape: "rect", x: 1, y: 1, w: 0.6, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Sixty percent", x: 1, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 3, y: 1, w: 0.3, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Thirty percent", x: 3, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 5, y: 1, w: 1, h: 0.5, fill: { color: "112244" } },
+        { type: "text", text: "Full coverage", x: 5, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 7, y: 1, w: 1, h: 0.5, fill: { color: "112244", transparency: 100 } },
+        { type: "text", text: "Transparent", x: 7, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "shape", shape: "rect", x: 9, y: 1, w: 1, h: 0.5, fill: { color: "112244", transparency: 50 } },
+        { type: "text", text: "Semitransparent", x: 9, y: 1, w: 1, h: 0.5, fontSize: 18, color: "FFFFFF", margin: 0 },
+        { type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 1, y: 3, w: 2, h: 1.5 },
+        { type: "text", text: "Over chart", x: 1.2, y: 3.2, w: 1, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+        { type: "table", rows: [["A", "B"], ["C", "D"]], x: 4, y: 3, w: 2, h: 1.5 },
+        { type: "text", text: "Over table", x: 4.2, y: 3.2, w: 1, h: 0.5, fontSize: 18, color: "000000", margin: 0 },
+      ] }],
+    }, host);
+    const coverageReport = JSON.parse(coverageContrastResult.content).measurementReport.slides[0];
+    for (const index of [1, 3]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "a partly covering shape does not imply a single background color");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is mixed");
+    }
+    assert.ok(coverageReport.elements[5].contrast > 7, "a shape that fully covers the text box supplies its fill color");
+    for (const index of [7, 9]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "transparent and semitransparent fills do not produce a fabricated ratio");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is transparent/unknown");
+    }
+    for (const index of [11, 13]) {
+      assert.equal(coverageReport.elements[index].contrast, null, "text over charts and tables has no known background color");
+      assert.equal(coverageReport.elements[index].contrast_reason, "background is a chart/table");
+    }
+
     const tableSpans = await globalThis.createPresentation({
       title: "Logical table spans",
       slides: [{ elements: [
@@ -590,6 +661,20 @@ async function main() {
     assert.match(spanXml, /gridSpan="2"/, "a colspan cell occupies two logical columns");
     assert.match(spanXml, /rowSpan="2"/, "a rowspan cell occupies a column in the next row");
     assert.match(spanXml, /vMerge="1"/, "PptxGenJS writes the covered continuation cell");
+    const tableWithoutHeight = await globalThis.createPresentation({
+      title: "Table derives its height",
+      slides: [{ elements: [{ type: "table", rows: [["Region", "Sales"], ["North", "42"]], x: 0.8, y: 0.8, w: 4, rowH: [0.4, 0.4] }] }],
+    }, host);
+    assert.equal(tableWithoutHeight.success, true, "a table may omit h and derive its height from rows");
+    const tableWithoutHeightXml = await (await globalThis.JSZip.loadAsync(deliveries.at(-1).bytes))
+      .file("ppt/slides/slide1.xml").async("string");
+    assert.match(tableWithoutHeightXml, /<a:tbl>/);
+    await assert.rejects(globalThis.createPresentation({
+      title: "Rowspan extends beyond table",
+      slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 3 } }], ["B"]], x: 0.8, y: 0.8, w: 4 }] }],
+    }, host), (error) => error.message.includes("Slide 1") && error.message.includes("element 0") &&
+      error.message.includes("rowspan") && error.message.includes("final table row"),
+    "a rowspan past the final table row is rejected with its cell context");
     await assert.rejects(globalThis.createPresentation({
       title: "Malformed table span",
       slides: [{ elements: [{ type: "table", rows: [[{ text: "A", options: { rowspan: 2 } }, "B"], ["C", "D"]], x: 0.8, y: 0.8, w: 4 }] }],
@@ -600,6 +685,10 @@ async function main() {
     const invalidCases = [
       [{ type: "audio", x: 0, y: 0, w: 1, h: 1 }, "type"],
       [{ type: "text", text: "Unknown prop", x: 0, y: 0, w: 1, h: 1, autoPlace: true }, "autoPlace"],
+      [{ type: "text", text: "No height", x: 0, y: 0, w: 1 }, "h"],
+      [{ type: "shape", shape: "rect", x: 0, y: 0, w: 1 }, "h"],
+      [{ type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 0, y: 0, w: 1 }, "h"],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2 }, "h"],
       [{ type: "text", text: "Non-finite", x: 0, y: 0, w: Infinity, h: 1 }, "w"],
       [{ type: "text", text: "Negative", x: 0, y: 0, w: -1, h: 1 }, "w"],
       [{ type: "text", text: "Negative height", x: 0, y: 0, w: 1, h: -1 }, "h"],
@@ -620,6 +709,18 @@ async function main() {
         "invalid " + element.type + " input reports slide, element and field " + field,
       );
     }
+    await assert.rejects(
+      globalThis.createPresentation({ title: "Missing type", slides: [{ elements: [
+        { type: "text", text: "First", x: 0, y: 0, w: 1, h: 1 },
+        { text: "No type", x: 2, y: 0, w: 1, h: 1 },
+      ] }] }, host),
+      (error) => {
+        assert.match(error.message, /Slide 1.*element 1 \(missing type\)/);
+        assert.doesNotMatch(error.message, /element 1 \(undefined\)/);
+        return true;
+      },
+      "a missing element type has clear slide and element context",
+    );
     assert.equal(deliveries.length, beforeInvalidInputs, "invalid input never delivers a partial presentation");
 
     const svgResult = await globalThis.createPresentation({

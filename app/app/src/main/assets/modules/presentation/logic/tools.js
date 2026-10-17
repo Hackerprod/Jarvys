@@ -17,8 +17,9 @@
     "superscript", "vert", "wrap", "autoFit", "shrinkText", "inset", "lineDash", "lineHead",
     "lineSize", "lineTail", "objectName"
   ];
-  var TEXT_RUN_PROPERTIES = ["text", "bold", "italic", "color", "fontSize", "fontFace", "hyperlink"];
-  var SHAPE_PROPERTIES = [
+  var TEXT_RUN_PROPERTIES = ["text", "options"];
+  var TEXT_RUN_OPTION_PROPERTIES = ["bold", "italic", "color", "fontSize", "fontFace", "hyperlink"];
+  var SHAPE_ELEMENT_PROPERTIES = ["shape",
     "x", "y", "w", "h", "align", "angleRange", "arcThicknessRatio", "fill", "flipH", "flipV",
     "hyperlink", "line", "points", "rectRadius", "rotate", "shadow", "lineSize", "lineDash",
     "lineHead", "lineTail", "objectName"
@@ -34,8 +35,9 @@
     "align", "bold", "breakLine", "bullet", "color", "fontFace", "fontSize", "highlight", "italic",
     "lang", "margin", "paraSpaceAfter", "paraSpaceBefore", "valign", "underline", "border", "fill",
     "colspan", "rowspan", "rotate", "transparency", "hyperlink", "line", "shadow", "fit", "wrap",
-    "vert", "strike", "subscript", "superscript", "outline", "breakLine"
+    "vert", "strike", "subscript", "superscript", "outline"
   ];
+  var CHART_ELEMENT_PROPERTIES = ["chartType", "labels", "datasets", "options"];
   var CHART_PROPERTIES = [
     "objectName", "axisPos", "chartColors", "chartColorsOpacity", "dataBorder",
     "displayBlanksAs", "invertedColors", "lang", "layout", "shadow", "showLabel", "showLeaderLines",
@@ -288,6 +290,7 @@
       }
       return;
     }
+    if (element.h === undefined) fail(context + ": " + field + ".h is required for this element type.");
     validateNumber(element.h, context, field + ".h", false);
     if (element.w < 0 || element.h < 0 || (!allowLineZero && (element.w === 0 || element.h === 0)) || (allowLineZero && element.w === 0 && element.h === 0)) {
       fail(context + ": " + field + ".w and .h must be positive; a line may have one zero dimension.");
@@ -398,6 +401,9 @@
         }
         var colspan = options.colspan === undefined ? 1 : options.colspan;
         var rowspan = options.rowspan === undefined ? 1 : options.rowspan;
+        if (rowIndex + rowspan > rows.length) {
+          fail(context + ": " + cellField + ".options.rowspan extends beyond the final table row.");
+        }
         while (true) {
           while (occupiedUntil[cursor] > rowIndex) cursor += 1;
           var covered = false;
@@ -465,7 +471,8 @@
   }
 
   function elementContext(slideNumber, elementIndex, elementType) {
-    return "Slide " + slideNumber + ", element " + elementIndex + " (" + String(elementType) + ")";
+    return "Slide " + slideNumber + ", element " + elementIndex + " (" +
+      (elementType === undefined ? "missing type" : String(elementType)) + ")";
   }
 
   function validatePresentationInput(args, pptx) {
@@ -500,14 +507,16 @@
               objectValue(run, runContext, "run");
               allowProperties(run, TEXT_RUN_PROPERTIES, runContext, "run");
               requireType(run.text, "string", runContext, "text");
-              validateTextStyle(run, TEXT_RUN_PROPERTIES, runContext, "run");
+              if (run.options !== undefined) {
+                validateTextStyle(run.options, TEXT_RUN_OPTION_PROPERTIES, runContext, "run.options");
+              }
             });
           }
           var textStyle = Object.assign({}, element);
           ["type", "x", "y", "w", "h", "text", "runs"].forEach(function (key) { delete textStyle[key]; });
           validateTextStyle(textStyle, TEXT_PROPERTIES.filter(function (key) { return ["type", "x", "y", "w", "h", "text", "runs"].indexOf(key) === -1; }), context, "element");
         } else if (type === "shape") {
-          allowProperties(element, SHAPE_PROPERTIES.concat(["type", "shape"]), context, "element");
+          allowProperties(element, SHAPE_ELEMENT_PROPERTIES.concat(["type"]), context, "element");
           validateCoordinates(element, context, "element", false, true);
           if (typeof element.shape !== "string" || Object.values(pptx.ShapeType).indexOf(element.shape) === -1) fail(context + ": shape must name a PptxGenJS ShapeType.");
           ["fill", "line"].forEach(function (key) { if (element[key] !== undefined) validateFillOrLine(element[key], context, key, key === "line"); });
@@ -523,7 +532,7 @@
           if (element.hyperlink !== undefined) validateHyperlink(element.hyperlink, context, "hyperlink");
           imageDecodes.push(validateImageDataUrl(element, context, elementIndex));
         } else if (type === "chart") {
-          allowProperties(element, ["type", "chartType", "labels", "datasets", "x", "y", "w", "h", "options"], context, "element");
+          allowProperties(element, CHART_ELEMENT_PROPERTIES.concat(["type", "x", "y", "w", "h"]), context, "element");
           validateCoordinates(element, context, "element", false, false);
           if (typeof element.chartType !== "string" || Object.values(pptx.ChartType).indexOf(element.chartType) === -1) fail(context + ": chartType is not a supported PptxGenJS chart type.");
           if (element.chartType === "scatter") fail(context + ": chartType scatter is not supported by the labels and numeric values input format; use another chart type.");
@@ -639,7 +648,9 @@
   }
 
   function textRuns(element) {
-    if (element.runs) return element.runs;
+    if (element.runs) return element.runs.map(function (run) {
+      return Object.assign({ text: run.text }, run.options || {});
+    });
     return [{ text: element.text, fontSize: element.fontSize, fontFace: element.fontFace, bold: element.bold, italic: element.italic, color: element.color }];
   }
 
@@ -656,27 +667,33 @@
     return { color: null, reason: "background is a gradient/unknown" };
   }
 
-  function coversMostOfBox(candidate, target) {
+  function boxCoverage(candidate, target) {
     var left = Math.max(candidate.x, target.x);
     var top = Math.max(candidate.y, target.y);
     var right = Math.min(candidate.x + candidate.w, target.x + target.w);
     var bottom = Math.min(candidate.y + candidate.h, target.y + target.h);
     var intersectionArea = Math.max(0, right - left) * Math.max(0, bottom - top);
-    var targetArea = target.w * target.h;
+    if (intersectionArea === 0) return "none";
     var contains = candidate.x <= target.x && candidate.y <= target.y &&
       candidate.x + candidate.w >= target.x + target.w && candidate.y + candidate.h >= target.y + target.h;
-    return contains || (targetArea > 0 && intersectionArea > targetArea / 2);
+    return contains ? "complete" : "partial";
   }
 
-  function effectiveTextBackground(source, args, element, elementIndex) {
+  function effectiveTextBackground(source, args, element, elementIndex, boxes) {
     if (element.fill !== undefined && element.fill !== null && element.fill.type !== "none") {
       return fillBackground(element.fill) || { color: null, reason: "background is transparent/unknown" };
     }
-    var textBox = { x: element.x, y: element.y, w: element.w, h: element.h };
+    var textBox = boxes[elementIndex];
     for (var previousIndex = elementIndex - 1; previousIndex >= 0; previousIndex -= 1) {
       var candidate = source.elements[previousIndex];
-      if ((candidate.type !== "shape" && candidate.type !== "image") || !coversMostOfBox(candidate, textBox)) continue;
+      var coverage = boxCoverage(boxes[previousIndex], textBox);
+      if (coverage === "none") continue;
+      if (candidate.type === "chart" || candidate.type === "table") {
+        return { color: null, reason: "background is a chart/table" };
+      }
       if (candidate.type === "image") return { color: null, reason: "background is an image/unknown" };
+      if (candidate.type !== "shape") continue;
+      if (coverage === "partial") return { color: null, reason: "background is mixed" };
       if (candidate.fill === undefined || candidate.fill === null || candidate.fill.type === "none") continue;
       return fillBackground(candidate.fill) || { color: null, reason: "background is transparent/unknown" };
     }
@@ -827,9 +844,7 @@
   function addElement(pptx, slide, element, themeColors, context) {
     if (element.type === "text") {
       var text = element.text !== undefined ? element.text : element.runs.map(function (run) {
-        var options = Object.assign({}, run);
-        delete options.text;
-        return { text: run.text, options: options };
+        return { text: run.text, options: Object.assign({}, run.options || {}) };
       });
       var textOptions = Object.assign({}, element);
       delete textOptions.type;
@@ -971,7 +986,7 @@
             var measurement = textMeasurements[slideIndex][elementIndex];
             metricsSources.push(measurement.metrics_source);
             var overflow = measurement.needed_h > box.h;
-            var background = effectiveTextBackground(source, args, element, elementIndex);
+            var background = effectiveTextBackground(source, args, element, elementIndex, boxes);
             var contrast = textContrast(element, background);
             entry.needed_h = measurement.needed_h;
             entry.line_count = measurement.line_count;
@@ -1086,6 +1101,17 @@
     };
   }
 
-  global.presentationChartOptionProperties = Object.freeze(CHART_PROPERTIES.slice());
+  global.presentationPropertyLists = Object.freeze({
+    text: Object.freeze(TEXT_PROPERTIES.filter(function (property) { return ["x", "y", "w", "h"].indexOf(property) === -1; })),
+    textRun: Object.freeze(TEXT_RUN_PROPERTIES.slice()),
+    textRunOptions: Object.freeze(TEXT_RUN_OPTION_PROPERTIES.slice()),
+    shape: Object.freeze(SHAPE_ELEMENT_PROPERTIES.filter(function (property) { return ["x", "y", "w", "h"].indexOf(property) === -1; })),
+    image: Object.freeze(IMAGE_PROPERTIES.filter(function (property) { return ["x", "y", "w", "h"].indexOf(property) === -1; })),
+    chart: Object.freeze(CHART_ELEMENT_PROPERTIES.slice()),
+    chartOptions: Object.freeze(CHART_PROPERTIES.slice()),
+    table: Object.freeze(TABLE_PROPERTIES.filter(function (property) { return ["x", "y", "w", "h"].indexOf(property) === -1; })),
+    tableCell: Object.freeze(TABLE_CELL_PROPERTIES.slice())
+  });
+  global.presentationChartOptionProperties = global.presentationPropertyLists.chartOptions;
   global.createPresentation = createPresentation;
 }(window));
