@@ -55,6 +55,7 @@ import com.hrm.latex.renderer.LatexAutoWrap
 import com.hrm.latex.renderer.model.LatexConfig
 import com.hrm.latex.renderer.model.LatexTheme
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
+import org.intellij.markdown.MarkdownTokenTypes
 import org.json.JSONArray
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
@@ -62,21 +63,37 @@ import java.io.StringReader
 import java.util.Locale
 import kotlin.math.ceil
 
-internal data class MarkdownFenceSource(val language: String, val source: String, val closed: Boolean)
+internal data class MarkdownFenceSource(
+    val language: String,
+    val source: String,
+    val closed: Boolean,
+    val headerComplete: Boolean,
+)
 
 internal fun fenceSource(content: String, node: org.intellij.markdown.ast.ASTNode): MarkdownFenceSource {
-    val language = node.children.firstOrNull { it.type == org.intellij.markdown.MarkdownTokenTypes.FENCE_LANG }
+    val languageNode = node.children.firstOrNull { it.type == MarkdownTokenTypes.FENCE_LANG }
+    val language = languageNode
         ?.let { content.substring(it.startOffset, it.endOffset).trim().takeWhile { char -> !char.isWhitespace() }.lowercase() }.orEmpty()
     val source = node.children.filter { it.type == org.intellij.markdown.MarkdownTokenTypes.CODE_FENCE_CONTENT }
         .joinToString("") { content.substring(it.startOffset, it.endOffset) }
-    val closed = node.children.any { it.type == org.intellij.markdown.MarkdownTokenTypes.CODE_FENCE_END }
-    return MarkdownFenceSource(language, source, closed)
+    val closed = node.children.any { it.type == MarkdownTokenTypes.CODE_FENCE_END }
+    val languageIndex = languageNode?.let(node.children::indexOf) ?: -1
+    val headerComplete = node.children.withIndex().any { (index, child) ->
+        (languageIndex < 0 || index > languageIndex) &&
+            (child.type == MarkdownTokenTypes.EOL || child.type == MarkdownTokenTypes.CODE_FENCE_CONTENT)
+    }
+    return MarkdownFenceSource(language, source, closed, headerComplete)
 }
 
 internal enum class InlineFenceState { RENDER, STREAM_PLACEHOLDER, CODE }
 
-internal fun inlineFenceState(language: String, closed: Boolean, streaming: Boolean): InlineFenceState = when {
-    !closed && streaming -> InlineFenceState.STREAM_PLACEHOLDER
+internal fun inlineFenceState(
+    language: String,
+    closed: Boolean,
+    streaming: Boolean,
+    headerComplete: Boolean,
+): InlineFenceState = when {
+    !closed && streaming && (inlineBlockRenderer(language) != null || !headerComplete) -> InlineFenceState.STREAM_PLACEHOLDER
     closed && inlineBlockRenderers[language.lowercase()] != null -> InlineFenceState.RENDER
     else -> InlineFenceState.CODE
 }
@@ -104,7 +121,7 @@ internal fun RenderAssistantCodeFence(
 ) {
     val fence = fenceSource(content, node)
     val renderer = inlineBlockRenderer(fence.language)
-    val state = inlineFenceState(fence.language, fence.closed, streaming)
+    val state = inlineFenceState(fence.language, fence.closed, streaming, fence.headerComplete)
     if (renderer == null && state == InlineFenceState.CODE) {
         val observer = LocalAssistantMarkdownRenderObserver.current
         if (!fence.closed && streaming) {
@@ -121,11 +138,7 @@ internal fun RenderAssistantCodeFence(
                 fence.language.takeIf { renderer != null },
             )
             InlineFenceState.RENDER -> ObservedInlineBlock(renderer!!, fence.source, fence.language)
-            InlineFenceState.CODE -> if (renderer == null) {
-                MarkdownCodeFence(content, node, codeStyle)
-            } else {
-                AssistantCodeFallback(fence.source, fence.language, codeStyle)
-            }
+            InlineFenceState.CODE -> AssistantCodeFallback(fence.source, fence.language, codeStyle)
         }
     }
 }

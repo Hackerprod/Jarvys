@@ -1,13 +1,19 @@
 package com.jarvys.agent
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.parser.MarkdownParser
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -83,10 +89,43 @@ class InlineMessageBlocksTest {
     }
 
     @Test fun incompleteSpecialFencesWaitOnlyWhileStreamingAndThenFallBackToCode() {
-        assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState("svg", closed = false, streaming = true))
-        assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState("unknown-prefix", closed = false, streaming = true))
-        assertEquals(InlineFenceState.CODE, inlineFenceState("svg", closed = false, streaming = false))
-        assertEquals(InlineFenceState.RENDER, inlineFenceState("chart", closed = true, streaming = false))
-        assertEquals(InlineFenceState.CODE, inlineFenceState("text", closed = true, streaming = false))
+        assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState(
+            "svg", closed = false, streaming = true, headerComplete = true,
+        ))
+        val incompleteUnknown = parsedFence("```ch")
+        assertEquals("ch", incompleteUnknown.language)
+        assertFalse(incompleteUnknown.headerComplete)
+        assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState(
+            incompleteUnknown.language, incompleteUnknown.closed, streaming = true,
+            headerComplete = incompleteUnknown.headerComplete,
+        ))
+
+        val completeUnknown = parsedFence("```unknown\n")
+        assertTrue(completeUnknown.headerComplete)
+        assertEquals(InlineFenceState.CODE, inlineFenceState(
+            completeUnknown.language, completeUnknown.closed, streaming = true,
+            headerComplete = completeUnknown.headerComplete,
+        ))
+        assertEquals(InlineFenceState.CODE, inlineFenceState("svg", closed = false, streaming = false, headerComplete = true))
+        assertEquals(InlineFenceState.RENDER, inlineFenceState("chart", closed = true, streaming = false, headerComplete = true))
+        assertEquals(InlineFenceState.CODE, inlineFenceState("text", closed = true, streaming = false, headerComplete = true))
     }
+
+    @Test fun openKotlinFenceUsesCodeInsteadOfAStreamingPlaceholder() {
+        val fence = parsedFence("```kotlin\nprintln(1)")
+        assertEquals("kotlin", fence.language)
+        assertFalse(fence.closed)
+        assertTrue(fence.headerComplete)
+        assertNull(inlineBlockRenderer(fence.language))
+        assertEquals(InlineFenceState.CODE, inlineFenceState(
+            fence.language, fence.closed, streaming = true, headerComplete = fence.headerComplete,
+        ))
+    }
+}
+
+private fun parsedFence(content: String): MarkdownFenceSource {
+    val root = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(content)
+    fun findFence(node: ASTNode): ASTNode? = if (node.type == MarkdownElementTypes.CODE_FENCE) node
+        else node.children.firstNotNullOfOrNull(::findFence)
+    return fenceSource(content, requireNotNull(findFence(root)))
 }

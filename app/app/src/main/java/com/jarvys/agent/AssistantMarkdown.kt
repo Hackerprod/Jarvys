@@ -145,15 +145,19 @@ internal fun AssistantMarkdown(
                 error = { Text(markdown, modifier = it, color = textColor, style = fallbackStyle) },
             )
         } else {
-            // Renderer 0.37.0 starts each content-keyed parse in Loading. Parse live deltas immediately to avoid
-            // a blank frame, and keep the last tree mounted while an initial/history parse runs asynchronously.
-            val markdownState = rememberMarkdownState(normalizedMarkdown, immediate = streaming)
+            // Renderer 0.37.0 parses content-keyed states on Dispatchers.Default; immediate=true would block composition.
+            // Keep the last successful tree mounted while a replacement parse runs.
+            val markdownState = rememberMarkdownState(normalizedMarkdown)
             val parsedState by markdownState.state.collectAsState()
-            var lastSuccessState by remember { mutableStateOf<State.Success?>(null) }
-            val displayState = (parsedState as? State.Success) ?: lastSuccessState ?: parsedState
+            // This retained value is only read as a fallback while parsing; keeping it outside snapshot state avoids
+            // a second recomposition for every successfully parsed delta.
+            val lastSuccessState = remember { arrayOfNulls<State.Success>(1) }
+            val successState = parsedState as? State.Success
+            val displayState = successState
+                ?: if (parsedState is State.Error) parsedState else lastSuccessState[0] ?: parsedState
             val observer = LocalAssistantMarkdownRenderObserver.current
             SideEffect {
-                (parsedState as? State.Success)?.let { lastSuccessState = it }
+                successState?.let { lastSuccessState[0] = it }
                 (displayState as? State.Success)?.let { observer?.onMarkdownContentRendered(it.content) }
             }
             // Read streaming inside the callback so promotion does not replace the MarkdownComponents instance.
@@ -175,7 +179,7 @@ internal fun AssistantMarkdown(
                         SideEffect { loadingObserver?.onLoadingComposed() }
                         Box(loadingModifier)
                     },
-                    error = { errorModifier -> Box(errorModifier) },
+                    error = { errorModifier -> Text(normalizedMarkdown, modifier = errorModifier, color = textColor, style = body) },
                 )
             }
         }
