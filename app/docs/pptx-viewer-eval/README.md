@@ -2,6 +2,12 @@
 
 **Decisión: adoptar PptxGlimpse 5.3.1 como visor de pantalla completa y renderer de miniaturas.** Su bundle Vite de **1,197,989 B / 287,995 B gzip** dibuja gráficos, tablas y temas bajo la CSP actual. La falta de etiquetas de valor y la omisión de la imagen SVG de prueba quedan como límites conocidos. La validación inicial eligió PptxGlimpse para la vista principal y dejó `deck-renderer.js` en la miniatura; la reproducción posterior en Android confirmó que PptxGlimpse también funciona para el PNG de la tarjeta, así que el segundo renderer se retiró. El visor carga los bytes PPTX mediante la URL local permitida por el puente, usa controles propios y el harness no observó peticiones externas. La evidencia del WebView real está en [presentation-triage.md](../chat-db/presentation-triage.md).
 
+## Causa raíz del WebView Android
+
+El visor en blanco se debía a que `createViewerWebView` insertaba un WebView sin `layoutParams` en `AndroidView`; el valor implícito era `WRAP_CONTENT`. El WebView informaba `innerHeight` y `documentElement.clientHeight` de 684 CSS px, pero el layout del documento calculaba alto cero, así que porcentajes y `vh` no disponían de altura útil y se veía el fondo de Compose. Asignar `ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)` al WebView, conservando `Modifier.fillMaxSize()` en `AndroidView`, corrigió el alto. Se probó el HTML de presentación sin parche CSS de viewport y el visor chart con su CSS original; no era un defecto de CSP, MIME o conversión PPTX. La corrección de layout no añade conocimiento de presentaciones al anfitrión Kotlin.
+
+Las capturas ADB registran el diagnóstico y el resultado en el AVD: [visor vacío antes](captures/android-webview-owner-deck-slide1-before-fix.png), [`100vh` tampoco lo arregla](captures/android-webview-owner-deck-slide1-css-vh-fail.png), [probe con altura forzada](captures/android-webview-owner-deck-slide1-forced-height-probe.png), [deck de tres diapositivas tras `MATCH_PARENT`](captures/android-webview-presentation-three-slides-after-host-match-parent.png), [gráfico y tabla](captures/android-webview-presentation-chart-table-after-host-match-parent.png), [visor del módulo chart](captures/android-webview-chart-module-viewer-after-host-match-parent.png) y [fallback tras retirar el renderer muerto](captures/android-webview-renderer-fallback-after-host-match-parent.png). El AVD `JarvysModuleWebView34` ejecutó Android 14/API 34 con WebView 113.0.5672.136.
+
 ## Paquetes empaquetados y licencias
 
 El bundle incluye estos 17 paquetes. Todos declaran MIT; el archivo [`THIRD-PARTY-NOTICES.md`](../../app/src/main/assets/modules/presentation/vendor/THIRD-PARTY-NOTICES.md) conserva sus avisos íntegros.
@@ -85,3 +91,14 @@ node app/docs/pptx-viewer-eval/run-final-viewer.cjs
 ```
 
 La publicación del skill PPTX de Anthropic declara una licencia propietaria. La guía del módulo solo recoge principios generales parafraseados; no reutiliza texto, código, ejemplos ni paletas del material. Fuentes: [documentación de PptxViewJS](https://github.com/gptsci/pptxviewjs), [soporte de pptx-glimpse](https://glimpse.pptx.app/docs/feature-support) y [uso en navegador](https://glimpse.pptx.app/docs/browser), [licencia de `pptx-preview` publicada en npm](https://www.npmjs.com/package/pptx-preview).
+
+## Composiciones del esquema libre (2026-10-17)
+
+`generate-fixtures.cjs` genera cuatro PPTX mediante `logic/tools.js#createPresentation`; `composition-measurement-reports.json` conserva la salida del handler, etiquetada explícitamente como doble de Node. Este script sustituye `canvas.measureText` por `string.length × 8`, así que sus anchos y `line_count` no son mediciones reales ni evidencia de ajuste tipográfico. Para las medidas Canvas de verdad, usa el test instrumentado que ejecuta el handler en el Android WebView del AVD. `run-final-viewer.cjs` abre los PPTX en el HTML y JavaScript de producción bajo la CSP usada por el módulo. Las cuatro cargas pintaron su diapositiva, cada archivo se leyó una vez y no hubo peticiones externas.
+
+- [Portada con runs y formas decorativas](captures/final-viewer-free-cover-slide1.png)
+- [Dos columnas con imagen PNG data URL](captures/final-viewer-free-columns-slide1.png)
+- [Gráfico nativo con tres insights](captures/final-viewer-free-chart-insights-slide1.png)
+- [Título largo, subtítulo, texto y tabla](captures/final-viewer-free-table-long-title-slide1.png)
+
+Chrome headless 155.0.8059.79, viewport 360×800 CSS px y `deviceScaleFactor: 3`. `composition-viewer-results.json` registra los cuatro resultados. El contrato Node también prueba un título de dos líneas que se solapa y desborda, y una versión corregida que no lo hace; ambos casos entregan un PPTX. El informe de medidas compactado para 20 diapositivas × 8 elementos bajó de **75,183 B** a **17,497 B**. El manifiesto pasó de **86,131 B** a **3,178 B**; sus opciones de gráfico se describen en el SKILL cargado bajo demanda y el handler valida sus nombres desde su única lista.

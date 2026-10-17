@@ -10,10 +10,12 @@ import java.util.Map;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import androidx.test.core.app.ApplicationProvider;
 import com.jarvys.agent.coding.CodingProjectTools;
 import com.jarvys.agent.coding.ProjectMutationService;
 import com.jarvys.agent.coding.ProjectScope;
 import com.jarvys.agent.crew.CrewTools;
+import com.jarvys.agent.modules.ModuleRegistry;
 import org.junit.Test;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
@@ -133,6 +135,26 @@ public class ToolArgumentValidatorTest {
 
         assertNotNull(result.error);
         assertTrue(result.error.contains("unexpected"));
+    }
+
+    @Test public void bundledPresentationTableMayOmitHeightAtTheHostValidationBoundary() {
+        ModuleRegistry registry = ModuleRegistry.Companion.fromAssets(ApplicationProvider.getApplicationContext(), "modules");
+        Map<String, Object> table = arguments(
+                "type", "table",
+                "rows", Arrays.asList(Arrays.asList("North"), Arrays.asList("South")),
+                "x", 0.8,
+                "y", 1.0,
+                "w", 4.0);
+        Map<String, Object> slide = arguments("elements", Collections.singletonList(table));
+        Map<String, Object> input = arguments("title", "Table with derived height",
+                "slides", Collections.singletonList(slide));
+
+        ToolArgumentValidator.Result result = ToolArgumentValidator.coerceAndValidate(
+                input, registry.declaredTool("create_presentation").getInputSchema());
+
+        assertNull(result.error);
+        assertFalse(((Map<?, ?>) ((List<?>) ((Map<?, ?>) ((List<?>) result.arguments.get("slides")).get(0))
+                .get("elements")).get(0)).containsKey("h"));
     }
 
     @Test public void realWorkspaceAndCodingSchemasOmitOptionalNullsAndKeepDefaultBehavior() throws Exception {

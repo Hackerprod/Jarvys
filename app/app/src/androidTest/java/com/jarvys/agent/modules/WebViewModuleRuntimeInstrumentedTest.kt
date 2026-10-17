@@ -27,6 +27,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,8 +81,31 @@ class WebViewModuleRuntimeInstrumentedTest {
         val result = executeInWebView(module, tool, mapOf(
             "title" to "Instrumented WebView presentation",
             "slides" to listOf(mapOf(
-                "title" to "WebView regression slide",
-                "body" to "Rendered through the Android system WebView",
+                "background" to "FFFFFF",
+                "elements" to listOf(mapOf(
+                    "type" to "text",
+                    "text" to "WebView regression slide",
+                    "x" to 0.8,
+                    "y" to 0.8,
+                    "w" to 8.0,
+                    "h" to 1.0,
+                    "fontSize" to 30,
+                    "fontFace" to "Arial",
+                    "color" to "000000",
+                    "bold" to true,
+                    "margin" to 0,
+                ), mapOf(
+                    "type" to "text",
+                    "text" to "Rendered through the Android system WebView",
+                    "x" to 0.8,
+                    "y" to 2.0,
+                    "w" to 8.0,
+                    "h" to 0.8,
+                    "fontSize" to 18,
+                    "fontFace" to "Arial",
+                    "color" to "000000",
+                    "margin" to 0,
+                )),
             )),
         ), access)
 
@@ -94,6 +118,64 @@ class WebViewModuleRuntimeInstrumentedTest {
         val slideXml = readZipEntry(delivery.bytes, "ppt/slides/slide1.xml")
         assertNotNull("PPTX bundle is missing slide1.xml", slideXml)
         assertTrue("PPTX slide does not contain the generated title", requireNotNull(slideXml).contains("WebView regression slide"))
+        val toolContent = JSONObject(result.content)
+        val measurementReport = toolContent.getJSONObject("measurementReport")
+        assertEquals("LAYOUT_WIDE", measurementReport.getJSONObject("layout").getString("name"))
+        assertEquals(13.333333333333334, measurementReport.getJSONObject("layout").getDouble("width_in"), 0.000001)
+        val measuredSlide = measurementReport.getJSONArray("slides").getJSONObject(0)
+        val measuredTitle = measuredSlide.getJSONArray("elements").getJSONObject(0)
+        assertEquals("canvas-font-metrics", measurementReport.getString("metrics_source"))
+        assertTrue("the requested x/y in EMU must remain exact", requireNotNull(slideXml).contains("<a:off x=\"731520\" y=\"731520\"/>"))
+        assertTrue("the requested w/h in EMU must remain exact", requireNotNull(slideXml).contains("<a:ext cx=\"7315200\" cy=\"914400\"/>"))
+        assertTrue("canvas measurement must return a positive required text height", measuredTitle.getDouble("needed_h") > 0.0)
+        assertFalse("a fitting title omits the overflow finding", measuredTitle.has("overflow"))
+        assertFalse("a clean element omits its box", measuredTitle.has("box"))
+        assertTrue(measuredTitle.getDouble("contrast") > 20.0)
+        assertEquals(2, measuredSlide.getJSONArray("elements").length())
+        assertFalse("a clean slide omits the overlap list", measuredSlide.has("overlaps"))
+        assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
+    }
+
+    @Test
+    fun createPresentationMeasuresRealMarginsBulletsAndEffectiveContrast() {
+        val module = ModuleRegistry.fromAssets(context).module("com.jarvys.module.presentation")!!
+        val tool = module.tools.single { it.name == "create_presentation" }
+        val access = CapturingModuleAccess(CONVERSATION_ID)
+
+        val result = executeInWebView(module, tool, mapOf(
+            "title" to "Canvas measurement regressions",
+            "slides" to listOf(mapOf(
+                "background" to "FFFFFF",
+                "elements" to listOf(
+                    mapOf("type" to "shape", "shape" to "rect", "x" to 0.8, "y" to 1.0, "w" to 3.2, "h" to 1.4, "fill" to mapOf("color" to "112244")),
+                    mapOf("type" to "text", "text" to "White on dark card", "x" to 1.0, "y" to 1.2, "w" to 2.8, "h" to 0.6, "fontSize" to 18, "color" to "FFFFFF", "margin" to 0),
+                    mapOf("type" to "text", "text" to "Light grey on white", "x" to 4.5, "y" to 1.2, "w" to 2.8, "h" to 0.6, "fontSize" to 18, "color" to "D8D8D8", "margin" to 0),
+                    mapOf("type" to "text", "text" to "X", "x" to 0.8, "y" to 3.0, "w" to 0.6, "h" to 0.6, "fontSize" to 18, "color" to "000000", "margin" to listOf(0, 0, 18, 18)),
+                    mapOf("type" to "text", "text" to "Scalar inset", "x" to 2.0, "y" to 3.0, "w" to 4.0, "h" to 1.0, "fontSize" to 18, "color" to "000000", "margin" to 6),
+                    mapOf("type" to "text", "text" to "A long bullet paragraph wraps after the PptxGenJS hanging indent", "x" to 7.0, "y" to 1.0, "w" to 1.2, "h" to 2.0, "fontSize" to 16, "color" to "000000", "margin" to 0, "bullet" to true),
+                ),
+            )),
+        ), access)
+
+        assertTrue("create_presentation failed in Android WebView: ${result.content}", result.success)
+        val delivery = requireNotNull(access.delivery.get()) { "create_presentation did not deliver an artifact" }
+        val content = JSONObject(result.content)
+        val report = content.getJSONObject("measurementReport")
+        assertEquals("canvas-font-metrics", report.getString("metrics_source"))
+        val elements = report.getJSONArray("slides").getJSONObject(0).getJSONArray("elements")
+        assertTrue("white text must use the dark rectangle beneath it", elements.getJSONObject(1).getDouble("contrast") > 7.0)
+        assertTrue("light grey text on white must report low contrast", elements.getJSONObject(2).getDouble("contrast") < 4.5)
+        val exactMargin = elements.getJSONObject(3)
+        assertTrue("18 pt font with 18 pt top and bottom margins must overflow a 0.6 in box", exactMargin.getBoolean("overflow"))
+        assertTrue(exactMargin.getDouble("needed_h") > 0.6)
+
+        val slideXml = requireNotNull(readZipEntry(delivery.bytes, "ppt/slides/slide1.xml"))
+        assertTrue(slideXml.contains("bIns=\"228600\""))
+        assertTrue(slideXml.contains("tIns=\"228600\""))
+        assertTrue(slideXml.contains("lIns=\"76200\""))
+        assertTrue(slideXml.contains("rIns=\"76200\""))
+        assertTrue(slideXml.contains("marL=\"342900\""))
+        assertTrue(slideXml.contains("indent=\"-342900\""))
         assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
     }
 
@@ -147,48 +229,46 @@ class WebViewModuleRuntimeInstrumentedTest {
             }
 
             val deckArtifactId = createAndPersist(module, presentationTool, "owner-three-slide", mapOf(
-            "title" to "Regional growth",
-            "slides" to listOf(
-                mapOf(
-                    "title" to "Regional growth accelerated",
-                    "body" to "Revenue rose 22% this quarter, led by the North and South teams.",
-                    "backgroundColor" to "F4F6FB",
-                    "bullets" to listOf("North finished at 42", "South finished at 57"),
-                    "shapes" to listOf(
-                        mapOf("type" to "ellipse", "x" to 10.7, "y" to 0.5, "w" to 1.6, "h" to 1.6, "fillColor" to "536DFE", "lineColor" to "536DFE"),
-                        mapOf("type" to "ellipse", "x" to 11.55, "y" to 1.3, "w" to 0.8, "h" to 0.8, "fillColor" to "18A999", "lineColor" to "18A999"),
+                "title" to "Regional growth",
+                "slides" to listOf(
+                    mapOf(
+                        "background" to "F4F6FB",
+                        "elements" to listOf(
+                            mapOf("type" to "shape", "shape" to "ellipse", "x" to 10.8, "y" to 0.5, "w" to 1.5, "h" to 1.5, "fill" to mapOf("color" to "DDEBFF"), "line" to mapOf("color" to "DDEBFF")),
+                            mapOf("type" to "text", "text" to "Regional growth accelerated as field teams adapted the shared playbook", "x" to 0.8, "y" to 0.55, "w" to 9.5, "h" to 1.25, "fontSize" to 29, "fontFace" to "Arial", "color" to "18253A", "bold" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "Revenue rose 22% this quarter, led by the North and South teams.", "x" to 0.8, "y" to 1.95, "w" to 9.5, "h" to 0.5, "fontSize" to 18, "fontFace" to "Arial", "color" to "344054", "margin" to 0),
+                            mapOf("type" to "text", "text" to "North finished at 42", "x" to 0.95, "y" to 2.85, "w" to 7.5, "h" to 0.55, "fontSize" to 20, "fontFace" to "Arial", "color" to "18253A", "bullet" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "South finished at 57", "x" to 0.95, "y" to 3.6, "w" to 7.5, "h" to 0.55, "fontSize" to 20, "fontFace" to "Arial", "color" to "18253A", "bullet" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "West held a steady result", "x" to 0.95, "y" to 4.35, "w" to 7.5, "h" to 0.55, "fontSize" to 20, "fontFace" to "Arial", "color" to "18253A", "bullet" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "Each region stayed within its cost plan", "x" to 0.95, "y" to 5.1, "w" to 7.5, "h" to 0.55, "fontSize" to 20, "fontFace" to "Arial", "color" to "18253A", "bullet" to true, "margin" to 0),
+                        ),
+                    ),
+                    mapOf(
+                        "elements" to listOf(
+                            mapOf("type" to "text", "text" to "North and South lead growth", "x" to 0.8, "y" to 0.7, "w" to 11.5, "h" to 0.9, "fontSize" to 30, "fontFace" to "Arial", "color" to "18253A", "bold" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "Both regions grew, with the strongest gains in the latest quarter.", "x" to 0.8, "y" to 2.0, "w" to 9.0, "h" to 1.0, "fontSize" to 22, "fontFace" to "Arial", "color" to "344054", "margin" to 0),
+                        ),
+                    ),
+                    mapOf(
+                        "background" to "14233B",
+                        "elements" to listOf(
+                            mapOf("type" to "shape", "shape" to "ellipse", "x" to 0.8, "y" to 5.5, "w" to 1.2, "h" to 1.2, "fill" to mapOf("color" to "2459D3"), "line" to mapOf("color" to "2459D3")),
+                            mapOf("type" to "text", "text" to "Keep the momentum", "x" to 0.8, "y" to 0.8, "w" to 10.5, "h" to 1.0, "fontSize" to 34, "fontFace" to "Arial", "color" to "FFFFFF", "bold" to true, "margin" to 0),
+                            mapOf("type" to "text", "text" to "Invest in the teams and markets that drove this quarter's result.", "x" to 0.8, "y" to 2.25, "w" to 9.4, "h" to 1.0, "fontSize" to 22, "fontFace" to "Arial", "color" to "FFFFFF", "margin" to 0),
+                        ),
                     ),
                 ),
-                mapOf(
-                    "title" to "North and South lead growth",
-                    "body" to "Both regions grew, with the strongest gains in the latest quarter.",
-                    "backgroundColor" to "FFFFFF",
-                ),
-                mapOf(
-                    "title" to "Keep the momentum",
-                    "body" to "Invest in the teams and markets that drove this quarter's result.",
-                    "backgroundColor" to "14233B",
-                    "shapes" to listOf(
-                        mapOf("type" to "ellipse", "x" to 0.7, "y" to 5.5, "w" to 1.2, "h" to 1.2, "fillColor" to "2459D3", "lineColor" to "2459D3"),
-                    ),
-                ),
-            ),
             ))
             val chartTableArtifactId = createAndPersist(module, presentationTool, "chart-table", mapOf(
-            "title" to "Regional sales details",
-            "slides" to listOf(mapOf(
-                "title" to "Sales by region",
-                "backgroundColor" to "F4F6FB",
-                "chart" to mapOf(
-                    "title" to "Revenue",
-                    "labels" to listOf("North", "South"),
-                    "datasets" to listOf(mapOf("name" to "Sales", "values" to listOf(42, 57), "color" to "2459D3")),
-                ),
-                "table" to mapOf(
-                    "headers" to listOf("Region", "Revenue"),
-                    "rows" to listOf(listOf("North", "42"), listOf("South", "57")),
-                ),
-            )),
+                "title" to "Regional sales details",
+                "slides" to listOf(mapOf(
+                    "background" to "F4F6FB",
+                    "elements" to listOf(
+                        mapOf("type" to "text", "text" to "Sales by region", "x" to 0.8, "y" to 0.45, "w" to 11.7, "h" to 0.8, "fontSize" to 29, "fontFace" to "Arial", "color" to "18253A", "bold" to true, "margin" to 0),
+                        mapOf("type" to "chart", "chartType" to "bar", "labels" to listOf("North", "South"), "datasets" to listOf(mapOf("name" to "Sales", "values" to listOf(42, 57), "color" to "2459D3")), "x" to 0.8, "y" to 1.6, "w" to 5.5, "h" to 4.7, "options" to mapOf("title" to "Revenue", "showTitle" to true, "showValue" to true, "showLegend" to false)),
+                        mapOf("type" to "table", "rows" to listOf(listOf("Region", "Revenue"), listOf("North", "42"), listOf("South", "57")), "x" to 7.0, "y" to 1.75, "w" to 5.4, "colW" to listOf(2.8, 2.6), "rowH" to listOf(0.75, 0.75, 0.75), "fontSize" to 18, "fontFace" to "Arial", "color" to "18253A", "margin" to 0.08),
+                    ),
+                )),
             ))
             val chartArtifactId = createAndPersist(chartModule, chartTool, "chart-viewer", mapOf(
                 "title" to "Revenue by quarter",
