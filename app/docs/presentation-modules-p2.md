@@ -17,10 +17,18 @@ La miniatura rasterizada queda en el almacén de archivos existente y su `file_r
 
 - **Gráficas:** Chart.js **4.5.1**, bundle UMD local minificado, sin CDN. El handler crea un gráfico sin animación, serializa sus datos como artefacto JSON y captura el canvas como PNG.
 - **PPTX:** PptxGenJS **4.0.1** y JSZip **3.10.1**, ambos bundles de navegador empaquetados localmente y minificados. El handler los ejecuta dentro del WebView aislado, genera el archivo PPTX y entrega los bytes junto con una miniatura PNG.
-- **Visor PPTX:** `viewer/deck-renderer.js`, renderer local propio de **14,791 bytes**. Recorre el orden definido en OOXML y dibuja formas básicas, texto e imágenes incorporadas con canvas. No pretende reproducir temas, tablas, grupos, transiciones, gráficos OOXML ni todas las reglas tipográficas de PowerPoint. La primera diapositiva usa el mismo renderer para producir la miniatura.
+- **Visor PPTX:** `viewer/deck-renderer.js`, renderer local propio de **18,345 bytes**. Recorre el orden definido en OOXML y dibuja formas básicas, texto e imágenes incorporadas con canvas. Resuelve colores sRGB y colores base del tema; no reproduce tablas, grupos, transiciones, gráficos OOXML ni todas las reglas tipográficas de PowerPoint. La primera diapositiva usa el mismo renderer para producir la miniatura.
 - PptxGenJS y JSZip se distribuyen con sus licencias MIT junto a los bundles; Chart.js conserva su licencia en el módulo. Los README de cada módulo apuntan a las versiones upstream fijadas.
 
 La app no descarga bibliotecas ni usa runtime Node, Linux, Python o shell. No se añadieron tools de módulos a tareas programadas; continúan diferidas.
+
+## Visor: causa corregida y decisión
+
+El Node handler genera el texto y los rellenos dentro del XML real de cada diapositiva; la pérdida ocurría en el visor al asignar tamaños OOXML en EMU directamente como `font` CSS del canvas (por ejemplo, `sz="3000"` se convertía en `381000px`). WebView limitaba esa fuente antes de transformar el canvas. El renderer propio ahora pasa texto y medidas a píxeles CSS, resuelve sRGB y colores de tema desde el `.pptx`, y dibuja desde los bytes entregados. Las formas con texto de una línea admiten ajuste, alineación vertical y giro básico.
+
+La tool actual no declara ni genera gráficos OOXML. El renderer no interpreta `p:graphicFrame`; si una diapositiva incluye un gráfico, una tabla u otro objeto integrado, muestra una advertencia visible en el visor.
+
+La decisión es mantener el renderer propio para el subconjunto que produce la tool y no añadir otra biblioteca de visualización general. No se modificó el permiso aislado del WebView. La miniatura continúa renderizando la primera diapositiva con el mismo renderer.
 
 ## Peso
 

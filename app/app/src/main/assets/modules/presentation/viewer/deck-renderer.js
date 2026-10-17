@@ -86,11 +86,37 @@
       zip: zip,
       width: width,
       height: height,
-      slidePaths: presentationSlidePaths(presentation, rels)
+      slidePaths: presentationSlidePaths(presentation, rels),
+      themeColors: await loadThemeColors(zip, rels)
     };
   }
 
-  function colorFrom(node, fallback) {
+  async function loadThemeColors(zip, relationshipsById) {
+    var themePath = Array.from(relationshipsById.values()).find(function (path) {
+      return path && path.indexOf("/theme/") >= 0 && path.slice(-4).toLowerCase() === ".xml";
+    });
+    var part = themePath && zip.file(themePath);
+    if (!part) return {};
+    var theme = await parseXml(await part.async("string"));
+    var scheme = firstDescendant(theme, DRAWING_NS, "clrScheme");
+    if (!scheme) return {};
+    var result = {};
+    ["dk1", "dk2", "lt1", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"]
+      .forEach(function (name) {
+        var entry = firstDescendant(scheme, DRAWING_NS, name);
+        var rgb = firstDescendant(entry, DRAWING_NS, "srgbClr");
+        var system = firstDescendant(entry, DRAWING_NS, "sysClr");
+        var value = rgb && rgb.getAttribute("val") || system && system.getAttribute("lastClr");
+        if (value) result[name] = "#" + value;
+      });
+    result.tx1 = result.dk1;
+    result.tx2 = result.dk2;
+    result.bg1 = result.lt1;
+    result.bg2 = result.lt2;
+    return result;
+  }
+
+  function colorFrom(node, fallback, themeColors) {
     if (!node) return fallback;
     var rgb = firstDescendant(node, DRAWING_NS, "srgbClr");
     if (rgb) return "#" + rgb.getAttribute("val");
@@ -104,22 +130,23 @@
         accent3: "#f79009", accent4: "#7f56d9", accent5: "#f04438", accent6: "#06aed4",
         hlink: "#175cd3", folHlink: "#6941c6"
       };
-      return mapped[scheme.getAttribute("val")] || fallback;
+      var schemeName = scheme.getAttribute("val");
+      return themeColors && themeColors[schemeName] || mapped[schemeName] || fallback;
     }
     return fallback;
   }
 
-  function shapeFill(shapeProperties) {
+  function shapeFill(shapeProperties, themeColors) {
     if (!shapeProperties || firstDescendant(shapeProperties, DRAWING_NS, "noFill")) return null;
-    return colorFrom(firstDescendant(shapeProperties, DRAWING_NS, "solidFill"), null);
+    return colorFrom(firstDescendant(shapeProperties, DRAWING_NS, "solidFill"), null, themeColors);
   }
 
-  function shapeLine(shapeProperties) {
+  function shapeLine(shapeProperties, themeColors) {
     var line = firstDescendant(shapeProperties, DRAWING_NS, "ln");
     if (!line || firstDescendant(line, DRAWING_NS, "noFill")) return null;
     var width = Number(line.getAttribute("w"));
     return {
-      color: colorFrom(firstDescendant(line, DRAWING_NS, "solidFill"), "#667085"),
+      color: colorFrom(firstDescendant(line, DRAWING_NS, "solidFill"), "#667085", themeColors),
       width: Number.isFinite(width) && width > 0 ? width : EMU_PER_POINT
     };
   }
@@ -128,7 +155,7 @@
     return descendants(paragraph, DRAWING_NS, "t").map(function (text) { return text.textContent || ""; }).join("");
   }
 
-  function paragraphStyle(paragraph, shapeTextBody) {
+  function paragraphStyle(paragraph, shapeTextBody, themeColors) {
     var paragraphProperties = firstDescendant(paragraph, DRAWING_NS, "pPr");
     var runProperties = firstDescendant(paragraph, DRAWING_NS, "rPr") ||
       firstDescendant(paragraph, DRAWING_NS, "defRPr") ||
@@ -137,7 +164,8 @@
     var bold = runProperties && (runProperties.getAttribute("b") === "1" || runProperties.getAttribute("b") === "true");
     var italic = runProperties && (runProperties.getAttribute("i") === "1" || runProperties.getAttribute("i") === "true");
     var alignment = paragraphProperties && paragraphProperties.getAttribute("algn");
-    var color = colorFrom(firstDescendant(runProperties || paragraph, DRAWING_NS, "solidFill"), "#24324a");
+    var color = colorFrom(firstDescendant(runProperties || paragraph, DRAWING_NS, "solidFill"),
+      themeColors && themeColors.tx1 || "#24324a", themeColors);
     var bullet = paragraphProperties && firstDescendant(paragraphProperties, DRAWING_NS, "buChar");
     var bodyProperties = firstDescendant(shapeTextBody, DRAWING_NS, "bodyPr");
     var vertical = bodyProperties && bodyProperties.getAttribute("anchor");
@@ -177,30 +205,50 @@
     return lines;
   }
 
-  function drawText(context, shape, bounds) {
+  function drawText(context, shape, bounds, scale, themeColors) {
     var textBody = firstDescendant(shape, PRESENTATION_NS, "txBody");
     if (!textBody || bounds.w <= 0 || bounds.h <= 0) return;
     var paragraphs = descendants(textBody, DRAWING_NS, "p");
     var insets = bodyInsets(textBody);
-    var top = bounds.y + insets.top;
-    var availableWidth = Math.max(0, bounds.w - insets.left - insets.right);
-    var availableHeight = Math.max(0, bounds.h - insets.top - insets.bottom);
+    var top = (bounds.y + insets.top) * scale;
+    var availableWidth = Math.max(0, bounds.w - insets.left - insets.right) * scale;
+    var availableHeight = Math.max(0, bounds.h - insets.top - insets.bottom) * scale;
     var consumed = 0;
+    context.save();
+    // Shape geometry uses EMU coordinates; canvas fonts are parsed as CSS pixels.
+    // Cancel the EMU transform while drawing text so WebView does not clamp values
+    // such as 381000px before the canvas transform is applied.
+    context.scale(1 / scale, 1 / scale);
+    var shapeProperties = firstDescendant(shape, PRESENTATION_NS, "spPr");
+    var transform = firstDescendant(shapeProperties, DRAWING_NS, "xfrm");
+    var rotation = Number(transform && transform.getAttribute("rot"));
+    if (Number.isFinite(rotation) && rotation !== 0) {
+      var centerX = (bounds.x + bounds.w / 2) * scale;
+      var centerY = (bounds.y + bounds.h / 2) * scale;
+      context.translate(centerX, centerY);
+      context.rotate(rotation / 60000 * Math.PI / 180);
+      context.translate(-centerX, -centerY);
+    }
     paragraphs.forEach(function (paragraph) {
       var text = paragraphText(paragraph);
       if (!text) return;
-      var style = paragraphStyle(paragraph, textBody);
+      var style = paragraphStyle(paragraph, textBody, themeColors);
       context.save();
       context.fillStyle = style.color;
-      context.font = (style.italic ? "italic " : "") + (style.bold ? "bold " : "") + style.fontSizeEmu + "px Aptos, Arial, sans-serif";
+      context.font = (style.italic ? "italic " : "") + (style.bold ? "bold " : "") + style.fontSizeEmu * scale + "px Aptos, Arial, sans-serif";
       context.textBaseline = "top";
       context.textAlign = style.alignment;
       var lines = wrapText(context, (style.bullet ? "• " : "") + text, availableWidth);
-      var lineHeight = style.fontSizeEmu * 1.25;
+      var lineHeight = style.fontSizeEmu * scale * 1.25;
+      var textTop = top;
+      if (paragraphs.length === 1 && (style.vertical === "ctr" || style.vertical === "b")) {
+        var remainingHeight = Math.max(0, availableHeight - lines.length * lineHeight);
+        textTop += style.vertical === "ctr" ? remainingHeight / 2 : remainingHeight;
+      }
       lines.forEach(function (line, lineIndex) {
-        var y = top + consumed + lineIndex * lineHeight;
+        var y = textTop + consumed + lineIndex * lineHeight;
         if (y > top + availableHeight) return;
-        var x = bounds.x + insets.left;
+        var x = (bounds.x + insets.left) * scale;
         if (style.alignment === "center") x += availableWidth / 2;
         if (style.alignment === "right") x += availableWidth;
         context.fillText(line, x, y, availableWidth);
@@ -208,6 +256,7 @@
       consumed += lines.length * lineHeight;
       context.restore();
     });
+    context.restore();
   }
 
   function transformFor(shapeProperties, bounds, context) {
@@ -232,7 +281,7 @@
     };
   }
 
-  function drawShape(context, shape) {
+  function drawShape(context, shape, scale, themeColors) {
     var shapeProperties = firstDescendant(shape, PRESENTATION_NS, "spPr");
     var bounds = shapeBounds(shapeProperties);
     if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)) return;
@@ -240,8 +289,8 @@
     transformFor(shapeProperties, bounds, context);
     var geometry = firstDescendant(shapeProperties, DRAWING_NS, "prstGeom");
     var kind = geometry ? geometry.getAttribute("prst") : "rect";
-    var fill = shapeFill(shapeProperties);
-    var line = shapeLine(shapeProperties);
+    var fill = shapeFill(shapeProperties, themeColors);
+    var line = shapeLine(shapeProperties, themeColors);
     context.beginPath();
     if (kind === "ellipse" || kind === "arc" || kind === "pie") {
       context.ellipse(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2,
@@ -262,7 +311,7 @@
       context.stroke();
     }
     context.restore();
-    drawText(context, shape, bounds);
+    drawText(context, shape, bounds, scale, themeColors);
   }
 
   function mimeFor(path) {
@@ -309,7 +358,7 @@
     context.fillRect(0, 0, deck.width, deck.height);
 
     var background = firstDescendant(slideDocument, PRESENTATION_NS, "bg");
-    var backgroundColor = colorFrom(firstDescendant(background, DRAWING_NS, "solidFill"), null);
+    var backgroundColor = colorFrom(firstDescendant(background, DRAWING_NS, "solidFill"), null, deck.themeColors);
     if (backgroundColor) {
       context.fillStyle = backgroundColor;
       context.fillRect(0, 0, deck.width, deck.height);
@@ -317,15 +366,28 @@
 
     var shapes = descendants(slideDocument, PRESENTATION_NS, "sp");
     var pictures = descendants(slideDocument, PRESENTATION_NS, "pic");
+    var warnings = descendants(slideDocument, PRESENTATION_NS, "graphicFrame").length > 0
+      ? ["Esta diapositiva contiene un gráfico, una tabla u otro objeto integrado que el visor no puede representar."]
+      : [];
     var content = shapes.concat(pictures).sort(function (left, right) {
       return left.compareDocumentPosition(right) & 2 ? 1 : -1;
     });
     for (var shapeIndex = 0; shapeIndex < content.length; shapeIndex += 1) {
       if (content[shapeIndex].localName === "pic") {
         await drawPicture(context, content[shapeIndex], deck.zip, rels);
-      } else drawShape(context, content[shapeIndex]);
+      } else drawShape(context, content[shapeIndex], scale, deck.themeColors);
     }
+    canvas.presentationWarnings = warnings;
     return canvas;
+  }
+
+  function fitSlideToBounds(availableWidth, availableHeight, slideWidth, slideHeight) {
+    if (![availableWidth, availableHeight, slideWidth, slideHeight].every(Number.isFinite) ||
+        availableWidth <= 0 || availableHeight <= 0 || slideWidth <= 0 || slideHeight <= 0) {
+      return { width: 0, height: 0, scale: 0 };
+    }
+    var scale = Math.min(availableWidth / slideWidth, availableHeight / slideHeight);
+    return { width: slideWidth * scale, height: slideHeight * scale, scale: scale };
   }
 
   async function renderFirstSlide(bytes, canvas) {
@@ -336,6 +398,7 @@
   global.PptxDeckRenderer = {
     loadDeck: loadDeck,
     renderSlide: renderSlide,
-    renderFirstSlide: renderFirstSlide
+    renderFirstSlide: renderFirstSlide,
+    fitSlideToBounds: fitSlideToBounds
   };
 }(window));

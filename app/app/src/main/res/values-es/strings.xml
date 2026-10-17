@@ -740,6 +740,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="agent_presence_stopping">Deteniendo…</string>
     <string name="chat_streaming_status">Recibiendo respuesta</string>
     <string name="chat_open_preview">Abrir vista previa</string>
+    <string name="module_artifact_viewer_title">Vista previa del artefacto</string>
     <string name="chat_current_screen_capture">Pantalla actual · se captura al iniciar la ejecución</string>
     <string name="chat_message_placeholder">Escribe a Jarvys…</string>
     <string name="chat_previous_run">Ejecución anterior</string>
