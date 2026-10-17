@@ -25,32 +25,19 @@
       button { background: #fff; color: #24324a; border-color: #667085; }
     }
   </style>
+  <script src="../vendor/jszip.min.js"></script>
   <script>
     (function () {
       "use strict";
 
       var ready = false;
       var failureShown = false;
-      // API 34 WebView measurements were 431 ms, 749 ms, and 1284 ms; report only after over 7x the slowest.
-      var timer = window.setTimeout(function () {
-        if (!ready) showFailure();
-      }, 10000);
-
-      function sizeViewport() {
-        var height = window.innerHeight;
-        if (!height || !document.body) return;
-        document.documentElement.style.height = height + "px";
-        document.documentElement.style.minHeight = height + "px";
-        document.body.style.height = height + "px";
-        document.body.style.minHeight = height + "px";
-      }
 
       function showFailure() {
-        if (failureShown) return;
+        if (ready || failureShown) return;
         var status = document.getElementById("status");
         if (!status) return;
         failureShown = true;
-        window.clearTimeout(timer);
         var isSpanish = (navigator.language || "en").toLowerCase().indexOf("es") === 0;
         status.textContent = status.getAttribute(isSpanish ? "data-error-es" : "data-error-en");
         status.hidden = false;
@@ -60,11 +47,8 @@
 
       window.__presentationViewerReady = function () {
         ready = true;
-        window.clearTimeout(timer);
       };
 
-      window.addEventListener("DOMContentLoaded", sizeViewport);
-      window.addEventListener("resize", sizeViewport);
       window.addEventListener("error", function (event) {
         var target = event.target;
         if (target && target !== window) {
@@ -77,8 +61,8 @@
   </script>
 </head>
 <body>
-  <main class="stage" id="stage" aria-label="Diapositiva de la presentación">
-    <p class="loading" id="loading">Cargando presentación…</p>
+  <main class="stage" id="stage" aria-label="Presentation slide">
+    <p class="loading" id="loading">Loading presentation…</p>
   </main>
   <p id="status" role="alert"
      data-error-es="No se pudo abrir la presentación. Vuelve a intentarlo o abre el archivo en una aplicación compatible."

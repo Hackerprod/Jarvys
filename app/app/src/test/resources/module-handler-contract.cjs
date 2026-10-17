@@ -660,16 +660,29 @@ async function main() {
     assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
     assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
     assert.match(viewerHtml, /<script src="presentation\.js"><\/script>/);
-    assert.match(viewerHtml, /<p class="loading" id="loading">Cargando presentación…<\/p>/,
+    assert.match(viewerHtml, /<p class="loading" id="loading">Loading presentation…<\/p>/,
       "the viewer must show its loading state before presentation.js runs");
+    const viewerJs = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.js"), "utf8");
+    assert.match(viewerJs, /loadingPresentation: "Cargando presentación…"/);
+    assert.match(viewerJs, /loadingPresentation: "Loading presentation…"/);
+    assert.match(viewerJs, /stage\.setAttribute\("aria-label", labels\.stage\)/);
     assert.match(viewerHtml, /window\.addEventListener\("error"[\s\S]*window\.addEventListener\("unhandledrejection"/,
       "the standalone HTML fallback must report script/global and unhandled promise failures");
-    assert.match(viewerHtml, /function sizeViewport\(\)[\s\S]*window\.innerHeight[\s\S]*window\.addEventListener\("DOMContentLoaded", sizeViewport\)[\s\S]*window\.addEventListener\("resize", sizeViewport\)/,
-      "the standalone HTML must size the viewer to WebView's reported viewport and track viewport changes");
-    assert.match(viewerHtml, /if \(!ready\) showFailure\(\);[\s\S]*\}, 10000\)/,
-      "the standalone watchdog must report a stalled render without cancelling it");
+    assert.doesNotMatch(viewerHtml, /sizeViewport|window\.innerHeight/,
+      "the viewer layout must use its host's measured WebView bounds");
+    assert.doesNotMatch(viewerHtml, /setTimeout\([^]*?10000/,
+      "a slow render must keep its loading state instead of becoming an error");
+    assert.match(viewerHtml, /if \(ready \|\| failureShown\) return/,
+      "global errors after a successful render must not cover the working deck");
     assert.match(viewerHtml, /window\.__presentationViewerReady = function \(\)/,
-      "the viewer script must be able to stop the standalone watchdog after its first render");
+      "the viewer script must report when the first slide has rendered");
+    assert.match(viewerJs, /slides:\s*\[index \+ 1\]/,
+      "the viewer must convert only the selected slide");
+    assert.match(viewerJs, /slideCache\.set\(index, result\.svg\)/,
+      "the viewer must retain SVGs it has already converted");
+    assert.match(viewerJs, /getElementsByTagNameNS/);
+    assert.match(viewerJs, /"sldId"/,
+      "the viewer must count slides from the PPTX manifest without converting each slide");
     assert.match(viewerHtml, /data-error-es="No se pudo abrir la presentación\./);
     assert.match(viewerHtml, /data-error-en="The presentation could not be opened\./);
     assert.doesNotMatch(viewerHtml, /deck-renderer\.js/, "the user-visible viewer must have one renderer");
@@ -682,8 +695,6 @@ async function main() {
     assert.ok(fallbackSource, "the page must carry its fallback independently of presentation.js and PptxGlimpse");
     function runStandaloneFallback(language = "es-ES") {
       const listeners = {};
-      let timer;
-      let clearedTimer = false;
       const fallbackNodes = {
         status: {
           hidden: true,
@@ -697,8 +708,6 @@ async function main() {
         counter: { textContent: "Cargando…" },
       };
       const fallbackWindow = {
-        setTimeout(callback, delay) { timer = { callback, delay }; return 1; },
-        clearTimeout() { clearedTimer = true; },
         addEventListener(name, callback) { listeners[name] = callback; },
       };
       vm.runInNewContext(fallbackSource, {
@@ -706,11 +715,10 @@ async function main() {
         document: { getElementById: (id) => fallbackNodes[id] || null },
         navigator: { language },
       });
-      return { fallbackNodes, fallbackWindow, listeners, get timer() { return timer; }, wasTimerCleared: () => clearedTimer };
+      return { fallbackNodes, fallbackWindow, listeners };
     }
 
     const scriptFailureFallback = runStandaloneFallback();
-    assert.equal(scriptFailureFallback.timer.delay, 10000);
     scriptFailureFallback.listeners.error({
       target: { tagName: "IMG", getAttribute: () => "" },
     });
@@ -723,7 +731,6 @@ async function main() {
       "a failed presentation.js load must display the standalone alert");
     assert.match(scriptFailureFallback.fallbackNodes.status.textContent, /No se pudo abrir la presentación/);
     assert.equal(scriptFailureFallback.fallbackNodes.counter.textContent, "");
-    assert.equal(scriptFailureFallback.wasTimerCleared(), true);
 
     const rejectionFallback = runStandaloneFallback("en-US");
     rejectionFallback.listeners.unhandledrejection({ reason: new Error("fixture-rejection") });
@@ -731,11 +738,11 @@ async function main() {
       "an unhandled rejection must display the standalone alert");
     assert.match(rejectionFallback.fallbackNodes.status.textContent, /The presentation could not be opened/);
 
-    const stalledFallback = runStandaloneFallback();
-    stalledFallback.timer.callback();
-    assert.equal(stalledFallback.fallbackNodes.status.hidden, false,
-      "the watchdog must report a render that has not completed");
-    assert.match(stalledFallback.fallbackNodes.status.textContent, /No se pudo abrir la presentación/);
+    const completedFallback = runStandaloneFallback();
+    completedFallback.fallbackWindow.__presentationViewerReady();
+    completedFallback.listeners.error({ target: completedFallback.fallbackWindow });
+    assert.equal(completedFallback.fallbackNodes.status.hidden, true,
+      "a later global error must not cover the successfully rendered presentation");
 
     const viewerScript = path.join(moduleDirectory, "viewer/presentation.js");
     const viewerSource = fs.readFileSync(viewerScript, "utf8");
@@ -752,8 +759,10 @@ async function main() {
           clientWidth: 320,
           clientHeight: 210,
           children: [],
+          setAttribute(name, value) { this[name] = value; },
           replaceChildren(...children) { this.children = children; },
         },
+        loading: { hidden: false, textContent: "" },
         navigation: { setAttribute(name, value) { this[name] = value; } },
         counter: { textContent: "" },
         previous: { disabled: true, textContent: "", addEventListener(name, handler) { this[name] = handler; }, click() { if (!this.disabled) this.clickHandler && this.clickHandler(); } },
@@ -799,18 +808,29 @@ async function main() {
       return viewerNodes;
     }
 
-    async function runViewer(converter, language = "es-ES") {
+    async function runViewer(converter, language = "es-ES", countedSlideCount = 4, failFetch = false) {
       const viewerNodes = setupViewerNodes();
       Object.defineProperty(globalThis, "navigator", {
         value: { userAgent: "node-module-contract", language }, configurable: true,
       });
       globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
+      globalThis.DOMParser = class {
+        parseFromString(xml) {
+          return {
+            getElementsByTagName() { return []; },
+            getElementsByTagNameNS(namespace, name) {
+              assert.equal(name, "sldId");
+              return Array.from({ length: countedSlideCount });
+            },
+          };
+        }
+      };
       viewerFallbackReadyCalls = 0;
       globalThis.__presentationViewerReady = () => { viewerFallbackReadyCalls += 1; };
       globalThis.fetch = async (url) => {
         requestedArtifactUrl = url;
         return {
-          ok: true,
+          ok: !failFetch,
           arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength),
         };
       };
@@ -830,20 +850,23 @@ async function main() {
       return viewerNodes;
     }
 
+    const convertedCalls = [];
     const successfulViewerNodes = await runViewer(async (bytes, options) => {
       convertedBytes = Buffer.from(bytes);
       convertedOptions = options;
+      convertedCalls.push({ bytes: Buffer.from(bytes), options });
       return {
-        slides: [0, 1, 2, 3].map((index) => ({
-          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>',
-        })),
+        slides: [{
+          slideNumber: options.slides[0],
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + (options.slides[0] - 1) + '"></svg>',
+        }],
       };
     });
     assert.equal(requestedArtifactUrl, globalThis.JarvysArtifact.url);
     assert.deepEqual(convertedBytes, delivery.bytes, "the viewer must pass the delivered PPTX bytes to PptxGlimpse");
-    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280 });
+    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280, slides: [1] });
     assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4", "viewer error: " + successfulViewerNodes.status.textContent);
-    assert.equal(viewerFallbackReadyCalls, 1, "the first rendered slide must stop the standalone watchdog");
+    assert.equal(viewerFallbackReadyCalls, 1, "the first rendered slide must clear the loading state");
     assert.equal(successfulViewerNodes.status.hidden, true);
     assert.equal(document.title, "Presentación");
     assert.equal(successfulViewerNodes.previous.disabled, true);
@@ -859,11 +882,13 @@ async function main() {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4");
     assert.deepEqual(renderedSlideIndices, [0, 1, 0], "next and previous controls must render the selected slide");
+    assert.deepEqual(convertedCalls.map((call) => call.options.slides[0]), [1, 2],
+      "the viewer must convert the selected slide once and reuse its cached SVG when navigating back");
 
     failSlideImageDecode = false;
-    const englishViewerNodes = await runViewer(async () => ({
-      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
-    }), "en-US");
+    const englishViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "en-US", 1);
     assert.equal(document.title, "Presentation");
     assert.equal(englishViewerNodes.counter.textContent, "Slide 1 of 1");
     assert.equal(viewerFallbackReadyCalls, 1);
@@ -871,15 +896,15 @@ async function main() {
     assert.equal(englishViewerNodes.next.textContent, "Next");
 
     failSlideImageDecode = true;
-    const failedViewerNodes = await runViewer(async () => ({
-      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
-    }));
+    const failedViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "es-ES", 1);
     assert.equal(failedViewerNodes.status.hidden, false, "a failed slide render must show an on-screen alert");
     assert.match(failedViewerNodes.status.textContent, /No se pudo mostrar la diapositiva/);
     assert.equal(failedViewerNodes.stage.children.length, 0, "a failed render must not leave a silent empty slide");
     assert.equal(viewerFallbackReadyCalls, 1, "a visible slide failure must stop the standalone watchdog");
 
-    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("fixture-load-failed"); });
+    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("converter-should-not-run"); }, "es-ES", 1, true);
     assert.equal(failedLoadViewerNodes.counter.textContent, "", "a failed presentation load must clear the loading counter");
     assert.equal(failedLoadViewerNodes.status.hidden, false, "a failed presentation load must show its alert");
     assert.equal(viewerFallbackReadyCalls, 1, "a visible load failure must stop the standalone watchdog");

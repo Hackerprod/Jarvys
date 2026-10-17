@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -125,23 +126,21 @@ fun ModuleArtifactViewerScreen(
                         onRendererGone = { rendererGone.value = true },
                     )
                 }
-                DisposableEffect(webView, cancellation) {
+                DisposableEffect(webView, cancellation, rendererGone.value) {
+                    val releaseOnDispose = !rendererGone.value
                     onDispose {
-                        cancellation.cancel()
-                        webView.stopLoading()
-                        webView.removeJavascriptInterface("Jarvys")
-                        webView.webViewClient = WebViewClient()
-                        webView.webChromeClient = null
-                        webView.onPause()
-                        webView.destroy()
+                        if (releaseOnDispose) {
+                            cancellation.cancel()
+                            webView.stopLoading()
+                            webView.removeJavascriptInterface("Jarvys")
+                            webView.webViewClient = WebViewClient()
+                            webView.webChromeClient = null
+                            webView.onPause()
+                            webView.destroy()
+                        }
                     }
                 }
                 Box(Modifier.fillMaxWidth().weight(1f)) {
-                    AndroidView(
-                        factory = { webView },
-                        modifier = Modifier.fillMaxSize(),
-                        update = {},
-                    )
                     if (rendererGone.value) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
@@ -150,6 +149,19 @@ fun ModuleArtifactViewerScreen(
                                 modifier = Modifier.padding(24.dp),
                             )
                         }
+                    } else {
+                        AndroidView(
+                            factory = {
+                                webView.apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            update = {},
+                        )
                     }
                 }
             }

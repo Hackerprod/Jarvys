@@ -17,6 +17,6 @@ Raw UTF-8/file bytes packaged under this module asset directory. APK ZIP compres
 | vendor/pptx-glimpse.bundle.js | 1197989 |
 | vendor/PPTX-GLIMPSE-LICENSE.md | 1069 |
 | vendor/THIRD-PARTY-NOTICES.md | 22526 |
-| viewer/presentation.html | 4539 |
-| viewer/presentation.js | 6697 |
-| **Total module assets (excluding this inventory)** | **1677022** |
+| viewer/presentation.html | 3813 |
+| viewer/presentation.js | 8617 |
+| **Total module assets (excluding this inventory)** | **1678216** |
