@@ -235,6 +235,7 @@ internal fun ConnectorPolicySelector(
     origin: ActionPolicyOrigin? = null,
     subjectKey: String,
     optionTags: Map<Int, String> = emptyMap(),
+    captionModifier: Modifier = Modifier,
 ) {
     var expanded by remember(subjectKey) { mutableStateOf(false) }
     var editLease by remember(subjectKey) { mutableStateOf<com.jarvys.agent.MemoryUiAutomationGuard.Lease?>(null) }
@@ -278,9 +279,9 @@ internal fun ConnectorPolicySelector(
                 ) }
             }
         }
-        origin?.let { ConnectorPolicyOriginCaption(it) }
+        origin?.let { ConnectorPolicyOriginCaption(it, captionModifier) }
         if (editError) Text(stringResource(com.jarvys.agent.R.string.action_policy_edit_unavailable),
-            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            modifier = captionModifier, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
 }
 

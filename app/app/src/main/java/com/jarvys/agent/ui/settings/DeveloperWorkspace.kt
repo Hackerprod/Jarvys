@@ -33,7 +33,7 @@ internal fun DeveloperWorkspace() {
     Column(modifier = Modifier.fillMaxWidth().testTag("developer-settings")) {
         FlavorAutonomyUi.DeveloperControls()
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {

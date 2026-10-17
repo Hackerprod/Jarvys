@@ -156,7 +156,8 @@ object FlavorAutonomyUi {
         }
         ConnectorPolicySelector(label(policy), AutonomyPolicy.entries.map { choice ->
             ConnectorPolicyChoice(label(choice)) { onSelect(choice) }
-        }, subjectKey = tag, origin = origin, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag(tag))
+        }, subjectKey = tag, origin = origin, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag(tag),
+            captionModifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
     }
 
 }
