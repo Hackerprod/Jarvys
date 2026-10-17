@@ -5,7 +5,7 @@ Raw UTF-8/file bytes packaged under this module asset directory. APK ZIP compres
 | File | Bytes |
 |---|---:|
 | README.md | 7246 |
-| logic/tools.js | 15563 |
+| logic/tools.js | 20189 |
 | manifest.json | 7063 |
 | skills/presentation/SKILL.md | 2593 |
 | vendor/FAST-XML-PARSER-LICENSE.md | 1073 |
@@ -20,4 +20,4 @@ Raw UTF-8/file bytes packaged under this module asset directory. APK ZIP compres
 | viewer/deck-renderer.js | 18345 |
 | viewer/presentation.html | 2359 |
 | viewer/presentation.js | 6501 |
-| **Total module assets (excluding this inventory)** | **1686886** |
+| **Total module assets (excluding this inventory)** | **1691512** |
