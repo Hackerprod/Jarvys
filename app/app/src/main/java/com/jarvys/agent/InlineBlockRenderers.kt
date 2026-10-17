@@ -186,7 +186,7 @@ private object SvgInlineBlockRenderer : InlineBlockRenderer {
         val svgFigureLabel = stringResource(R.string.inline_block_svg_figure)
         val accessibleLabel = prepared.description.ifBlank { svgFigureLabel }
         Canvas(
-            modifier.fillMaxWidth().padding(vertical = 8.dp)
+            modifier.fillMaxWidth()
                 .aspectRatio(prepared.width / prepared.height)
                 .copySourceAction(source)
                 .semantics { contentDescription = accessibleLabel },
@@ -392,7 +392,7 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
         val renderResult = runCatching {
             LatexAutoWrap(
                 latex = source,
-                modifier = modifier.fillMaxWidth().padding(vertical = 8.dp).copySourceAction(source),
+                modifier = modifier.fillMaxWidth().copySourceAction(source),
                 config = LatexConfig(
                     fontSize = 20.sp,
                     theme = LatexTheme.material3(MaterialTheme.colorScheme.copy(surface = Color.Transparent)),
@@ -410,7 +410,7 @@ private fun NativeChart(spec: ChartSpec, modifier: Modifier, source: String) {
     val chartLabel = stringResource(R.string.inline_block_chart_label)
     val seriesLabel = stringResource(R.string.inline_block_series_label)
     val palette = listOf(colors.primary, colors.secondary, colors.tertiary, colors.error, colors.onSurfaceVariant)
-    Column(modifier.fillMaxWidth().padding(vertical = 8.dp).copySourceAction(source)
+    Column(modifier.fillMaxWidth().copySourceAction(source)
         .semantics { contentDescription = spec.accessibilitySummary(chartLabel, seriesLabel) }) {
         if (spec.title.isNotBlank()) {
             Text(spec.title, style = MaterialTheme.typography.titleSmall,

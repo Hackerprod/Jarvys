@@ -871,9 +871,15 @@ object AgentRunUiState {
             event.id !in transientEventIds
                 && !replacedLiveTool
                 && (identity == null || identity !in durableEventIdentities)
-                && (event.timelineKey != null || event.id < firstPersistedId && event.kind in durableKinds)
+                && event.timelineKey == null
+                && event.id < firstPersistedId && event.kind in durableKinds
         }
-        val mergedDurableEvents = (olderLoadedEvents + durableEvents).distinctBy { it.id }
+        val retainedRunningTimelineEvents = if (current.running) current.events.filter { event ->
+            event.timelineKey != null
+                && event.id !in transientEventIds
+                && (refreshEventIdentity(event) == null || refreshEventIdentity(event) !in durableEventIdentities)
+        } else emptyList()
+        val mergedDurableEvents = (olderLoadedEvents + durableEvents + retainedRunningTimelineEvents).distinctBy { it.id }
         nextEventId = maxOf(nextEventId, ((mergedDurableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
         val usedIds = mergedDurableEvents.mapTo(mutableSetOf()) { it.id }
         val uniqueTransient = transientEvents.map { live ->
@@ -1016,14 +1022,22 @@ object AgentRunUiState {
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error",
             "memory", "crew_mission", "tool", "user_decision", "artifact", "workspace_result")
         val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
+        val retainedAssistantTimelineKeys = current.events.asSequence()
+            .filter { it.kind == "assistant" && it.timelineKey != null }
+            .mapNotNull { event -> refreshEventIdentity(event)?.let { it to event.timelineKey } }
+            .toMap()
+        val keyedPersistedEvents = persistedEvents.map { event ->
+            if (event.kind != "assistant") event
+            else retainedAssistantTimelineKeys[refreshEventIdentity(event)]
+                ?.let { timelineKey -> event.copy(timelineKey = timelineKey) } ?: event
+        }
         val liveEvents = current.events.filter { event ->
             event.kind !in durableKinds
                 || event.kind == "tool" && event.stage in activeToolStages
                 || event.kind == "user_decision" && event.decisionStatus == "PENDING"
-                || event.timelineKey != null
         }
         _state.value = current.copy(events = liveEvents)
-        refreshPersistedSession(sessionId, persistedEvents)
+        refreshPersistedSession(sessionId, keyedPersistedEvents)
     } }
 
     @JvmStatic

@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import com.jarvys.agent.ui.chat.ConversationTimelineItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -57,6 +58,84 @@ class AgentRunUiStateTest {
         AgentRunUiState.replacePersistedTimelineWindow(session, listOf(promoted.copy(timelineKey = null)))
         assertEquals("persisted reconciliation keeps the live row identity", retry.timelineKey,
             AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant" }.timelineKey)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun regeneratingPromotedAnswerRemovesItFromRefreshedWindowAndKeepsDurableOrderAndKeys() {
+        val session = "timeline-regenerate-promoted-${System.nanoTime()}"
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
+        val firstUserId = store.appendConversationMessage(session, "user", "First request")
+        val firstAnswerId = store.appendConversationMessage(session, "assistant", "First answer", null, "", firstUserId)
+        val secondUserId = store.appendConversationMessage(session, "user", "Second request")
+        val oldAnswerId = store.appendConversationMessage(session, "assistant", "Old second answer", null, "", secondUserId)
+        val promotedEvents = store.readConversationTimeline(session).map { event ->
+            when (event.messageId) {
+                firstAnswerId -> event.copy(timelineKey = 70_001L)
+                oldAnswerId -> event.copy(timelineKey = 70_002L)
+                else -> event
+            }
+        }
+        AgentRunUiState.restoreSession(session, promotedEvents)
+
+        assertEquals(secondUserId, store.regenerateAssistantIfLatest(session, oldAnswerId).userMessageId)
+        AgentRunUiState.replacePersistedTimelineWindow(session, store.readConversationTimeline(session))
+
+        val events = AgentRunUiState.snapshotForSession(session).events
+        assertFalse(events.any { it.kind == "assistant" && it.messageId == oldAnswerId })
+        assertEquals(listOf("First request", "First answer", "Second request"),
+            events.filter { it.kind == "user" || it.kind == "assistant" }.map { it.text })
+        assertEquals(70_001L, events.single { it.messageId == firstAnswerId }.timelineKey)
+        val rowKeys = events.map { ConversationTimelineItem.Event(it).key }
+        assertEquals(rowKeys.size, rowKeys.toSet().size)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun replacingEditedUserWindowDropsItsPromotedAnswer() {
+        val session = "timeline-edit-promoted-${System.nanoTime()}"
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
+        val userId = store.appendConversationMessage(session, "user", "Original request")
+        val answerId = store.appendConversationMessage(session, "assistant", "Promoted answer", null, "", userId)
+        val events = store.readConversationTimeline(session).map { event ->
+            if (event.messageId == answerId) event.copy(timelineKey = 71_001L) else event
+        }
+        AgentRunUiState.restoreSession(session, events)
+
+        val editedPersistedWindow = listOf(events.single { it.kind == "user" }
+            .copy(id = 90_000L, messageId = "edited-request-id", text = "Edited request"))
+        AgentRunUiState.replacePersistedTimelineWindow(session, editedPersistedWindow)
+
+        val refreshed = AgentRunUiState.snapshotForSession(session).events
+        assertEquals(listOf("Edited request"), refreshed.map { it.text })
+        assertFalse(refreshed.any { it.kind == "assistant" && it.messageId == answerId })
+        assertEquals(1, refreshed.map { ConversationTimelineItem.Event(it).key }.toSet().size)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun refreshKeepsPromotedRowOnlyDuringCurrentRunAndAfterDurableEvents() {
+        val session = "timeline-refresh-running-${System.nanoTime()}"
+        val promoted = AgentRunUiEvent(5L, "assistant", text = "Promoted answer", messageId = "promoted-answer")
+            .copy(timelineKey = 700L)
+        AgentRunUiState.restoreSession(session, listOf(promoted))
+        AgentRunUiState.beginRun(session, "Current request")
+        val generation = 700L
+        AgentRunUiState.bindGeneration(session, generation)
+
+        val older = AgentRunUiEvent(10L, "user", text = "Previous request", messageId = "previous-user")
+        val newest = AgentRunUiEvent(40L, "user", text = "Current request", messageId = "current-user")
+        AgentRunUiState.refreshPersistedSession(session, listOf(older, newest))
+
+        val duringRun = AgentRunUiState.snapshotForSession(session).events
+        assertEquals(listOf("Previous request", "Current request", "Promoted answer"), duringRun.map { it.text })
+        assertEquals(700L, duringRun.last().timelineKey)
+        assertEquals(duringRun.size, duringRun.map { ConversationTimelineItem.Event(it).key }.toSet().size)
+
+        AgentRunUiState.stopPendingGeneration(session, generation)
+        AgentRunUiState.finishPendingGeneration(session, generation)
+        AgentRunUiState.refreshPersistedSession(session, listOf(older, newest))
+        assertFalse(AgentRunUiState.snapshotForSession(session).events.any { it.messageId == "promoted-answer" })
         AgentRunUiState.resetSession(session)
     }
 

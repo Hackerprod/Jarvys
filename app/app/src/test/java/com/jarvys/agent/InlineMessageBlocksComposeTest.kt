@@ -3,6 +3,7 @@ package com.jarvys.agent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -24,8 +25,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.ui.chat.assistantReplyIsGenerating
+import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatMessageArrivalPolicy
 import com.jarvys.agent.ui.chat.ConversationTimelineItem
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.JarvysOwnTheme
@@ -46,6 +50,50 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class InlineMessageBlocksComposeTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun timelineKeepsOpenSvgPlaceholderAfterUserRowRefreshAndSteering() {
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, permissionGranted = { false })
+        val markdown = "```svg\n<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 50'><title>Live diagram</title>\n"
+        val optimisticUser = AgentRunUiEvent(1L, "user", text = "Draw a diagram", messageId = "optimistic-user")
+        val stream = AgentRunUiEvent(-1L, "assistant_stream", stage = "STREAMING", text = markdown,
+            messageId = "live-run", timelineKey = -1L, streamUserEventId = optimisticUser.id)
+        val events = mutableStateOf(listOf(optimisticUser, stream))
+        val placeholder = compose.activity.getString(R.string.inline_block_rendering, "svg")
+
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                ConversationTimeline(
+                    conversationKey = "stream-user-row-refresh",
+                    events = events.value,
+                    isRunning = true,
+                    connectorRegistry = connectors,
+                    onOpenPreview = {},
+                    onOpenSkillFile = {},
+                    chatWithoutMemory = false,
+                    benchmarkListState = rememberLazyListState(),
+                    modifier = Modifier.width(360.dp),
+                )
+            }
+        }
+        compose.onNodeWithText(placeholder).assertIsDisplayed()
+
+        val persistedUser = optimisticUser.copy(id = 2L, messageId = "durable-user")
+        compose.runOnIdle { events.value = listOf(persistedUser, stream) }
+        compose.waitForIdle()
+        compose.onNodeWithText(placeholder).assertIsDisplayed()
+        compose.onAllNodesWithText("Copy").assertCountEquals(0)
+        compose.onAllNodesWithText("<svg", substring = true).assertCountEquals(0)
+
+        val steering = AgentRunUiEvent(3L, "user", text = "Keep going", messageId = "steering-user")
+        compose.runOnIdle { events.value = listOf(persistedUser, stream, steering) }
+        compose.waitForIdle()
+        compose.onNodeWithText(placeholder).assertIsDisplayed()
+        compose.onAllNodesWithText("Copy").assertCountEquals(0)
+        compose.onAllNodesWithText("<svg", substring = true).assertCountEquals(0)
+    }
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun assistantMarkdownRendersInlineVisualsWithoutCopyButtonsAndKeepsCopySourceAccessible() {
@@ -106,17 +154,17 @@ class InlineMessageBlocksComposeTest {
                         key(ConversationTimelineItem.Event(event).key) {
                             DisposableEffect(Unit) {
                                 replyMounts.intValue++
-                                onDispose { replyMounts.intValue-- }
+                                onDispose { }
                             }
                             DisposableEffect(Unit) {
                                 blockSlotMounts.intValue++
-                                onDispose { blockSlotMounts.intValue-- }
+                                onDispose { }
                             }
                             RenderAssistantCodeFence(event.text, fenceNode, MaterialTheme.typography.bodySmall, generating)
                         }
                         DisposableEffect(Unit) {
                             belowMounts.intValue++
-                            onDispose { belowMounts.intValue-- }
+                            onDispose { }
                         }
                         androidx.compose.material3.Text("Following content", Modifier.testTag("following-content")
                             .onGloballyPositioned { belowTop.value = it.boundsInRoot().top })
@@ -133,7 +181,8 @@ class InlineMessageBlocksComposeTest {
         assertTrue(openFenceEvent.id < 0L)
         assertEquals(userId, openFenceEvent.streamUserEventId)
         assertTrue(assistantReplyIsGenerating(openFenceEvent, isRunning.value, userId))
-        assertFalse(assistantReplyIsGenerating(openFenceEvent, isRunning.value, userId + 1L))
+        assertTrue("a user-row refresh or steering row does not close the active stream gate",
+            assistantReplyIsGenerating(openFenceEvent, isRunning.value, userId + 1L))
         compose.onNodeWithText(compose.activity.getString(R.string.inline_block_rendering, "svg")).assertIsDisplayed()
         assertEquals(1, belowMounts.intValue)
         assertEquals(1, replyMounts.intValue)
@@ -153,6 +202,7 @@ class InlineMessageBlocksComposeTest {
         }
         compose.onNodeWithContentDescription("Streaming diagram").assertIsDisplayed()
         val blockId = compose.onNodeWithContentDescription("Streaming diagram").fetchSemanticsNode().id
+        assertEquals("closing the SVG fence keeps its visual slot mounted once", 1, blockSlotMounts.intValue)
         val closeTransitionPositions = mutableListOf<Float>()
         repeat(8) {
             compose.mainClock.advanceTimeBy(16L)

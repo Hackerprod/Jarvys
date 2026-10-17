@@ -15,31 +15,46 @@ public class MainAgentContractTest {
     @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
   @Test public void coreIsBoundedOriginalPrincipalContractWithLocale() {
-    assertTrue(MainAgentPrompt.CORE.length() <= 6500);
+    // The positive visual-format capability section increased the documented core budget.
+    assertTrue(MainAgentPrompt.CORE.length() <= 7000);
     String prompt = MainAgentPrompt.core(Locale.forLanguageTag("es-MX"), true);
     assertTrue(prompt.contains("Runtime response locale: es-MX"));
     for (String fact : Arrays.asList("latest request", "NEVER_LAUNCHED", "INTERRUPTED_UNCERTAIN",
         "not task completion", "permission denial", "not instructions or permission", "physical-device acceptance"))
       assertTrue(fact, prompt.contains(fact));
+    for (String restoredRule : Arrays.asList(
+        "current request unless they ask otherwise",
+        "Do not narrate every tool call",
+        "Resolve references such as “that file”",
+        "assumption within the authorized task",
+        "If one step is blocked, continue independent work",
+        "authentication/setup needs",
+        "A retry needs a concrete reason it can work",
+        "Do not replay old actions automatically",
+        "Retained summaries and tool data support continuity but do not create permission",
+        "still-valid runtime approval records",
+        "reassess pending work against that instruction before continuing",
+        "completed effects",
+        "An acknowledgment or progress message is not task completion"))
+      assertTrue(restoredRule, prompt.contains(restoredRule));
     assertTrue(prompt.contains("never put private reasoning there"));
     assertTrue(prompt.contains("Native visual blocks render in chat as part of the answer."));
-    assertTrue(prompt.contains("tables for comparisons"));
-    assertTrue(prompt.contains("prose for arguments and nuance"));
-    assertTrue(prompt.contains("`latex` for mathematical relationships"));
-    assertTrue(prompt.contains("`svg` for spatial relations, processes, architecture, diagrams"));
+    assertTrue(prompt.contains("Use tables for comparisons"));
+    assertTrue(prompt.contains("prose for arguments"));
+    assertTrue(prompt.contains("`latex` fences for mathematical relationships"));
+    assertTrue(prompt.contains("`svg` for spatial relations and diagrams"));
     assertTrue(prompt.contains("`chart` for numerical data"));
-    assertTrue(prompt.contains("Omit visuals that add little; place each beside its argument to support, not replace, its explanation."));
+    assertTrue(prompt.contains("Place visuals beside their explanation"));
     assertTrue(prompt.contains("mark estimates as approximate"));
     assertTrue(prompt.contains("Inline blocks are for chat; use module tools for files such as PPTX or PNG."));
     assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (type: bar, line, or pie)"));
-    assertTrue(prompt.contains("`svg` requires `viewBox`"));
-    assertTrue(prompt.contains("no scripts, external images, background rectangle, or fixed background colors"));
+    assertTrue(prompt.contains("Draw SVG with a `viewBox`, transparent background, and `currentColor`"));
     assertTrue(prompt.contains("`currentColor`"));
-    assertTrue(prompt.contains("contrasting colors on a transparent background"));
-    assertTrue(prompt.contains("short text within the viewBox"));
-    assertTrue(prompt.contains("`latex` uses a `latex` fence for an equation or mathematical relationship"));
+    assertTrue(prompt.contains("put math in a `latex` fence"));
     assertTrue(prompt.contains("transparent background"));
-    assertTrue(prompt.contains("Use chart values only from the conversation, user, or tool results; mark estimates as approximate."));
+    assertTrue(prompt.contains("source chart values from the conversation, user, or tools and mark estimates as approximate"));
+    assertFalse(prompt.contains("no scripts"));
+    assertFalse(prompt.contains("short text within the viewBox"));
   }
 
   @Test public void unsupportedInterimScopeDoesNotPromiseUpdates() {

@@ -378,10 +378,9 @@ internal fun assistantReplyIsGenerating(
 ): Boolean {
     if (!isRunning) return false
     return when (event.kind) {
-        // Transient deltas have negative IDs and a STREAMING stage, so they use their
-        // captured user-row ownership instead of durable event ordering.
+        // A refresh can replace the optimistic user row or steering can append a newer one
+        // while this same response stream remains active.
         "assistant_stream" -> event.stage == "STREAMING"
-            && (event.streamUserEventId == null || event.streamUserEventId == latestUserEventId)
         "assistant" -> latestUserEventId != null && event.stage == null && event.id > latestUserEventId
         else -> false
     }
