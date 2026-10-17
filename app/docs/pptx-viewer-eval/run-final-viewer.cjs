@@ -8,14 +8,12 @@ const repo = path.resolve(__dirname, "../../..");
 const moduleDirectory = path.join(repo, "app/app/src/main/assets/modules/presentation");
 const fixtureDirectory = path.join(__dirname, "fixtures");
 const captureDirectory = path.join(__dirname, "captures");
-const resultsFile = path.join(__dirname, "final-viewer-results.json");
+const resultsFile = path.join(__dirname, "composition-viewer-results.json");
 const fixtures = [
-  "title-text",
-  "bar-chart",
-  "table",
-  "image-shape",
-  "theme-light-dark",
-  "image-png-data-url",
+  "free-cover",
+  "free-columns",
+  "free-chart-insights",
+  "free-table-long-title",
 ];
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -159,15 +157,6 @@ async function main() {
         if (externalRequests.length) throw new Error("Viewer requested external resources: " + externalRequests.join(", "));
         if (pageErrors.length) throw new Error("Browser error in viewer: " + pageErrors.join("; "));
         if (artifactReads.get(fixture) !== 1) throw new Error("Expected one allowlisted PPTX byte read for " + fixture);
-        if (fixture === "theme-light-dark") {
-          await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "light" }]);
-          await page.click("#previous");
-          await page.waitForFunction(() => Number((document.getElementById("counter").textContent.match(/\d+/g) || [])[0]) === 2);
-          const captureName = "final-viewer-theme-light-dark-light-slide2.png";
-          await page.screenshot({ path: path.join(captureDirectory, captureName), fullPage: false });
-          results.push({ fixture, slideIndex: 2, slideCount: 3, capture: captureName, colorScheme: "light" });
-          process.stdout.write("theme-light-dark / slide 2 / light appearance: captured\n");
-        }
       } finally {
         await page.close();
       }

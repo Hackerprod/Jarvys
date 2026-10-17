@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "com.jarvys.module.presentation",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "name": "Presentaciones",
   "artifactTypes": [
     {
@@ -13,112 +13,1859 @@
   "tools": [
     {
       "name": "create_presentation",
-      "description": "Crea presentaciones PowerPoint profesionales con títulos que expresan la conclusión, una idea principal por diapositiva, una paleta coherente, contraste legible, jerarquía tipográfica y espacio bien distribuido. Incluye texto, viñetas, formas, imágenes, tablas y gráficos de barras con categorías y etiquetas de valor. Usa gráficos nativos y encabezados de tabla claros; mantén cada diapositiva centrada en su mensaje. Entrega el archivo PPTX y una miniatura PNG de la primera diapositiva.",
+      "description": "Crea una presentacion PowerPoint LAYOUT_WIDE (13.333 x 7.5 pulgadas). Compone cada diapositiva indicando elements con posiciones x, y, w, h explicitas y propiedades de PptxGenJS 4.0.1. No hay campos title/body/bullets ni posicionamiento automatico. La entrada invalida se rechaza con slide, indice, tipo y campo; overflow y solapes se devuelven como mediciones sin impedir la entrega. El resultado de texto incluye el informe JSON y la capacidad entrega el PPTX editable y la miniatura PNG de la primera diapositiva.",
       "inputSchema": {
         "type": "object",
+        "description": "Presentacion en el lienzo LAYOUT_WIDE de 13.333 x 7.5 pulgadas.",
         "properties": {
-          "title": { "type": "string", "description": "Título de la presentación." },
+          "title": {
+            "type": "string",
+            "description": "Titulo y nombre del archivo PPTX."
+          },
+          "theme": {
+            "type": "object",
+            "description": "Opcional. fonts configura headFontFace/bodyFontFace; colors aporta colores en orden de insercion como paleta de graficos; background establece el fondo de diapositivas sin fondo propio. Sin theme se conservan los valores de PptxGenJS.",
+            "properties": {
+              "fonts": {
+                "type": "object",
+                "properties": {
+                  "headFontFace": {
+                    "type": "string"
+                  },
+                  "bodyFontFace": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "colors": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "background": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "description": "PptxGenJS color de seis digitos hex o nombre de color de tema."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "color": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "color"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
           "slides": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "title": { "type": "string", "description": "Título breve que comunica la conclusión o acción de la diapositiva." },
-                "body": { "type": "string", "description": "Contexto breve que apoya la idea principal." },
-                "bullets": { "type": "array", "items": { "type": "string" } },
-                "backgroundColor": { "type": "string", "description": "Color hexadecimal sin #." },
-                "shapes": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "type": { "type": "string", "description": "Tipo de forma admitido por PptxGenJS, como rect, ellipse o line." },
-                      "x": { "type": "number", "description": "Posición horizontal en pulgadas." },
-                      "y": { "type": "number", "description": "Posición vertical en pulgadas." },
-                      "w": { "type": "number", "description": "Ancho en pulgadas." },
-                      "h": { "type": "number", "description": "Alto en pulgadas." },
-                      "fillColor": { "type": "string" },
-                      "lineColor": { "type": "string" },
-                      "lineWidth": { "type": "number" },
-                      "text": { "type": "string" },
-                      "fontSize": { "type": "number" },
-                      "color": { "type": "string" }
+                "background": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "PptxGenJS color de seis digitos hex o nombre de color de tema."
                     },
-                    "required": ["type", "x", "y", "w", "h"],
-                    "additionalProperties": false
-                  }
+                    {
+                      "type": "object",
+                      "properties": {
+                        "color": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "color"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
-                "images": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "dataUrl": { "type": "string", "description": "Imagen incorporada como data URL, sin descargar recursos." },
-                      "x": { "type": "number" },
-                      "y": { "type": "number" },
-                      "w": { "type": "number" },
-                      "h": { "type": "number" },
-                      "altText": { "type": "string" }
+                "notes": {
+                  "anyOf": [
+                    {
+                      "type": "string"
                     },
-                    "required": ["dataUrl", "x", "y", "w", "h"],
-                    "additionalProperties": false
-                  }
-                },
-                "chart": {
-                  "type": "object",
-                  "properties": {
-                    "title": { "type": "string", "description": "Título informativo del gráfico." },
-                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Categorías mostradas en el eje." },
-                    "datasets": {
+                    {
                       "type": "array",
                       "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "elements": {
+                  "type": "array",
+                  "description": "Elementos en orden de dibujo. Todas las posiciones se eligen explicitamente en pulgadas.",
+                  "items": {
+                    "anyOf": [
+                      {
                         "type": "object",
                         "properties": {
-                          "name": { "type": "string", "description": "Nombre de la serie; se usa en la leyenda cuando hay varias series." },
-                          "values": { "type": "array", "items": { "type": "number" }, "description": "Valores numéricos alineados con labels; sus etiquetas se muestran sobre las barras." },
-                          "color": { "type": "string", "description": "Color hexadecimal de la serie, sin #; si se omite, usa la paleta del tema." }
+                          "x": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde izquierdo."
+                          },
+                          "y": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde superior."
+                          },
+                          "w": {
+                            "type": "number",
+                            "description": "Ancho en pulgadas."
+                          },
+                          "h": {
+                            "type": "number",
+                            "description": "Alto en pulgadas."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "Valor literal: \"text\"."
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "runs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "bold": {
+                                  "type": "boolean"
+                                },
+                                "italic": {
+                                  "type": "boolean"
+                                },
+                                "color": {
+                                  "type": "string"
+                                },
+                                "fontSize": {
+                                  "type": "number"
+                                },
+                                "fontFace": {
+                                  "type": "string"
+                                },
+                                "hyperlink": {
+                                  "type": "object",
+                                  "properties": {
+                                    "slide": {
+                                      "type": "number"
+                                    },
+                                    "url": {
+                                      "type": "string"
+                                    },
+                                    "tooltip": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "text"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "align": {
+                            "type": "string",
+                            "description": "Valores admitidos por el handler: left, center, right, justify."
+                          },
+                          "valign": {
+                            "type": "string",
+                            "description": "Valores admitidos por el handler: top, middle, bottom."
+                          },
+                          "bold": {
+                            "type": "boolean"
+                          },
+                          "italic": {
+                            "type": "boolean"
+                          },
+                          "color": {
+                            "type": "string"
+                          },
+                          "fontFace": {
+                            "type": "string"
+                          },
+                          "fontSize": {
+                            "type": "number"
+                          },
+                          "bullet": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "characterCode": {
+                                    "type": "string"
+                                  },
+                                  "indent": {
+                                    "type": "number"
+                                  },
+                                  "numberType": {
+                                    "type": "string"
+                                  },
+                                  "numberStartAt": {
+                                    "type": "number"
+                                  },
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "marginPt": {
+                                    "type": "number"
+                                  },
+                                  "startAt": {
+                                    "type": "number"
+                                  },
+                                  "style": {
+                                    "type": "string"
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "paraSpaceBefore": {
+                            "type": "number"
+                          },
+                          "paraSpaceAfter": {
+                            "type": "number"
+                          },
+                          "lineSpacing": {
+                            "type": "number"
+                          },
+                          "lineSpacingMultiple": {
+                            "type": "number"
+                          },
+                          "fit": {
+                            "type": "string",
+                            "description": "Valores admitidos por el handler: shrink, resize, none."
+                          },
+                          "margin": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                },
+                                "description": "El handler valida la longitud de esta lista."
+                              }
+                            ]
+                          },
+                          "fill": {
+                            "type": "object",
+                            "properties": {
+                              "color": {
+                                "type": "string"
+                              },
+                              "transparency": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "alpha": {
+                                "type": "number"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "line": {
+                            "type": "object",
+                            "properties": {
+                              "color": {
+                                "type": "string"
+                              },
+                              "transparency": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "alpha": {
+                                "type": "number"
+                              },
+                              "width": {
+                                "type": "number"
+                              },
+                              "dashType": {
+                                "type": "string"
+                              },
+                              "beginArrowType": {
+                                "type": "string"
+                              },
+                              "endArrowType": {
+                                "type": "string"
+                              },
+                              "lineDash": {
+                                "type": "string"
+                              },
+                              "lineHead": {
+                                "type": "string"
+                              },
+                              "lineTail": {
+                                "type": "string"
+                              },
+                              "pt": {
+                                "type": "number"
+                              },
+                              "size": {
+                                "type": "number"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "hyperlink": {
+                            "type": "object",
+                            "properties": {
+                              "slide": {
+                                "type": "number"
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "tooltip": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "highlight": {},
+                          "underline": {},
+                          "outline": {},
+                          "shadow": {},
+                          "breakLine": {
+                            "type": "boolean"
+                          },
+                          "softBreakBefore": {
+                            "type": "boolean"
+                          },
+                          "lang": {
+                            "type": "string"
+                          },
+                          "tabStops": {
+                            "type": "array"
+                          },
+                          "textDirection": {
+                            "type": "string"
+                          },
+                          "transparency": {
+                            "type": "number"
+                          },
+                          "baseline": {
+                            "type": "number"
+                          },
+                          "charSpacing": {
+                            "type": "number"
+                          },
+                          "flipH": {
+                            "type": "boolean"
+                          },
+                          "flipV": {
+                            "type": "boolean"
+                          },
+                          "glow": {},
+                          "indentLevel": {
+                            "type": "number"
+                          },
+                          "isTextBox": {
+                            "type": "boolean"
+                          },
+                          "placeholder": {
+                            "type": "string"
+                          },
+                          "rectRadius": {
+                            "type": "number"
+                          },
+                          "rotate": {
+                            "type": "number"
+                          },
+                          "rtlMode": {
+                            "type": "boolean"
+                          },
+                          "shape": {
+                            "type": "string"
+                          },
+                          "strike": {},
+                          "subscript": {
+                            "type": "boolean"
+                          },
+                          "superscript": {
+                            "type": "boolean"
+                          },
+                          "vert": {
+                            "type": "string"
+                          },
+                          "wrap": {
+                            "type": "boolean"
+                          },
+                          "autoFit": {
+                            "type": "boolean"
+                          },
+                          "shrinkText": {
+                            "type": "boolean"
+                          },
+                          "inset": {
+                            "type": "number"
+                          },
+                          "lineDash": {
+                            "type": "string"
+                          },
+                          "lineHead": {
+                            "type": "string"
+                          },
+                          "lineSize": {
+                            "type": "number"
+                          },
+                          "lineTail": {
+                            "type": "string"
+                          },
+                          "objectName": {
+                            "type": "string"
+                          }
                         },
-                        "required": ["name", "values"],
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h",
+                          "type"
+                        ],
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "required": [
+                              "text"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "runs"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde izquierdo."
+                          },
+                          "y": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde superior."
+                          },
+                          "w": {
+                            "type": "number",
+                            "description": "Ancho en pulgadas."
+                          },
+                          "h": {
+                            "type": "number",
+                            "description": "Alto en pulgadas."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "Valor literal: \"shape\"."
+                          },
+                          "shape": {
+                            "type": "string",
+                            "description": "Nombre de PptxGenJS ShapeType."
+                          },
+                          "fill": {
+                            "type": "object",
+                            "properties": {
+                              "color": {
+                                "type": "string"
+                              },
+                              "transparency": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "alpha": {
+                                "type": "number"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "line": {
+                            "type": "object",
+                            "properties": {
+                              "color": {
+                                "type": "string"
+                              },
+                              "transparency": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "alpha": {
+                                "type": "number"
+                              },
+                              "width": {
+                                "type": "number"
+                              },
+                              "dashType": {
+                                "type": "string"
+                              },
+                              "beginArrowType": {
+                                "type": "string"
+                              },
+                              "endArrowType": {
+                                "type": "string"
+                              },
+                              "lineDash": {
+                                "type": "string"
+                              },
+                              "lineHead": {
+                                "type": "string"
+                              },
+                              "lineTail": {
+                                "type": "string"
+                              },
+                              "pt": {
+                                "type": "number"
+                              },
+                              "size": {
+                                "type": "number"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "align": {
+                            "type": "string"
+                          },
+                          "angleRange": {
+                            "type": "number"
+                          },
+                          "arcThicknessRatio": {
+                            "type": "number"
+                          },
+                          "flipH": {
+                            "type": "boolean"
+                          },
+                          "flipV": {
+                            "type": "boolean"
+                          },
+                          "hyperlink": {
+                            "type": "object",
+                            "properties": {
+                              "slide": {
+                                "type": "number"
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "tooltip": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "points": {
+                            "type": "array"
+                          },
+                          "rectRadius": {
+                            "type": "number"
+                          },
+                          "rotate": {
+                            "type": "number"
+                          },
+                          "shadow": {},
+                          "lineSize": {
+                            "type": "number"
+                          },
+                          "lineDash": {
+                            "type": "string"
+                          },
+                          "lineHead": {
+                            "type": "string"
+                          },
+                          "lineTail": {
+                            "type": "string"
+                          },
+                          "objectName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h",
+                          "type",
+                          "shape"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde izquierdo."
+                          },
+                          "y": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde superior."
+                          },
+                          "w": {
+                            "type": "number",
+                            "description": "Ancho en pulgadas."
+                          },
+                          "h": {
+                            "type": "number",
+                            "description": "Alto en pulgadas."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "Valor literal: \"image\"."
+                          },
+                          "dataUrl": {
+                            "type": "string",
+                            "description": "Data URL base64 de una imagen decodificable."
+                          },
+                          "sizing": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "description": "Valores admitidos por el handler: cover, contain."
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "description": "Valores admitidos por el handler: cover, contain, crop."
+                                  },
+                                  "x": {
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "type": "number"
+                                  },
+                                  "w": {
+                                    "type": "number"
+                                  },
+                                  "h": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "w",
+                                  "h"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "altText": {
+                            "type": "string"
+                          },
+                          "flipH": {
+                            "type": "boolean"
+                          },
+                          "flipV": {
+                            "type": "boolean"
+                          },
+                          "hyperlink": {
+                            "type": "object",
+                            "properties": {
+                              "slide": {
+                                "type": "number"
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "tooltip": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "rotate": {
+                            "type": "number"
+                          },
+                          "rounding": {
+                            "type": "boolean"
+                          },
+                          "shadow": {},
+                          "transparency": {
+                            "type": "number"
+                          },
+                          "objectName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h",
+                          "type",
+                          "dataUrl"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde izquierdo."
+                          },
+                          "y": {
+                            "type": "number",
+                            "description": "Pulgadas desde el borde superior."
+                          },
+                          "w": {
+                            "type": "number",
+                            "description": "Ancho en pulgadas."
+                          },
+                          "h": {
+                            "type": "number",
+                            "description": "Alto en pulgadas."
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "Valor literal: \"chart\"."
+                          },
+                          "chartType": {
+                            "type": "string",
+                            "description": "Valores admitidos por el handler: area, bar, bar3D, bubble, bubble3D, doughnut, line, pie, radar, scatter."
+                          },
+                          "labels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "datasets": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "values": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "number"
+                                  }
+                                },
+                                "color": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "values"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "options": {
+                            "type": "object",
+                            "description": "Propiedades de opciones de grafico admitidas por PptxGenJS 4.0.1.",
+                            "properties": {
+                              "objectName": {
+                                "type": "string"
+                              },
+                              "axisPos": {
+                                "type": "string"
+                              },
+                              "chartColors": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "chartColorsOpacity": {
+                                "type": "number"
+                              },
+                              "dataBorder": {},
+                              "displayBlanksAs": {
+                                "type": "string"
+                              },
+                              "invertedColors": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "lang": {
+                                "type": "string"
+                              },
+                              "layout": {},
+                              "shadow": {},
+                              "showLabel": {
+                                "type": "boolean"
+                              },
+                              "showLeaderLines": {
+                                "type": "boolean"
+                              },
+                              "showLegend": {
+                                "type": "boolean"
+                              },
+                              "showPercent": {
+                                "type": "boolean"
+                              },
+                              "showSerName": {
+                                "type": "boolean"
+                              },
+                              "showTitle": {
+                                "type": "boolean"
+                              },
+                              "showValue": {
+                                "type": "boolean"
+                              },
+                              "v3DPerspective": {
+                                "type": "number"
+                              },
+                              "v3DRAngAx": {
+                                "type": "boolean"
+                              },
+                              "v3DRotX": {
+                                "type": "number"
+                              },
+                              "v3DRotY": {
+                                "type": "number"
+                              },
+                              "chartArea": {},
+                              "plotArea": {},
+                              "border": {},
+                              "fill": {},
+                              "catAxes": {
+                                "type": "array"
+                              },
+                              "catAxisBaseTimeUnit": {
+                                "type": "string"
+                              },
+                              "catAxisCrossesAt": {
+                                "type": "number"
+                              },
+                              "catAxisHidden": {
+                                "type": "boolean"
+                              },
+                              "catAxisLabelColor": {
+                                "type": "string"
+                              },
+                              "catAxisLabelFontBold": {
+                                "type": "boolean"
+                              },
+                              "catAxisLabelFontFace": {
+                                "type": "string"
+                              },
+                              "catAxisLabelFontItalic": {
+                                "type": "boolean"
+                              },
+                              "catAxisLabelFontSize": {
+                                "type": "number"
+                              },
+                              "catAxisLabelFrequency": {
+                                "type": "number"
+                              },
+                              "catAxisLabelPos": {
+                                "type": "string"
+                              },
+                              "catAxisLabelRotate": {
+                                "type": "number"
+                              },
+                              "catAxisLineColor": {
+                                "type": "string"
+                              },
+                              "catAxisLineShow": {
+                                "type": "boolean"
+                              },
+                              "catAxisLineSize": {
+                                "type": "number"
+                              },
+                              "catAxisLineStyle": {
+                                "type": "string"
+                              },
+                              "catAxisMajorTickMark": {
+                                "type": "string"
+                              },
+                              "catAxisMajorTimeUnit": {
+                                "type": "string"
+                              },
+                              "catAxisMajorUnit": {
+                                "type": "number"
+                              },
+                              "catAxisMaxVal": {
+                                "type": "number"
+                              },
+                              "catAxisMinorTickMark": {
+                                "type": "string"
+                              },
+                              "catAxisMinorTimeUnit": {
+                                "type": "string"
+                              },
+                              "catAxisMinorUnit": {
+                                "type": "number"
+                              },
+                              "catAxisMinVal": {
+                                "type": "number"
+                              },
+                              "catAxisMultiLevelLabels": {
+                                "type": "boolean"
+                              },
+                              "catAxisOrientation": {
+                                "type": "string"
+                              },
+                              "catAxisTitle": {
+                                "type": "string"
+                              },
+                              "catAxisTitleColor": {
+                                "type": "string"
+                              },
+                              "catAxisTitleFontFace": {
+                                "type": "string"
+                              },
+                              "catAxisTitleFontSize": {
+                                "type": "number"
+                              },
+                              "catAxisTitleRotate": {
+                                "type": "number"
+                              },
+                              "catGridLine": {},
+                              "catLabelFormatCode": {
+                                "type": "string"
+                              },
+                              "secondaryCatAxis": {},
+                              "showCatAxisTitle": {
+                                "type": "boolean"
+                              },
+                              "serAxes": {
+                                "type": "array"
+                              },
+                              "serAxisBaseTimeUnit": {
+                                "type": "string"
+                              },
+                              "serAxisHidden": {
+                                "type": "boolean"
+                              },
+                              "serAxisLabelColor": {
+                                "type": "string"
+                              },
+                              "serAxisLabelFontBold": {
+                                "type": "boolean"
+                              },
+                              "serAxisLabelFontFace": {
+                                "type": "string"
+                              },
+                              "serAxisLabelFontItalic": {
+                                "type": "boolean"
+                              },
+                              "serAxisLabelFontSize": {
+                                "type": "number"
+                              },
+                              "serAxisLabelFrequency": {
+                                "type": "number"
+                              },
+                              "serAxisLabelPos": {
+                                "type": "string"
+                              },
+                              "serAxisLineColor": {
+                                "type": "string"
+                              },
+                              "serAxisLineShow": {
+                                "type": "boolean"
+                              },
+                              "serAxisMajorTimeUnit": {
+                                "type": "string"
+                              },
+                              "serAxisMajorUnit": {
+                                "type": "number"
+                              },
+                              "serAxisMinorTimeUnit": {
+                                "type": "string"
+                              },
+                              "serAxisMinorUnit": {
+                                "type": "number"
+                              },
+                              "serAxisOrientation": {
+                                "type": "string"
+                              },
+                              "serAxisTitle": {
+                                "type": "string"
+                              },
+                              "serAxisTitleColor": {
+                                "type": "string"
+                              },
+                              "serAxisTitleFontFace": {
+                                "type": "string"
+                              },
+                              "serAxisTitleFontSize": {
+                                "type": "number"
+                              },
+                              "serAxisTitleRotate": {
+                                "type": "number"
+                              },
+                              "serGridLine": {},
+                              "serLabelFormatCode": {
+                                "type": "string"
+                              },
+                              "showSerAxisTitle": {
+                                "type": "boolean"
+                              },
+                              "secondaryValAxis": {},
+                              "showValAxisTitle": {
+                                "type": "boolean"
+                              },
+                              "valAxes": {
+                                "type": "array"
+                              },
+                              "valAxisCrossesAt": {
+                                "type": "number"
+                              },
+                              "valAxisDisplayUnit": {
+                                "type": "string"
+                              },
+                              "valAxisDisplayUnitLabel": {
+                                "type": "string"
+                              },
+                              "valAxisHidden": {
+                                "type": "boolean"
+                              },
+                              "valAxisLabelColor": {
+                                "type": "string"
+                              },
+                              "valAxisLabelFontBold": {
+                                "type": "boolean"
+                              },
+                              "valAxisLabelFontFace": {
+                                "type": "string"
+                              },
+                              "valAxisLabelFontItalic": {
+                                "type": "boolean"
+                              },
+                              "valAxisLabelFontSize": {
+                                "type": "number"
+                              },
+                              "valAxisLabelFormatCode": {
+                                "type": "string"
+                              },
+                              "valAxisLabelPos": {
+                                "type": "string"
+                              },
+                              "valAxisLabelRotate": {
+                                "type": "number"
+                              },
+                              "valAxisLineColor": {
+                                "type": "string"
+                              },
+                              "valAxisLineShow": {
+                                "type": "boolean"
+                              },
+                              "valAxisLineSize": {
+                                "type": "number"
+                              },
+                              "valAxisLineStyle": {
+                                "type": "string"
+                              },
+                              "valAxisLogScaleBase": {
+                                "type": "number"
+                              },
+                              "valAxisMajorTickMark": {
+                                "type": "string"
+                              },
+                              "valAxisMajorUnit": {
+                                "type": "number"
+                              },
+                              "valAxisMaxVal": {
+                                "type": "number"
+                              },
+                              "valAxisMinorTickMark": {
+                                "type": "string"
+                              },
+                              "valAxisMinorUnit": {
+                                "type": "number"
+                              },
+                              "valAxisMinVal": {
+                                "type": "number"
+                              },
+                              "valAxisOrientation": {
+                                "type": "string"
+                              },
+                              "valAxisTitle": {
+                                "type": "string"
+                              },
+                              "valAxisTitleColor": {
+                                "type": "string"
+                              },
+                              "valAxisTitleFontFace": {
+                                "type": "string"
+                              },
+                              "valAxisTitleFontSize": {
+                                "type": "number"
+                              },
+                              "valAxisTitleRotate": {
+                                "type": "number"
+                              },
+                              "valGridLine": {},
+                              "valLabelFormatCode": {
+                                "type": "string"
+                              },
+                              "bar3DShape": {
+                                "type": "string"
+                              },
+                              "barDir": {
+                                "type": "string"
+                              },
+                              "barGapDepthPct": {
+                                "type": "number"
+                              },
+                              "barGapWidthPct": {
+                                "type": "number"
+                              },
+                              "barGrouping": {
+                                "type": "string"
+                              },
+                              "barOverlapPct": {
+                                "type": "number"
+                              },
+                              "dataNoEffects": {
+                                "type": "boolean"
+                              },
+                              "holeSize": {
+                                "type": "number"
+                              },
+                              "lineCap": {
+                                "type": "string"
+                              },
+                              "lineDash": {
+                                "type": "string"
+                              },
+                              "lineDataSymbol": {
+                                "type": "string"
+                              },
+                              "lineDataSymbolLineColor": {
+                                "type": "string"
+                              },
+                              "lineDataSymbolLineSize": {
+                                "type": "number"
+                              },
+                              "lineDataSymbolSize": {
+                                "type": "number"
+                              },
+                              "lineSize": {
+                                "type": "number"
+                              },
+                              "lineSmooth": {
+                                "type": "boolean"
+                              },
+                              "firstSliceAng": {
+                                "type": "number"
+                              },
+                              "radarStyle": {
+                                "type": "string"
+                              },
+                              "dataLabelBkgrdColors": {},
+                              "dataLabelColor": {
+                                "type": "string"
+                              },
+                              "dataLabelFontBold": {
+                                "type": "boolean"
+                              },
+                              "dataLabelFontFace": {
+                                "type": "string"
+                              },
+                              "dataLabelFontItalic": {
+                                "type": "boolean"
+                              },
+                              "dataLabelFontSize": {
+                                "type": "number"
+                              },
+                              "dataLabelFormatCode": {
+                                "type": "string"
+                              },
+                              "dataLabelFormatScatter": {
+                                "type": "string"
+                              },
+                              "dataLabelPosition": {
+                                "type": "string"
+                              },
+                              "dataTableFontSize": {
+                                "type": "number"
+                              },
+                              "dataTableShowHorzBorder": {
+                                "type": "boolean"
+                              },
+                              "dataTableShowKeys": {
+                                "type": "boolean"
+                              },
+                              "dataTableShowOutline": {
+                                "type": "boolean"
+                              },
+                              "dataTableShowVertBorder": {
+                                "type": "boolean"
+                              },
+                              "legendColor": {
+                                "type": "string"
+                              },
+                              "legendFontBold": {
+                                "type": "boolean"
+                              },
+                              "legendFontFace": {
+                                "type": "string"
+                              },
+                              "legendFontItalic": {
+                                "type": "boolean"
+                              },
+                              "legendFontSize": {
+                                "type": "number"
+                              },
+                              "legendPos": {
+                                "type": "string"
+                              },
+                              "showDataTable": {
+                                "type": "boolean"
+                              },
+                              "showDataTableHorzBorder": {
+                                "type": "boolean"
+                              },
+                              "showDataTableKeys": {
+                                "type": "boolean"
+                              },
+                              "showDataTableOutline": {
+                                "type": "boolean"
+                              },
+                              "showDataTableVertBorder": {
+                                "type": "boolean"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "titleColor": {
+                                "type": "string"
+                              },
+                              "titleFontBold": {
+                                "type": "boolean"
+                              },
+                              "titleFontFace": {
+                                "type": "string"
+                              },
+                              "titleFontItalic": {
+                                "type": "boolean"
+                              },
+                              "titleFontSize": {
+                                "type": "number"
+                              },
+                              "titlePos": {
+                                "type": "string"
+                              },
+                              "showCatName": {
+                                "type": "boolean"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "w",
+                          "h",
+                          "type",
+                          "chartType",
+                          "labels",
+                          "datasets"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "description": "Valor literal: \"table\"."
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "text": {
+                                                  "type": "string"
+                                                },
+                                                "options": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "align": {
+                                                      "type": "string"
+                                                    },
+                                                    "bold": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "breakLine": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "bullet": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "boolean"
+                                                        },
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "type": {
+                                                              "type": "string"
+                                                            },
+                                                            "characterCode": {
+                                                              "type": "string"
+                                                            },
+                                                            "indent": {
+                                                              "type": "number"
+                                                            },
+                                                            "numberType": {
+                                                              "type": "string"
+                                                            },
+                                                            "numberStartAt": {
+                                                              "type": "number"
+                                                            },
+                                                            "code": {
+                                                              "type": "string"
+                                                            },
+                                                            "marginPt": {
+                                                              "type": "number"
+                                                            },
+                                                            "startAt": {
+                                                              "type": "number"
+                                                            },
+                                                            "style": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "additionalProperties": false
+                                                        }
+                                                      ]
+                                                    },
+                                                    "color": {
+                                                      "type": "string"
+                                                    },
+                                                    "fontFace": {
+                                                      "type": "string"
+                                                    },
+                                                    "fontSize": {
+                                                      "type": "number"
+                                                    },
+                                                    "highlight": {},
+                                                    "italic": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "lang": {
+                                                      "type": "string"
+                                                    },
+                                                    "margin": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "number"
+                                                        },
+                                                        {
+                                                          "type": "array",
+                                                          "items": {
+                                                            "type": "number"
+                                                          },
+                                                          "description": "El handler valida la longitud de esta lista."
+                                                        }
+                                                      ]
+                                                    },
+                                                    "paraSpaceAfter": {
+                                                      "type": "number"
+                                                    },
+                                                    "paraSpaceBefore": {
+                                                      "type": "number"
+                                                    },
+                                                    "valign": {
+                                                      "type": "string"
+                                                    },
+                                                    "underline": {},
+                                                    "border": {},
+                                                    "fill": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "color": {
+                                                          "type": "string"
+                                                        },
+                                                        "transparency": {
+                                                          "type": "number"
+                                                        },
+                                                        "type": {
+                                                          "type": "string"
+                                                        },
+                                                        "alpha": {
+                                                          "type": "number"
+                                                        }
+                                                      },
+                                                      "additionalProperties": false
+                                                    },
+                                                    "colspan": {
+                                                      "type": "number"
+                                                    },
+                                                    "rowspan": {
+                                                      "type": "number"
+                                                    },
+                                                    "rotate": {
+                                                      "type": "number"
+                                                    },
+                                                    "transparency": {
+                                                      "type": "number"
+                                                    },
+                                                    "hyperlink": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "slide": {
+                                                          "type": "number"
+                                                        },
+                                                        "url": {
+                                                          "type": "string"
+                                                        },
+                                                        "tooltip": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "additionalProperties": false
+                                                    },
+                                                    "line": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "color": {
+                                                          "type": "string"
+                                                        },
+                                                        "transparency": {
+                                                          "type": "number"
+                                                        },
+                                                        "type": {
+                                                          "type": "string"
+                                                        },
+                                                        "alpha": {
+                                                          "type": "number"
+                                                        },
+                                                        "width": {
+                                                          "type": "number"
+                                                        },
+                                                        "dashType": {
+                                                          "type": "string"
+                                                        },
+                                                        "beginArrowType": {
+                                                          "type": "string"
+                                                        },
+                                                        "endArrowType": {
+                                                          "type": "string"
+                                                        },
+                                                        "lineDash": {
+                                                          "type": "string"
+                                                        },
+                                                        "lineHead": {
+                                                          "type": "string"
+                                                        },
+                                                        "lineTail": {
+                                                          "type": "string"
+                                                        },
+                                                        "pt": {
+                                                          "type": "number"
+                                                        },
+                                                        "size": {
+                                                          "type": "number"
+                                                        }
+                                                      },
+                                                      "additionalProperties": false
+                                                    },
+                                                    "shadow": {},
+                                                    "fit": {
+                                                      "type": "string"
+                                                    },
+                                                    "wrap": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "vert": {
+                                                      "type": "string"
+                                                    },
+                                                    "strike": {},
+                                                    "subscript": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "superscript": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "outline": {}
+                                                  },
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": [
+                                                "text"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "options": {
+                                        "type": "object",
+                                        "properties": {
+                                          "align": {
+                                            "type": "string"
+                                          },
+                                          "bold": {
+                                            "type": "boolean"
+                                          },
+                                          "breakLine": {
+                                            "type": "boolean"
+                                          },
+                                          "bullet": {
+                                            "anyOf": [
+                                              {
+                                                "type": "boolean"
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "type": {
+                                                    "type": "string"
+                                                  },
+                                                  "characterCode": {
+                                                    "type": "string"
+                                                  },
+                                                  "indent": {
+                                                    "type": "number"
+                                                  },
+                                                  "numberType": {
+                                                    "type": "string"
+                                                  },
+                                                  "numberStartAt": {
+                                                    "type": "number"
+                                                  },
+                                                  "code": {
+                                                    "type": "string"
+                                                  },
+                                                  "marginPt": {
+                                                    "type": "number"
+                                                  },
+                                                  "startAt": {
+                                                    "type": "number"
+                                                  },
+                                                  "style": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "additionalProperties": false
+                                              }
+                                            ]
+                                          },
+                                          "color": {
+                                            "type": "string"
+                                          },
+                                          "fontFace": {
+                                            "type": "string"
+                                          },
+                                          "fontSize": {
+                                            "type": "number"
+                                          },
+                                          "highlight": {},
+                                          "italic": {
+                                            "type": "boolean"
+                                          },
+                                          "lang": {
+                                            "type": "string"
+                                          },
+                                          "margin": {
+                                            "anyOf": [
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "number"
+                                                },
+                                                "description": "El handler valida la longitud de esta lista."
+                                              }
+                                            ]
+                                          },
+                                          "paraSpaceAfter": {
+                                            "type": "number"
+                                          },
+                                          "paraSpaceBefore": {
+                                            "type": "number"
+                                          },
+                                          "valign": {
+                                            "type": "string"
+                                          },
+                                          "underline": {},
+                                          "border": {},
+                                          "fill": {
+                                            "type": "object",
+                                            "properties": {
+                                              "color": {
+                                                "type": "string"
+                                              },
+                                              "transparency": {
+                                                "type": "number"
+                                              },
+                                              "type": {
+                                                "type": "string"
+                                              },
+                                              "alpha": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          },
+                                          "colspan": {
+                                            "type": "number"
+                                          },
+                                          "rowspan": {
+                                            "type": "number"
+                                          },
+                                          "rotate": {
+                                            "type": "number"
+                                          },
+                                          "transparency": {
+                                            "type": "number"
+                                          },
+                                          "hyperlink": {
+                                            "type": "object",
+                                            "properties": {
+                                              "slide": {
+                                                "type": "number"
+                                              },
+                                              "url": {
+                                                "type": "string"
+                                              },
+                                              "tooltip": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          },
+                                          "line": {
+                                            "type": "object",
+                                            "properties": {
+                                              "color": {
+                                                "type": "string"
+                                              },
+                                              "transparency": {
+                                                "type": "number"
+                                              },
+                                              "type": {
+                                                "type": "string"
+                                              },
+                                              "alpha": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "dashType": {
+                                                "type": "string"
+                                              },
+                                              "beginArrowType": {
+                                                "type": "string"
+                                              },
+                                              "endArrowType": {
+                                                "type": "string"
+                                              },
+                                              "lineDash": {
+                                                "type": "string"
+                                              },
+                                              "lineHead": {
+                                                "type": "string"
+                                              },
+                                              "lineTail": {
+                                                "type": "string"
+                                              },
+                                              "pt": {
+                                                "type": "number"
+                                              },
+                                              "size": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          },
+                                          "shadow": {},
+                                          "fit": {
+                                            "type": "string"
+                                          },
+                                          "wrap": {
+                                            "type": "boolean"
+                                          },
+                                          "vert": {
+                                            "type": "string"
+                                          },
+                                          "strike": {},
+                                          "subscript": {
+                                            "type": "boolean"
+                                          },
+                                          "superscript": {
+                                            "type": "boolean"
+                                          },
+                                          "outline": {}
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          },
+                          "w": {
+                            "type": "number"
+                          },
+                          "h": {
+                            "type": "number"
+                          },
+                          "align": {
+                            "type": "string"
+                          },
+                          "bold": {
+                            "type": "boolean"
+                          },
+                          "breakLine": {
+                            "type": "boolean"
+                          },
+                          "bullet": {},
+                          "color": {
+                            "type": "string"
+                          },
+                          "fontFace": {
+                            "type": "string"
+                          },
+                          "fontSize": {
+                            "type": "number"
+                          },
+                          "highlight": {},
+                          "italic": {
+                            "type": "boolean"
+                          },
+                          "lang": {
+                            "type": "string"
+                          },
+                          "margin": {},
+                          "paraSpaceAfter": {
+                            "type": "number"
+                          },
+                          "paraSpaceBefore": {
+                            "type": "number"
+                          },
+                          "valign": {
+                            "type": "string"
+                          },
+                          "underline": {},
+                          "border": {},
+                          "colW": {},
+                          "fill": {},
+                          "rowH": {},
+                          "transparency": {
+                            "type": "number"
+                          },
+                          "rotate": {
+                            "type": "number"
+                          },
+                          "rtlMode": {
+                            "type": "boolean"
+                          },
+                          "vert": {
+                            "type": "string"
+                          },
+                          "wrap": {
+                            "type": "boolean"
+                          },
+                          "objectName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "rows",
+                          "x",
+                          "y",
+                          "w"
+                        ],
                         "additionalProperties": false
                       }
-                    },
-                    "x": { "type": "number", "description": "Posición horizontal opcional en pulgadas." },
-                    "y": { "type": "number", "description": "Posición vertical opcional en pulgadas." },
-                    "w": { "type": "number", "description": "Ancho opcional en pulgadas." },
-                    "h": { "type": "number", "description": "Alto opcional en pulgadas." }
-                  },
-                  "required": ["labels", "datasets"],
-                  "additionalProperties": false,
-                  "description": "Gráfico de barras con categorías en el eje y valores etiquetados sobre las barras."
-                },
-                "table": {
-                  "type": "object",
-                  "properties": {
-                    "headers": { "type": "array", "items": { "type": "string" }, "description": "Encabezados concisos para las columnas." },
-                    "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "Filas de datos en el mismo orden que los encabezados." },
-                    "x": { "type": "number", "description": "Posición horizontal opcional en pulgadas." },
-                    "y": { "type": "number", "description": "Posición vertical opcional en pulgadas." },
-                    "w": { "type": "number", "description": "Ancho opcional en pulgadas." },
-                    "h": { "type": "number", "description": "Alto opcional en pulgadas." }
-                  },
-                  "required": ["headers", "rows"],
-                  "additionalProperties": false,
-                  "description": "Tabla con encabezados destacados y filas de datos alternadas."
+                    ]
+                  }
                 }
               },
-              "required": [],
+              "required": [
+                "elements"
+              ],
               "additionalProperties": false
-            },
-            "description": "Diapositivas en orden de presentación. Expón una idea por diapositiva. Usa posiciones en pulgadas para formas e imágenes; gráficos y tablas se colocan después del texto salvo que indiques su posición y tamaño."
+            }
           }
         },
-        "required": ["title", "slides"],
+        "required": [
+          "title",
+          "slides"
+        ],
         "additionalProperties": false
       },
       "access": "write",
       "handler": "logic/tools.js#createPresentation"
     }
   ],
-  "skills": ["skills/presentation/SKILL.md"],
-  "capabilities": ["artifact.deliver"]
+  "skills": [
+    "skills/presentation/SKILL.md"
+  ],
+  "capabilities": [
+    "artifact.deliver"
+  ]
 }

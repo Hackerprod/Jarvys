@@ -1,0 +1,561 @@
+[
+  {
+    "key": "free-cover",
+    "artifactId": "A clearer view of regional growth.pptx",
+    "measurementReport": {
+      "layout": {
+        "name": "LAYOUT_WIDE",
+        "width_in": 13.333333333333334,
+        "height_in": 7.5
+      },
+      "slides": [
+        {
+          "slide": 1,
+          "elements": [
+            {
+              "index": 0,
+              "type": "shape",
+              "box": {
+                "x": 9.8,
+                "y": 0.5,
+                "w": 2.5,
+                "h": 2.5
+              },
+              "outside_slide": false
+            },
+            {
+              "index": 1,
+              "type": "shape",
+              "box": {
+                "x": 8.8,
+                "y": 3.9,
+                "w": 3.1,
+                "h": 1.5
+              },
+              "outside_slide": false
+            },
+            {
+              "index": 2,
+              "type": "text",
+              "box": {
+                "x": 0.9,
+                "y": 1.9,
+                "w": 8,
+                "h": 1.35
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "A clearer view of regional growth",
+                "needed_h": 0.47222222222222227,
+                "box_h": 1.35,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 34,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 34,
+              "contrast": {
+                "known": true,
+                "ratio": 5.766777709729427,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "F7F8F5",
+                    "known": true,
+                    "ratio": 14.437082601396495
+                  },
+                  {
+                    "run": 1,
+                    "foreground": "2D6A72",
+                    "background": "F7F8F5",
+                    "known": true,
+                    "ratio": 5.766777709729427
+                  }
+                ]
+              }
+            },
+            {
+              "index": 3,
+              "type": "text",
+              "box": {
+                "x": 0.95,
+                "y": 3.55,
+                "w": 6.8,
+                "h": 0.55
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "Quarterly outlook | October 2026",
+                "needed_h": 0.25,
+                "box_h": 0.55,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 18,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 18,
+              "contrast": {
+                "known": true,
+                "ratio": 5.91557006894263,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "526176",
+                    "background": "F7F8F5",
+                    "known": true,
+                    "ratio": 5.91557006894263
+                  }
+                ]
+              }
+            }
+          ],
+          "overlaps": [],
+          "outside_bounds": [],
+          "minimum_font_size_pt": 18
+        }
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "key": "free-columns",
+    "artifactId": "Local teams shared a field playbook.pptx",
+    "measurementReport": {
+      "layout": {
+        "name": "LAYOUT_WIDE",
+        "width_in": 13.333333333333334,
+        "height_in": 7.5
+      },
+      "slides": [
+        {
+          "slide": 1,
+          "elements": [
+            {
+              "index": 0,
+              "type": "text",
+              "box": {
+                "x": 0.8,
+                "y": 0.6,
+                "w": 11.7,
+                "h": 0.9
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "Local teams shared a field playbook",
+                "needed_h": 0.4166666666666667,
+                "box_h": 0.9,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 30,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 30,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            },
+            {
+              "index": 1,
+              "type": "text",
+              "box": {
+                "x": 0.9,
+                "y": 2,
+                "w": 5,
+                "h": 2.2
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "North and South used the same approach, then adapted it to local demand. The shared method made the gains repeatable.",
+                "needed_h": 0.5555555555555556,
+                "box_h": 2.2,
+                "overflow": false,
+                "line_count": 2,
+                "minimum_font_size_pt": 20,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 20,
+              "contrast": {
+                "known": true,
+                "ratio": 10.461346070440259,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "344054",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 10.461346070440259
+                  }
+                ]
+              }
+            },
+            {
+              "index": 2,
+              "type": "image",
+              "box": {
+                "x": 6.7,
+                "y": 1.8,
+                "w": 5.6,
+                "h": 4.3
+              },
+              "outside_slide": false
+            },
+            {
+              "index": 3,
+              "type": "text",
+              "box": {
+                "x": 6.7,
+                "y": 6.25,
+                "w": 5.6,
+                "h": 0.45
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "A consistent method, adapted locally",
+                "needed_h": 0.2222222222222222,
+                "box_h": 0.45,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 16,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 16,
+              "contrast": {
+                "known": true,
+                "ratio": 6.305839533809002,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "526176",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 6.305839533809002
+                  }
+                ]
+              }
+            }
+          ],
+          "overlaps": [],
+          "outside_bounds": [],
+          "minimum_font_size_pt": 16
+        }
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "key": "free-chart-insights",
+    "artifactId": "South led quarterly regional revenue.pptx",
+    "measurementReport": {
+      "layout": {
+        "name": "LAYOUT_WIDE",
+        "width_in": 13.333333333333334,
+        "height_in": 7.5
+      },
+      "slides": [
+        {
+          "slide": 1,
+          "elements": [
+            {
+              "index": 0,
+              "type": "text",
+              "box": {
+                "x": 0.8,
+                "y": 0.5,
+                "w": 11.7,
+                "h": 0.9
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "South led quarterly regional revenue",
+                "needed_h": 0.4166666666666667,
+                "box_h": 0.9,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 30,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 30,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            },
+            {
+              "index": 1,
+              "type": "chart",
+              "box": {
+                "x": 0.8,
+                "y": 1.7,
+                "w": 6,
+                "h": 4.9
+              },
+              "outside_slide": false
+            },
+            {
+              "index": 2,
+              "type": "text",
+              "box": {
+                "x": 7.4,
+                "y": 1.9,
+                "w": 4.7,
+                "h": 0.9
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "South reached the highest total",
+                "needed_h": 0.2916666666666667,
+                "box_h": 0.9,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 21,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 21,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            },
+            {
+              "index": 3,
+              "type": "text",
+              "box": {
+                "x": 7.4,
+                "y": 3.2,
+                "w": 4.7,
+                "h": 0.9
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "North delivered the next highest result",
+                "needed_h": 0.2916666666666667,
+                "box_h": 0.9,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 21,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 21,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            },
+            {
+              "index": 4,
+              "type": "text",
+              "box": {
+                "x": 7.4,
+                "y": 4.5,
+                "w": 4.7,
+                "h": 0.9
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "West remained near its prior quarter",
+                "needed_h": 0.2916666666666667,
+                "box_h": 0.9,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 21,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 21,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            }
+          ],
+          "overlaps": [],
+          "outside_bounds": [],
+          "minimum_font_size_pt": 21
+        }
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "key": "free-table-long-title",
+    "artifactId": "Every region improved while operating costs stayed within plan.pptx",
+    "measurementReport": {
+      "layout": {
+        "name": "LAYOUT_WIDE",
+        "width_in": 13.333333333333334,
+        "height_in": 7.5
+      },
+      "slides": [
+        {
+          "slide": 1,
+          "elements": [
+            {
+              "index": 0,
+              "type": "text",
+              "box": {
+                "x": 0.8,
+                "y": 0.4,
+                "w": 11.5,
+                "h": 1.35
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "Every region improved while operating costs stayed within plan",
+                "needed_h": 0.40277777777777773,
+                "box_h": 1.35,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 29,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 29,
+              "contrast": {
+                "known": true,
+                "ratio": 15.389544060801661,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "18253A",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 15.389544060801661
+                  }
+                ]
+              }
+            },
+            {
+              "index": 1,
+              "type": "text",
+              "box": {
+                "x": 0.8,
+                "y": 1.9,
+                "w": 8,
+                "h": 0.5
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "Quarterly operating summary",
+                "needed_h": 0.25,
+                "box_h": 0.5,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 18,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 18,
+              "contrast": {
+                "known": true,
+                "ratio": 6.305839533809002,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "526176",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 6.305839533809002
+                  }
+                ]
+              }
+            },
+            {
+              "index": 2,
+              "type": "text",
+              "box": {
+                "x": 0.8,
+                "y": 2.55,
+                "w": 8,
+                "h": 0.45
+              },
+              "outside_slide": false,
+              "text": {
+                "text": "Revenue and operating cost change by region",
+                "needed_h": 0.2222222222222222,
+                "box_h": 0.45,
+                "overflow": false,
+                "line_count": 1,
+                "minimum_font_size_pt": 16,
+                "metrics_source": "canvas-width-with-font-size-fallback"
+              },
+              "minimum_font_size_pt": 16,
+              "contrast": {
+                "known": true,
+                "ratio": 10.461346070440259,
+                "runs": [
+                  {
+                    "run": 0,
+                    "foreground": "344054",
+                    "background": "FFFFFF",
+                    "known": true,
+                    "ratio": 10.461346070440259
+                  }
+                ]
+              }
+            },
+            {
+              "index": 3,
+              "type": "table",
+              "box": {
+                "x": 0.8,
+                "y": 3.2,
+                "w": 11.6,
+                "h": 1
+              },
+              "outside_slide": false,
+              "minimum_font_size_pt": 18
+            }
+          ],
+          "overlaps": [],
+          "outside_bounds": [],
+          "minimum_font_size_pt": 16
+        }
+      ],
+      "warnings": []
+    }
+  }
+]

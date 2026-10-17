@@ -133,9 +133,6 @@ function assertSlideElementsWithinHeight(xml, slideNumber) {
       const second = boxes[secondIndex];
       const overlapWidth = Math.min(first.x + first.w, second.x + second.w) - Math.max(first.x, second.x);
       const overlapHeight = Math.min(first.y + first.h, second.y + second.h) - Math.max(first.y, second.y);
-      const exactSameBounds = first.x === second.x && first.y === second.y && first.w === second.w && first.h === second.h;
-      const shapeAndLabel = exactSameBounds && Boolean(first.text) !== Boolean(second.text);
-      if (shapeAndLabel) continue;
       assert.ok(overlapWidth <= emuTolerance || overlapHeight <= emuTolerance,
         "slide " + slideNumber + " elements " + first.name + " and " + second.name + " overlap");
     }
@@ -159,7 +156,13 @@ function makeCanvas() {
   canvases.push(canvas);
   const context = new Proxy({
     canvas,
-    measureText(text) { return { width: String(text).length * 8 }; },
+    measureText(text) {
+      // Node has no browser font rasterizer here. This deterministic width-only double exercises report structure;
+      // Android WebView instrumentation checks the same handler against real canvas font metrics.
+      const match = String(context.font || "").match(/([\d.]+)px/);
+      const fontPixels = match ? Number(match[1]) : 16;
+      return { width: String(text).length * fontPixels * 0.52 };
+    },
     drawImage(image, ...args) {
       if (image.tagName === "IMG") thumbnailDrawCalls.push({ image, args, canvas });
     },
@@ -185,14 +188,32 @@ const document = {
       let source = "";
       return {
         tagName: "IMG",
-        naturalWidth: 1280,
-        naturalHeight: 720,
+        naturalWidth: 0,
+        naturalHeight: 0,
         complete: false,
         onload: null,
         onerror: null,
         set src(value) {
           source = value;
-          queueMicrotask(() => this.onload && this.onload());
+          const knownPng = value === "data:image/png;base64," + thumbnailPng;
+          const svgPayload = value.slice(value.indexOf(",") + 1);
+          const svgText = value.startsWith("data:image/svg+xml")
+            ? (value.slice(0, value.indexOf(",")).includes("base64")
+              ? Buffer.from(svgPayload, "base64").toString("utf8")
+              : decodeURIComponent(svgPayload))
+            : "";
+          const decodedSvg = svgText.includes("<svg");
+          queueMicrotask(() => {
+            if (knownPng || decodedSvg) {
+              this.naturalWidth = knownPng ? 1 : 1280;
+              this.naturalHeight = knownPng ? 1 : 720;
+              this.complete = true;
+              this.onload && this.onload();
+            } else {
+              this.complete = true;
+              this.onerror && this.onerror();
+            }
+          });
         },
         get src() { return source; },
       };
@@ -285,40 +306,40 @@ async function main() {
     });
     argumentsObject = {
       title: "Quarterly review",
+      theme: { fonts: { headFontFace: "Arial", bodyFontFace: "Arial" }, colors: { accent1: "2459D3", accent2: "18A999" } },
       slides: [
-        { title: "Overview", body: "Four-slide renderer fixture" },
         {
-          title: "Two-bar comparison",
-          backgroundColor: "F4F6FB",
-          shapes: [
-            { type: "rect", x: 2, y: 2, w: 2, h: 3, fillColor: "536DFE", lineColor: "536DFE", text: "North 42", fontSize: 22, color: "FFFFFF" },
-            { type: "rect", x: 5, y: 1.4, w: 2, h: 3.6, fillColor: "18A999", lineColor: "18A999", text: "South 57", fontSize: 22, color: "FFFFFF" },
-            { type: "rect", x: 8, y: 2, w: 3.5, h: 0.7, fillColor: "F4F6FB", lineColor: "F4F6FB", text: "North region", fontSize: 18, color: "344054" },
-            { type: "rect", x: 8, y: 3, w: 3.5, h: 0.7, fillColor: "F4F6FB", lineColor: "F4F6FB", text: "South region", fontSize: 18, color: "344054" },
+          notes: "Cover slide notes",
+          elements: [
+            { type: "shape", shape: "ellipse", x: 10.0, y: 0.5, w: 2.2, h: 2.2, fill: { color: "DDEBFF" }, line: { color: "DDEBFF" } },
+            { type: "text", runs: [{ text: "Regional ", bold: true, color: "18253A" }, { text: "outlook", italic: true, color: "2459D3" }], x: 0.8, y: 2.0, w: 8.5, h: 1.2, fontSize: 34, fontFace: "Arial", color: "18253A", margin: 0 },
           ],
         },
         {
-          title: "Next steps",
-          body: "The four slides are part of the delivered PPTX.",
-          backgroundColor: "14233B",
-          images: [{ dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=", x: 10, y: 3.4, w: 1, h: 1, altText: "Sample image" }],
+          elements: [
+            { type: "text", text: "A shared field playbook", x: 0.8, y: 1.0, w: 5.5, h: 0.8, fontSize: 27, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "Local teams adapted the same approach to regional demand.", x: 0.8, y: 2.0, w: 5.5, h: 1.8, fontSize: 19, fontFace: "Arial", color: "344054", margin: 0 },
+            { type: "image", dataUrl: "data:image/png;base64," + thumbnailPng, x: 6.8, y: 1.0, w: 5.4, h: 4.2, sizing: "contain", altText: "Embedded PNG" },
+          ],
         },
         {
-          title: "Sales by region",
-          backgroundColor: "F4F6FB",
-          chart: {
-            title: "Revenue",
-            labels: ["North", "South"],
-            datasets: [{ name: "Sales", values: [42, 57], color: "2459D3" }]
-          },
-          table: {
-            headers: ["Region", "Revenue"],
-            rows: [["North", "42"], ["South", "57"]]
-          },
+          elements: [
+            { type: "chart", chartType: "bar", labels: ["North", "South", "West"], datasets: [{ name: "Revenue", values: [42, 57, 39], color: "2459D3" }], x: 0.8, y: 1.5, w: 6.0, h: 4.9, options: { title: "Quarterly revenue", showTitle: true, showValue: true, showLegend: false } },
+            { type: "text", text: "South led total revenue", x: 7.4, y: 1.6, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "North delivered the next highest result", x: 7.4, y: 3.0, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", margin: 0 },
+            { type: "text", text: "West remained close to the prior quarter", x: 7.4, y: 4.4, w: 4.6, h: 0.8, fontSize: 20, fontFace: "Arial", color: "18253A", margin: 0 },
+          ],
+        },
+        {
+          notes: ["Revenue sources: regional operating report."],
+          elements: [
+            { type: "text", text: "Every region improved while operating costs stayed within plan", x: 0.8, y: 0.4, w: 11.4, h: 1.3, fontSize: 29, fontFace: "Arial", color: "18253A", bold: true, margin: 0 },
+            { type: "text", text: "Quarterly operating summary", x: 0.8, y: 1.85, w: 8.0, h: 0.5, fontSize: 18, fontFace: "Arial", color: "344054", margin: 0 },
+            { type: "table", rows: [["Region", "Revenue", "Change"], ["North", "$42M", "+18%"], ["South", "$57M", "+27%"], ["West", "$39M", "+8%"]], x: 0.8, y: 2.6, w: 11.5, h: 3.6, colW: [4.2, 3.5, 3.8], fontSize: 16, fontFace: "Arial", color: "18253A", margin: 0.08 },
+          ],
         },
       ],
-    };
-  } else {
+    };  } else {
     throw new Error("Unexpected bundled module id: " + manifest.id);
   }
 
@@ -348,312 +369,138 @@ async function main() {
     assert.deepEqual(artifact.data.labels, ["Q1", "Q2"]);
   } else {
     assert.equal(delivery.name, "Quarterly review.pptx");
-    const zip = await globalThis.JSZip.loadAsync(delivery.bytes);
-    assert.ok(zip.file("[Content_Types].xml"));
-    assert.ok(zip.file("ppt/slides/slide1.xml"));
-    for (let slideNumber = 1; slideNumber <= 4; slideNumber += 1) {
-      const slideXml = await zip.file("ppt/slides/slide" + slideNumber + ".xml").async("string");
-      assertSlideElementsWithinHeight(slideXml, slideNumber);
-    }
-    const slide = await zip.file("ppt/slides/slide1.xml").async("string");
-    assert.match(slide, /Overview/);
-    assert.match(slide, /Four-slide renderer fixture/);
-    assert.ok(Object.keys(zip.files).some((name) => name.startsWith("ppt/media/") && name.endsWith(".png")));
-    assert.ok(zip.file("ppt/slides/slide2.xml"));
-    const comparisonXml = await zip.file("ppt/slides/slide2.xml").async("string");
-    ["Two-bar comparison", "North 42", "South 57", "North region", "South region"].forEach((text) => {
-      assert.ok(comparisonXml.includes(text), "PPTX slide 2 must contain " + text);
-    });
-    ["F4F6FB", "536DFE", "18A999", "FFFFFF", "344054", "101828"].forEach((color) => {
-      assert.ok(comparisonXml.includes(color), "PPTX slide 2 must contain color " + color);
-    });
+    const response = JSON.parse(result.content);
+    assert.equal(response.artifactId, "node-contract-artifact");
+    assert.deepEqual(response.layout, { name: "LAYOUT_WIDE", width_in: 13.333333333333334, height_in: 7.5 });
+    assert.equal(response.measurementReport.slides.length, 4);
+    assert.equal(response.measurementReport.slides[0].elements.length, 2);
     assert.deepEqual(thumbnailRendererInput, delivery.bytes,
       "the generated PPTX bytes must reach the same PptxGlimpse renderer used by the viewer");
     assert.deepEqual(thumbnailRendererOptions, { textOutput: "text", width: 1280, slides: [1] },
-      "thumbnail conversion must render only the first slide");
-    assert.equal(thumbnailDrawCalls.length, 1, "the thumbnail must draw exactly one converted slide");
-    const thumbnailDraw = thumbnailDrawCalls[0];
-    assert.deepEqual(thumbnailDraw.args, [0, 0, 1280, 720]);
-    assert.equal(thumbnailDraw.canvas, canvases[canvases.length - 1]);
-    assert.match(decodeURIComponent(thumbnailDraw.image.src.slice(thumbnailDraw.image.src.indexOf(",") + 1)),
-      /data-slide="0"/, "the thumbnail must use the first slide SVG returned by PptxGlimpse");
+      "the host artifact contract keeps the existing first-slide PNG thumbnail");
+    assert.equal(thumbnailDrawCalls.length, 1);
+    assert.deepEqual(thumbnailDrawCalls[0].args, [0, 0, 1280, 720]);
 
-    const darkSlide = await zip.file("ppt/slides/slide3.xml").async("string");
-    assert.match(darkSlide, /14233B/);
-    assert.match(darkSlide, /Next steps/);
-    assert.match(darkSlide, /FFFFFF/, "default text on a dark slide must use a contrasting color");
-    const visualSlide = await zip.file("ppt/slides/slide4.xml").async("string");
-    ["Sales by region", "Region", "Revenue", "North", "South", "42", "57"].forEach((text) => {
-      assert.ok(visualSlide.includes(text), "PPTX slide 4 must contain " + text);
-    });
-    const chartFile = zip.file("ppt/charts/chart1.xml");
-    assert.ok(chartFile, "the chart must be native PowerPoint chart data");
-    const chartXml = await chartFile.async("string");
-    assert.ok(chartXml.includes("2459D3"));
-    assert.match(chartXml, /<c:showVal val="1"\/>/, "chart data values must be enabled");
-    const chartNumFormats = parseXml(chartXml).getElementsByTagNameNS("*", "numFmt").map((node) => node.getAttribute("formatCode"));
-    assert.ok(chartNumFormats.length > 0 && chartNumFormats.every((format) => format === "General"), "chart numFmt entries must use the exact General formatCode");
+    const zip = await globalThis.JSZip.loadAsync(delivery.bytes);
+    assert.ok(zip.file("[Content_Types].xml"));
+    const expectedSlides = argumentsObject.slides;
+    for (let slideNumber = 1; slideNumber <= expectedSlides.length; slideNumber += 1) {
+      const slideXml = await zip.file("ppt/slides/slide" + slideNumber + ".xml").async("string");
+      const boxes = assertSlideElementsWithinHeight(slideXml, slideNumber);
+      const reportSlide = response.measurementReport.slides[slideNumber - 1];
+      assert.equal(reportSlide.elements.length, expectedSlides[slideNumber - 1].elements.length);
+      expectedSlides[slideNumber - 1].elements.forEach((element, elementIndex) => {
+        const measured = reportSlide.elements[elementIndex];
+        assert.equal(measured.index, elementIndex);
+        assert.equal(measured.type, element.type);
+        assert.equal(measured.box.x, boxes[elementIndex].x / 914400);
+        assert.equal(measured.box.y, boxes[elementIndex].y / 914400);
+        assert.equal(measured.box.x, element.x === undefined ? measured.box.x : element.x);
+        assert.equal(measured.box.y, element.y);
+        if (element.type !== "table") {
+          assert.equal(measured.box.w, element.w);
+          assert.equal(measured.box.h, element.h);
+        } else {
+          assert.equal(measured.box.w, element.w);
+        }
+        assert.equal(measured.outside_slide, false);
+      });
+      assert.deepEqual(reportSlide.outside_bounds, [], "accepted explicit elements stay within slide bounds");
+      assert.deepEqual(reportSlide.overlaps, [], "the four authored examples have no intersecting boxes");
+    }
+
+    const coverXml = await zip.file("ppt/slides/slide1.xml").async("string");
+    assert.match(coverXml, /Regional/);
+    assert.match(coverXml, /outlook/);
+    assert.match(coverXml, /<a:prstGeom prst="ellipse"/);
+    assert.match(coverXml, /<a:rPr[^>]*b="1"/);
+    assert.match(coverXml, /<a:rPr[^>]*i="1"/);
+    assert.equal(response.measurementReport.slides[0].elements[1].contrast.known, true);
+    assert.ok(response.measurementReport.slides[0].minimum_font_size_pt > 0);
+
+    const imageXml = await zip.file("ppt/slides/slide2.xml").async("string");
+    assert.match(imageXml, /shared field playbook/i);
+    assert.ok(Object.keys(zip.files).some((name) => name.startsWith("ppt/media/") && name.endsWith(".png")),
+      "a PNG data URL becomes an embedded image part");
+
+    const chartXml = await zip.file("ppt/charts/chart1.xml").async("string");
+    assert.match(chartXml, /Quarterly revenue/);
     assert.match(chartXml, /<c:v>North<\/c:v>/);
-    assert.match(chartXml, /<c:v>42<\/c:v>/);
-    const tableXml = visualSlide;
-    assert.equal((tableXml.match(/<a:tbl>/g) || []).length, 1, "the table must be a native PowerPoint table");
-    assert.ok(tableXml.includes("101828"), "table text must contrast with its pale cell fills");
-    const deliveryCountBeforeInvalidSlides = deliveries.length;
-    await assert.rejects(
-      globalThis.createPresentation({ title: "Empty chart", slides: [{ chart: { labels: [], datasets: [] } }] }, host),
-      (error) => error.message === "Slide 1: chart has no data; add labels and at least one dataset with values.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Only an empty dataset",
-        slides: [{ chart: { labels: ["North"], datasets: [{ name: "Empty", values: [] }] } }],
-      }, host),
-      (error) => error.message === "Slide 1: chart has no data; add labels and at least one dataset with values.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Mismatched chart",
-        slides: [{ chart: { labels: ["North", "South"], datasets: [{ name: "Regional sales", values: [42] }] } }],
-      }, host),
-      (error) => error.message === "Slide 1: chart dataset 'Regional sales' has a different number of values than labels; make the lengths match.",
-    );
-    for (const value of [NaN, null, Infinity, "not a number"]) {
+    assert.match(chartXml, /<c:v>57<\/c:v>/);
+    const tableSlideXml = await zip.file("ppt/slides/slide4.xml").async("string");
+    assert.equal((tableSlideXml.match(/<a:tbl>/g) || []).length, 1, "table output remains native OOXML");
+    ["Every region improved while operating costs stayed within plan", "Quarterly operating summary", "Revenue", "$57M"].forEach((value) => {
+      assert.ok(tableSlideXml.includes(value), "the authored slide includes " + value);
+    });
+    assert.ok(Object.keys(zip.files).some((name) => name.startsWith("ppt/notesSlides/notesSlide") && name.endsWith(".xml")),
+      "slide notes are preserved in the PPTX package");
+
+    const ownerElements = [
+      { type: "text", text: "Regional growth accelerated this quarter", x: 0.8, y: 0.3, w: 6.0, h: 0.55, fontSize: 30, fontFace: "Arial", color: "000000", margin: 0 },
+      { type: "text", text: "Quarterly outlook", x: 0.8, y: 0.7, w: 5.0, h: 0.6, fontSize: 18, fontFace: "Arial", color: "000000", margin: 0 },
+      ...["North finished at 42", "South finished at 57", "West remained stable", "All regions exceeded plan"].map((text, index) => ({
+        type: "text", text, x: 0.8, y: 2.0 + index * 0.8, w: 7.5, h: 0.5, fontSize: 18, fontFace: "Arial", color: "000000", bullet: true, margin: 0,
+      })),
+    ];
+    const ownerResult = await globalThis.createPresentation({ title: "Owner overlap regression", slides: [{ elements: ownerElements }] }, host);
+    assert.equal(ownerResult.success, true, "overflow and overlap are feedback, not delivery errors");
+    const ownerReport = JSON.parse(ownerResult.content).measurementReport.slides[0];
+    assert.equal(ownerReport.elements[0].text.overflow, true);
+    assert.equal(ownerReport.elements[0].text.line_count, 2, "the owner regression title wraps onto two lines");
+    assert.ok(ownerReport.elements[0].text.needed_h > ownerReport.elements[0].text.box_h);
+    assert.deepEqual(ownerReport.overlaps.map((entry) => entry.elements), [[0, 1]]);
+    assert.equal(ownerReport.elements[0].contrast.known, true);
+    assert.ok(ownerReport.minimum_font_size_pt > 0);
+
+    const correctedElements = ownerElements.map((element, index) => index === 0
+      ? { ...element, w: 11.5, h: 1.1 }
+      : index === 1 ? { ...element, y: 1.5 }
+        : { ...element, y: 2.7 + (index - 2) * 0.8 });
+    const correctedResult = await globalThis.createPresentation({ title: "Owner corrected layout", slides: [{ elements: correctedElements }] }, host);
+    const correctedReport = JSON.parse(correctedResult.content).measurementReport.slides[0];
+    assert.equal(correctedReport.elements[0].text.overflow, false);
+    assert.deepEqual(correctedReport.overlaps, []);
+
+    const generatedOutOfBounds = await globalThis.createPresentation({
+      title: "Generated table crosses slide edge",
+      slides: [{ elements: [{ type: "table", rows: [["A"], ["B"]], x: 0.8, y: 7.1, w: 4.0, rowH: [1.0, 1.0] }] }],
+    }, host);
+    const generatedBoundsReport = JSON.parse(generatedOutOfBounds.content).measurementReport.slides[0];
+    assert.equal(generatedBoundsReport.elements[0].outside_slide, true);
+    assert.equal(generatedBoundsReport.outside_bounds.length, 1);
+
+    const beforeInvalidInputs = deliveries.length;
+    const invalidCases = [
+      [{ type: "audio", x: 0, y: 0, w: 1, h: 1 }, "type"],
+      [{ type: "text", text: "Unknown prop", x: 0, y: 0, w: 1, h: 1, autoPlace: true }, "autoPlace"],
+      [{ type: "text", text: "Non-finite", x: 0, y: 0, w: Infinity, h: 1 }, "w"],
+      [{ type: "text", text: "Negative", x: 0, y: 0, w: -1, h: 1 }, "w"],
+      [{ type: "text", text: "Negative height", x: 0, y: 0, w: 1, h: -1 }, "h"],
+      [{ type: "text", text: "Outside", x: 13, y: 0, w: 1, h: 1 }, "bounds"],
+      [{ type: "chart", chartType: "bar", labels: [], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "labels"],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [], x: 0, y: 0, w: 2, h: 2 }, "datasets"],
+      [{ type: "chart", chartType: "bar", labels: ["North", "South"], datasets: [{ name: "Sales", values: [1] }], x: 0, y: 0, w: 2, h: 2 }, "values"],
+      [{ type: "chart", chartType: "bar", labels: ["North"], datasets: [{ name: "Sales", values: [NaN] }], x: 0, y: 0, w: 2, h: 2 }, "values[0]"],
+      [{ type: "image", dataUrl: "https://example.invalid/image.png", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
+      [{ type: "image", dataUrl: "data:image/png;base64,not-an-image", x: 0, y: 0, w: 2, h: 2 }, "dataUrl"],
+      [{ type: "table", rows: [["A", "B"], ["only one"]], x: 0, y: 0, w: 3 }, "rows[1]"]
+    ];
+    for (const [element, field] of invalidCases) {
       await assert.rejects(
-        globalThis.createPresentation({
-          title: "Invalid chart value",
-          slides: [{ chart: { labels: ["North"], datasets: [{ name: "Regional sales", values: [value] }] } }],
-        }, host),
-        (error) => error.message === "Slide 1: chart dataset 'Regional sales' value at index 0 is not a finite number",
+        globalThis.createPresentation({ title: "Invalid input", slides: [{ elements: [element] }] }, host),
+        (error) => error.message.includes("Slide 1") && error.message.includes("element 0") && error.message.includes(field),
+        "invalid " + element.type + " input reports slide, element and field " + field,
       );
     }
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Dense layout",
-        slides: [{
-          title: "Dense slide",
-          body: "The chart and table share the remaining slide area.",
-          bullets: Array.from({ length: 16 }, (_, index) => "Detail " + (index + 1)),
-          chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
-          table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-        }],
-      }, host),
-      (error) => error.message === "Slide 1: text content does not fit on the slide; shorten the body or bullets, or move visuals to another slide.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "No visual room",
-        slides: [{
-          title: "Text leaves no visual area",
-          body: "The chart and table share the remaining slide area.",
-          bullets: Array.from({ length: 12 }, (_, index) => "Detail " + (index + 1)),
-          chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
-          table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-        }],
-      }, host),
-      (error) => error.message === "Slide 1: no room for the automatic chart after the text and earlier visuals; shorten the text, move an earlier visual, or put this chart on another slide.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Out of bounds visual",
-        slides: [{ chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }], y: 6.5, h: 1.2 } }],
-      }, host),
-      (error) => error.message === "Slide 1: chart exceeds slide bounds; move it within the slide or reduce its size.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Out of bounds shape",
-        slides: [{ shapes: [{ type: "rect", x: 13.2, y: 1, w: 0.2, h: 1 }] }],
-      }, host),
-      (error) => error.message === "Slide 1: shape exceeds slide bounds; move it within the slide or reduce its size.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Out of bounds chart width",
-        slides: [{ chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }], x: 12.8, w: 0.6, y: 1, h: 2 } }],
-      }, host),
-      (error) => error.message === "Slide 1: chart exceeds slide bounds; move it within the slide or reduce its size.",
-    );
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Zero area shape",
-        slides: [{ shapes: [{ type: "line", x: 1, y: 1, w: 0, h: 0 }] }],
-      }, host),
-      (error) => error.message === "Slide 1: shape width and height must be non-negative, and at least one must be greater than zero.",
-    );
-    assert.equal(deliveries.length, deliveryCountBeforeInvalidSlides, "invalid or overfull content must not deliver a partial presentation");
+    assert.equal(deliveries.length, beforeInvalidInputs, "invalid input never delivers a partial presentation");
 
-    const lineShapeResult = await globalThis.createPresentation({
-      title: "Horizontal and vertical lines",
-      slides: [{ shapes: [
-        { type: "line", x: 1, y: 5, w: 10, h: 0, lineColor: "344054" },
-        { type: "line", x: 12, y: 1, w: 0, h: 5, lineColor: "344054" },
-      ] }],
+    const svgResult = await globalThis.createPresentation({
+      title: "SVG support notice",
+      slides: [{ elements: [{ type: "image", dataUrl: "data:image/svg+xml;base64," + Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"></svg>").toString("base64"), x: 1, y: 1, w: 2, h: 2 }] }],
     }, host);
-    assert.equal(lineShapeResult.success, true, "horizontal and vertical user lines may have one zero dimension");
-    const lineZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const lineSlide = await lineZip.file("ppt/slides/slide1.xml").async("string");
-    const lineBoxes = assertSlideElementsWithinHeight(lineSlide, 1);
-    assert.equal(lineBoxes.length, 2);
-    assert.ok(lineBoxes.some((box) => box.w > 0 && box.h === 0));
-    assert.ok(lineBoxes.some((box) => box.w === 0 && box.h > 0));
-
-    const fullWidthResult = await globalThis.createPresentation({
-      title: "Exact wide width",
-      slides: [{ shapes: [{ type: "rect", x: 0, y: 0, w: 12192000 / 914400, h: 0.5, fillColor: "2459D3" }] }],
-    }, host);
-    assert.equal(fullWidthResult.success, true, "the exact LAYOUT_WIDE width must be accepted");
-    const fullWidthZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const fullWidthSlide = await fullWidthZip.file("ppt/slides/slide1.xml").async("string");
-    const fullWidthBoxes = assertSlideElementsWithinHeight(fullWidthSlide, 1);
-    assert.equal(fullWidthBoxes[0].x, 0);
-    assert.equal(fullWidthBoxes[0].w, 12192000);
-
-    const safeTextResult = await globalThis.createPresentation({
-      title: "Twenty lines fit safely",
-      slides: [{ title: "Twenty lines", body: Array.from({ length: 20 }, (_, index) => "A measured line " + (index + 1)).join("\n") }],
-    }, host);
-    assert.equal(safeTextResult.success, true);
-    const safeTextZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const safeTextSlide = await safeTextZip.file("ppt/slides/slide1.xml").async("string");
-    const safeTextBoxes = assertSlideElementsWithinHeight(safeTextSlide, 1);
-    const safeBodyBox = safeTextBoxes.find((box) => box.text.includes("A measured line 1"));
-    assert.ok(safeBodyBox);
-    assert.ok(descendants(parseXml(safeTextSlide)).some((node) => node.localName === "bodyPr" &&
-      descendants(node).some((child) => child.localName === "normAutofit")), "body text must use native PowerPoint shrink autofit");
-    const safeBodyPr = descendants(parseXml(safeTextSlide)).find((node) => node.localName === "bodyPr" &&
-      descendants(node).some((child) => child.localName === "normAutofit"));
-    assert.equal(Number(safeBodyPr.getAttribute("lIns")), 4.32 * 12700, "measured and serialized body margins must both use 4.32 points");
-
-    const textChartResult = await globalThis.createPresentation({
-      title: "Text and chart",
-      slides: [{
-        title: "Six body lines and a chart",
-        body: Array.from({ length: 6 }, (_, index) => "Body line " + (index + 1)).join("\n"),
-        chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
-      }],
-    }, host);
-    assert.equal(textChartResult.success, true);
-    const textChartZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const textChartSlide = await textChartZip.file("ppt/slides/slide1.xml").async("string");
-    const textChartBoxes = assertSlideElementsWithinHeight(textChartSlide, 1);
-    const sixLineBox = textChartBoxes.find((box) => box.text.includes("Body line 1"));
-    const textChartBox = textChartBoxes.find((box) => box.element.localName === "graphicFrame");
-    assert.ok(sixLineBox && textChartBox);
-    assert.ok(textChartBox.y >= sixLineBox.y + sixLineBox.h + Math.round(0.1 * 914400), "the chart must leave a gap after the body text");
-
-    const ignoredEmptyDatasetResult = await globalThis.createPresentation({
-      title: "Empty dataset ignored beside valid data",
-      slides: [{ chart: { labels: ["North"], datasets: [
-        { name: "Empty", values: [] },
-        { name: "Sales", values: [-3] },
-      ] } }],
-    }, host);
-    assert.equal(ignoredEmptyDatasetResult.success, true, "an empty dataset beside valid values is ignored");
-    const ignoredEmptyZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const ignoredEmptyChartPath = Object.keys(ignoredEmptyZip.files).find((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name));
-    const ignoredEmptyChart = await ignoredEmptyZip.file(ignoredEmptyChartPath).async("string");
-    assert.match(ignoredEmptyChart, /<c:v>-3<\/c:v>/, "negative finite values remain valid chart data");
-
-    const explicitOverlapCount = deliveries.length;
-    await assert.rejects(
-      globalThis.createPresentation({
-        title: "Explicit visual overlap",
-        slides: [{
-          title: "Text under an explicit chart",
-          body: "A body line followed by bullets.",
-          bullets: ["Detail one", "Detail two", "Detail three"],
-          chart: { labels: ["Small", "Medium"], datasets: [{ name: "Sales", values: [0.35, 3.5] }], y: 2.0, h: 1.2 },
-          table: { headers: ["Region", "Sales"], rows: [["North", "3.5"]], y: 4.0, h: 1.2 },
-        }],
-      }, host),
-      (error) => error.message === "Slide 1: chart overlaps bullet 1; move the visual below the text or shorten the text.",
-    );
-    assert.equal(deliveries.length, explicitOverlapCount, "overlapping explicit visuals must not deliver a partial presentation");
-
-    const explicitVisualResult = await globalThis.createPresentation({
-      title: "Explicit visual placement",
-      slides: [{
-        title: "Text with explicit visuals",
-        body: "A body line followed by bullets.",
-        bullets: ["Detail one"],
-        chart: { labels: ["Small", "Medium"], datasets: [{ name: "Sales", values: [0.35, 3.5] }], y: 2.8, h: 1.0 },
-        table: { headers: ["Region", "Sales"], rows: [["North", "3.5"]], y: 4.1, h: 1.2 },
-      }],
-    }, host);
-    assert.equal(explicitVisualResult.success, true, "explicit chart and table bounds must be honored when they clear the text");
-    const explicitDelivery = deliveries[deliveries.length - 1];
-    const explicitZip = await globalThis.JSZip.loadAsync(explicitDelivery.bytes);
-    const explicitSlide = await explicitZip.file("ppt/slides/slide1.xml").async("string");
-    assert.equal((explicitSlide.match(/<a:tbl>/g) || []).length, 1, "an explicit table must remain present");
-    const explicitChartPath = Object.keys(explicitZip.files).find((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name));
-    assert.ok(explicitChartPath, "an explicit chart must remain present");
-    const explicitBoxes = assertSlideElementsWithinHeight(explicitSlide, 1);
-    const explicitChartBox = explicitBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "chart"));
-    const explicitTableBox = explicitBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "tbl"));
-    assert.ok(explicitChartBox && explicitTableBox);
-    assert.equal(Math.round(explicitChartBox.y), Math.round(2.8 * 914400));
-    assert.equal(Math.round(explicitTableBox.y), Math.round(4.1 * 914400));
-    const decimalChartXml = await explicitZip.file(explicitChartPath).async("string");
-    const decimalNumFormats = parseXml(decimalChartXml).getElementsByTagNameNS("*", "numFmt").map((node) => node.getAttribute("formatCode"));
-    assert.ok(decimalNumFormats.length > 0 && decimalNumFormats.every((format) => format === "General"), "fractional chart numFmt entries must use the exact General formatCode");
-    assert.match(decimalChartXml, /<c:v>0\.35<\/c:v>/, "fractional chart values must retain 0.35 in the PPTX cache");
-    assert.match(decimalChartXml, /<c:v>3\.5<\/c:v>/, "fractional chart values must retain 3.5 in the PPTX cache");
-
-    const explicitChartAutoTableResult = await globalThis.createPresentation({
-      title: "Explicit chart with automatic table",
-      slides: [{
-        title: "An explicit chart leaves room for its table",
-        chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }], y: 2.5, h: 2 },
-        table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-      }],
-    }, host);
-    assert.equal(explicitChartAutoTableResult.success, true);
-    const explicitChartAutoTableZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const explicitChartAutoTableSlide = await explicitChartAutoTableZip.file("ppt/slides/slide1.xml").async("string");
-    const explicitAutoBoxes = assertSlideElementsWithinHeight(explicitChartAutoTableSlide, 1);
-    const placedChartBox = explicitAutoBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "chart"));
-    const automaticTableBox = explicitAutoBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "tbl"));
-    assert.ok(placedChartBox && automaticTableBox);
-    assert.equal(Math.round(placedChartBox.y), Math.round(2.5 * 914400));
-    assert.ok(automaticTableBox.y >= placedChartBox.y + placedChartBox.h, "the automatic table must be placed after the explicit chart");
-    assert.ok(automaticTableBox.y + automaticTableBox.h <= 6858000 - Math.round(0.55 * 914400), "the automatic table must preserve the slide bottom margin");
-
-    const lowerExplicitChartResult = await globalThis.createPresentation({
-      title: "Lower explicit chart with automatic table",
-      slides: [{
-        title: "The table uses the remaining lower slot",
-        chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }], y: 4, h: 2 },
-        table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-      }],
-    }, host);
-    assert.equal(lowerExplicitChartResult.success, true);
-    const lowerExplicitZip = await globalThis.JSZip.loadAsync(deliveries[deliveries.length - 1].bytes);
-    const lowerExplicitSlide = await lowerExplicitZip.file("ppt/slides/slide1.xml").async("string");
-    const lowerExplicitBoxes = assertSlideElementsWithinHeight(lowerExplicitSlide, 1);
-    const lowerPlacedChart = lowerExplicitBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "chart"));
-    const lowerAutomaticTable = lowerExplicitBoxes.find((box) => box.element.localName === "graphicFrame" && descendants(box.element).some((node) => node.localName === "tbl"));
-    assert.ok(lowerPlacedChart && lowerAutomaticTable);
-    assert.equal(Math.round(lowerPlacedChart.y), Math.round(4 * 914400));
-    assert.ok(lowerAutomaticTable.y >= lowerPlacedChart.y + lowerPlacedChart.h, "the automatic table must avoid the explicit chart at y=4");
-    assert.ok(lowerAutomaticTable.y + lowerAutomaticTable.h <= 6858000 - Math.round(0.55 * 914400), "the lower automatic table must leave the bottom margin");
-
-    const fittingResult = await globalThis.createPresentation({
-      title: "Fitting chart and table",
-      slides: [{
-        title: "Fits normally",
-        body: "The chart and table share the remaining slide area.",
-        chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
-        table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-      }],
-    }, host);
-    assert.equal(fittingResult.success, true);
-    const fittingDelivery = deliveries[deliveries.length - 1];
-    const fittingZip = await globalThis.JSZip.loadAsync(fittingDelivery.bytes);
-    const fittingSlide = await fittingZip.file("ppt/slides/slide1.xml").async("string");
-    assert.equal((fittingSlide.match(/<a:tbl>/g) || []).length, 1, "a fitting table must be present in the PPTX");
-    assert.ok(Object.keys(fittingZip.files).some((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name)), "a fitting chart must be present in the PPTX");
-    assertSlideElementsWithinHeight(fittingSlide, 1);
-
+    const svgReport = JSON.parse(svgResult.content).measurementReport;
+    assert.equal(svgReport.warnings[0].field, "dataUrl");
+    assert.match(svgReport.warnings[0].fact, /SVG/);
     const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
     assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
     assert.doesNotMatch(viewerHtml, /<h1\b/, "the host already provides the presentation title");

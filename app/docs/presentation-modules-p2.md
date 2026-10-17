@@ -2,57 +2,38 @@
 
 ## Módulos y tools
 
-Los dos módulos están registrados solo por sus manifiestos bajo `assets/modules/`:
+Los dos módulos se registran desde sus manifiestos bajo `app/src/main/assets/modules/`:
 
 | Módulo | Tool declarada | Artifact type | Skill |
 |---|---|---|---|
 | `com.jarvys.module.chart` | `create_chart` | `application/vnd.jarvys.chart+json` | `jarvys-chart`, desde `skills/chart/SKILL.md` |
 | `com.jarvys.module.presentation` | `create_presentation` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | `jarvys-presentation`, desde `skills/presentation/SKILL.md` |
 
-Las tools escriben artefactos con `artifact.deliver`; el manifiesto declara el visor, la ruta de miniatura, el handler y la skill. La carga de skills de módulos y la disponibilidad de sus tools en `allowed-tools` se resuelven genéricamente desde esos manifiestos. Las tools nuevas son de escritura y reciben `Preguntar` como política inicial en Conectores.
+Las tools entregan artefactos con `artifact.deliver`. La carga de skills y la disponibilidad en `allowed-tools` se resuelven genéricamente desde los manifiestos. La miniatura PNG usa el almacén existente y la referencia `artifacts.thumbnail_ref` de Room v2; el esquema de Room no cambió. La tarjeta, el visor y Guardar/Compartir siguen los flujos genéricos.
 
-La miniatura rasterizada queda en el almacén de archivos existente y su `file_refs.id` se asocia con `artifacts.thumbnail_ref` de Room v2. No se cambió el esquema. La tarjeta muestra ese archivo restaurado desde SQLite; abrirla usa el visor declarado. Guardar y compartir siguen usando el flujo genérico de archivos del chat.
+## Composición de presentaciones
 
-## Implementación y librerías
+`create_presentation` recibe `{ title, theme?, slides }`. Cada diapositiva contiene opcionalmente `background` y `notes`, más un `elements` ordenado. Cada elemento tiene coordenadas explícitas `x`, `y`, `w` y `h` en pulgadas sobre `LAYOUT_WIDE` (13.333 × 7.5 in). Los elementos admitidos son `text`, `shape`, `image`, `chart` y `table`. `manifest.json` enumera propiedades y tipos aceptados, y `skills/presentation/SKILL.md` explica cómo componer distintos diseños.
 
-- **Gráficas:** Chart.js **4.5.1**, bundle UMD local minificado, sin CDN. El handler crea un gráfico sin animación, serializa sus datos como artefacto JSON y captura el canvas como PNG.
-- **PPTX:** PptxGenJS **4.0.1** y JSZip **3.10.1**, ambos bundles de navegador empaquetados localmente y minificados. El handler los ejecuta dentro del WebView aislado, genera el archivo PPTX y entrega los bytes junto con una miniatura PNG.
-- **Visor PPTX (estado de esta nota):** `viewer/deck-renderer.js`, renderer local propio de **18,345 bytes**. Recorre el orden definido en OOXML y dibuja formas básicas, texto e imágenes incorporadas con canvas. Resuelve colores sRGB y colores base del tema; no reproduce tablas, grupos, transiciones, gráficos OOXML ni todas las reglas tipográficas de PowerPoint. La implementación actual, validada después en Android real, usa PptxGlimpse para el visor y la miniatura; véase [presentation-triage.md](chat-db/presentation-triage.md#reproducción-android-webview-real-2026-10-17).
-- PptxGenJS y JSZip se distribuyen con sus licencias MIT junto a los bundles; Chart.js conserva su licencia en el módulo. Los README de cada módulo apuntan a las versiones upstream fijadas.
+El handler no crea títulos, huecos, tamaños por rol ni ubicaciones automáticas. Las propiedades se validan con errores identificados por diapositiva, índice y tipo de elemento. La validación rechaza propiedades desconocidas, valores no finitos, cajas negativas o fuera del lienzo, datos de gráfico incompatibles, imágenes que no se decodifican y tablas mal formadas. Una caja de texto cuyo contenido se desborda o dos elementos que se cruzan producen mediciones, no un error de generación.
 
-La app no descarga bibliotecas ni usa runtime Node, Linux, Python o shell. No se añadieron tools de módulos a tareas programadas; continúan diferidas.
+Tras construir el PPTX, el handler mide el texto con `canvas.measureText` en el WebView real, ajustando líneas al ancho y a la fuente declarada. El contenido JSON de la respuesta al modelo incluye el id del artefacto y un informe por diapositiva y elemento: caja pedida, altura necesaria y disponible para texto, desbordes, intersecciones, elementos fuera del lienzo, menor tamaño de fuente y contraste cuando los colores se conocen. El agente usa estos hechos para corregir la siguiente versión. La miniatura sigue mostrando la primera diapositiva; el host entrega texto y no admite que un módulo devuelva imágenes adicionales al modelo sin cambiar el contrato genérico, así que no se añadieron miniaturas adicionales.
 
-## Visor: causa corregida y decisión
+Si no se proporciona `theme`, PptxGenJS conserva sus valores neutrales. Si se proporciona, el handler aplica `fonts.headFontFace`, `fonts.bodyFontFace` y el fondo global; `theme.colors` pasa a ser la paleta de los gráficos. PptxGenJS 4.0.1 no expone reemplazo simple del esquema de colores OOXML, así que el agente coloca los hexadecimales que eligió en cada elemento de texto o forma. El módulo no impone colores. Los data URLs SVG se informan como no compatibles con el visor/miniatura.
 
-El Node handler genera el texto y los rellenos dentro del XML real de cada diapositiva; la pérdida ocurría en el visor al asignar tamaños OOXML en EMU directamente como `font` CSS del canvas (por ejemplo, `sz="3000"` se convertía en `381000px`). WebView limitaba esa fuente antes de transformar el canvas. El renderer propio ahora pasa texto y medidas a píxeles CSS, resuelve sRGB y colores de tema desde el `.pptx`, y dibuja desde los bytes entregados. Las formas con texto de una línea admiten ajuste, alineación vertical y giro básico.
+## Runtime y artefactos
 
-La tool actual no declara ni genera gráficos OOXML. El renderer no interpreta `p:graphicFrame`; si una diapositiva incluye un gráfico, una tabla u otro objeto integrado, muestra una advertencia visible en el visor.
+- **Gráficas:** Chart.js **4.5.1**, bundle UMD local minificado, sin CDN. El handler produce un artefacto JSON y captura el canvas como PNG.
+- **PPTX:** PptxGenJS **4.0.1** y JSZip **3.10.1**, bundles de navegador locales y minificados. El WebView aislado construye el `.pptx`; PptxGlimpse **5.3.1** renderiza la miniatura y el visor de pantalla completa.
+- **Seguridad:** no se descargan bibliotecas ni se relaja la CSP. El aislamiento del WebView se mantiene; el anfitrión Kotlin no contiene lógica específica de presentaciones.
 
-La decisión es mantener el renderer propio para el subconjunto que produce la tool y no añadir otra biblioteca de visualización general. No se modificó el permiso aislado del WebView. La miniatura continúa renderizando la primera diapositiva con el mismo renderer.
+Los paquetes conservan sus licencias MIT y avisos junto a los bundles. Los tamaños exactos por archivo y total están en [ASSET-SIZES.md](../app/src/main/assets/modules/presentation/ASSET-SIZES.md).
 
-## Peso
+## Cobertura y límites
 
-Medición sobre `app-full-debug-unsigned.apk` creado con `:app:assembleFullDebug`:
+- `ModuleBundleIntegrationTest` ejecuta `module-handler-contract.cjs`, que usa los bundles reales, descomprime el PPTX y verifica posiciones explícitas, texto/runs, formas, imágenes, gráficos, tablas, notas, validación, mediciones y el contrato de artefacto + miniatura + informe. Node no tiene canvas de navegador; su doble de `measureText` se documenta dentro del contrato y solo comprueba la estructura. La medición real se verifica con el handler offscreen en Android WebView.
+- El harness de `docs/pptx-viewer-eval/` genera decks distintos con el handler de producción y abre los PPTX en el HTML/JavaScript del visor bajo la CSP de producción. Las capturas de las composiciones y el informe de evaluación quedan en `docs/pptx-viewer-eval/captures/`.
+- `ModuleCapabilityBridgeTest` cubre la entrega binaria y el rechazo de miniaturas que no sean imágenes. `DeliveredArtifactTest.moduleArtifactThumbnailAndBytesRestoreFromTheExistingRoomReference` verifica restauración de bytes, miniatura y referencia Room v2.
+- El visor/miniatura es un renderizador aproximado de PowerPoint; el resultado visual puede variar con las fuentes y el software de presentación. Las cajas y las métricas informadas permiten al agente detectar problemas antes de entregar otra versión.
 
-| Assets nuevos | Bytes sin comprimir | Bytes comprimidos en APK |
-|---|---:|---:|
-| Gráficas | 220,620 | 88,591 |
-| Presentaciones | 434,655 | 165,949 |
-| **Total añadido** | **655,275 (0.655275 MB)** | **254,540 (0.254540 MB)** |
-
-El APK fullDebug resultante mide **44,968,068 bytes (44.968 MB)**. El delta comprimido de la tabla suma las entradas `assets/modules/chart/` y `assets/modules/presentation/` directamente desde el ZIP del APK. Los bundles JS fijados representan 577,162 bytes del tamaño bruto total.
-
-## Cobertura y límites de prueba
-
-- `ModuleBundleIntegrationTest` carga los manifiestos reales, comprueba herramientas, visores, miniaturas, skills, la aparición genérica en Conectores y la política inicial `Preguntar`. Ejecuta ambos handlers con un motor JavaScript Node instalado solo para el test: PPTX usa PptxGenJS, JSZip y el renderer OOXML empaquetados; el test confirma el ZIP, `[Content_Types].xml`, `ppt/slides/slide1.xml` y texto de la primera diapositiva. Chart.js se carga y se comprueba como bundle, pero el test sustituye el contexto canvas porque Node no aporta un canvas de navegador.
-- `ModuleCapabilityBridgeTest` cubre la entrega binaria, la declaración de artefacto y el rechazo de una miniatura que no es imagen.
-- `DeliveredArtifactTest.moduleArtifactThumbnailAndBytesRestoreFromTheExistingRoomReference` verifica persistencia y restauración del archivo, miniatura y referencia Room v2.
-- Robolectric aquí no ejecuta el JavaScript real de una página WebView. La política de aislamiento del WebView conserva sus tests existentes; la generación/visor con Canvas real se debe confirmar en el móvil siguiendo la lista siguiente.
-
-## Prueba manual en móvil
-
-1. En un chat nuevo, pide una gráfica de barras con al menos dos categorías. Confirma que la tool devuelve el id real, la tarjeta muestra la miniatura, se abre el visor, y Guardar/Compartir producen un archivo legible.
-2. Pide una presentación con dos diapositivas, texto y una forma. Confirma que el `.pptx` abre en PowerPoint o equivalente, la tarjeta muestra la primera diapositiva, el visor permite avanzar/retroceder y Guardar/Compartir conservan el `.pptx`.
-3. En **Conectores**, cambia cada módulo por separado a **Permitir**, **Preguntar** y **Denegar**; confirma que las tools respetan cada política y que ninguna tool aparece para tareas programadas.
-
-Riesgos restantes: el visor PPTX es aproximado; el test Node no sustituye la validación de Chart.js sobre el Canvas del WebView del móvil; el camino de bytes conserva el límite de entrega existente de conectores (8 MiB por archivo), sin introducir otro límite para P2.
+No se añadieron tools de módulos a tareas programadas; continúan diferidas.

@@ -112,91 +112,101 @@ globalThis.window = globalThis;
 globalThis.document = {
   head: { appendChild() {} },
   body: { appendChild() {} },
-  createElement(tag) { return tag === "canvas" ? makeCanvas() : {}; },
+  createElement(tag) {
+    if (tag === "canvas") return makeCanvas();
+    if (tag === "img") {
+      return {
+        naturalWidth: 0,
+        naturalHeight: 0,
+        complete: false,
+        onload: null,
+        onerror: null,
+        set src(value) {
+          const isPng = value.startsWith("data:image/png;base64,");
+          const svgPayload = value.slice(value.indexOf(",") + 1);
+          const isSvg = value.startsWith("data:image/svg+xml") && decodeURIComponent(svgPayload).includes("<svg");
+          queueMicrotask(() => {
+            if (isPng || isSvg) {
+              this.naturalWidth = isPng ? 320 : 1280;
+              this.naturalHeight = isPng ? 180 : 720;
+              this.complete = true;
+              this.onload && this.onload();
+            } else {
+              this.complete = true;
+              this.onerror && this.onerror();
+            }
+          });
+        },
+      };
+    }
+    return {};
+  },
 };
 Object.defineProperty(globalThis, "navigator", {
   value: { userAgent: "pptx-viewer-eval-fixture-generator" }, configurable: true,
 });
 globalThis.JSZip = require(path.join(moduleDirectory, "vendor/jszip.min.js"));
-globalThis.PptxDeckRenderer = {
-  async renderFirstSlide(_bytes, canvas) {
-    canvas.getContext("2d").fillText("Fixture thumbnail", 24, 40);
-  },
-};
-
+class XmlElement {
+  constructor(name) { this.localName = name.split(":").pop(); this.children = []; this.parentNode = null; this.value = ""; }
+  getAttribute(name) { return this.attributes[name] || ""; }
+  getAttributeNS(_namespace, name) { return this.attributes[name] || this.attributes[Object.keys(this.attributes).find((key) => key.endsWith(":" + name))] || ""; }
+  get textContent() { return this.value + this.children.map((child) => child.textContent).join(""); }
+}
+function parseXml(source) {
+  const root = new XmlElement("#document");
+  root.attributes = {};
+  const stack = [root];
+  const tokens = source.match(/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/g) || [];
+  for (const token of tokens) {
+    if (token.startsWith("<!--") || token.startsWith("<?")) continue;
+    if (token.startsWith("<![CDATA[")) { stack[stack.length - 1].value += token.slice(9, -3); continue; }
+    if (token.startsWith("</")) { stack.pop(); continue; }
+    if (token.startsWith("<")) {
+      const selfClosing = /\/\s*>$/.test(token);
+      const inner = token.slice(1, selfClosing ? token.lastIndexOf("/") : -1).trim();
+      const name = inner.match(/^([^\s/>]+)/)?.[1];
+      if (!name) continue;
+      const element = new XmlElement(name);
+      element.attributes = {};
+      const attributes = inner.slice(name.length);
+      for (const match of attributes.matchAll(/([^\s=]+)\s*=\s*"([^"]*)"/g)) element.attributes[match[1]] = match[2];
+      element.parentNode = stack[stack.length - 1];
+      element.parentNode.children.push(element);
+      if (!selfClosing) stack.push(element);
+      continue;
+    }
+    stack[stack.length - 1].value += token;
+  }
+  return root;
+}
+globalThis.DOMParser = class { parseFromString(source) { return parseXml(source); } };
+const glimpseContext = vm.createContext({});
+const glimpseModule = new vm.SyntheticModule(["convertPptxToSvg"], function () {
+  this.setExport("convertPptxToSvg", async (_bytes, options) => ({
+    slides: options.slides.map((slide) => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + slide + '"></svg>' })),
+  }));
+}, { context: glimpseContext });
 const pptxgenFile = path.join(moduleDirectory, "vendor/pptxgen.min.js");
 vm.runInThisContext(fs.readFileSync(pptxgenFile, "utf8"), {
   filename: pptxgenFile,
   importModuleDynamically: (specifier) => import(specifier),
 });
 const handlerFile = path.join(moduleDirectory, "logic/tools.js");
-vm.runInThisContext(fs.readFileSync(handlerFile, "utf8"), { filename: handlerFile });
+vm.runInThisContext(fs.readFileSync(handlerFile, "utf8"), {
+  filename: handlerFile,
+  importModuleDynamically(specifier) {
+    if (specifier !== "../vendor/pptx-glimpse.bundle.js") throw new Error("Unexpected handler import " + specifier);
+    return glimpseModule;
+  },
+});
 
-const presentations = [
-  {
-    key: "title-text",
-    title: "Regional growth",
-    slides: [{
-      title: "Regional growth accelerated",
-      body: "Revenue rose 22% this quarter, led by the North and South teams.",
-      bullets: ["North finished at 42", "South finished at 57"],
-    }],
-  },
-  {
-    key: "bar-chart",
-    title: "Regional sales chart",
-    slides: [{
-      title: "South leads regional sales",
-      chart: {
-        title: "Quarterly revenue",
-        labels: ["North", "South", "West"],
-        datasets: [{ name: "Revenue", values: [42, 57, 39], color: "2459D3" }],
-      },
-    }],
-  },
-  {
-    key: "table",
-    title: "Regional sales table",
-    slides: [{
-      title: "Two regions exceeded plan",
-      table: {
-        headers: ["Region", "Revenue", "Change"],
-        rows: [["North", "$42M", "+18%"], ["South", "$57M", "+27%"], ["West", "$39M", "+8%"]],
-      },
-    }],
-  },
-  {
-    key: "image-shape",
-    title: "Field team image and shape",
-    slides: [{
-      title: "One team, three regions",
-      body: "The regional teams shared one playbook.",
-      shapes: [{ type: "roundRect", x: 0.9, y: 4.15, w: 3.0, h: 1.15, fillColor: "2459D3", text: "One playbook", fontSize: 22 }],
-      images: [{ dataUrl: "data:image/svg+xml;base64," + svgImage, x: 6.6, y: 1.8, w: 4.7, h: 2.9, altText: "Mountain landscape with a team label" }],
-    }],
-  },
-  {
-    key: "image-png-data-url",
-    title: "Embedded PNG from a data URL",
-    slides: [{
-      title: "The embedded PNG is visible",
-      body: "This PNG reached create_presentation as an image data URL.",
-      images: [{ dataUrl: pngDataUrl(), x: 6.6, y: 1.8, w: 4.7, h: 2.9, altText: "Blue sky, sun, and mountain landscape" }],
-    }],
-  },
-  {
-    key: "theme-light-dark",
-    title: "Light and dark theme slides",
-    slides: [
-      { title: "Invest in what works", body: "The lighter theme keeps detail clear and calm.", backgroundColor: "F7F9FC" },
-      { title: "Grow the strongest regions", body: "Use the dark theme for a clear executive close.", backgroundColor: "14233B" },
-      { title: "Carry momentum forward", body: "Keep the same palette and spacing across the deck.", backgroundColor: "E7F3F1" },
-    ],
-  },
-];
+const presentations = require("./composition-fixtures.cjs")(pngDataUrl);
 
 let nextId = 0;
 async function main() {
+  await glimpseModule.link(() => {});
+  await glimpseModule.evaluate();
+  const reports = [];
   for (const input of presentations) {
     const host = {
       newArtifactDeliveryId() { nextId += 1; return "eval-" + nextId; },
@@ -211,10 +221,14 @@ async function main() {
         return JSON.stringify({ id: name });
       },
     };
-    const result = await globalThis.createPresentation(input, host);
+    const { key, ...presentationInput } = input;
+    const result = await globalThis.createPresentation(presentationInput, host);
     if (!result.success) throw new Error("The production handler did not deliver " + input.key);
+    const content = JSON.parse(result.content);
+    reports.push({ key, artifactId: content.artifactId, measurementReport: content.measurementReport });
     process.stdout.write(input.key + " " + fs.statSync(path.join(fixtureDirectory, input.key + ".pptx")).size + " bytes\n");
   }
+  fs.writeFileSync(path.join(__dirname, "composition-measurement-reports.json"), JSON.stringify(reports, null, 2) + "\n");
 }
 
 main().catch((error) => {

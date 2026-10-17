@@ -85,3 +85,14 @@ node app/docs/pptx-viewer-eval/run-final-viewer.cjs
 ```
 
 La publicación del skill PPTX de Anthropic declara una licencia propietaria. La guía del módulo solo recoge principios generales parafraseados; no reutiliza texto, código, ejemplos ni paletas del material. Fuentes: [documentación de PptxViewJS](https://github.com/gptsci/pptxviewjs), [soporte de pptx-glimpse](https://glimpse.pptx.app/docs/feature-support) y [uso en navegador](https://glimpse.pptx.app/docs/browser), [licencia de `pptx-preview` publicada en npm](https://www.npmjs.com/package/pptx-preview).
+
+## Composiciones del esquema libre (2026-10-17)
+
+`generate-fixtures.cjs` genera cuatro PPTX mediante `logic/tools.js#createPresentation`; `composition-measurement-reports.json` guarda los informes que devolvió el handler. `run-final-viewer.cjs` abre cada archivo en el HTML y JavaScript del visor de producción bajo la CSP usada por el módulo. Las cuatro cargas pintaron su diapositiva, cada archivo se leyó una vez y no hubo peticiones externas.
+
+- [Portada con runs y formas decorativas](captures/final-viewer-free-cover-slide1.png)
+- [Dos columnas con imagen PNG data URL](captures/final-viewer-free-columns-slide1.png)
+- [Gráfico nativo con tres insights](captures/final-viewer-free-chart-insights-slide1.png)
+- [Título largo, subtítulo, texto y tabla](captures/final-viewer-free-table-long-title-slide1.png)
+
+Chrome headless 155.0.8059.79, viewport 360×800 CSS px y `deviceScaleFactor: 3`. `composition-viewer-results.json` registra los cuatro resultados. El contrato Node también prueba un título de dos líneas que se solapa y desborda, y una versión corregida que no lo hace; ambos casos entregan un PPTX.
