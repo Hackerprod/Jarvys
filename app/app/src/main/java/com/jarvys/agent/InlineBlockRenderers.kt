@@ -122,7 +122,7 @@ internal fun RenderAssistantCodeFence(
 @Composable
 private fun InlineBlockPlaceholder(language: String) {
     val renderingLabel = stringResource(R.string.inline_block_rendering, language)
-    Text(renderingLabel, Modifier.fillMaxWidth().padding(vertical = 8.dp),
+    Text(renderingLabel, Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
 }
 

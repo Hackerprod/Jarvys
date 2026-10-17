@@ -871,11 +871,11 @@ object AgentRunUiState {
             event.id !in transientEventIds
                 && !replacedLiveTool
                 && (identity == null || identity !in durableEventIdentities)
-                && event.timelineKey == null
                 && event.id < firstPersistedId && event.kind in durableKinds
         }
         val retainedRunningTimelineEvents = if (current.running) current.events.filter { event ->
             event.timelineKey != null
+                && event.id >= firstPersistedId
                 && event.id !in transientEventIds
                 && (refreshEventIdentity(event) == null || refreshEventIdentity(event) !in durableEventIdentities)
         } else emptyList()

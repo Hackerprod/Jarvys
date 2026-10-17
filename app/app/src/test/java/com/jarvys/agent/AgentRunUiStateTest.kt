@@ -116,7 +116,7 @@ class AgentRunUiStateTest {
     @Test
     fun refreshKeepsPromotedRowOnlyDuringCurrentRunAndAfterDurableEvents() {
         val session = "timeline-refresh-running-${System.nanoTime()}"
-        val promoted = AgentRunUiEvent(5L, "assistant", text = "Promoted answer", messageId = "promoted-answer")
+        val promoted = AgentRunUiEvent(50L, "assistant", text = "Promoted answer", messageId = "promoted-answer")
             .copy(timelineKey = 700L)
         AgentRunUiState.restoreSession(session, listOf(promoted))
         AgentRunUiState.beginRun(session, "Current request")
@@ -137,6 +137,35 @@ class AgentRunUiStateTest {
         AgentRunUiState.refreshPersistedSession(session, listOf(older, newest))
         assertFalse(AgentRunUiState.snapshotForSession(session).events.any { it.messageId == "promoted-answer" })
         AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun refreshKeepsOlderPromotedResponseBeforePersistedWindowWithOrWithoutRun() {
+        val olderPromoted = AgentRunUiEvent(5L, "assistant", text = "Older promoted answer", messageId = "older-answer")
+            .copy(timelineKey = 700L)
+        val persistedWindow = listOf(
+            AgentRunUiEvent(10L, "user", text = "First visible request", messageId = "visible-user-1"),
+            AgentRunUiEvent(40L, "assistant", text = "Second visible answer", messageId = "visible-answer-2"),
+        )
+
+        for (runActive in listOf(false, true)) {
+            val session = "timeline-refresh-older-promoted-$runActive-${System.nanoTime()}"
+            AgentRunUiState.restoreSession(session, listOf(olderPromoted))
+            if (runActive) AgentRunUiState.beginRun(session, "Current request")
+
+            AgentRunUiState.refreshPersistedSession(session, persistedWindow)
+
+            val events = AgentRunUiState.snapshotForSession(session).events
+            val durableTimeline = events.filter { it.messageId in setOf("older-answer", "visible-user-1", "visible-answer-2") }
+            assertEquals(listOf("Older promoted answer", "First visible request", "Second visible answer"),
+                durableTimeline.map { it.text })
+            assertEquals(1, events.count { it.messageId == "older-answer" })
+            assertEquals(700L, events.single { it.messageId == "older-answer" }.timelineKey)
+            assertEquals(events.size, events.map { it.id }.toSet().size)
+            assertEquals(events.size, events.map { ConversationTimelineItem.Event(it).key }.toSet().size)
+
+            AgentRunUiState.resetSession(session)
+        }
     }
 
     @Test
