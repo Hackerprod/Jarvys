@@ -38,7 +38,37 @@
   async function loadRuntime() {
     if (!global.JSZip) await loadAssetScript("vendor/jszip.min.js");
     if (!global.PptxGenJS) await loadAssetScript("vendor/pptxgen.min.js");
-    if (!global.PptxDeckRenderer) await loadAssetScript("viewer/deck-renderer.js");
+  }
+
+  async function renderFirstSlideThumbnail(pptxBytes) {
+    var glimpse = await import("../vendor/pptx-glimpse.bundle.js");
+    if (typeof glimpse.convertPptxToSvg !== "function") {
+      throw new Error("The presentation thumbnail renderer is unavailable.");
+    }
+    var report = await glimpse.convertPptxToSvg(pptxBytes, { textOutput: "text", width: 1280, slides: [1] });
+    var firstSlide = report && Array.isArray(report.slides) && report.slides[0];
+    if (!firstSlide || typeof firstSlide.svg !== "string" || firstSlide.svg.trim().length === 0) {
+      throw new Error("The presentation thumbnail renderer returned no first slide.");
+    }
+
+    var image = await new Promise(function (resolve, reject) {
+      var slideImage = document.createElement("img");
+      slideImage.onload = function () {
+        if (slideImage.naturalWidth > 0 && slideImage.naturalHeight > 0) resolve(slideImage);
+        else reject(new Error("The presentation thumbnail SVG is empty."));
+      };
+      slideImage.onerror = function () { reject(new Error("The presentation thumbnail SVG could not be decoded.")); };
+      slideImage.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(firstSlide.svg);
+      if (slideImage.complete && slideImage.naturalWidth > 0 && slideImage.naturalHeight > 0) resolve(slideImage);
+    });
+
+    var canvas = document.createElement("canvas");
+    canvas.width = 1280;
+    canvas.height = 720;
+    var context = canvas.getContext("2d");
+    if (!context) throw new Error("A 2D canvas is unavailable for the presentation thumbnail.");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas;
   }
 
   function bytesFromBase64(value) {
@@ -411,8 +441,7 @@
 
     var pptxBase64 = await pptx.write({ outputType: "base64" });
     var pptxBytes = bytesFromBase64(pptxBase64);
-    var thumbnailCanvas = document.createElement("canvas");
-    await global.PptxDeckRenderer.renderFirstSlide(pptxBytes, thumbnailCanvas);
+    var thumbnailCanvas = await renderFirstSlideThumbnail(pptxBytes);
     var thumbnailBase64 = thumbnailCanvas.toDataURL("image/png").split(",")[1];
     if (thumbnailBase64.length > MAX_THUMBNAIL_BASE64_CHARS) {
       throw new Error("The presentation thumbnail exceeds the displayed-card budget.");

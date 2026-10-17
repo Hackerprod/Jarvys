@@ -1,13 +1,30 @@
 package com.jarvys.agent.modules
 
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.os.Debug
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import android.webkit.WebView
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.ConversationModuleCapabilityAccess
 import com.jarvys.agent.CoreToolResult
+import com.jarvys.agent.R
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.ChatDbResult
+import com.jarvys.agent.chatdb.ChatFileOwnership
 import org.json.JSONObject
+import org.json.JSONTokener
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -20,6 +37,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
+import java.util.UUID
+import java.io.File
+import kotlin.math.abs
 
 /** Exercises the production asset bundles in the Android system WebView, not a JS test engine. */
 @RunWith(AndroidJUnit4::class)
@@ -77,6 +97,201 @@ class WebViewModuleRuntimeInstrumentedTest {
         assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
     }
 
+    @Test
+    fun presentationViewerHarnessCreatesOwnerDecksAndOpensProductionScreen() {
+        val registry = ModuleRegistry.fromAssets(context)
+        val module = registry.module("com.jarvys.module.presentation")!!
+        val presentationTool = module.tools.single { it.name == "create_presentation" }
+        val chartModule = registry.module("com.jarvys.module.chart")!!
+        val chartTool = chartModule.tools.single { it.name == "create_chart" }
+        val conversationId = "viewer-harness-${UUID.randomUUID()}"
+        val database = ChatDatabaseBridge.getInstance(context)
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        assertTrue(
+            "Could not create the temporary harness conversation",
+            database.ensureConversationSync(conversationId) is ChatDbResult.Success,
+        )
+        val cleanupIds = InstrumentationRegistry.getArguments()
+            .getString("cleanupHarnessConversations").orEmpty().split(',')
+            .filter { it.startsWith("viewer-harness-") }
+        cleanupIds.forEach { staleId ->
+            assertTrue(
+                "Could not clean an earlier temporary harness conversation",
+                database.deleteConversationSync(staleId) is ChatDbResult.Success,
+            )
+        }
+        val openedActivities = mutableListOf<android.app.Activity>()
+        try {
+            val pssBefore = appProcessPssKb()
+
+            fun createAndPersist(
+                selectedModule: ModuleManifest,
+                tool: ModuleToolDeclaration,
+                label: String,
+                arguments: Map<String, Any?>,
+            ): String {
+                val access = CapturingModuleAccess(conversationId)
+                val startedAt = SystemClock.elapsedRealtime()
+                val result = executeInWebView(selectedModule, tool, arguments, access)
+                val elapsed = SystemClock.elapsedRealtime() - startedAt
+                assertTrue("$label creation failed in Android WebView: ${result.content}", result.success)
+                val delivery = requireNotNull(access.delivery.get()) { "$label did not deliver an artifact" }
+                assertRenderedPng(delivery.thumbnailMimeType, delivery.thumbnailBytes)
+                val artifactId = persistDelivery(conversationId, selectedModule, delivery)
+                Log.i(
+                    "ArtifactViewerHarness",
+                    "$label handler complete elapsedMs=$elapsed appPssKb=${appProcessPssKb()} " +
+                        "artifactBytes=${delivery.bytes.size} thumbnailBytes=${delivery.thumbnailBytes.size} artifactId=$artifactId",
+                )
+                return artifactId
+            }
+
+            val deckArtifactId = createAndPersist(module, presentationTool, "owner-three-slide", mapOf(
+            "title" to "Regional growth",
+            "slides" to listOf(
+                mapOf(
+                    "title" to "Regional growth accelerated",
+                    "body" to "Revenue rose 22% this quarter, led by the North and South teams.",
+                    "backgroundColor" to "F4F6FB",
+                    "bullets" to listOf("North finished at 42", "South finished at 57"),
+                    "shapes" to listOf(
+                        mapOf("type" to "ellipse", "x" to 10.7, "y" to 0.5, "w" to 1.6, "h" to 1.6, "fillColor" to "536DFE", "lineColor" to "536DFE"),
+                        mapOf("type" to "ellipse", "x" to 11.55, "y" to 1.3, "w" to 0.8, "h" to 0.8, "fillColor" to "18A999", "lineColor" to "18A999"),
+                    ),
+                ),
+                mapOf(
+                    "title" to "North and South lead growth",
+                    "body" to "Both regions grew, with the strongest gains in the latest quarter.",
+                    "backgroundColor" to "FFFFFF",
+                ),
+                mapOf(
+                    "title" to "Keep the momentum",
+                    "body" to "Invest in the teams and markets that drove this quarter's result.",
+                    "backgroundColor" to "14233B",
+                    "shapes" to listOf(
+                        mapOf("type" to "ellipse", "x" to 0.7, "y" to 5.5, "w" to 1.2, "h" to 1.2, "fillColor" to "2459D3", "lineColor" to "2459D3"),
+                    ),
+                ),
+            ),
+            ))
+            val chartTableArtifactId = createAndPersist(module, presentationTool, "chart-table", mapOf(
+            "title" to "Regional sales details",
+            "slides" to listOf(mapOf(
+                "title" to "Sales by region",
+                "backgroundColor" to "F4F6FB",
+                "chart" to mapOf(
+                    "title" to "Revenue",
+                    "labels" to listOf("North", "South"),
+                    "datasets" to listOf(mapOf("name" to "Sales", "values" to listOf(42, 57), "color" to "2459D3")),
+                ),
+                "table" to mapOf(
+                    "headers" to listOf("Region", "Revenue"),
+                    "rows" to listOf(listOf("North", "42"), listOf("South", "57")),
+                ),
+            )),
+            ))
+            val chartArtifactId = createAndPersist(chartModule, chartTool, "chart-viewer", mapOf(
+                "title" to "Revenue by quarter",
+                "chartType" to "bar",
+                "labels" to listOf("Q1", "Q2", "Q3"),
+                "datasets" to listOf(mapOf("label" to "Revenue", "data" to listOf(42, 57, 51))),
+            ))
+            val chartArtifact = database.findChatFileSync(conversationId, "delivered", chartArtifactId)
+                as? ChatFileOwnership.Delivered
+            assertNotNull("Chart viewer artifact should be stored as a delivered artifact", chartArtifact)
+            assertEquals("com.jarvys.module.chart", requireNotNull(chartArtifact).value.module_id)
+            assertEquals("application/vnd.jarvys.chart+json", chartArtifact.value.artifact_type)
+
+            Log.i(
+                "ArtifactViewerHarness",
+                "fixtures conversationId=$conversationId threeSlideArtifactId=$deckArtifactId " +
+                    "chartTableArtifactId=$chartTableArtifactId chartArtifactId=$chartArtifactId " +
+                    "appPssBeforeKb=$pssBefore appPssAfterKb=${appProcessPssKb()}",
+            )
+            fun launchViewer(artifactId: String) = Intent(context, ArtifactViewerDebugActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(ArtifactViewerDebugActivity.EXTRA_CONVERSATION_ID, conversationId)
+                .putExtra(ArtifactViewerDebugActivity.EXTRA_ARTIFACT_ID, artifactId)
+
+            fun startViewer(artifactId: String): android.app.Activity =
+                instrumentation.startActivitySync(launchViewer(artifactId)).also(openedActivities::add)
+
+            fun observePresentation(label: String, activity: android.app.Activity, expectedCount: String? = null): Pair<WebView, JSONObject> {
+                val webView = awaitViewerWebView(activity)
+                val viewerStartedAt = SystemClock.elapsedRealtime()
+                val state = awaitViewerState(webView, VIEWER_OBSERVE_TIMEOUT_SECONDS, expectedCount)
+                val bodyHeight = state.optJSONArray("bodyRect")?.optDouble(3, 0.0) ?: 0.0
+                val stageHeight = state.optJSONArray("stageRect")?.optDouble(3, 0.0) ?: 0.0
+                val navigationHeight = state.optJSONArray("navigationRect")?.optDouble(3, 0.0) ?: 0.0
+                Log.i(
+                    "ArtifactViewerHarness",
+                    "$label viewer observed elapsedMs=${SystemClock.elapsedRealtime() - viewerStartedAt} state=$state " +
+                        "appPssKb=${appProcessPssKb()} rendererAlive=${webView.parent != null} ${nativeViewGeometry(webView)}",
+                )
+                if (expectedCount != null) {
+                    assertEquals("$label should show the requested slide", expectedCount, state.optString("counter"))
+                }
+                assertTrue("$label WebView body should occupy the viewport: $state", bodyHeight > 0)
+                assertTrue("$label slide should be visible: $state", stageHeight > 0)
+                assertTrue("$label navigation should be visible: $state", navigationHeight > 0)
+                return webView to state
+            }
+
+            val deckActivity = startViewer(deckArtifactId)
+            val (deckWebView, initialDeckState) = observePresentation("owner-three-slide", deckActivity)
+            val spanish = initialDeckState.optString("language").startsWith("es", ignoreCase = true)
+            val firstSlideLabel = slideCounter(1, 3, spanish)
+            val secondSlideLabel = slideCounter(2, 3, spanish)
+            assertEquals("The initial slide counter should report one of three", firstSlideLabel, initialDeckState.optString("counter"))
+            captureUiIfRequested(
+                "presentation-three-slides",
+                deckWebView,
+                initialDeckState,
+                Color.rgb(244, 246, 251),
+            )
+            evaluateJavascript(instrumentation, deckWebView, "document.getElementById('next').click()")
+            val secondSlide = awaitViewerState(deckWebView, VIEWER_OBSERVE_TIMEOUT_SECONDS, secondSlideLabel)
+            assertEquals("Next should show slide two", secondSlideLabel, secondSlide.optString("counter"))
+            evaluateJavascript(instrumentation, deckWebView, "document.getElementById('previous').click()")
+            val firstSlideAgain = awaitViewerState(deckWebView, VIEWER_OBSERVE_TIMEOUT_SECONDS, firstSlideLabel)
+            assertEquals("Previous should return to slide one", firstSlideLabel, firstSlideAgain.optString("counter"))
+
+            val chartTableActivity = startViewer(chartTableArtifactId)
+            val (_, chartTableState) = observePresentation("chart-table", chartTableActivity)
+            assertEquals("Chart and table deck should report one of one", slideCounter(1, 1, spanish), chartTableState.optString("counter"))
+            val chartTableWebView = awaitViewerWebView(chartTableActivity)
+            captureUiIfRequested(
+                "presentation-chart-table",
+                chartTableWebView,
+                chartTableState,
+                Color.rgb(244, 246, 251),
+            )
+
+            val chartActivity = startViewer(chartArtifactId)
+            val chartWebView = awaitViewerWebView(chartActivity)
+            val chartState = awaitChartViewerState(chartWebView, VIEWER_OBSERVE_TIMEOUT_SECONDS, "Revenue by quarter")
+            assertTrue("Chart canvas should have a visible native-sized drawing surface: $chartState", chartState.optInt("canvasWidth") > 0 && chartState.optInt("canvasHeight") > 0)
+            assertTrue("Chart plot should occupy the viewport: $chartState", chartState.optDouble("plotHeight") > 0)
+            assertTrue("Chart.js should have painted the canvas: $chartState", chartState.optInt("paintedPixels") > 0)
+            Log.i("ArtifactViewerHarness", "chart viewer observed state=$chartState ${nativeViewGeometry(chartWebView)}")
+            captureUiIfRequested("chart-module-viewer", chartWebView)
+
+            val fallbackActivity = startViewer(deckArtifactId)
+            val fallbackWebView = awaitViewerWebView(fallbackActivity)
+            observePresentation("fallback-source", fallbackActivity, firstSlideLabel)
+            val terminated = AtomicReference(false)
+            instrumentation.runOnMainSync {
+                terminated.set(fallbackWebView.webViewRenderProcess?.terminate() == true)
+            }
+            assertTrue("Could not terminate the viewer renderer for fallback coverage", terminated.get())
+            awaitViewerFallback(fallbackActivity, VIEWER_OBSERVE_TIMEOUT_SECONDS)
+        } finally {
+            instrumentation.runOnMainSync { openedActivities.forEach(android.app.Activity::finish) }
+            val deleted = database.deleteConversationSync(conversationId)
+            assertTrue("Could not clean the temporary harness conversation", deleted is ChatDbResult.Success)
+        }
+    }
+
     private fun executeInWebView(
         module: ModuleManifest,
         tool: ModuleToolDeclaration,
@@ -88,7 +303,7 @@ class WebViewModuleRuntimeInstrumentedTest {
             module = module,
             tool = tool,
             arguments = arguments,
-            conversationId = CONVERSATION_ID,
+            conversationId = access.conversationId,
             requester = "instrumented-test",
             requesterColorKey = null,
         )
@@ -108,6 +323,343 @@ class WebViewModuleRuntimeInstrumentedTest {
             executor.shutdownNow()
             executor.awaitTermination(5, TimeUnit.SECONDS)
         }
+    }
+
+    private fun persistDelivery(
+        conversationId: String,
+        module: ModuleManifest,
+        delivery: CapturedDelivery,
+    ): String {
+        val token = CancellationToken.cancellable()
+        val executor = Executors.newSingleThreadExecutor()
+        return try {
+            executor.submit<String> {
+                ConversationModuleCapabilityAccess(context, conversationId, module, token, null)
+                    .deliverArtifact(
+                        delivery.bytes,
+                        delivery.name,
+                        delivery.artifactType,
+                        delivery.title,
+                        delivery.thumbnailBytes,
+                        delivery.thumbnailMimeType,
+                        delivery.deliveryId,
+                    ).getString("id")
+            }.get(PERSIST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } finally {
+            token.cancel()
+            executor.shutdownNow()
+            executor.awaitTermination(5, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun awaitViewerWebView(activity: android.app.Activity): WebView {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val deadline = SystemClock.elapsedRealtime() + VIEWER_OBSERVE_TIMEOUT_SECONDS * 1_000L
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val found = AtomicReference<WebView?>()
+            instrumentation.runOnMainSync { found.set(activity.window.decorView.findWebView()) }
+            found.get()?.let { return it }
+            SystemClock.sleep(100)
+        }
+        throw AssertionError("The production viewer screen did not attach its WebView")
+    }
+
+    private fun slideCounter(index: Int, total: Int, spanish: Boolean): String =
+        if (spanish) "Diapositiva $index de $total" else "Slide $index of $total"
+
+    private fun awaitViewerState(webView: WebView, timeoutSeconds: Long, expectedCounter: String? = null): JSONObject {
+        val script = """JSON.stringify({
+            readyState: document.readyState,
+            title: document.title,
+            language: document.documentElement.lang,
+            pageUrl: location.href,
+            bodyText: document.body ? document.body.innerText : '',
+            navigation: !!document.getElementById('navigation'),
+            counter: document.getElementById('counter') ? document.getElementById('counter').textContent : null,
+            status: document.getElementById('status') ? document.getElementById('status').textContent : null,
+            statusHidden: document.getElementById('status') ? document.getElementById('status').hidden : null,
+            imageWidth: document.getElementById('slide') ? document.getElementById('slide').naturalWidth : 0,
+            imageHeight: document.getElementById('slide') ? document.getElementById('slide').naturalHeight : 0,
+            viewport: [innerWidth, innerHeight, devicePixelRatio],
+            documentClientHeight: document.documentElement ? document.documentElement.clientHeight : 0,
+            htmlHeight: document.documentElement ? getComputedStyle(document.documentElement).height : null,
+            htmlRect: document.documentElement ? (() => { const r = document.documentElement.getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })() : null,
+            bodyHeight: document.body ? getComputedStyle(document.body).height : null,
+            bodyRect: document.body ? (() => { const r = document.body.getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })() : null,
+            stageRect: document.getElementById('stage') ? (() => { const r = document.getElementById('stage').getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })() : null,
+            stageHeight: document.getElementById('stage') ? getComputedStyle(document.getElementById('stage')).height : null,
+            imageRect: document.getElementById('slide') ? (() => { const r = document.getElementById('slide').getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })() : null,
+            navigationRect: document.getElementById('navigation') ? (() => { const r = document.getElementById('navigation').getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; })() : null,
+            scrollHeight: document.documentElement ? document.documentElement.scrollHeight : 0,
+            background: document.body ? getComputedStyle(document.body).backgroundColor : null,
+            stageBackground: document.getElementById('stage') ? getComputedStyle(document.getElementById('stage')).backgroundColor : null,
+            navigationDisplay: document.getElementById('navigation') ? getComputedStyle(document.getElementById('navigation')).display : null,
+            imageDisplay: document.getElementById('slide') ? getComputedStyle(document.getElementById('slide')).display : null
+        })"""
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val deadline = SystemClock.elapsedRealtime() + timeoutSeconds * 1_000L
+        var last = JSONObject()
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val encoded = evaluateJavascript(instrumentation, webView, script)
+            if (!encoded.isNullOrBlank() && encoded != "null") {
+                last = runCatching {
+                    val value = JSONTokener(encoded).nextValue()
+                    JSONObject(value as? String ?: encoded)
+                }.getOrDefault(JSONObject().put("raw", encoded))
+                val rendered = last.optInt("imageWidth") > 0 && last.optInt("imageHeight") > 0 &&
+                    (expectedCounter == null || last.optString("counter") == expectedCounter)
+                val failed = last.has("status") && !last.isNull("status") &&
+                    !last.optBoolean("statusHidden", true) && last.optString("status").isNotBlank()
+                if (rendered || failed) return last
+            }
+            SystemClock.sleep(250)
+        }
+        return last
+    }
+
+    private fun awaitChartViewerState(webView: WebView, timeoutSeconds: Long, expectedTitle: String): JSONObject {
+        val script = """JSON.stringify({
+            canvasWidth: document.getElementById('chart') ? document.getElementById('chart').width : 0,
+            canvasHeight: document.getElementById('chart') ? document.getElementById('chart').height : 0,
+            plotHeight: document.querySelector('.plot') ? document.querySelector('.plot').getBoundingClientRect().height : 0,
+            title: document.getElementById('title') ? document.getElementById('title').textContent : null,
+            bodyHeight: document.body ? document.body.getBoundingClientRect().height : 0,
+            paintedPixels: (() => {
+                const canvas = document.getElementById('chart');
+                if (!canvas || canvas.width === 0 || canvas.height === 0) return 0;
+                const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+                let count = 0;
+                for (let index = 3; index < data.length; index += 128) if (data[index] > 0) count++;
+                return count;
+            })()
+        })"""
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val deadline = SystemClock.elapsedRealtime() + timeoutSeconds * 1_000L
+        var last = JSONObject()
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val encoded = evaluateJavascript(instrumentation, webView, script)
+            if (!encoded.isNullOrBlank() && encoded != "null") {
+                last = parseJavascriptObject(encoded)
+                if (last.optString("title") == expectedTitle && last.optInt("canvasWidth") > 0 &&
+                    last.optInt("canvasHeight") > 0 && last.optDouble("plotHeight") > 0 &&
+                    last.optInt("paintedPixels") > 0) {
+                    return last
+                }
+            }
+            SystemClock.sleep(250)
+        }
+        return last
+    }
+
+    private fun awaitViewerFallback(activity: android.app.Activity, timeoutSeconds: Long) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val removed = java.util.concurrent.CountDownLatch(1)
+        val listener = object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                val decor = activity.window.decorView
+                if (decor.findWebView() == null) {
+                    if (decor.viewTreeObserver.isAlive) decor.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    removed.countDown()
+                }
+            }
+        }
+        instrumentation.runOnMainSync {
+            val decor = activity.window.decorView
+            if (decor.findWebView() == null) removed.countDown()
+            else decor.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        }
+        assertTrue(
+            "Renderer failure did not remove the dead WebView from the host hierarchy",
+            removed.await(timeoutSeconds, TimeUnit.SECONDS),
+        )
+        val expectedFallback = context.getString(R.string.module_artifact_viewer_renderer_failed)
+        val deadline = SystemClock.elapsedRealtime() + timeoutSeconds * 1_000L
+        var fallbackVisible = false
+        while (SystemClock.elapsedRealtime() < deadline && !fallbackVisible) {
+            val root = instrumentation.uiAutomation.rootInActiveWindow
+            fallbackVisible = root?.containsVisibleText(expectedFallback) == true
+            root?.recycle()
+            if (!fallbackVisible) SystemClock.sleep(100)
+        }
+        assertTrue("The host fallback message was not visible after renderer removal", fallbackVisible)
+        instrumentation.waitForIdleSync()
+        val fallbackDrawn = java.util.concurrent.CountDownLatch(1)
+        val firstDraw = java.util.concurrent.atomic.AtomicBoolean(false)
+        val observerReference = AtomicReference<ViewTreeObserver?>()
+        val drawListener = object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                if (firstDraw.compareAndSet(false, true)) {
+                    activity.window.decorView.postOnAnimation {
+                        val observer = observerReference.get()
+                        if (observer?.isAlive == true) observer.removeOnDrawListener(this)
+                        fallbackDrawn.countDown()
+                    }
+                }
+            }
+        }
+        instrumentation.runOnMainSync {
+            val decor = activity.window.decorView
+            observerReference.set(decor.viewTreeObserver)
+            decor.viewTreeObserver.addOnDrawListener(drawListener)
+            decor.invalidate()
+        }
+        assertTrue("The host fallback did not draw after renderer removal", fallbackDrawn.await(timeoutSeconds, TimeUnit.SECONDS))
+        captureUiIfRequested("renderer-fallback")
+    }
+
+    private fun AccessibilityNodeInfo.containsVisibleText(expected: String): Boolean {
+        if (isVisibleToUser && text?.toString() == expected) return true
+        for (index in 0 until childCount) {
+            val child = getChild(index) ?: continue
+            val matches = child.containsVisibleText(expected)
+            child.recycle()
+            if (matches) return true
+        }
+        return false
+    }
+
+    private fun captureUiIfRequested(
+        name: String,
+        webView: WebView? = null,
+        renderedSlideState: JSONObject? = null,
+        expectedSlideBackground: Int? = null,
+    ) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        if (!InstrumentationRegistry.getArguments().getString("captureUi").equals("true", ignoreCase = true)) return
+        val directory = context.cacheDir
+        check(directory.isDirectory) { "The app cache directory is unavailable" }
+        val deadline = SystemClock.elapsedRealtime() + VIEWER_OBSERVE_TIMEOUT_SECONDS * 1_000L
+        var screenshot: Bitmap
+        while (true) {
+            if (webView != null) awaitWebViewVisualState(webView)
+            screenshot = instrumentation.uiAutomation.takeScreenshot()
+            if (expectedSlideBackground == null ||
+                screenshotShowsSlideBackground(screenshot, webView, renderedSlideState, expectedSlideBackground)) break
+            screenshot.recycle()
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                throw AssertionError("The captured screen did not include the rendered slide surface")
+            }
+        }
+        val file = File(directory, "$name.png")
+        try {
+            file.outputStream().use { output ->
+                check(screenshot.compress(Bitmap.CompressFormat.PNG, 100, output)) { "Could not encode the UI capture" }
+            }
+        } finally {
+            screenshot.recycle()
+        }
+        Log.i("ArtifactViewerHarness", "UI capture saved in test app storage: ${file.name}")
+    }
+
+    private fun screenshotShowsSlideBackground(
+        screenshot: Bitmap,
+        webView: WebView?,
+        state: JSONObject?,
+        expectedColor: Int,
+    ): Boolean {
+        val imageRect = state?.optJSONArray("imageRect") ?: return false
+        val viewport = state.optJSONArray("viewport") ?: return false
+        val view = webView ?: return false
+        val location = IntArray(2)
+        val geometry = AtomicReference(false)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            view.getLocationOnScreen(location)
+            geometry.set(view.width > 0 && view.height > 0)
+        }
+        if (!geometry.get()) return false
+        val scaleX = view.width.toFloat() / viewport.optDouble(0).toFloat()
+        val scaleY = view.height.toFloat() / viewport.optDouble(1).toFloat()
+        val x = location[0] + ((imageRect.optDouble(0) + imageRect.optDouble(2) * 0.05) * scaleX).toInt()
+        val y = location[1] + ((imageRect.optDouble(1) + imageRect.optDouble(3) * 0.05) * scaleY).toInt()
+        if (x !in 0 until screenshot.width || y !in 0 until screenshot.height) return false
+        val actual = screenshot.getPixel(x, y)
+        return abs(Color.red(actual) - Color.red(expectedColor)) <= 2 &&
+            abs(Color.green(actual) - Color.green(expectedColor)) <= 2 &&
+            abs(Color.blue(actual) - Color.blue(expectedColor)) <= 2
+    }
+
+    private fun awaitWebViewVisualState(webView: WebView) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val visualReady = java.util.concurrent.CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            webView.postVisualStateCallback(SystemClock.uptimeMillis(), object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    visualReady.countDown()
+                }
+            })
+        }
+        assertTrue(
+            "WebView did not submit the rendered visual state",
+            visualReady.await(VIEWER_OBSERVE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+        )
+        val drawReady = java.util.concurrent.CountDownLatch(1)
+        val drawReported = java.util.concurrent.atomic.AtomicBoolean(false)
+        val listenerReference = AtomicReference<ViewTreeObserver.OnDrawListener?>()
+        instrumentation.runOnMainSync {
+            val listener = object : ViewTreeObserver.OnDrawListener {
+                override fun onDraw() {
+                    if (drawReported.compareAndSet(false, true)) {
+                        webView.post {
+                            val listenerToRemove = listenerReference.get()
+                            if (listenerToRemove != null && webView.viewTreeObserver.isAlive) {
+                                webView.viewTreeObserver.removeOnDrawListener(listenerToRemove)
+                            }
+                        }
+                        drawReady.countDown()
+                    }
+                }
+            }
+            listenerReference.set(listener)
+            webView.viewTreeObserver.addOnDrawListener(listener)
+            webView.invalidate()
+        }
+        assertTrue(
+            "WebView did not draw the submitted visual state",
+            drawReady.await(VIEWER_OBSERVE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+        )
+    }
+
+    private fun parseJavascriptObject(encoded: String): JSONObject = runCatching {
+        val value = JSONTokener(encoded).nextValue()
+        JSONObject(value as? String ?: encoded)
+    }.getOrDefault(JSONObject().put("raw", encoded))
+
+    private fun nativeViewGeometry(webView: WebView): String {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val geometry = AtomicReference<String>()
+        instrumentation.runOnMainSync {
+            val location = IntArray(2)
+            webView.getLocationOnScreen(location)
+            geometry.set("nativeView=${webView.width}x${webView.height} shown=${webView.isShown} " +
+                "visibility=${webView.visibility} screenX=${location[0]} screenY=${location[1]}")
+        }
+        return geometry.get() ?: "nativeView=unavailable"
+    }
+
+    private fun evaluateJavascript(
+        instrumentation: android.app.Instrumentation,
+        webView: WebView,
+        script: String,
+    ): String? {
+        val result = AtomicReference<String?>()
+        val latch = java.util.concurrent.CountDownLatch(1)
+        instrumentation.runOnMainSync { webView.evaluateJavascript(script) { value -> result.set(value); latch.countDown() } }
+        latch.await(3, TimeUnit.SECONDS)
+        return result.get()
+    }
+
+    private fun View.findWebView(): WebView? {
+        if (this is WebView) return this
+        if (this is ViewGroup) {
+            for (index in 0 until childCount) getChildAt(index).findWebView()?.let { return it }
+        }
+        return null
+    }
+
+    private fun appProcessPssKb(): Int {
+        val info = Debug.MemoryInfo()
+        Debug.getMemoryInfo(info)
+        return info.totalPss
     }
 
     private fun assertRenderedPng(mimeType: String, bytes: ByteArray) {
@@ -188,6 +740,8 @@ class WebViewModuleRuntimeInstrumentedTest {
     private companion object {
         const val CONVERSATION_ID = "instrumented-webview-conversation"
         const val EXECUTION_TIMEOUT_SECONDS = 90L
+        const val PERSIST_TIMEOUT_SECONDS = 45L
+        const val VIEWER_OBSERVE_TIMEOUT_SECONDS = 45L
         val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
     }
 }

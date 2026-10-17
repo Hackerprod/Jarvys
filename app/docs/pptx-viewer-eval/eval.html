@@ -25,7 +25,6 @@
   <script src="/assets/vendor/jszip.min.js"></script>
   <script src="/candidate-assets/chartjs/chart.umd.min.js"></script>
   <script src="/candidates/pptxviewjs/package/dist/PptxViewJS.min.js"></script>
-  <script src="/assets/viewer/deck-renderer.js"></script>
 </head>
 <body>
   <div id="stage"><canvas id="slide" role="img" aria-label="Diapositiva de evaluación"></canvas></div>
@@ -56,7 +55,6 @@
       var currentSlide = 0;
       var slideCount = 0;
       var renderer;
-      var deck;
       var svgSlides = [];
       var candidateWarnings = [];
       var started = performance.now();
@@ -107,14 +105,6 @@
           renderer = new PptxViewJS.PPTXViewer({ canvas: canvas, slideSizeMode: "fit", enableThumbnails: false, debug: false });
           await renderer.loadFile(bytes);
           slideCount = renderer.getSlideCount();
-        } else if (rendererName === "deck-renderer") {
-          deck = await PptxDeckRenderer.loadDeck(bytes);
-          slideCount = deck.slidePaths.length;
-          var unsupported = await PptxDeckRenderer.renderSlide(deck, 0, canvas);
-          if (unsupported.presentationWarnings.length) {
-            warning.hidden = false;
-            warning.textContent = unsupported.presentationWarnings.join(" ");
-          }
         } else if (rendererName === "pptx-preview") {
           await loadScript("/candidates/preview/package/dist/pptx-preview.umd.js");
           renderer = pptxPreview.init(stage, { width: 336, height: 189 });
@@ -139,7 +129,6 @@
 
       async function showSlide(index) {
         if (rendererName === "pptxviewjs") await renderer.goToSlide(index, canvas);
-        else if (rendererName === "deck-renderer") await PptxDeckRenderer.renderSlide(deck, index, canvas);
         else if (rendererName === "pptx-preview") renderer.renderSingleSlide(index);
         else if (rendererName === "pptx-glimpse") await fitImage(svgSlides[index]);
         else if (rendererName === "silurus") await renderer.goToSlide(index);

@@ -5,16 +5,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const moduleDirectory = path.resolve(process.argv[2]);
+const moduleDirectory = path.resolve(process.argv[2] || path.join(__dirname, "../../main/assets/modules/presentation"));
 const manifest = JSON.parse(fs.readFileSync(path.join(moduleDirectory, "manifest.json"), "utf8"));
 const declaration = manifest.tools[0];
 const handlerFile = path.join(moduleDirectory, declaration.handler.split("#")[0]);
 const thumbnailPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=";
-const renderedTexts = [];
-const drawnTextCalls = [];
-const paintedFills = [];
 const canvases = [];
-const rendererInputs = [];
+const thumbnailDrawCalls = [];
+let thumbnailRendererInput = null;
+let thumbnailRendererOptions = null;
+const thumbnailSlideSvgs = [0, 1, 2, 3].map((index) =>
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>');
 
 function decodeXmlText(value) {
   return value.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
@@ -159,12 +160,11 @@ function makeCanvas() {
   const context = new Proxy({
     canvas,
     measureText(text) { return { width: String(text).length * 8 }; },
-    fillText(text) {
-      const value = String(text);
-      renderedTexts.push(value);
-      drawnTextCalls.push({ text: value, font: this.font, fillStyle: this.fillStyle });
+    drawImage(image, ...args) {
+      if (image.tagName === "IMG") thumbnailDrawCalls.push({ image, args, canvas });
     },
-    fill() { paintedFills.push(this.fillStyle); },
+    fillText() {},
+    fill() {},
     getLineDash() { return []; },
     getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; },
   }, {
@@ -179,7 +179,26 @@ function makeCanvas() {
 const document = {
   body: { appendChild() {} },
   head: { appendChild() {} },
-  createElement(tag) { return tag === "canvas" ? makeCanvas() : { setAttribute() {}, addEventListener() {} }; },
+  createElement(tag) {
+    if (tag === "canvas") return makeCanvas();
+    if (tag === "img") {
+      let source = "";
+      return {
+        tagName: "IMG",
+        naturalWidth: 1280,
+        naturalHeight: 720,
+        complete: false,
+        onload: null,
+        onerror: null,
+        set src(value) {
+          source = value;
+          queueMicrotask(() => this.onload && this.onload());
+        },
+        get src() { return source; },
+      };
+    }
+    return { setAttribute() {}, addEventListener() {} };
+  },
 };
 globalThis.window = globalThis;
 globalThis.document = document;
@@ -217,6 +236,8 @@ const host = {
 
 async function main() {
   let argumentsObject;
+  let handlerDynamicImport;
+  let handlerSource;
   if (manifest.id === "com.jarvys.module.chart") {
     const chartBundle = require(path.join(moduleDirectory, "vendor/chart.umd.min.js"));
     assert.equal(typeof chartBundle, "function");
@@ -242,19 +263,21 @@ async function main() {
     const skillMarkdown = fs.readFileSync(path.join(moduleDirectory, manifest.skills[0]));
     assert.ok(skillMarkdown.byteLength < 256 * 1024, "module skill must fit the shared 256 KiB skill-reader limit");
     globalThis.JSZip = require(path.join(moduleDirectory, "vendor/jszip.min.js"));
-    const rendererFile = path.join(moduleDirectory, "viewer/deck-renderer.js");
-    vm.runInThisContext(fs.readFileSync(rendererFile, "utf8"), { filename: rendererFile });
-    const originalRenderer = globalThis.PptxDeckRenderer;
-    globalThis.PptxDeckRenderer = Object.assign({}, originalRenderer, {
-      loadDeck(bytes) {
-        rendererInputs.push(Buffer.from(bytes));
-        return originalRenderer.loadDeck(bytes);
-      },
-      renderFirstSlide(bytes, canvas) {
-        rendererInputs.push(Buffer.from(bytes));
-        return originalRenderer.renderFirstSlide(bytes, canvas);
-      },
-    });
+    const glimpseContext = vm.createContext({});
+    const glimpseModule = new vm.SyntheticModule(["convertPptxToSvg"], function () {
+      this.setExport("convertPptxToSvg", async (bytes, options) => {
+        thumbnailRendererInput = Buffer.from(bytes);
+        thumbnailRendererOptions = options;
+        return { slides: thumbnailSlideSvgs.map((svg) => ({ svg })) };
+      });
+    }, { context: glimpseContext });
+    await glimpseModule.link(() => {});
+    await glimpseModule.evaluate();
+    handlerDynamicImport = (specifier) => {
+      assert.equal(specifier, "../vendor/pptx-glimpse.bundle.js",
+        "the thumbnail must use the same bundled PptxGlimpse module as the viewer");
+      return glimpseModule;
+    };
     const generatorFile = path.join(moduleDirectory, "vendor/pptxgen.min.js");
     vm.runInThisContext(fs.readFileSync(generatorFile, "utf8"), {
       filename: generatorFile,
@@ -299,7 +322,10 @@ async function main() {
     throw new Error("Unexpected bundled module id: " + manifest.id);
   }
 
-  vm.runInThisContext(fs.readFileSync(handlerFile, "utf8"), { filename: handlerFile });
+  handlerSource = fs.readFileSync(handlerFile, "utf8");
+  const handlerOptions = { filename: handlerFile };
+  if (handlerDynamicImport) handlerOptions.importModuleDynamically = handlerDynamicImport;
+  new vm.Script(handlerSource, handlerOptions).runInThisContext();
   const exportName = declaration.handler.split("#")[1];
   assert.equal(typeof globalThis[exportName], "function");
   const result = await globalThis[exportName](argumentsObject, host);
@@ -341,36 +367,16 @@ async function main() {
     ["F4F6FB", "536DFE", "18A999", "FFFFFF", "344054", "101828"].forEach((color) => {
       assert.ok(comparisonXml.includes(color), "PPTX slide 2 must contain color " + color);
     });
-    const deck = await globalThis.PptxDeckRenderer.loadDeck(delivery.bytes);
-    assert.equal(deck.slidePaths.length, 4);
-    await globalThis.PptxDeckRenderer.renderSlide(deck, 1, makeCanvas());
-    ["Two-bar comparison", "North 42", "South 57", "North region", "South region"].forEach((text) => {
-      assert.ok(renderedTexts.some((rendered) => rendered.includes(text)), "renderer must draw " + text);
-    });
-    assert.ok(drawnTextCalls.some((call) => call.text.includes("Two-bar comparison") && call.font.includes("48px")));
-    assert.ok(drawnTextCalls.some((call) => call.text.includes("North 42") && call.fillStyle === "#FFFFFF"));
-    assert.ok(drawnTextCalls.some((call) => call.text.includes("South 57") && call.fillStyle === "#FFFFFF"));
-    ["#F4F6FB", "#536DFE", "#18A999"].forEach((color) => assert.ok(paintedFills.includes(color)));
-
-    const unsupportedZip = await globalThis.JSZip.loadAsync(delivery.bytes);
-    unsupportedZip.file("ppt/slides/slide2.xml", comparisonXml.replace(
-      "</p:spTree>", "<p:graphicFrame/></p:spTree>",
-    ));
-    const unsupportedDeck = await globalThis.PptxDeckRenderer.loadDeck(
-      await unsupportedZip.generateAsync({ type: "uint8array" }),
-    );
-    const unsupportedCanvas = makeCanvas();
-    await globalThis.PptxDeckRenderer.renderSlide(unsupportedDeck, 1, unsupportedCanvas);
-    assert.match(unsupportedCanvas.presentationWarnings.join(" "), /gráfico.*tabla/);
-
-    // Stage dimensions are measured after the warning and nav auto-rows have taken their space.
-    const stageHeight = 210;
-    const stagePadding = 12;
-    const fit = globalThis.PptxDeckRenderer.fitSlideToBounds(296, stageHeight - stagePadding * 2, deck.width, deck.height);
-    assert.equal(fit.width, 296);
-    assert.equal(fit.height, 166.5);
-    const slideBottom = stagePadding + (stageHeight - stagePadding * 2 - fit.height) / 2 + fit.height;
-    assert.ok(fit.width <= 296 && slideBottom <= stageHeight - stagePadding);
+    assert.deepEqual(thumbnailRendererInput, delivery.bytes,
+      "the generated PPTX bytes must reach the same PptxGlimpse renderer used by the viewer");
+    assert.deepEqual(thumbnailRendererOptions, { textOutput: "text", width: 1280, slides: [1] },
+      "thumbnail conversion must render only the first slide");
+    assert.equal(thumbnailDrawCalls.length, 1, "the thumbnail must draw exactly one converted slide");
+    const thumbnailDraw = thumbnailDrawCalls[0];
+    assert.deepEqual(thumbnailDraw.args, [0, 0, 1280, 720]);
+    assert.equal(thumbnailDraw.canvas, canvases[canvases.length - 1]);
+    assert.match(decodeURIComponent(thumbnailDraw.image.src.slice(thumbnailDraw.image.src.indexOf(",") + 1)),
+      /data-slide="0"/, "the thumbnail must use the first slide SVG returned by PptxGlimpse");
 
     const darkSlide = await zip.file("ppt/slides/slide3.xml").async("string");
     assert.match(darkSlide, /14233B/);
@@ -392,8 +398,6 @@ async function main() {
     const tableXml = visualSlide;
     assert.equal((tableXml.match(/<a:tbl>/g) || []).length, 1, "the table must be a native PowerPoint table");
     assert.ok(tableXml.includes("101828"), "table text must contrast with its pale cell fills");
-    assert.ok(rendererInputs.some((input) => input.equals(delivery.bytes)), "the generated PPTX bytes must reach the thumbnail renderer");
-
     const deliveryCountBeforeInvalidSlides = deliveries.length;
     await assert.rejects(
       globalThis.createPresentation({ title: "Empty chart", slides: [{ chart: { labels: [], datasets: [] } }] }, host),
@@ -656,7 +660,89 @@ async function main() {
     assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
     assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
     assert.match(viewerHtml, /<script src="presentation\.js"><\/script>/);
+    assert.match(viewerHtml, /<p class="loading" id="loading">Loading presentation…<\/p>/,
+      "the viewer must show its loading state before presentation.js runs");
+    const viewerJs = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.js"), "utf8");
+    assert.match(viewerJs, /loadingPresentation: "Cargando presentación…"/);
+    assert.match(viewerJs, /loadingPresentation: "Loading presentation…"/);
+    assert.match(viewerJs, /stage\.setAttribute\("aria-label", labels\.stage\)/);
+    assert.match(viewerHtml, /window\.addEventListener\("error"[\s\S]*window\.addEventListener\("unhandledrejection"/,
+      "the standalone HTML fallback must report script/global and unhandled promise failures");
+    assert.doesNotMatch(viewerHtml, /sizeViewport|window\.innerHeight/,
+      "the viewer layout must use its host's measured WebView bounds");
+    assert.doesNotMatch(viewerHtml, /setTimeout\([^]*?10000/,
+      "a slow render must keep its loading state instead of becoming an error");
+    assert.match(viewerHtml, /if \(ready \|\| failureShown\) return/,
+      "global errors after a successful render must not cover the working deck");
+    assert.match(viewerHtml, /window\.__presentationViewerReady = function \(\)/,
+      "the viewer script must report when the first slide has rendered");
+    assert.match(viewerJs, /slides:\s*\[index \+ 1\]/,
+      "the viewer must convert only the selected slide");
+    assert.match(viewerJs, /slideCache\.set\(index, result\.svg\)/,
+      "the viewer must retain SVGs it has already converted");
+    assert.match(viewerJs, /getElementsByTagNameNS/);
+    assert.match(viewerJs, /"sldId"/,
+      "the viewer must count slides from the PPTX manifest without converting each slide");
+    assert.match(viewerHtml, /data-error-es="No se pudo abrir la presentación\./);
+    assert.match(viewerHtml, /data-error-en="The presentation could not be opened\./);
     assert.doesNotMatch(viewerHtml, /deck-renderer\.js/, "the user-visible viewer must have one renderer");
+    assert.equal(fs.existsSync(path.join(moduleDirectory, "viewer/deck-renderer.js")), false,
+      "the separate thumbnail renderer asset must be removed");
+    assert.doesNotMatch(handlerSource, /PptxDeckRenderer|deck-renderer\.js/,
+      "the handler must load no separate thumbnail renderer");
+
+    const fallbackSource = viewerHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(fallbackSource, "the page must carry its fallback independently of presentation.js and PptxGlimpse");
+    function runStandaloneFallback(language = "es-ES") {
+      const listeners = {};
+      const fallbackNodes = {
+        status: {
+          hidden: true,
+          textContent: "",
+          getAttribute(name) {
+            return name === "data-error-es"
+              ? "No se pudo abrir la presentación. Vuelve a intentarlo o abre el archivo en una aplicación compatible."
+              : "The presentation could not be opened. Try again or open the file in a compatible app.";
+          },
+        },
+        counter: { textContent: "Cargando…" },
+      };
+      const fallbackWindow = {
+        addEventListener(name, callback) { listeners[name] = callback; },
+      };
+      vm.runInNewContext(fallbackSource, {
+        window: fallbackWindow,
+        document: { getElementById: (id) => fallbackNodes[id] || null },
+        navigator: { language },
+      });
+      return { fallbackNodes, fallbackWindow, listeners };
+    }
+
+    const scriptFailureFallback = runStandaloneFallback();
+    scriptFailureFallback.listeners.error({
+      target: { tagName: "IMG", getAttribute: () => "" },
+    });
+    assert.equal(scriptFailureFallback.fallbackNodes.status.hidden, true,
+      "an unrelated image failure must not report a presentation load failure");
+    scriptFailureFallback.listeners.error({
+      target: { tagName: "SCRIPT", getAttribute: () => "presentation.js" },
+    });
+    assert.equal(scriptFailureFallback.fallbackNodes.status.hidden, false,
+      "a failed presentation.js load must display the standalone alert");
+    assert.match(scriptFailureFallback.fallbackNodes.status.textContent, /No se pudo abrir la presentación/);
+    assert.equal(scriptFailureFallback.fallbackNodes.counter.textContent, "");
+
+    const rejectionFallback = runStandaloneFallback("en-US");
+    rejectionFallback.listeners.unhandledrejection({ reason: new Error("fixture-rejection") });
+    assert.equal(rejectionFallback.fallbackNodes.status.hidden, false,
+      "an unhandled rejection must display the standalone alert");
+    assert.match(rejectionFallback.fallbackNodes.status.textContent, /The presentation could not be opened/);
+
+    const completedFallback = runStandaloneFallback();
+    completedFallback.fallbackWindow.__presentationViewerReady();
+    completedFallback.listeners.error({ target: completedFallback.fallbackWindow });
+    assert.equal(completedFallback.fallbackNodes.status.hidden, true,
+      "a later global error must not cover the successfully rendered presentation");
 
     const viewerScript = path.join(moduleDirectory, "viewer/presentation.js");
     const viewerSource = fs.readFileSync(viewerScript, "utf8");
@@ -665,6 +751,7 @@ async function main() {
     let convertedBytes = null;
     let convertedOptions = null;
     let renderedSlideIndices = [];
+    let viewerFallbackReadyCalls = 0;
 
     function setupViewerNodes() {
       const viewerNodes = {
@@ -672,8 +759,10 @@ async function main() {
           clientWidth: 320,
           clientHeight: 210,
           children: [],
+          setAttribute(name, value) { this[name] = value; },
           replaceChildren(...children) { this.children = children; },
         },
+        loading: { hidden: false, textContent: "" },
         navigation: { setAttribute(name, value) { this[name] = value; } },
         counter: { textContent: "" },
         previous: { disabled: true, textContent: "", addEventListener(name, handler) { this[name] = handler; }, click() { if (!this.disabled) this.clickHandler && this.clickHandler(); } },
@@ -719,16 +808,29 @@ async function main() {
       return viewerNodes;
     }
 
-    async function runViewer(converter, language = "es-ES") {
+    async function runViewer(converter, language = "es-ES", countedSlideCount = 4, failFetch = false) {
       const viewerNodes = setupViewerNodes();
       Object.defineProperty(globalThis, "navigator", {
         value: { userAgent: "node-module-contract", language }, configurable: true,
       });
       globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
+      globalThis.DOMParser = class {
+        parseFromString(xml) {
+          return {
+            getElementsByTagName() { return []; },
+            getElementsByTagNameNS(namespace, name) {
+              assert.equal(name, "sldId");
+              return Array.from({ length: countedSlideCount });
+            },
+          };
+        }
+      };
+      viewerFallbackReadyCalls = 0;
+      globalThis.__presentationViewerReady = () => { viewerFallbackReadyCalls += 1; };
       globalThis.fetch = async (url) => {
         requestedArtifactUrl = url;
         return {
-          ok: true,
+          ok: !failFetch,
           arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength),
         };
       };
@@ -748,19 +850,23 @@ async function main() {
       return viewerNodes;
     }
 
+    const convertedCalls = [];
     const successfulViewerNodes = await runViewer(async (bytes, options) => {
       convertedBytes = Buffer.from(bytes);
       convertedOptions = options;
+      convertedCalls.push({ bytes: Buffer.from(bytes), options });
       return {
-        slides: [0, 1, 2, 3].map((index) => ({
-          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>',
-        })),
+        slides: [{
+          slideNumber: options.slides[0],
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + (options.slides[0] - 1) + '"></svg>',
+        }],
       };
     });
     assert.equal(requestedArtifactUrl, globalThis.JarvysArtifact.url);
     assert.deepEqual(convertedBytes, delivery.bytes, "the viewer must pass the delivered PPTX bytes to PptxGlimpse");
-    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280 });
+    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280, slides: [1] });
     assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4", "viewer error: " + successfulViewerNodes.status.textContent);
+    assert.equal(viewerFallbackReadyCalls, 1, "the first rendered slide must clear the loading state");
     assert.equal(successfulViewerNodes.status.hidden, true);
     assert.equal(document.title, "Presentación");
     assert.equal(successfulViewerNodes.previous.disabled, true);
@@ -776,27 +882,32 @@ async function main() {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4");
     assert.deepEqual(renderedSlideIndices, [0, 1, 0], "next and previous controls must render the selected slide");
+    assert.deepEqual(convertedCalls.map((call) => call.options.slides[0]), [1, 2],
+      "the viewer must convert the selected slide once and reuse its cached SVG when navigating back");
 
     failSlideImageDecode = false;
-    const englishViewerNodes = await runViewer(async () => ({
-      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
-    }), "en-US");
+    const englishViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "en-US", 1);
     assert.equal(document.title, "Presentation");
     assert.equal(englishViewerNodes.counter.textContent, "Slide 1 of 1");
+    assert.equal(viewerFallbackReadyCalls, 1);
     assert.equal(englishViewerNodes.previous.textContent, "Previous");
     assert.equal(englishViewerNodes.next.textContent, "Next");
 
     failSlideImageDecode = true;
-    const failedViewerNodes = await runViewer(async () => ({
-      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
-    }));
+    const failedViewerNodes = await runViewer(async (_bytes, options) => ({
+      slides: [{ slideNumber: options.slides[0], svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "es-ES", 1);
     assert.equal(failedViewerNodes.status.hidden, false, "a failed slide render must show an on-screen alert");
     assert.match(failedViewerNodes.status.textContent, /No se pudo mostrar la diapositiva/);
     assert.equal(failedViewerNodes.stage.children.length, 0, "a failed render must not leave a silent empty slide");
+    assert.equal(viewerFallbackReadyCalls, 1, "a visible slide failure must stop the standalone watchdog");
 
-    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("fixture-load-failed"); });
+    const failedLoadViewerNodes = await runViewer(async () => { throw new Error("converter-should-not-run"); }, "es-ES", 1, true);
     assert.equal(failedLoadViewerNodes.counter.textContent, "", "a failed presentation load must clear the loading counter");
     assert.equal(failedLoadViewerNodes.status.hidden, false, "a failed presentation load must show its alert");
+    assert.equal(viewerFallbackReadyCalls, 1, "a visible load failure must stop the standalone watchdog");
   }
 
   process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");
