@@ -53,6 +53,7 @@ internal fun AssistantMarkdown(
     onOpenSkillFile: (SkillFileLink) -> Unit,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     userMessage: Boolean = false,
+    streaming: Boolean = false,
 ) {
     val platformUriHandler = LocalUriHandler.current
     val openSkillFile by rememberUpdatedState(onOpenSkillFile)
@@ -128,11 +129,17 @@ internal fun AssistantMarkdown(
                 error = { Text(markdown, modifier = it, color = textColor, style = fallbackStyle) },
             )
         } else {
+            val components = remember(streaming) {
+                markdownComponents(codeFence = { model ->
+                    RenderAssistantCodeFence(model.content, model.node, model.typography.code, streaming)
+                })
+            }
             Markdown(
                 content = normalizedMarkdown,
                 modifier = modifier,
                 colors = markdownColor(text = textColor),
                 typography = typography,
+                components = components,
             )
         }
     }

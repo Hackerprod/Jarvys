@@ -577,7 +577,8 @@ internal fun AssistantReplyView(
             // One selection scope per body; actions and neighboring messages stay outside it.
             SelectionContainer {
                 AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
-                    textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground)
+                    textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
+                    streaming = streamActive)
             }
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)

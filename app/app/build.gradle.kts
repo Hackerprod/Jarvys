@@ -112,6 +112,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("com.mikepenz:multiplatform-markdown-renderer:0.37.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.37.0")
+    implementation("com.caverock:androidsvg-aar:1.4")
+    implementation("io.github.huarangmeng:latex-renderer-android:1.5.6-kt2.1.0")
     implementation("androidx.navigation:navigation-compose:2.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
