@@ -6,9 +6,11 @@ import android.content.Context
 import android.graphics.Picture
 import android.graphics.RectF
 import android.util.Xml
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -22,24 +24,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.caverock.androidsvg.RenderOptions
 import com.caverock.androidsvg.SVG
+import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.hrm.latex.parser.LatexParser
 import com.hrm.latex.renderer.LatexAutoWrap
 import com.hrm.latex.renderer.model.LatexConfig
@@ -49,6 +57,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import java.io.StringReader
+import java.util.Locale
 import kotlin.math.ceil
 
 internal data class MarkdownFenceSource(val language: String, val source: String, val closed: Boolean)
@@ -93,34 +102,28 @@ internal fun RenderAssistantCodeFence(
     streaming: Boolean,
 ) {
     val fence = fenceSource(content, node)
-    if (inlineBlockRenderer(fence.language) == null) {
+    val renderer = inlineBlockRenderer(fence.language)
+    if (renderer == null) {
         MarkdownCodeFence(content, node, codeStyle)
         return
     }
-    when (inlineFenceState(fence.language, fence.closed, streaming)) {
-        InlineFenceState.STREAM_PLACEHOLDER -> InlineBlockPlaceholder(fence.language)
-        InlineFenceState.RENDER -> inlineBlockRenderer(fence.language)?.Render(
-            fence.source,
-            Modifier.fillMaxWidth(),
-            fence.language,
-        ) ?: AssistantCodeFallback(fence.source, fence.language, codeStyle)
-        InlineFenceState.CODE -> AssistantCodeFallback(fence.source, fence.language, codeStyle)
+    val state = inlineFenceState(fence.language, fence.closed, streaming)
+    val sizeMotion = if (LocalReducedMotion.current) Modifier else Modifier.animateContentSize(JarvysMotion.expand())
+    // Keep one fence slot through streaming updates; only its inline content changes on closure.
+    Box(Modifier.fillMaxWidth().then(sizeMotion)) {
+        when (state) {
+            InlineFenceState.STREAM_PLACEHOLDER -> InlineBlockPlaceholder(fence.language)
+            InlineFenceState.RENDER -> renderer.Render(fence.source, Modifier.fillMaxWidth(), fence.language)
+            InlineFenceState.CODE -> AssistantCodeFallback(fence.source, fence.language, codeStyle)
+        }
     }
 }
 
 @Composable
 private fun InlineBlockPlaceholder(language: String) {
     val renderingLabel = stringResource(R.string.inline_block_rendering, language)
-    Surface(
-        modifier = Modifier.fillMaxWidth().height(220.dp),
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(renderingLabel, style = MaterialTheme.typography.bodySmall)
-        }
-    }
+    Text(renderingLabel, Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
@@ -158,39 +161,38 @@ private fun copyBlockSource(context: Context, source: String) {
 internal data class ParsedSvg(val svg: SVG, val width: Float, val height: Float, val description: String)
 internal data class PreparedSvg(val picture: Picture, val width: Float, val height: Float, val description: String)
 
-internal fun ParsedSvg.renderToPicture(): PreparedSvg {
+internal fun ParsedSvg.renderToPicture(currentColor: Color? = null): PreparedSvg {
     val pictureWidth = ceil(width.toDouble()).toInt()
     val pictureHeight = ceil(height.toDouble()).toInt()
     require(pictureWidth > 0 && pictureHeight > 0)
-    return PreparedSvg(svg.renderToPicture(pictureWidth, pictureHeight), width, height, description)
+    val options = RenderOptions.create()
+    if (currentColor != null) options.css("svg { color: ${currentColor.toCssHexColor()}; }")
+    return PreparedSvg(svg.renderToPicture(pictureWidth, pictureHeight, options), width, height, description)
 }
+
+private fun Color.toCssHexColor(): String = "#%06X".format(Locale.ROOT, toArgb() and 0x00FFFFFF)
 
 private object SvgInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
-        val result = remember(source) { runCatching { sanitizeAndParseSvg(source).renderToPicture() } }
+        val currentColor = MaterialTheme.colorScheme.onSurface
+        val result = remember(source, currentColor) {
+            runCatching { sanitizeAndParseSvg(source).renderToPicture(currentColor) }
+        }
         val prepared = result.getOrNull()
         if (prepared == null) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             return
         }
-        val scheme = MaterialTheme.colorScheme
         val svgFigureLabel = stringResource(R.string.inline_block_svg_figure)
         val accessibleLabel = prepared.description.ifBlank { svgFigureLabel }
-        Surface(
-            modifier = modifier.semantics { contentDescription = accessibleLabel },
-            shape = RoundedCornerShape(10.dp),
-            color = scheme.surfaceVariant,
-            contentColor = scheme.onSurfaceVariant,
+        Canvas(
+            modifier.fillMaxWidth().padding(vertical = 8.dp)
+                .aspectRatio(prepared.width / prepared.height)
+                .copySourceAction(source)
+                .semantics { contentDescription = accessibleLabel },
         ) {
-            Column {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    CopyBlockAction(source)
-                }
-                Canvas(Modifier.fillMaxWidth().aspectRatio(prepared.width / prepared.height)) {
-                    drawIntoCanvas { canvas ->
-                        canvas.nativeCanvas.drawPicture(prepared.picture, RectF(0f, 0f, size.width, size.height))
-                    }
-                }
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawPicture(prepared.picture, RectF(0f, 0f, size.width, size.height))
             }
         }
     }
@@ -206,6 +208,7 @@ internal fun sanitizeAndParseSvg(source: String): ParsedSvg {
     var rootSeen = false
     var width = Float.NaN
     var height = Float.NaN
+    var viewBoxSeen = false
     var title = ""
     var description = ""
     var modelLabel = ""
@@ -223,10 +226,14 @@ internal fun sanitizeAndParseSvg(source: String): ParsedSvg {
                 if (parser.depth == 1) {
                     require(name == "svg")
                     rootSeen = true
-                    val viewBox = parser.getAttributeValue(null, "viewBox").orEmpty().trim()
+                    val viewBoxSource = parser.getAttributeValue(null, "viewBox")
+                    require(!viewBoxSource.isNullOrBlank())
+                    val viewBox = viewBoxSource.trim()
                         .split(',', ' ', '\n', '\r', '\t').filter(String::isNotBlank).map(String::toFloat)
-                    width = if (viewBox.size == 4) viewBox[2] else svgLength(parser.getAttributeValue(null, "width").orEmpty())
-                    height = if (viewBox.size == 4) viewBox[3] else svgLength(parser.getAttributeValue(null, "height").orEmpty())
+                    require(viewBox.size == 4)
+                    viewBoxSeen = true
+                    width = viewBox[2]
+                    height = viewBox[3]
                     modelLabel = parser.getAttributeValue(null, "aria-label")?.trim().orEmpty()
                 }
                 for (index in 0 until parser.attributeCount) {
@@ -264,7 +271,7 @@ internal fun sanitizeAndParseSvg(source: String): ParsedSvg {
         }
         event = parser.nextToken()
     }
-    require(rootSeen)
+    require(rootSeen && viewBoxSeen)
     require(width > 0f && height > 0f && width.isFinite() && height.isFinite())
     val aspectRatio = width / height
     require(aspectRatio > 0f && aspectRatio.isFinite())
@@ -278,11 +285,6 @@ private val supportedSvgElements = setOf(
     "polygon", "path", "text", "tspan", "style", "lineargradient", "radialgradient", "stop",
     "clippath", "mask", "pattern", "marker",
 )
-
-private fun svgLength(value: String): Float {
-    val numeric = value.trim().takeWhile { it.isDigit() || it == '.' || it == '-' || it == '+' }
-    return numeric.toFloatOrNull() ?: Float.NaN
-}
 
 /** Reject all non-fragment CSS URLs without pattern-based sanitization. */
 private fun validateCssReferences(css: String) {
@@ -386,32 +388,19 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             return
         }
-        val colors = MaterialTheme.colorScheme
         val monospaceStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-        Surface(
-            modifier = modifier.clip(RoundedCornerShape(10.dp)),
-            shape = RoundedCornerShape(10.dp),
-            color = colors.surfaceVariant,
-            contentColor = colors.onSurfaceVariant,
-        ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    CopyBlockAction(source)
-                }
-                val renderResult = runCatching {
-                    LatexAutoWrap(
-                        latex = source,
-                        modifier = Modifier.fillMaxWidth(),
-                        config = LatexConfig(
-                            fontSize = 20.sp,
-                            theme = LatexTheme.material3(),
-                            accessibilityEnabled = true,
-                        ),
-                    )
-                }
-                if (renderResult.isFailure) AssistantCodeFallback(source, label, monospaceStyle)
-            }
+        val renderResult = runCatching {
+            LatexAutoWrap(
+                latex = source,
+                modifier = modifier.fillMaxWidth().padding(vertical = 8.dp).copySourceAction(source),
+                config = LatexConfig(
+                    fontSize = 20.sp,
+                    theme = LatexTheme.material3(MaterialTheme.colorScheme.copy(surface = Color.Transparent)),
+                    accessibilityEnabled = true,
+                ),
+            )
         }
+        if (renderResult.isFailure) AssistantCodeFallback(source, label, monospaceStyle)
     }
 }
 
@@ -421,15 +410,13 @@ private fun NativeChart(spec: ChartSpec, modifier: Modifier, source: String) {
     val chartLabel = stringResource(R.string.inline_block_chart_label)
     val seriesLabel = stringResource(R.string.inline_block_series_label)
     val palette = listOf(colors.primary, colors.secondary, colors.tertiary, colors.error, colors.onSurfaceVariant)
-    Column(modifier.semantics { contentDescription = spec.accessibilitySummary(chartLabel, seriesLabel) }
-        .clip(RoundedCornerShape(10.dp)).background(colors.surfaceVariant).padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween) {
-            if (spec.title.isNotBlank()) Text(spec.title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+    Column(modifier.fillMaxWidth().padding(vertical = 8.dp).copySourceAction(source)
+        .semantics { contentDescription = spec.accessibilitySummary(chartLabel, seriesLabel) }) {
+        if (spec.title.isNotBlank()) {
+            Text(spec.title, style = MaterialTheme.typography.titleSmall,
                 color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            CopyBlockAction(source)
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(10.dp))
         if (spec.type == "pie") {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Canvas(Modifier.size(148.dp)) {
@@ -526,10 +513,16 @@ private fun NativeChart(spec: ChartSpec, modifier: Modifier, source: String) {
 }
 
 @Composable
-private fun CopyBlockAction(source: String) {
+private fun Modifier.copySourceAction(source: String): Modifier {
     val context = LocalContext.current
-    TextButton(onClick = { copyBlockSource(context, source) }) {
-            Text(stringResource(R.string.chat_footer_copy), style = MaterialTheme.typography.labelSmall)
+    val label = stringResource(R.string.inline_block_copy_source)
+    return pointerInput(source) {
+        detectTapGestures(onLongPress = { copyBlockSource(context, source) })
+    }.semantics {
+        customActions = listOf(CustomAccessibilityAction(label) {
+            copyBlockSource(context, source)
+            true
+        })
     }
 }
 

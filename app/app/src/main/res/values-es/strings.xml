@@ -1,5 +1,6 @@
 <resources>
     <string name="inline_block_rendering">Mostrando %1$s…</string>
+    <string name="inline_block_copy_source">Copiar fuente</string>
     <string name="inline_block_svg_figure">Figura SVG</string>
     <string name="inline_block_chart_label">Gráfico</string>
     <string name="inline_block_series_label">Serie</string>

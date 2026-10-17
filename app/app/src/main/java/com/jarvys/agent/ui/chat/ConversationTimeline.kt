@@ -243,7 +243,7 @@ fun ConversationTimeline(
             onLoadOlder = onLoadOlderHistory,
             messageKey = { it.key },
             messageUpdateKey = { item -> when (item) {
-                is ConversationTimelineItem.Event -> item.event.id
+                is ConversationTimelineItem.Event -> item.key
                 is ConversationTimelineItem.ToolGroup -> item.events.last().id
             } },
             isUserMessage = { it is ConversationTimelineItem.Event && it.event.kind == "user" },
@@ -375,8 +375,17 @@ internal fun assistantReplyIsGenerating(
     event: AgentRunUiEvent,
     isRunning: Boolean,
     latestUserEventId: Long?,
-): Boolean = isRunning && latestUserEventId != null && event.kind == "assistant"
-    && event.stage == null && event.id > latestUserEventId
+): Boolean {
+    if (!isRunning) return false
+    return when (event.kind) {
+        // Transient deltas have negative IDs and a STREAMING stage, so they use their
+        // captured user-row ownership instead of durable event ordering.
+        "assistant_stream" -> event.stage == "STREAMING"
+            && (event.streamUserEventId == null || event.streamUserEventId == latestUserEventId)
+        "assistant" -> latestUserEventId != null && event.stage == null && event.id > latestUserEventId
+        else -> false
+    }
+}
 
 @Composable
 private fun AssistantWorkingMarker(snapshot: AgentRunUiSnapshot) {
@@ -561,11 +570,12 @@ internal fun AssistantReplyView(
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
-    var languageDialog by remember(event.id) { mutableStateOf(false) }
-    var actionSheet by remember(event.id) { mutableStateOf(false) }
-    var confirmRegenerate by remember(event.id) { mutableStateOf(false) }
-    var confirmDelete by remember(event.id) { mutableStateOf(false) }
-    var showSelection by remember(event.id) { mutableStateOf(false) }
+    val timelineKey = event.timelineKey ?: event.id
+    var languageDialog by remember(timelineKey) { mutableStateOf(false) }
+    var actionSheet by remember(timelineKey) { mutableStateOf(false) }
+    var confirmRegenerate by remember(timelineKey) { mutableStateOf(false) }
+    var confirmDelete by remember(timelineKey) { mutableStateOf(false) }
+    var showSelection by remember(timelineKey) { mutableStateOf(false) }
     val speaking = speakingMessageId == event.messageId
     val replySizeMotion = if (reducedMotion) Modifier else Modifier.animateContentSize(JarvysMotion.expand())
     Column(Modifier.fillMaxWidth().then(replySizeMotion)) {

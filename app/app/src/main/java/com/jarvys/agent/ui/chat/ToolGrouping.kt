@@ -4,12 +4,12 @@ import com.jarvys.agent.AgentRunUiEvent
 
 private val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
 
-/** A display-only timeline row. Keys remain anchored to the original event IDs. */
+/** A display-only timeline row. Transient answers retain their row key when promoted to durable events. */
 internal sealed interface ConversationTimelineItem {
     val key: Long
 
     data class Event(val event: AgentRunUiEvent) : ConversationTimelineItem {
-        override val key: Long get() = event.id
+        override val key: Long get() = event.timelineKey ?: event.id
     }
 
     data class ToolGroup(val events: List<AgentRunUiEvent>) : ConversationTimelineItem {

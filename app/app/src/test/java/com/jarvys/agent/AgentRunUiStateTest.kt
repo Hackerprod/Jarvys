@@ -40,12 +40,23 @@ class AgentRunUiStateTest {
         assertEquals(runId, retry.messageId)
         assertEquals("Retry", retry.text)
         assertTrue(retry.id < 0L)
+        assertEquals("the transient row owns a distinct presentation key", retry.id, retry.timelineKey)
 
         AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", "Final answer", "durable-answer", 1L)
 
         val completed = AgentRunUiState.snapshotForSession(session).events
+        val promoted = completed.single { it.kind == "assistant" && it.messageId == "durable-answer" }
         assertFalse(completed.any { it.kind == "assistant_stream" })
-        assertTrue(completed.any { it.kind == "assistant" && it.messageId == "durable-answer" && it.text == "Final answer" })
+        assertEquals("Final answer", promoted.text)
+        assertEquals("COMPLETED assistant rows have no failure stage", null, promoted.stage)
+        assertEquals(1L, promoted.durationMs)
+        assertTrue(promoted.id > 0L)
+        assertEquals("promotion retains the visible row identity", retry.timelineKey, promoted.timelineKey)
+        assertTrue(promoted.timestampMillis >= retry.timestampMillis)
+
+        AgentRunUiState.replacePersistedTimelineWindow(session, listOf(promoted.copy(timelineKey = null)))
+        assertEquals("persisted reconciliation keeps the live row identity", retry.timelineKey,
+            AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant" }.timelineKey)
         AgentRunUiState.resetSession(session)
     }
 

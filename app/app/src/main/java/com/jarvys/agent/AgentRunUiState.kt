@@ -81,6 +81,10 @@ data class AgentRunUiEvent(
     val toolTurnMessageId: String? = null,
     val submissionError: String? = null,
     val scheduledTaskArtifact: ScheduledTaskArtifact? = null,
+    /** In-memory row identity retained while a transient assistant stream is promoted to a durable answer. */
+    val timelineKey: Long? = null,
+    /** User row that owns this transient stream, when the conversation has one. */
+    val streamUserEventId: Long? = null,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
@@ -841,8 +845,16 @@ object AgentRunUiState {
                     }
             if (isTransient) event else null
         } else emptyList()
+        val retainedAssistantTimelineKeys = current.events.asSequence()
+            .filter { it.kind == "assistant" && it.timelineKey != null }
+            .mapNotNull { event -> refreshEventIdentity(event)?.let { it to event.timelineKey } }
+            .toMap()
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
+        }.map { event ->
+            if (event.kind != "assistant") event
+            else retainedAssistantTimelineKeys[refreshEventIdentity(event)]
+                ?.let { timelineKey -> event.copy(timelineKey = timelineKey) } ?: event
         }
         val durableEventIdentities = durableEvents.mapNotNullTo(mutableSetOf<String>()) {
             refreshEventIdentity(it)
@@ -859,7 +871,7 @@ object AgentRunUiState {
             event.id !in transientEventIds
                 && !replacedLiveTool
                 && (identity == null || identity !in durableEventIdentities)
-                && event.id < firstPersistedId && event.kind in durableKinds
+                && (event.timelineKey != null || event.id < firstPersistedId && event.kind in durableKinds)
         }
         val mergedDurableEvents = (olderLoadedEvents + durableEvents).distinctBy { it.id }
         nextEventId = maxOf(nextEventId, ((mergedDurableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
@@ -1008,6 +1020,7 @@ object AgentRunUiState {
             event.kind !in durableKinds
                 || event.kind == "tool" && event.stage in activeToolStages
                 || event.kind == "user_decision" && event.decisionStatus == "PENDING"
+                || event.timelineKey != null
         }
         _state.value = current.copy(events = liveEvents)
         refreshPersistedSession(sessionId, persistedEvents)
@@ -1263,11 +1276,15 @@ object AgentRunUiState {
         inSession(sessionId) { synchronized(lock) {
             if (!ownsAssistantStreamLocked(sessionId, generation)) return@synchronized
             val key = assistantTextStreamKey(sessionId, generation, runId)
-            val event = assistantTextStreams[key]?.copy(text = "", timestampMillis = System.currentTimeMillis())
-                ?: AgentRunUiEvent(id = nextAssistantTextStreamId--, kind = "assistant_stream",
-                    stage = "STREAMING", text = "", messageId = runId)
-            assistantTextStreams[key] = event
             val current = _state.value
+            val userEventId = current.events.lastOrNull { it.kind == "user" }?.id
+            val event = assistantTextStreams[key]?.copy(text = "", timestampMillis = System.currentTimeMillis(),
+                streamUserEventId = userEventId)
+                ?: nextAssistantTextStreamId--.let { streamId ->
+                    AgentRunUiEvent(id = streamId, kind = "assistant_stream", stage = "STREAMING",
+                        text = "", messageId = runId, timelineKey = streamId, streamUserEventId = userEventId)
+                }
+            assistantTextStreams[key] = event
             _state.value = current.copy(events = current.events.filterNot { it.id == event.id })
         } }
 
@@ -1311,13 +1328,17 @@ object AgentRunUiState {
     private fun assistantTextStreamKey(sessionId: String, generation: Long, runId: String) =
         "$sessionId:$generation:$runId"
 
-    private fun clearAssistantTextStreamsLocked(sessionId: String, generation: Long) {
+    private fun takeAssistantTextStreamsLocked(sessionId: String, generation: Long): List<AgentRunUiEvent> {
         val prefix = "$sessionId:$generation:"
         val keys = assistantTextStreams.keys.filter { it.startsWith(prefix) }
-        if (keys.isEmpty()) return
-        val ids = keys.mapNotNull { assistantTextStreams.remove(it)?.id }.toSet()
+        return keys.mapNotNull { assistantTextStreams.remove(it) }
+    }
+
+    private fun clearAssistantTextStreamsLocked(sessionId: String, generation: Long) {
+        val ids = takeAssistantTextStreamsLocked(sessionId, generation).mapTo(mutableSetOf()) { it.id }
+        if (ids.isEmpty()) return
         val current = _state.value
-        if (ids.isNotEmpty() && current.events.any { it.id in ids })
+        if (current.events.any { it.id in ids })
             _state.value = current.copy(events = current.events.filterNot { it.id in ids })
     }
 
@@ -1584,24 +1605,68 @@ object AgentRunUiState {
     @JvmStatic
     fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
         text: String, messageId: String, durationMs: Long) = inSession(sessionId) { synchronized(lock) {
-        clearAssistantTextStreamsLocked(sessionId, generation)
+        val streams = takeAssistantTextStreamsLocked(sessionId, generation)
+        val streamIds = streams.mapTo(mutableSetOf()) { it.id }
+        val current = _state.value
         val ownership = owner()
         if (ownership.stoppingGeneration == generation) {
             ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs)
+            if (current.events.any { it.id in streamIds })
+                _state.value = current.copy(events = current.events.filterNot { it.id in streamIds })
             return@synchronized
         }
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             val animationOutcome = if (outcome == "STOPPED" || outcome == "CANCELLED") "cancelled" else "rejected"
             val animationReason = if (animationOutcome == "cancelled") null
                 else "The agent run ended before the animation finished."
-            resolveHeaderMascotAnimationForExecutionLocked(sessionId, "$sessionId:$generation", animationOutcome, animationReason)
+            val animationRequest = current.headerMascotAnimationRequest?.takeIf {
+                it.sessionId == sessionId && it.executionId == "$sessionId:$generation"
+            }
+            val animationResult = animationRequest?.let { request ->
+                HeaderMascotAnimationResult(request.animationId, animationOutcome, animationReason, request.requestId)
+                    .also { result ->
+                        pendingHeaderMascotAnimations.remove(request.requestId)?.completion?.complete(result)
+                    }
+            }
             ownedRunActive = false
             ownedLiveSnapshot = null
             ownership.stoppingGeneration = null
             ownership.stoppedCompletion = null
-            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null,
-                liveModelWaitId = null, liveUserWaitId = null)
-            if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
+            if (current.sessionId == sessionId) {
+                pendingProgress.clear()
+                val currentEventIds = current.events.mapTo(mutableSetOf()) { it.id }
+                val promotedStream = streams.lastOrNull { stream ->
+                    stream.kind == "assistant_stream" && stream.id in currentEventIds
+                }
+                val assistant = event("assistant", text).copy(
+                    stage = AgentRunUiEvent.assistantStageForOutcome(outcome),
+                    messageId = messageId,
+                    durationMs = durationMs,
+                    timelineKey = promotedStream?.timelineKey ?: promotedStream?.id,
+                    streamUserEventId = null,
+                )
+                val events = append(
+                    interruptActivities(current.events.filterNot { it.id in streamIds }),
+                    assistant,
+                )
+                _state.value = current.copy(
+                    runId = runId,
+                    running = false,
+                    stopping = false,
+                    outcome = outcome,
+                    interactiveOwnerSessionId = null,
+                    liveMascotTool = null,
+                    liveModelWaitId = null,
+                    liveUserWaitId = null,
+                    compacting = false,
+                    compactionStatus = null,
+                    headerMascotAnimationRequest = if (animationRequest == null) current.headerMascotAnimationRequest else null,
+                    headerMascotAnimationResult = animationResult ?: current.headerMascotAnimationResult,
+                    events = events,
+                )
+            }
+        } else if (current.events.any { it.id in streamIds }) {
+            _state.value = current.copy(events = current.events.filterNot { it.id in streamIds })
         }
     } }
 

@@ -22,7 +22,24 @@ public class MainAgentContractTest {
         "not task completion", "permission denial", "not instructions or permission", "physical-device acceptance"))
       assertTrue(fact, prompt.contains(fact));
     assertTrue(prompt.contains("never put private reasoning there"));
-    assertTrue(prompt.contains("type bar|line|pie and series shaped as [{name, values}]"));
+    assertTrue(prompt.contains("Native visual blocks render in chat as part of the answer."));
+    assertTrue(prompt.contains("tables for comparisons"));
+    assertTrue(prompt.contains("prose for arguments and nuance"));
+    assertTrue(prompt.contains("`latex` for mathematical relationships"));
+    assertTrue(prompt.contains("`svg` for spatial relations, processes, architecture, diagrams"));
+    assertTrue(prompt.contains("`chart` for numerical data"));
+    assertTrue(prompt.contains("Omit visuals that add little; place each beside its argument to support, not replace, its explanation."));
+    assertTrue(prompt.contains("mark estimates as approximate"));
+    assertTrue(prompt.contains("Inline blocks are for chat; use module tools for files such as PPTX or PNG."));
+    assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (type: bar, line, or pie)"));
+    assertTrue(prompt.contains("`svg` requires `viewBox`"));
+    assertTrue(prompt.contains("no scripts, external images, background rectangle, or fixed background colors"));
+    assertTrue(prompt.contains("`currentColor`"));
+    assertTrue(prompt.contains("contrasting colors on a transparent background"));
+    assertTrue(prompt.contains("short text within the viewBox"));
+    assertTrue(prompt.contains("`latex` uses a `latex` fence for an equation or mathematical relationship"));
+    assertTrue(prompt.contains("transparent background"));
+    assertTrue(prompt.contains("Use chart values only from the conversation, user, or tool results; mark estimates as approximate."));
   }
 
   @Test public void unsupportedInterimScopeDoesNotPromiseUpdates() {
