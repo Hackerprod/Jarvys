@@ -135,7 +135,24 @@
     throw new Error("The host did not return an artifact reference.");
   }
 
-  function fail(message) { throw new Error(message); }
+  class PresentationInputError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "PresentationInputError";
+    }
+  }
+
+  function fail(message) { throw new PresentationInputError(message); }
+
+  function runElementBuild(context, operation) {
+    try {
+      return operation();
+    } catch (error) {
+      if (error instanceof PresentationInputError) throw error;
+      throw new PresentationInputError(context + ": PptxGenJS rejected the element: " +
+        (error && error.message ? error.message : String(error)));
+    }
+  }
 
   function objectValue(value, context, field) {
     if (!value || typeof value !== "object" || Array.isArray(value)) fail(context + ": " + field + " must be an object.");
@@ -485,11 +502,15 @@
     args.slides.forEach(function (source, slideIndex) {
       var slideNumber = slideIndex + 1;
       objectValue(source, "Slide " + slideNumber, "slide");
+      var legacySlideProperties = ["title", "body", "bullets", "shapes", "images", "chart", "table"];
+      if (legacySlideProperties.some(function (key) { return Object.prototype.hasOwnProperty.call(source, key); })) {
+        fail("Slide " + slideNumber + ": the old slide-level title/body/bullets/shapes/images/chart/table format is no longer supported; use slides[].elements[] and give each element explicit x, y, w, and h (tables may derive h).");
+      }
       allowProperties(source, ["background", "notes", "elements"], "Slide " + slideNumber, "slide");
       if (source.background !== undefined) validateBackground(source.background, "Slide " + slideNumber, "background");
       if (source.notes !== undefined && typeof source.notes !== "string" && !Array.isArray(source.notes)) fail("Slide " + slideNumber + ": notes must be a string or an array of strings.");
       if (Array.isArray(source.notes)) source.notes.forEach(function (note, noteIndex) { requireType(note, "string", "Slide " + slideNumber, "notes[" + noteIndex + "]"); });
-      if (!Array.isArray(source.elements)) fail("Slide " + slideNumber + ": elements must be an array.");
+      if (!Array.isArray(source.elements)) fail("Slide " + slideNumber + ": elements must be an array. Use slides[].elements[]; the old slide-level title/body/bullets/shapes/images/chart/table format is no longer supported. Give each element explicit x, y, w, and h (tables may derive h).");
       source.elements.forEach(function (element, elementIndex) {
         objectValue(element, "Slide " + slideNumber + ", element " + elementIndex, "element");
         var type = element.type;
@@ -850,18 +871,18 @@
       delete textOptions.type;
       delete textOptions.text;
       delete textOptions.runs;
-      slide.addText(text, textOptions);
+      runElementBuild(context, function () { slide.addText(text, textOptions); });
     } else if (element.type === "shape") {
       var shapeOptions = Object.assign({}, element);
       delete shapeOptions.type;
       delete shapeOptions.shape;
-      slide.addShape(element.shape, shapeOptions);
+      runElementBuild(context, function () { slide.addShape(element.shape, shapeOptions); });
     } else if (element.type === "image") {
       var imageOptions = Object.assign({}, element, { data: element.dataUrl });
       delete imageOptions.type;
       delete imageOptions.dataUrl;
       if (typeof element.sizing === "string") imageOptions.sizing = { type: element.sizing, w: element.w, h: element.h };
-      slide.addImage(imageOptions);
+      runElementBuild(context, function () { slide.addImage(imageOptions); });
     } else if (element.type === "chart") {
       var chartOptions = Object.assign({}, element.options || {}, { x: element.x, y: element.y, w: element.w, h: element.h });
       var chartColors = element.datasets.map(function (dataset) { return dataset.color; });
@@ -877,7 +898,7 @@
         if (!inheritedColors) {
           var probe = new global.PptxGenJS();
           var probeSlide = probe.addSlide();
-          probeSlide.addChart(element.chartType, data, { x: 0, y: 0, w: 1, h: 1 });
+          runElementBuild(context, function () { probeSlide.addChart(element.chartType, data, { x: 0, y: 0, w: 1, h: 1 }); });
           inheritedColors = probeSlide._slideObjects[0].options.chartColors.slice();
         }
         var basePalette = inheritedColors.slice();
@@ -889,12 +910,12 @@
         });
         chartOptions.chartColors = inheritedColors;
       }
-      slide.addChart(element.chartType, data, chartOptions);
+      runElementBuild(context, function () { slide.addChart(element.chartType, data, chartOptions); });
     } else if (element.type === "table") {
       var tableOptions = Object.assign({}, element);
       delete tableOptions.type;
       delete tableOptions.rows;
-      slide.addTable(element.rows, tableOptions);
+      runElementBuild(context, function () { slide.addTable(element.rows, tableOptions); });
     }
   }
 
@@ -1031,8 +1052,8 @@
     return report;
   }
 
-  async function createPresentation(argumentsObject, host) {
-    if (!argumentsObject || !host || typeof host.artifactDeliverBytes !== "function") {
+  async function createPresentationInternal(argumentsObject, host) {
+    if (!host || typeof host.artifactDeliverBytes !== "function") {
       throw new Error("The presentation host capability is unavailable.");
     }
     await loadRuntime();
@@ -1062,12 +1083,7 @@
       textMeasurements.push([]);
       source.elements.forEach(function (element, elementIndex) {
         if (element.type === "text") textMeasurements[slideIndex][elementIndex] = measureText(element, measurementContext, themeBodyFontFace);
-        try {
-          addElement(pptx, slide, element, themeColors, elementContext(slideIndex + 1, elementIndex, element.type));
-        } catch (error) {
-          if (error && error.message && error.message.indexOf("Slide ") === 0) throw error;
-          throw new Error(elementContext(slideIndex + 1, elementIndex, element.type) + ": PptxGenJS rejected the element: " + (error && error.message ? error.message : String(error)));
-        }
+        addElement(pptx, slide, element, themeColors, elementContext(slideIndex + 1, elementIndex, element.type));
       });
     });
 
@@ -1099,6 +1115,17 @@
       artifactType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       measurementReport: measurementReport
     };
+  }
+
+  async function createPresentation(argumentsObject, host) {
+    try {
+      return await createPresentationInternal(argumentsObject, host);
+    } catch (error) {
+      if (error instanceof PresentationInputError) {
+        return { success: false, content: error.message };
+      }
+      throw error;
+    }
   }
 
   global.presentationPropertyLists = Object.freeze({

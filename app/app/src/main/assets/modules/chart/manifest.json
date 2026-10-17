@@ -13,12 +13,12 @@
   "tools": [
     {
       "name": "create_chart",
-      "description": "Crea una gráfica local a partir de etiquetas y series de datos, y la entrega como artefacto con una miniatura PNG.",
+      "description": "Crea una gráfica local con Chart.js y entrega un artefacto con miniatura PNG. Los errores de entrada corregibles indican qué cambiar.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "title": { "type": "string", "description": "Título que se muestra en la gráfica y en su tarjeta." },
-          "chartType": { "type": "string", "description": "Tipo admitido por Chart.js, por ejemplo bar, line, pie, doughnut, radar o polarArea." },
+          "chartType": { "type": "string", "description": "Tipo admitido por Chart.js: bar, bubble, doughnut, line, pie, polarArea, radar o scatter." },
           "labels": { "type": "array", "items": { "type": "string" }, "description": "Etiquetas que corresponden a los valores de las series." },
           "datasets": {
             "type": "array",

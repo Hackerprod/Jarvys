@@ -5,6 +5,14 @@
   var THUMBNAIL_WIDTH = 1280;
   var THUMBNAIL_HEIGHT = 720;
   var MAX_THUMBNAIL_BASE64_CHARS = Math.ceil(THUMBNAIL_WIDTH * THUMBNAIL_HEIGHT * 4 / 3) * 4;
+  var CHART_TYPES = ["bar", "bubble", "doughnut", "line", "pie", "polarArea", "radar", "scatter"];
+
+  class ChartInputError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "ChartInputError";
+    }
+  }
 
   function loadAssetScript(path) {
     return new Promise(function (resolve, reject) {
@@ -29,9 +37,15 @@
     throw new Error("The host did not return an artifact reference.");
   }
 
-  async function createChart(argumentsObject, host) {
-    if (!argumentsObject || !host || typeof host.artifactDeliverBytes !== "function") {
+  async function createChartInternal(argumentsObject, host) {
+    if (!host || typeof host.artifactDeliverBytes !== "function") {
       throw new Error("The chart host capability is unavailable.");
+    }
+    if (!argumentsObject || typeof argumentsObject !== "object" || Array.isArray(argumentsObject)) {
+      throw new ChartInputError("Chart: arguments must be an object containing title, chartType, labels, and datasets.");
+    }
+    if (typeof argumentsObject.chartType !== "string" || CHART_TYPES.indexOf(argumentsObject.chartType) === -1) {
+      throw new ChartInputError("Chart: chartType is not supported by Chart.js; choose bar, bubble, doughnut, line, pie, polarArea, radar, or scatter.");
     }
     if (!global.Chart) await loadAssetScript("vendor/chart.umd.min.js");
 
@@ -64,7 +78,7 @@
     var thumbnailDataUrl = canvas.toDataURL("image/png");
     var thumbnailBase64 = thumbnailDataUrl.substring(thumbnailDataUrl.indexOf(",") + 1);
     if (thumbnailBase64.length > MAX_THUMBNAIL_BASE64_CHARS) {
-      throw new Error("The chart thumbnail exceeds the displayed-card budget.");
+      throw new ChartInputError("The chart thumbnail exceeds the displayed-card budget. Reduce the chart's data or visual complexity and retry.");
     }
     var artifact = {
       schemaVersion: 1,
@@ -90,6 +104,15 @@
       artifactId: delivered.id,
       artifactType: "application/vnd.jarvys.chart+json"
     };
+  }
+
+  async function createChart(argumentsObject, host) {
+    try {
+      return await createChartInternal(argumentsObject, host);
+    } catch (error) {
+      if (error instanceof ChartInputError) return { success: false, content: error.message };
+      throw error;
+    }
   }
 
   global.createChart = createChart;
