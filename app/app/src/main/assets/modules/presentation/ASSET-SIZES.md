@@ -4,20 +4,19 @@ Raw UTF-8/file bytes packaged under this module asset directory. APK ZIP compres
 
 | File | Bytes |
 |---|---:|
-| README.md | 7246 |
-| logic/tools.js | 20189 |
+| logic/tools.js | 21691 |
 | manifest.json | 7063 |
+| README.md | 7223 |
 | skills/presentation/SKILL.md | 2593 |
 | vendor/FAST-XML-PARSER-LICENSE.md | 1073 |
+| vendor/jszip.min.js | 97630 |
 | vendor/JSZIP-LICENSE.md | 33753 |
 | vendor/OPENTYPE-LICENSE.md | 1085 |
-| vendor/PPTX-GLIMPSE-LICENSE.md | 1069 |
-| vendor/PPTXGENJS-LICENSE.md | 1081 |
-| vendor/THIRD-PARTY-NOTICES.md | 22526 |
-| vendor/jszip.min.js | 97630 |
-| vendor/pptx-glimpse.bundle.js | 1197989 |
 | vendor/pptxgen.min.js | 271010 |
-| viewer/deck-renderer.js | 18345 |
-| viewer/presentation.html | 2359 |
-| viewer/presentation.js | 6501 |
-| **Total module assets (excluding this inventory)** | **1691512** |
+| vendor/PPTXGENJS-LICENSE.md | 1081 |
+| vendor/pptx-glimpse.bundle.js | 1197989 |
+| vendor/PPTX-GLIMPSE-LICENSE.md | 1069 |
+| vendor/THIRD-PARTY-NOTICES.md | 22526 |
+| viewer/presentation.html | 4539 |
+| viewer/presentation.js | 6697 |
+| **Total module assets (excluding this inventory)** | **1677022** |

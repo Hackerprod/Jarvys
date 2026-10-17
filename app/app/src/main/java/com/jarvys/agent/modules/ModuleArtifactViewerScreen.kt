@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -46,6 +47,9 @@ import java.io.InputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.os.Build
+import android.os.SystemClock
+import androidx.annotation.RequiresApi
 
 private const val MAX_VIEWER_HTML_BYTES = 2 * 1024 * 1024
 
@@ -86,13 +90,9 @@ fun ModuleArtifactViewerScreen(
         }
         is ViewerArtifactState.Ready -> {
             Column(modifier.fillMaxSize()) {
-                Text(
-                    current.artifact.title?.takeIf(String::isNotBlank) ?: current.artifact.name,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                )
                 val token = remember(conversationId, artifactId) { UUID.randomUUID().toString().replace("-", "") }
                 val cancellation = remember(conversationId, artifactId) { CancellationToken.cancellable() }
+                val rendererGone = remember(conversationId, artifactId) { mutableStateOf(false) }
                 val assetLoader = remember(context) {
                     WebViewAssetLoader.Builder()
                         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
@@ -122,6 +122,7 @@ fun ModuleArtifactViewerScreen(
                         token = token,
                         assetLoader = assetLoader,
                         bridge = bridge,
+                        onRendererGone = { rendererGone.value = true },
                     )
                 }
                 DisposableEffect(webView, cancellation) {
@@ -135,11 +136,22 @@ fun ModuleArtifactViewerScreen(
                         webView.destroy()
                     }
                 }
-                AndroidView(
-                    factory = { webView },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    update = {},
-                )
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    AndroidView(
+                        factory = { webView },
+                        modifier = Modifier.fillMaxSize(),
+                        update = {},
+                    )
+                    if (rendererGone.value) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                stringResource(R.string.module_artifact_viewer_renderer_failed),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(24.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -177,6 +189,7 @@ private fun createViewerWebView(
     token: String,
     assetLoader: WebViewAssetLoader,
     bridge: ModuleCapabilityBridge,
+    onRendererGone: () -> Unit,
 ): WebView {
     val encodedDirectory = module.bundleAssetDirectory.split('/').joinToString("/") { Uri.encode(it) }
     val encodedViewer = viewerPath.split('/').joinToString("/") { Uri.encode(it) }
@@ -188,6 +201,7 @@ private fun createViewerWebView(
         },
         logMessage = { Log.w("ArtifactViewer", it) },
     )
+    val startedAt = SystemClock.elapsedRealtime()
     val view = WebView(context)
     ModuleWebViewSecurity.configure(view)
     view.addJavascriptInterface(bridge, "Jarvys")
@@ -221,13 +235,20 @@ private fun createViewerWebView(
             if (relative == viewerPath) {
                 val response = viewerHtmlResponse(context, module, artifact, token, viewerPath)
                 if (response.statusCode != 200) diagnostics.recordAssetHandlerError(request.url)
+                Log.i("ArtifactViewer", "local viewer document mime=${response.mimeType} status=${response.statusCode}")
                 return response
             }
             return try {
-                assetLoader.shouldInterceptRequest(request.url) ?: run {
+                val response = assetLoader.shouldInterceptRequest(request.url) ?: run {
                     diagnostics.recordAssetHandlerMiss(request.url)
                     ModuleWebViewSecurity.blockedResponse()
                 }
+                Log.i(
+                    "ArtifactViewer",
+                    "local asset mime=${response.mimeType} charset=${response.encoding ?: "none"} " +
+                        "noSniff=${response.responseHeaders?.get("X-Content-Type-Options") ?: "none"}",
+                )
+                response
             } catch (_: Exception) {
                 diagnostics.recordAssetHandlerError(request.url)
                 ModuleWebViewSecurity.blockedResponse()
@@ -254,6 +275,7 @@ private fun createViewerWebView(
             error: android.webkit.WebResourceError?,
         ) {
             diagnostics.recordResourceError(request?.url, error?.errorCode ?: 0, request?.isForMainFrame)
+            if (request?.isForMainFrame == true) onRendererGone()
         }
 
         override fun onReceivedHttpError(
@@ -262,6 +284,25 @@ private fun createViewerWebView(
             errorResponse: WebResourceResponse?,
         ) {
             diagnostics.recordHttpError(request?.url, errorResponse?.statusCode ?: 0, request?.isForMainFrame)
+            if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) onRendererGone()
+        }
+
+        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+            Log.i("ArtifactViewer", "page started local=${url?.substringBefore('?') == viewerUrl}")
+        }
+
+        override fun onPageFinished(view: WebView?, url: String?) {
+            Log.i(
+                "ArtifactViewer",
+                "page finished local=${url?.substringBefore('?') == viewerUrl} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+            )
+        }
+
+        @RequiresApi(Build.VERSION_CODES.O)
+        override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+            diagnostics.recordRenderProcessGone(detail?.didCrash() == true)
+            onRendererGone()
+            return true
         }
     }
     view.loadUrl(viewerUrl)

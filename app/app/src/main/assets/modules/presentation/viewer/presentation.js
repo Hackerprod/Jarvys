@@ -39,6 +39,12 @@
   var currentSlide = 0;
   var renderRequest = 0;
 
+  function markViewerReady() {
+    if (typeof window.__presentationViewerReady === "function") {
+      window.__presentationViewerReady();
+    }
+  }
+
   document.documentElement.lang = isSpanish ? "es" : "en";
   document.title = labels.title;
   navigation.setAttribute("aria-label", labels.navigation);
@@ -123,6 +129,7 @@
     counter.textContent = "";
     status.textContent = labels.loadFailure;
     status.hidden = false;
+    markViewerReady();
   }
 
   async function loadPresentation() {
@@ -147,6 +154,7 @@
     currentSlide = 0;
     updateControls();
     await showSlide(0);
+    markViewerReady();
   }
 
   previous.addEventListener("click", function () {

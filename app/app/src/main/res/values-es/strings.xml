@@ -741,6 +741,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="chat_streaming_status">Recibiendo respuesta</string>
     <string name="chat_open_preview">Abrir vista previa</string>
     <string name="module_artifact_viewer_title">Vista previa del artefacto</string>
+    <string name="module_artifact_viewer_renderer_failed">La vista previa de la presentación se detuvo. Vuelve a abrir el artefacto para intentarlo de nuevo.</string>
     <string name="chat_current_screen_capture">Pantalla actual · se captura al iniciar la ejecución</string>
     <string name="chat_message_placeholder">Escribe a Jarvys…</string>
     <string name="chat_previous_run">Ejecución anterior</string>

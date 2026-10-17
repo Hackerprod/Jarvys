@@ -1,6 +1,6 @@
 # Módulo de presentaciones
 
-`create_presentation` produce un `.pptx` nativo con PptxGenJS. Además de texto, formas e imágenes incorporadas, admite gráficos de barras y tablas editables de PowerPoint. El handler entrega los bytes del archivo mediante `artifact.deliver` y conserva la miniatura PNG de la primera diapositiva que aparece en la tarjeta del chat.
+`create_presentation` produce un `.pptx` nativo con PptxGenJS. Además de texto, formas e imágenes incorporadas, admite gráficos de barras y tablas editables de PowerPoint. El handler entrega los bytes del archivo mediante `artifact.deliver` y conserva la miniatura PNG de la primera diapositiva que aparece en la tarjeta del chat. La miniatura usa PptxGlimpse, el mismo renderer del visor.
 
 ## Defaults de diseño
 
@@ -17,19 +17,17 @@ La herramienta espera que el agente formule títulos que expresen la conclusión
 
 El visor visible usa PptxGlimpse 5.3.1. Lee los bytes del `.pptx` real entregado por el puente con lista blanca existente, convierte las diapositivas a SVG localmente y permite recorrerlas con controles propios. El bundle se sirve desde `vendor/pptx-glimpse.bundle.js`; no usa CDN, workers, WASM ni `eval` en el camino `convertPptxToSvg`. La CSP del visor no se modificó.
 
-El bundle incluye `new XMLHttpRequest()` dentro de la función de carga de fuentes de opentype.js, pero esa función no tiene llamadores en el camino `convertPptxToSvg` ejercitado y permanece inalcanzable en la ruta usada. La página carga el artefacto con `fetch` desde la URL local incluida en la lista blanca; `blockNetworkLoads` y `connect-src 'self'` impiden las conexiones externas.
+El bundle incluye `new XMLHttpRequest()` dentro de la función de carga de fuentes de opentype.js, pero esa función no tiene llamadores en el camino `convertPptxToSvg` ejercitado y permanece inalcanzable en la ruta usada. La página carga el artefacto con `fetch` desde la URL local incluida en la lista blanca; `blockNetworkLoads` y `connect-src 'self'` impiden las conexiones externas. El handler vuelve a usar `convertPptxToSvg` sobre los bytes recién generados y pide solo la diapositiva 1 (`slides: [1]`), decodifica su SVG en canvas y entrega el PNG con el contrato actual.
 
 La elección mejora el uso real frente al render actual: en la evaluación medida, PptxGlimpse dibujó gráficos, tablas y temas en las siete ejecuciones de diapositivas, mientras el visor anterior dejaba gráficos y tablas vacíos. Se conservan dos límites observados: no dibuja las etiquetas de valor explícitas de los gráficos y omite la imagen SVG de la muestra. La tabla completa de resultados y capturas está en [`app/docs/pptx-viewer-eval/README.md`](../../../../../../docs/pptx-viewer-eval/README.md).
-
-`viewer/deck-renderer.js` queda para producir la miniatura de la tarjeta a partir de los bytes del PPTX. El usuario ve un solo visor: la vista de pantalla completa la sirve PptxGlimpse; conservar el renderer pequeño para la miniatura evita añadir a ese flujo la conversión más pesada que el chat no necesita.
 
 ## Dependencias incluidas
 
 | Componente | Versión | Uso | Licencia |
 |---|---:|---|---|
 | PptxGenJS | 4.0.1 | Generación del archivo PowerPoint | MIT, `vendor/PPTXGENJS-LICENSE.md` |
-| JSZip | 3.10.1 | Lectura local para la miniatura | MIT, `vendor/JSZIP-LICENSE.md` |
-| pptx-glimpse | 5.3.1 | Render del visor final a SVG | MIT, `vendor/PPTX-GLIMPSE-LICENSE.md` |
+| JSZip | 3.10.1 | Archivo ZIP usado para generar el PowerPoint con PptxGenJS | MIT, `vendor/JSZIP-LICENSE.md` |
+| pptx-glimpse | 5.3.1 | Render del visor y de la miniatura a SVG | MIT, `vendor/PPTX-GLIMPSE-LICENSE.md` |
 | `@pptx-glimpse/document` | 0.16.0 | Código de documento del renderer | MIT |
 | `@pptx-glimpse/editor` | 0.6.0 | Código de edición del renderer | MIT |
 | `fflate` | 0.8.3 | Compresión y descompresión ZIP incluida en chunks | MIT |

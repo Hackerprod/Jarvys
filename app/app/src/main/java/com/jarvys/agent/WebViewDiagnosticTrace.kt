@@ -32,6 +32,8 @@ internal class WebViewDiagnosticTrace(
     fun recordHttpError(uri: Uri?, statusCode: Int, mainFrame: Boolean? = null) =
         record(Event.HttpError(resource(uri), statusCode, mainFrame, isDeclaredLocalResource(uri)))
 
+    fun recordRenderProcessGone(crashed: Boolean) = record(Event.RenderProcessGone(crashed))
+
     /** Stores only a message category and a vetted local source label; raw Chromium text is discarded. */
     fun recordConsoleMessage(sourceId: String, lineNumber: Int, level: String, message: String) {
         val source = runCatching { Uri.parse(sourceId) }.getOrNull()
@@ -181,6 +183,11 @@ internal class WebViewDiagnosticTrace(
         data class ResourceError(val resource: String, val errorCode: Int, val mainFrame: Boolean?, val local: Boolean) : Event {
             override fun priority() = if (local) 90 else 45
             override fun format() = "WebView error $errorCode while loading $resource${frameSuffix(mainFrame)}"
+        }
+
+        data class RenderProcessGone(val crashed: Boolean) : Event {
+            override fun priority() = 100
+            override fun format() = if (crashed) "WebView renderer process crashed" else "WebView renderer process was killed"
         }
 
         data class Console(val resource: String, val level: String, val category: String, val line: Int, val local: Boolean) : Event {
