@@ -1,6 +1,6 @@
 # Módulo de presentaciones
 
-`create_presentation` produce un `.pptx` nativo con PptxGenJS. Además de texto, formas e imágenes incorporadas, admite gráficos de barras y tablas editables de PowerPoint. El handler entrega los bytes del archivo mediante la capacidad `artifact.deliver` y conserva la miniatura PNG que aparece en la tarjeta de chat.
+`create_presentation` produce un `.pptx` nativo con PptxGenJS. Además de texto, formas e imágenes incorporadas, admite gráficos de barras y tablas editables de PowerPoint. El handler entrega los bytes del archivo mediante `artifact.deliver` y conserva la miniatura PNG de la primera diapositiva que aparece en la tarjeta del chat.
 
 ## Defaults de diseño
 
@@ -13,22 +13,39 @@
 
 La herramienta espera que el agente formule títulos que expresen la conclusión y mantenga una idea central por diapositiva. El manifiesto y `skills/presentation/SKILL.md` describen esas pautas junto con los tipos de contenido admitidos.
 
-## Visor y evaluación
+## Visor
 
-El visor permanece sin cambios tras comparar cuatro candidatos contra el mismo conjunto de archivos. Ninguno mostró gráficos, tablas, temas y contenido con fidelidad suficiente para ser adoptado dentro del WebView aislado. La tabla con licencias, versiones, tamaño, dependencias, errores, tiempos y capturas está en [`app/docs/pptx-viewer-eval/README.md`](../../../../../../docs/pptx-viewer-eval/README.md).
+El visor visible usa PptxGlimpse 5.3.1. Lee los bytes del `.pptx` real entregado por el puente con lista blanca existente, convierte las diapositivas a SVG localmente y permite recorrerlas con controles propios. El bundle se sirve desde `vendor/pptx-glimpse.bundle.js`; no usa CDN ni requiere red, workers, WASM o `eval` en el camino `convertPptxToSvg`. La CSP del visor no se modificó.
 
-El visor actual lee el `.pptx` entregado y representa localmente un subconjunto de OOXML: texto simple, formas rectangulares/elípticas/líneas, rellenos y trazos sólidos e imágenes incorporadas. Gráficos, tablas y otros `graphicFrame` muestran un aviso y quedan vacíos. En la comparación también se observan cajas de texto con demasiado espacio y el render de la imagen de prueba falla en el harness headless. Las capturas explican por qué el resultado todavía no equivale a un visor completo de PowerPoint.
+La elección mejora el uso real frente al render actual: en la evaluación medida, PptxGlimpse dibujó gráficos, tablas y temas en las siete ejecuciones de diapositivas, mientras el visor anterior dejaba gráficos y tablas vacíos. Se conservan dos límites observados: no dibuja las etiquetas de valor explícitas de los gráficos y omite la imagen SVG de la muestra. La tabla completa de resultados y capturas está en [`app/docs/pptx-viewer-eval/README.md`](../../../../../../docs/pptx-viewer-eval/README.md).
 
-La miniatura se sigue generando desde los bytes del `.pptx` entregado con `viewer/deck-renderer.js`; el contrato Node verifica que recibe esos mismos bytes y produce un PNG. Como el renderer comparte el subconjunto descrito, una diapositiva inicial cuyo elemento principal sea un gráfico o una tabla también tendrá esa limitación en su miniatura.
+`viewer/deck-renderer.js` queda para producir la miniatura de la tarjeta a partir de los bytes del PPTX. El usuario ve un solo visor: la vista de pantalla completa la sirve PptxGlimpse; conservar el renderer pequeño para la miniatura evita añadir a ese flujo la conversión más pesada que el chat no necesita.
 
 ## Dependencias incluidas
 
 | Componente | Versión | Uso | Licencia |
 |---|---:|---|---|
 | PptxGenJS | 4.0.1 | Generación del archivo PowerPoint | MIT, `vendor/PPTXGENJS-LICENSE.md` |
-| JSZip | 3.10.1 | Lectura OOXML local para miniatura y visor | MIT, `vendor/JSZIP-LICENSE.md` |
+| JSZip | 3.10.1 | Lectura local para la miniatura | MIT, `vendor/JSZIP-LICENSE.md` |
+| pptx-glimpse | 5.3.1 | Render del visor final a SVG | MIT, `vendor/PPTX-GLIMPSE-LICENSE.md` |
+| `@pptx-glimpse/document` | 0.16.0 | Dependencia empaquetada del renderer | MIT |
+| `@pptx-glimpse/editor` | 0.6.0 | Dependencia empaquetada del renderer | MIT |
+| `fast-xml-parser` | 5.11.2 | Lectura XML del PPTX | MIT, `vendor/FAST-XML-PARSER-LICENSE.md` |
+| `opentype.js` | 1.3.4 | Métricas y render de fuentes | MIT, `vendor/OPENTYPE-LICENSE.md` |
+| `@resvg/resvg-wasm` | 2.6.2 | Dependencia declarada por el paquete | MPL-2.0; el build del navegador usado aquí la excluye por tree-shaking y no carga WASM |
 
-Los candidatos de renderizado probados no se empaquetan. No se añadió dependencia de runtime, CDN, permiso de red, worker ni esquema Room. Los scripts y capturas de evaluación quedan en `app/docs/pptx-viewer-eval/`.
+Las versiones y licencias de las dependencias se comprobaron en los `package.json` del árbol npm resuelto para el build. PptxGlimpse se compiló con Vite 8.3.4; el paquete de runtime no se descarga en la aplicación. El bundle mide **1,199,469 B (288,157 B gzip)**.
+
+Para regenerar el bundle con `app/docs/pptx-viewer-eval/bundle-glimpse.cjs`, instala `pptx-glimpse@5.3.1` y Vite 8.3.4 en el directorio de build temporal y ejecuta:
+
+```powershell
+$buildRoot = "$env:LOCALAPPDATA\Temp\jarvys-pptx-glimpse-browser-build"
+$packageRoot = "$env:LOCALAPPDATA\Temp\jarvys-pptx-viewer-eval\pptx-glimpse-5.3.1\package"
+node app/docs/pptx-viewer-eval/bundle-glimpse.cjs $buildRoot $packageRoot
+Copy-Item "$packageRoot\dist\browser.js" "app/app/src/main/assets/modules/presentation/vendor/pptx-glimpse.bundle.js" -Force
+```
+
+Los scripts y capturas de evaluación quedan en `app/docs/pptx-viewer-eval/`.
 
 ## Reglas de diseño y licencia de la fuente
 

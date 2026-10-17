@@ -333,41 +333,148 @@ async function main() {
     assert.ok(rendererInputs.some((input) => input.equals(delivery.bytes)), "the generated PPTX bytes must reach the thumbnail renderer");
 
     const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
-    assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
+    assert.match(viewerHtml, /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto\s+auto/);
     assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
     assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
+    assert.match(viewerHtml, /<script src="presentation\.js"><\/script>/);
+    assert.doesNotMatch(viewerHtml, /deck-renderer\.js/, "the user-visible viewer must have one renderer");
 
-    const viewerNodes = {
-      stage: { clientWidth: 320, clientHeight: 210 },
-      canvas: Object.assign(makeCanvas(), { style: {} }),
-      counter: { textContent: "Cargando" },
-      previous: { disabled: true, addEventListener() {} },
-      next: { disabled: true, addEventListener() {} },
-      warning: { hidden: true, textContent: "" },
-      status: { hidden: true, textContent: "" },
-    };
-    viewerNodes.stage.clientWidth = 320;
-    viewerNodes.stage.clientHeight = 210;
-    viewerNodes.stage.getBoundingClientRect = () => ({ width: 320, height: 210 });
-    viewerNodes.canvas.setAttribute = () => {};
-    document.getElementById = (id) => id === "slide" ? viewerNodes.canvas : viewerNodes[id];
-    globalThis.getComputedStyle = () => ({ paddingLeft: "12px", paddingRight: "12px", paddingTop: "12px", paddingBottom: "12px" });
-    globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
-    let requestedArtifactUrl = "";
-    globalThis.fetch = async (url) => {
-      requestedArtifactUrl = url;
-      return { ok: true, arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength) };
-    };
-    globalThis.addEventListener = () => {};
     const viewerScript = path.join(moduleDirectory, "viewer/presentation.js");
-    vm.runInThisContext(fs.readFileSync(viewerScript, "utf8"), { filename: viewerScript });
-    await globalThis.PptxPresentationViewerReady;
+    const viewerSource = fs.readFileSync(viewerScript, "utf8");
+    let failSlideImageDecode = false;
+    let requestedArtifactUrl = "";
+    let convertedBytes = null;
+    let convertedOptions = null;
+    let renderedSlideIndices = [];
+
+    function setupViewerNodes() {
+      const viewerNodes = {
+        stage: {
+          clientWidth: 320,
+          clientHeight: 210,
+          children: [],
+          replaceChildren(...children) { this.children = children; },
+        },
+        "screen-title": { textContent: "" },
+        navigation: { setAttribute(name, value) { this[name] = value; } },
+        counter: { textContent: "" },
+        previous: { disabled: true, textContent: "", addEventListener(name, handler) { this[name] = handler; }, click() { if (!this.disabled) this.clickHandler && this.clickHandler(); } },
+        next: { disabled: true, textContent: "", addEventListener(name, handler) { this.clickHandler = handler; }, click() { if (!this.disabled) this.clickHandler(); } },
+        status: { hidden: true, textContent: "" },
+      };
+      viewerNodes.previous.addEventListener = function (name, handler) { this.clickHandler = handler; };
+      viewerNodes.stage.getBoundingClientRect = () => ({ width: 320, height: 210 });
+      document.documentElement = { lang: "es" };
+      document.title = "";
+      document.getElementById = (id) => viewerNodes[id];
+      document.createElement = (tag) => {
+        assert.equal(tag, "img");
+        const image = {
+          id: "",
+          className: "",
+          alt: "",
+          style: {},
+          naturalWidth: 1280,
+          naturalHeight: 720,
+          complete: false,
+          onload: null,
+          onerror: null,
+          _src: "",
+          set src(value) {
+            this._src = value;
+            const slideMatch = decodeURIComponent(value.slice(value.indexOf(",") + 1)).match(/data-slide="(\d+)"/);
+            if (slideMatch) renderedSlideIndices.push(Number(slideMatch[1]));
+            queueMicrotask(() => {
+              this.complete = !failSlideImageDecode;
+              if (failSlideImageDecode) this.onerror && this.onerror();
+              else this.onload && this.onload();
+            });
+          },
+          get src() { return this._src; },
+          getAttribute(name) { return name === "src" ? this.src : null; },
+        };
+        return image;
+      };
+      globalThis.getComputedStyle = () => ({
+        paddingLeft: "12px", paddingRight: "12px", paddingTop: "12px", paddingBottom: "12px",
+      });
+      return viewerNodes;
+    }
+
+    async function runViewer(converter, language = "es-ES") {
+      const viewerNodes = setupViewerNodes();
+      Object.defineProperty(globalThis, "navigator", {
+        value: { userAgent: "node-module-contract", language }, configurable: true,
+      });
+      globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
+      globalThis.fetch = async (url) => {
+        requestedArtifactUrl = url;
+        return {
+          ok: true,
+          arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength),
+        };
+      };
+      globalThis.addEventListener = () => {};
+      const moduleContext = vm.createContext({});
+      const glimpseModule = new vm.SyntheticModule(["convertPptxToSvg"], function () {
+        this.setExport("convertPptxToSvg", converter);
+      }, { context: moduleContext });
+      await glimpseModule.link(() => {});
+      await glimpseModule.evaluate();
+      const script = new vm.Script(viewerSource, {
+        filename: viewerScript,
+        importModuleDynamically: () => glimpseModule,
+      });
+      script.runInThisContext();
+      await globalThis.PptxPresentationViewerReady;
+      return viewerNodes;
+    }
+
+    const successfulViewerNodes = await runViewer(async (bytes, options) => {
+      convertedBytes = Buffer.from(bytes);
+      convertedOptions = options;
+      return {
+        slides: [0, 1, 2, 3].map((index) => ({
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" data-slide="' + index + '"></svg>',
+        })),
+      };
+    });
     assert.equal(requestedArtifactUrl, globalThis.JarvysArtifact.url);
-    assert.equal(viewerNodes.counter.textContent, "Diapositiva 1 de 4", "viewer error: " + viewerNodes.status.textContent);
-    assert.equal(viewerNodes.status.hidden, true);
-    assert.ok(rendererInputs.some((input) => input.equals(delivery.bytes)), "the viewer must pass the delivered file bytes to the renderer");
-    assert.equal(viewerNodes.canvas.style.width, "296px");
-    assert.ok(parseFloat(viewerNodes.canvas.style.height) <= 186);
+    assert.deepEqual(convertedBytes, delivery.bytes, "the viewer must pass the delivered PPTX bytes to PptxGlimpse");
+    assert.deepEqual(convertedOptions, { textOutput: "text", width: 1280 });
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4", "viewer error: " + successfulViewerNodes.status.textContent);
+    assert.equal(successfulViewerNodes.status.hidden, true);
+    assert.equal(document.title, "Presentación");
+    assert.equal(successfulViewerNodes.previous.disabled, true);
+    assert.equal(successfulViewerNodes.next.disabled, false);
+    assert.equal(successfulViewerNodes.stage.children.length, 1);
+    assert.equal(successfulViewerNodes.stage.children[0].style.width, "296px");
+    assert.equal(successfulViewerNodes.stage.children[0].style.height, "166.5px");
+    successfulViewerNodes.next.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 2 de 4");
+    assert.equal(successfulViewerNodes.previous.disabled, false);
+    successfulViewerNodes.previous.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(successfulViewerNodes.counter.textContent, "Diapositiva 1 de 4");
+    assert.deepEqual(renderedSlideIndices, [0, 1, 0], "next and previous controls must render the selected slide");
+
+    failSlideImageDecode = false;
+    const englishViewerNodes = await runViewer(async () => ({
+      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }), "en-US");
+    assert.equal(document.title, "Presentation");
+    assert.equal(englishViewerNodes.counter.textContent, "Slide 1 of 1");
+    assert.equal(englishViewerNodes.previous.textContent, "Previous");
+    assert.equal(englishViewerNodes.next.textContent, "Next");
+
+    failSlideImageDecode = true;
+    const failedViewerNodes = await runViewer(async () => ({
+      slides: [{ svg: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }],
+    }));
+    assert.equal(failedViewerNodes.status.hidden, false, "a failed slide render must show an on-screen alert");
+    assert.match(failedViewerNodes.status.textContent, /No se pudo mostrar la diapositiva/);
+    assert.equal(failedViewerNodes.stage.children.length, 0, "a failed render must not leave a silent empty slide");
   }
 
   process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");

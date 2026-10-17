@@ -3,40 +3,41 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Presentación</title>
   <style>
     :root { color-scheme: light dark; font-family: sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; height: 100dvh; min-width: 0; min-height: 0; margin: 0; overflow: hidden; }
-    body { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; background: #111827; color: #f9fafb; }
-    .stage { display: grid; place-items: center; min-width: 0; min-height: 0; padding: 12px; }
-    canvas { display: block; max-width: 100%; max-height: 100%; background: #fff; box-shadow: 0 18px 55px #0008; }
-    #warning, #status { min-width: 0; margin: 0; padding: 8px 12px; text-align: center; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
-    #warning { background: #344054; color: #fff; }
-    #status { background: #7f1d1d; color: #fff; }
+    body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: #111827; color: #f9fafb; }
+    header { min-width: 0; padding: 12px 16px 8px; }
+    h1 { margin: 0; font-size: 16px; line-height: 1.35; font-weight: 600; }
+    .stage { display: grid; place-items: center; min-width: 0; min-height: 0; padding: 12px; background: #182230; }
+    .slide-image { display: block; max-width: 100%; max-height: 100%; background: #fff; box-shadow: 0 18px 55px #0008; }
+    #status { min-width: 0; margin: 0; padding: 10px 12px; text-align: center; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; background: #7f1d1d; color: #fff; }
     nav { display: flex; justify-content: center; align-items: center; gap: 8px; min-width: 0; padding: 8px 12px max(8px, env(safe-area-inset-bottom)); }
-    button { flex: 0 0 auto; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid #667085; border-radius: 10px; background: #24324a; color: #fff; font: inherit; font-size: 14px; white-space: nowrap; }
+    button { flex: 0 0 auto; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid #98a2b3; border-radius: 10px; background: #24324a; color: #fff; font: inherit; font-size: 14px; white-space: nowrap; }
     button:disabled { opacity: .55; }
     #counter { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     @media (prefers-color-scheme: light) {
-      body { background: #f2f4f7; color: #101828; }
-      #warning { background: #fff; color: #344054; border-top: 1px solid #d0d5dd; }
+      body { background: #fff; color: #101828; }
+      .stage { background: #f2f4f7; }
       #status { background: #fee4e2; color: #b42318; border-top: 1px solid #fecdca; }
-      button { background: #fff; color: #24324a; border-color: #98a2b3; }
+      button { background: #fff; color: #24324a; border-color: #667085; }
     }
   </style>
 </head>
 <body>
-  <div class="stage" id="stage"><canvas id="slide" role="img" aria-label="Diapositiva de la presentación"></canvas></div>
-  <p id="warning" role="status" hidden></p>
-  <p id="status" role="status" hidden></p>
-  <nav aria-label="Controles de diapositivas">
+  <header><h1 id="screen-title">Presentación</h1></header>
+  <main class="stage" id="stage" aria-label="Diapositiva de la presentación">
+    <img id="slide" class="slide-image" alt="Diapositiva 1">
+  </main>
+  <p id="status" role="alert" hidden></p>
+  <nav id="navigation" aria-label="Controles de diapositivas">
     <button id="previous" type="button" disabled>Anterior</button>
-    <span id="counter" aria-live="polite">Cargando</span>
+    <span id="counter" aria-live="polite">Cargando…</span>
     <button id="next" type="button" disabled>Siguiente</button>
   </nav>
-  <script src="../vendor/jszip.min.js"></script>
-  <script src="deck-renderer.js"></script>
   <script src="presentation.js"></script>
 </body>
 </html>
