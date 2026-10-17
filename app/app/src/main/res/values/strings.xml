@@ -739,6 +739,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="agent_presence_stopping">Stopping…</string>
     <string name="chat_streaming_status">Receiving response</string>
     <string name="chat_open_preview">Open preview</string>
+    <string name="module_artifact_viewer_title">Artifact preview</string>
     <string name="chat_current_screen_capture">Current screen · captured when the run starts</string>
     <string name="chat_message_placeholder">Message Jarvys…</string>
     <string name="chat_previous_run">Previous run</string>

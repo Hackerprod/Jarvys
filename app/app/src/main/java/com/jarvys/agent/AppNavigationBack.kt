@@ -120,9 +120,9 @@ object AppNavigationBackPolicy {
         CREW_BOT -> AppRouteMeta(crewBotTitle ?: context.getString(R.string.crew_bot_title), false)
         COORDINATED_WORKSPACE -> AppRouteMeta(context.getString(R.string.workspace_title), false)
         COORDINATED_FILES -> AppRouteMeta(context.getString(R.string.workspace_open_files), false)
-        WORKSPACE_PREVIEW, ARTIFACT_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
-        WORKSPACE_SESSION_PREVIEW, MODULE_ARTIFACT_VIEWER ->
+        WORKSPACE_PREVIEW, ARTIFACT_PREVIEW, WORKSPACE_SESSION_PREVIEW ->
             AppRouteMeta(context.getString(R.string.chat_open_preview), false)
+        MODULE_ARTIFACT_VIEWER -> AppRouteMeta(context.getString(R.string.module_artifact_viewer_title), false)
         else -> AppRouteMeta(context.getString(R.string.drawer_chat_fallback), false,
             action = AppRouteAction.HOME_FALLBACK)
     }

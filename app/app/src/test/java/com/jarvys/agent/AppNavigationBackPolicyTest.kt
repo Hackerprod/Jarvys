@@ -5,6 +5,8 @@ import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import org.junit.Rule
 import org.robolectric.annotation.GraphicsMode
 import androidx.test.core.app.ApplicationProvider
+import android.content.Context
+import android.content.res.Configuration
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,6 +17,7 @@ import org.robolectric.annotation.Config
 import org.junit.Test
 import org.junit.rules.RuleChain
 import java.io.File
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -67,6 +70,26 @@ class AppNavigationBackPolicyTest {
         } finally {
             WorkManagerTestCleanup.close(context)
         }
+    }
+
+    @Test fun moduleArtifactViewerUsesItsOwnLocalizedRouteTitle() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        fun localized(language: String) = context.createConfigurationContext(
+            Configuration(context.resources.configuration).apply { setLocale(Locale(language)) },
+        )
+        val english = AppNavigationBackPolicy.metadata(
+            localized("en"), AppNavigationBackPolicy.MODULE_ARTIFACT_VIEWER, "Chat", null, null,
+        )
+        val spanish = AppNavigationBackPolicy.metadata(
+            localized("es"), AppNavigationBackPolicy.MODULE_ARTIFACT_VIEWER, "Chat", null, null,
+        )
+        assertEquals("Artifact preview", english.title)
+        assertEquals("Vista previa del artefacto", spanish.title)
+        assertEquals(
+            context.getString(R.string.chat_open_preview),
+            AppNavigationBackPolicy.metadata(context, AppNavigationBackPolicy.WORKSPACE_SESSION_PREVIEW,
+                "Chat", null, null).title,
+        )
     }
 
     @Test fun assistantSettingsRouteAndCopyAreRemovedAndProvidersRoutesAreRealDestinations() {

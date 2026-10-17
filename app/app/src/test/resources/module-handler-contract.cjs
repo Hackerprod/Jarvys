@@ -11,6 +11,8 @@ const declaration = manifest.tools[0];
 const handlerFile = path.join(moduleDirectory, declaration.handler.split("#")[0]);
 const thumbnailPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1sAAAAASUVORK5CYII=";
 const renderedTexts = [];
+const drawnTextCalls = [];
+const paintedFills = [];
 const canvases = [];
 
 function decodeXmlText(value) {
@@ -100,7 +102,12 @@ function makeCanvas() {
   const context = new Proxy({
     canvas,
     measureText(text) { return { width: String(text).length * 8 }; },
-    fillText(text) { renderedTexts.push(String(text)); },
+    fillText(text) {
+      const value = String(text);
+      renderedTexts.push(value);
+      drawnTextCalls.push({ text: value, font: this.font, fillStyle: this.fillStyle });
+    },
+    fill() { paintedFills.push(this.fillStyle); },
     getLineDash() { return []; },
     getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }; },
   }, {
@@ -185,7 +192,20 @@ async function main() {
     vm.runInThisContext(fs.readFileSync(rendererFile, "utf8"), { filename: rendererFile });
     argumentsObject = {
       title: "Quarterly review",
-      slides: [{ title: "Overview", body: "Sales improved" }],
+      slides: [
+        { title: "Overview", body: "Three-slide renderer fixture" },
+        {
+          title: "Two-bar comparison",
+          backgroundColor: "F4F6FB",
+          shapes: [
+            { type: "rect", x: 2, y: 2, w: 2, h: 3, fillColor: "536DFE", lineColor: "536DFE", text: "North 42", fontSize: 22, color: "FFFFFF" },
+            { type: "rect", x: 5, y: 1.4, w: 2, h: 3.6, fillColor: "18A999", lineColor: "18A999", text: "South 57", fontSize: 22, color: "FFFFFF" },
+            { type: "rect", x: 8, y: 2, w: 3.5, h: 0.7, fillColor: "F4F6FB", lineColor: "F4F6FB", text: "North region", fontSize: 18, color: "344054" },
+            { type: "rect", x: 8, y: 3, w: 3.5, h: 0.7, fillColor: "F4F6FB", lineColor: "F4F6FB", text: "South region", fontSize: 18, color: "344054" },
+          ],
+        },
+        { title: "Next steps", body: "The three slides are part of the delivered PPTX." },
+      ],
     };
   } else {
     throw new Error("Unexpected bundled module id: " + manifest.id);
@@ -214,12 +234,84 @@ async function main() {
     assert.deepEqual(artifact.data.labels, ["Q1", "Q2"]);
   } else {
     assert.equal(delivery.name, "Quarterly review.pptx");
-    assert.ok(renderedTexts.some((text) => text.includes("Overview")));
     const zip = await globalThis.JSZip.loadAsync(delivery.bytes);
     assert.ok(zip.file("[Content_Types].xml"));
     assert.ok(zip.file("ppt/slides/slide1.xml"));
     const slide = await zip.file("ppt/slides/slide1.xml").async("string");
     assert.match(slide, /Overview/);
+    assert.ok(zip.file("ppt/slides/slide2.xml"));
+    const comparisonXml = await zip.file("ppt/slides/slide2.xml").async("string");
+    ["Two-bar comparison", "North 42", "South 57", "North region", "South region"].forEach((text) => {
+      assert.ok(comparisonXml.includes(text), "PPTX slide 2 must contain " + text);
+    });
+    ["F4F6FB", "536DFE", "18A999", "FFFFFF", "344054", "24324A"].forEach((color) => {
+      assert.ok(comparisonXml.includes(color), "PPTX slide 2 must contain color " + color);
+    });
+    const deck = await globalThis.PptxDeckRenderer.loadDeck(delivery.bytes);
+    assert.equal(deck.slidePaths.length, 3);
+    await globalThis.PptxDeckRenderer.renderSlide(deck, 1, makeCanvas());
+    ["Two-bar comparison", "North 42", "South 57", "North region", "South region"].forEach((text) => {
+      assert.ok(renderedTexts.some((rendered) => rendered.includes(text)), "renderer must draw " + text);
+    });
+    assert.ok(drawnTextCalls.some((call) => call.text.includes("Two-bar comparison") && call.font.includes("40px")));
+    assert.ok(drawnTextCalls.some((call) => call.text.includes("North 42") && call.fillStyle === "#FFFFFF"));
+    assert.ok(drawnTextCalls.some((call) => call.text.includes("South 57") && call.fillStyle === "#FFFFFF"));
+    ["#F4F6FB", "#536DFE", "#18A999"].forEach((color) => assert.ok(paintedFills.includes(color)));
+
+    const unsupportedZip = await globalThis.JSZip.loadAsync(delivery.bytes);
+    unsupportedZip.file("ppt/slides/slide2.xml", comparisonXml.replace(
+      "</p:spTree>", "<p:graphicFrame/></p:spTree>",
+    ));
+    const unsupportedDeck = await globalThis.PptxDeckRenderer.loadDeck(
+      await unsupportedZip.generateAsync({ type: "uint8array" }),
+    );
+    const unsupportedCanvas = makeCanvas();
+    await globalThis.PptxDeckRenderer.renderSlide(unsupportedDeck, 1, unsupportedCanvas);
+    assert.match(unsupportedCanvas.presentationWarnings.join(" "), /gráfico.*tabla/);
+
+    // Stage dimensions are measured after the warning and nav auto-rows have taken their space.
+    const stageHeight = 210;
+    const stagePadding = 12;
+    const fit = globalThis.PptxDeckRenderer.fitSlideToBounds(296, stageHeight - stagePadding * 2, deck.width, deck.height);
+    assert.equal(fit.width, 296);
+    assert.equal(fit.height, 166.5);
+    const slideBottom = stagePadding + (stageHeight - stagePadding * 2 - fit.height) / 2 + fit.height;
+    assert.ok(fit.width <= 296 && slideBottom <= stageHeight - stagePadding);
+    const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
+    assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
+    assert.ok(viewerHtml.indexOf("class=\"stage\"") < viewerHtml.indexOf("<nav"));
+    assert.doesNotMatch(viewerHtml.match(/nav\s*\{[^}]*\}/)?.[0] || "", /position\s*:\s*absolute/);
+
+    const viewerNodes = {
+      stage: { clientWidth: 320, clientHeight: 210 },
+      canvas: Object.assign(makeCanvas(), { style: {} }),
+      counter: { textContent: "Cargando" },
+      previous: { disabled: true, addEventListener() {} },
+      next: { disabled: true, addEventListener() {} },
+      warning: { hidden: true, textContent: "" },
+      status: { hidden: true, textContent: "" },
+    };
+    viewerNodes.stage.clientWidth = 320;
+    viewerNodes.stage.clientHeight = 210;
+    viewerNodes.stage.getBoundingClientRect = () => ({ width: 320, height: 210 });
+    viewerNodes.canvas.setAttribute = () => {};
+    document.getElementById = (id) => id === "slide" ? viewerNodes.canvas : viewerNodes[id];
+    globalThis.JarvysArtifact = { url: "https://modules.jarvys.invalid/module-artifacts/fixture" };
+    let requestedArtifactUrl = "";
+    globalThis.fetch = async (url) => {
+      requestedArtifactUrl = url;
+      return { ok: true, arrayBuffer: async () => delivery.bytes.buffer.slice(delivery.bytes.byteOffset, delivery.bytes.byteOffset + delivery.bytes.byteLength) };
+    };
+    globalThis.addEventListener = () => {};
+    globalThis.getComputedStyle = () => ({ paddingLeft: "12px", paddingRight: "12px", paddingTop: "12px", paddingBottom: "12px" });
+    const viewerScript = path.join(moduleDirectory, "viewer/presentation.js");
+    vm.runInThisContext(fs.readFileSync(viewerScript, "utf8"), { filename: viewerScript });
+    await globalThis.PptxPresentationViewerReady;
+    assert.equal(requestedArtifactUrl, globalThis.JarvysArtifact.url);
+    assert.equal(viewerNodes.counter.textContent, "Diapositiva 1 de 3", "viewer error: " + viewerNodes.status.textContent);
+    assert.equal(viewerNodes.status.hidden, true);
+    assert.equal(viewerNodes.canvas.style.width, "296px");
+    assert.ok(parseFloat(viewerNodes.canvas.style.height) <= 186);
   }
 
   process.stdout.write("node-module-ok " + manifest.id + " " + delivery.bytes.length + " bytes\n");
