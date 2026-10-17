@@ -25,6 +25,16 @@ class InlineMessageBlocksTest {
         dangerous.forEach { source -> assertThrows("Sanitizer accepted: $source", IllegalArgumentException::class.java) { sanitizeAndParseSvg(source) } }
     }
 
+    @Test fun svgSanitizerRejectsEntityReferencesInsideStyleBeforeCssValidation() {
+        val dangerous = listOf(
+            "<svg viewBox='0 0 10 10'><style>.a{fill:&#117;rl(http://x)}</style></svg>",
+            "<svg viewBox='0 0 10 10'><style>&#64;import 'https://example.invalid/a.css';</style></svg>",
+        )
+        dangerous.forEach { source ->
+            assertThrows("Sanitizer accepted: $source", IllegalArgumentException::class.java) { sanitizeAndParseSvg(source) }
+        }
+    }
+
     @Test fun svgSanitizerKeepsTitleAndViewBoxForNativeDrawing() {
         val result = sanitizeAndParseSvg(
             "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 60'><title>Diagram</title><circle cx='30' cy='30' r='12'/></svg>",
@@ -39,15 +49,32 @@ class InlineMessageBlocksTest {
     @Test fun chartSpecValidatesShapeAndRendererRegistryOwnsLanguageDispatch() {
         val chart = parseChartSpec(
             """{"type":"bar","title":"Monthly","labels":["Jan","Feb"],"series":[{"name":"Sales","values":[3,5]}]}""",
+            seriesLabel = "Series",
         )
         assertNotNull(chart)
-        assertEquals("Monthly. Sales: Jan 3.0, Feb 5.0", chart!!.accessibilitySummary())
-        assertNull(parseChartSpec("""{"type":"line","title":"Broken","labels":["Jan","Feb"],"series":[{"values":[2]}]}"""))
-        assertNull(parseChartSpec("""{"type":"pie","title":"Broken","labels":["Jan"],"series":[{"values":[-1]}]}"""))
+        assertEquals("Monthly. Sales: Jan 3.0, Feb 5.0", chart!!.accessibilitySummary("Chart", "Series"))
+        assertNull(parseChartSpec("""{"type":"line","title":"Broken","labels":["Jan","Feb"],"series":[{"values":[2]}]}""", "Series"))
+        assertNull(parseChartSpec("""{"type":"pie","title":"Broken","labels":["Jan"],"series":[{"values":[-1]}]}""", "Series"))
         assertNotNull(inlineBlockRenderer("SVG"))
         assertNotNull(inlineBlockRenderer("chart"))
         assertNotNull(inlineBlockRenderer("tex"))
         assertNull(inlineBlockRenderer("python"))
+    }
+
+    @Test fun nullChartSeriesNameUsesTheLocalizedFallbackInsteadOfTheLiteralNull() {
+        val chart = parseChartSpec(
+            """{"type":"bar","title":"Monthly","labels":["Jan"],"series":[{"name":null,"values":[3]}]}""",
+            seriesLabel = "Serie",
+        )
+        assertNotNull(chart)
+        assertEquals("Serie 1", chart!!.series.single().name)
+        assertEquals("Monthly. Serie 1: Jan 3.0", chart.accessibilitySummary("Chart", "Serie"))
+    }
+
+    @Test fun chartNumberFormattingDoesNotOverflowLongForLargeIntegralValues() {
+        val outsideLongRange = Long.MAX_VALUE.toDouble()
+        assertEquals(java.lang.Double.toString(outsideLongRange), outsideLongRange.formatChartNumber())
+        assertEquals(Long.MIN_VALUE.toString(), Long.MIN_VALUE.toDouble().formatChartNumber())
     }
 
     @Test fun latexFenceUsesNativeParserAndRejectsMalformedEquationsToCodeFallback() {

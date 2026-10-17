@@ -22,6 +22,7 @@ public class MainAgentContractTest {
         "not task completion", "permission denial", "not instructions or permission", "physical-device acceptance"))
       assertTrue(fact, prompt.contains(fact));
     assertTrue(prompt.contains("never put private reasoning there"));
+    assertTrue(prompt.contains("type bar|line|pie and series shaped as [{name, values}]"));
   }
 
   @Test public void unsupportedInterimScopeDoesNotPromiseUpdates() {

@@ -578,7 +578,7 @@ internal fun AssistantReplyView(
             SelectionContainer {
                 AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
                     textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
-                    streaming = streamActive)
+                    streaming = isGeneratingAnswer)
             }
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)

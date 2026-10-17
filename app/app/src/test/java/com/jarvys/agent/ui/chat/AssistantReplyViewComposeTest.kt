@@ -64,4 +64,24 @@ class AssistantReplyViewComposeTest {
         assertTrue("assistant error markdown keeps the Material error color",
             results.any { it.layoutInput.style.color == JarvysPalette.ClayLight })
     }
+
+    @Test fun oldUnfinishedInlineFenceFallsBackToCodeWhileAnotherAnswerIsGenerating() {
+        val body = """Earlier answer:
+            |```svg
+            |<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='2'/>
+            |""".trimMargin()
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                AssistantReplyView(
+                    event = AgentRunUiEvent.messageEvent(1L, "assistant", body, 1L),
+                    onOpenSkillFile = {},
+                    isError = false,
+                    streamActive = true,
+                    isGeneratingAnswer = false,
+                )
+            }
+        }
+        compose.onNodeWithText("<svg", substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText("Rendering", substring = true).assertCountEquals(0)
+    }
 }

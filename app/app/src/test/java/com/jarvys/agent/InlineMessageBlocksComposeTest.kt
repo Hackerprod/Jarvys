@@ -53,11 +53,22 @@ class InlineMessageBlocksComposeTest {
                 AssistantMarkdown(markdown, onOpenSkillFile = {}, streaming = streamActive.value)
             }
         }
-        compose.onNodeWithText("Rendering svg...").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.inline_block_rendering, "svg")).assertIsDisplayed()
         compose.onAllNodesWithText("Copy").assertCountEquals(0)
 
         streamActive.value = false
         compose.waitForIdle()
+        compose.onNodeWithText("Copy").assertIsDisplayed()
+        compose.onNodeWithText("<svg", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun recursivelyMaskedSvgFallsBackToCopyableCodeWithoutCrashingComposition() {
+        val source = "<svg viewBox='0 0 10 10'><mask id='m'><rect width='10' height='10' mask='url(#m)'/></mask><rect width='10' height='10' mask='url(#m)'/></svg>"
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                AssistantMarkdown("```svg\n$source\n```", onOpenSkillFile = {})
+            }
+        }
         compose.onNodeWithText("Copy").assertIsDisplayed()
         compose.onNodeWithText("<svg", substring = true).assertIsDisplayed()
     }

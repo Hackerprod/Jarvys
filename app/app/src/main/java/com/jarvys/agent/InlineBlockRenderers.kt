@@ -3,6 +3,7 @@ package com.jarvys.agent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Picture
 import android.graphics.RectF
 import android.util.Xml
 import androidx.compose.foundation.Canvas
@@ -32,12 +33,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.stringResource
 import com.caverock.androidsvg.SVG
 import com.hrm.latex.parser.LatexParser
 import com.hrm.latex.renderer.LatexAutoWrap
@@ -48,6 +49,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import java.io.StringReader
+import kotlin.math.ceil
 
 internal data class MarkdownFenceSource(val language: String, val source: String, val closed: Boolean)
 
@@ -108,6 +110,7 @@ internal fun RenderAssistantCodeFence(
 
 @Composable
 private fun InlineBlockPlaceholder(language: String) {
+    val renderingLabel = stringResource(R.string.inline_block_rendering, language)
     Surface(
         modifier = Modifier.fillMaxWidth().height(220.dp),
         shape = RoundedCornerShape(10.dp),
@@ -115,7 +118,7 @@ private fun InlineBlockPlaceholder(language: String) {
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text("Rendering $language...", style = MaterialTheme.typography.bodySmall)
+            Text(renderingLabel, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -123,6 +126,7 @@ private fun InlineBlockPlaceholder(language: String) {
 @Composable
 internal fun AssistantCodeFallback(source: String, language: String, style: androidx.compose.ui.text.TextStyle) {
     val context = LocalContext.current
+    val codeLabel = stringResource(R.string.inline_block_code_label)
     val background = MaterialTheme.colorScheme.surfaceVariant
     Column(
         Modifier.fillMaxWidth()
@@ -135,7 +139,7 @@ internal fun AssistantCodeFallback(source: String, language: String, style: andr
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(language.ifBlank { "code" }, style = MaterialTheme.typography.labelSmall,
+            Text(language.ifBlank { codeLabel }, style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextButton(onClick = { copyBlockSource(context, source) }) {
                 Text(stringResource(R.string.chat_footer_copy), style = MaterialTheme.typography.labelSmall)
@@ -151,18 +155,27 @@ private fun copyBlockSource(context: Context, source: String) {
     clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.chat_footer_clip_label), source))
 }
 
-internal data class PreparedSvg(val svg: SVG, val width: Float, val height: Float, val description: String)
+internal data class ParsedSvg(val svg: SVG, val width: Float, val height: Float, val description: String)
+internal data class PreparedSvg(val picture: Picture, val width: Float, val height: Float, val description: String)
+
+internal fun ParsedSvg.renderToPicture(): PreparedSvg {
+    val pictureWidth = ceil(width.toDouble()).toInt()
+    val pictureHeight = ceil(height.toDouble()).toInt()
+    require(pictureWidth > 0 && pictureHeight > 0)
+    return PreparedSvg(svg.renderToPicture(pictureWidth, pictureHeight), width, height, description)
+}
 
 private object SvgInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
-        val result = remember(source) { runCatching { sanitizeAndParseSvg(source) } }
+        val result = remember(source) { runCatching { sanitizeAndParseSvg(source).renderToPicture() } }
         val prepared = result.getOrNull()
         if (prepared == null) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             return
         }
         val scheme = MaterialTheme.colorScheme
-        val accessibleLabel = prepared.description.ifBlank { label.ifBlank { "SVG figure" } }
+        val svgFigureLabel = stringResource(R.string.inline_block_svg_figure)
+        val accessibleLabel = prepared.description.ifBlank { svgFigureLabel }
         Surface(
             modifier = modifier.semantics { contentDescription = accessibleLabel },
             shape = RoundedCornerShape(10.dp),
@@ -175,7 +188,7 @@ private object SvgInlineBlockRenderer : InlineBlockRenderer {
                 }
                 Canvas(Modifier.fillMaxWidth().aspectRatio(prepared.width / prepared.height)) {
                     drawIntoCanvas { canvas ->
-                        prepared.svg.renderToCanvas(canvas.nativeCanvas, RectF(0f, 0f, size.width, size.height))
+                        canvas.nativeCanvas.drawPicture(prepared.picture, RectF(0f, 0f, size.width, size.height))
                     }
                 }
             }
@@ -183,7 +196,7 @@ private object SvgInlineBlockRenderer : InlineBlockRenderer {
     }
 }
 
-internal fun sanitizeAndParseSvg(source: String): PreparedSvg {
+internal fun sanitizeAndParseSvg(source: String): ParsedSvg {
     require(source.isNotBlank())
     val parser = Xml.newPullParser().apply {
         setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
@@ -233,6 +246,9 @@ internal fun sanitizeAndParseSvg(source: String): PreparedSvg {
                 descriptionText?.append(parser.text)
                 styleText?.append(parser.text)
             }
+            XmlPullParser.ENTITY_REF -> if (styleText != null) {
+                throw IllegalArgumentException("XML entity references are not supported in SVG styles")
+            }
             XmlPullParser.END_TAG -> {
                 if (parser.depth == 2) {
                     when (parser.name.substringAfter(':').lowercase()) {
@@ -253,8 +269,8 @@ internal fun sanitizeAndParseSvg(source: String): PreparedSvg {
     val aspectRatio = width / height
     require(aspectRatio > 0f && aspectRatio.isFinite())
     val accessibleDescription = listOf(title, description).filter(String::isNotBlank).joinToString(". ")
-        .ifBlank { modelLabel.ifBlank { "SVG figure" } }
-    return PreparedSvg(SVG.getFromString(source), width, height, accessibleDescription)
+        .ifBlank { modelLabel }
+    return ParsedSvg(SVG.getFromString(source), width, height, accessibleDescription)
 }
 
 private val supportedSvgElements = setOf(
@@ -302,16 +318,16 @@ private fun validateCssReferences(css: String) {
 
 internal data class ChartSeries(val name: String, val values: List<Double>)
 internal data class ChartSpec(val type: String, val title: String, val labels: List<String>, val series: List<ChartSeries>) {
-    fun accessibilitySummary(): String = buildString {
-        append(title.ifBlank { "Chart" })
+    fun accessibilitySummary(chartLabel: String, seriesLabel: String): String = buildString {
+        append(title.ifBlank { chartLabel })
         series.forEach { data ->
-            append(". ").append(data.name.ifBlank { "Series" }).append(": ")
+            append(". ").append(data.name.ifBlank { seriesLabel }).append(": ")
             append(labels.indices.joinToString(", ") { index -> "${labels[index]} ${data.values[index]}" })
         }
     }
 }
 
-internal fun parseChartSpec(source: String): ChartSpec? = runCatching {
+internal fun parseChartSpec(source: String, seriesLabel: String): ChartSpec? = runCatching {
     val json = JSONObject(source)
     val type = (json.get("type") as? String)?.lowercase() ?: error("Chart type is required")
     require(type in setOf("bar", "line", "pie"))
@@ -328,7 +344,13 @@ internal fun parseChartSpec(source: String): ChartSpec? = runCatching {
             value.toDouble()
         }
         require(values.size == labels.size && values.all(Double::isFinite))
-        ChartSeries(item.optString("name", "Series ${index + 1}"), values)
+        val rawName = item.opt("name")
+        val name = when (rawName) {
+            null, JSONObject.NULL -> null
+            is String -> rawName.trim().takeIf(String::isNotBlank)
+            else -> rawName.toString().trim().takeIf(String::isNotBlank)
+        } ?: "$seriesLabel ${index + 1}"
+        ChartSeries(name, values)
     }
     val allValues = series.flatMap { it.values }
     require((allValues.maxOrNull()!! - allValues.minOrNull()!!).isFinite())
@@ -346,7 +368,8 @@ private fun JSONArray.toStringList(): List<String> = (0 until length()).map {
 
 private object ChartInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
-        val spec = remember(source) { parseChartSpec(source) }
+        val seriesLabel = stringResource(R.string.inline_block_series_label)
+        val spec = remember(source, seriesLabel) { parseChartSpec(source, seriesLabel) }
         if (spec == null) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
         } else NativeChart(spec, modifier, source)
@@ -364,6 +387,7 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
             return
         }
         val colors = MaterialTheme.colorScheme
+        val monospaceStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
         Surface(
             modifier = modifier.clip(RoundedCornerShape(10.dp)),
             shape = RoundedCornerShape(10.dp),
@@ -374,15 +398,18 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     CopyBlockAction(source)
                 }
-                LatexAutoWrap(
-                    latex = source,
-                    modifier = Modifier.fillMaxWidth(),
-                    config = LatexConfig(
-                        fontSize = 20.sp,
-                        theme = LatexTheme.material3(),
-                        accessibilityEnabled = true,
-                    ),
-                )
+                val renderResult = runCatching {
+                    LatexAutoWrap(
+                        latex = source,
+                        modifier = Modifier.fillMaxWidth(),
+                        config = LatexConfig(
+                            fontSize = 20.sp,
+                            theme = LatexTheme.material3(),
+                            accessibilityEnabled = true,
+                        ),
+                    )
+                }
+                if (renderResult.isFailure) AssistantCodeFallback(source, label, monospaceStyle)
             }
         }
     }
@@ -391,8 +418,10 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
 @Composable
 private fun NativeChart(spec: ChartSpec, modifier: Modifier, source: String) {
     val colors = MaterialTheme.colorScheme
+    val chartLabel = stringResource(R.string.inline_block_chart_label)
+    val seriesLabel = stringResource(R.string.inline_block_series_label)
     val palette = listOf(colors.primary, colors.secondary, colors.tertiary, colors.error, colors.onSurfaceVariant)
-    Column(modifier.semantics { contentDescription = spec.accessibilitySummary() }
+    Column(modifier.semantics { contentDescription = spec.accessibilitySummary(chartLabel, seriesLabel) }
         .clip(RoundedCornerShape(10.dp)).background(colors.surfaceVariant).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween) {
@@ -487,7 +516,7 @@ private fun NativeChart(spec: ChartSpec, modifier: Modifier, source: String) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(8.dp).background(palette[index % palette.size], RoundedCornerShape(2.dp)))
                         Spacer(Modifier.width(5.dp))
-                        Text(series.name, color = colors.onSurface, style = MaterialTheme.typography.labelSmall,
+                        Text(series.name.ifBlank { seriesLabel }, color = colors.onSurface, style = MaterialTheme.typography.labelSmall,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -504,4 +533,6 @@ private fun CopyBlockAction(source: String) {
     }
 }
 
-private fun Double.formatChartNumber(): String = if (this % 1.0 == 0.0) toLong().toString() else toString()
+internal fun Double.formatChartNumber(): String = if (
+    this % 1.0 == 0.0 && this >= Long.MIN_VALUE.toDouble() && this < Long.MAX_VALUE.toDouble()
+) toLong().toString() else toString()

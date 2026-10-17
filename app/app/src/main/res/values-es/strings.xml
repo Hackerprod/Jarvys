@@ -1,4 +1,9 @@
 <resources>
+    <string name="inline_block_rendering">Mostrando %1$s…</string>
+    <string name="inline_block_svg_figure">Figura SVG</string>
+    <string name="inline_block_chart_label">Gráfico</string>
+    <string name="inline_block_series_label">Serie</string>
+    <string name="inline_block_code_label">código</string>
     <string name="app_name">Jarvys</string>
     <string name="language_title">Idioma</string>
     <string name="language_dialog_title">Idioma de la aplicación</string>
