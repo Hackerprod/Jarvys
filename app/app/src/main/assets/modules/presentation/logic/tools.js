@@ -3,6 +3,11 @@
 
   // Match the host's 640x360 decode target and its existing 2x card-density margin.
   var MAX_THUMBNAIL_BASE64_CHARS = Math.ceil(1280 * 720 * 4 / 3) * 4;
+  var SLIDE_WIDTH = 13.333333;
+  var SLIDE_HEIGHT = 7.5;
+  var VISUAL_BOTTOM_MARGIN = 0.55;
+  var VISUAL_GAP = 0.3;
+  var TEXT_LINE_SPACING = 1;
   var COLORS = {
     background: "F7F9FC",
     ink: "101828",
@@ -63,19 +68,41 @@
     return darkContrast >= lightContrast ? COLORS.ink : "FFFFFF";
   }
 
-  function placeVisual(source, y, height) {
+  function validateVisualInput(source, slideNumber, kind) {
+    ["x", "y", "w", "h"].forEach(function (key) {
+      if (source[key] !== undefined && !Number.isFinite(source[key])) {
+        throw new Error("Slide " + slideNumber + ": " + kind + " " + key + " must be a finite number.");
+      }
+    });
+    if (source.w !== undefined && source.w <= 0) {
+      throw new Error("Slide " + slideNumber + ": " + kind + " width must be greater than zero.");
+    }
+    if (source.h !== undefined && source.h <= 0) {
+      throw new Error("Slide " + slideNumber + ": " + kind + " height must be greater than zero.");
+    }
+  }
+
+  function placeVisual(source, y, height, slideNumber, kind) {
+    validateVisualInput(source, slideNumber, kind);
     return {
       x: source.x === undefined ? 0.8 : source.x,
       y: source.y === undefined ? y : source.y,
       w: source.w === undefined ? 11.75 : source.w,
-      h: Number.isFinite(source.h) && source.h > 0 ? source.h : height
+      h: source.h === undefined ? height : source.h
     };
   }
 
   function hasChartData(chart) {
-    return Boolean(chart && Array.isArray(chart.datasets) && chart.datasets.some(function (dataset) {
-      return dataset && Array.isArray(dataset.values) && dataset.values.length > 0;
-    }));
+    return Boolean(chart && Array.isArray(chart.labels) && chart.labels.length > 0 &&
+      Array.isArray(chart.datasets) && chart.datasets.some(function (dataset) {
+        return dataset && Array.isArray(dataset.values) && dataset.values.length > 0;
+      }));
+  }
+
+  function chartValuesMatchLabels(chart) {
+    return chart.datasets.every(function (dataset) {
+      return dataset && Array.isArray(dataset.values) && dataset.values.length === chart.labels.length;
+    });
   }
 
   function addChart(pptx, slide, chart, backgroundColor, textColor, bounds) {
@@ -114,7 +141,7 @@
       dataLabelColor: textColor,
       dataLabelFontFace: "Arial",
       dataLabelFontSize: 15,
-      dataLabelFormatCode: "#,##0",
+      dataLabelFormatCode: "General",
       showSerName: false,
       showBorder: false
     });
@@ -145,7 +172,60 @@
     });
   }
 
-  function addSlideContent(pptx, source) {
+  function measureTextLineCount(text, width, fontSize, fontFace, leftIndent) {
+    var canvas = document.createElement("canvas");
+    var context = canvas.getContext("2d");
+    context.font = (fontSize * 96 / 72) + "px " + fontFace;
+    var availableWidth = (width - leftIndent) * 96;
+    var lineCount = 0;
+    String(text).split(/\r?\n/).forEach(function (paragraph) {
+      var words = paragraph.split(/\s+/).filter(Boolean);
+      if (words.length === 0) {
+        lineCount += 1;
+        return;
+      }
+      var line = "";
+      words.forEach(function (word) {
+        var candidate = line ? line + " " + word : word;
+        if (line && context.measureText(candidate).width > availableWidth) {
+          lineCount += 1;
+          line = word;
+        } else {
+          line = candidate;
+        }
+      });
+      lineCount += 1;
+    });
+    return lineCount;
+  }
+
+  function measuredTextHeight(text, width, fontSize, fontFace, margin, leftIndent) {
+    var lines = measureTextLineCount(text, width - margin * 2, fontSize, fontFace, leftIndent || 0);
+    return lines * fontSize / 72 * TEXT_LINE_SPACING + margin * 2;
+  }
+
+  function validateBounds(bounds, slideNumber, kind) {
+    if (![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)) {
+      throw new Error("Slide " + slideNumber + ": " + kind + " position and size must be finite numbers.");
+    }
+    if (bounds.w <= 0 || bounds.h <= 0) {
+      throw new Error("Slide " + slideNumber + ": " + kind + " width and height must be greater than zero.");
+    }
+    if (bounds.y + bounds.h > SLIDE_HEIGHT && (kind === "body text" || kind.indexOf("bullet ") === 0)) {
+      throw new Error("Slide " + slideNumber + ": text content does not fit on the slide; shorten the body or bullets.");
+    }
+    if (bounds.x < 0 || bounds.y < 0 || bounds.x + bounds.w > SLIDE_WIDTH || bounds.y + bounds.h > SLIDE_HEIGHT) {
+      throw new Error("Slide " + slideNumber + ": " + kind + " exceeds slide bounds; move it within the slide or reduce its size.");
+    }
+  }
+
+  function addSlideContent(pptx, source, slideNumber) {
+    if (source.chart && !hasChartData(source.chart)) {
+      throw new Error("Slide " + slideNumber + ": chart has no data.");
+    }
+    if (source.chart && !chartValuesMatchLabels(source.chart)) {
+      throw new Error("Slide " + slideNumber + ": chart labels and values must have the same length.");
+    }
     var slide = pptx.addSlide();
     var backgroundColor = hexColor(source.backgroundColor || COLORS.background);
     var textColor = contrastingTextColor(backgroundColor);
@@ -154,6 +234,7 @@
     var contentY = source.title ? 1.55 : 0.72;
     var renderChart = hasChartData(source.chart);
     var visualCount = Number(renderChart) + Number(Boolean(source.table));
+    var textPlacements = [];
     if (source.title) {
       slide.addText(source.title, {
         x: 0.65, y: 0.55, w: 12.0, h: 0.78,
@@ -162,25 +243,35 @@
       });
     }
     if (source.body) {
-      var bodyHeight = visualCount ? 0.92 : 2.8;
-      slide.addText(source.body, {
-        x: 0.8, y: contentY, w: 11.7, h: bodyHeight,
-        fontFace: "Arial", fontSize: 20, color: textColor,
-        valign: "top", margin: 0.06
-      });
+      var bodyHeight = measuredTextHeight(source.body, 11.7, 20, "Arial", 0.06, 0);
+      var bodyBounds = { x: 0.8, y: contentY, w: 11.7, h: bodyHeight };
+      validateBounds(bodyBounds, slideNumber, "body text");
+      textPlacements.push({ text: source.body, bounds: bodyBounds, options: {
+        fontFace: "Arial", fontSize: 20, color: textColor, valign: "top", margin: 0.06,
+        lineSpacingMultiple: TEXT_LINE_SPACING
+      } });
       contentY += bodyHeight + 0.12;
     }
-    (source.bullets || []).forEach(function (text) {
-      slide.addText(text, {
-        x: 1.0, y: contentY, w: 11.5, h: 0.45,
+    (source.bullets || []).forEach(function (text, bulletIndex) {
+      var bulletHeight = measuredTextHeight(text, 11.5, 18, "Arial", 0.02, 18 / 72);
+      var bulletBounds = { x: 1.0, y: contentY, w: 11.5, h: bulletHeight };
+      validateBounds(bulletBounds, slideNumber, "bullet " + (bulletIndex + 1));
+      textPlacements.push({ text: text, bounds: bulletBounds, options: {
         fontFace: "Arial", fontSize: 18, color: textColor,
-        bullet: { indent: 18 }, hanging: 4, margin: 0.02
-      });
-      contentY += 0.5;
+        bullet: { indent: 18 }, hanging: 4, margin: 0.02,
+        lineSpacingMultiple: TEXT_LINE_SPACING
+      } });
+      contentY += bulletHeight + 0.05;
+    });
+    textPlacements.forEach(function (placement) {
+      slide.addText(placement.text, Object.assign({
+        x: placement.bounds.x, y: placement.bounds.y, w: placement.bounds.w, h: placement.bounds.h,
+      }, placement.options));
     });
 
     if (source.shapes) source.shapes.forEach(function (shape) {
       var options = { x: shape.x, y: shape.y, w: shape.w, h: shape.h };
+      validateBounds(options, slideNumber, "shape");
       if (shape.fillColor) options.fill = { color: hexColor(shape.fillColor) };
       if (shape.lineColor || shape.lineWidth !== undefined) options.line = {
         color: hexColor(shape.lineColor || COLORS.body),
@@ -195,20 +286,32 @@
       });
     });
 
-    var visualGap = 0.3;
-    var availableVisualHeight = 7.5 - contentY - 0.55 - visualGap * (visualCount - 1);
-    var visualHeight = visualCount && availableVisualHeight > 0 ? availableVisualHeight / visualCount : 0;
-    if (visualHeight > 0) {
-      if (renderChart) {
-        addChart(pptx, slide, source.chart, backgroundColor, textColor,
-          placeVisual(source.chart, contentY, visualHeight));
-        contentY += visualHeight + visualGap;
+    var visuals = [];
+    if (renderChart) visuals.push({ source: source.chart, kind: "chart" });
+    if (source.table) visuals.push({ source: source.table, kind: "table" });
+    if (visuals.length > 0) {
+      visuals.forEach(function (visual) { validateVisualInput(visual.source, slideNumber, visual.kind); });
+      var fixedHeight = visuals.reduce(function (total, visual) {
+        return total + (visual.source.h === undefined ? 0 : visual.source.h);
+      }, 0);
+      var autoHeightCount = visuals.filter(function (visual) { return visual.source.h === undefined; }).length;
+      var availableVisualHeight = SLIDE_HEIGHT - contentY - VISUAL_BOTTOM_MARGIN - VISUAL_GAP * (visualCount - 1);
+      var autoVisualHeight = autoHeightCount > 0 ? (availableVisualHeight - fixedHeight) / autoHeightCount : 0;
+      if (autoHeightCount > 0 && autoVisualHeight <= 0) {
+        throw new Error("Slide " + slideNumber + ": no room for chart/table below the text; shorten the text or move the chart to its own slide.");
       }
-      if (source.table) addTable(slide, source.table, textColor,
-        placeVisual(source.table, contentY, visualHeight));
+      var visualY = contentY;
+      visuals.forEach(function (visual, index) {
+        var bounds = placeVisual(visual.source, visualY, autoVisualHeight, slideNumber, visual.kind);
+        validateBounds(bounds, slideNumber, visual.kind);
+        if (visual.kind === "chart") addChart(pptx, slide, visual.source, backgroundColor, textColor, bounds);
+        else addTable(slide, visual.source, textColor, bounds);
+        visualY = Math.max(visualY, bounds.y + bounds.h) + (index < visuals.length - 1 ? VISUAL_GAP : 0);
+      });
     }
 
     (source.images || []).forEach(function (image) {
+      validateBounds({ x: image.x, y: image.y, w: image.w, h: image.h }, slideNumber, "image");
       slide.addImage({ data: image.dataUrl, x: image.x, y: image.y, w: image.w, h: image.h, altText: image.altText || "" });
     });
   }
@@ -229,7 +332,7 @@
     pptx.subject = argumentsObject.title;
     pptx.title = argumentsObject.title;
     pptx.company = "Jarvys";
-    argumentsObject.slides.forEach(function (slide) { addSlideContent(pptx, slide); });
+    argumentsObject.slides.forEach(function (slide, slideIndex) { addSlideContent(pptx, slide, slideIndex + 1); });
 
     var pptxBase64 = await pptx.write({ outputType: "base64" });
     var pptxBytes = bytesFromBase64(pptxBase64);

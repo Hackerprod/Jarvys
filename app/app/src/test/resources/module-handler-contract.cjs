@@ -86,6 +86,24 @@ function parseXml(source) {
   return root;
 }
 
+function descendants(node) {
+  return node.children.reduce((found, child) => found.concat(child, descendants(child)), []);
+}
+
+function assertSlideElementsWithinHeight(xml, slideNumber) {
+  const root = parseXml(xml);
+  descendants(root).filter((node) => ["sp", "graphicFrame", "pic", "cxnSp"].includes(node.localName)).forEach((element) => {
+    const transform = descendants(element).find((node) => node.localName === "xfrm");
+    if (!transform) return;
+    const transformNodes = descendants(transform);
+    const offset = transformNodes.find((node) => node.localName === "off");
+    const extent = transformNodes.find((node) => node.localName === "ext");
+    if (!offset || !extent) return;
+    const bottomInches = (Number(offset.getAttribute("y")) + Number(extent.getAttribute("cy"))) / 914400;
+    assert.ok(bottomInches <= 7.5, "slide " + slideNumber + " element ends at " + bottomInches + " inches, beyond the 7.5 inch slide");
+  });
+}
+
 function makeCanvas() {
   const canvas = {
     width: 1280,
@@ -269,6 +287,10 @@ async function main() {
     const zip = await globalThis.JSZip.loadAsync(delivery.bytes);
     assert.ok(zip.file("[Content_Types].xml"));
     assert.ok(zip.file("ppt/slides/slide1.xml"));
+    for (let slideNumber = 1; slideNumber <= 4; slideNumber += 1) {
+      const slideXml = await zip.file("ppt/slides/slide" + slideNumber + ".xml").async("string");
+      assertSlideElementsWithinHeight(slideXml, slideNumber);
+    }
     const slide = await zip.file("ppt/slides/slide1.xml").async("string");
     assert.match(slide, /Overview/);
     assert.match(slide, /Four-slide renderer fixture/);
@@ -325,7 +347,8 @@ async function main() {
     const chartXml = await chartFile.async("string");
     assert.ok(chartXml.includes("2459D3"));
     assert.match(chartXml, /<c:showVal val="1"\/>/, "chart data values must be enabled");
-    assert.ok(chartXml.includes("#,##0"), "integer chart labels must not retain a trailing decimal point");
+    const chartNumFormats = parseXml(chartXml).getElementsByTagNameNS("*", "numFmt").map((node) => node.getAttribute("formatCode"));
+    assert.ok(chartNumFormats.length > 0 && chartNumFormats.every((format) => format === "General"), "chart numFmt entries must use the exact General formatCode");
     assert.match(chartXml, /<c:v>North<\/c:v>/);
     assert.match(chartXml, /<c:v>42<\/c:v>/);
     const tableXml = visualSlide;
@@ -333,32 +356,73 @@ async function main() {
     assert.ok(tableXml.includes("101828"), "table text must contrast with its pale cell fills");
     assert.ok(rendererInputs.some((input) => input.equals(delivery.bytes)), "the generated PPTX bytes must reach the thumbnail renderer");
 
-    const denseSlides = [
-      {
-        title: "Dense slide",
-        body: "The chart and table share the remaining slide area.",
+    const deliveryCountBeforeInvalidSlides = deliveries.length;
+    await assert.rejects(
+      globalThis.createPresentation({ title: "Empty chart", slides: [{ chart: { labels: [], datasets: [] } }] }, host),
+      (error) => error.message === "Slide 1: chart has no data.",
+    );
+    await assert.rejects(
+      globalThis.createPresentation({
+        title: "Dense layout",
+        slides: [{
+          title: "Dense slide",
+          body: "The chart and table share the remaining slide area.",
+          bullets: Array.from({ length: 16 }, (_, index) => "Detail " + (index + 1)),
+          chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
+          table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
+        }],
+      }, host),
+      (error) => error.message === "Slide 1: no room for chart/table below the text; shorten the text or move the chart to its own slide.",
+    );
+    await assert.rejects(
+      globalThis.createPresentation({
+        title: "Out of bounds visual",
+        slides: [{ chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }], y: 6.5, h: 1.2 } }],
+      }, host),
+      (error) => error.message === "Slide 1: chart exceeds slide bounds; move it within the slide or reduce its size.",
+    );
+    assert.equal(deliveries.length, deliveryCountBeforeInvalidSlides, "invalid or overfull content must not deliver a partial presentation");
+
+    const explicitVisualResult = await globalThis.createPresentation({
+      title: "Explicit visual placement",
+      slides: [{
+        title: "Text with explicit visuals",
+        body: "A body line followed by bullets.",
         bullets: Array.from({ length: 16 }, (_, index) => "Detail " + (index + 1)),
+        chart: { labels: ["Small", "Medium"], datasets: [{ name: "Sales", values: [0.35, 3.5] }], y: 2.0, h: 1.2 },
+        table: { headers: ["Region", "Sales"], rows: [["North", "3.5"]], y: 4.0, h: 1.2 },
+      }],
+    }, host);
+    assert.equal(explicitVisualResult.success, true, "explicit chart and table bounds must be honored when auto space is exhausted");
+    const explicitDelivery = deliveries[deliveries.length - 1];
+    const explicitZip = await globalThis.JSZip.loadAsync(explicitDelivery.bytes);
+    const explicitSlide = await explicitZip.file("ppt/slides/slide1.xml").async("string");
+    assert.equal((explicitSlide.match(/<a:tbl>/g) || []).length, 1, "an explicit table must remain present");
+    const explicitChartPath = Object.keys(explicitZip.files).find((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name));
+    assert.ok(explicitChartPath, "an explicit chart must remain present");
+    assertSlideElementsWithinHeight(explicitSlide, 1);
+    const decimalChartXml = await explicitZip.file(explicitChartPath).async("string");
+    const decimalNumFormats = parseXml(decimalChartXml).getElementsByTagNameNS("*", "numFmt").map((node) => node.getAttribute("formatCode"));
+    assert.ok(decimalNumFormats.length > 0 && decimalNumFormats.every((format) => format === "General"), "fractional chart numFmt entries must use the exact General formatCode");
+    assert.match(decimalChartXml, /<c:v>0\.35<\/c:v>/, "fractional chart values must retain 0.35 in the PPTX cache");
+    assert.match(decimalChartXml, /<c:v>3\.5<\/c:v>/, "fractional chart values must retain 3.5 in the PPTX cache");
+
+    const fittingResult = await globalThis.createPresentation({
+      title: "Fitting chart and table",
+      slides: [{
+        title: "Fits normally",
+        body: "The chart and table share the remaining slide area.",
         chart: { labels: ["North"], datasets: [{ name: "Sales", values: [42] }] },
         table: { headers: ["Region", "Sales"], rows: [["North", "42"]] },
-      },
-      {
-        title: "Empty chart data",
-        chart: { labels: [], datasets: [] },
-      },
-    ];
-    const deliveryCountBeforeDenseSlides = deliveries.length;
-    await globalThis.createPresentation({ title: "Dense layout", slides: denseSlides }, host);
-    assert.equal(deliveries.length, deliveryCountBeforeDenseSlides + 1, "dense content and empty datasets must still deliver a presentation");
-    const denseZip = await globalThis.JSZip.loadAsync(deliveries[deliveryCountBeforeDenseSlides].bytes);
-    const denseSlideXml = await denseZip.file("ppt/slides/slide1.xml").async("string");
-    assert.doesNotMatch(denseSlideXml, /<a:tbl>/, "visuals are omitted when the slide has no available area");
-    assert.ok(!Object.keys(denseZip.files).some((name) => name.startsWith("ppt/charts/chart")), "an overfull slide must not emit a chart outside its usable area");
-    const denseShapeXml = [...denseSlideXml.matchAll(/<p:sp\b[\s\S]*?<\/p:sp>/g)].map((match) => match[0]).join("");
-    const denseHeights = [...denseShapeXml.matchAll(/<a:ext\b[^>]*\bcy="(-?\d+)"/g)].map((match) => Number(match[1]));
-    assert.ok(denseHeights.length > 0 && denseHeights.every((height) => height > 0), "dense slide OOXML must not contain zero or negative shape heights");
-    const emptyDataSlideXml = await denseZip.file("ppt/slides/slide2.xml").async("string");
-    assert.ok(emptyDataSlideXml.includes("Empty chart data"));
-    assert.ok(!emptyDataSlideXml.includes("<c:chart"), "empty chart datasets are ignored without producing an invalid chart");
+      }],
+    }, host);
+    assert.equal(fittingResult.success, true);
+    const fittingDelivery = deliveries[deliveries.length - 1];
+    const fittingZip = await globalThis.JSZip.loadAsync(fittingDelivery.bytes);
+    const fittingSlide = await fittingZip.file("ppt/slides/slide1.xml").async("string");
+    assert.equal((fittingSlide.match(/<a:tbl>/g) || []).length, 1, "a fitting table must be present in the PPTX");
+    assert.ok(Object.keys(fittingZip.files).some((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name)), "a fitting chart must be present in the PPTX");
+    assertSlideElementsWithinHeight(fittingSlide, 1);
 
     const viewerHtml = fs.readFileSync(path.join(moduleDirectory, "viewer/presentation.html"), "utf8");
     assert.match(viewerHtml, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/);
