@@ -84,6 +84,7 @@ class InlineMessageBlocksTest {
 
     @Test fun incompleteSpecialFencesWaitOnlyWhileStreamingAndThenFallBackToCode() {
         assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState("svg", closed = false, streaming = true))
+        assertEquals(InlineFenceState.STREAM_PLACEHOLDER, inlineFenceState("unknown-prefix", closed = false, streaming = true))
         assertEquals(InlineFenceState.CODE, inlineFenceState("svg", closed = false, streaming = false))
         assertEquals(InlineFenceState.RENDER, inlineFenceState("chart", closed = true, streaming = false))
         assertEquals(InlineFenceState.CODE, inlineFenceState("text", closed = true, streaming = false))

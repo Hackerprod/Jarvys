@@ -11,6 +11,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +43,24 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownAnnotatorConfig
+import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
+
+internal interface AssistantMarkdownRenderObserver {
+    fun onLoadingComposed()
+    fun onMarkdownContentRendered(content: String)
+    fun onPlaceholderComposed(language: String)
+    fun onStreamingCodeFallbackComposed(language: String)
+    fun onBlockSourceParsed(language: String)
+    fun onBlockMounted(language: String)
+}
+
+internal val LocalAssistantMarkdownRenderObserver = compositionLocalOf<AssistantMarkdownRenderObserver?> { null }
+private val LocalAssistantMarkdownStreaming = compositionLocalOf { false }
 
 @Composable
 internal fun AssistantMarkdown(
@@ -129,18 +145,39 @@ internal fun AssistantMarkdown(
                 error = { Text(markdown, modifier = it, color = textColor, style = fallbackStyle) },
             )
         } else {
-            val components = remember(streaming) {
+            // Renderer 0.37.0 starts each content-keyed parse in Loading. Parse live deltas immediately to avoid
+            // a blank frame, and keep the last tree mounted while an initial/history parse runs asynchronously.
+            val markdownState = rememberMarkdownState(normalizedMarkdown, immediate = streaming)
+            val parsedState by markdownState.state.collectAsState()
+            var lastSuccessState by remember { mutableStateOf<State.Success?>(null) }
+            val displayState = (parsedState as? State.Success) ?: lastSuccessState ?: parsedState
+            val observer = LocalAssistantMarkdownRenderObserver.current
+            SideEffect {
+                (parsedState as? State.Success)?.let { lastSuccessState = it }
+                (displayState as? State.Success)?.let { observer?.onMarkdownContentRendered(it.content) }
+            }
+            // Read streaming inside the callback so promotion does not replace the MarkdownComponents instance.
+            val components = remember {
                 markdownComponents(codeFence = { model ->
-                    RenderAssistantCodeFence(model.content, model.node, model.typography.code, streaming)
+                    RenderAssistantCodeFence(model.content, model.node, model.typography.code,
+                        LocalAssistantMarkdownStreaming.current)
                 })
             }
-            Markdown(
-                content = normalizedMarkdown,
-                modifier = modifier,
-                colors = markdownColor(text = textColor),
-                typography = typography,
-                components = components,
-            )
+            CompositionLocalProvider(LocalAssistantMarkdownStreaming provides streaming) {
+                Markdown(
+                    state = displayState,
+                    modifier = modifier,
+                    colors = markdownColor(text = textColor),
+                    typography = typography,
+                    components = components,
+                    loading = { loadingModifier ->
+                        val loadingObserver = LocalAssistantMarkdownRenderObserver.current
+                        SideEffect { loadingObserver?.onLoadingComposed() }
+                        Box(loadingModifier)
+                    },
+                    error = { errorModifier -> Box(errorModifier) },
+                )
+            }
         }
     }
 }

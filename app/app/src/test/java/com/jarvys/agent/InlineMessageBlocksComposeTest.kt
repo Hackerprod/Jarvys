@@ -2,6 +2,8 @@ package com.jarvys.agent
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
@@ -13,6 +15,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
@@ -258,6 +262,167 @@ class InlineMessageBlocksComposeTest {
         assertEquals("the visual slot keeps its composition through completion", 1, blockSlotMounts.intValue)
         assertEquals("the closed visual keeps its composition through suffix deltas", blockId,
             compose.onNodeWithContentDescription("Streaming diagram").fetchSemanticsNode().id)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test fun assistantMarkdownStreamingRetainsRenderedContentAcrossDeltasAndPromotion() {
+        val session = "markdown-stream-${System.nanoTime()}"
+        val generation = System.nanoTime()
+        val runId = "markdown-run-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Draw a chart and diagram")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "The summary is already visible.")
+
+        val reply = mutableStateOf(AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" })
+        val height = mutableIntStateOf(0)
+        val heightSamples = mutableListOf<Int>()
+        val rowBottomSamples = mutableListOf<Float>()
+        val loadingCompositions = mutableIntStateOf(0)
+        val placeholderCompositions = mutableIntStateOf(0)
+        val streamingCodeFallbackCompositions = mutableIntStateOf(0)
+        val placeholderByLanguage = mutableMapOf<String, Int>()
+        val sourceParsesByLanguage = mutableMapOf<String, Int>()
+        val blockMountsByLanguage = mutableMapOf<String, Int>()
+        val rowMounts = mutableIntStateOf(0)
+        val renderedMarkdown = mutableStateOf<String?>(null)
+        val observer = object : AssistantMarkdownRenderObserver {
+            override fun onLoadingComposed() { loadingCompositions.intValue++ }
+            override fun onMarkdownContentRendered(content: String) { renderedMarkdown.value = content }
+            override fun onPlaceholderComposed(language: String) {
+                placeholderCompositions.intValue++
+                placeholderByLanguage[language] = (placeholderByLanguage[language] ?: 0) + 1
+            }
+            override fun onStreamingCodeFallbackComposed(language: String) { streamingCodeFallbackCompositions.intValue++ }
+            override fun onBlockSourceParsed(language: String) {
+                sourceParsesByLanguage[language] = (sourceParsesByLanguage[language] ?: 0) + 1
+            }
+            override fun onBlockMounted(language: String) {
+                blockMountsByLanguage[language] = (blockMountsByLanguage[language] ?: 0) + 1
+            }
+        }
+
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalInspectionMode provides false,
+                LocalReducedMotion provides false,
+                LocalAssistantMarkdownRenderObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    val event = reply.value
+                    ChatMessageList(
+                        conversationKey = session,
+                        messages = listOf(event),
+                        isRunning = event.kind == "assistant_stream",
+                        messageKey = { ConversationTimelineItem.Event(it).key },
+                        isUserMessage = { false },
+                        listState = rememberLazyListState(),
+                        modifier = Modifier.width(360.dp).height(640.dp),
+                        itemContent = { item ->
+                            DisposableEffect(Unit) {
+                                rowMounts.intValue++
+                                onDispose { }
+                            }
+                            Column(Modifier.fillMaxWidth()
+                                .onSizeChanged {
+                                    height.intValue = it.height
+                                    heightSamples += it.height
+                                }
+                                .onGloballyPositioned {
+                                    val bottom = it.boundsInRoot().bottom
+                                    rowBottomSamples += bottom
+                                }) {
+                                AssistantMarkdown(
+                                    markdown = item.text,
+                                    onOpenSkillFile = {},
+                                    streaming = item.kind == "assistant_stream" && item.stage == "STREAMING",
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        fun settleContent(expected: String) {
+            runCatching { compose.waitUntil(5_000L) { renderedMarkdown.value == expected } }
+            compose.waitForIdle()
+            assertEquals(
+                "rendered Markdown did not catch up (expected=${expected.takeLast(80)}, " +
+                    "actual=${renderedMarkdown.value?.takeLast(80)}, loading=${loadingCompositions.intValue}, " +
+                    "rows=${rowMounts.intValue})",
+                expected,
+                renderedMarkdown.value,
+            )
+        }
+
+        settleContent(reply.value.text)
+        assertTrue("the pre-fence message has visible height", height.intValue > 0)
+        val loadingAfterInitialParse = loadingCompositions.intValue
+        val firstVisibleHeightSample = heightSamples.size
+        val firstVisibleRowBottomSample = rowBottomSamples.size
+        var noIntermediateShrink = true
+
+        fun appendAndSettle(delta: String) {
+            val priorHeight = height.intValue
+            val sampleStart = heightSamples.size
+            compose.runOnIdle {
+                AgentRunUiState.assistantTextStreamDelta(session, generation, runId, delta)
+                reply.value = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+            }
+            settleContent(reply.value.text)
+            val intermediateHeights = heightSamples.drop(sampleStart)
+            if (intermediateHeights.any { it < priorHeight } || height.intValue < priorHeight) noIntermediateShrink = false
+        }
+
+        appendAndSettle("\n\nQuarterly totals.\n\n```ch")
+        appendAndSettle("art\n")
+        appendAndSettle("""{"type":"bar","title":"Sales","labels":["Jan","Feb"],"series":[{"name":"Total","values":[3,""")
+        appendAndSettle("5]}]")
+        appendAndSettle("}\n```")
+        appendAndSettle("\n\nTrend diagram.\n\n```svg\n<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 50'><title>Trend diagram</title>\n")
+        appendAndSettle("<circle cx='25' cy='25' r='15' fill='currentColor'/></svg>\n```")
+        appendAndSettle("\n\nThe chart and diagram are complete.")
+
+        val streamEvent = reply.value
+        AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", streamEvent.text,
+            "durable-markdown-${System.nanoTime()}", 43L)
+        val finalEvent = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant" }
+        assertEquals(ConversationTimelineItem.Event(streamEvent).key, ConversationTimelineItem.Event(finalEvent).key)
+        compose.runOnIdle { reply.value = finalEvent }
+        compose.waitForIdle()
+        assertTrue(compose.onAllNodesWithContentDescription("Sales. Total: Jan 3.0, Feb 5.0")
+            .fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodesWithContentDescription("Trend diagram").fetchSemanticsNodes().isNotEmpty())
+
+        val visibleHeights = heightSamples.drop(firstVisibleHeightSample)
+        val visibleRowBottoms = rowBottomSamples.drop(firstVisibleRowBottomSample)
+        val rowBottomMovement = (visibleRowBottoms.maxOrNull() ?: 0f) - (visibleRowBottoms.minOrNull() ?: 0f)
+        val rowBottomReversals = visibleRowBottoms.zipWithNext().count { (before, after) -> after < before }
+        println("STREAM_FLICKER_METRICS loading=$loadingAfterInitialParse->${loadingCompositions.intValue}, " +
+            "placeholders=${placeholderCompositions.intValue}, chartMounts=${blockMountsByLanguage["chart"]}, " +
+            "svgMounts=${blockMountsByLanguage["svg"]}, chartParses=${sourceParsesByLanguage["chart"]}, " +
+            "svgParses=${sourceParsesByLanguage["svg"]}, streamedCodeFallbacks=${streamingCodeFallbackCompositions.intValue}, " +
+            "rowMounts=${rowMounts.intValue}, " +
+            "minVisibleHeight=${visibleHeights.minOrNull()}, rowBottomMovement=$rowBottomMovement, " +
+            "rowBottomReversals=$rowBottomReversals")
+
+        assertTrue("no intermediate frame empties or shrinks already shown content", noIntermediateShrink)
+        assertEquals("the row position never moves backward between frames", 0, rowBottomReversals)
+        assertEquals("each open fence, including an unknown language prefix, uses the same cheap placeholder",
+            setOf("", "chart", "svg"), placeholderByLanguage.keys)
+        assertEquals("the loading slot does not return for stream deltas", loadingAfterInitialParse,
+            loadingCompositions.intValue)
+        assertEquals("one chart visual is mounted", 1, blockMountsByLanguage["chart"])
+        assertEquals("one SVG visual is mounted", 1, blockMountsByLanguage["svg"])
+        assertEquals("closed chart source is parsed once despite later deltas", 1, sourceParsesByLanguage["chart"])
+        assertEquals("closed SVG source is parsed once despite promotion", 1, sourceParsesByLanguage["svg"])
+        assertEquals("an incomplete language prefix never flashes as code", 0, streamingCodeFallbackCompositions.intValue)
+        assertEquals("stream to persisted promotion keeps one keyed row mount", 1, rowMounts.intValue)
+        assertEquals("promotion does not remount the chart", 1, blockMountsByLanguage["chart"])
+        assertEquals("promotion does not remount the SVG", 1, blockMountsByLanguage["svg"])
+        assertEquals("the final state keeps its full layout", streamEvent.text, renderedMarkdown.value)
         AgentRunUiState.resetSession(session)
     }
 

@@ -27,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,9 +76,8 @@ internal fun fenceSource(content: String, node: org.intellij.markdown.ast.ASTNod
 internal enum class InlineFenceState { RENDER, STREAM_PLACEHOLDER, CODE }
 
 internal fun inlineFenceState(language: String, closed: Boolean, streaming: Boolean): InlineFenceState = when {
-    inlineBlockRenderers[language.lowercase()] == null -> InlineFenceState.CODE
     !closed && streaming -> InlineFenceState.STREAM_PLACEHOLDER
-    closed -> InlineFenceState.RENDER
+    closed && inlineBlockRenderers[language.lowercase()] != null -> InlineFenceState.RENDER
     else -> InlineFenceState.CODE
 }
 
@@ -103,27 +104,50 @@ internal fun RenderAssistantCodeFence(
 ) {
     val fence = fenceSource(content, node)
     val renderer = inlineBlockRenderer(fence.language)
-    if (renderer == null) {
+    val state = inlineFenceState(fence.language, fence.closed, streaming)
+    if (renderer == null && state == InlineFenceState.CODE) {
+        val observer = LocalAssistantMarkdownRenderObserver.current
+        if (!fence.closed && streaming) {
+            SideEffect { observer?.onStreamingCodeFallbackComposed(fence.language) }
+        }
         MarkdownCodeFence(content, node, codeStyle)
         return
     }
-    val state = inlineFenceState(fence.language, fence.closed, streaming)
     val sizeMotion = if (LocalReducedMotion.current) Modifier else Modifier.animateContentSize(JarvysMotion.expand())
     // Keep one fence slot through streaming updates; only its inline content changes on closure.
     Box(Modifier.fillMaxWidth().then(sizeMotion)) {
         when (state) {
-            InlineFenceState.STREAM_PLACEHOLDER -> InlineBlockPlaceholder(fence.language)
-            InlineFenceState.RENDER -> renderer.Render(fence.source, Modifier.fillMaxWidth(), fence.language)
-            InlineFenceState.CODE -> AssistantCodeFallback(fence.source, fence.language, codeStyle)
+            InlineFenceState.STREAM_PLACEHOLDER -> InlineBlockPlaceholder(
+                fence.language.takeIf { renderer != null },
+            )
+            InlineFenceState.RENDER -> ObservedInlineBlock(renderer!!, fence.source, fence.language)
+            InlineFenceState.CODE -> if (renderer == null) {
+                MarkdownCodeFence(content, node, codeStyle)
+            } else {
+                AssistantCodeFallback(fence.source, fence.language, codeStyle)
+            }
         }
     }
 }
 
 @Composable
-private fun InlineBlockPlaceholder(language: String) {
-    val renderingLabel = stringResource(R.string.inline_block_rendering, language)
+private fun InlineBlockPlaceholder(language: String?) {
+    val renderingLabel = if (language != null) stringResource(R.string.inline_block_rendering, language)
+        else stringResource(R.string.inline_block_pending)
+    val observer = LocalAssistantMarkdownRenderObserver.current
+    SideEffect { observer?.onPlaceholderComposed(language.orEmpty()) }
     Text(renderingLabel, Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun ObservedInlineBlock(renderer: InlineBlockRenderer, source: String, label: String) {
+    val observer = LocalAssistantMarkdownRenderObserver.current
+    DisposableEffect(label) {
+        observer?.onBlockMounted(label)
+        onDispose { }
+    }
+    renderer.Render(source, Modifier.fillMaxWidth(), label)
 }
 
 @Composable
@@ -175,7 +199,9 @@ private fun Color.toCssHexColor(): String = "#%06X".format(Locale.ROOT, toArgb()
 private object SvgInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
         val currentColor = MaterialTheme.colorScheme.onSurface
+        val observer = LocalAssistantMarkdownRenderObserver.current
         val result = remember(source, currentColor) {
+            observer?.onBlockSourceParsed(label)
             runCatching { sanitizeAndParseSvg(source).renderToPicture(currentColor) }
         }
         val prepared = result.getOrNull()
@@ -371,7 +397,11 @@ private fun JSONArray.toStringList(): List<String> = (0 until length()).map {
 private object ChartInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
         val seriesLabel = stringResource(R.string.inline_block_series_label)
-        val spec = remember(source, seriesLabel) { parseChartSpec(source, seriesLabel) }
+        val observer = LocalAssistantMarkdownRenderObserver.current
+        val spec = remember(source, seriesLabel) {
+            observer?.onBlockSourceParsed(label)
+            parseChartSpec(source, seriesLabel)
+        }
         if (spec == null) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
         } else NativeChart(spec, modifier, source)

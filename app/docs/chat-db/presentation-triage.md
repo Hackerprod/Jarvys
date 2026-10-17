@@ -37,3 +37,28 @@ Modules and actions without an explicit saved choice use the single policy selec
 MCP keeps the saved initial policy for each server. `COMMON_DEFAULT` follows the Wizard choice, `EXPLICIT_CURRENT` and `LEGACY_UNKNOWN` use the server's saved value, and `INVALID` fails closed to `DENY`; saved per-tool policies still take precedence. The server editor again exposes the initial-policy selector with Allow, Ask, and Deny. A new server starts at the current Wizard default, and the selection becomes explicit only after the user changes it and confirms Save.
 
 The original coverage is restored in `McpInitialToolPolicyTest`, `McpNavigationQ1Test`, `Ux21ConnectorPermissionInteractionTest`, and `McpActionLeaseIntegrationTest`. The lease test covers both a saved server-level Ask and the additional Wizard Ask fallback without materialized per-tool rows. `SetupWizardPreferencesTest` also verifies that persisted action defaults are read from their owning preferences even when the global preference binding is absent. If the connector policy store fails, the displayed policy remains restricted (`ASK`); action admission still fails closed through its saved snapshot. `AppNavigationBackPolicyTest` lists the workspace-session preview and module-artifact-viewer routes, matching the actual navigation destinations.
+
+## Markdown en streaming con bloques inline
+
+La fuente etiquetada de `multiplatform-markdown-renderer` `0.37.0` confirma la causa: `rememberMarkdownState(content)` crea un estado nuevo al cambiar el contenido; ese estado empieza en `Loading` y se parsea en `Dispatchers.Default`. La sobrecarga `Markdown(content)` usa esa API y su `loading` predeterminado dibuja un `Box` vacío. Así, cada delta podía sustituir el árbol ya visible por un área de altura cero hasta terminar el parseo. `0.37.0` no declara `retainState`; durante el streaming `AssistantMarkdown` usa el parseo inmediato de la API para que no exista ese frame vacío, y conserva el último `State.Success` para cargas iniciales o históricas asíncronas. Fuentes: [MarkdownState.kt de v0.37.0](https://github.com/mikepenz/multiplatform-markdown-renderer/blob/v0.37.0/multiplatform-markdown-renderer/src/commonMain/kotlin/com/mikepenz/markdown/model/MarkdownState.kt#L34-L64), [Markdown.kt de v0.37.0](https://github.com/mikepenz/multiplatform-markdown-renderer/blob/v0.37.0/multiplatform-markdown-renderer/src/commonMain/kotlin/com/mikepenz/markdown/compose/Markdown.kt#L85-L130).
+
+`AssistantMarkdown` mantiene una única instancia de `MarkdownComponents`; el callback del fence lee `streaming` desde un `CompositionLocal`, evitando cambiar la identidad de componentes al promover el mensaje. Los fences abiertos permanecen en un placeholder de una sola línea hasta cerrarse; el registro sigue decidiendo cuáles se convierten en bloques visuales. El test Compose `assistantMarkdownStreamingRetainsRenderedContentAcrossDeltasAndPromotion` mide carga, placeholder, montajes visuales y de fila, altura intermedia y movimiento de la fila con fences `chart` y `svg`.
+
+`InlineMessageBlocksTest.incompleteSpecialFencesWaitOnlyWhileStreamingAndThenFallBackToCode` conserva todas sus aserciones y añade el caso de un prefijo de lenguaje aún no reconocido. No se debilitó ningún test.
+
+### Medición de `8fe9ebd` y del arreglo
+
+Métricas Robolectric del test Compose con ocho deltas, dos visuales y promoción. La base se ejecutó en el worktree temporal `C:\jvf` preparado desde `8fe9ebd`, añadiendo el mismo test y observadores que solo cuentan eventos, sin aplicar el arreglo. Sus dos fallos son el test nuevo de flicker y el caso del prefijo desconocido añadido arriba. El test aislado de la solución pasó.
+
+| Medición | `8fe9ebd` | Arreglo |
+|---|---:|---:|
+| Composiciones de carga, tras parsear el texto inicial → final | 1 → 10 | 0 → 0 |
+| Composiciones del placeholder | 8 | 5 |
+| Montajes / parseos de chart | 5 / 5 | 1 / 1 |
+| Montajes / parseos de SVG | 3 / 3 | 1 / 1 |
+| Fallbacks a código durante la escritura | 2 | 0 |
+| Montajes de la fila durante stream y promoción | 1 | 1 |
+| Altura mínima observada tras mostrar contenido | 0 px | 122 px |
+| Recorrido del borde inferior de la fila / reversiones | 452 px / 9 | 396 px / 0 |
+
+El desplazamiento del borde acompaña el crecimiento del contenido; las reversiones cuentan movimientos hacia atrás entre frames, que aparecían durante los vaciados en la base. El arreglo mantiene una altura visible mínima y elimina esas reversiones.
