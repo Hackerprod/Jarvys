@@ -13,7 +13,7 @@
   "tools": [
     {
       "name": "create_presentation",
-      "description": "Genera una presentación PowerPoint local con títulos, texto, formas e imágenes, y entrega el PPTX con una miniatura PNG de su primera diapositiva.",
+      "description": "Crea presentaciones PowerPoint profesionales con títulos que expresan la conclusión, una idea principal por diapositiva, una paleta coherente, contraste legible, jerarquía tipográfica y espacio bien distribuido. Incluye texto, viñetas, formas, imágenes, tablas y gráficos de barras con categorías y etiquetas de valor. Usa gráficos nativos y encabezados de tabla claros; mantén cada diapositiva centrada en su mensaje. Entrega el archivo PPTX y una miniatura PNG de la primera diapositiva.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -23,8 +23,8 @@
             "items": {
               "type": "object",
               "properties": {
-                "title": { "type": "string" },
-                "body": { "type": "string" },
+                "title": { "type": "string", "description": "Título breve que comunica la conclusión o acción de la diapositiva." },
+                "body": { "type": "string", "description": "Contexto breve que apoya la idea principal." },
                 "bullets": { "type": "array", "items": { "type": "string" } },
                 "backgroundColor": { "type": "string", "description": "Color hexadecimal sin #." },
                 "shapes": {
@@ -63,12 +63,53 @@
                     "required": ["dataUrl", "x", "y", "w", "h"],
                     "additionalProperties": false
                   }
+                },
+                "chart": {
+                  "type": "object",
+                  "properties": {
+                    "title": { "type": "string", "description": "Título informativo del gráfico." },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Categorías mostradas en el eje." },
+                    "datasets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": { "type": "string", "description": "Nombre de la serie; se usa en la leyenda cuando hay varias series." },
+                          "values": { "type": "array", "items": { "type": "number" }, "description": "Valores numéricos alineados con labels; sus etiquetas se muestran sobre las barras." },
+                          "color": { "type": "string", "description": "Color hexadecimal de la serie, sin #; si se omite, usa la paleta del tema." }
+                        },
+                        "required": ["name", "values"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "x": { "type": "number", "description": "Posición horizontal opcional en pulgadas." },
+                    "y": { "type": "number", "description": "Posición vertical opcional en pulgadas." },
+                    "w": { "type": "number", "description": "Ancho opcional en pulgadas." },
+                    "h": { "type": "number", "description": "Alto opcional en pulgadas." }
+                  },
+                  "required": ["labels", "datasets"],
+                  "additionalProperties": false,
+                  "description": "Gráfico de barras con categorías en el eje y valores etiquetados sobre las barras."
+                },
+                "table": {
+                  "type": "object",
+                  "properties": {
+                    "headers": { "type": "array", "items": { "type": "string" }, "description": "Encabezados concisos para las columnas." },
+                    "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "Filas de datos en el mismo orden que los encabezados." },
+                    "x": { "type": "number", "description": "Posición horizontal opcional en pulgadas." },
+                    "y": { "type": "number", "description": "Posición vertical opcional en pulgadas." },
+                    "w": { "type": "number", "description": "Ancho opcional en pulgadas." },
+                    "h": { "type": "number", "description": "Alto opcional en pulgadas." }
+                  },
+                  "required": ["headers", "rows"],
+                  "additionalProperties": false,
+                  "description": "Tabla con encabezados destacados y filas de datos alternadas."
                 }
               },
               "required": [],
               "additionalProperties": false
             },
-            "description": "Diapositivas en orden de presentación. Usa posiciones en pulgadas para formas e imágenes."
+            "description": "Diapositivas en orden de presentación. Expón una idea por diapositiva. Usa posiciones en pulgadas para formas e imágenes; gráficos y tablas se colocan después del texto salvo que indiques su posición y tamaño."
           }
         },
         "required": ["title", "slides"],
