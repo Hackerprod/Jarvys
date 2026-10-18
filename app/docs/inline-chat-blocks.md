@@ -2,6 +2,16 @@
 
 Assistant Markdown fences are dispatched by the language-to-renderer registry in `InlineBlockRenderers.kt`. SVG, chart, and LaTeX blocks draw natively in Compose. Ordinary Markdown remains on the existing renderer path, which includes GFM tables and applies horizontal scrolling when a table is wider than its measured message area. Invalid or unfinished final special fences fall back to copyable code.
 
+## Scroll re-entry
+
+A Robolectric Compose measurement of a completed 2,240 px assistant reply with 36 paragraphs, a list, SVG, and chart confirmed that LazyColumn disposed the row offscreen and recreated it on return. Before the fix, loading callbacks increased from 1 to 2 and row-height samples changed from 2,240 px to 0 and back to 2,240 px. SVG and chart parse/mount counts each increased from 1 to 2. With a requested anchor at index 0 / offset 180 px, the list returned at index 3 / offset 16 px and stayed there across three frames; while the row was offscreen it was at index 19 / offset 10 px.
+
+The empty frame came from the Markdown renderer's asynchronous parse: the row-local remembered state was discarded with the LazyColumn item, so re-entry showed its empty loading slot until parsing completed. Recreated inline blocks also parse and mount again, adding synchronous work, but their measurements did not cause the zero-height sample. The list anchor shift followed the temporary row collapse.
+
+`ChatMessageList` now owns a successful Markdown-state cache for its `conversationKey` lifetime. Completed, non-streaming Markdown stores only `State.Success` after composition; a cache hit renders that state directly, while a miss keeps the renderer's asynchronous parse path. Streaming bypasses the cache. The cache has no arbitrary item-count limit and is released with the conversation list. SVG sanitization and inline rendering semantics are unchanged.
+
+After the fix, the same Compose test measured loading callbacks at 1→1, row height at 2,240 px before and after re-entry, and every re-entry height sample at 2,240 px. The list returned to index 0 / offset 180 px and held that anchor through three frames. SVG and chart parse/mount counts still rose from 1 to 2, confirming that inline blocks are recreated but did not drive the height or scroll shift in this case.
+
 ## SVG fidelity
 
 The matrix below records alpha bounds and paint measured for generated 160 x 80 SVG samples with AndroidSVG 1.4 in Robolectric native graphics (API 34) and headless Chromium. The shared line/arrow endpoint is included in the measured region; `refX=10` and marker-start cases use a region around the marker endpoint.

@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,6 +67,7 @@ internal fun <T> ChatMessageList(
     messageUpdateKey: (T) -> Any = messageKey,
     fixedItems: LazyListScope.() -> Unit = {},
 ) {
+    val markdownSuccessCache = remember(conversationKey) { AssistantMarkdownSuccessCache() }
     var followingEnd by remember(conversationKey) { mutableStateOf(true) }
     var followingBeforeDataChange by remember(conversationKey) { mutableStateOf(true) }
     var openingByReverseLayout by remember(conversationKey) { mutableStateOf(true) }
@@ -136,17 +138,19 @@ internal fun <T> ChatMessageList(
     }
 
     Box(modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            reverseLayout = true,
-            modifier = Modifier.fillMaxSize().testTag("chat-message-list"),
-            contentPadding = PaddingValues(start = 18.dp, top = 18.dp + headerInset, end = 18.dp,
-                bottom = 18.dp + composerInset),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Top),
-        ) {
-            newestItems()
-            items(messages.asReversed(), key = messageKey) { message -> itemContent(message) }
-            fixedItems()
+        CompositionLocalProvider(LocalAssistantMarkdownSuccessCache provides markdownSuccessCache) {
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                modifier = Modifier.fillMaxSize().testTag("chat-message-list"),
+                contentPadding = PaddingValues(start = 18.dp, top = 18.dp + headerInset, end = 18.dp,
+                    bottom = 18.dp + composerInset),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Top),
+            ) {
+                newestItems()
+                items(messages.asReversed(), key = messageKey) { message -> itemContent(message) }
+                fixedItems()
+            }
         }
         if (!followingEnd && listState.canScrollBackward) SmallFloatingActionButton(
             onClick = {
