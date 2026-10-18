@@ -15,8 +15,7 @@ public class MainAgentContractTest {
     @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
   @Test public void coreIsBoundedOriginalPrincipalContractWithLocale() {
-    // The positive visual-format capability section increased the documented core budget.
-    assertTrue(MainAgentPrompt.CORE.length() <= 7000);
+    assertTrue(MainAgentPrompt.CORE.length() <= MainAgentPrompt.MAX_CORE_CHARACTERS);
     String prompt = MainAgentPrompt.core(Locale.forLanguageTag("es-MX"), true);
     assertTrue(prompt.contains("Runtime response locale: es-MX"));
     for (String fact : Arrays.asList("latest request", "NEVER_LAUNCHED", "INTERRUPTED_UNCERTAIN",
@@ -38,21 +37,20 @@ public class MainAgentContractTest {
         "An acknowledgment or progress message is not task completion"))
       assertTrue(restoredRule, prompt.contains(restoredRule));
     assertTrue(prompt.contains("never put private reasoning there"));
-    assertTrue(prompt.contains("Native visual blocks render in chat as part of the answer."));
-    assertTrue(prompt.contains("Use tables for comparisons"));
-    assertTrue(prompt.contains("prose for arguments"));
-    assertTrue(prompt.contains("`latex` fences for mathematical relationships"));
-    assertTrue(prompt.contains("`svg` for spatial relations and diagrams"));
-    assertTrue(prompt.contains("`chart` for numerical data"));
-    assertTrue(prompt.contains("Place visuals beside their explanation"));
-    assertTrue(prompt.contains("mark estimates as approximate"));
-    assertTrue(prompt.contains("Inline blocks are for chat; use module tools for files such as PPTX or PNG."));
-    assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (type: bar, line, or pie)"));
-    assertTrue(prompt.contains("Draw SVG with a `viewBox`, transparent background, and `currentColor`"));
+    assertTrue(prompt.contains("Use one compact figure per idea for structure, flow, spatial relations or magnitude when prose is slower."));
+    assertTrue(prompt.contains("Put it by the sentence; say what it shows."));
+    assertTrue(prompt.contains("If text/table works as well, use text; draw diagrams on request."));
+    assertTrue(prompt.contains("Math: use a `latex` fence."));
+    assertTrue(prompt.contains("Inline blocks are for chat; use modules for files like PPTX or PNG."));
+    assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (bar/line/pie)"));
+    assertTrue(prompt.contains("SVG: `viewBox`, transparent background, `currentColor`"));
+    assertTrue(prompt.contains("fit labels to shapes on portrait phones"));
+    assertTrue(prompt.contains("markerWidth/Height, viewBox, refX/Y"));
+    assertTrue(prompt.contains("markerUnits=strokeWidth scales size with stroke; userSpaceOnUse fixed"));
+    assertTrue(prompt.contains("orient=auto; fill=currentColor or fill=none stroke=currentColor; avoid context-stroke/context-fill, auto-start-reverse."));
     assertTrue(prompt.contains("`currentColor`"));
-    assertTrue(prompt.contains("put math in a `latex` fence"));
     assertTrue(prompt.contains("transparent background"));
-    assertTrue(prompt.contains("source chart values from the conversation, user, or tools and mark estimates as approximate"));
+    assertTrue(prompt.contains("Chart data: use conversation, user or tools; mark estimates as approximate."));
     assertFalse(prompt.contains("no scripts"));
     assertFalse(prompt.contains("short text within the viewBox"));
   }
