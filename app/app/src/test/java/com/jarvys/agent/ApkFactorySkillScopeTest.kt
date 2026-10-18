@@ -134,10 +134,7 @@ class ApkFactorySkillScopeTest {
         }
 
         val principalSkills = repo.enabledForRun().filter { it.source == SkillSource.BUNDLED }
-        val completeSkillChars = principalSkills.maxOf {
-            "Skill ${it.metadata.id} — ${it.metadata.name}\n${it.body}".length
-        }
-        val tool = LoadSkillTool(principalSkills, completeSkillChars,
+        val tool = LoadSkillTool(principalSkills, CorePromptBudget.standard().loadedSkillChars,
             { key -> repo.enabledForProfile(null).any { it.metadata.id == key } })
         principalSkills.forEach { skill ->
             assertTrue(skill.metadata.id, tool.execute(mapOf("skill_id" to skill.metadata.id),

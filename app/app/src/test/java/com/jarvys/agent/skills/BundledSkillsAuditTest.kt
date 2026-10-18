@@ -102,4 +102,18 @@ class BundledSkillsAuditTest {
         assertEquals(listOf(imported), botPickerSkillEntries(listOf(imported)))
         assertFalse(imported.metadata.id in botPickerHiddenSkillIds(listOf(imported)))
     }
+
+    @Test fun presentationSkillLoadsWithinTheStandardReadSkillBudget() {
+        val repository = SkillRepository.get(context)
+        repository.refresh()
+        val skill = repository.enabledForRun().single { it.metadata.id == "jarvys-presentation" }
+        val budget = CorePromptBudget.standard().loadedSkillChars
+        val result = LoadSkillTool(listOf(skill), budget).execute(
+            mapOf("skill_id" to skill.metadata.id), CancellationToken.uncancellable(),
+        )
+
+        assertTrue("Presentation skill must fit the real read_skill payload budget: ${result.content}", result.success)
+        assertTrue(result.content.length <= budget)
+    }
+
 }
