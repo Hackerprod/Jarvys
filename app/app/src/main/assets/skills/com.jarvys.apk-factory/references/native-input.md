@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / native-input
+# Factory guidance factory-guidance-v89 / native-input
 
 ## Shared contract
 Installed current page and declared capability; operations authenticate the installed caller. Android runtime permissions and system activities still apply; preview UNAVAILABLE. No hardware,zero-egress or packaged acceptance claim.

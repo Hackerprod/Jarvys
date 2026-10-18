@@ -16,10 +16,12 @@ First call `apk_factory` with `action: inspect`; then inspect the project and `f
 
 In `factory.json`, `capabilities` is optional: omit it to enable every compiled capability, or declare an array to restrict the app to that subset. Omission also selects the full derived Android manifest scope and the incomingShare `*/*`/multiple and Bluetooth `full` policy defaults; it does not grant Android runtime permissions. See `lifecycle` for the exact implications. The generated `factory-app.json` records the effective explicit capability list under schema 1.
 
+Load `/factory-sdk.js` first from the app origin `https://app.jarvys.invalid`, then separate local JavaScript files. Do not use inline scripts. Apply native insets once.
+
 `apk_factory` results are compact by default: state and counts, with details for failures and relevant warnings. `inspect`, `test` and preview still report their evidence limits; a passing test runs the complete shared checks but does not test project JavaScript, WebView rendering, installed identity, Android grants/system effects, durable persistence or prove network absence.
 
 ## References
-Guidance version: factory-guidance-v88. SDK2/schema1; 33 capabilities / 134 methods. Load only the reference needed with `read_skill`, skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v88". Reuse loaded references while they remain in context; re-fetch only after compaction. Each read is complete, version-checked and on demand.
+Guidance version: factory-guidance-v89. SDK2/schema1; 33 capabilities / 134 methods. The core is already in Coding's system prompt; `read_skill` loads references on demand. Load only a needed reference with skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v89". Reuse loaded references while they remain in context; re-fetch only after compaction. Each read is complete and version-checked.
 - basics: SDK, authenticated calls and storage
 - documents-media: document handles, sharing, photos and audio
 - external-actions: browser, maps, dialer, email and SMS
@@ -36,11 +38,11 @@ Guidance version: factory-guidance-v88. SDK2/schema1; 33 capabilities / 134 meth
 - durable-native: notifications, widgets and finite background HTTP
 
 ## Security and Android boundaries
-Native operations authenticate the installed caller; identity is appId+certificate. The 64 recent artifacts retain exact signed scope. Nonce/request/source-bound leases constrain active calls. Damaged/missing evidence fails closed; a newer artifact cannot lend identity or scope.
+Native calls authenticate the exact package, UID, version and APK hash; identity is appId+certificate. The 64 recent artifacts retain exact signed scope, and an older installed matching artifact can remain valid. Legacy compatibility is exact-latest only. Nonce/request/source-bound leases constrain active calls. Damaged/missing evidence fails closed; a newer artifact cannot lend identity or scope.
 
-The documented APK Factory permission default is ALLOW_ALWAYS (Settings → Factory permissions). Android runtime permissions and system selectors (documents, photos, contacts and recipients), biometric prompts, launcher pinning and PackageInstaller consent remain system-controlled. The user completes those flows. Do not automate Android security UI or retry uncertain effects.
+Jarvys does not add an operation approval screen. Android runtime permissions and system selectors (documents, photos, contacts and recipients), biometric prompts, launcher pinning and PackageInstaller consent remain system-controlled. The user completes those flows. Do not automate Android security UI or retry uncertain effects.
 
-The app packages precompiled DEX; there is no arbitrary per-app native compiler or API. Use the Promise-based `window.Jarvys` SDK, origin/frame checks and local-only WebView setup; no remote scripts, fonts or direct web fetch. Use the declared native network API when the app needs network access. INTERNET is process-wide, and providers, engines or recipients may use their own network. Keep credentials out of source/logs.
+The app packages precompiled DEX; there is no arbitrary per-app native compiler or API. No API exposes arbitrary filesystem access, billing, Intents, Android objects or hidden-library hooks. Use the Promise-based `window.Jarvys` SDK, origin/frame checks and local-only WebView setup; no remote scripts, fonts or direct web fetch. Use the declared native network API when the app needs network access. INTERNET is process-wide, and providers, engines or recipients may use their own network. Keep credentials out of source/logs.
 
 ## Build and evidence
 New apps use a distinct identity; updates keep appId/key and increase versionCode. Keep exact sources, hashes and receipts. Build/sign/install/physical acceptance are separate. factory.install submits the exact signed receipt to PackageInstaller. A per-app Android Keystore key is created at first signing and is not exported by Factory tools. Preserve exact API names, enums and receipt fields.

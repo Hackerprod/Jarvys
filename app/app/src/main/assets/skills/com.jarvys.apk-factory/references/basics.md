@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / basics
+# Factory guidance factory-guidance-v89 / basics
 
 ## SDK/data
 SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `factory.json` capabilities select all; an explicit subset remains closed (`CAPABILITY_DENIED`). Generated schema1 `factory-app.json` records the effective list. Methods require capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
@@ -18,11 +18,11 @@ SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `facto
 Storage keys match [a-zA-Z0-9_.:-]{1,96}; values need valid paired Unicode. Serialize dependent writes. Signed resourceBudgets:{version:1,storage:{totalBytes,entries,valueBytes}} permits partial fields. Defaults:1MiB/256/64KiB; maxima:16MiB/65536/523264 raw-value bytes. Escaped request/result content must still fit 511KiB, full bridge512KiB; whole-map adapter ceiling,not Android disk limit. Lowered quotas preserve reads/deletes/non-growing replacements.
 
 ## Authenticated native operations
-Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. The documented APK Factory permission default is ALLOW_ALWAYS (Settings → Factory permissions).
+Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. Jarvys does not add an operation approval screen.
 
-Invalid or missing caller/source evidence fails closed. An operation cannot borrow identity or capabilities from a newer artifact. Cleanup and status methods report or close owned work without replaying completed effects; durable work rechecks caller/source identity before effects.
+Invalid or missing caller/source evidence fails closed; a newer artifact cannot lend identity or scope. Revocation stops future effects, not completed work or open descriptors; receipts do not prove evidence was erased. Cleanup/status report or close owned work; no blind replay.
 
-Backup protocol v2 rechecks before writes/commit; legacy v1 ends at final host authorization. Open FDs/completed effects/remote copies cannot be recalled. No blind replay.
+Backup protocol v2 rechecks before writes/commit; legacy v1 ends at final host authorization.
 
 SDK:16 ordinary/20 total pending with recognized cleanup controls,one pending per control method. Shared ceiling,no guaranteed slots per control; timeout proves no rollback.
 

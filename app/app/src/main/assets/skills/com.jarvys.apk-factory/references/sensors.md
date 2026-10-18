@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / sensors
+# Factory guidance factory-guidance-v89 / sensors
 
 ## Finite capture
 Declared sensors, installed foreground page; preview UNAVAILABLE, including list/cancel. Fixed kinds: light (lux/scalar), accelerometer (m/s2/device-natural), gyroscope (rad/s/device-natural). No vendor/ID enumeration. Discovery is no output guarantee. TYPE_GYROSCOPE angular velocity, no orientation/fusion/uncalibrated fallback. Natural x right/y top/z out, right-hand rotation, no display remap. Accelerometer includesGravity:true; others false.

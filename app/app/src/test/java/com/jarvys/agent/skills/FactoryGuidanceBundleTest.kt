@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun catalogHashesBoundsAndImmutableMapAreVerified() {
         val bundle = load()
-        assertEquals("factory-guidance-v88", bundle.version)
+        assertEquals("factory-guidance-v89", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar", "database",
             "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services", "native-input", "radios", "durable-native"), FactoryGuidanceBundle.NAMES)
         assertEquals(14, bundle.resources.size)

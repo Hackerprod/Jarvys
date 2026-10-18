@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / durable-native
+# Factory guidance factory-guidance-v89 / durable-native
 
 Installed APIs,preview UNAVAILABLE. Durable data does not authenticate its caller: recheck current app/source identity and capabilities before effects. Background work waits when its caller/source or Android prerequisites are unavailable. Own reads/cleanup do not replay completed effects. No background JS/exactly-once/device acceptance claim.
 

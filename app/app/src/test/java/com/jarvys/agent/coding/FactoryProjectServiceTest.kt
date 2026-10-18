@@ -141,19 +141,30 @@ class FactoryProjectServiceTest {
         assertFalse(result.toString().contains("Long source limit"))
     }
 
-    @Test fun previewStatusSummaryCountsAllEventsAndReturnsOnlyWarnings() {
+    @Test fun previewStatusSummaryCountsAllEventsAndRetainsSuccessfulAndFailureGroups() {
         val f = Fixture()
         val full = JSONObject().put("state", "launch_requested")
             .put("observations", JSONArray().put(JSONObject().put("operation", "storage.set").put("outcome", "success").put("count", 4))
                 .put(JSONObject().put("operation", "share.text").put("outcome", "simulated").put("count", 2))
-                .put(JSONObject().put("operation", "runtime").put("outcome", "cleanup_pending").put("count", 1)))
+                .put(JSONObject().put("operation", "runtime").put("outcome", "cleanup_pending").put("count", 1))
+                .put(JSONObject().put("operation", "page").put("outcome", "started").put("count", 1))
+                .put(JSONObject().put("operation", "page").put("outcome", "finished").put("count", 1))
+                .put(JSONObject().put("operation", "documents.open").put("outcome", "success").put("count", 3))
+                .put(JSONObject().put("operation", "network.request").put("outcome", "error").put("count", 5)))
             .put("evidence_limit", "Long source limit")
         val result = f.service.compactPreviewStatus(full)
-        assertEquals(7L, result.getLong("total_observations"))
-        assertEquals(3L, result.getLong("warning_count"))
-        assertEquals(2, result.getJSONArray("observations").length())
-        assertEquals("simulated", result.getJSONArray("observations").getJSONObject(0).getString("outcome"))
-        assertEquals("cleanup_pending", result.getJSONArray("observations").getJSONObject(1).getString("outcome"))
+        assertEquals(17L, result.getLong("total_observations"))
+        assertEquals(7, result.getJSONArray("observations").length())
+        val groups = (0 until result.getJSONArray("observations").length()).map {
+            result.getJSONArray("observations").getJSONObject(it).let { row -> "${row.getString("operation")}:${row.getString("outcome")}" to row.getLong("count") }
+        }.toMap()
+        assertEquals(4L, groups.getValue("storage.set:success"))
+        assertEquals(2L, groups.getValue("share.text:simulated"))
+        assertEquals(1L, groups.getValue("page:started"))
+        assertEquals(1L, groups.getValue("page:finished"))
+        assertEquals(3L, groups.getValue("documents.open:success"))
+        assertEquals(5L, groups.getValue("network.request:error"))
+        assertEquals(1L, groups.getValue("runtime:cleanup_pending"))
         assertTrue(result.getString("evidence_limit").contains("unverified"))
         assertFalse(result.toString().contains("Long source limit"))
     }
@@ -361,6 +372,14 @@ class FactoryProjectServiceTest {
         assertTrue(manifest.plan.queryActions.contains("android.speech.action.RECOGNIZE_SPEECH"))
         val application = manifest.plan.nodes.single { it.path == "manifest/application" }
         assertEquals(-1, application.attributes["${com.jarvys.factory.contract.ManifestPlan.ANDROID}|usesCleartextTraffic"]?.value)
+        val scopeWarning = f.service.inspect(CancellationToken.cancellable()).getString("scopeWarning")
+        (manifest.plan.permissions + manifest.plan.features + manifest.plan.queries + manifest.plan.queryActions +
+            manifest.plan.exportedComponents + manifest.plan.privateComponents).forEach {
+            assertTrue("scopeWarning omits derived manifest entry $it", scopeWarning.contains(it))
+        }
+        assertTrue(scopeWarning.contains("incomingShare [*/*] / multiple=true"))
+        assertTrue(scopeWarning.contains("Bluetooth scanPrivacy=full"))
+        assertTrue(scopeWarning.contains("cleartext traffic=enabled"))
         assertEquals(built.getString("sha256"), ProjectScope.sha256(apk))
     }
     @Test fun factoryHarnessRejectsHashScopeAndAvailabilityChanges() {
@@ -389,8 +408,7 @@ class FactoryProjectServiceTest {
             val status=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())
             assertEquals("launch_requested",status.getString("state"))
             assertEquals(launch.getString("build_id"),status.getString("build_id"))
-            assertTrue(status.getLong("total_observations") >= status.getLong("warning_count"))
-            assertTrue(status.getInt("warning_count") >= status.getJSONArray("observations").length())
+            assertTrue(status.getLong("total_observations") >= status.getJSONArray("observations").length())
             assertTrue(status.getString("evidence_limit").isNotBlank())
             token.cancel()
             val cancelled=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())

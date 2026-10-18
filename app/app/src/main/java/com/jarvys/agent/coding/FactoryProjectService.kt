@@ -15,6 +15,11 @@ import com.jarvys.factory.runtime.FactoryUiAssets
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
 import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.contract.BluetoothPolicy
+import com.jarvys.factory.contract.F3ManifestPolicy
+import com.jarvys.factory.contract.IncomingSharePolicy
+import com.jarvys.factory.contract.ManifestPlan
+import com.jarvys.factory.contract.NotificationPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -30,7 +35,6 @@ internal class FactoryProjectService(
     private val identities: FactorySigningIdentity = FactorySigningIdentity(context),
 ) {
     private val privateRoot = File(context.noBackupFilesDir, "apk-factory")
-    private val previewWarningOutcomes = setOf("simulated", "denied", "error", "failed", "revoked", "cleanup_pending")
     private fun checkActive(token: CancellationToken) {
         token.throwIfCancelled()
         check(available()) { "APK factory is no longer available to this Coding run" }
@@ -88,10 +92,37 @@ internal class FactoryProjectService(
                 .put("technicalApkBytes", TemplateApk.MAX_APK_BYTES)
                 .put("resourceAdmission", "Defaults shown above; signed resourceBudgets.packaging can raise source limits within maxima. Complete APK includes fixed runtime/config/provenance and ZIP overhead. One process-local operation with conservative actual-size heap admission; availability is not guaranteed.").put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON")
                 .put("adaptiveIcon", "Optional foreground PNG or transparent geometric JSON, opaque #RRGGBB background, insetPercent 0–40 (default 0 preserves canvas); compiled API26 adaptive resource plus legacy fallback"))
-            .put("scopeWarning", "Omitting capabilities enables all ${FactorySpec.CAPABILITIES.size} compiled APIs and derives their manifest scope: USE_BIOMETRIC, INTERNET/cleartext, POST_NOTIFICATIONS, coarse/fine location, RECORD_AUDIO, ACTIVITY_RECOGNITION, HIGH_SAMPLING_RATE_SENSORS, NFC/optional NFC feature, Bluetooth permissions/feature, ACCESS_NETWORK_STATE, RECEIVE_BOOT_COMPLETED, the two Jarvys package queries and TTS/speech-recognition intent queries. Defaults include incomingShare */* plus multiple items and Bluetooth scanPrivacy full. Declarations do not grant Android runtime permissions.")
+            .put("scopeWarning", defaultScopeWarning())
             .put("evidence_limit", "Bundled template and compiled catalog only; no project app behavior was tested.")
             .put("signing", "A per-app RSA key is created locally in AndroidKeyStore on first signing. Android controls installation confirmation and the source-specific install setting.")
             .put("unsupported", "Native APIs outside the compiled catalog require a reviewed template update; per-app native code and compilation are unsupported.")
+    }
+
+    private fun defaultScopeWarning(): String {
+        val omitted = FactorySpec.parse(JSONObject().put("schemaVersion", 1).put("appId", "org.example.factoryscope")
+            .put("name", "Factory scope").put("versionCode", 1).put("versionName", "1")
+            .put("webDir", "web").put("icon", "icon.png"))
+        val capabilities = omitted.capabilities.toSet()
+        val catalog = capabilities.map { CapabilityCatalog.CAPABILITIES.getValue(it) }
+        val permissions = catalog.flatMap { it.permissions }.toMutableSet()
+        if ("nfc" in capabilities) permissions += F3ManifestPolicy.NFC_PERMISSION
+        if ("bluetooth" in capabilities) permissions += setOf(F3ManifestPolicy.BLUETOOTH_PERMISSION,
+            F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION, F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION,
+            F3ManifestPolicy.BLUETOOTH_CONNECT_PERMISSION)
+        if ("jobs" in capabilities) permissions += setOf(F3ManifestPolicy.NETWORK_STATE_PERMISSION, NotificationPolicy.BOOT_PERMISSION)
+        val features = buildSet {
+            if ("nfc" in capabilities) add(F3ManifestPolicy.NFC_FEATURE)
+            if ("bluetooth" in capabilities) add(F3ManifestPolicy.BLE_FEATURE)
+        }
+        val components = buildSet {
+            add(ManifestPlan.ACTIVITY)
+            if ("widgets" in capabilities) addAll(listOf(F3ManifestPolicy.WIDGET_PROVIDER, F3ManifestPolicy.WIDGET_ACTION_RECEIVER))
+            if ("jobs" in capabilities) add(F3ManifestPolicy.JOB_SERVICE)
+        }
+        val incomingShare = omitted.incomingShare ?: IncomingSharePolicy(listOf("*/*"), true)
+        val bluetooth = omitted.bluetooth ?: BluetoothPolicy("full")
+        val cleartext = "enabled".takeIf { "network" in capabilities } ?: "disabled"
+        return "Omitting capabilities selects all ${capabilities.size} compiled APIs. Derived manifest scope: permissions=${permissions.sorted()}, features=${features.sorted()}, package queries=${catalog.flatMap { it.queries }.toSet().sorted()}, intent queries=${catalog.flatMap { it.queryActions }.toSet().sorted()}, components=${components.sorted()}, cleartext traffic=$cleartext. Defaults: incomingShare ${incomingShare.mimeTypes} / multiple=${incomingShare.multiple}; Bluetooth scanPrivacy=${bluetooth.scanPrivacy}. Manifest declarations do not grant Android runtime permissions."
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject =
         FactoryPackagingResources.acquire().use { buildOwned(specPath, outputPath, expectedVersion, token) }
@@ -435,17 +466,13 @@ internal class FactoryProjectService(
 
     internal fun compactPreviewStatus(full: JSONObject): JSONObject {
         val observations = full.getJSONArray("observations")
-        val warnings = JSONArray()
+        val retained = JSONArray()
         var totalCount = 0L
-        var warningCount = 0L
         for (index in 0 until observations.length()) {
             val observation = observations.getJSONObject(index)
             val count = observation.optLong("count", 1L).coerceAtLeast(0L)
             totalCount = saturatedAdd(totalCount, count)
-            if (observation.optString("outcome") in previewWarningOutcomes) {
-                warningCount = saturatedAdd(warningCount, count)
-                warnings.put(JSONObject(observation.toString()))
-            }
+            retained.put(JSONObject(observation.toString()))
         }
         val compact = JSONObject()
         val keys = full.keys()
@@ -453,8 +480,8 @@ internal class FactoryProjectService(
             val key = keys.next()
             if (key != "observations" && key != "evidence_limit") compact.put(key, full.get(key))
         }
-        return compact.put("total_observations", totalCount).put("warning_count", warningCount)
-            .put("observations", warnings)
+        return compact.put("total_observations", totalCount)
+            .put("observations", retained)
             .put("evidence_limit", "Shared-runtime events only; installed rendering, Android grants, persistence and network absence are unverified.")
     }
 

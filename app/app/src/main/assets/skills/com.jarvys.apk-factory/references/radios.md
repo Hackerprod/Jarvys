@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / radios
+# Factory guidance factory-guidance-v89 / radios
 
 ## Foreground NFC NDEF
 Declared nfc; selective NFC normal permission and optional hardware.nfc feature, no arbitrary tag API/HCE/payment service/intent dispatch. Installed,preview UNAVAILABLE. Operations use the declared capability; status/cancel do not start a reader. Nearby tag physically required.

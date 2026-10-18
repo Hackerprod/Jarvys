@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v88 / native-services
+# Factory guidance factory-guidance-v89 / native-services
 
 Installed declared APIs,UNAVAILABLE in preview. Installed caller identity is authenticated; Android OS permissions still apply. Old DEX needs same-ID/key higher-version update. Network selection adds INTERNET/usesCleartextTraffic=true; speech adds android.intent.action.TTS_SERVICE query. INTERNET is process-wide; local WebView/CSP is no zero-egress proof. Platform TLS trust/hostname verification remains intact; no custom trust bypass. TTS/providers may use network; runtime.info is configuration,no isolation proof.
 
