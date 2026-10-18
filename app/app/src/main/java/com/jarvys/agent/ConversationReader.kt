@@ -20,6 +20,7 @@ import com.jarvys.agent.chatdb.MessageWindow
 import com.jarvys.agent.chatdb.ModelTranscriptEntry
 import com.jarvys.agent.chatdb.ModelTranscriptRepository
 import com.jarvys.agent.chatdb.ModelTranscriptSnapshot
+import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.chatdb.ReflectionPayloadSnapshot
 import com.jarvys.agent.chatdb.StrictJournalRepository
 import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
@@ -61,7 +62,10 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val hasOlder: Boolean get() = olderCursorSeq != null
     }
 
-    suspend fun loadConversationContext(conversationId: String): List<ConversationTurn> = readProjection {
+    suspend fun loadConversationContext(
+        conversationId: String,
+        workspaceWakeReferenceId: String? = null,
+    ): List<ConversationTurn> = readProjection {
         val compaction = memory.activeCompaction(conversationId)
         val modelSnapshot = transcript.readModelTranscript(conversationId)
         val modelRows = readModelRows(modelSnapshot, conversationId)
@@ -96,11 +100,24 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 emptyList(),
             )
         }
+        val wakeEvents = if (WorkspaceIdentity.isCentral(conversationId)) {
+            (strictJournals.listPendingWorkspaceResultWakes(conversationId) as? ChatDbResult.Success)
+                ?.value.orEmpty()
+                .filter { workspaceWakeReferenceId == null || it.reference.referenceId == workspaceWakeReferenceId }
+                .map { wake ->
+                val reference = wake.reference
+                ContextPart(wake.seq, 0, wake.seq, null, listOf(ConversationTurn.systemEvent(reference.referenceId,
+                    "Workspace result registered: workspace_id=${reference.workspaceId}; " +
+                        "assignment_id=${reference.assignmentId}; reported_state=${reference.reportedStatus}; " +
+                        "result_reference_id=${reference.referenceId}"
+                )))
+            }
+        } else emptyList()
         val context = ArrayList<ConversationTurn>()
         if (compaction != null && compaction.summary.isNotEmpty()) {
             context += ConversationTurn.compactionSummary(compaction.summary, compaction.summarized_messages.toInt())
         }
-        (messageParts + groupsByPosition).sortedWith(compareBy<ContextPart>({ it.sortSeq }, { it.sortSub }, { it.seq }))
+        (messageParts + groupsByPosition + wakeEvents).sortedWith(compareBy<ContextPart>({ it.sortSeq }, { it.sortSub }, { it.seq }))
             .forEach { part ->
                 val message = part.message ?: run {
                     context.addAll(part.turns)
@@ -119,6 +136,10 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                         index,
                         message.attachments.map(::toChatAttachment),
                     )
+                }
+                if (message.role == "user") {
+                    val last = context.last()
+                    context[context.lastIndex] = last.withDurableMessageId(message.messageId)
                 }
             }
         context
@@ -351,6 +372,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                         AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
                             .copyMetadata(message.messageId, duration)
                             .copyStage(stage)
+                            .copyCanRegenerate(!ConversationTurn.isWorkspaceWakeOwner(message.ownerUserMessageId))
                     }
                 }
                 continue

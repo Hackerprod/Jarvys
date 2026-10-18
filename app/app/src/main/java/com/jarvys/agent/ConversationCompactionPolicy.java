@@ -78,9 +78,13 @@ public final class ConversationCompactionPolicy {
     public static Plan planAll(List<ConversationTurn> messages) {
         List<ConversationTurn> input = messages == null ? Collections.emptyList() : messages;
         int last = input.size() - 1;
+        int protectedStart = firstSystemEventIndex(input);
         if (last >= 0 && hasPendingToolCall(input.get(last))) {
-            return new Plan(input.subList(0, last), input.subList(last, input.size()), last, Mode.ALL);
+            protectedStart = Math.min(protectedStart, last);
         }
+        if (protectedStart < input.size())
+            return new Plan(input.subList(0, protectedStart), input.subList(protectedStart, input.size()),
+                    protectedStart, Mode.ALL);
         return new Plan(input, Collections.emptyList(), input.size(), Mode.ALL);
     }
 
@@ -89,6 +93,8 @@ public final class ConversationCompactionPolicy {
         if (input.size() < 4) return planAll(input);
         double targetPercent = Double.isFinite(percentage) ? Math.min(1, Math.max(0.1, percentage)) : DEFAULT_SLIDING_PERCENTAGE;
         int maximumCutoff = input.size() - (hasPendingToolCall(input.get(input.size() - 1)) ? 2 : 1);
+        int protectedStart = firstSystemEventIndex(input);
+        if (protectedStart < input.size()) maximumCutoff = Math.min(maximumCutoff, protectedStart + 1);
         int cutoff = -1;
         int retainedTokens = Integer.MAX_VALUE;
         double evictionPercent = targetPercent;
@@ -116,6 +122,14 @@ public final class ConversationCompactionPolicy {
 
     private static boolean hasPendingToolCall(ConversationTurn turn) {
         return turn != null && turn.kind == ConversationTurn.Kind.TOOL_CALLS;
+    }
+
+    private static int firstSystemEventIndex(List<ConversationTurn> turns) {
+        for (int index = 0; index < turns.size(); index++) {
+            ConversationTurn turn = turns.get(index);
+            if (turn != null && turn.kind == ConversationTurn.Kind.SYSTEM_EVENT) return index;
+        }
+        return turns.size();
     }
 
     public static int estimateTurnsTokens(List<ConversationTurn> turns) {

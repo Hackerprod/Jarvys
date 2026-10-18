@@ -5,6 +5,7 @@ import android.database.Cursor
 import android.os.Looper
 import com.jarvys.agent.ConversationMetadataAccess
 import com.jarvys.agent.ConversationTitle
+import com.jarvys.agent.ConversationTurn
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionRole
@@ -674,6 +675,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val target = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
         if (target.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("regeneration target must be an assistant message")
         if (target.hiddenKind != null) return@transactionResult ChatDbResult.Success(null)
+        if (ConversationTurn.isWorkspaceWakeOwner(target.ownerUserMessageId))
+            return@transactionResult ChatDbResult.Invalid("system-origin workspace replies cannot be regenerated")
 
         val latestActiveAssistantId = sql.query(
             "SELECT m.message_id FROM messages m " +

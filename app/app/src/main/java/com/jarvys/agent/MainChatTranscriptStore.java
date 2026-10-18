@@ -69,6 +69,10 @@ final class MainChatTranscriptStore {
     }
 
     void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory) {
+        attach(loop, priorHistory, null);
+    }
+
+    void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory, String turnOwnerId) {
         Set<ConversationTurn> historical = Collections.newSetFromMap(new IdentityHashMap<>());
         if (priorHistory != null) historical.addAll(priorHistory);
         Map<ConversationTurn, String> batches = new IdentityHashMap<>();
@@ -78,7 +82,8 @@ final class MainChatTranscriptStore {
         Set<String> callIds = new HashSet<>();
         if (priorHistory != null) for (ConversationTurn turn : priorHistory)
             for (ModelReply.Call call : turn.toolCalls) callIds.add(call.id);
-        String userMessageId = store.latestUserMessageId(sessionId);
+        String userMessageId = turnOwnerId == null || turnOwnerId.isEmpty()
+                ? store.latestUserMessageId(sessionId) : turnOwnerId;
         int messageIndex = store.latestUserMessageIndex(sessionId);
         loop.setCheckpointListener(checkpoint -> {
             try {
@@ -153,7 +158,9 @@ final class MainChatTranscriptStore {
                         batch = null;
                     }
                 }
-                store.appendModelTranscriptCheckpoint(sessionId, checkpointRows, new java.util.ArrayList<>(checkpoint.appliedIncomingIds));
+                store.appendModelTranscriptCheckpoint(sessionId, checkpointRows,
+                        new java.util.ArrayList<>(checkpoint.appliedIncomingIds),
+                        checkpoint.workspaceResultWakeReferenceIds);
                 } finally {
                     pendingCheckpointRows.remove();
                 }

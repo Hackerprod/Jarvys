@@ -67,6 +67,13 @@ class CentralWorkspaceToolTest {
                              token: CancellationToken, admission: Runnable) =
             invoke("deliver", mapOf("workspaceId" to workspaceId, "path" to path, "expectedSha256" to expectedSha256,
                 "filename" to filename), admission, token)
+        override fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
+                           expectedAssignmentRevision: Long, requestId: String, originalUserRequest: String,
+                           token: CancellationToken, admission: Runnable) =
+            invoke("reply", mapOf("workspaceId" to workspaceId, "messageId" to messageId,
+                "expectedSha256" to expectedSha256, "key" to key, "text" to text,
+                "expectedAssignmentRevision" to expectedAssignmentRevision,
+                "requestId" to requestId, "originalUserRequest" to originalUserRequest), admission, token)
         override fun results(workspaceId: String, limit: Int, afterResultId: String?, admission: Runnable) =
             invoke("results", mapOf("workspaceId" to workspaceId, "limit" to limit, "afterResultId" to afterResultId), admission)
         override fun readResult(workspaceId: String, resultId: String, expectedSha256: String, offset: Int,
@@ -137,6 +144,34 @@ class CentralWorkspaceToolTest {
         assertEquals(mapOf("workspaceId" to workspace, "path" to inspect["path"]), backend.calls[5].values)
         assertEquals(mapOf("workspaceId" to workspace, "path" to deliver["path"],
             "expectedSha256" to sha, "filename" to null), backend.calls[4].values)
+    }
+
+    @Test fun workspaceToolUsesItsInjectedOriginatingUserRequestForMutatingActions() {
+        val backend = Backend()
+        val runtime = tool(backend, requestId = "wake-runtime:assignment-1", originalRequest = userText)
+        val token = CancellationToken.uncancellable()
+        val coordinationId = "workspace-coordination-${"d".repeat(64)}"
+
+        val actions = listOf(
+            deliver,
+            delegate,
+            mapOf("action" to "reply", "workspace_id" to workspace, "message_id" to coordinationId,
+                "expected_sha256" to sha, "key" to "reply-stable", "text" to "The requested APK is ready.",
+                "expected_assignment_revision" to 4L),
+        )
+        actions.forEach { arguments ->
+            val result = runtime.execute(arguments, token)
+            assertTrue(result.content, result.success)
+        }
+
+        assertEquals(listOf("deliver", "delegate", "reply"), backend.calls.map { it.action })
+        assertEquals(userText, backend.calls[1].values["originalUserRequest"])
+        assertEquals(userText, backend.calls[2].values["originalUserRequest"])
+        val emptyProvenance = tool(Backend(), originalRequest = "")
+        actions.forEach { arguments ->
+            assertFalse("Mutation without the originating user request must fail: $arguments",
+                emptyProvenance.execute(arguments, token).success)
+        }
     }
 
     @Test fun stopBeforeExecutionNeverEntersBackend() {

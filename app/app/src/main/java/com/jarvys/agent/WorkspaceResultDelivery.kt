@@ -9,10 +9,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Local receipt reconciliation only. Never launches a worker, model turn or external effect. */
+/** Reconciles local receipts and queues a reference-only Central turn; it never launches a worker. */
 class WorkspaceResultDelivery internal constructor(
     context: Context,
     private val ledger: LocalRunStore,
+    private val startWake: (Context, String) -> Unit = { owner, referenceId ->
+        AgentForegroundService.startWorkspaceResultWake(owner, referenceId)
+    },
 ) {
     constructor(context: Context) : this(context, LocalRunStore(context))
     private val app = context.applicationContext
@@ -56,16 +59,27 @@ class WorkspaceResultDelivery internal constructor(
         }
     }
 
-    private fun notice(reference: WorkspaceResultReference, token: CancellationToken, admission: Runnable) {
+    private fun notice(reference: WorkspaceResultReference, token: CancellationToken, admission: Runnable,
+                       scheduleWake: Boolean = true) {
         token.throwIfCancelled(); admission.run()
         source(reference) // Registry and source reads stay outside the ledger append lock.
+        var shouldScheduleWake = false
         synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
             // Same lock order as artifact delivery and coordination: delivery → STOP → ledger.
             if (!token.runIfActive {
                     token.throwIfCancelled(); admission.run()
-                    ledger.appendWorkspaceResultNoticeIfAbsent(reference, Runnable { token.throwIfCancelled(); admission.run() })
+                    val beforeWrite = Runnable { token.throwIfCancelled(); admission.run() }
+                    shouldScheduleWake = if (scheduleWake) {
+                        ledger.appendWorkspaceResultNoticeAndWake(reference, beforeWrite)
+                    } else {
+                        ledger.appendWorkspaceResultNoticeIfAbsent(reference, beforeWrite)
+                        false
+                    }
                 }) token.throwIfCancelled()
         }
+        // A newly inserted notice creates its wake atomically. Existing legacy notices without
+        // that marker stay historical; existing unacknowledged markers remain recoverable.
+        if (shouldScheduleWake) startWake(app, reference.referenceId)
         AgentRunUiState.workspaceResultAdded(reference)
         WorkspaceChanges.changed()
     }
@@ -125,7 +139,9 @@ class WorkspaceResultDelivery internal constructor(
         if (end < evidence.resultText.length && end > offset && Character.isHighSurrogate(evidence.resultText[end - 1]) &&
             Character.isLowSurrogate(evidence.resultText[end])) end--
         // Reading the exact evidence can also finish its corresponding local receipt.
-        notice(reference, token, admission)
+        // The current turn is already attending to this evidence; record local disclosure without
+        // creating another system-origin request for the same result.
+        notice(reference, token, admission, scheduleWake = false)
         val current = assignment(reference)
         admission.run(); token.throwIfCancelled()
         ledger.requireWorkspaceResultDisclosureLive(reference, true)

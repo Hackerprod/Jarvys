@@ -11,6 +11,8 @@ import com.jarvys.agent.workspaces.WorkspaceInputIncorporation as InputIncorpora
 import com.jarvys.agent.workspaces.WorkspaceResultReference as ResultReference
 import java.util.Collections
 
+internal data class PendingWorkspaceResultWake(val seq: Long, val reference: ResultReference)
+
 /**
  * Normalized persistence for the fail-closed workspace and crew journals. It validates the same
  * source bindings as LocalRunStore's strict whole-ledger scan while keeping ledger identities
@@ -136,6 +138,37 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     }
 
     /**
+     * Atomically persists a new Central notice and its metadata-only wake intent. Returns whether
+     * an unacknowledged marker is available for dispatch; a preexisting notice without a marker is
+     * historical and must not gain a retroactive wake.
+     */
+    suspend fun appendWorkspaceResultNoticeAndWake(
+        reference: ResultReference,
+        beforeWrite: () -> Unit = {},
+    ): ChatDbResult<Boolean> = transaction {
+        ResultReference.fromNoticeJsonStrict(reference.toNoticeJson())
+        ensureCentralConversationForWrite(reference.ownerCentralSessionId)
+        val source = findResultRef(reference.executionSessionId, reference.referenceId, false)
+            ?: return@transaction ChatDbResult.Conflict("Notice has no exact durable source reference")
+        if (!source.samePayload(reference)) return@transaction ChatDbResult.Conflict("Notice has no exact durable source reference")
+        val evidence = findCrewResult(reference.executionSessionId, reference.evidenceId)
+            ?: return@transaction ChatDbResult.Conflict("Notice has no matching execution evidence")
+        if (!reference.matchesEvidence(evidence)) return@transaction ChatDbResult.Conflict("Notice has no matching execution evidence")
+        val old = findResultRef(reference.ownerCentralSessionId, reference.referenceId, true)
+        if (old != null && !old.samePayload(reference)) return@transaction ChatDbResult.Conflict(RESULT_CONFLICT)
+        if (old != null) return@transaction ChatDbResult.Success(
+            hasWakeMarker(WAKE_PENDING, reference.referenceId) &&
+                !hasWakeMarker(WAKE_ACKNOWLEDGED, reference.referenceId) &&
+                !hasWakeMarker(WAKE_DISCARDED, reference.referenceId),
+        )
+        ChatSqlBeforeWriteGuard.invoke(beforeWrite)
+        insertResultRef(reference.ownerCentralSessionId, reference, true)
+        if (!hasWakeMarker(WAKE_PENDING, reference.referenceId))
+            appendItem(WorkspaceIdentity.CENTRAL_SESSION, WAKE_PENDING, reference.referenceId)
+        ChatDbResult.Success(true)
+    }
+
+    /**
      * Reads a `workspace_result_reference` or `workspace_result_notice`, replacing
      * `LocalRunStore.readWorkspaceResultReference` / `readWorkspaceResultNotice` (`LocalRunStore.java:readWorkspaceResultReference`, `LocalRunStore.java:readWorkspaceResultNotice`).
      * A stored reference without its exact execution evidence is treated as corruption.
@@ -228,6 +261,83 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         }
         ChatDbResult.Success(Unit)
     }
+
+    /** The service lane calls this only after it takes the queued request. Unacked work stays retryable. */
+    suspend fun claimWorkspaceResultWake(referenceId: String): ChatDbResult<Boolean> = transaction {
+        requireCentralConversation(WorkspaceIdentity.CENTRAL_SESSION)
+        ResultReference.requireReferenceId(referenceId)
+        val notice = findResultRef(WorkspaceIdentity.CENTRAL_SESSION, referenceId, true)
+            ?: return@transaction ChatDbResult.Conflict("Workspace result wake has no Central notice")
+        if (notice.reportedStatus !in TERMINAL_RESULT_STATES || !hasWakeMarker(WAKE_PENDING, referenceId) ||
+            hasWakeMarker(WAKE_ACKNOWLEDGED, referenceId) || hasWakeMarker(WAKE_DISCARDED, referenceId))
+            return@transaction ChatDbResult.Success(false)
+        appendItem(WorkspaceIdentity.CENTRAL_SESSION, WAKE_STARTED, referenceId)
+        ChatDbResult.Success(true)
+    }
+
+    /** Acknowledges the event after a successful provider response, never at enqueue/dispatch time. */
+    suspend fun acknowledgeWorkspaceResultWake(referenceId: String): ChatDbResult<Boolean> = transaction {
+        requireCentralConversation(WorkspaceIdentity.CENTRAL_SESSION)
+        ResultReference.requireReferenceId(referenceId)
+        val notice = findResultRef(WorkspaceIdentity.CENTRAL_SESSION, referenceId, true)
+            ?: return@transaction ChatDbResult.Conflict("Workspace result wake has no Central notice")
+        if (notice.reportedStatus !in TERMINAL_RESULT_STATES || !hasWakeMarker(WAKE_PENDING, referenceId) ||
+            hasWakeMarker(WAKE_ACKNOWLEDGED, referenceId) || hasWakeMarker(WAKE_DISCARDED, referenceId))
+            return@transaction ChatDbResult.Success(false)
+        appendItem(WorkspaceIdentity.CENTRAL_SESSION, WAKE_ACKNOWLEDGED, referenceId)
+        ChatDbResult.Success(true)
+    }
+
+    /** A user STOP closes this event so later service startups cannot silently revive it. */
+    suspend fun discardWorkspaceResultWake(referenceId: String): ChatDbResult<Boolean> = transaction {
+        requireCentralConversation(WorkspaceIdentity.CENTRAL_SESSION)
+        ResultReference.requireReferenceId(referenceId)
+        val notice = findResultRef(WorkspaceIdentity.CENTRAL_SESSION, referenceId, true)
+            ?: return@transaction ChatDbResult.Conflict("Workspace result wake has no Central notice")
+        if (notice.reportedStatus !in TERMINAL_RESULT_STATES || !hasWakeMarker(WAKE_PENDING, referenceId) ||
+            hasWakeMarker(WAKE_ACKNOWLEDGED, referenceId) || hasWakeMarker(WAKE_DISCARDED, referenceId))
+            return@transaction ChatDbResult.Success(false)
+        appendItem(WorkspaceIdentity.CENTRAL_SESSION, WAKE_DISCARDED, referenceId)
+        ChatDbResult.Success(true)
+    }
+
+    suspend fun isWorkspaceResultWakePending(referenceId: String): ChatDbResult<Boolean> = readTransaction {
+        requireCentralConversation(WorkspaceIdentity.CENTRAL_SESSION)
+        ResultReference.requireReferenceId(referenceId)
+        val notice = findResultRef(WorkspaceIdentity.CENTRAL_SESSION, referenceId, true)
+        ChatDbResult.Success(notice != null && notice.reportedStatus in TERMINAL_RESULT_STATES &&
+            hasWakeMarker(WAKE_PENDING, referenceId) && !hasWakeMarker(WAKE_ACKNOWLEDGED, referenceId) &&
+            !hasWakeMarker(WAKE_DISCARDED, referenceId))
+    }
+
+    /** Pending system events are projected only from the matching durable Central notice. */
+    suspend fun listPendingWorkspaceResultWakes(conversationId: String): ChatDbResult<List<PendingWorkspaceResultWake>> = readTransaction {
+        requireCentralConversation(conversationId)
+        val result = mutableListOf<PendingWorkspaceResultWake>()
+        sql.query(
+            "SELECT p.seq,p.item_key FROM conversation_items p " +
+                "WHERE p.conversation_id=? AND p.item_kind=? AND NOT EXISTS(" +
+                "SELECT 1 FROM conversation_items a WHERE a.conversation_id=p.conversation_id AND " +
+                "a.item_kind=? AND a.item_key=p.item_key) AND NOT EXISTS(" +
+                "SELECT 1 FROM conversation_items d WHERE d.conversation_id=p.conversation_id AND " +
+                "d.item_kind=? AND d.item_key=p.item_key) ORDER BY p.seq",
+            arrayOf(conversationId, WAKE_PENDING, WAKE_ACKNOWLEDGED, WAKE_DISCARDED),
+        ).use { c ->
+            while (c.moveToNext()) {
+                val referenceId = c.getString(1)
+                val notice = findResultRef(conversationId, referenceId, true)
+                    ?: error("Pending workspace result wake has no matching Central notice")
+                check(notice.reportedStatus in TERMINAL_RESULT_STATES) { "Pending workspace result wake is not terminal" }
+                result += PendingWorkspaceResultWake(c.getLong(0), notice)
+            }
+        }
+        ChatDbResult.Success(result)
+    }
+
+    private fun hasWakeMarker(kind: String, referenceId: String): Boolean = sql.query(
+        "SELECT 1 FROM conversation_items WHERE conversation_id=? AND item_kind=? AND item_key=? LIMIT 1",
+        arrayOf(WorkspaceIdentity.CENTRAL_SESSION, kind, referenceId),
+    ).use { it.moveToFirst() }
 
     /**
      * Persists immutable `crew_coordination_evidence` plus its normalized `refs[]`, replacing
@@ -1167,6 +1277,11 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     private class JournalAbort(val reason: String) : RuntimeException(reason)
 
     private companion object {
+        const val WAKE_PENDING = "workspace_result_wake_pending"
+        const val WAKE_STARTED = "workspace_result_wake_started"
+        const val WAKE_ACKNOWLEDGED = "workspace_result_wake_acknowledged"
+        const val WAKE_DISCARDED = "workspace_result_wake_discarded"
+        val TERMINAL_RESULT_STATES = setOf("DONE", "PARTIAL", "FAILED", "STOPPED")
         const val RESULT_CONFLICT = "Result identity already has a different payload"
         const val COORDINATION_CONFLICT = "Coordination identity already has a different payload"
         const val INPUT_CONFLICT = "Input source already has a different immutable incorporation claim"

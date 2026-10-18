@@ -88,6 +88,9 @@ public final class CoreAgentRuntime {
   private final boolean webSearchEnabledForConversation;
   private final List<CoreTool> workspaceTools;
   private volatile String mainChatSteeringCursor = "";
+  private volatile String currentUserMessageId = "";
+  private volatile String workspaceWakeReferenceId = "";
+  private volatile String workspaceWakeOriginalUserRequest;
   private volatile MainChatTurnContextProvider mainChatSteeringProvider;
 
   public static List<CrewMissionSnapshot> crewSnapshots() {
@@ -281,6 +284,20 @@ public final class CoreAgentRuntime {
         : null;
   }
 
+  void setCurrentUserMessageId(String userMessageId) {
+    currentUserMessageId = userMessageId == null ? "" : userMessageId;
+  }
+
+  void setWorkspaceWakeContext(String referenceId, String originalUserRequest) {
+    workspaceWakeReferenceId = referenceId == null ? "" : referenceId;
+    workspaceWakeOriginalUserRequest = referenceId == null ? null : originalUserRequest;
+  }
+
+  String workspaceToolOriginalUserRequest(String request) {
+    if (workspaceWakeReferenceId.isEmpty()) return request;
+    return workspaceWakeOriginalUserRequest == null ? "" : workspaceWakeOriginalUserRequest;
+  }
+
   MainChatTurnContextProvider mainChatSteeringProvider() {
     return mainChatSteeringProvider;
   }
@@ -310,7 +327,8 @@ public final class CoreAgentRuntime {
     if (mainChat && depth == 0 && context != null && allowedTools == null
         && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
       CoreTool workspace = new com.jarvys.agent.workspaces.CentralWorkspaceTool(context, sessionId,
-          com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(), request,
+          com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(),
+          workspaceToolOriginalUserRequest(request),
           new com.jarvys.agent.workspaces.WorkspaceCoordinator(context));
       if (allowed(workspace)) toolRegistry = toolRegistry.with(Collections.singletonList(workspace));
       List<String> centralTools = new ArrayList<>(toolRegistry.names());
@@ -360,8 +378,11 @@ public final class CoreAgentRuntime {
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
-      if (transcriptStore != null) transcriptStore.attach(loop, history);
-      CoreAgentLoop.Result result = AgentResultPresentation.localize(context, loop.run(request, history, attachments, token, listener));
+      String wakeOwnerId = workspaceWakeReferenceId.isEmpty()
+          ? null : ConversationTurn.workspaceWakeOwnerId(workspaceWakeReferenceId);
+      if (transcriptStore != null) transcriptStore.attach(loop, history, wakeOwnerId);
+      CoreAgentLoop.Result result = AgentResultPresentation.localize(context,
+          loop.run(request, history, attachments, token, listener, currentUserMessageId));
       if (crewManager != null) {
         crewManager.finishMission(crewMissionId, result.text, result.interruptionReason == CoreAgentLoop.InterruptionReason.DEADLINE ? "TIMED_OUT" : result.outcome);
         if ("COMPLETED".equals(result.outcome))

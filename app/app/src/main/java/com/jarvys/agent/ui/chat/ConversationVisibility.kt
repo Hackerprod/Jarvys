@@ -13,6 +13,8 @@ internal object ConversationVisibility {
     )
 
     fun visible(event: AgentRunUiEvent, showAssistantProgress: Boolean = false): Boolean {
+        // The strict journal row is durable model/recovery evidence, not a chat card for its owner.
+        if (event.kind == "workspace_result") return false
         if (event.kind == "memory" && event.stage == "SEED") return false
         if (event.kind == "progress" && event.stage in internalStages) return false
         // Only the main chat opts into persisted model preambles; workspace timelines stay unchanged.

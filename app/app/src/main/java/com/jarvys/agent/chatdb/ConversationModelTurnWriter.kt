@@ -24,6 +24,7 @@ data class ConversationModelTurnInput(
     val writes: List<ModelTranscriptWrite> = emptyList(),
     val inputMessageIds: List<String> = emptyList(),
     val inputState: String? = null,
+    val workspaceResultWakeReferenceIds: List<String> = emptyList(),
 )
 
 data class ToolCallLifecycleWrite(val batchId: String, val callId: String, val lifecycle: String)
@@ -61,6 +62,7 @@ internal class ConversationModelTurnWriter(
     private val database: JarvysChatDatabase,
     private val conversations: ConversationRepository,
     private val transcript: ModelTranscriptRepository,
+    private val strictJournals: StrictJournalRepository,
 ) {
     /** Commits steering admission and its user-row dispatch before any provider callback runs. */
     suspend fun appendAndDispatchInterruptRequest(
@@ -178,6 +180,13 @@ internal class ConversationModelTurnWriter(
                 val incorporated = input.inputState?.let { state ->
                     requireSuccess(conversations.markInputState(input.conversationId, input.inputMessageIds, state))
                 }.orEmpty()
+                if (input.workspaceResultWakeReferenceIds.isNotEmpty() &&
+                    input.conversationId != com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION) {
+                    throw CompositeWriteAbort(ChatDbResult.Invalid("workspace result wake acknowledgement requires Central"))
+                }
+                input.workspaceResultWakeReferenceIds.distinct().forEach { referenceId ->
+                    requireSuccess(strictJournals.acknowledgeWorkspaceResultWake(referenceId))
+                }
                 ChatDbResult.Success(ConversationModelTurnResult(
                     batch, lifecycleSequences, results, errors, providerOutputs, incorporated,
                 ))
