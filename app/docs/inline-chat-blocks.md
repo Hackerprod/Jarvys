@@ -35,6 +35,8 @@ For inline arrows, give the SVG a `viewBox` and explicit marker dimensions and r
 
 `VISUAL RESPONSES` says that chat renders `svg`, `chart`, and `latex` fences inline. It asks for a compact figure right after the sentence it illustrates when a structure, flow, spatial layout, or magnitude comparison is clearer visually, with a text explanation; prose and tables handle other content. It specifies the chart JSON shape and data provenance, `viewBox`, a transparent background, `currentColor`, the 25-unit default OMEGA marker example, fixed-size marker guidance, LaTeX fences, and module tools for files such as PPTX or PNG.
 
+The five-box diagram case adds two authoring rules: `marker-end` appears only at a complete path's final endpoint and `marker-start` only at its initial endpoint, so draw each arrow as its own `<line>` or `<path>`. SVG text does not wrap or clip automatically; labels wider than their boxes overflow. Compare label character count with box width at the chosen font size. For 4+ steps on a portrait phone, prefer a vertical flow, two rows, or short labels, and keep all content inside the `viewBox`.
+
 ## Dependencies
 
 - `com.caverock:androidsvg-aar:1.4` - Apache-2.0. AndroidSVG draws sanitized SVG into Compose Canvas. The Maven Central AAR is 202,395 bytes.
