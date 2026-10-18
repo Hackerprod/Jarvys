@@ -42,12 +42,12 @@ public final class NetworkRequest {
         url = parseUrl(string(args, "url", null));
         method = string(args, "method", probe ? "HEAD" : "GET").toUpperCase(Locale.ROOT);
         if (!token(method) || method.length() > 32 || (probe && !"HEAD".equals(method) && !"GET".equals(method)))
-            throw invalid("Use an HTTP method; probes support HEAD or GET.");
+            throw invalid("method must be a supported HTTP token; probes support HEAD or GET.");
         responseType = string(args, "responseType", "text");
-        if (!"text".equals(responseType) && !"base64".equals(responseType)) throw invalid("Invalid responseType.");
+        if (!"text".equals(responseType) && !"base64".equals(responseType)) throw invalid("responseType must be text or base64.");
         redirect = string(args, "redirect", "follow");
         if (!"follow".equals(redirect) && !"manual".equals(redirect) && !"error".equals(redirect))
-            throw invalid("Invalid redirect policy.");
+            throw invalid("redirect must be follow, manual, or error.");
         connectTimeoutMs = integer(args, "connectTimeoutMs", 10000, 1, MAX_TIMEOUT_MS);
         readTimeoutMs = integer(args, "readTimeoutMs", 10000, 1, MAX_TIMEOUT_MS);
         timeoutMs = integer(args, "timeoutMs", 30000, 1, MAX_TIMEOUT_MS);
@@ -59,55 +59,57 @@ public final class NetworkRequest {
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         int headerBytes = 0;
         if (args.has("headers")) {
-            JSONObject object = args.getJSONObject("headers");
-            if (object.length() > 64) throw invalid("Too many request headers.");
+            Object rawHeaders = args.get("headers");
+            if (!(rawHeaders instanceof JSONObject)) throw invalid("headers must be an object of string values.");
+            JSONObject object = (JSONObject) rawHeaders;
+            if (object.length() > 64) throw invalid("headers may contain at most 64 entries.");
             for (Iterator<String> keys = object.keys(); keys.hasNext();) {
                 String name = keys.next(), lower = name.toLowerCase(Locale.ROOT);
                 String value = string(object, name, null);
                 if (!token(name) || name.length() > 256 || managedHeader(lower) || values.containsKey(lower))
-                    throw invalid("Invalid, duplicate or transport-managed header.");
-                if (value.length() > maxHeaderBytes) throw invalid("Request headers exceed maxHeaderBytes.");
+                    throw invalid("headers must use unique, safe, unmanaged HTTP names.");
+                if (value.length() > maxHeaderBytes) throw invalid("headers values must fit maxHeaderBytes.");
                 for (int i = 0; i < value.length(); i++) {
                     char c = value.charAt(i);
-                    if ((c < 32 && c != '\t') || c > 126) throw invalid("Headers must contain HTTP ASCII field values.");
+                    if ((c < 32 && c != '\t') || c > 126) throw invalid("headers values must contain HTTP ASCII field values.");
                 }
                 headerBytes += name.length() + value.length() + 4;
-                if (headerBytes > maxHeaderBytes) throw invalid("Request headers exceed maxHeaderBytes.");
+                if (headerBytes > maxHeaderBytes) throw invalid("headers must fit maxHeaderBytes.");
                 values.put(lower, value);
             }
         }
         headers = Collections.unmodifiableMap(values);
         hasBody = args.has("body") || args.has("bodyBase64");
         textBody = args.has("body");
-        if (args.has("body") && args.has("bodyBase64")) throw invalid("Choose body or bodyBase64.");
+        if (args.has("body") && args.has("bodyBase64")) throw invalid("body and bodyBase64 are mutually exclusive.");
         // HttpURLConnection rewrites GET-with-output to POST; reject rather than silently change semantics.
         if (hasBody && ("GET".equals(method) || "HEAD".equals(method) || "TRACE".equals(method)))
-            throw invalid("This transport cannot send a body with GET, HEAD or TRACE.");
+            throw invalid("body is unsupported with GET, HEAD, or TRACE.");
         if (textBody) {
             String value = string(args, "body", null);
-            if (value.length() > maxRequestBytes || !validUnicode(value)) throw invalid("Invalid or oversized request body.");
+            if (value.length() > maxRequestBytes || !validUnicode(value)) throw invalid("body must be valid Unicode within maxRequestBytes.");
             body = value.getBytes(StandardCharsets.UTF_8);
         } else if (hasBody) {
             String value = string(args, "bodyBase64", null);
             if (value.length() > ((maxRequestBytes + 2) / 3) * 4 || value.length() % 4 != 0)
-                throw invalid("Use canonical padded base64 within maxRequestBytes.");
+                throw invalid("bodyBase64 must be canonical padded base64 within maxRequestBytes.");
             for (int i = 0; i < value.length(); i++) {
                 char c = value.charAt(i);
                 if (!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '+' && c != '/' && c != '=')
-                    throw invalid("Use canonical padded base64.");
+                    throw invalid("bodyBase64 must be canonical padded base64.");
             }
             body = Base64.decode(value, Base64.NO_WRAP);
-            if (!Base64.encodeToString(body, Base64.NO_WRAP).equals(value)) throw invalid("Use canonical padded base64.");
+            if (!Base64.encodeToString(body, Base64.NO_WRAP).equals(value)) throw invalid("bodyBase64 must be canonical padded base64.");
         } else body = new byte[0];
-        if (body.length > maxRequestBytes) throw invalid("Request body exceeds maxRequestBytes.");
+        if (body.length > maxRequestBytes) throw invalid("body must not exceed maxRequestBytes.");
     }
 
     public static NetworkRequest fromRequest(JSONObject args) throws FactoryException { return parse(args, false); }
     public static NetworkRequest fromProbe(JSONObject args) throws FactoryException { return parse(args, true); }
     private static NetworkRequest parse(JSONObject args, boolean probe) throws FactoryException {
-        try { if (args == null) throw invalid("Network arguments are required."); return new NetworkRequest(args, probe); }
+        try { if (args == null) throw invalid((probe ? "network.probe" : "network.request") + ".args must be an object."); return new NetworkRequest(args, probe); }
         catch (FactoryException failure) { throw failure; }
-        catch (Exception invalid) { throw invalid("Invalid typed network arguments."); }
+        catch (Exception invalid) { throw invalid((probe ? "network.probe" : "network.request") + ": request fields have invalid JSON types or shapes."); }
     }
 
     /** A new review object each time; callers must not log it, as URL/headers/preview may be private. */
@@ -137,16 +139,16 @@ public final class NetworkRequest {
     static URL parseUrl(String value) throws FactoryException {
         try {
             if (value == null || value.length() > MAX_URL_BYTES || value.getBytes(StandardCharsets.UTF_8).length > MAX_URL_BYTES || !validUnicode(value))
-                throw invalid("Invalid HTTP URL.");
-            for (int i = 0; i < value.length(); i++) if (value.charAt(i) <= 32 || value.charAt(i) == 127 || value.charAt(i) == '\\') throw invalid("Invalid HTTP URL.");
+                throw invalid("url must be a bounded HTTP(S) URL without credentials or a fragment.");
+            for (int i = 0; i < value.length(); i++) if (value.charAt(i) <= 32 || value.charAt(i) == 127 || value.charAt(i) == '\\') throw invalid("url must be a bounded HTTP(S) URL without whitespace, credentials or a fragment.");
             URI uri = new URI(value);
             String scheme = uri.getScheme();
             if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || uri.getHost() == null || uri.getHost().isEmpty()
                     || uri.getUserInfo() != null || uri.getRawFragment() != null || uri.getPort() < -1 || uri.getPort() == 0 || uri.getPort() > 65535)
-                throw invalid("Use an absolute HTTP(S) URL without userinfo or fragment.");
+                throw invalid("url must be an absolute HTTP(S) URL without userinfo or fragment.");
             return uri.toURL();
         } catch (FactoryException failure) { throw failure; }
-        catch (Exception failure) { throw invalid("Invalid HTTP URL."); }
+            catch (Exception failure) { throw invalid("url must be a bounded HTTP(S) URL without credentials or a fragment."); }
     }
     private static boolean managedHeader(String name) {
         return "host".equals(name) || "content-length".equals(name) || "transfer-encoding".equals(name)
@@ -155,22 +157,22 @@ public final class NetworkRequest {
     }
     private static boolean token(String value) { return !value.isEmpty() && value.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]+"); }
     private static String string(JSONObject object, String key, String fallback) throws JSONException, FactoryException {
-        if (!object.has(key)) { if (fallback != null) return fallback; throw invalid("Missing network field."); }
+        if (!object.has(key)) { if (fallback != null) return fallback; throw invalid(key + " is required and must be a string."); }
         Object value = object.get(key);
-        if (!(value instanceof String)) throw invalid("Network text fields must be strings.");
+        if (!(value instanceof String)) throw invalid(key + " must be a string.");
         return (String) value;
     }
     private static int integer(JSONObject object, String key, int fallback, int min, int max) throws JSONException, FactoryException {
         if (!object.has(key)) return fallback;
         Object value = object.get(key);
-        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid("Network limits must be integers.");
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid(key + " must be an integer.");
         long number = ((Number) value).longValue();
-        if (number < min || number > max) throw invalid("Network limit is outside the supported range.");
+        if (number < min || number > max) throw invalid(key + " must be from " + min + " through " + max + ".");
         return (int) number;
     }
     private static boolean bool(JSONObject object, String key, boolean fallback) throws JSONException, FactoryException {
         if (!object.has(key)) return fallback;
-        if (!(object.get(key) instanceof Boolean)) throw invalid("Network flags must be booleans.");
+        if (!(object.get(key) instanceof Boolean)) throw invalid(key + " must be a boolean.");
         return object.getBoolean(key);
     }
     private static boolean validUnicode(String value) {

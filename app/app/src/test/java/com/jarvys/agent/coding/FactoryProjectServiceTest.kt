@@ -143,7 +143,10 @@ class FactoryProjectServiceTest {
 
     @Test fun previewStatusSummaryCountsAllEventsAndRetainsSuccessfulAndFailureGroups() {
         val f = Fixture()
+        val validationErrors = JSONArray().put(JSONObject().put("method", "database.migrate")
+            .put("code", "INVALID_ARGUMENT").put("message", "steps[0].columns must be an object map").put("count", 1))
         val full = JSONObject().put("state", "launch_requested")
+            .put("validation_errors", validationErrors)
             .put("observations", JSONArray().put(JSONObject().put("operation", "storage.set").put("outcome", "success").put("count", 4))
                 .put(JSONObject().put("operation", "share.text").put("outcome", "simulated").put("count", 2))
                 .put(JSONObject().put("operation", "runtime").put("outcome", "cleanup_pending").put("count", 1))
@@ -154,6 +157,7 @@ class FactoryProjectServiceTest {
             .put("evidence_limit", "Long source limit")
         val result = f.service.compactPreviewStatus(full)
         assertEquals(17L, result.getLong("total_observations"))
+        assertEquals(validationErrors.toString(), result.getJSONArray("validation_errors").toString())
         assertEquals(7, result.getJSONArray("observations").length())
         val groups = (0 until result.getJSONArray("observations").length()).map {
             result.getJSONArray("observations").getJSONObject(it).let { row -> "${row.getString("operation")}:${row.getString("outcome")}" to row.getLong("count") }
@@ -267,21 +271,14 @@ class FactoryProjectServiceTest {
             )
             assertEquals(capabilities.toString(), expectedPermissions, manifest.permissions)
             assertTrue(manifest.plan.features.isEmpty())
-            assertEquals(if ("sensors" in capabilities) listOf("com.jarvys.agent", "com.jarvys.agent.recoverytest")
-                else emptyList<String>(), manifest.plan.queries)
+            assertTrue(manifest.plan.queries.isEmpty())
             assertTrue(manifest.plan.queryActions.isEmpty())
             assertEquals(listOf(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), manifest.plan.exportedComponents)
             ZipFile(File(f.root, "notes.apk")).use { zip ->
                 val text = zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() }
                 val config = com.jarvys.factory.runtime.FactoryConfig.parse(text, "org.example.selective")
                 assertEquals(capabilities.toSet(), config.capabilities)
-                if ("sensors" in capabilities) {
-                    assertNotNull(config.documentBroker)
-                    assertEquals(f.context.packageName, config.documentBroker.packageName)
-                    assertEquals(ProjectScope.sha256(byteArrayOf(7, 12, 24, 42)), config.documentBroker.certificateSha256)
-                } else {
-                    assertNull(config.documentBroker)
-                }
+                assertNull(config.documentBroker)
             }
             assertEquals(0, f.obtained)
         }

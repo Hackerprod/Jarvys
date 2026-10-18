@@ -45,6 +45,9 @@ public class RecordingRequestTest {
                 "{\"channels\":0}", "{\"channels\":3}", "{\"format\":\"aac\"}", "{\"format\":null}"}) {
             assertThrows(json, FactoryException.class, () -> RecordingRequest.parseRecord(json));
         }
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> RecordingRequest.parseRecord("{\"durationMs\":99}"));
+        assertEquals("recording.record: durationMs must be an integer from 100 through 3600000.", field.getMessage());
     }
     @Test public void strictJsonRejectsDuplicatesAndMalformedPayloads() {
         for (String json : new String[]{"[]", "{'durationMs':1000}", "{durationMs:1000}",

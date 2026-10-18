@@ -15,7 +15,7 @@ import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Process-local, Activity-instance inbox. Payload reads require the current authenticated caller session. */
+/** Process-local, Activity-instance inbox. Payload reads require the current generated-app page session. */
 public final class IncomingShareInbox implements AutoCloseable {
     public interface Clock { long millis(); }
     /** Native page/session identity. current() must be nonblocking and must not perform provider I/O. */
@@ -162,7 +162,7 @@ public final class IncomingShareInbox implements AutoCloseable {
                 } catch(org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
             }
         }
-        /** Run on bounded I/O executor only, while the authenticated caller session remains current. */
+        /** Run on bounded I/O executor only, while the generated-app page session remains current. */
         public void prepare(DocumentHandles documents,Access access,Opener opener) throws Exception {
             if(documents==null || access==null || opener==null)throw new IllegalArgumentException();
             try { access.check(); } catch(RuntimeException denied) { close();throw denied; }

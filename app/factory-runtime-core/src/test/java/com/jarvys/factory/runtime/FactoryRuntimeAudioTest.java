@@ -38,6 +38,7 @@ public class FactoryRuntimeAudioTest {
         public void postMessage(String text){try{value=new JSONObject(text);}catch(Exception e){throw new AssertionError(e);}}
         public void postMessage(byte[] bytes){throw new AssertionError();}
         String error()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("code");}
+        String message()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("message");}
     }
     private FactoryRuntime runtime; private Screen screen; private Host host; private int next;
     private final java.util.List<StreamingFileShareTransfer.Admission> admissions=new java.util.ArrayList<>();
@@ -123,7 +124,8 @@ public class FactoryRuntimeAudioTest {
     @Test public void ambiguousPinnedHostUidNeverReceivesSnapshot()throws Exception{
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY,DocumentBrokerIdentity.RECOVERY);
-        Response response=share(new byte[]{1});idle();assertEquals("SOURCE_UNAVAILABLE",response.error());assertNull(screen.launched);
+        Response response=share(new byte[]{1});idle();assertEquals("SOURCE_UNAVAILABLE",response.error());
+        assertTrue(response.message().contains("requires Jarvys installed and active"));assertNull(screen.launched);
     }
     @Test public void wrongPinnedHostCertificateNeverReceivesSnapshot()throws Exception{
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(new byte[]{99}));

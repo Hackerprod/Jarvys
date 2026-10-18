@@ -13,7 +13,7 @@ public class FactoryConfigTest {
         reject(text("com.first.notes", "www/index.html", "[]"), "com.second.tasks");
     }
     @Test public void rejectUnknownDuplicateCapabilityAndTraversal() throws Exception {
-        reject(text("com.example.app", "www/index.html", "[\"location\"]"), "com.example.app");
+        assertNull(FactoryConfig.parse(text("com.example.app", "www/index.html", "[\"location\"]"), "com.example.app").documentBroker);
         reject(text("com.example.app", "www/index.html", "[\"storage\",\"storage\"]"), "com.example.app");
         for (String path : new String[]{"www/../secret.html", "file:///x.html", "www/%2e%2e/x.html", "factory-app.json", "www//index.html", "www/index.html?next=evil", "www/script.js"})
             reject(text("com.example.app", path, "[]"), "com.example.app");
@@ -22,7 +22,7 @@ public class FactoryConfigTest {
         FactoryConfig config = FactoryConfig.parse(text("com.example.app", "www/index.html", "[\"storage\"]"), "com.example.app");
         try { config.capabilities.add("export"); fail(); } catch (UnsupportedOperationException expected) { }
     }
-    @Test public void documentBrokerIsPinnedAndOnlyAcceptedForDocuments() throws Exception {
+    @Test public void documentBrokerIsPinnedForHostEffectsAndLegacyPinsRemainOptional() throws Exception {
         String base = text("com.example.app", "www/index.html", "[\"documents\"]");
         reject(base, "com.example.app");
         assertNull(FactoryConfig.parsePreview(base).documentBroker);
@@ -33,7 +33,8 @@ public class FactoryConfigTest {
             FactoryConfig parsed = FactoryConfig.parse(config.toString(),"com.example.app");
             assertEquals(host,parsed.documentBroker.packageName); assertEquals(digest,parsed.documentBroker.certificateSha256);
             assertEquals(host,FactoryConfig.parsePreview(config.toString()).documentBroker.packageName);
-            config.put("capabilities",new org.json.JSONArray()); reject(config.toString(),"com.example.app");
+            config.put("capabilities",new org.json.JSONArray());
+            assertEquals(host,FactoryConfig.parse(config.toString(),"com.example.app").documentBroker.packageName);
         }
         for (String host : new String[]{"org.example.broker","com.jarvys.agent.fake","com.jarvys.agent.debug",""}) {
             org.json.JSONObject config = new org.json.JSONObject(base).put("documentBroker",
@@ -67,14 +68,14 @@ public class FactoryConfigTest {
         for (String caps : new String[]{"[]", "[\"audio\"]", "[\"photos\"]"}) {
             org.json.JSONObject json = new org.json.JSONObject(text("com.example.app", "www/index.html", caps)).put("documentBroker",
                     new org.json.JSONObject().put("packageName", "com.jarvys.agent").put("certificateSha256", digest));
-            reject(json.toString(), "com.example.app");
+            assertEquals("com.jarvys.agent",FactoryConfig.parse(json.toString(),"com.example.app").documentBroker.packageName);
         }
     }
     private void reject(String text, String installed) throws Exception {
         try { FactoryConfig.parse(text, installed); fail("Invalid config accepted"); } catch (FactoryException expected) { }
     }
 
-    @Test public void presentationIsStandaloneAndCannotPinAnUnneededHostBroker() throws Exception {
+    @Test public void presentationIsStandaloneAndCanRetainAnUnusedLegacyHostPin() throws Exception {
         String base = text("com.example.app", "www/index.html", "[\"presentation\"]");
         FactoryConfig installed = FactoryConfig.parse(base, "com.example.app");
         assertEquals(java.util.Collections.singleton("presentation"), installed.capabilities);
@@ -82,7 +83,7 @@ public class FactoryConfigTest {
         assertNull(FactoryConfig.parsePreview(base).documentBroker);
         org.json.JSONObject broker = new org.json.JSONObject().put("packageName", "com.jarvys.agent")
                 .put("certificateSha256", new String(new char[64]).replace('\0', 'a'));
-        reject(new org.json.JSONObject(base).put("documentBroker", broker).toString(), "com.example.app");
+        assertEquals("com.jarvys.agent",FactoryConfig.parse(new org.json.JSONObject(base).put("documentBroker", broker).toString(),"com.example.app").documentBroker.packageName);
         reject(text("com.example.app", "www/index.html", "[\"presentation\",\"presentation\"]"), "com.example.app");
     }
 

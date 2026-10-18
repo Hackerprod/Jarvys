@@ -11,7 +11,7 @@ import java.util.HashSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-/** No-UI, deadline-aware acquisition of an authenticated installed-source operation session. */
+/** No-UI, deadline-aware acquisition for generated-app work that must be mediated by Jarvys. */
 public final class NativeBackgroundAuthorization {
     public enum Decision { ACTIVE }
     /** Expected descriptor identity; a caller-supplied value is never authority until the host compares fresh proof. */
@@ -50,9 +50,10 @@ public final class NativeBackgroundAuthorization {
             this.decision=decision; this.client=client; this.ended=ended; this.current=current;
         }
         public void check() {
-            if (decision != Decision.ACTIVE || client == null || ended.get() || !current.getAsBoolean()) throw new SecurityException("Background operation session ended");
-            client.check();
-            if (ended.get() || !current.getAsBoolean()) throw new SecurityException("Background authority ended");
+            if (decision != Decision.ACTIVE || client == null || ended.get() || !current.getAsBoolean()) throw new SecurityException("This background operation requires Jarvys installed and active.");
+            try { client.check(); }
+            catch (SecurityException unavailable) { throw new SecurityException("This background operation requires Jarvys installed and active."); }
+            if (ended.get() || !current.getAsBoolean()) throw new SecurityException("This background operation requires Jarvys installed and active.");
         }
         @Override public void close() { ended.set(true); if (client != null) client.close(); }
     }
@@ -103,7 +104,7 @@ public final class NativeBackgroundAuthorization {
             Result active=new Result(Decision.ACTIVE,client,ended,current); active.check(); return active;
         } catch(Exception unavailable) {
             ended.set(true); if(client!=null) client.close();
-            throw new FactoryException("SOURCE_UNAVAILABLE","Current installed source session is unavailable.");
+            throw new FactoryException("SOURCE_UNAVAILABLE","This background operation requires Jarvys installed and active.");
         }
     }
     private static void requireCurrent(BooleanSupplier current,long deadline) {

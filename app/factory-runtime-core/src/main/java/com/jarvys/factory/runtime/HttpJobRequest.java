@@ -22,11 +22,12 @@ public final class HttpJobRequest {
         private Constraints(JSONObject value) throws Exception {
             FactoryConfig.exactKeys(value,"network","requiresCharging","minimumLatencyMs","overrideDeadlineMs");
             network=text(value,"network","any");
-            if (!network.equals("any") && !network.equals("unmetered")) throw invalid();
+            if (!network.equals("any") && !network.equals("unmetered")) throw invalid("constraints.network must be any or unmetered.");
             requiresCharging=bool(value,"requiresCharging",false);
             minimumLatencyMs=integer(value,"minimumLatencyMs",0,0,MAX_DELAY_MS);
             overrideDeadlineMs=integer(value,"overrideDeadlineMs",-1,0,MAX_DELAY_MS);
-            if (overrideDeadlineMs>=0 && overrideDeadlineMs<minimumLatencyMs) throw invalid();
+            if (overrideDeadlineMs>=0 && overrideDeadlineMs<minimumLatencyMs)
+                throw invalid("constraints.overrideDeadlineMs must be at least constraints.minimumLatencyMs.");
         }
         public JSONObject details() {
             try {
@@ -43,12 +44,12 @@ public final class HttpJobRequest {
         request=NetworkRequest.fromRequest(network);
         constraints=new Constraints(value.has("constraints")?value.getJSONObject("constraints"):new JSONObject());
         payload=canonical(new JSONObject().put("jobId",jobId).put("request",network).put("constraints",constraints.details()),0);
-        if(bytes(payload)>BridgeProtocol.MAX_MESSAGE_BYTES) throw invalid();
+        if(bytes(payload)>BridgeProtocol.MAX_MESSAGE_BYTES) throw invalid("request and constraints must fit the bridge message limit.");
         fingerprint=digest("factory-http-job-payload-v1",payload);
     }
     public static HttpJobRequest parse(JSONObject value) throws FactoryException {
-        try { if(value==null || bytes(value.toString())>BridgeProtocol.MAX_MESSAGE_BYTES) throw invalid(); return new HttpJobRequest(new JSONObject(value.toString())); }
-        catch(FactoryException failure){throw failure;} catch(Exception invalid){throw invalid();}
+        try { if(value==null) throw invalid("request must be an object."); if(bytes(value.toString())>BridgeProtocol.MAX_MESSAGE_BYTES) throw invalid("request and constraints must fit the bridge message limit."); return new HttpJobRequest(new JSONObject(value.toString())); }
+        catch(FactoryException failure){throw failure;} catch(Exception malformed){throw invalid("request must contain a lowercase UUID jobId, typed network request, and optional constraints object.");}
     }
     public static HttpJobRequest parse(String raw) throws FactoryException { return parse(StrictJson.object(raw,BridgeProtocol.MAX_MESSAGE_BYTES)); }
     public String payloadJson(){return payload;}
@@ -56,23 +57,25 @@ public final class HttpJobRequest {
     public JSONObject authorizationDetails() throws FactoryException { return authorizationDetails("scheduled"); }
     public JSONObject authorizationDetails(String executionMode) throws FactoryException { return authorizationDetails(executionMode,false); }
     public JSONObject authorizationDetails(String executionMode,boolean replayPossible) throws FactoryException {
-        if ((!"scheduled".equals(executionMode) && !"foreground_now".equals(executionMode)) || ("scheduled".equals(executionMode) && replayPossible)) throw invalid();
+        if ((!"scheduled".equals(executionMode) && !"foreground_now".equals(executionMode)) || ("scheduled".equals(executionMode) && replayPossible))
+            throw invalid("executionMode must be scheduled or foreground_now; scheduled requests cannot be replayable.");
         try { return new JSONObject().put("jobId",jobId).put("request",request.authorizationDetails()).put("constraints",constraints.details()).put("executionMode",executionMode).put("replayPossible",replayPossible); }
         catch(Exception failure){throw new FactoryException("UNAVAILABLE","Job review details unavailable.");}
     }
     public static String id(String value) throws FactoryException {
-        if(value==null || !value.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")) throw invalid(); return value;
+        if(value==null || !value.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))
+            throw invalid("jobId must be a lowercase UUID string."); return value;
     }
     static String text(JSONObject object,String name,String fallback) throws Exception {
-        if(!object.has(name)){if(fallback!=null)return fallback;throw invalid();}
-        Object value=object.get(name);if(!(value instanceof String))throw invalid();return (String)value;
+        if(!object.has(name)){if(fallback!=null)return fallback;throw invalid(name+" must be a string.");}
+        Object value=object.get(name);if(!(value instanceof String))throw invalid(name+" must be a string.");return (String)value;
     }
     static boolean bool(JSONObject object,String name,boolean fallback) throws Exception {
-        if(!object.has(name))return fallback;Object value=object.get(name);if(!(value instanceof Boolean))throw invalid();return (Boolean)value;
+        if(!object.has(name))return fallback;Object value=object.get(name);if(!(value instanceof Boolean))throw invalid("constraints."+name+" must be a boolean.");return (Boolean)value;
     }
     static long integer(JSONObject object,String name,long fallback,long min,long max) throws Exception {
-        if(!object.has(name))return fallback;Object value=object.get(name);if(!(value instanceof Integer)&&!(value instanceof Long))throw invalid();
-        long n=((Number)value).longValue();if(n<min||n>max)throw invalid();return n;
+        if(!object.has(name))return fallback;Object value=object.get(name);if(!(value instanceof Integer)&&!(value instanceof Long))throw invalid("constraints."+name+" must be an integer from "+min+" through "+max+".");
+        long n=((Number)value).longValue();if(n<min||n>max)throw invalid("constraints."+name+" must be an integer from "+min+" through "+max+".");return n;
     }
     static int bytes(String value){return value.getBytes(StandardCharsets.UTF_8).length;}
     static String token(){return java.util.UUID.randomUUID().toString();}
@@ -82,10 +85,11 @@ public final class HttpJobRequest {
         }catch(Exception impossible){throw new IllegalStateException(impossible);}
     }
     static String canonical(Object value,int depth) throws Exception {
-        if(depth>16)throw invalid();
+        if(depth>16)throw invalid("request JSON nesting exceeds the supported depth.");
         if(value instanceof JSONObject){JSONObject o=(JSONObject)value;ArrayList<String> keys=new ArrayList<>();for(Iterator<String> it=o.keys();it.hasNext();)keys.add(it.next());Collections.sort(keys);StringBuilder b=new StringBuilder("{");for(String k:keys){if(b.length()>1)b.append(',');b.append(JSONObject.quote(k)).append(':').append(canonical(o.get(k),depth+1));}return b.append('}').toString();}
         if(value instanceof JSONArray){JSONArray a=(JSONArray)value;StringBuilder b=new StringBuilder("[");for(int i=0;i<a.length();i++){if(i>0)b.append(',');b.append(canonical(a.get(i),depth+1));}return b.append(']').toString();}
-        if(value==null||value==JSONObject.NULL)return "null";if(value instanceof String)return JSONObject.quote((String)value);if(value instanceof Boolean)return value.toString();if(value instanceof Number)return JSONObject.numberToString((Number)value);throw invalid();
+        if(value==null||value==JSONObject.NULL)return "null";if(value instanceof String)return JSONObject.quote((String)value);if(value instanceof Boolean)return value.toString();if(value instanceof Number)return JSONObject.numberToString((Number)value);throw invalid("request fields must contain JSON values.");
     }
-    static FactoryException invalid(){return new FactoryException("INVALID_ARGUMENT","Invalid bounded HTTP job arguments.");}
+    static FactoryException invalid(){return invalid("fields must match a supported finite HTTP job operation.");}
+    static FactoryException invalid(String message){return new FactoryException("INVALID_ARGUMENT","jobs.enqueueHttp: "+message);}
 }

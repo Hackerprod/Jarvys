@@ -106,6 +106,24 @@ public class ExpandedStorageDatabaseBudgetsTest {
         error("INVALID_ARGUMENT",()->StorageRequest.validate("storage.set",args.put("value",repeat("x",StorageRequest.MAX_VALUE_BYTES))));
         error("INVALID_ARGUMENT",()->StorageBackupFormat.create("test.storage",repeat("a",64),1,new JSONObject().put("large",repeat("x",65537))));
     }
+    @Test public void storageValidationNamesTheFieldWithoutEchoingItsValue() throws Exception {
+        try {
+            StorageRequest.validate("storage.set", new JSONObject().put("key", "synthetic private key").put("value", "value"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("storage.set.key"));
+            assertFalse(failure.getMessage().contains("synthetic private key"));
+        }
+        try {
+            StorageRequest.validate("storage.listPage", new JSONObject().put("limit", "synthetic private limit"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("storage.listPage.limit"));
+            assertFalse(failure.getMessage().contains("synthetic private limit"));
+        }
+    }
     @Test public void preferencesEditsDoNotClearUnknownNativeEntries() throws Exception {
         Context context=RuntimeEnvironment.getApplication(); SharedPreferences raw=context.getSharedPreferences("expanded-storage-test",Context.MODE_PRIVATE);
         raw.edit().clear().putString("a","old").putString("other","retained").putInt("native",7).commit();

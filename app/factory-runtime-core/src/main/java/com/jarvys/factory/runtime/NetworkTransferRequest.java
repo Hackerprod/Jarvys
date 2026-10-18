@@ -12,19 +12,21 @@ public final class NetworkTransferRequest {
     public final int timeoutMs, connectTimeoutMs, readTimeoutMs;
 
     private NetworkTransferRequest(JSONObject args, boolean upload, ResourceBudgets budgets) throws Exception {
-        if (args == null || budgets == null) throw invalid();
+        if (args == null) throw invalid("args must be an object.");
+        if (budgets == null) throw invalid("document resource limits are unavailable.");
         this.upload = upload;
         if (upload) FactoryConfig.exactKeys(args, "url", "method", "headers", "handle", "offset", "length", "maxBytes",
                 "connectTimeoutMs", "readTimeoutMs", "timeoutMs", "maxHeaderBytes", "redirect", "maxRedirects", "allowHttpsDowngrade");
         else FactoryConfig.exactKeys(args, "url", "method", "headers", "handle", "offset", "maxBytes", "body", "bodyBase64", "maxRequestBytes",
                 "connectTimeoutMs", "readTimeoutMs", "timeoutMs", "maxHeaderBytes", "redirect", "maxRedirects", "allowHttpsDowngrade");
         Object token = args.opt("handle");
-        if (!(token instanceof String) || !((String) token).matches("[a-f0-9]{64}")) throw invalid();
+        if (!(token instanceof String) || !((String) token).matches("[a-f0-9]{64}")) throw invalid("handle must be an opaque 64-character lowercase hexadecimal token.");
         handle = (String) token;
         offset = number(args, "offset", 0, 0, budgets.documents.handleBytes);
         maxBytes = number(args, "maxBytes", upload ? budgets.documents.handleBytes : budgets.documents.handleBytes - offset, 1, budgets.documents.handleBytes);
         length = upload ? number(args, "length", -1, 0, maxBytes) : 0;
-        if ((upload ? length : maxBytes) > budgets.documents.handleBytes - offset) throw invalid();
+        if ((upload ? length : maxBytes) > budgets.documents.handleBytes - offset)
+            throw invalid((upload ? "length" : "maxBytes") + " plus offset must fit the declared document handle byte limit.");
         long timeoutCeiling = Math.min(budgets.documents.leaseMs, 86400000L);
         timeoutMs = (int) number(args, "timeoutMs", Math.min(30000L, timeoutCeiling), 1, timeoutCeiling);
         connectTimeoutMs = (int) number(args, "connectTimeoutMs", Math.min(10000L, timeoutCeiling), 1, timeoutCeiling);
@@ -52,7 +54,7 @@ public final class NetworkTransferRequest {
     private static NetworkTransferRequest parse(JSONObject args, boolean upload, ResourceBudgets budgets) throws FactoryException {
         try { return new NetworkTransferRequest(args, upload, budgets); }
         catch (FactoryException failure) { throw failure; }
-        catch (Exception failure) { throw invalid(); }
+        catch (Exception failure) { throw invalid((upload ? "network.upload" : "network.download") + ": request fields must have the documented JSON types and fit the document limits."); }
     }
 
     /** Bind this entire object in the single operation lease; do not log private headers/URL/body. */
@@ -75,10 +77,11 @@ public final class NetworkTransferRequest {
     }
     private static long number(JSONObject args, String key, long fallback, long minimum, long maximum) throws Exception {
         Object value = args.has(key) ? args.get(key) : Long.valueOf(fallback);
-        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid();
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid(key + " must be an integer.");
         long number = ((Number) value).longValue();
-        if (number < minimum || number > maximum) throw invalid();
+        if (number < minimum || number > maximum) throw invalid(key + " must be from " + minimum + " through " + maximum + ".");
         return number;
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed HTTP transfer arguments or document budget."); }
+    private static FactoryException invalid() { return invalid("request fields do not match the declared network transfer grammar."); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
 }

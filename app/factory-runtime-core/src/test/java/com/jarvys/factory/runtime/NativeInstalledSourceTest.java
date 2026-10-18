@@ -34,6 +34,7 @@ import static org.robolectric.Shadows.shadowOf;
 public class NativeInstalledSourceTest {
     private Context context;
     private FactoryConfig config;
+    private String configText;
     private ReplyProvider provider;
     private PackageInfo host;
     private AtomicBoolean current;
@@ -70,9 +71,10 @@ public class NativeInstalledSourceTest {
         ProviderInfo info=new ProviderInfo();info.packageName=hostName;info.authority=hostName+".factory.operations";
         info.name="com.jarvys.agent.apkfactory.FactoryOperationAuthorizationProvider";info.enabled=true;info.exported=true;info.applicationInfo=host.applicationInfo;
         host.providers=new ProviderInfo[]{info};shadowOf(context.getPackageManager()).installPackage(host);shadowOf(context.getPackageManager()).setPackagesForUid(23999,hostName);
-        config=FactoryConfig.parse(new JSONObject().put("schemaVersion",1).put("appId",context.getPackageName()).put("name","Test").put("entryPoint","www/index.html")
-            .put("capabilities",new org.json.JSONArray().put("notifications"))
-            .put("documentBroker",new JSONObject().put("packageName",hostName).put("certificateSha256",digest.toString())).toString(),context.getPackageName());
+        configText=new JSONObject().put("schemaVersion",1).put("appId",context.getPackageName()).put("name","Test").put("entryPoint","www/index.html")
+            .put("capabilities",new org.json.JSONArray().put("documents").put("notifications"))
+            .put("documentBroker",new JSONObject().put("packageName",hostName).put("certificateSha256",digest.toString())).toString();
+        config=FactoryConfig.parse(configText,context.getPackageName());
         provider=new ReplyProvider();provider.appId=context.getPackageName();provider.attachInfo(context,info);
         ShadowContentResolver.registerProviderInternal(info.authority,provider);
     }
@@ -83,6 +85,16 @@ public class NativeInstalledSourceTest {
         assertEquals(repeat('a'),value.certificateSha256);assertEquals(repeat('b'),value.apkSha256);assertEquals(repeat('c'),value.recordSha256);
         assertEquals(ResourceBudgets.legacy(),value.resources);assertEquals(1,provider.calls);
         assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("protocolVersion","nonce","capability","deadlineElapsedMs")),provider.request.keySet());
+    }
+    @Test public void localSourceUsesInstalledPackageAndPackagedBudgetsWithoutHostCall()throws Exception{
+        PackageInfo own=context.getPackageManager().getPackageInfo(context.getPackageName(),0);
+        own.signatures=new Signature[]{new Signature(new byte[]{9,7,5,3})};own.versionCode=42;
+        shadowOf(context.getPackageManager()).installPackage(own);
+        NativeInstalledSource value=NativeInstalledSource.describeLocal(context,config,"notifications",configText);
+        assertEquals(context.getPackageName(),value.appId);assertEquals(42L,value.versionCode);
+        assertTrue(value.certificateSha256.matches("[a-f0-9]{64}"));assertTrue(value.apkSha256.matches("[a-f0-9]{64}"));
+        assertTrue(value.recordSha256.matches("[a-f0-9]{64}"));assertEquals(config.resources,value.resources);
+        assertEquals(0,provider.calls);
     }
     @Test public void rejectsExtraMissingWrongTypeAndReplayFields(){
         rejected(b->b.putBoolean("unexpected",true));rejected(b->b.remove("recordSha256"));rejected(b->b.putLong("protocolVersion",1L));

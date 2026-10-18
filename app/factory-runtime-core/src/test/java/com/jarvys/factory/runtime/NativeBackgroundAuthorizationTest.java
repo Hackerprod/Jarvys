@@ -46,11 +46,13 @@ public final class NativeBackgroundAuthorizationTest {
     public static final class ReplyProvider extends ContentProvider {
         int calls;
         Bundle request;
+        boolean unavailable;
         Consumer<Bundle> mutate=reply->{};
         NativeOperationAuthorization lease;
         final AtomicInteger checks=new AtomicInteger(),closed=new AtomicInteger();
         @Override public Bundle call(String method,String arg,Bundle input) {
             assertEquals("acquire_background",method);assertNull(arg);calls++;request=new Bundle(input);
+            if(unavailable)return null;
             assertEquals(6,input.keySet().size());
             try {
                 NativeOperationRequest operation=NativeOperationRequest.parse(input.getString("operation"),input.getString("details"));
@@ -92,7 +94,10 @@ public final class NativeBackgroundAuthorizationTest {
     }
     private <T>T worker(Callable<T> work)throws Exception {
         java.util.concurrent.ExecutorService executor=Executors.newSingleThreadExecutor();
-        try{return executor.submit(work).get(5,TimeUnit.SECONDS);}finally{executor.shutdownNow();}
+        try{return executor.submit(work).get(5,TimeUnit.SECONDS);}
+        catch(java.util.concurrent.ExecutionException failure){
+            Throwable cause=failure.getCause();if(cause instanceof Exception)throw (Exception)cause;throw failure;
+        }finally{executor.shutdownNow();}
     }
     private NativeBackgroundAuthorization.Result acquire()throws Exception {
         return worker(()->NativeBackgroundAuthorization.acquire(context,config,operation,source,receiverDeadline,current::get));
@@ -155,5 +160,11 @@ public final class NativeBackgroundAuthorizationTest {
     @Test public void expiredOrCancelledReceiversNeverQueryHost()throws Exception {
         current.set(false);rejected(reply->{});assertEquals(0,provider.calls);
         current.set(true);receiverDeadline=SystemClock.elapsedRealtime();rejected(reply->{});assertEquals(0,provider.calls);
+    }
+    @Test public void unavailableJarvysProducesActionableHostRequirement()throws Exception {
+        provider.unavailable=true;
+        FactoryException unavailable=assertThrows(FactoryException.class,this::acquire);
+        assertEquals("SOURCE_UNAVAILABLE",unavailable.code);
+        assertEquals("This background operation requires Jarvys installed and active.",unavailable.getMessage());
     }
 }

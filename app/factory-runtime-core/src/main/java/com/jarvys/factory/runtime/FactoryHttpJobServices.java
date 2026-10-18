@@ -14,7 +14,7 @@ import java.net.HttpURLConnection;
 import java.util.Map;
 import static com.jarvys.factory.runtime.HttpJobEngine.*;
 
-/** Cold-process resolution uses the authenticated installed source provider, never Activity state. */
+/** Cold-process resolution uses this app's packaged config and Android identity, never Activity or host state. */
 public final class FactoryHttpJobServices {
     public static final String PROCESS=HttpJobRequest.token();
     public static final Clock CLOCK=new Clock(){public long epochMs(){return System.currentTimeMillis();}public long elapsedMs(){return SystemClock.elapsedRealtime();}};
@@ -31,16 +31,15 @@ public final class FactoryHttpJobServices {
         if(override!=null)return override.open(context,ledger,session,params);
         FactoryConfig config=configuration(context);Source source=source(context,config,session);
         Authority authority=(row,current,mode,active)->{
-            if(mode!=Mode.BACKGROUND_NO_UI||!current.fingerprint.equals(source.fingerprint)||!current.owner.equals(row.source.owner))return new Decision(SessionStatus.UNAVAILABLE,null);
+            if(mode!=Mode.BACKGROUND_NO_UI||row==null||!current.fingerprint.equals(source.fingerprint)||!current.owner.equals(row.source.owner))return new Decision(SessionStatus.UNAVAILABLE,null);
             active.check();
             // On API 24-27 use the current Network explicitly; newer releases expose the assigned Network.
             network(context,params,row.request.constraints);
             NativeOperationRequest disclosure=NativeOperationRequest.parse("jobs.enqueueHttp",row.request.authorizationDetails("scheduled"));
-            NativeBackgroundAuthorization.Result result=NativeBackgroundAuthorization.acquireFiniteHttpJob(context,config,disclosure,
-                new NativeBackgroundAuthorization.SourceIdentity(source.appId,source.certificateSha256,source.apkSha256,source.recordSha256,source.versionCode),active.deadlineElapsedMs,active::active);
-            if(result.decision!=NativeBackgroundAuthorization.Decision.ACTIVE){result.close();return new Decision(SessionStatus.UNAVAILABLE,null);}
-            try{active.check();result.check();return new Decision(SessionStatus.ACTIVE,new Lease(){public void check(){active.check();result.check();active.check();}public void close(){result.close();}});}
-            catch(RuntimeException failure){result.close();throw failure;}
+            if(!config.capabilities.contains(disclosure.capability)||!config.capabilities.contains("network")||
+                !"scheduled".equals(disclosure.details().optString("executionMode"))||disclosure.details().optBoolean("replayPossible"))
+                return new Decision(SessionStatus.UNAVAILABLE,null);
+            return new Decision(SessionStatus.ACTIVE,new Lease(){public void check(){active.check();}public void close(){}});
         };
         Transport transport=(request,access,cancellation)->{
             Row row=ledger.byToken(params.getExtras().getString("token"));
@@ -60,13 +59,13 @@ public final class FactoryHttpJobServices {
     public static Source source(Context context,FactoryConfig config,Session session)throws FactoryException{
         session.check();
         if(!config.capabilities.contains("jobs")||!config.capabilities.contains("network"))throw new FactoryException("CAPABILITY_REQUIRED","Finite HTTP jobs require jobs and network capabilities.");
-        NativeInstalledSource proof=NativeInstalledSource.describe(context,config,"jobs",session.deadlineElapsedMs,session::active);
+        NativeInstalledSource proof=NativeInstalledSource.describeLocal(context,config,"jobs");
         try{
             Object section=proof.resources.toMap().get("jobs");if(!(section instanceof Map))throw new IllegalArgumentException();Map<?,?> limits=(Map<?,?>)section;
             Object records=limits.get("records"),bytes=limits.get("storageBytes");
             if(!(records instanceof Number)||!(bytes instanceof Number)||limits.size()!=2)throw new IllegalArgumentException();
             session.check();return new Source(proof.appId,proof.certificateSha256,proof.apkSha256,proof.recordSha256,proof.versionCode,new Limits(((Number)records).intValue(),((Number)bytes).longValue()));
-        }catch(RuntimeException unavailable){throw new FactoryException("SOURCE_UNAVAILABLE","Current signed job budgets are unavailable.");}
+        }catch(RuntimeException unavailable){throw new FactoryException("SOURCE_UNAVAILABLE","This app's packaged job budget is unavailable.");}
     }
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private static Network network(Context context,JobParameters params,HttpJobRequest.Constraints constraints)throws FactoryException{

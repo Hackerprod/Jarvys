@@ -20,6 +20,9 @@ public class StepsRequestTest {
         for (String bad : new String[]{"{\"timeoutMs\":1e999}", "{\"timeoutMs\":NaN}", "{\"timeoutMs\":Infinity}",
                 "{\"timeoutMs\":1e3}", "{\"timeoutMs\":1000.0}", "{\"timeoutMs\":1000.000000000000001}"})
             assertThrows(FactoryException.class, () -> StepsRequest.parseCurrent(bad));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> StepsRequest.parseCurrent(new JSONObject().put("timeoutMs", "soon")));
+        assertEquals("steps.current: timeoutMs must be an integer from 1000 through 120000.", field.getMessage());
     }
 
     @Test public void strictJsonRejectsLeniencyDuplicatesAndTrailingData() {

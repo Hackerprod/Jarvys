@@ -21,7 +21,7 @@ import org.robolectric.util.ReflectionHelpers;
 import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
-/** Real policy leases and native Job wiring; synthetic vault/HTTP only, never live credentials. */
+/** In-process page leases and native Job wiring; synthetic vault/HTTP only. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
@@ -35,7 +35,7 @@ public class NativeSecretEffectsTest {
     private int opened, sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativeOperationSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture("[\"secrets\",\"network\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"secrets\",\"network\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
                         .put("packageName", fixture.config.documentBroker.packageName)
@@ -85,15 +85,14 @@ public class NativeSecretEffectsTest {
     }
     private void work() throws Exception { fixture.pump(); queue.next(); idle(); }
 
-    @Test public void unavailableInstalledSourceReleasesNativeInputWithoutConstructingVaultOrAdapter() throws Exception {
+    @Test public void unavailableHostDoesNotBlockAppOwnedSecretVaultOperation() throws Exception {
         fixture.provider.unavailable = true;
+        installSyntheticAdapter();
         Result result = perform("secrets.put", put());
         SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
-        assertTrue(bytes.length > 0); assertNull(ReflectionHelpers.getField(effects, "secrets"));
-        fixture.pump();
-        assertEquals("UNAVAILABLE", result.error); assertReleased(prepared, bytes);
-        assertTrue(jobs().isEmpty()); assertNull(ReflectionHelpers.getField(effects, "secrets"));
-        assertEquals(0, result.claims); assertTrue(fixture.screen.launched.isEmpty());
+        assertTrue(bytes.length > 0); work();
+        assertEquals(1, result.successes); assertEquals(1, vault.writes); assertTrue(jobs().isEmpty());
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(0, result.claims); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void approvedCaptureLazilyCreatesAdapterWithDeclaredInputBudget() throws Exception {
@@ -114,7 +113,7 @@ public class NativeSecretEffectsTest {
         // No Save or worker task: this verifies admission/UI only, never AndroidKeyStore.
     }
 
-    @Test public void pauseBeforeSessionReplyReleasesPutAndPreventsLateAdmission() throws Exception {
+    @Test public void pauseBeforeLocalAdmissionReleasesPutAndPreventsStorageAccess() throws Exception {
         Result result = perform("secrets.put", put());
         SecretEffects.Prepared prepared = prepared(); byte[] bytes = nativeInput(prepared);
         effects.onPause(); fixture.sessions.onPause(); fixture.pump();
@@ -124,6 +123,7 @@ public class NativeSecretEffectsTest {
     }
 
     @Test public void putUsesImmutableSnapshotThenExplicitGetReceivesItsOwnLease() throws Exception {
+        fixture.provider.unavailable = true;
         installSyntheticAdapter();
         BridgeProtocol.Request request = request("secrets.put", put()); Result saved = new Result(); effects.perform(request, saved);
         NativeOperationSessions.Lease putLease = lease();
@@ -134,11 +134,12 @@ public class NativeSecretEffectsTest {
         assertEquals("https://api.example.test", metadata.getJSONObject("scope").getString("origin"));
         assertEquals(0, saved.claims); assertEquals(1, saved.successes); assertTrue(jobs().isEmpty());
         Result read = perform("secrets.get", new JSONObject().put("id", metadata.getString("id"))); work();
-        assertEquals(SecretEffectsTest.SYNTHETIC, read.value); assertEquals(2, fixture.provider.issued.size());
+        assertEquals(SecretEffectsTest.SYNTHETIC, read.value); assertTrue(fixture.provider.issued.isEmpty());
         assertEquals(0, read.claims); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void secretRequestUsesOneBoundGrantAndNativeConnectionInjection() throws Exception {
+        fixture.provider.unavailable = true;
         installSyntheticAdapter(); Result saved = perform("secrets.put", put()); work();
         String id = ((JSONObject) saved.value).getString("id");
         NativeNetworkInjectionTest.Fake connection = new NativeNetworkInjectionTest.Fake(); transport.queued.add(connection);
@@ -151,7 +152,7 @@ public class NativeSecretEffectsTest {
         assertEquals(id, bound.getString("id")); assertEquals(7, bound.getJSONObject("request").getInt("bodyBytes"));
         assertFalse(bound.toString().contains(SecretEffectsTest.SYNTHETIC));
         work();
-        assertEquals(2, fixture.provider.issued.size()); assertEquals(1, response.successes);
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(1, response.successes);
         assertEquals("Bearer " + SecretEffectsTest.SYNTHETIC, connection.headers.get("authorization"));
         assertEquals("yes", connection.headers.get("x-ordinary")); assertEquals(0, response.claims);
     }
@@ -164,7 +165,7 @@ public class NativeSecretEffectsTest {
         assertEquals("CANCELLED", result.error); assertTrue(jobs().isEmpty());
     }
 
-    @Test public void policyRevocationCancelsHandleAndRetiresJobWithoutStorage() throws Exception {
+    @Test public void pageCancellationCancelsHandleAndRetiresJobWithoutStorage() throws Exception {
         installSyntheticAdapter(); Result result = perform("secrets.put", put()); fixture.pump();
         fixture.sessions.cancelAll(); idle(); queue.next(); idle();
         assertEquals("CANCELLED", result.error); assertEquals(0, opened); assertEquals(0, result.successes);

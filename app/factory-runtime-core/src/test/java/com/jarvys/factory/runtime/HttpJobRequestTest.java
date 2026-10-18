@@ -30,6 +30,8 @@ public final class HttpJobRequestTest {
     @Test public void rejectsUnboundedAndWrongTypedConstraints()throws Exception{
         Object[] invalid={new JSONObject().put("network","none"),new JSONObject().put("requiresCharging","true"),new JSONObject().put("minimumLatencyMs",-1),new JSONObject().put("minimumLatencyMs",1.5),new JSONObject().put("overrideDeadlineMs",HttpJobRequest.MAX_DELAY_MS+1),new JSONObject().put("minimumLatencyMs",2).put("overrideDeadlineMs",1),new JSONObject().put("periodic",true)};
         for(Object c:invalid)reject(input().put("constraints",c));
+        FactoryException field=assertThrows(FactoryException.class,()->HttpJobRequest.parse(input().put("constraints",new JSONObject().put("minimumLatencyMs","later"))));
+        assertEquals("jobs.enqueueHttp: constraints.minimumLatencyMs must be an integer from 0 through 2592000000.",field.getMessage());
     }
     @Test public void rejectsExecutableAndHandlePayloads()throws Exception{
         reject(input().put("onComplete","alert(1)"));reject(input().put("request",new JSONObject().put("url","https://example.invalid").put("documentHandle","opaque")));

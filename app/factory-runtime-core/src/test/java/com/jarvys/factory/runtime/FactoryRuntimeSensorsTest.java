@@ -60,7 +60,7 @@ public class FactoryRuntimeSensorsTest {
         JSONObject info=request("runtime.info","{}").result();assertEquals("[\"light\",\"accelerometer\",\"gyroscope\"]",info.getJSONArray("sensorsKinds").toString());
         assertEquals(10.0,info.getDouble("sensorsMaxRateHz"),0.0);assertEquals(5000,info.getInt("sensorsMaxDurationMs"));assertEquals(50,info.getInt("sensorsMaxSamples"));assertEquals(16384,info.getInt("sensorsResultBytes"));
         assertEquals(2,info.getInt("sensorsProtocolVersion"));assertFalse(info.getBoolean("sensorsBrokerRequired"));assertTrue(info.getBoolean("sensorsForegroundOnly"));
-        assertTrue(info.getBoolean("sensorsSubscriptionBrokerRequired"));assertTrue(info.getBoolean("sensorsSubscriptionsForegroundOnly"));
+        assertFalse(info.getBoolean("sensorsSubscriptionBrokerRequired"));assertTrue(info.getBoolean("sensorsSubscriptionsForegroundOnly"));
         assertEquals(100000,info.getInt("sensorsSubscriptionMinimumIntervalUs"));assertEquals(10.0,info.getDouble("sensorsSubscriptionRequestedRateCeilingHz"),0.0);
         assertFalse(info.getBoolean("sensorsSubscriptionRateGuaranteed"));assertEquals(50,info.getInt("sensorsSubscriptionBufferSamples"));
     }
@@ -75,23 +75,16 @@ public class FactoryRuntimeSensorsTest {
             else assertEquals(1000000.0/period,info.getDouble("sensorsSubscriptionRequestedRateCeilingHz"),0.0);
             assertEquals(period==0?10.0:Math.min(10.0,1000000.0/period),info.getDouble("sensorsMaxRateHz"),0.0);
             assertTrue(info.getDouble("sensorsMaxRateHz")<=10.0);assertFalse(info.getBoolean("sensorsBrokerRequired"));
-            assertTrue(info.getBoolean("sensorsSubscriptionBrokerRequired"));
+            assertFalse(info.getBoolean("sensorsSubscriptionBrokerRequired"));
         }
         assertEquals(0,driver.registrations);
     }
-    @Test public void legacyUnpinnedSensorsStillCaptureButCannotAcquireASubscription()throws Exception{
+    @Test public void unpinnedSensorsStillSupportFiniteCapture()throws Exception{
         assertNull(((FactoryConfig)field("config").get(runtime)).documentBroker);
         assertEquals(3,request("sensors.list","{}").result().getJSONArray("sensors").length());
         Response capture=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));
         driver.events.sample(now,new float[]{1,2,3});assertEquals(1,capture.result().getJSONArray("samples").length());
         assertEquals(1,driver.registrations);assertEquals(1,driver.unregisters);
-        Response subscription=request("sensors.subscribe",arguments("subscribe"));
-        ((ThreadPoolExecutor)field("io").get(runtime)).submit(()->{}).get(10,TimeUnit.SECONDS);
-        Shadows.shadowOf(Looper.getMainLooper()).idle();
-        assertEquals("UNAVAILABLE",subscription.error());assertEquals(1,subscription.count);
-        assertEquals(1,driver.registrations);assertEquals(1,driver.unregisters);
-        Field subscriptions=NativeEffects.class.getDeclaredField("subscriptions");subscriptions.setAccessible(true);
-        assertNull(subscriptions.get(field("nativeEffects").get(runtime)));
     }
     @Test public void previewCannotListCaptureCancelOrSubscribeToInstalledSensors()throws Exception{
         host.preview=true;for(String method:new String[]{"list","capture","cancel","subscribe","poll","unsubscribe"})assertEquals("UNAVAILABLE",request("sensors."+method,arguments(method)).error());assertEquals(0,driver.registrations);

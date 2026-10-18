@@ -26,8 +26,17 @@ public final class BridgeProtocol {
     public static boolean trustedSender(String origin, boolean mainFrame) {
         return mainFrame && ORIGIN.equals(origin);
     }
+    /** Returns only a method from the closed bridge catalog; never exposes request arguments. */
+    static String knownMethod(String raw) {
+        try {
+            JSONObject request = StrictJson.object(raw, MAX_MESSAGE_BYTES, 24, 8192);
+            Object value = request.opt("method");
+            return value instanceof String && CapabilityCatalog.METHODS.containsKey(value) ? (String) value : null;
+        } catch (FactoryException malformed) { return null; }
+    }
     public static Request validate(String origin, boolean mainFrame, String raw, FactoryConfig config) throws FactoryException {
         if (!trustedSender(origin, mainFrame)) throw new FactoryException("UNTRUSTED_SOURCE", "Only the trusted main frame can call native APIs.");
+        String method = null;
         try {
             JSONObject request = StrictJson.object(raw, MAX_MESSAGE_BYTES, 24, 8192);
             FactoryConfig.exactKeys(request, "v", "id", "method", "args");
@@ -35,7 +44,7 @@ public final class BridgeProtocol {
                 throw new FactoryException("INVALID_REQUEST", "Unsupported bridge version.");
             String id = FactoryConfig.string(request, "id");
             if (!id.matches("[a-zA-Z0-9_-]{1,64}")) throw new FactoryException("INVALID_REQUEST", "Invalid request identifier.");
-            String method = FactoryConfig.string(request, "method");
+            method = FactoryConfig.string(request, "method");
             JSONObject args = request.getJSONObject("args");
             CapabilityCatalog.Method operation = CapabilityCatalog.METHODS.get(method);
             if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
@@ -90,10 +99,10 @@ public final class BridgeProtocol {
                 case NOTIFICATIONS_SHOW: NotificationScheduleRequest.parseNotification(args); break;
                 case NOTIFICATIONS_SCHEDULE: NotificationScheduleRequest.parseSchedule(args); break;
                 case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS: case NOTIFICATIONS_CANCEL_SCHEDULED:
-                    NotificationScheduleRequest.parseScheduleId(args.toString()); break;
+                    NotificationScheduleRequest.parseScheduleId(args.toString(), method); break;
                 case NOTIFICATIONS_FORGET_SCHEDULED: NotificationScheduleControl.parseForget(args.toString()); break;
-                case NOTIFICATIONS_POLL_ACTIONS: NotificationScheduleRequest.parsePollActions(args.toString()); break;
-                case NOTIFICATIONS_ACK_ACTION: NotificationScheduleRequest.parseEventAck(args.toString()); break;
+                case NOTIFICATIONS_POLL_ACTIONS: NotificationScheduleRequest.parsePollActions(args.toString(), method); break;
+                case NOTIFICATIONS_ACK_ACTION: NotificationScheduleRequest.parseEventAck(args.toString(), method); break;
                 case NOTIFICATIONS_GENERATION_STATUS: NotificationScheduleControl.parseGenerationStatus(args.toString()); break;
                 case NOTIFICATIONS_FORGET_GENERATION: NotificationScheduleControl.parseForgetGeneration(args.toString()); break;
                 case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS: FactoryConfig.exactKeys(args); break;
@@ -105,10 +114,10 @@ public final class BridgeProtocol {
                 case BIOMETRICS_AUTHENTICATE:
                     try { BiometricAuthentication.Request.parse(args); }
                     catch(FactoryException e) { throw e; }
-                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","Invalid biometric authentication arguments."); }
+                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","biometrics.authenticate: arguments must match the documented fields and value limits."); }
                     break;
                 case BIOMETRICS_CANCEL:
-                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","Biometric cancellation envelope exceeds 1 KiB.");
+                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","biometrics.cancel: request must fit the 1024-byte cancellation envelope.");
                     FactoryConfig.exactKeys(args);break;
                 case BIOMETRICS_AVAILABILITY:
                     FactoryConfig.exactKeys(args);break;
@@ -121,10 +130,10 @@ public final class BridgeProtocol {
                 case SENSORS_CAPTURE:
                     try { SensorCapture.Request.parse(args); }
                     catch(FactoryException e) { throw e; }
-                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","Invalid sensor capture arguments."); }
+                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","sensors.capture: arguments must match the documented fields and sample limits."); }
                     break;
                 case SENSORS_CANCEL:
-                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","Sensor cancellation envelope exceeds 1 KiB.");
+                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","sensors.cancel: request must fit the 1024-byte cancellation envelope.");
                     FactoryConfig.exactKeys(args);break;
                 case SENSORS_LIST:
                 case PRESENTATION_GET: case PRESENTATION_RESET: FactoryConfig.exactKeys(args); break;
@@ -148,7 +157,7 @@ public final class BridgeProtocol {
                     FactoryConfig.exactKeys(args, "filename", "text", "mimeType");
                     String filename = text(args, "filename", 120, false);
                     if (!filename.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || filename.endsWith(".") || filename.contains(".."))
-                        throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
+                        throw new FactoryException("INVALID_ARGUMENT", "filename must be a simple document name without paths.");
                     text(args, "text", MAX_TEXT_BYTES, true);
                     String mime = args.has("mimeType") ? FactoryConfig.string(args, "mimeType") : "text/plain";
                     if (!mime.equals("text/plain") && !mime.equals("text/markdown") && !mime.equals("application/json") && !mime.equals("text/csv"))
@@ -179,7 +188,7 @@ public final class BridgeProtocol {
                     FactoryConfig.exactKeys(args, "handle", "filename", "mimeType"); documentHandle(args);
                     String shareName = text(args, "filename", 120, false);
                     if (!shareName.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || shareName.endsWith(".") || shareName.contains(".."))
-                        throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
+                        throw new FactoryException("INVALID_ARGUMENT", "filename must be a simple document name without paths.");
                     documentMime(args, false);
                     if (!config.capabilities.contains("documents"))
                         throw new FactoryException("CAPABILITY_DENIED", "File sharing also requires documents capability.");
@@ -195,7 +204,7 @@ public final class BridgeProtocol {
                     FactoryConfig.exactKeys(args, "kind");
                     if (args.has("kind")) {
                         String kind = FactoryConfig.string(args, "kind");
-                        if (!kind.equals("tap") && !kind.equals("longPress")) throw new FactoryException("INVALID_ARGUMENT", "Unsupported haptic feedback kind.");
+                        if (!kind.equals("tap") && !kind.equals("longPress")) throw new FactoryException("INVALID_ARGUMENT", "kind must be tap or longPress.");
                     }
                     break;
                 case DEVICE_INFO: FactoryConfig.exactKeys(args); break;
@@ -210,7 +219,7 @@ public final class BridgeProtocol {
                     FactoryConfig.exactKeys(args, "filename", "mimeType");
                     String documentName = text(args, "filename", 120, false);
                     if (!documentName.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || documentName.endsWith(".") || documentName.contains(".."))
-                        throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
+                        throw new FactoryException("INVALID_ARGUMENT", "filename must be a simple document name without paths.");
                     documentMime(args, false); break;
                 case DOCUMENTS_READ:
                     FactoryConfig.exactKeys(args, "handle", "offset", "length"); documentHandle(args);
@@ -233,7 +242,9 @@ public final class BridgeProtocol {
                 throw new FactoryException("CAPABILITY_DENIED", "This application did not declare the required capability.");
             return new Request(id, method, args);
         } catch (JSONException e) {
-            throw new FactoryException("INVALID_REQUEST", "Missing or incorrectly typed bridge fields.");
+            throw new FactoryException("INVALID_REQUEST", method == null
+                    ? "Bridge request must contain correctly typed v, id, method, and args fields."
+                    : method + ": args must contain the required fields with their documented JSON types.");
         }
     }
     private static void documentMime(JSONObject args, boolean wildcard) throws JSONException, FactoryException {
@@ -241,33 +252,33 @@ public final class BridgeProtocol {
         boolean plain = mime.matches("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*");
         boolean pattern = mime.equals("*/*") || mime.matches("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/\\*");
         if (mime.length() > 127 || !(plain || (wildcard && pattern)))
-            throw new FactoryException("INVALID_ARGUMENT", "Use one plain MIME type.");
+            throw new FactoryException("INVALID_ARGUMENT", "mimeType must be one plain MIME type" + (wildcard ? " or supported wildcard" : "") + ".");
     }
     private static void documentHandle(JSONObject args) throws JSONException, FactoryException {
         if (!FactoryConfig.string(args, "handle").matches("[a-f0-9]{64}"))
-            throw new FactoryException("INVALID_ARGUMENT", "Invalid document handle.");
+            throw new FactoryException("INVALID_ARGUMENT", "handle must be an opaque 64-character lowercase hexadecimal token.");
     }
     private static long documentInteger(JSONObject args, String key, long min, long max) throws JSONException, FactoryException {
         Object value = args.get(key);
         if (!(value instanceof Integer) && !(value instanceof Long))
             throw new FactoryException("INVALID_ARGUMENT", key + " must be an integer.");
         long number = ((Number)value).longValue();
-        if (number < min || number > max) throw new FactoryException("INVALID_ARGUMENT", key + " is outside the document limit.");
+        if (number < min || number > max) throw new FactoryException("INVALID_ARGUMENT", key + " must be from " + min + " through " + max + ".");
         return number;
     }
     private static int documentDataLength(String encoded) throws FactoryException {
         final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         if (encoded == null || encoded.isEmpty() || encoded.length() > 43692 || encoded.length() % 4 != 0)
-            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+            throw new FactoryException("INVALID_ARGUMENT", "data must be canonical padded base64 within the document chunk limit.");
         int length = encoded.length();
         int padding = encoded.charAt(length - 1) == '=' ? (encoded.charAt(length - 2) == '=' ? 2 : 1) : 0;
         int bytes = (length / 4) * 3 - padding;
         for (int i = 0; i < length - padding; i++) if (alphabet.indexOf(encoded.charAt(i)) < 0)
-            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+            throw new FactoryException("INVALID_ARGUMENT", "data must be canonical padded base64 within the document chunk limit.");
         if (bytes > MAX_DOCUMENT_CHUNK_BYTES ||
                 (padding == 2 && (alphabet.indexOf(encoded.charAt(length - 3)) & 15) != 0) ||
                 (padding == 1 && (alphabet.indexOf(encoded.charAt(length - 2)) & 3) != 0))
-            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+            throw new FactoryException("INVALID_ARGUMENT", "data must be canonical padded base64 within the document chunk limit.");
         return bytes;
     }
     static String requestId(String raw) {
@@ -278,7 +289,7 @@ public final class BridgeProtocol {
     }
     private static void key(JSONObject args) throws JSONException, FactoryException {
         String key = FactoryConfig.string(args, "key");
-        if (!key.matches("[a-zA-Z0-9_.:-]{1,96}")) throw new FactoryException("INVALID_ARGUMENT", "Invalid storage key.");
+        if (!key.matches("[a-zA-Z0-9_.:-]{1,96}")) throw new FactoryException("INVALID_ARGUMENT", "storage.key must be 1 to 96 letters, digits, underscore, period, colon, or hyphen.");
     }
     private static String text(JSONObject args, String name, int maxBytes, boolean emptyAllowed) throws JSONException, FactoryException {
         String text = FactoryConfig.string(args, name);

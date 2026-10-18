@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v89 / lifecycle
+# Factory guidance factory-guidance-v90 / lifecycle
 
 ## Spec and packaging
 factory.json requires schemaVersion:1,appId,name,positive versionCode,versionName,relative webDir/icon; `capabilities` is optional (omit = all compiled; array = subset). Generated schema1 `factory-app.json` records the effective list, so existing explicit subsets retain their scope. Optional dataBackup,resourceBudgets,incomingShare,notifications,bluetooth,adaptiveIcon are closed schemas. Inspect limits; runtime config/host pin/SDK/DEX/manifest remain factory-owned.

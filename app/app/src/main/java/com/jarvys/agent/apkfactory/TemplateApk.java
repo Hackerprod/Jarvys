@@ -671,7 +671,7 @@ public final class TemplateApk {
                     incomingMimeTypes.add(mime);
                 }
             }
-            check(!seen.contains("manifest/queries") || queryPackages.equals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES),
+            check(queryPackages.isEmpty() || queryPackages.equals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES),
                 "Document broker queries must match the exact approved set");
             check(stack.isEmpty() && namespaces==0 && rootClosed && appId!=null && label!=null && icon!=null && activity!=null &&
                     seen.contains("manifest/uses-sdk") && seen.contains("manifest/application/activity/intent-filter/category") &&

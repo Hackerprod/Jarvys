@@ -21,12 +21,12 @@ Load `/factory-sdk.js` first from the app origin `https://app.jarvys.invalid`, t
 `apk_factory` results are compact by default: state and counts, with details for failures and relevant warnings. `inspect`, `test` and preview still report their evidence limits; a passing test runs the complete shared checks but does not test project JavaScript, WebView rendering, installed identity, Android grants/system effects, durable persistence or prove network absence.
 
 ## References
-Guidance version: factory-guidance-v89. SDK2/schema1; 33 capabilities / 134 methods. The core is already in Coding's system prompt; `read_skill` loads references on demand. Load only a needed reference with skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v89". Reuse loaded references while they remain in context; re-fetch only after compaction. Each read is complete and version-checked.
+Guidance version: factory-guidance-v90. SDK2/schema1; 33 capabilities / 134 methods. The core is already in Coding's system prompt; `read_skill` loads references on demand. Load only a needed reference with skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v90". Reuse loaded references while they remain in context; re-fetch only after compaction. Each read is complete and version-checked.
 - basics: SDK, authenticated calls and storage
 - documents-media: document handles, sharing, photos and audio
 - external-actions: browser, maps, dialer, email and SMS
 - contacts-calendar: selected contacts and calendar editor
-- database: SQLite and selected-table backup
+- database: Private SQLite and selected-table backup; for exact contracts, especially `columns` as a name→`{type,nullable}` object map (e.g. `{"title":{"type":"text","nullable":false}}`), load this reference.
 - presentation: appearance and orientation
 - lifecycle: spec, manifest, build, signing, preview and install
 - sensors: finite capture and foreground subscriptions
@@ -38,7 +38,7 @@ Guidance version: factory-guidance-v89. SDK2/schema1; 33 capabilities / 134 meth
 - durable-native: notifications, widgets and finite background HTTP
 
 ## Security and Android boundaries
-Native calls authenticate the exact package, UID, version and APK hash; identity is appId+certificate. The 64 recent artifacts retain exact signed scope, and an older installed matching artifact can remain valid. Legacy compatibility is exact-latest only. Nonce/request/source-bound leases constrain active calls. Damaged/missing evidence fails closed; a newer artifact cannot lend identity or scope.
+App-owned effects check the packaged capability and active page in process; they do not lease Jarvys. Host document, broker, chooser and backup effects authenticate the exact package, UID, version and APK hash; identity is appId+certificate. The 64 recent artifacts retain exact signed scope, and an older installed matching artifact can remain valid. Nonce/request/source-bound Binder leases constrain host effects. Damaged/missing evidence fails closed; a newer artifact cannot lend identity or scope.
 
 Jarvys does not add an operation approval screen. Android runtime permissions and system selectors (documents, photos, contacts and recipients), biometric prompts, launcher pinning and PackageInstaller consent remain system-controlled. The user completes those flows. Do not automate Android security UI or retry uncertain effects.
 

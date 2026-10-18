@@ -47,6 +47,24 @@ public class NotificationRequestTest {
         assertThrows(FactoryException.class, () -> NotificationRequest.parseCancel(new JSONObject().put("id", 1.0d)));
         assertThrows(FactoryException.class, () -> NotificationRequest.parseShow((JSONObject) null));
     }
+    @Test public void typedNotificationErrorsNameTheFieldWithoutEchoingItsValue() throws Exception {
+        try {
+            NotificationRequest.parseShow(new JSONObject(SHOW).put("title", "synthetic-private-title".repeat(20)));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("notifications.show.title"));
+            assertFalse(failure.getMessage().contains("synthetic-private-title"));
+        }
+        try {
+            NotificationRequest.parseShow(new JSONObject(SHOW).put("id", "synthetic-private-id"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("notifications.show.id"));
+            assertFalse(failure.getMessage().contains("synthetic-private-id"));
+        }
+    }
 
     @Test public void closedGrammarRejectsIntentAndSchedulingAuthority() throws Exception {
         for (String field : new String[]{"url", "uri", "intent", "component", "package", "extras", "flags", "action", "icon", "sound", "fullScreenIntent", "ongoing", "when", "delayMs", "repeat", "schedule", "all"}) {

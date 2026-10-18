@@ -43,13 +43,16 @@ public final class RecordingRequest {
         bounded(args);
         FactoryConfig.exactKeys(args, "durationMs", "maxBytes", "format", "sampleRate", "channels");
         try {
-            if (args.has("format") && !"wav-pcm16".equals(FactoryConfig.string(args, "format"))) throw invalid();
+            if (args.has("format") && !"wav-pcm16".equals(FactoryConfig.string(args, "format")))
+                throw invalid("recording.record: format must be wav-pcm16.");
             long duration = integer(args, "durationMs", DEFAULT_DURATION_MS, 100, MAX_DURATION_MS);
             long bytes = integer(args, "maxBytes", DEFAULT_MAX_BYTES, WAV_HEADER_BYTES + 4, MAX_BYTES);
             int rate = (int) integer(args, "sampleRate", 16000, 8000, 48000);
             int channels = (int) integer(args, "channels", 1, 1, 2);
             return new Record(duration, bytes, rate, channels);
-        } catch (JSONException invalid) { throw invalid(); }
+        } catch (JSONException malformed) {
+            throw invalid("recording.record: format must be a string; numeric options must be integers in their documented ranges.");
+        }
     }
     public static void parseEmpty(String json) throws FactoryException {
         JSONObject args = StrictJson.object(json, MAX_ARGS_BYTES);
@@ -59,18 +62,18 @@ public final class RecordingRequest {
             throws JSONException, FactoryException {
         if (!args.has(key)) return fallback;
         Object value = args.get(key);
-        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid();
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid("recording.record: " + key + " must be an integer from " + min + " through " + max + ".");
         long number = ((Number) value).longValue();
-        if (number < min || number > max) throw invalid();
+        if (number < min || number > max) throw invalid("recording.record: " + key + " must be an integer from " + min + " through " + max + ".");
         return number;
     }
     private static void bounded(JSONObject args) throws FactoryException {
-        if (args == null) throw invalid();
+        if (args == null) throw invalid("recording.record: arguments must be an object.");
         String json = args.toString();
         if (json == null || json.length() > MAX_ARGS_BYTES || json.getBytes(StandardCharsets.UTF_8).length > MAX_ARGS_BYTES)
             throw new FactoryException("TOO_LARGE", "Recording arguments exceed the transport limit.");
     }
-    private static FactoryException invalid() {
-        return new FactoryException("INVALID_ARGUMENT", "Invalid typed recording arguments.");
+    private static FactoryException invalid(String message) {
+        return new FactoryException("INVALID_ARGUMENT", message);
     }
 }

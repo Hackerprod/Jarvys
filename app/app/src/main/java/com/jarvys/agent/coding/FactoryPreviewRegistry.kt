@@ -89,6 +89,8 @@ internal object FactoryPreviewRegistry {
             }
         }
         private val observations = linkedMapOf<String, Long>()
+        private data class ValidationEvidence(val code: String, val message: String, val count: Long)
+        private val validationErrors = linkedMapOf<String, ValidationEvidence>()
         private var saturated = false
         private var webViewVersion: String? = null
         fun validate() {
@@ -129,11 +131,23 @@ internal object FactoryPreviewRegistry {
             val key = "$operation:$outcome"
             observations[key] = (observations[key] ?: 0L).let { if (it == Long.MAX_VALUE) { saturated = true; it } else it + 1 }
         }
+        /** Retain only fixed validator diagnostics for catalog methods, never request contents. */
+        @Synchronized fun recordValidationFailure(method: String, code: String, message: String) {
+            if (!active || method !in CapabilityCatalog.METHODS || code != "INVALID_ARGUMENT") return
+            val previous = validationErrors[method]
+            val count = if (previous == null) 1L else if (previous.count == Long.MAX_VALUE) {
+                saturated = true
+                Long.MAX_VALUE
+            } else previous.count + 1
+            validationErrors[method] = ValidationEvidence(code, message, count)
+        }
         @Synchronized fun receipt(): JSONObject = snapshot.metadata().put("mode", "functional_preview")
             .put("state", state).put("webview_version", webViewVersion ?: JSONObject.NULL)
             .put("counts_saturated", saturated).put("observations", JSONArray().apply { observations.forEach { (key, count) ->
                 put(JSONObject().put("operation", key.substringBefore(':')).put("outcome", key.substringAfter(':')).put("count", count))
-            } }).put("evidence_limit", "Observed shared-runtime events only. No installed-app, permission, persistence or network-absence certification. No console, arguments or private data captured.")
+            } }).put("validation_errors", JSONArray().apply { validationErrors.forEach { (method, evidence) ->
+                put(JSONObject().put("method", method).put("code", evidence.code).put("message", evidence.message).put("count", evidence.count))
+            } }).put("evidence_limit", "Observed shared-runtime events and validator errors only. No installed-app, permission, persistence or network-absence certification. No console, arguments or private data captured.")
         companion object {
             private val OPERATIONS = CapabilityCatalog.METHODS.keys + setOf("lifecycle", "page", "runtime")
             private val OUTCOMES = setOf("created", "requested", "started", "ready", "finished", "closed", "reset", "revoked", "success", "error", "simulated", "denied", "failed", "loaded", "cleanup_pending")

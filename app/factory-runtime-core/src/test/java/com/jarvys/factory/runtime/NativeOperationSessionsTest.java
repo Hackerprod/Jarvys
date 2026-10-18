@@ -53,7 +53,24 @@ public class NativeOperationSessionsTest {
         fixture.provider.unavailable = true;
         Capture reply = new Capture(); fixture.authorize(reply); fixture.pump();
         assertEquals("UNAVAILABLE", reply.error); assertEquals(1, reply.failures);
+        assertEquals("This operation requires Jarvys installed and active.", reply.message);
         assertEquals(0, reply.ready); assertNull(reply.lease); assertEquals(0, reply.claims);
+    }
+
+    @Test public void appOwnedOperationIsDeliveredWithoutCallingTheHostProvider() throws Exception {
+        fixture.provider.unavailable = true;
+        Capture reply = new Capture(); NativeOperationSessions.Lease lease = fixture.authorizeLocal(reply); idle();
+        assertSame(lease, reply.lease); assertEquals(1, reply.ready); assertTrue(lease.local); lease.check();
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(0, reply.claims);
+    }
+
+    @Test public void localLeaseStillEndsWithTheForegroundPageAndCapabilityGate() throws Exception {
+        FactoryException denied = assertThrows(FactoryException.class, () -> fixture.sessions.authorizeLocal(
+                "location.requestPermission", new JSONObject().put("precision", "approximate"), new Capture()));
+        assertEquals("CAPABILITY_DENIED", denied.code);
+        Capture reply = new Capture(); NativeOperationSessions.Lease lease = fixture.authorizeLocal(reply); idle();
+        fixture.sessions.onPause(); idle();
+        assertEquals("CANCELLED", reply.error); assertEquals(1, reply.failures); assertThrows(SecurityException.class, lease::check);
     }
 
     @Test public void aHostSessionEndingBeforeEffectInvalidatesTheLease() throws Exception {
@@ -61,6 +78,7 @@ public class NativeOperationSessionsTest {
         fixture.provider.last().state.set(NativeOperationAuthorization.TERMINAL);
         assertThrows(SecurityException.class, lease::check); idle();
         assertEquals("CANCELLED", reply.error); assertEquals(1, reply.failures); assertEquals(0, reply.claims);
+        assertTrue(reply.message.contains("requires Jarvys installed and active"));
     }
 
     @Test public void AndroidSystemHandoffKeepsTheLiveSessionAcrossPauseAndResume() throws Exception {
@@ -79,12 +97,12 @@ public class NativeOperationSessionsTest {
 
     static void idle() { Shadows.shadowOf(Looper.getMainLooper()).idle(); }
     static final class Capture implements NativeOperationSessions.Callback {
-        NativeOperationSessions.Lease lease; String error; int claims, releases, ready, failures;
+        NativeOperationSessions.Lease lease; String error, message; int claims, releases, ready, failures;
         public boolean current() { return true; }
         public boolean claimUi() { claims++; return true; }
         public void releaseUi() { releases++; }
         public void ready(NativeOperationSessions.Lease value) { lease = value; ready++; }
-        public void failed(String code, String message) { error = code; failures++; }
+        public void failed(String code, String message) { error = code; this.message = message; failures++; }
     }
     public static class Screen extends Activity { final List<android.content.Intent> launched = new ArrayList<>(); }
     static final class Worker implements Executor, AutoCloseable {
@@ -97,7 +115,8 @@ public class NativeOperationSessionsTest {
     static final class Fixture implements AutoCloseable {
         final Screen screen; final Worker io = new Worker(); final SessionProvider provider = new SessionProvider();
         final FactoryConfig config; final NativeOperationSessions sessions;
-        Fixture() throws Exception {
+        Fixture() throws Exception { this("[\"network\",\"notifications\",\"speech\",\"share\"]"); }
+        Fixture(String capabilities) throws Exception {
             screen = Robolectric.buildActivity(Screen.class).setup().get(); String host = DocumentBrokerIdentity.PRIMARY;
             DocumentBrokerIdentityTest.install(screen, host, new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
             PackageInfo info = screen.getPackageManager().getPackageInfo(host, PackageManager.GET_SIGNATURES | PackageManager.GET_SIGNING_CERTIFICATES);
@@ -108,13 +127,16 @@ public class NativeOperationSessionsTest {
             Shadows.shadowOf(screen.getPackageManager()).installPackage(info);
             Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(android.os.Process.myUid(), host);
             provider.attachInfo(screen, entry); ShadowContentResolver.registerProviderInternal(entry.authority, provider);
-            config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"network\",\"notifications\",\"speech\"]"))
+            config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(capabilities))
                     .put("appId", screen.getPackageName()).put("documentBroker", new JSONObject().put("packageName", host)
                             .put("certificateSha256", DocumentBrokerIdentityTest.digest())).toString(), screen.getPackageName());
             sessions = new NativeOperationSessions(screen, config, io, true);
         }
         NativeOperationSessions.Lease authorize(Capture reply) throws Exception {
-            return sessions.authorize("notifications.requestPermission", new JSONObject(), reply);
+            return sessions.authorize("share.text", new JSONObject().put("text", "Synthetic").put("title", ""), reply);
+        }
+        NativeOperationSessions.Lease authorizeLocal(Capture reply) throws Exception {
+            return sessions.authorizeLocal("notifications.requestPermission", new JSONObject(), reply);
         }
         void pump() throws Exception { idle(); while (!io.tasks.isEmpty()) { io.runNext(); idle(); } }
         public void close() throws Exception { sessions.close(); idle(); for (Issued value : provider.issued) value.host.close(); io.close(); screen.finish(); }

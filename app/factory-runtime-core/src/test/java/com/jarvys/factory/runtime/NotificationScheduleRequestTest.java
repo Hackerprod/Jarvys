@@ -36,6 +36,28 @@ public class NotificationScheduleRequestTest {
         assertThrows(FactoryException.class, () -> NotificationScheduleRequest.parseSchedule(new JSONObject(SCHEDULE).put("expiresAtEpochMs", 1999)));
         assertEquals(NotificationScheduleRequest.MAX_SAFE_INTEGER,
                 NotificationScheduleRequest.parseSchedule(new JSONObject(SCHEDULE).put("expiresAtEpochMs", NotificationScheduleRequest.MAX_SAFE_INTEGER)).expiresAtEpochMs);
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> NotificationScheduleRequest.parseSchedule(new JSONObject(SCHEDULE).put("expiresAtEpochMs", 1999)));
+        assertEquals("notifications.schedule: expiresAtEpochMs must be greater than or equal to atEpochMs.", field.getMessage());
+    }
+
+    @Test public void typedFailuresNameNotificationMethodAndFieldWithoutEchoingValues() throws Exception {
+        FactoryException schedule = assertThrows(FactoryException.class,
+                () -> NotificationScheduleRequest.parseSchedule(new JSONObject(SCHEDULE).put("atEpochMs", "private-value")));
+        assertEquals("notifications.schedule: atEpochMs must be a positive safe integer.", schedule.getMessage());
+
+        FactoryException scheduleId = assertThrows(FactoryException.class,
+                () -> NotificationScheduleRequest.parseScheduleId("{\"scheduleId\":\"private/value\"}", "notifications.cancelScheduled"));
+        assertEquals("notifications.cancelScheduled: scheduleId must be 1 to 64 letters, digits, dots, underscores, or hyphens, starting with a letter or digit.", scheduleId.getMessage());
+        assertFalse(scheduleId.getMessage().contains("private/value"));
+
+        FactoryException actions = assertThrows(FactoryException.class,
+                () -> NotificationScheduleRequest.parseNotification(new JSONObject(SHOW).put("actions", JSONObject.NULL)));
+        assertEquals("notifications.show: actions must be an array of at most 3 objects.", actions.getMessage());
+
+        FactoryException nestedTitle = assertThrows(FactoryException.class,
+                () -> NotificationScheduleRequest.parseSchedule(new JSONObject(SCHEDULE).put("notification", new JSONObject(SHOW).put("title", 42))));
+        assertEquals("notifications.schedule.notification.title must be a string.", nestedTitle.getMessage());
     }
     @Test public void unknownScheduleFieldsCannotRequestBackgroundCodeOrExternalActions() throws Exception {
         for (String key : new String[]{"script", "callback", "url", "intent", "component", "package", "repeat", "intervalMs", "exactFallback", "granted", "flags"})

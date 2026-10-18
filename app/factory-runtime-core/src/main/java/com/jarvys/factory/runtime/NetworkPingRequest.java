@@ -13,9 +13,11 @@ public final class NetworkPingRequest {
     private NetworkPingRequest(JSONObject args) throws Exception {
         FactoryConfig.exactKeys(args, "host", "family", "count", "timeoutMs", "packetTimeoutMs", "intervalMs", "packetBytes", "maxOutputBytes");
         host = normalizeHost(text(args, "host", null));
-        family = text(args, "family", "auto");
-        if (!"auto".equals(family) && !"ipv4".equals(family) && !"ipv6".equals(family)) throw invalid();
-        if ((host.indexOf(':') >= 0 && "ipv4".equals(family)) || (ipv4(host) && "ipv6".equals(family))) throw invalid();
+        family = text(args, "family", "auto", "network.ping.family must be auto, ipv4, or ipv6");
+        if (!"auto".equals(family) && !"ipv4".equals(family) && !"ipv6".equals(family))
+            throw invalid("network.ping.family must be auto, ipv4, or ipv6");
+        if ((host.indexOf(':') >= 0 && "ipv4".equals(family)) || (ipv4(host) && "ipv6".equals(family)))
+            throw invalid("network.ping.family must match the host address family");
         count = integer(args, "count", 4, 1, MAX_COUNT);
         timeoutMs = integer(args, "timeoutMs", 10000, 100, MAX_TIMEOUT_MS);
         packetTimeoutMs = integer(args, "packetTimeoutMs", 1000, 1000, MAX_TIMEOUT_MS);
@@ -24,15 +26,15 @@ public final class NetworkPingRequest {
         maxOutputBytes = integer(args, "maxOutputBytes", 16384, 1024, MAX_OUTPUT_BYTES);
     }
     public static NetworkPingRequest parse(JSONObject args) throws FactoryException {
-        try { if (args == null) throw invalid(); return new NetworkPingRequest(args); }
+        try { if (args == null) throw invalid("network.ping.args must be an object"); return new NetworkPingRequest(args); }
         catch (FactoryException failure) { throw failure; }
-        catch (Exception failure) { throw invalid(); }
+        catch (Exception failure) { throw invalid("network.ping.args fields must have their documented JSON types"); }
     }
     public JSONObject authorizationDetails() throws FactoryException {
         try { return new JSONObject().put("host", host).put("family", family).put("count", count)
                 .put("timeoutMs", timeoutMs).put("packetTimeoutMs", packetTimeoutMs).put("intervalMs", intervalMs)
                 .put("packetBytes", packetBytes).put("maxOutputBytes", maxOutputBytes); }
-        catch (Exception failure) { throw invalid(); }
+        catch (Exception failure) { throw invalid("network.ping: operation details could not be serialized"); }
     }
     /** Pure syntax validation: IPv6 is checked locally without InetAddress.getByName or DNS. */
     static String normalizeHost(String value) throws FactoryException {
@@ -88,13 +90,18 @@ public final class NetworkPingRequest {
         return compression >= 0 ? units < 8 : units == 8;
     }
     private static String text(JSONObject object, String key, String fallback) throws Exception {
+        return text(object, key, fallback, "network.ping." + key + " must be a string");
+    }
+    private static String text(JSONObject object, String key, String fallback, String expectation) throws Exception {
         if (!object.has(key) && fallback != null) return fallback;
-        Object value = object.get(key); if (!(value instanceof String)) throw invalid(); return (String) value;
+        Object value = object.get(key); if (!(value instanceof String)) throw invalid(expectation); return (String) value;
     }
     private static int integer(JSONObject object, String key, int fallback, int min, int max) throws Exception {
         if (!object.has(key)) return fallback;
-        Object value = object.get(key); if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid();
-        long number = ((Number) value).longValue(); if (number < min || number > max) throw invalid(); return (int) number;
+        String expectation = "network.ping." + key + " must be an integer from " + min + " through " + max;
+        Object value = object.get(key); if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid(expectation);
+        long number = ((Number) value).longValue(); if (number < min || number > max) throw invalid(expectation); return (int) number;
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid ICMP host, family or finite ping limits."); }
+    private static FactoryException invalid() { return invalid("network.ping.host must be a valid bounded DNS name or IP literal"); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message + "."); }
 }

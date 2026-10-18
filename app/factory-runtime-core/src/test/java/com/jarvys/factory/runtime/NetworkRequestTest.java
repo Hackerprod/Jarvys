@@ -84,6 +84,24 @@ public class NetworkRequestTest {
         invalid(() -> NetworkRequest.fromRequest(request().put("redirect", "yes")));
         invalid(() -> NetworkRequest.fromRequest(request().put("url", JSONObject.NULL)));
     }
+    @Test public void typedNetworkErrorsNameTheFieldWithoutEchoingItsValue() throws Exception {
+        JSONObject[] inputs = {
+                request().put("timeoutMs", "synthetic-private-value"),
+                request().put("responseType", "synthetic-private-type"),
+                request().put("redirect", "synthetic-private-redirect")};
+        String[] expected = {"timeoutMs must be an integer.", "responseType must be text or base64.",
+                "redirect must be follow, manual, or error."};
+        for (int index = 0; index < inputs.length; index++) {
+            try {
+                NetworkRequest.fromRequest(inputs[index]);
+                fail("Expected INVALID_ARGUMENT");
+            } catch (FactoryException failure) {
+                assertEquals("INVALID_ARGUMENT", failure.code);
+                assertEquals(expected[index], failure.getMessage());
+                assertFalse(failure.getMessage().contains("synthetic-private-"));
+            }
+        }
+    }
     @Test public void unsupportedBodyCombinationsNeverSilentlyRewriteGet() throws Exception {
         for (String method : new String[]{"GET", "HEAD", "TRACE"})
             invalid(() -> NetworkRequest.fromRequest(request().put("method", method).put("body", "")));

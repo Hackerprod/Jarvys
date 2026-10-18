@@ -130,7 +130,9 @@ public final class CapabilityCatalog {
             if (name.equals("steps")) declarations.add(ACTIVITY_RECOGNITION_DECLARATION);
             if (name.equals("sensors")) declarations.add(HIGH_RATE_SENSORS_DECLARATION);
             if (location) { declarations.add(COARSE_LOCATION_DECLARATION); declarations.add(FINE_LOCATION_DECLARATION); }
-            if (broker) declarations.add(speech ? SPEECH_QUERIES : voice ? VOICE_QUERIES : DOCUMENT_QUERIES);
+            if (broker) declarations.add(DOCUMENT_QUERIES);
+            if (speech) declarations.add(SPEECH_QUERIES);
+            if (voice) declarations.add(VOICE_QUERIES);
             manifestNodes = ManifestNodes.ordered(declarations);
             queries = broker ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
             queryActions = speech ? Collections.singleton(TTS_SERVICE_ACTION) : voice ? Collections.singleton(RECOGNIZE_SPEECH_ACTION) : Collections.emptySet();
@@ -155,16 +157,17 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element RECORD_AUDIO_DECLARATION = ManifestNodes.permission(RECORD_AUDIO_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element COARSE_LOCATION_DECLARATION = ManifestNodes.permission(COARSE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element FINE_LOCATION_DECLARATION = ManifestNodes.permission(FINE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
-    static final ManifestNodes.Element SPEECH_QUERIES, VOICE_QUERIES, SPEECH_VOICE_QUERIES;
+    static final ManifestNodes.Element SPEECH_QUERIES, VOICE_QUERIES, SPEECH_VOICE_QUERIES,
+            DOCUMENT_SPEECH_QUERIES, DOCUMENT_VOICE_QUERIES, DOCUMENT_SPEECH_VOICE_QUERIES;
     static {
-        List<ManifestNodes.Element> queries = new ArrayList<>(DOCUMENT_QUERIES.children);
-        queries.add(ManifestNodes.queryIntent(TTS_SERVICE_ACTION, null, null));
-        SPEECH_QUERIES = ManifestNodes.queries(queries);
-        queries.add(ManifestNodes.queryIntent(RECOGNIZE_SPEECH_ACTION, null, null));
-        SPEECH_VOICE_QUERIES = ManifestNodes.queries(queries);
-        queries = new ArrayList<>(DOCUMENT_QUERIES.children);
-        queries.add(ManifestNodes.queryIntent(RECOGNIZE_SPEECH_ACTION, null, null));
-        VOICE_QUERIES = ManifestNodes.queries(queries);
+        ManifestNodes.Element speech = ManifestNodes.queryIntent(TTS_SERVICE_ACTION, null, null);
+        ManifestNodes.Element voice = ManifestNodes.queryIntent(RECOGNIZE_SPEECH_ACTION, null, null);
+        SPEECH_QUERIES = ManifestNodes.queries(Collections.singletonList(speech));
+        VOICE_QUERIES = ManifestNodes.queries(Collections.singletonList(voice));
+        SPEECH_VOICE_QUERIES = ManifestNodes.queries(Arrays.asList(speech, voice));
+        DOCUMENT_SPEECH_QUERIES = ManifestNodes.queries(Arrays.asList(DOCUMENT_QUERIES.children.get(0), DOCUMENT_QUERIES.children.get(1), speech));
+        DOCUMENT_VOICE_QUERIES = ManifestNodes.queries(Arrays.asList(DOCUMENT_QUERIES.children.get(0), DOCUMENT_QUERIES.children.get(1), voice));
+        DOCUMENT_SPEECH_VOICE_QUERIES = ManifestNodes.queries(Arrays.asList(DOCUMENT_QUERIES.children.get(0), DOCUMENT_QUERIES.children.get(1), speech, voice));
     }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
             "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
@@ -190,14 +193,32 @@ public final class CapabilityCatalog {
         for (String name : select(requested)) {
             for (ManifestNodes.Element node : CAPABILITIES.get(name).manifestNodes) {
                 if (node == DOCUMENT_QUERIES) broker = true;
-                else if (node == SPEECH_QUERIES) { broker = true; speech = true; }
-                else if (node == VOICE_QUERIES) { broker = true; voice = true; }
+                else if (node == SPEECH_QUERIES) speech = true;
+                else if (node == VOICE_QUERIES) voice = true;
                 else if (!result.contains(node)) result.add(node);
             }
         }
-        // Exactly one queries element; speech adds its one service intent to the shared packages.
-        if (broker) result.add(speech && voice ? SPEECH_VOICE_QUERIES : speech ? SPEECH_QUERIES : voice ? VOICE_QUERIES : DOCUMENT_QUERIES);
+        // Host package visibility and Android service visibility are independent declarations.
+        if (broker || speech || voice) result.add(queryContribution(broker, speech, voice));
         return ManifestNodes.ordered(result);
+    }
+    private static ManifestNodes.Element queryContribution(boolean broker, boolean speech, boolean voice) {
+        if (broker) return speech ? (voice ? DOCUMENT_SPEECH_VOICE_QUERIES : DOCUMENT_SPEECH_QUERIES)
+                : voice ? DOCUMENT_VOICE_QUERIES : DOCUMENT_QUERIES;
+        return speech ? (voice ? SPEECH_VOICE_QUERIES : SPEECH_QUERIES) : VOICE_QUERIES;
+    }
+    static boolean hasQueryContribution(ManifestNodes.Element node) {
+        return node == DOCUMENT_QUERIES || node == SPEECH_QUERIES || node == VOICE_QUERIES || node == SPEECH_VOICE_QUERIES ||
+                node == DOCUMENT_SPEECH_QUERIES || node == DOCUMENT_VOICE_QUERIES || node == DOCUMENT_SPEECH_VOICE_QUERIES;
+    }
+    static boolean hasHostPackageQueries(ManifestNodes.Element node) {
+        return node == DOCUMENT_QUERIES || node == DOCUMENT_SPEECH_QUERIES || node == DOCUMENT_VOICE_QUERIES || node == DOCUMENT_SPEECH_VOICE_QUERIES;
+    }
+    static boolean hasSpeechQuery(ManifestNodes.Element node) {
+        return node == SPEECH_QUERIES || node == SPEECH_VOICE_QUERIES || node == DOCUMENT_SPEECH_QUERIES || node == DOCUMENT_SPEECH_VOICE_QUERIES;
+    }
+    static boolean hasVoiceQuery(ManifestNodes.Element node) {
+        return node == VOICE_QUERIES || node == SPEECH_VOICE_QUERIES || node == DOCUMENT_VOICE_QUERIES || node == DOCUMENT_SPEECH_VOICE_QUERIES;
     }
     /** Current runtime binding requirement; historical manifest profiles filter separately. */
     public static boolean requiresHostBroker(Iterable<String> requested) {
@@ -205,16 +226,15 @@ public final class CapabilityCatalog {
         for (String name : select(requested)) if (hostBrokerCapability(name)) required = true;
         return required;
     }
-    /** Legacy finite-sensor apps did not need a broker; only their new subscription API does. */
+    /** Installed configs need a host pin only for capabilities that use host brokers or handoffs. */
     public static boolean requiresMandatoryHostBroker(Iterable<String> requested) {
-        for (String name : select(requested)) if (!name.equals("sensors") && hostBrokerCapability(name)) return true;
+        for (String name : select(requested)) if (hostBrokerCapability(name)) return true;
         return false;
     }
     private static boolean hostBrokerCapability(String name) {
-        return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
+        return name.equals("documents") || name.equals("photos") || name.equals("audio") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
-                || name.equals("clipboard") || name.equals("share") || name.equals("export")
-                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors") || name.equals("secrets") || name.equals("incomingShare") || name.equals("nfc") || name.equals("bluetooth") || name.equals("widgets") || name.equals("jobs");
+                || name.equals("clipboard") || name.equals("share") || name.equals("export");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

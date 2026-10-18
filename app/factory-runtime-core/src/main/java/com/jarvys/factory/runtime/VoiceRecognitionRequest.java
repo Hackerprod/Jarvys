@@ -45,55 +45,60 @@ public final class VoiceRecognitionRequest {
             if (!language.isEmpty()) {
                 try {
                     Locale locale = new Locale.Builder().setLanguageTag(language).build();
-                    if (locale.getLanguage().isEmpty()) throw invalid();
-                } catch (IllformedLocaleException malformed) { throw invalid(); }
+                    if (locale.getLanguage().isEmpty()) throw invalid("voiceRecognition.start: language must be a BCP 47 language tag.");
+                } catch (IllformedLocaleException malformed) { throw invalid("voiceRecognition.start: language must be a BCP 47 language tag."); }
             }
             String model = optional(args, "languageModel", "free_form", 32);
-            if (!"free_form".equals(model) && !"web_search".equals(model)) throw invalid();
+            if (!"free_form".equals(model) && !"web_search".equals(model))
+                throw invalid("voiceRecognition.start: languageModel must be free_form or web_search.");
             String prompt = optional(args, "prompt", "", MAX_PROMPT_BYTES);
             boolean offline = false;
             if (args.has("preferOffline")) {
                 Object value = args.get("preferOffline");
-                if (!(value instanceof Boolean)) throw invalid();
+                if (!(value instanceof Boolean)) throw invalid("voiceRecognition.start: preferOffline must be a boolean.");
                 offline = (Boolean) value;
             }
             return new Recognize(language, model, prompt, integer(args, "maxResults", DEFAULT_MAX_RESULTS, MAX_RESULTS),
                     offline, integer(args, "timeoutMs", DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS));
-        } catch (JSONException malformed) { throw invalid(); }
+        } catch (JSONException malformed) { throw invalid("voiceRecognition.start: text options must be strings when provided."); }
     }
     public static void parseStatus(String json) throws FactoryException { parseEmpty(StrictJson.object(json, 64)); }
     public static void parseCancel(String json) throws FactoryException { parseEmpty(StrictJson.object(json, 64)); }
     public static void parseEmpty(JSONObject args) throws FactoryException { bounded(args); FactoryConfig.exactKeys(args); }
 
     private static String optional(JSONObject args, String key, String fallback, int limit) throws JSONException, FactoryException {
-        return args.has(key) ? text(FactoryConfig.string(args, key), limit, false) : fallback;
+        try { return args.has(key) ? text(FactoryConfig.string(args, key), limit, false, key) : fallback; }
+        catch (JSONException malformed) { throw invalid("voiceRecognition.start: " + key + " must be a string."); }
     }
     private static int integer(JSONObject args, String key, int fallback, int maximum) throws JSONException, FactoryException {
         if (!args.has(key)) return fallback;
         Object value = args.get(key);
-        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid();
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid("voiceRecognition.start: " + key + " must be an integer from 1 through " + maximum + ".");
         long number = ((Number) value).longValue();
-        if (number < 1 || number > maximum) throw invalid();
+        if (number < 1 || number > maximum) throw invalid("voiceRecognition.start: " + key + " must be an integer from 1 through " + maximum + ".");
         return (int) number;
     }
-    static String text(String value, int limit, boolean multiline) throws FactoryException {
-        if (value == null || value.length() > limit || value.getBytes(StandardCharsets.UTF_8).length > limit) throw invalid();
+    static String text(String value, int limit, boolean multiline) throws FactoryException { return text(value, limit, multiline, "text"); }
+    private static String text(String value, int limit, boolean multiline, String field) throws FactoryException {
+        if (value == null || value.length() > limit || value.getBytes(StandardCharsets.UTF_8).length > limit)
+            throw invalid("voiceRecognition.start: " + field + " exceeds its UTF-8 byte limit.");
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
-            if (Character.isISOControl(c) && !(multiline && (c == '\n' || c == '\r' || c == '\t'))) throw invalid();
+            if (Character.isISOControl(c) && !(multiline && (c == '\n' || c == '\r' || c == '\t')))
+                throw invalid("voiceRecognition.start: " + field + " contains a disallowed control character.");
             if (Character.isHighSurrogate(c)) {
-                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw invalid();
-            } else if (Character.isLowSurrogate(c)) throw invalid();
+                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw invalid("voiceRecognition.start: " + field + " must contain valid Unicode.");
+            } else if (Character.isLowSurrogate(c)) throw invalid("voiceRecognition.start: " + field + " must contain valid Unicode.");
         }
         return value;
     }
     private static void bounded(JSONObject args) throws FactoryException {
-        if (args == null) throw invalid();
+        if (args == null) throw invalid("voiceRecognition: arguments must be an object.");
         String encoded = args.toString();
         if (encoded == null || encoded.length() > MAX_ARGS_BYTES || encoded.getBytes(StandardCharsets.UTF_8).length > MAX_ARGS_BYTES)
             throw new FactoryException("TOO_LARGE", "Voice recognition options exceed the implementation's bounded intent budget.");
     }
-    private static FactoryException invalid() {
-        return new FactoryException("INVALID_ARGUMENT", "Invalid typed voice recognition options.");
+    private static FactoryException invalid(String message) {
+        return new FactoryException("INVALID_ARGUMENT", message);
     }
 }

@@ -83,7 +83,7 @@ public final class NotificationScheduleMachine {
     }
     private static Plan unavailable(SessionStatus sessionStatus) {
         switch (sessionStatus) {
-            case UNAVAILABLE: return none(State.QUEUED_SESSION_UNAVAILABLE, "authenticated_host_unavailable");
+            case UNAVAILABLE: return none(State.QUEUED_SESSION_UNAVAILABLE, "local_authority_unavailable");
             default: return null;
         }
     }

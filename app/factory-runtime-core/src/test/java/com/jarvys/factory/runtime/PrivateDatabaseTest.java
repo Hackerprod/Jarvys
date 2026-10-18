@@ -143,7 +143,10 @@ public class PrivateDatabaseTest {
         PrivateDatabase db = ready();
         error("NOT_FOUND", () -> tx(db, 1, op("insert", "one", value("valid")), op("update", "absent", value("missing"))));
         assertEquals(0, rows(db, 1).length());
-        error("INVALID_ARGUMENT", () -> tx(db, 1, op("insert", "one", value("valid")), op("insert", "two", new JSONObject().put("title", true))));
+        FactoryException typed = error("INVALID_ARGUMENT", () -> tx(db, 1, op("insert", "one", value("valid")), op("insert", "two", new JSONObject().put("title", true))));
+        assertTrue(typed.getMessage().contains("database.transact.operations[1].values.<column>"));
+        assertTrue(typed.getMessage().contains("declared text column type"));
+        assertFalse(typed.getMessage().contains("true"));
         error("INVALID_ARGUMENT", () -> tx(db, 1, op("insert", "one", new JSONObject().put("title", JSONObject.NULL))));
         error("INVALID_ARGUMENT", () -> tx(db, 1, op("insert", "one", new JSONObject().put("unknown", "x"))));
         assertEquals(0, rows(db, 1).length());

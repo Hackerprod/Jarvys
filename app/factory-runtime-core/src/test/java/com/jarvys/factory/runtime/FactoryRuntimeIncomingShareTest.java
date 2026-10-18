@@ -3,7 +3,6 @@ package com.jarvys.factory.runtime;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.widget.FrameLayout;
 import androidx.webkit.JavaScriptReplyProxy;
 import java.io.ByteArrayInputStream;
@@ -163,16 +162,9 @@ public class FactoryRuntimeIncomingShareTest {
             work = constructor.newInstance(runtime, owner(), id, claim, documents(), reply); callback = (NativeOperationSessions.Callback) work;
             NativeOperationSessions sessions = new NativeOperationSessions(activity, config, executor(), true);
             field("nativeOperations").set(runtime, sessions);
-            lease = sessions.new Lease(NativeOperationRequest.parse("incomingShare.take", claim.authorizationDetails()), callback);
+            lease = sessions.new Lease(NativeOperationRequest.parse("incomingShare.take", claim.authorizationDetails()), callback, true);
             Field leases = NativeOperationSessions.class.getDeclaredField("leases"); leases.setAccessible(true);
             @SuppressWarnings("unchecked") Set<NativeOperationSessions.Lease> active = (Set<NativeOperationSessions.Lease>) leases.get(sessions); active.add(lease);
-            NativeOperationAuthorization endpoint = new NativeOperationAuthorization(lease.nonce, lease.request.binding(lease.nonce),
-                    SystemClock.elapsedRealtime() + 300000, uid -> true, new NativeOperationAuthorization.Authority() {
-                        public int status() { return NativeOperationAuthorization.ACTIVE; }
-                        public void checkBeforeEffect() { }
-                    }, () -> {});
-            lease.client = executor().submit(() -> NativeOperationAuthorization.connect(endpoint, lease.nonce,
-                    lease.request.binding(lease.nonce), uid -> true, () -> {})).get(5, TimeUnit.SECONDS);
             Method attach = workClass.getDeclaredMethod("attach", NativeOperationSessions.Lease.class); attach.setAccessible(true); attach.invoke(work, lease);
         }
         void prepare() throws Exception {
@@ -227,7 +219,7 @@ public class FactoryRuntimeIncomingShareTest {
     @Test public void leavingForegroundCancelsAnUnsettledTakeWithoutConsumingText() throws Exception {
         page(PAGE); Take take = new Take(false);
         runtime.onPause(); assertFalse(take.callback.current()); assertTrue(take.lease.ended.get());
-        assertEquals("one-time text", take.claim.authorizationDetails().getString("textPreview"));
+        assertFalse(take.claim.committed());
     }
     @Test public void replacementPageCancelsPreparedWorkInsteadOfDeliveringToNewPage() throws Exception {
         page(PAGE); Take take = new Take(true); take.prepare(); page(PAGE); take.deliver();

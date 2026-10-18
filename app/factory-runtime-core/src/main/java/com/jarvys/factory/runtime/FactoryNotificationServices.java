@@ -12,7 +12,7 @@ public final class FactoryNotificationServices {
         @Override public long elapsedMs() { return SystemClock.elapsedRealtime(); }
     };
     public interface Resolver {
-        /** Verify package/signature/APK/receipt, capability and signed budgets; no UI or WebView. */
+        /** Resolve this app's package identity and packaged capabilities/budgets; no UI or WebView. */
         Environment resolve(Context application, NotificationScheduleLedger ledger, Session session) throws FactoryException;
     }
     public static final class Environment {

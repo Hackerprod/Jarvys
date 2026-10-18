@@ -184,14 +184,13 @@ public final class ManifestPlan {
                 selectedPermissions.add(permission);
                 result.add(new Node("manifest/uses-permission", 0,
                         a("name", 0x01010003, 3, permission)));
-            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES || contribution == CapabilityCatalog.SPEECH_QUERIES
-                    || contribution == CapabilityCatalog.VOICE_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES) {
-                selectedQueries.addAll(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES);
+            } else if (CapabilityCatalog.hasQueryContribution(contribution)) {
+                if (CapabilityCatalog.hasHostPackageQueries(contribution)) selectedQueries.addAll(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES);
                 int queryIndex = result.size();
                 result.add(new Node("manifest/queries", 0));
-                if (contribution == CapabilityCatalog.SPEECH_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES)
+                if (CapabilityCatalog.hasSpeechQuery(contribution))
                     selectedQueryActions.add(CapabilityCatalog.TTS_SERVICE_ACTION);
-                if (contribution == CapabilityCatalog.VOICE_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES)
+                if (CapabilityCatalog.hasVoiceQuery(contribution))
                     selectedQueryActions.add(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
                 for (String action : selectedQueryActions) {
                     int intentIndex = result.size();

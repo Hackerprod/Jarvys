@@ -482,7 +482,7 @@ internal class FactoryProjectService(
         }
         return compact.put("total_observations", totalCount)
             .put("observations", retained)
-            .put("evidence_limit", "Shared-runtime events only; installed rendering, Android grants, persistence and network absence are unverified.")
+            .put("evidence_limit", "Runs project JS in shared WebView; retains bridge validation errors/events only. No console capture; installed rendering, Android grants, persistence and network absence remain unverified.")
     }
 
     private fun saturatedAdd(left: Long, right: Long): Long =

@@ -27,10 +27,10 @@ public class F3ConfigTest {
         assertTrue(FactoryConfig.parsePreview(config("jobs","network").toString()).capabilities.contains("jobs"));
         for(String field:new String[]{"jobs","widgets","nfc"}) assertThrows(FactoryException.class,()->FactoryConfig.parsePreview(config(field,"network").put(field,new JSONObject()).toString()));
     }
-    @Test public void installedF3AppsRequirePinnedHost() throws Exception {
-        for(String cap:new String[]{"nfc","widgets","jobs"}) assertThrows(FactoryException.class,()->FactoryConfig.parse(config(cap,"network").toString(),"org.example.f3"));
+    @Test public void generatedAppLocalF3FamiliesNeedNoHostPin() throws Exception {
+        for(String cap:new String[]{"nfc","widgets","jobs"}) assertTrue(FactoryConfig.parse(config(cap,"network").toString(),"org.example.f3").capabilities.contains(cap));
         JSONObject source=config("bluetooth").put("bluetooth",bluetooth("full"));
-        assertThrows(FactoryException.class,()->FactoryConfig.parse(source.toString(),"org.example.f3"));
+        assertNotNull(FactoryConfig.parse(source.toString(),"org.example.f3").bluetooth);
         source.put("documentBroker",new JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256",String.join("",java.util.Collections.nCopies(64,"a"))));
         assertNotNull(FactoryConfig.parse(source.toString(),"org.example.f3").bluetooth);
     }

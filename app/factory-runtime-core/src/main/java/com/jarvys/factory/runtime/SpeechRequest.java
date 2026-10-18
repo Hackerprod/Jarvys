@@ -36,18 +36,18 @@ public final class SpeechRequest {
         bounded(args);
         FactoryConfig.exactKeys(args, "text", "language", "engine", "voice", "rate", "pitch", "volume");
         try {
-            String text = text(FactoryConfig.string(args, "text"), BridgeProtocol.MAX_TEXT_BYTES, true);
-            if (text.trim().isEmpty()) throw invalid();
+            String text = text(FactoryConfig.string(args, "text"), BridgeProtocol.MAX_TEXT_BYTES, true, "text");
+            if (text.trim().isEmpty()) throw invalid("speech.speak: text must contain visible text.");
             String language = optional(args, "language", 64);
             if (!language.isEmpty()) {
                 try {
                     Locale locale = new Locale.Builder().setLanguageTag(language).build();
-                    if (locale.getLanguage().isEmpty()) throw invalid();
-                } catch (IllformedLocaleException invalidLanguage) { throw invalid(); }
+                    if (locale.getLanguage().isEmpty()) throw invalid("speech.speak: language must be a BCP 47 language tag.");
+                } catch (IllformedLocaleException invalidLanguage) { throw invalid("speech.speak: language must be a BCP 47 language tag."); }
             }
             return new Speak(text, language, engine(optional(args, "engine", 255)), optional(args, "voice", 512),
                     number(args, "rate", false), number(args, "pitch", false), number(args, "volume", true));
-        } catch (JSONException invalid) { throw invalid(); }
+        } catch (JSONException malformed) { throw invalid("speech.speak: text, language, engine, and voice must be strings when provided."); }
     }
 
     public static String parseVoices(String json) throws FactoryException {
@@ -56,7 +56,7 @@ public final class SpeechRequest {
     public static String parseVoices(JSONObject args) throws FactoryException {
         bounded(args); FactoryConfig.exactKeys(args, "engine");
         try { return engine(optional(args, "engine", 255)); }
-        catch (JSONException invalid) { throw invalid(); }
+        catch (JSONException malformed) { throw invalid("speech.voices: engine must be a string when provided."); }
     }
     public static JSONObject voicesAuthorizationDetails(String engine) throws FactoryException {
         try { return new JSONObject().put("engine", engine(engine)); }
@@ -68,7 +68,7 @@ public final class SpeechRequest {
 
     /** Sequential chunks preserve every UTF-16 unit and never divide a Unicode surrogate pair. */
     static List<String> chunks(String text, int maxLength) throws FactoryException {
-        if (maxLength < 2 || text == null || text.isEmpty()) throw invalid();
+        if (maxLength < 2 || text == null || text.isEmpty()) throw invalid("speech.speak: text must contain at least one character.");
         List<String> result = new ArrayList<>();
         for (int from = 0; from < text.length();) {
             int end = Math.min(text.length(), from + maxLength);
@@ -86,38 +86,43 @@ public final class SpeechRequest {
 
     static String engine(String value) throws FactoryException {
         if (value == null || value.length() > 255 || (!value.isEmpty() &&
-                !value.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+"))) throw invalid();
+                !value.matches("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")))
+            throw invalid("speech: engine must be an empty value or a bounded package name.");
         return value;
     }
     private static double number(JSONObject args, String key, boolean volume) throws JSONException, FactoryException {
         if (!args.has(key)) return 1.0;
         Object value = args.get(key);
-        if (!(value instanceof Number)) throw invalid();
+        if (!(value instanceof Number)) throw invalid("speech.speak: " + key + " must be a number.");
         double number = ((Number) value).doubleValue();
         float platform = (float) number;
         if (Double.isNaN(number) || Double.isInfinite(number) || Float.isInfinite(platform) ||
-                (volume ? number < 0 || number > 1 : number <= 0 || platform <= 0)) throw invalid();
+                (volume ? number < 0 || number > 1 : number <= 0 || platform <= 0))
+            throw invalid(volume ? "speech.speak: volume must be finite from 0 through 1." : "speech.speak: " + key + " must be finite and positive.");
         return number;
     }
     private static String optional(JSONObject args, String key, int maxBytes) throws JSONException, FactoryException {
-        return args.has(key) ? text(FactoryConfig.string(args, key), maxBytes, false) : "";
+        try { return args.has(key) ? text(FactoryConfig.string(args, key), maxBytes, false, key) : ""; }
+        catch (JSONException malformed) { throw invalid("speech.speak: " + key + " must be a string."); }
     }
-    private static String text(String value, int maxBytes, boolean multiline) throws FactoryException {
-        if (value.length() > maxBytes || value.getBytes(StandardCharsets.UTF_8).length > maxBytes) throw invalid();
+    private static String text(String value, int maxBytes, boolean multiline, String field) throws FactoryException {
+        if (value.length() > maxBytes || value.getBytes(StandardCharsets.UTF_8).length > maxBytes)
+            throw invalid("speech.speak: " + field + " exceeds its UTF-8 byte limit.");
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
-            if (Character.isISOControl(c) && !(multiline && (c == '\n' || c == '\r' || c == '\t'))) throw invalid();
+            if (Character.isISOControl(c) && !(multiline && (c == '\n' || c == '\r' || c == '\t')))
+                throw invalid("speech.speak: " + field + " contains a disallowed control character.");
             if (Character.isHighSurrogate(c)) {
-                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw invalid();
-            } else if (Character.isLowSurrogate(c)) throw invalid();
+                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw invalid("speech.speak: " + field + " must contain valid Unicode.");
+            } else if (Character.isLowSurrogate(c)) throw invalid("speech.speak: " + field + " must contain valid Unicode.");
         }
         return value;
     }
     private static void bounded(JSONObject args) throws FactoryException {
-        if (args == null) throw invalid();
+        if (args == null) throw invalid("speech: arguments must be an object.");
         String encoded = args.toString();
         if (encoded == null || encoded.length() > MAX_ARGS_BYTES || encoded.getBytes(StandardCharsets.UTF_8).length > MAX_ARGS_BYTES)
             throw new FactoryException("TOO_LARGE", "Speech arguments exceed the transport limit.");
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed speech arguments."); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
 }

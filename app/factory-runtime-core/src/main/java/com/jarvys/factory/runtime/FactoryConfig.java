@@ -126,7 +126,6 @@ public final class FactoryConfig {
             }
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
-                if (!CapabilityCatalog.requiresHostBroker(capabilities)) throw new FactoryException("INVALID_CONFIG", "Host broker requires a capability with a native policy or broker operation.");
                 JSONObject metadata = object.getJSONObject("documentBroker");
                 exactKeys(metadata, "packageName", "certificateSha256");
                 String host = string(metadata, "packageName"), certificate = string(metadata, "certificateSha256");
@@ -135,7 +134,7 @@ public final class FactoryConfig {
                 broker = new DocumentBroker(host, certificate);
             }
             if (installedPackage != null && CapabilityCatalog.requiresMandatoryHostBroker(capabilities) && broker == null)
-                throw new FactoryException("INVALID_CONFIG", "Declared native policy or broker operations require a pinned compatible Jarvys host.");
+                throw new FactoryException("INVALID_CONFIG", "Declared host-mediated capabilities require a pinned compatible Jarvys host.");
             ResourceBudgets resources = object.has("resourceBudgets") ? ResourceBudgetsJson.parse(object.getJSONObject("resourceBudgets")) : ResourceBudgets.legacy();
             return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth);
         } catch (JSONException e) {
@@ -159,7 +158,11 @@ public final class FactoryConfig {
     static void exactKeys(JSONObject object, String... keys) throws FactoryException {
         Set<String> allowed = new LinkedHashSet<>(Arrays.asList(keys));
         Iterator<String> actual = object.keys();
-        while (actual.hasNext()) if (!allowed.contains(actual.next()))
-            throw new FactoryException("INVALID_ARGUMENT", "Unknown field.");
+        while (actual.hasNext()) if (!allowed.contains(actual.next())) {
+            String expected = String.join(", ", allowed);
+            throw new FactoryException("INVALID_ARGUMENT", expected.isEmpty()
+                    ? "Arguments must not contain fields."
+                    : "Arguments may contain only these fields: " + expected + ".");
+        }
     }
 }

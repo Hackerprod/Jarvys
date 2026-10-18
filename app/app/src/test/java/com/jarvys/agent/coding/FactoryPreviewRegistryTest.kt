@@ -163,6 +163,24 @@ class FactoryPreviewRegistryTest {
         session.record("lifecycle", "started")
         assertEquals("closed", session.receipt().getString("state"))
     }
+    @Test fun receiptKeepsLatestCatalogValidationErrorWithoutRequestValues() {
+        val session = FactoryPreviewRegistry.consume(FactoryPreviewRegistry.issue(snapshot(), {}, CancellationToken.cancellable()))!!
+        session.recordValidationFailure("database.migrate", "INVALID_ARGUMENT",
+            "database.migrate.steps[0].columns must be an object mapping column name to {type, nullable}")
+        session.recordValidationFailure("database.migrate", "INVALID_ARGUMENT",
+            "database.migrate.steps[0].columns values must be {type, nullable} objects")
+        session.recordValidationFailure("unknown.private.method", "INVALID_ARGUMENT", "private value")
+        session.recordValidationFailure("storage.set", "IO_ERROR", "private value")
+        val errors = session.receipt().getJSONArray("validation_errors")
+        assertEquals(1, errors.length())
+        val error = errors.getJSONObject(0)
+        assertEquals("database.migrate", error.getString("method"))
+        assertEquals("INVALID_ARGUMENT", error.getString("code"))
+        assertEquals(2L, error.getLong("count"))
+        assertTrue(error.getString("message").contains("columns values"))
+        assertFalse(session.receipt().toString().contains("private value"))
+        session.close()
+    }
     @Test fun snapshotRejectsTraversalExtraAssetsAndBuildLimitOverflow() {
         fun create(assets: Map<String, ByteArray>) = FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(assets))
         assertThrows(Exception::class.java) { create(mapOf("www/index.html" to byteArrayOf(), "www/../private" to byteArrayOf())) }

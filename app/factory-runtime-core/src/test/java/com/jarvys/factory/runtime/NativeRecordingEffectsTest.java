@@ -24,7 +24,7 @@ import org.robolectric.util.ReflectionHelpers;
 import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
-/** Shared policy/Android permission flow and bridge delivery with synthetic, never live, PCM. */
+/** App-local operation lease, Android permission flow and bridge delivery with synthetic PCM. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35, manifest=Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
@@ -40,7 +40,7 @@ public class NativeRecordingEffectsTest {
     private final Scheduler scheduler = new Scheduler();
 
     @Before public void setup() throws Exception {
-        fixture = new NativeOperationSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture("[\"recording\",\"documents\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"recording\",\"documents\"]"))
                 .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
                         .put("packageName", fixture.config.documentBroker.packageName)
@@ -74,26 +74,25 @@ public class NativeRecordingEffectsTest {
     private void drain() { Runnable task; while ((task=cleanup.poll()) != null) task.run(); }
     private int files() { String[] names=directory.list(); return names == null ? 0 : names.length; }
 
-    @Test public void unavailableInstalledSourceCannotReserveDocumentsOrStartMicrophone() throws Exception {
-        fixture.provider.unavailable=true; Result denied=perform("recording.record", tiny()); fixture.pump(); scheduler.runDue();
-        assertEquals("UNAVAILABLE", denied.error); assertEquals(0, drivers); assertEquals(0, files());
-        List<DocumentHandles.Reservation> slots=new ArrayList<>();
-        for (int i=0;i<config.resources.documents.openHandles;i++) slots.add(documents.reserveRead());
-        for (DocumentHandles.Reservation slot:slots) slot.cancel();
-        assertTrue(fixture.screen.launched.isEmpty()); assertEquals(0, denied.claims);
+    @Test public void unavailableHostDoesNotBlockAppOwnedRecordingOrDocumentHandle() throws Exception {
+        fixture.provider.unavailable=true; Result captured=perform("recording.record", tiny()); fixture.pump(); scheduler.runDue(); idle();
+        assertEquals(1, captured.successes); assertEquals(1, drivers); assertEquals(1, files());
+        assertTrue(fixture.provider.issued.isEmpty()); assertTrue(fixture.screen.launched.isEmpty());
+        documents.close(captured.value.getString("handle")); drain(); assertEquals(0, files());
     }
     @Test public void stopAndCancelReuseTheExistingCaptureWithoutANewHostSession() throws Exception {
         Result capture=perform("recording.record", new JSONObject().put("durationMs",1000).put("maxBytes",100));
-        fixture.pump(); scheduler.runDue(); assertEquals(1, fixture.provider.issued.size());
+        fixture.pump(); scheduler.runDue(); assertTrue(fixture.provider.issued.isEmpty());
         Result stop=perform("recording.stop", new JSONObject());
-        assertTrue(stop.value.getBoolean("stopRequested")); assertEquals(1, fixture.provider.issued.size());
+        assertTrue(stop.value.getBoolean("stopRequested")); assertTrue(fixture.provider.issued.isEmpty());
         scheduler.runDue(); idle(); assertEquals("stopped", capture.value.getString("reason"));
         fixture.provider.unavailable=true;
         Result cancel=perform("recording.cancel", new JSONObject());
-        assertEquals(0, cancel.value.getInt("cancelled")); assertEquals(1, fixture.provider.issued.size());
+        assertEquals(0, cancel.value.getInt("cancelled")); assertTrue(fixture.provider.issued.isEmpty());
         assertTrue(fixture.screen.launched.isEmpty()); assertEquals(0,capture.claims);
     }
     @Test public void permissionHandoffUsesSharedSlotAndReadsActualOsStateAfterResume() throws Exception {
+        fixture.provider.unavailable=true;
         Shadows.shadowOf(fixture.screen.getApplication()).denyPermissions(Manifest.permission.RECORD_AUDIO);
         Result request=perform("recording.requestPermission", new JSONObject()); fixture.pump();
         assertTrue(effects.hasPendingPermission()); assertEquals(1,request.claims);

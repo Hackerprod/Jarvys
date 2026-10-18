@@ -118,6 +118,8 @@ open class FactoryPreviewActivity : Activity() {
             override fun isSessionOpen() = active.isOpen()
             override fun lifecycleLock(): Any = active
             override fun onTrace(operation: String, outcome: String) = active.record(operation, outcome)
+            override fun onValidationFailure(method: String, code: String, message: String) =
+                active.recordValidationFailure(method, code, message)
         }
         val controller = FactoryRuntime(this, content, host)
         return object : RuntimeHandle {
