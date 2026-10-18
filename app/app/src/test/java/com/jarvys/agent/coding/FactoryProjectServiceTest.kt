@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.apkfactory.FactorySigningScope
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
+import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
 import org.json.JSONArray
 import org.json.JSONObject
@@ -87,11 +88,16 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun setIdentityState(appId:String,state:FactorySigningIdentity.State){savedByApp[appId]=state;identityState=state}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
+        fun confirmPublishedReceipt(sha:String) {
+            val file = receiptFile(this, sha)
+            file.writeText(JSONObject(file.readText()).put("state", "published").toString())
+        }
     }
 
     @Test fun signingCreatesAnAppKeyAutomaticallyAndPreservesPackagedDex() {
         val f = Fixture(enableEphemeralSigning = true)
         val build = f.build()
+        assertEquals("published", build.getString("state"))
         val result = f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
         assertEquals(1, f.obtained)
         assertTrue(result.getBoolean("signed"))
@@ -102,6 +108,54 @@ class FactoryProjectServiceTest {
         val signed = File(f.root, "signed.apk").readBytes()
         TemplateApk.verifyUnchangedPayload(unsigned, signed)
         assertEquals(TemplateApk.verify(unsigned, expected).dexSha256, TemplateApk.verify(signed, expected).dexSha256)
+    }
+
+    @Test fun compactPublicReceiptsExposeTheirPublishedState() {
+        val f = Fixture()
+        for (signed in listOf(false, true)) {
+            val receipt = JSONObject().put("buildId", "build-id").put("state", "published")
+                .put("outputPath", "notes.apk").put("apkSha256", "a".repeat(64)).put("apkBytes", 123L)
+                .put("signed", signed).put("templateSha256", "b".repeat(64))
+                .put("spec", JSONObject().put("appId", "org.example.notebook").put("versionCode", 1))
+                .put("sources", JSONObject().put("factory.json", "c".repeat(64)))
+            val result = f.service.publicReceipt(receipt)
+            assertEquals("published", result.getString("state"))
+            assertEquals(signed, result.getBoolean("signed"))
+        }
+    }
+
+    @Test fun contractTestSummaryRetainsCountsAndOnlyNonPassingObservations() {
+        val f = Fixture()
+        val full = JSONObject().put("state", "failed").put("mode", "shared_core_test")
+            .put("observations", JSONArray().put(JSONObject().put("operation", "storage.set").put("outcome", "passed"))
+                .put(JSONObject().put("operation", "network.request").put("outcome", "failed").put("detail", "blocked"))
+                .put(JSONObject().put("operation", "database.select").put("outcome", "passed")))
+            .put("evidence_limit", "Long source limit")
+        val result = f.service.compactContractTestResult(full)
+        assertEquals(3, result.getInt("total_checks"))
+        assertEquals(1, result.getInt("failed_checks"))
+        assertEquals("failed", result.getString("state"))
+        assertEquals(1, result.getJSONArray("observations").length())
+        assertEquals("network.request", result.getJSONArray("observations").getJSONObject(0).getString("operation"))
+        assertTrue(result.getString("evidence_limit").contains("zero-egress proof"))
+        assertFalse(result.toString().contains("Long source limit"))
+    }
+
+    @Test fun previewStatusSummaryCountsAllEventsAndReturnsOnlyWarnings() {
+        val f = Fixture()
+        val full = JSONObject().put("state", "launch_requested")
+            .put("observations", JSONArray().put(JSONObject().put("operation", "storage.set").put("outcome", "success").put("count", 4))
+                .put(JSONObject().put("operation", "share.text").put("outcome", "simulated").put("count", 2))
+                .put(JSONObject().put("operation", "runtime").put("outcome", "cleanup_pending").put("count", 1)))
+            .put("evidence_limit", "Long source limit")
+        val result = f.service.compactPreviewStatus(full)
+        assertEquals(7L, result.getLong("total_observations"))
+        assertEquals(3L, result.getLong("warning_count"))
+        assertEquals(2, result.getJSONArray("observations").length())
+        assertEquals("simulated", result.getJSONArray("observations").getJSONObject(0).getString("outcome"))
+        assertEquals("cleanup_pending", result.getJSONArray("observations").getJSONObject(1).getString("outcome"))
+        assertTrue(result.getString("evidence_limit").contains("unverified"))
+        assertFalse(result.toString().contains("Long source limit"))
     }
 
     @Test fun cancellationAfterKeyCreationStopsSigningAndPublication() {
@@ -119,9 +173,6 @@ class FactoryProjectServiceTest {
     @Test fun localUiIsRuntimeOwnedDeterministicAndAvailableInPreviewWithProvenance() {
         val f = Fixture()
         f.spec("org.example.localui", 1, emptyList())
-        val catalog = f.service.inspect(CancellationToken.cancellable()).getJSONObject("localUiLibraries")
-        assertEquals("3.0.0", catalog.getString("version"))
-        assertFalse(catalog.getBoolean("capabilityRequired"))
         val example = File("../examples/factory-local-ui")
         assertTrue(example.isDirectory)
         example.walkTopDown().filter { it.isFile && it.name != "README.md" }.forEach { source ->
@@ -130,6 +181,18 @@ class FactoryProjectServiceTest {
         val first = f.build("first.apk")
         f.build("second.apk")
         assertArrayEquals(File(f.root,"first.apk").readBytes(),File(f.root,"second.apk").readBytes())
+        val catalog = ZipFile(File(f.root,"first.apk")).use { zip ->
+            val provenance = JSONObject(zip.getInputStream(zip.getEntry("assets/factory-provenance.json")).bufferedReader().use { it.readText() })
+            provenance.getJSONObject("localUiLibraries")
+        }
+        val secondCatalog = ZipFile(File(f.root,"second.apk")).use { zip ->
+            val provenance = JSONObject(zip.getInputStream(zip.getEntry("assets/factory-provenance.json")).bufferedReader().use { it.readText() })
+            provenance.getJSONObject("localUiLibraries")
+        }
+        assertEquals("3.0.0", catalog.getString("version"))
+        assertFalse(catalog.getBoolean("capabilityRequired"))
+        assertEquals(catalog.toString(), secondCatalog.toString())
+        assertEquals(com.jarvys.factory.runtime.FactoryUiAssets.paths().size, catalog.getJSONArray("files").length())
         com.jarvys.agent.apkfactory.FactoryApkEvidence.write("local-ui-example-unsigned.apk", File(f.root,"first.apk").readBytes())
         val ui = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(File(f.root,"first.apk").readBytes())
         assertEquals(5, ui.size)
@@ -247,11 +310,58 @@ class FactoryProjectServiceTest {
     }
     @Test fun factoryTestBindsActualBuildWithoutKeysWritesOrInstalledClaims() {
         val f=Fixture(); val built=f.build(); val version=f.scope.version()
+        f.confirmPublishedReceipt(built.getString("sha256"))
         val result=f.service.harness("test","notes.apk",built.getString("sha256"),version,CancellationToken.cancellable())
         assertEquals("passed",result.getString("state")); assertEquals("shared_core_test",result.getString("mode"))
         assertEquals(built.getString("sha256"),result.getString("apk_sha256"))
+        assertTrue(result.getInt("total_checks") > 0)
+        assertEquals(0,result.getInt("failed_checks"))
+        assertEquals(0,result.getJSONArray("observations").length())
+        assertTrue(result.getString("evidence_limit").contains("zero-egress proof"))
+        assertFalse(result.toString().contains("\"outcome\":\"passed\""))
+        assertFalse(result.toString().contains("undeclared_denied"))
         assertEquals(version,f.scope.version()); assertEquals(0,f.obtained)
         assertFalse(result.toString().contains(f.root.absolutePath))
+    }
+    @Test fun omittedCapabilitiesDeriveFullCompiledManifestScopeAndExplicitSchemaOneRuntimeConfig() {
+        val f = Fixture()
+        val specFile = File(f.root, "factory.json")
+        specFile.writeText(JSONObject(specFile.readText()).apply { remove("capabilities") }.toString())
+        val built = f.build()
+        val apk = File(f.root, "notes.apk").readBytes()
+        ZipFile(File(f.root, "notes.apk")).use { zip ->
+            val configText = zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() }
+            val configJson = JSONObject(configText)
+            assertEquals(1, configJson.getInt("schemaVersion"))
+            val config = com.jarvys.factory.runtime.FactoryConfig.parse(configText, "org.example.notebook")
+            assertEquals(FactorySpec.CAPABILITIES.toSet(), config.capabilities)
+        }
+        val manifest = TemplateApk.inspect(apk)
+        assertEquals(listOf("biometrics", "bluetooth", "documents", "incomingShare", "jobs", "location", "network", "nfc",
+            "notifications", "recording", "sensors", "speech", "steps", "voiceRecognition", "widgets"), manifest.plan.capabilities)
+        val catalogPermissions = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES.values
+            .flatMap { it.permissions }.toSet() + setOf(
+                com.jarvys.factory.contract.F3ManifestPolicy.NFC_PERMISSION,
+                com.jarvys.factory.contract.F3ManifestPolicy.BLUETOOTH_PERMISSION,
+                com.jarvys.factory.contract.F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION,
+                com.jarvys.factory.contract.F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION,
+                com.jarvys.factory.contract.F3ManifestPolicy.BLUETOOTH_CONNECT_PERMISSION,
+                com.jarvys.factory.contract.F3ManifestPolicy.NETWORK_STATE_PERMISSION,
+                com.jarvys.factory.contract.NotificationPolicy.BOOT_PERMISSION)
+        assertEquals(catalogPermissions, manifest.permissions.toSet())
+        assertTrue(manifest.permissions.containsAll(listOf(
+            "android.permission.USE_BIOMETRIC", "android.permission.INTERNET", "android.permission.POST_NOTIFICATIONS",
+            "android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.RECORD_AUDIO", "android.permission.ACTIVITY_RECOGNITION",
+            "android.permission.HIGH_SAMPLING_RATE_SENSORS", "android.permission.NFC",
+            "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECEIVE_BOOT_COMPLETED")))
+        assertTrue(manifest.plan.features.contains(com.jarvys.factory.contract.F3ManifestPolicy.NFC_FEATURE))
+        assertEquals(listOf("com.jarvys.agent", "com.jarvys.agent.recoverytest"), manifest.plan.queries)
+        assertTrue(manifest.plan.queryActions.contains("android.intent.action.TTS_SERVICE"))
+        assertTrue(manifest.plan.queryActions.contains("android.speech.action.RECOGNIZE_SPEECH"))
+        val application = manifest.plan.nodes.single { it.path == "manifest/application" }
+        assertEquals(-1, application.attributes["${com.jarvys.factory.contract.ManifestPlan.ANDROID}|usesCleartextTraffic"]?.value)
+        assertEquals(built.getString("sha256"), ProjectScope.sha256(apk))
     }
     @Test fun factoryHarnessRejectsHashScopeAndAvailabilityChanges() {
         val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
@@ -279,6 +389,9 @@ class FactoryProjectServiceTest {
             val status=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())
             assertEquals("launch_requested",status.getString("state"))
             assertEquals(launch.getString("build_id"),status.getString("build_id"))
+            assertTrue(status.getLong("total_observations") >= status.getLong("warning_count"))
+            assertTrue(status.getInt("warning_count") >= status.getJSONArray("observations").length())
+            assertTrue(status.getString("evidence_limit").isNotBlank())
             token.cancel()
             val cancelled=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())
             assertEquals("revoked",cancelled.getString("state"))
@@ -428,14 +541,26 @@ class FactoryProjectServiceTest {
     }
     @Test fun inspectExposesVerifiedResourceAndComponentBindings() {
         val f=Fixture();val inspected=f.service.inspect(CancellationToken.cancellable())
-        val bindings=inspected.getJSONObject("resourceBindings")
+        assertEquals("ready", inspected.getString("state"))
+        assertEquals(33, inspected.getInt("capabilityCount"))
+        assertEquals(134, inspected.getInt("methodCount"))
+        assertFalse(inspected.has("implementedCapabilities"))
+        assertTrue(inspected.getString("scopeWarning").contains("USE_BIOMETRIC"))
+        assertTrue(inspected.getString("evidence_limit").contains("no project app behavior"))
+        assertFalse(inspected.has("methods"))
+        assertFalse(inspected.has("resourceBindings"))
+        assertFalse(inspected.has("componentDex"))
+        val template=f.context.assets.open("apk_factory/template.apk").use { TemplateApk.inspect(it.readBytes()) }
+        val bindings=JSONObject().apply { template.resourceBindings.forEach { (role, binding) ->
+            put(role, JSONObject().put("id", binding.id).put("type", binding.type).put("name", binding.name).put("path", binding.path))
+        } }
         assertTrue(bindings.has("icon"));assertTrue(bindings.has("backup"))
         for(role in listOf("icon","backup")) {
             val binding=bindings.getJSONObject(role)
             assertTrue(binding.getInt("id") != 0);assertTrue(binding.getString("path").startsWith("res/"))
             assertTrue(binding.getString("type").isNotEmpty());assertTrue(binding.getString("name").isNotEmpty())
         }
-        assertTrue(inspected.getJSONObject("componentDex").has("com.jarvys.factory.runtime.FactoryActivity"))
+        assertTrue(template.componentDex.containsKey("com.jarvys.factory.runtime.FactoryActivity"))
     }
     @Test fun newlyRecordedContractCannotFallBackToTheLegacyLayout() {
         val f=Fixture();val sha=legacyReceipt(f,true)

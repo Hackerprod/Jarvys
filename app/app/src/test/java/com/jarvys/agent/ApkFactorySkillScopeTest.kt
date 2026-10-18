@@ -408,7 +408,7 @@ class ApkFactorySkillScopeTest {
             }
             val core = CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 16384)
             assertTrue(core.endsWith(entry.body))
-            assertTrue(core.contains("READ_ONLY forbids mutation/build/sign/install or delegated bypass"))
+            assertTrue(core.contains("READ_ONLY forbids writes, builds, signing, installing and delegated bypass"))
             assertFalse(tools.names().contains("apk_factory"))
             assertThrows(IllegalStateException::class.java) {
                 CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 256)

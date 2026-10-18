@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v87 / radios
+# Factory guidance factory-guidance-v88 / radios
 
 ## Foreground NFC NDEF
 Declared nfc; selective NFC normal permission and optional hardware.nfc feature, no arbitrary tag API/HCE/payment service/intent dispatch. Installed,preview UNAVAILABLE. Operations use the declared capability; status/cancel do not start a reader. Nearby tag physically required.
@@ -11,7 +11,7 @@ Record exact {tnf,typeHex,idHex,payloadHex}, canonical lowercase even hex. TNF i
 Signed resources.nfc defaults/maxima: messageBytes8192/131072(min3),records16/256,timeoutMs30000/300000(min1000); omitted request timeout min30000/signed cap. Encoded NDEF size includes headers/type/ID/payload, actual tag capacity may be lower. Bounds app copies,not framework heap allocation. One process reader/bounded queues. Lifecycle cancels; blocked cleanup retains ownership. Failed write/cancel can follow effect,no rollback/stop proof.
 
 ## Generic BLE central
-Declared bluetooth requires exact signed bluetooth:{version:1,scanPrivacy:"full"|"neverForLocation"}. Signed choice controls permission profile. full may require location; neverForLocation asserts no location derivation and can filter beacons. Android12+ nearby SCAN/CONNECT grants remain real; older versions use legacy/location requirements. No programmatic radio enable/explicit bond API, but Android GATT may trigger pairing/authentication UI. BLE central only, no Classic/advertising/GATT server/background service/device-specific business protocol.
+Declared bluetooth requires exact signed bluetooth:{version:1,scanPrivacy:"full"|"neverForLocation"}; omitted capabilities supplies `full`. Signed choice controls permission profile. full may require location; neverForLocation asserts no location derivation and can filter beacons. Android12+ nearby SCAN/CONNECT grants remain real; older versions use legacy/location requirements. No programmatic radio enable/explicit bond API, but Android GATT may trigger pairing/authentication UI. BLE central only, no Classic/advertising/GATT server/background service/device-specific business protocol.
 
 All IDs canonical lowercase opaque UUIDs, page-native ownership; no raw address. Service UUID full128-bit lowercase.
 - bluetooth.status({}): framework/radio/API/target/permission/privacy/location state, not a scan/connection proof.

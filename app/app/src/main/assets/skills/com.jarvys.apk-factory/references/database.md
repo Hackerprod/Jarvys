@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v87 / database
+# Factory guidance factory-guidance-v88 / database
 
 ## Private typed SQLite
 database uses private unencrypted no-backup SQLite; preview RAM is lost on close/reset/pause. No raw SQL/path/ATTACH/extensions.

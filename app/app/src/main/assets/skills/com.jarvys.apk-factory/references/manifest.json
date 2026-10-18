@@ -1,19 +1,19 @@
 {
-  "version": "factory-guidance-v87",
-  "sha256": {
-    "basics": "9cdc87392763401307d230db813cfba79cb18be3ff78706b738fd5ea2b5f559e",
-    "biometrics": "bc98bd88968ee1f77661e9a2916776b449a3f9d1f84e62c7fec9540e2c61fb62",
-    "contacts-calendar": "33c6e18cfa4ec91cdd4729daa776a53d75f8c4c838d3eb7b95e6de36e26d8a37",
-    "database": "eef3f3d24ea39591c5e40d83688079a9e571178c13f26c6b87aec1f7ad030842",
-    "documents-media": "4ed256a5b06a946b9c3d425097dc3e5e7972067323be1a33f66c3b9dd69bd364",
-    "durable-native": "9b1c53e5ab6a86b31523b6b66f8202dd556949a0d184ffb5c90851f1b4111ab7",
-    "external-actions": "2a74ab081fb2b274b78a83005d49ca1140467c53b9d5db1acf001b73a0e1661a",
-    "lifecycle": "5a841ed4b4c6de32adf3806346ceeae5af00f304ce207f908a8b711180a81038",
-    "local-ui": "557e21ab071fc38da9876b3c00adbac2c845f92616396d9eb8572296b0b38834",
-    "native-input": "b3fe042df1dee5fdd89288edd99e93041c40924c2a341ec9952cf1ce6dbf8cc8",
-    "native-services": "359623517c5f927da1253f007d55532e403f6e03886624418a97a6f0174e5003",
-    "presentation": "0484e93f4b186356473b0440076f8aa80ac385d16917e21e3e5f3d61f9f4fd4a",
-    "radios": "e49fc98418f769799e55a7c0e506e4604cd142f4e5f6a1e8817df8a32520315e",
-    "sensors": "a099463583b8dc8f86fda5860d3a8977d9c2c6dc75a35c3d4576cbf1a41085b1"
-  }
+    "version":  "factory-guidance-v88",
+    "sha256":  {
+                   "basics":  "696d38522945e6d84cb6c0be6084de620c684902adcdbbd932cfeffd1e5453a7",
+                   "documents-media":  "c60267501856a13b41ca826aa0e612c5be7242a410ee60a289030c3ff159291c",
+                   "external-actions":  "45569810b5d08cf42b9c8855930b4857dcebf1fe25fc946566be9d51a66e46aa",
+                   "contacts-calendar":  "0c2f12d285298ee774516e9e9f741f85e34e357c266e1b31f7be9c402266270a",
+                   "database":  "c83ab3eb397d326fb84e9b1bd815fc1bf2ed561adfbc74a6c5d2845cb6f5a392",
+                   "presentation":  "7f1ceb864c7610a5c60f797d40457cd830b1b861b965bc2762f4b539ddde3f76",
+                   "lifecycle":  "ecad741f645df8204d8d4c1c0e2ff3e35475510a76070da5a1a3250db47609bf",
+                   "sensors":  "a1034a888d3bed885c7c5ebd01e7f73938996a60bf19486053307b480a3f7304",
+                   "biometrics":  "49ab959e82dab0b95906bf23f65d2bb41cf7f48e3f596e93d9de2f4e6d8c4094",
+                   "local-ui":  "c11a4e980fb5f943da7bfae5acf7fd8c0b67a4a9d8b97dc12d2665295d64475d",
+                   "native-services":  "8e35c16f5485309debf0a9edf7151dd94bd23fe5930e67b1a6b09a45334807cb",
+                   "native-input":  "c234cf85930f8bfd05b2e0fc80b555d937157ae38fab289948638d43f7b85f0d",
+                   "radios":  "9dc9207fccd40bc24426ab28b80ec04401a670c3bd45fe6aa29e441c5736836e",
+                   "durable-native":  "beeb091b2474c8a6e8bf81e9c7ffbf0e5c78af0a37caf05d850d8d502de63fc9"
+               }
 }

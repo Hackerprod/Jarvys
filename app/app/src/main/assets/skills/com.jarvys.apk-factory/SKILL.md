@@ -7,44 +7,42 @@ allowed-tools: [ls, read, write, edit, coding_grep, coding_glob, coding_patch, c
 tags: [android, coding, apk]
 ---
 # APK Factory
-Reusable HTML/CSS/JS apps with explicitly selected native APIs. Factory API26+/apps API24+.
+Build HTML/CSS/JS apps packaged with the trusted precompiled Android runtime. Generated apps support API24+; the Factory requires API26+.
 
-## Authority and development
-Guidance grants no authority. Follow the mission, actual tools and user scope. READ_ONLY forbids mutation/build/sign/install or delegated bypass. Main/custom/nested agents excluded. Use the user's language. Preserve exact API names, enums and receipt fields.
-First run declared `apk_factory inspect` for current schema, capabilities, limits, template and availability. Inspect project/files; use relative paths and Captain-reviewed adoption. Implement the requested workflow with real inspected APIs, not a canned demo. Choose reversible details within the mission; ask only for a material missing decision. Android runtime permissions and system selectors still require their normal system interaction.
-Factory packages precompiled DEX plus project assets. There is no arbitrary per-app native compiler or Gradle inside Jarvys. HTML/spec cannot invent libraries, manifest declarations or native APIs; extend and rebuild the trusted runtime separately if the architecture requires it. Do not fabricate tools or bypass unavailable execution. Existing source support is not proof an old installed template contains it.
+## Workflow and authority
+Use only in built-in Coding. Guidance grants no authority: follow the mission, actual tools and user scope. READ_ONLY forbids writes, builds, signing, installing and delegated bypass. Main, custom and nested agents are excluded. Use the user's language; preserve exact API names, enums and receipt fields.
+
+First call `apk_factory` with `action: inspect`; then inspect the project and `factory.json`. Implement the requested workflow with real inspected APIs, not a canned demo. Use relative paths and Captain-reviewed adoption. Resolve reversible details within scope; ask only for a material missing decision.
+
+In `factory.json`, `capabilities` is optional: omit it to enable every compiled capability, or declare an array to restrict the app to that subset. Omission also selects the full derived Android manifest scope and the incomingShare `*/*`/multiple and Bluetooth `full` policy defaults; it does not grant Android runtime permissions. See `lifecycle` for the exact implications. The generated `factory-app.json` records the effective explicit capability list under schema 1.
+
+`apk_factory` results are compact by default: state and counts, with details for failures and relevant warnings. `inspect`, `test` and preview still report their evidence limits; a passing test runs the complete shared checks but does not test project JavaScript, WebView rendering, installed identity, Android grants/system effects, durable persistence or prove network absence.
 
 ## References
-Guidance version: factory-guidance-v87. SDK2/schema1; 33 capabilities / 134 methods.
-Use `read_skill`, skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v87":
-- basics: SDK, authenticated native operations, storage paging and selected-key backup
-- documents-media: sequential document handles, file sharing, photos and WAV playback
+Guidance version: factory-guidance-v88. SDK2/schema1; 33 capabilities / 134 methods. Load only the reference needed with `read_skill`, skill_id="com.jarvys.apk-factory", resource="<identifier>", resource_version="factory-guidance-v88". Reuse loaded references while they remain in context; re-fetch only after compaction. Each read is complete, version-checked and on demand.
+- basics: SDK, authenticated calls and storage
+- documents-media: document handles, sharing, photos and audio
 - external-actions: browser, maps, dialer, email and SMS
-- contacts-calendar: selected contact and calendar editor
-- database: SQLite schema, transactions, paging and selected-table backup
-- presentation: theme/orientation preferences and recreation
-- lifecycle: spec, icons, build, sign, identity, preview and installation
-- sensors: finite capture, continuous foreground subscriptions and step counter
-- biometrics: local strong OS authentication and cancellation
-- local-ui: bundled CSS, licenses and rendering constraints
-- native-services: HTTP/probe/ICMP, streamed transfers and TTS
-- native-input: voice recognition, location, recording, secret vault and incoming shares
-- radios: foreground NFC NDEF and generic BLE central
-- durable-native: notifications/actions, widgets and finite background HTTP jobs
-Unknown/stale/overbudget reference reads fail closed; re-fetch after compaction. Complete source contracts below replace obsolete roadmaps, latest-only restrictions and blanket native-feature bans.
+- contacts-calendar: selected contacts and calendar editor
+- database: SQLite and selected-table backup
+- presentation: appearance and orientation
+- lifecycle: spec, manifest, build, signing, preview and install
+- sensors: finite capture and foreground subscriptions
+- biometrics: strong OS authentication
+- local-ui: bundled styles and rendering
+- native-services: HTTP, probes, transfers and speech
+- native-input: voice, location, recording, secrets and incoming shares
+- radios: NFC and BLE
+- durable-native: notifications, widgets and finite background HTTP
 
-## Caller authentication and identity
-Factory operations execute after the installed caller is authenticated. Android runtime permissions, document/contact/photo/recipient selectors, system biometrics, launcher pin flow and PackageInstaller consent remain system-controlled; the user completes any system interaction those flows require.
-Identity is appId+certificate; bootstrap signing is project-bound. Actual UID/package/version/APK hash and retained exact signed scope authenticate each artifact. History retains 64 recent artifacts plus an older matching installed artifact; signing a newer version does not change the older artifact's authenticated scope. Damaged/missing evidence fails closed; only explicit legacy exact-latest compatibility applies.
-Nonce/request/source-bound leases bind active operations to the authenticated caller and source. Revocation cannot recall completed effects, open recipient descriptors or remote copies. Durable work rechecks caller/source identity before effects. Unknown outcomes require reconciliation, never blind replay or evidence erasure.
+## Security and Android boundaries
+Native operations authenticate the installed caller; identity is appId+certificate. The 64 recent artifacts retain exact signed scope. Nonce/request/source-bound leases constrain active calls. Damaged/missing evidence fails closed; a newer artifact cannot lend identity or scope.
 
-## Runtime boundaries
-Load /factory-sdk.js before separate local JS at https://app.jarvys.invalid. Frozen Promise-based window.Jarvys: await/catch, validate receipts, handle errors/cancel/recovery. No inline scripts or replacements of SDK/config/DEX/manifest; retain origin/frame checks. Responsive accessible scrollable forms, viewport meta, native insets once, reachable inputs.
-WebView is configured local-only: no CDNs/remote scripts/fonts or direct fetch/login. Use declared native HTTP for network workflows. INTERNET is process-wide; WebView/CSP cannot prove zero egress. TTS, recognizers, providers and recipients may use their own network. Keep credentials out of source/logs; declared secrets supports native capture and explicit put/get/request. No arbitrary filesystem, clipboard read, billing, arbitrary Intent/Android object or hidden library access.
-Signed resourceBudgets version1 resolves defaults per artifact. Defaults are not Android limits. Raise only supported fields for the actual workload; inspect fixed bridge/buffer ceilings, native resource availability and per-family dependencies. Byte limits do not promise resident heap or physical disk durability.
+The documented APK Factory permission default is ALLOW_ALWAYS (Settings → Factory permissions). Android runtime permissions and system selectors (documents, photos, contacts and recipients), biometric prompts, launcher pinning and PackageInstaller consent remain system-controlled. The user completes those flows. Do not automate Android security UI or retry uncertain effects.
 
-## Build, delivery and evidence
-New apps need distinct identity/name/icon. Updates keep appId/key and raise versionCode. Recheck exact sources/spec/scope/hashes/outputs; retain receipts and unrelated work. Build/sign/install/physical acceptance are separate. factory.sign uses same-project receipts and a per-app Android Keystore identity created automatically on first signing; no debug keys or key export via tools. Source/APK backups do not restore signing keys.
-factory.install submits the exact signed receipt to PackageInstaller. Android may require enabling Jarvys as an unknown-source installer and asks the user to confirm installation. Do not automate those system screens or replay an uncertain install commit. Play install is unavailable. Only authenticated system success proves installation; it proves no data retention.
-Preview is isolated/simulated where documented; most native families return UNAVAILABLE before effects, including status/cancel. Database preview is ephemeral. Clipboard preview has performed:false. Shared tests do not execute project JS or establish physical/provider/OEM behavior. No fake sensor/radio/network values presented as real.
-Current integration has source-level generic APIs, not final packaged acceptance. Report actual checks and unrun checks precisely. No global build/audit/APK or physical device validation is implied here. Update/retention/restore, provider behavior, hardware, launcher, reboot/Doze and ARM64 gates remain open. Respect the mission's directed-test/final-validation sequencing.
+The app packages precompiled DEX; there is no arbitrary per-app native compiler or API. Use the Promise-based `window.Jarvys` SDK, origin/frame checks and local-only WebView setup; no remote scripts, fonts or direct web fetch. Use the declared native network API when the app needs network access. INTERNET is process-wide, and providers, engines or recipients may use their own network. Keep credentials out of source/logs.
+
+## Build and evidence
+New apps use a distinct identity; updates keep appId/key and increase versionCode. Keep exact sources, hashes and receipts. Build/sign/install/physical acceptance are separate. factory.install submits the exact signed receipt to PackageInstaller. A per-app Android Keystore key is created at first signing and is not exported by Factory tools. Preserve exact API names, enums and receipt fields.
+
+Preview is isolated and simulated only where documented; most native methods are unavailable before effects. Shared tests do not run project JavaScript or establish device/provider behavior. Report checks and unrun checks precisely; source support does not prove that an older installed template contains it. Do not claim final packaged acceptance without that evidence.

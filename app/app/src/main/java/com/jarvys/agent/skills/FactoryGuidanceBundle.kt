@@ -10,7 +10,7 @@ class FactoryGuidanceBundle private constructor(val version: String, resources: 
     val resources: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(resources))
 
     companion object {
-        const val VERSION = "factory-guidance-v87"
+        const val VERSION = "factory-guidance-v88"
         const val MAX_CORE_BYTES = 8 * 1024
         const val MAX_RESOURCE_BYTES = 16 * 1024
         const val MAX_TOTAL_BYTES = 64 * 1024

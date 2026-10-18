@@ -1,7 +1,9 @@
-# Factory guidance factory-guidance-v87 / basics
+# Factory guidance factory-guidance-v88 / basics
 
 ## SDK/data
-33 capabilities/134 methods including runtime.info; SDK2/schema1. Inspect first. Methods require declared capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
+SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `factory.json` capabilities select all; an explicit subset remains closed (`CAPABILITY_DENIED`). Generated schema1 `factory-app.json` records the effective list. Methods require capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
+
+`apk_factory` defaults to compact state/counts plus failures and relevant warnings; inspect, test and preview also retain evidence limits. Test still runs the full shared contract but omits passing rows. Its `evidence_limit`: “Shared handlers only: isolated RAM/SQLite, simulated effects; no project JS/WebView, installed behavior, Android grants, persistence or zero-egress proof.”
 
 - runtime.info(): actual capability/configuration/limits metadata, never a grant.
 - storage.get(key): string or null. storage.set(key,value): string key/value. storage.remove(key): deletes one key. No startup clear.
@@ -16,7 +18,7 @@
 Storage keys match [a-zA-Z0-9_.:-]{1,96}; values need valid paired Unicode. Serialize dependent writes. Signed resourceBudgets:{version:1,storage:{totalBytes,entries,valueBytes}} permits partial fields. Defaults:1MiB/256/64KiB; maxima:16MiB/65536/523264 raw-value bytes. Escaped request/result content must still fit 511KiB, full bridge512KiB; whole-map adapter ceiling,not Android disk limit. Lowered quotas preserve reads/deletes/non-growing replacements.
 
 ## Authenticated native operations
-Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. Jarvys does not add an operation approval screen.
+Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. The documented APK Factory permission default is ALLOW_ALWAYS (Settings → Factory permissions).
 
 Invalid or missing caller/source evidence fails closed. An operation cannot borrow identity or capabilities from a newer artifact. Cleanup and status methods report or close owned work without replaying completed effects; durable work rechecks caller/source identity before effects.
 
