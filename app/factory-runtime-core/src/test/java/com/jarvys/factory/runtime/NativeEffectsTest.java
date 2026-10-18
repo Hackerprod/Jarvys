@@ -55,12 +55,10 @@ public class NativeEffectsTest {
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativeOperationSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture("[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(
                 "[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
+                .put("appId", fixture.config.appId).toString(), fixture.config.appId);
         PackageInfo own = fixture.screen.getPackageManager().getPackageInfo(fixture.config.appId, PackageManager.GET_PERMISSIONS);
         own.requestedPermissions = new String[]{Manifest.permission.POST_NOTIFICATIONS,
                 Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};
@@ -90,18 +88,17 @@ public class NativeEffectsTest {
         idle(); fixture.close();
     }
 
-    @Test public void unavailableInstalledSourceLeavesNetworkNotificationAndSpeechAdaptersUntouched() throws Exception {
+    @Test public void unavailableHostDoesNotBlockAppOwnedNetworkNotificationsOrSpeech() throws Exception {
         fixture.provider.unavailable = true;
         Result network = perform("network.request", new JSONObject().put("url", "https://synthetic.invalid/"));
-        Result channel = perform("notifications.channel", new JSONObject().put("id", "denied").put("name", "Denied"));
-        Result speech = perform("speech.speak", new JSONObject().put("text", "Never spoken"));
+        Result channel = perform("notifications.channel", new JSONObject().put("id", "local").put("name", "Local"));
+        Result speech = perform("speech.speak", new JSONObject().put("text", "Locally spoken"));
         fixture.pump();
-        for (Result result : new Result[]{network, channel, speech}) {
-            assertEquals("UNAVAILABLE", result.error); assertEquals(1, result.calls); assertEquals(0, result.successes);
-        }
-        assertEquals(0, opens.get()); assertTrue(engines.isEmpty());
-        assertNull(notifications.getNotificationChannel("factory.denied"));
-        assertEquals(0, Shadows.shadowOf(notifications).size()); assertTrue(fixture.screen.launched.isEmpty());
+        networkIo.submit(() -> { }).get(5, TimeUnit.SECONDS); idle();
+        assertEquals(1, network.successes); assertEquals(1, opens.get());
+        assertEquals(1, channel.successes); assertNotNull(notifications.getNotificationChannel("factory.local"));
+        assertEquals(0, speech.calls); assertEquals(1, engines.size()); engines.get(0).ready(); idle();
+        assertEquals(0, fixture.provider.issued.size()); assertTrue(fixture.screen.launched.isEmpty());
     }
 
     @Test public void cancellationBypassesFullNetworkQueueAndLateTransportResultCannotSucceed() throws Exception {
@@ -116,7 +113,7 @@ public class NativeEffectsTest {
         Result cancellation = perform("network.cancel", new JSONObject()); idle();
         assertEquals(2, cancellation.value.getInt("cancelled")); assertFalse(cancellation.value.getBoolean("rollbackConfirmed"));
         assertEquals("CANCELLED", running.error); assertEquals("CANCELLED", queued.error);
-        assertEquals(3, fixture.provider.issued.size()); // Cancellation itself needs no queued authorization.
+        assertTrue(fixture.provider.issued.isEmpty()); // Local effects never acquire host leases.
         connection.release.countDown(); networkIo.shutdown();
         assertTrue(networkIo.awaitTermination(5, TimeUnit.SECONDS)); idle();
         assertEquals(1, running.calls); assertEquals(1, queued.calls); assertEquals(1, rejected.calls);
@@ -133,12 +130,12 @@ public class NativeEffectsTest {
         assertEquals(0, pending.successes); assertNull(pending.value);
     }
 
-    @Test public void queuedNetworkSuccessRechecksLivePolicyBeforeMainThreadDelivery() throws Exception {
+    @Test public void queuedNetworkSuccessRechecksPageLeaseBeforeMainThreadDelivery() throws Exception {
         Result pending = queueSuccessfulNetworkResult();
-        // No revocation hint is sent: delivery itself must perform a fresh host CHECK.
-        fixture.provider.last().state.set(NativeOperationAuthorization.TERMINAL);
+        // No transport result can outlive cancellation of the owning generated-app page.
+        fixture.sessions.cancelAll();
         idle();
-        assertNotNull(pending.error); assertEquals(1, pending.calls);
+        assertEquals("CANCELLED", pending.error); assertEquals(1, pending.calls);
         assertEquals(0, pending.successes); assertNull(pending.value);
     }
 
@@ -160,11 +157,12 @@ public class NativeEffectsTest {
         // A worker barrier proves the response has returned and completion is queued. Do not idle main yet.
         networkIo.submit(() -> { }).get(5, TimeUnit.SECONDS);
         assertEquals(1, connection.inputOpens.get()); assertEquals(0, pending.calls);
-        assertFalse("Authority must stay live while successful delivery is queued", fixture.provider.last().host.isClosed());
+        assertTrue("App-owned effects do not acquire a Jarvys lease", fixture.provider.issued.isEmpty());
         return pending;
     }
 
     @Test public void notificationResultWaitsForResumeAndReadsOsGrantInsteadOfCallbackClaim() throws Exception {
+        fixture.provider.unavailable = true;
         Result denied = perform("notifications.requestPermission", new JSONObject()); fixture.pump();
         assertTrue(effects.hasPendingPermission()); assertEquals(1, denied.claims);
         assertEquals(NativeEffects.NOTIFICATION_PERMISSION_REQUEST, Shadows.shadowOf(fixture.screen).getLastRequestedPermission().requestCode);
@@ -187,6 +185,7 @@ public class NativeEffectsTest {
     }
 
     @Test public void preciseLocationPermissionWaitsForResumeAndReportsActualCoarseAndFineGrants() throws Exception {
+        fixture.provider.unavailable = true;
         locationStatusOnly();
         JSONObject precise = new JSONObject().put("precision", "precise");
         Result coarse = perform("location.requestPermission", precise); fixture.pump();
@@ -339,7 +338,7 @@ public class NativeEffectsTest {
         Engine first = engines.get(0); first.ready(); idle();
         first.progress.error(first.id, TextToSpeech.ERROR_NETWORK); // Queue old failure without processing it yet.
         Result next = perform("speech.speak", new JSONObject().put("text", "New"));
-        fixture.io.runNext(); // Queue the next authorized delivery behind the old failure.
+        // Local authorization queues the next delivery on main behind the old failure.
         idle(); // Old failure enqueues close; next delivery takes ownership before that close runs.
         assertEquals("SPEECH_ERROR", old.error); assertEquals(1, old.calls);
         assertEquals(2, engines.size()); assertEquals(0, next.calls);

@@ -37,6 +37,9 @@ public class VoiceRecognitionRequestTest {
         assertThrows(FactoryException.class, () -> VoiceRecognitionRequest.parseStatus("{\"initialize\":true}"));
         assertThrows(FactoryException.class, () -> VoiceRecognitionRequest.parseCancel("{\"allApps\":true}"));
         assertThrows(FactoryException.class, () -> VoiceRecognitionRequest.parseRecognize((JSONObject) null));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> VoiceRecognitionRequest.parseRecognize(new JSONObject().put("timeoutMs", true)));
+        assertEquals("voiceRecognition.start: timeoutMs must be an integer from 1 through 600000.", field.getMessage());
     }
     @Test public void appliesUtf8AndUnicodeBoundsWithoutSilentlyTruncating() throws Exception {
         assertEquals(512, VoiceRecognitionRequest.parseRecognize(new JSONObject().put("prompt", repeat("é", 512))).prompt.length());

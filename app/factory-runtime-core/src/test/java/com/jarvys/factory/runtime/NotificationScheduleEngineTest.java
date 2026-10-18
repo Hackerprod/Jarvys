@@ -91,6 +91,14 @@ public final class NotificationScheduleEngineTest {
     @Test public void activeForgetIsRejected()throws Exception{Fixture f=new Fixture();f.schedule("n");try{f.engine.forget("n",true);fail();}catch(FactoryException ex){assertEquals("UNRESOLVED_NOTIFICATION",ex.code);}}
     @Test public void coldRecoveryRearamsSameTokenOnly()throws Exception{Fixture f=new Fixture();Row r=f.schedule("n");f.store.change(r,State.ARMING,"crash",hex('2'),"",1000);f.engine.recoverPage(null,64,f.session());assertEquals(r.token,f.engine.status("n").token);assertEquals(State.SCHEDULED,f.engine.status("n").state);assertEquals(2,f.os.arms);}
     @Test public void forgetGrammarRejectsUnknownAndNonBoolean()throws Exception{assertFalse(NotificationScheduleControl.parseForget("{\"scheduleId\":\"x\"}").acknowledgeDeliveryUnknown);assertTrue(NotificationScheduleControl.parseForget("{\"scheduleId\":\"x\",\"acknowledgeDeliveryUnknown\":true}").acknowledgeDeliveryUnknown);for(String s:new String[]{"{\"scheduleId\":\"x\",\"acknowledgeDeliveryUnknown\":1}","{\"scheduleId\":\"x\",\"payload\":{}}"})try{NotificationScheduleControl.parseForget(s);fail();}catch(FactoryException expected){}}
+    @Test public void notificationGenerationControlsNameInvalidFieldWithoutEchoingValue()throws Exception{
+        try{NotificationScheduleControl.parseForget("{\"scheduleId\":\"private/value\",\"acknowledgeDeliveryUnknown\":1}");fail();}
+        catch(FactoryException expected){assertEquals("INVALID_ARGUMENT",expected.code);assertEquals("notifications.forgetScheduled: scheduleId must be a valid 1–64 character identifier.",expected.getMessage());assertFalse(expected.getMessage().contains("private/value"));}
+        try{NotificationScheduleControl.parseForgetGeneration("{\"generationId\":\""+hex('3')+"\",\"acknowledgeDeliveryUnknown\":1}");fail();}
+        catch(FactoryException expected){assertEquals("notifications.forgetGeneration: acknowledgeDeliveryUnknown must be a boolean.",expected.getMessage());}
+        try{NotificationScheduleControl.parseGenerationStatus("{\"generationId\":\"private-value\"}");fail();}
+        catch(FactoryException expected){assertEquals("notifications.generationStatus: generationId must be a 64-character lowercase hexadecimal token.",expected.getMessage());assertFalse(expected.getMessage().contains("private-value"));}
+    }
     @Test public void dueCallbackWaitsForArmCommit()throws Exception{
         Fixture f=new Fixture();CountDownLatch registered=new CountDownLatch(1),allowArm=new CountDownLatch(1);AtomicReference<Throwable> error=new AtomicReference<>();
         f.os.afterArm=()->{registered.countDown();try{assertTrue(allowArm.await(2,TimeUnit.SECONDS));}catch(InterruptedException e){throw new AssertionError(e);}};

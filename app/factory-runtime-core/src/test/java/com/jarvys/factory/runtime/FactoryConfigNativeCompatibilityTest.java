@@ -13,10 +13,12 @@ import static org.junit.Assert.*;
 public class FactoryConfigNativeCompatibilityTest {
     private static final String APP = "org.example.nativecompat";
     private static final String DIGEST = new String(new char[64]).replace('\0', 'a');
-    private static final String[] NATIVE = {"network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"};
+    private static final String[] NATIVE = {"network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors", "secrets", "nfc", "bluetooth", "widgets", "jobs"};
     private static JSONObject configuration(String... capabilities) throws Exception {
-        return new JSONObject().put("schemaVersion", 1).put("appId", APP).put("name", "Native compatibility")
+        JSONObject value = new JSONObject().put("schemaVersion", 1).put("appId", APP).put("name", "Native compatibility")
                 .put("entryPoint", "www/index.html").put("capabilities", new JSONArray(Arrays.asList(capabilities)));
+        if (Arrays.asList(capabilities).contains("bluetooth")) value.put("bluetooth", new JSONObject().put("version", 1).put("scanPrivacy", "full"));
+        return value;
     }
     private static JSONObject broker(String host, String digest) throws Exception {
         return new JSONObject().put("packageName", host).put("certificateSha256", digest);
@@ -31,38 +33,35 @@ public class FactoryConfigNativeCompatibilityTest {
             FactoryConfig config = installed(json);
             assertEquals(new LinkedHashSet<>(Arrays.asList(capabilities)), config.capabilities);
             assertNull(config.documentBroker); assertNull(FactoryConfig.parsePreview(json.toString()).documentBroker);
-            assertTrue(CapabilityCatalog.requiresHostBroker(config.capabilities));
+            assertFalse(CapabilityCatalog.requiresHostBroker(config.capabilities));
             assertFalse(CapabilityCatalog.requiresMandatoryHostBroker(config.capabilities));
             assertThrows(UnsupportedOperationException.class, () -> config.capabilities.add("network"));
         }
     }
-    @Test public void sensorsMayPinEitherExactHostForNewSubscriptionOperations() throws Exception {
+    @Test public void sensorsCannotAcquireAnUnneededHostPin() throws Exception {
         for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"}) {
             JSONObject json = configuration("sensors").put("documentBroker", broker(host, DIGEST));
-            FactoryConfig config = installed(json);
-            assertEquals(Collections.singleton("sensors"), config.capabilities);
-            assertEquals(host, config.documentBroker.packageName); assertEquals(DIGEST, config.documentBroker.certificateSha256);
-            assertEquals(host, FactoryConfig.parsePreview(json.toString()).documentBroker.packageName);
+            invalidConfig(json);
         }
     }
-    @Test public void everyNativeFamilyRequiresAnInstalledPinWithoutRequiringDocuments() throws Exception {
+    @Test public void generatedAppLocalFamiliesCannotAcquireAnUnneededHostPin() throws Exception {
         for (String capability : NATIVE) {
-            JSONObject json = configuration(capability);
-            invalidConfig(json); assertNull(FactoryConfig.parsePreview(json.toString()).documentBroker);
-            assertTrue(CapabilityCatalog.requiresMandatoryHostBroker(Collections.singleton(capability)));
-            for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"}) {
-                FactoryConfig config = installed(json.put("documentBroker", broker(host, DIGEST)));
-                assertEquals(Collections.singleton(capability), config.capabilities);
-                assertEquals(host, config.documentBroker.packageName); assertEquals(DIGEST, config.documentBroker.certificateSha256);
-                assertFalse(config.capabilities.contains("documents"));
-            }
-            invalidConfig(configuration("sensors", capability));
+            String[] selected = "jobs".equals(capability) ? new String[]{"jobs", "network"} : new String[]{capability};
+            JSONObject json = configuration(selected);
+            FactoryConfig local = installed(json);
+            assertNull(local.documentBroker);
+            assertNull(FactoryConfig.parsePreview(json.toString()).documentBroker);
+            assertFalse(CapabilityCatalog.requiresHostBroker(Arrays.asList(selected)));
+            assertFalse(CapabilityCatalog.requiresMandatoryHostBroker(Arrays.asList(selected)));
+            for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"})
+                invalidConfig(new JSONObject(json.toString()).put("documentBroker", broker(host, DIGEST)));
         }
     }
     @Test public void allExistingAndNewBrokerFamiliesShareTheExactPinningContract() throws Exception {
-        for (String capability : Arrays.asList("documents", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
-                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors")) {
+        for (String capability : Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
+                "clipboard", "share", "export")) {
             JSONObject json = configuration(capability);
+            invalidConfig(json);
             for (String host : new String[]{"org.example.host", "com.jarvys.agent.fake", "com.jarvys.agent.debug", ""})
                 invalidConfig(json.put("documentBroker", broker(host, DIGEST)));
             for (String digest : new String[]{DIGEST.toUpperCase(java.util.Locale.ROOT), "", "aa", DIGEST + "a", "sha256:" + DIGEST})
@@ -74,7 +73,7 @@ public class FactoryConfigNativeCompatibilityTest {
         }
     }
     @Test public void standaloneCapabilitiesCannotAcquireUnneededBrokerBindings() throws Exception {
-        for (String[] capabilities : new String[][]{{}, {"storage"}, {"audio"}, {"photos"}, {"presentation"}, {"database"}, {"biometrics"}}) {
+        for (String[] capabilities : new String[][]{{}, {"storage"}, {"presentation"}, {"database"}, {"biometrics"}, {"sensors"}}) {
             JSONObject json = configuration(capabilities);
             assertNull(installed(json).documentBroker);
             assertFalse(CapabilityCatalog.requiresHostBroker(Arrays.asList(capabilities)));

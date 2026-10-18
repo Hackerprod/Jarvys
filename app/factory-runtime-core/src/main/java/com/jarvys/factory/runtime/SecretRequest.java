@@ -30,31 +30,31 @@ public final class SecretRequest {
         }
         public static Scope parse(JSONObject object) throws FactoryException {
             try {
-                if (object == null) throw invalid();
+                if (object == null) throw invalid("secrets.scope: scope must be an object.");
                 FactoryConfig.exactKeys(object, "origin", "methods", "header", "prefix");
-                String origin = canonicalOrigin(text(object, "origin", null), true);
+                String origin = canonicalOrigin(text(object, "origin", null), true, "secrets.scope: origin must be a canonical HTTPS origin without path, query, fragment, or credentials.");
                 Object rawMethods = object.get("methods");
-                if (!(rawMethods instanceof JSONArray)) throw invalid();
+                if (!(rawMethods instanceof JSONArray)) throw invalid("secrets.scope: methods must be an array of unique uppercase HTTP method strings.");
                 JSONArray values = (JSONArray) rawMethods;
-                if (values.length() < 1 || values.length() > 32) throw invalid();
+                if (values.length() < 1 || values.length() > 32) throw invalid("secrets.scope: methods must contain 1 through 32 unique HTTP method strings.");
                 Set<String> methods = new LinkedHashSet<>();
                 for (int i = 0; i < values.length(); i++) {
                     Object item = values.get(i);
-                    if (!(item instanceof String)) throw invalid();
+                    if (!(item instanceof String)) throw invalid("secrets.scope: each methods item must be a string.");
                     String method = (String) item;
-                    if (!method(method) || !methods.add(method)) throw invalid();
+                    if (!method(method) || !methods.add(method)) throw invalid("secrets.scope: methods must contain unique uppercase HTTP method tokens.");
                 }
                 String header = text(object, "header", null).toLowerCase(Locale.ROOT);
-                if (!header.matches("[!#$%&'*+.^_`|~0-9a-z-]{1,128}") || reservedHeader(header)) throw invalid();
+                if (!header.matches("[!#$%&'*+.^_`|~0-9a-z-]{1,128}") || reservedHeader(header)) throw invalid("secrets.scope: header must be a safe non-reserved HTTP header name.");
                 String prefix = text(object, "prefix", "");
-                if (prefix.length() > 128 || !asciiField(prefix)) throw invalid();
+                if (prefix.length() > 128 || !asciiField(prefix)) throw invalid("secrets.scope: prefix must contain at most 128 printable ASCII characters.");
                 return new Scope(origin, methods, header, prefix);
             } catch (FactoryException failure) { throw failure; }
-            catch (Exception failure) { throw invalid(); }
+            catch (Exception failure) { throw invalid("secrets.scope: origin, methods, header, and prefix must match the documented scope types."); }
         }
         public boolean permits(URL destination, String method) {
             if (destination == null || method == null || !methods.contains(method)) return false;
-            try { return origin.equals(canonicalOrigin(destination.toExternalForm(), false)); }
+            try { return origin.equals(canonicalOrigin(destination.toExternalForm(), false, "secrets.scope: destination must be an HTTPS URL without credentials or fragment.")); }
             catch (FactoryException failure) { return false; }
         }
         public JSONObject metadata() throws FactoryException {
@@ -98,7 +98,7 @@ public final class SecretRequest {
         char[] chars = null;
         try {
             String raw = text(object, "value", null);
-            if (raw.length() > MAX_VALUE_BYTES) throw invalid();
+            if (raw.length() > MAX_VALUE_BYTES) throw invalid("secrets.put: value exceeds the UTF-8 byte limit.");
             chars = raw.toCharArray();
             return new Put(input, encode(chars));
         } finally { if (chars != null) Arrays.fill(chars, '\0'); }
@@ -122,14 +122,15 @@ public final class SecretRequest {
     /** An immutable typed network request supplies the URL/method; no stored header value is read. */
     public static JSONObject injectionAuthorizationDetails(String id, URL destination, String method) throws FactoryException {
         try {
-            if (destination == null || !method(method)) throw invalid();
-            canonicalOrigin(destination.toExternalForm(), false);
+            if (destination == null) throw invalid("secrets.request: destination URL is required.");
+            if (!method(method)) throw invalid("secrets.request: method must be an uppercase HTTP method token.");
+            canonicalOrigin(destination.toExternalForm(), false, "secrets.request: destination must be an HTTPS URL without credentials or fragment.");
             return idAuthorizationDetails(id).put("url", destination.toExternalForm()).put("method", method);
         } catch (FactoryException failure) { throw failure; }
         catch (Exception failure) { throw unavailable(); }
     }
     static String id(String value) throws FactoryException {
-        if (value == null || !value.matches("sec_[a-f0-9]{32}")) throw invalid();
+        if (value == null || !value.matches("sec_[a-f0-9]{32}")) throw invalid("secrets: id must be an opaque sec_ token followed by 32 lowercase hexadecimal characters.");
         return value;
     }
     private static Capture metadata(JSONObject object, boolean put) throws FactoryException {
@@ -138,10 +139,10 @@ public final class SecretRequest {
             if (put) FactoryConfig.exactKeys(object, "label", "replaceId", "scope", "value");
             else FactoryConfig.exactKeys(object, "label", "replaceId", "scope");
             String label = text(object, "label", "");
-            if (label.length() > 80 || FactoryConfig.containsControl(label) || !validUnicode(label)) throw invalid();
+            if (label.length() > 80 || FactoryConfig.containsControl(label) || !validUnicode(label)) throw invalid("secrets: label must be valid Unicode text of at most 80 characters without controls.");
             String replaceId = object.has("replaceId") ? id(text(object, "replaceId", null)) : null;
             Object scope = object.get("scope");
-            if (!(scope instanceof JSONObject)) throw invalid();
+            if (!(scope instanceof JSONObject)) throw invalid("secrets: scope must be an object.");
             return new Capture(label, replaceId, Scope.parse((JSONObject) scope));
         } catch (FactoryException failure) { throw failure; }
         catch (Exception failure) { throw invalid(); }
@@ -169,19 +170,20 @@ public final class SecretRequest {
     private static boolean method(String value) {
         return value != null && !"*".equals(value) && value.matches("[!#$%&'*+.^_`|~0-9A-Z-]{1,32}");
     }
-    private static String canonicalOrigin(String value, boolean originOnly) throws FactoryException {
+    private static String canonicalOrigin(String value, boolean originOnly, String message) throws FactoryException {
         try {
-            if (value == null || value.length() > (originOnly ? 1024 : 8192) || !validUnicode(value)) throw invalid();
+            if (value == null || value.length() > (originOnly ? 1024 : 8192) || !validUnicode(value)) throw invalid(message);
             for (int i = 0; i < value.length(); i++)
-                if (value.charAt(i) <= 32 || value.charAt(i) == 127 || value.charAt(i) == '\\') throw invalid();
+                if (value.charAt(i) <= 32 || value.charAt(i) == 127 || value.charAt(i) == '\\') throw invalid(message);
             URI uri = new URI(value);
             String host = uri.getHost();
             if (!"https".equalsIgnoreCase(uri.getScheme()) || host == null || host.isEmpty()
                     || host.endsWith(".") || uri.getRawUserInfo() != null || uri.getRawFragment() != null
-                    || uri.getPort() < -1 || uri.getPort() == 0 || uri.getPort() > 65535) throw invalid();
-            if (originOnly && (uri.getRawQuery() != null || !(uri.getRawPath().isEmpty() || "/".equals(uri.getRawPath())))) throw invalid();
+                    || uri.getPort() < -1 || uri.getPort() == 0 || uri.getPort() > 65535) throw invalid(message);
+            if (originOnly && (uri.getRawQuery() != null || !(uri.getRawPath().isEmpty() || "/".equals(uri.getRawPath())))) throw invalid(message);
             return "https://" + host.toLowerCase(Locale.ROOT) + (uri.getPort() == -1 || uri.getPort() == 443 ? "" : ":" + uri.getPort());
-        } catch (Exception failure) { throw invalid(); }
+        } catch (FactoryException failure) { throw failure; }
+        catch (Exception failure) { throw invalid(message); }
     }
     private static boolean reservedHeader(String name) {
         return "host".equals(name) || "content-length".equals(name) || "transfer-encoding".equals(name)
@@ -201,10 +203,12 @@ public final class SecretRequest {
         try {
             if (!object.has(name) && fallback != null) return fallback;
             Object value = object.get(name);
-            if (!(value instanceof String)) throw invalid();
+            if (!(value instanceof String)) throw invalid("secrets: " + name + " must be a string.");
             return (String) value;
-        } catch (Exception failure) { throw invalid(); }
+        } catch (FactoryException failure) { throw failure; }
+        catch (Exception failure) { throw invalid("secrets: " + name + " must be a string."); }
     }
-    static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed secret arguments."); }
+    static FactoryException invalid() { return invalid("secrets: request fields do not match the expected typed shape."); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
     private static FactoryException unavailable() { return new FactoryException("UNAVAILABLE", "Secret metadata unavailable."); }
 }

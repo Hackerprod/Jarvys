@@ -4,7 +4,7 @@ import android.content.Context;
 import com.jarvys.factory.contract.ResourceBudgets;
 import static com.jarvys.factory.runtime.NotificationScheduleEngine.*;
 
-/** Cold-process adapter to the same authenticated source and live operation session used by foreground APIs. */
+/** Cold-process adapter to the generated app's own packaged config and Android identity. */
 final class NotificationInstalledEnvironment {
     static FactoryConfig configuration(Context context) throws FactoryException {
         try {
@@ -15,7 +15,7 @@ final class NotificationInstalledEnvironment {
     }
     static Source source(Context context, FactoryConfig config, Session session) throws FactoryException {
         session.check();
-        NativeInstalledSource proof = NativeInstalledSource.describe(context, config, "notifications", session.deadlineElapsedMs, session::active);
+        NativeInstalledSource proof = NativeInstalledSource.describeLocal(context, config, "notifications");
         ResourceBudgets.Notifications limits = proof.resources.notifications;
         session.check();
         return new Source(proof.appId, proof.certificateSha256, proof.apkSha256, proof.recordSha256, proof.versionCode,
@@ -31,16 +31,12 @@ final class NotificationInstalledEnvironment {
                     !source.fingerprint.equals(currentSource.fingerprint) || !source.ownerFingerprint.equals(row.source.ownerFingerprint))
                 return new Decision(NotificationScheduleMachine.SessionStatus.UNAVAILABLE, null);
             NativeOperationRequest request = NativeOperationRequest.parse("notifications.schedule", row.request.authorizationDetails());
-            NativeBackgroundAuthorization.Result result = NativeBackgroundAuthorization.acquire(context, config, request,
-                    new NativeBackgroundAuthorization.SourceIdentity(source.appId, source.certificateSha256, source.artifactSha256, source.receiptSha256, source.versionCode),
-                    active.deadlineElapsedMs, active::active);
-            try {
-                active.check(); result.check();
-                return new Decision(NotificationScheduleMachine.SessionStatus.ACTIVE, new Lease() {
-                    public void check() { active.check(); result.check(); active.check(); }
-                    public void close() { result.close(); }
-                });
-            } catch (RuntimeException ended) { result.close(); throw ended; }
+            if (!config.capabilities.contains(request.capability))
+                return new Decision(NotificationScheduleMachine.SessionStatus.UNAVAILABLE, null);
+            return new Decision(NotificationScheduleMachine.SessionStatus.ACTIVE, new Lease() {
+                public void check() { active.check(); }
+                public void close() { }
+            });
         };
         return new FactoryNotificationServices.Environment(context, ledger, source, authority);
     }

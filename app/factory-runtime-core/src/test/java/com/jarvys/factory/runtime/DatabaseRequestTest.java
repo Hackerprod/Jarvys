@@ -29,6 +29,14 @@ public class DatabaseRequestTest {
         return new JSONObject().put("kind", "createTable").put("table", "notes")
                 .put("columns", new JSONObject().put("title", definition("text", false)));
     }
+    private static void actionable(String method, JSONObject args, String expected, String submitted) throws Exception {
+        try { DatabaseRequest.validate(method, args); fail("Expected INVALID_ARGUMENT"); }
+        catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals(expected, failure.getMessage());
+            assertFalse(failure.getMessage().contains(submitted));
+        }
+    }
     @Test public void closedMethodsAndUnknownFields() throws Exception {
         for (String method : new String[]{"database.info", "database.close", "database.cancel"}) {
             DatabaseRequest.validate(method, new JSONObject());
@@ -112,6 +120,41 @@ public class DatabaseRequestTest {
         DatabaseRequest.validate("database.migrate", migration(steps));
         steps.put(create());
         invalid(() -> DatabaseRequest.validate("database.migrate", migration(steps)));
+    }
+    @Test public void databaseValidationNamesTheFieldAndExpectationWithoutEchoingInput() throws Exception {
+        JSONObject badStep = new JSONObject(create().toString()).put("columns", new JSONArray());
+        try {
+            DatabaseRequest.validate("database.migrate", migration(new JSONArray().put(badStep)));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals("database.migrate.steps[0].columns must be an object mapping column name to {type, nullable}", failure.getMessage());
+        }
+
+        JSONObject privateColumnName = new JSONObject().put("synthetic-private-column", definition("text", false));
+        badStep.put("columns", privateColumnName);
+        try {
+            DatabaseRequest.validate("database.migrate", migration(new JSONArray().put(badStep)));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("columns keys must be lowercase column identifiers"));
+            assertFalse(failure.getMessage().contains("synthetic-private-column"));
+        }
+    }
+    @Test public void databaseMethodsNameTypedFieldsWithoutEchoingValues() throws Exception {
+        actionable("database.migrate", migration(new JSONArray().put(create())).put("toVersion", "private-version"),
+                "database.migrate.toVersion must be the next integer schema version", "private-version");
+
+        JSONObject operation = new JSONObject().put("kind", "insert").put("table", "notes").put("id", "n1")
+                .put("values", "private-values");
+        actionable("database.transact", new JSONObject().put("version", 1).put("operations", new JSONArray().put(operation)),
+                "database.transact.operations[0].values must be an object of scalar values", "private-values");
+
+        actionable("database.select", selection().put("limit", "private-limit"),
+                "database.select.limit must be an integer from 1 through " + DatabaseRequest.HARD_MAX_SELECT_ROWS, "private-limit");
+        actionable("database.info", new JSONObject().put("private-field", "private-value"),
+                "database.info.args may contain no fields.", "private-value");
     }
     @Test public void operationGrammarAndBounds() throws Exception {
         JSONObject op = new JSONObject().put("kind", "insert").put("table", "notes").put("id", "one").put("values", new JSONObject().put("title", "hello"));

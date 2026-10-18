@@ -14,36 +14,63 @@ public final class StorageRequest {
     // A shortest encoded key plus a separator costs four bytes. Actual pages also stop by bytes.
     public static final int MAX_PAGE_KEYS = MAX_RESULT_BYTES / 4;
     public static void validate(String method, JSONObject args) throws FactoryException {
+        String request = method == null || !method.startsWith("storage.") ? "storage" : method;
         try {
-            if (args == null || args.toString().getBytes(StandardCharsets.UTF_8).length > MAX_RESULT_BYTES) throw invalid();
+            if (args == null) throw invalid(request + ": args must be an object.");
+            if (args.toString().getBytes(StandardCharsets.UTF_8).length > MAX_RESULT_BYTES)
+                throw invalid(request + ": args exceeds the bridge message byte limit.");
             switch (method) {
                 case "storage.get": case "storage.remove":
-                    FactoryConfig.exactKeys(args, "key"); key(FactoryConfig.string(args, "key")); break;
+                    FactoryConfig.exactKeys(args, "key"); key(string(args, "key", request + ".key must be a string"), request + ".key"); break;
                 case "storage.set":
-                    FactoryConfig.exactKeys(args, "key", "value"); key(FactoryConfig.string(args, "key"));
-                    value(FactoryConfig.string(args, "value")); break;
+                    FactoryConfig.exactKeys(args, "key", "value"); key(string(args, "key", request + ".key must be a string"), request + ".key");
+                    value(string(args, "value", request + ".value must be a string"), request + ".value"); break;
                 case "storage.list": FactoryConfig.exactKeys(args); break;
                 case "storage.listPage":
                     FactoryConfig.exactKeys(args, "afterKey", "limit");
-                    page(args.has("afterKey") ? FactoryConfig.string(args, "afterKey") : null,
-                            args.has("limit") ? DatabaseRequest.integer(args, "limit", 1, MAX_PAGE_KEYS) : 256); break;
-                default: throw invalid();
+                    String afterKey = args.has("afterKey") ? string(args, "afterKey", request + ".afterKey must be a string") : null;
+                    if (afterKey != null) key(afterKey, request + ".afterKey");
+                    int limit = args.has("limit") ? integer(args, "limit", 1, MAX_PAGE_KEYS, request + ".limit must be an integer from 1 through " + MAX_PAGE_KEYS + ".") : 256;
+                    if (limit < 1 || limit > MAX_PAGE_KEYS) throw invalid(request + ".limit must be from 1 through " + MAX_PAGE_KEYS + ".");
+                    break;
+                default: throw invalid(request + ": method must be get, set, remove, list, or listPage.");
             }
-        } catch (JSONException failure) { throw invalid(); }
+        } catch (JSONException failure) { throw invalid(request + ": args fields have invalid JSON types or shapes."); }
+    }
+    private static String string(JSONObject object, String key, String expectation) throws JSONException, FactoryException {
+        Object value;
+        try { value = object.get(key); } catch (JSONException missing) { throw invalid(expectation); }
+        if (!(value instanceof String)) throw invalid(expectation);
+        return (String) value;
+    }
+    private static int integer(JSONObject object, String key, int min, int max, String expectation) throws JSONException, FactoryException {
+        Object value;
+        try { value = object.get(key); } catch (JSONException missing) { throw invalid(expectation); }
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid(expectation);
+        long number = ((Number) value).longValue();
+        if (number < min || number > max) throw invalid(expectation);
+        return (int) number;
     }
     static void key(String key) throws FactoryException {
-        if (key == null || !key.matches("[a-zA-Z0-9_.:-]{1,96}")) throw invalid();
+        key(key, "storage key");
+    }
+    private static void key(String key, String field) throws FactoryException {
+        if (key == null || !key.matches("[a-zA-Z0-9_.:-]{1,96}")) throw invalid(field + " must be 1 to 96 letters, digits, underscore, period, colon, or hyphen.");
     }
     static void page(String afterKey, int limit) throws FactoryException {
         if (afterKey != null) key(afterKey);
-        if (limit < 1 || limit > MAX_PAGE_KEYS) throw invalid();
+        if (limit < 1 || limit > MAX_PAGE_KEYS) throw invalid("storage.listPage.limit must be from 1 through " + MAX_PAGE_KEYS + ".");
     }
     static void value(String value) throws FactoryException {
+        value(value, "storage value");
+    }
+    private static void value(String value, String field) throws FactoryException {
         if (value == null || value.length() > MAX_VALUE_BYTES || value.indexOf('\0') >= 0 ||
-                value.getBytes(StandardCharsets.UTF_8).length > MAX_VALUE_BYTES) throw invalid();
-        BackupJson.unicode(value);
+                value.getBytes(StandardCharsets.UTF_8).length > MAX_VALUE_BYTES) throw invalid(field + " must be valid text within the storage byte limit.");
+        try { BackupJson.unicode(value); }
+        catch (FactoryException invalid) { throw invalid(field + " must contain well-formed Unicode text."); }
         // Admission must guarantee the whole value remains retrievable without truncation.
-        if (encodedStringBytes(value) > MAX_RESULT_BYTES) throw invalid();
+        if (encodedStringBytes(value) > MAX_RESULT_BYTES) throw invalid(field + " must fit one bridge response.");
     }
     static void checkResultValue(String value) throws FactoryException {
         if (value.length() > MAX_VALUE_BYTES || encodedStringBytes(value) > MAX_RESULT_BYTES)
@@ -55,7 +82,5 @@ public final class StorageRequest {
     static FactoryException listTooLarge() {
         return new FactoryException("TOO_LARGE", "Storage keys exceed one response; use storage.listPage with nextAfterKey.");
     }
-    private static FactoryException invalid() {
-        return new FactoryException("INVALID_ARGUMENT", "Invalid storage arguments or bounded message limit exceeded.");
-    }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
 }

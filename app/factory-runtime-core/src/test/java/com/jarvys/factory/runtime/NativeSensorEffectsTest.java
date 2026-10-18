@@ -24,7 +24,7 @@ import org.robolectric.util.ReflectionHelpers;
 import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static org.junit.Assert.*;
 
-/** Adapter-only fake policy, sensor, grant and bridge fixtures. No physical sensor is accessed. */
+/** Adapter-only page lease, sensor, grant and bridge fixtures. No physical sensor is accessed. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
@@ -40,11 +40,9 @@ public class NativeSensorEffectsTest {
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativeOperationSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture("[\"sensors\",\"steps\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"sensors\",\"steps\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
+                .put("appId", fixture.config.appId).toString(), fixture.config.appId);
         PackageInfo own = fixture.screen.getPackageManager().getPackageInfo(config.appId, PackageManager.GET_PERMISSIONS);
         own.requestedPermissions = new String[]{Manifest.permission.ACTIVITY_RECOGNITION};
         Shadows.shadowOf(fixture.screen.getPackageManager()).installPackage(own);
@@ -88,10 +86,10 @@ public class NativeSensorEffectsTest {
         emit(driver.last(), 12);
         Result polled = perform("sensors.poll", handle(started));
         assertEquals(1, polled.value.getJSONArray("samples").length());
-        assertEquals(1, fixture.provider.issued.size()); assertFalse(lease.ended.get());
+        assertTrue(fixture.provider.issued.isEmpty()); assertFalse(lease.ended.get());
         Result stopped = perform("sensors.unsubscribe", handle(started)); idle();
         assertTrue(stopped.value.getBoolean("unsubscribed")); assertTrue(lease.ended.get()); assertNoRetainedJobs();
-        assertEquals(1, fixture.provider.issued.size()); assertEquals(1, started.successes); assertNull(started.error);
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(1, started.successes); assertNull(started.error);
     }
 
     @Test public void repeatedAutonomousGrantLossClosesRetainedJobsAndLeasesWithoutAnyPoll() throws Exception {
@@ -108,20 +106,21 @@ public class NativeSensorEffectsTest {
         }
     }
 
-    @Test public void hostRevocationAfterSettledReplyClosesItsRetainedLeaseWithoutAReapproval() throws Exception {
+    @Test public void pageCancellationAfterSettledReplyClosesItsRetainedLease() throws Exception {
         Result started = subscribe("light"); fixture.pump();
         NativeOperationSessions.Lease lease = onlyLease();
-        fixture.provider.last().state.set(NativeOperationAuthorization.TERMINAL);
-        advance(SensorSubscriptions.AUTHORIZATION_POLL_MS);
+        fixture.sessions.cancelAll(); idle();
         assertTrue(lease.ended.get()); assertNoRetainedJobs(); assertEquals(1, driver.last().unregisters);
-        assertEquals(1, fixture.provider.issued.size()); assertEquals(1, started.successes); assertNull(started.error);
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(1, started.successes); assertNull(started.error);
     }
 
-    @Test public void unavailableInstalledSourceCannotCreateALiveSensorOrRetainedJob() throws Exception {
+    @Test public void unavailableHostDoesNotBlockAppOwnedSensorSubscription() throws Exception {
         fixture.provider.unavailable = true;
-        Result denied = subscribe("light"); fixture.pump();
-        assertFailure(denied, "UNAVAILABLE"); assertTrue(driver.registrations.isEmpty());
-        assertNoRetainedJobs(); assertEquals(SensorSubscriptions.MAX_PROCESS_LISTENERS, admissions.availablePermits());
+        Result started = subscribe("light"); fixture.pump();
+        assertEquals(1, started.successes); assertEquals(1, driver.registrations.size());
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(1, jobs("subscriptionJobs").size());
+        perform("sensors.unsubscribe", handle(started)); idle(); assertNoRetainedJobs();
+        assertEquals(SensorSubscriptions.MAX_PROCESS_LISTENERS, admissions.availablePermits());
     }
 
     @Test public void autonomousFailureClosesLeaseEvenWhenNativeCleanupStillHoldsAdmission() throws Exception {
@@ -167,7 +166,7 @@ public class NativeSensorEffectsTest {
         assertEquals(1, jobs("jobs").size()); assertEquals(1, jobs("subscriptionJobs").size()); assertEquals(1, leases().size());
         emit(driver.last(), 1, 2, 3);
         Result polled = perform("sensors.poll", handle(gyro));
-        assertEquals(1, polled.value.getJSONArray("samples").length()); assertEquals(2, fixture.provider.issued.size());
+        assertEquals(1, polled.value.getJSONArray("samples").length()); assertTrue(fixture.provider.issued.isEmpty());
         perform("sensors.unsubscribe", handle(gyro)); idle(); assertNoRetainedJobs();
     }
 
@@ -202,7 +201,7 @@ public class NativeSensorEffectsTest {
         Result stopped = perform("steps.cancel", new JSONObject()); idle();
         assertTrue(stopped.value.getBoolean("cancelled")); assertFalse(stopped.value.getBoolean("cleanupFailed"));
         assertFailure(current, "CANCELLED"); assertEquals(1, releases[0]); assertEquals(1, stepSlots.availablePermits());
-        assertEquals(1, fixture.provider.issued.size()); assertNoRetainedJobs();
+        assertTrue(fixture.provider.issued.isEmpty()); assertNoRetainedJobs();
     }
 
     private Result subscribe(String kind) throws Exception { return perform("sensors.subscribe", args(kind)); }

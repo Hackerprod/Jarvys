@@ -30,6 +30,12 @@ public class BridgeProtocolTest {
         try { BridgeProtocol.validate(origin, main, raw, config); fail("Expected " + expected); }
         catch (FactoryException e) { assertEquals(expected, e.code); }
     }
+    @Test public void previewDiagnosticMethodExtractionUsesOnlyTheClosedCatalog() {
+        assertEquals("database.migrate", BridgeProtocol.knownMethod(request("database.migrate", "[]")));
+        assertNull(BridgeProtocol.knownMethod(request("private.method", "{}")));
+        assertNull(BridgeProtocol.knownMethod("{\"v\":1,\"method\":42,\"args\":{}}"));
+        assertNull(BridgeProtocol.knownMethod("not json"));
+    }
     @Test public void originAndFrameAreCheckedBeforeParsing() throws Exception {
         FactoryConfig config = config("[\"storage\"]");
         String[] origins = {"null", "file://", "content://app", "http://app.jarvys.invalid", "https://evil.example", "https://app.jarvys.invalid.evil.example", "https://app.jarvys.invalid/", "https://app.jarvys.invalid:443", "https://user@app.jarvys.invalid"};
@@ -88,6 +94,17 @@ public class BridgeProtocolTest {
         rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("export.text", "{\"filename\":\"../x.txt\",\"text\":\"a\"}"), all);
         rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("export.text", "{\"filename\":\"a.apk\",\"text\":\"a\",\"mimeType\":\"application/vnd.android.package-archive\"}"), all);
         rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("share.text", "{\"text\":\"a\",\"targetPackage\":\"evil\"}"), all);
+    }
+    @Test public void databaseBridgeFailureReturnsActionableFieldPathWithoutInputValues() throws Exception {
+        String bad = request("database.migrate", "{\"fromVersion\":0,\"toVersion\":1,\"steps\":[{\"kind\":\"createTable\",\"table\":\"notes\",\"columns\":[{\"name\":\"synthetic-private\",\"type\":\"text\",\"nullable\":false}]}]}");
+        try {
+            BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, bad, config("[\"database\"]"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals("database.migrate.steps[0].columns must be an object mapping column name to {type, nullable}", failure.getMessage());
+            assertFalse(failure.getMessage().contains("synthetic-private"));
+        }
     }
     @Test public void strictJsonRejectsDuplicatesTrailingCommentsAndDeepNesting() throws Exception {
         FactoryConfig all = config("[\"storage\"]");

@@ -56,6 +56,16 @@ public class NetworkPingRequestTest {
         invalid(() -> NetworkPingRequest.parse(args().put("host", "::1").put("family", "ipv4")));
         invalid(() -> NetworkPingRequest.parse(args().put("host", "127.0.0.1").put("family", "ipv6")));
     }
+    @Test public void typedFailuresNamePingFieldWithoutEchoingInput() throws Exception {
+        for (JSONObject args : new JSONObject[]{args().put("count", "private-count"), args().put("family", "private-family"), args().put("host", "private-host;command")}) {
+            try { NetworkPingRequest.parse(args); fail("Expected typed ping failure"); }
+            catch (FactoryException failure) {
+                assertEquals("INVALID_ARGUMENT", failure.code);
+                assertTrue(failure.getMessage().contains("network.ping."));
+                assertFalse(failure.getMessage().contains("private-"));
+            }
+        }
+    }
     @Test public void authorizationDisclosureIsCompleteAndFresh() throws Exception {
         JSONObject input = args(); NetworkPingRequest request = NetworkPingRequest.parse(input); input.put("host", "other.example");
         JSONObject details = request.authorizationDetails(); assertEquals(8, details.length());

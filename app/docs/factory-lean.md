@@ -8,7 +8,7 @@
 - La UI genérica Debate/detalle presenta las respuestas dentro de un acordeón cerrado por defecto: `ToolActivityUi.kt:55-85`, `ConversationTimeline.kt:764-817`; cobertura existente: `ToolActivityComposeTest.kt:65-87`.
 - Omitir `capabilities` selecciona las 33 capacidades y el manifiesto derivado. `FactorySpec.runtimeConfig()` mantiene schema 1 y escribe la lista efectiva en `factory-app.json`; los subconjuntos explícitos mantienen su alcance. El perfil completo también agrega el proveedor y receiver genéricos de widgets.
 - Se restauró en el skill la carga de `/factory-sdk.js` desde `https://app.jarvys.invalid` antes de JS local separado, la prohibición de scripts inline y el dueño único de insets nativos. El core ya se inserta en el system prompt de Coding; `read_skill` obtiene solo referencias bajo demanda.
-- No se tocaron Binder/UID, certificado, identidad, firma, recibos, historial, límites de Android ni prompts de producción.
+- No se relaja la autenticación Binder/UID/certificado del host para documentos y handoffs. Los efectos propios de la app usan autorización local; se mantienen identidad, firma, recibos, historial, límites de Android y prompts de producción.
 
 ## Medidas de salida
 
@@ -26,7 +26,7 @@ El runner contractual visita todos los métodos; la compactación de `test` solo
 
 El core de APK Factory se inyecta en el system prompt de Coding (`CoreAgentRuntime.java:1102-1103,1159-1171`). La herramienta `read_skill` entrega el core o una referencia solicitada; no carga automáticamente las 14 referencias (`LoadSkillTool.java:84-105`). El texto ahora indica que el agente ya tiene el core y debe pedir referencias solo cuando las necesite. Las 18 lecturas observadas fueron llamadas del agente, no relecturas automáticas del loader; el motivo de cada llamada no se conserva en esos contadores.
 
-Los límites de `FactoryGuidanceBundle` son: core 8.192 bytes, cada referencia 16.384, referencias juntas 65.536 y hasta 16 recursos. El cuerpo parseado del core ocupa 5.087 bytes; las 14 referencias suman 65.531 bytes y la mayor ocupa 9.374. La salida completa de `read_skill` para core + `basics` ocupa 10.641 bytes incluyendo ambos encabezados. `manifest.json` usa UTF-8 sin BOM, versión v89 y hashes verificados antes de exponer cada referencia.
+Los límites de `FactoryGuidanceBundle` son: core 8.192 bytes, cada referencia 16.384, referencias juntas 65.536 y hasta 16 recursos. El cuerpo parseado del core ocupa 5.087 bytes; las 14 referencias suman 65.532 bytes y la mayor ocupa 9.374. La salida completa de `read_skill` para core + `basics` ocupa 10.641 bytes incluyendo ambos encabezados. `manifest.json` usa UTF-8 sin BOM, versión `factory-guidance-v90` y hashes verificados antes de exponer cada referencia.
 
 ## Auditoría de autorización y límites
 

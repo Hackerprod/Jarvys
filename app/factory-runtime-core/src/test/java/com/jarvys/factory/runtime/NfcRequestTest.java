@@ -34,6 +34,9 @@ public final class NfcRequestTest {
         fails("INVALID_ARGUMENT", () -> NfcRequest.write(writeArgs().put("allowFormat", "true"), DEFAULTS));
         fails("INVALID_ARGUMENT", () -> NfcRequest.write(writeArgs().put("extra", "x"), DEFAULTS));
         fails("INVALID_ARGUMENT", () -> NfcRequest.write(new JSONObject().put("records", new JSONArray().put("text")), DEFAULTS));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> NfcRequest.write(writeArgs().put("allowFormat", "true"), DEFAULTS));
+        assertEquals("nfc: read accepts optional integer timeoutMs; write requires records as NDEF objects with integer tnf and lowercase even-length typeHex, idHex, and payloadHex strings plus optional boolean allowFormat; clear accepts no fields.", field.getMessage());
         fails("INVALID_ARGUMENT", () -> NfcRequest.empty(new JSONObject().put("id", "foreign")));
     }
     @Test public void duplicateAndNonJsonRejected() throws Exception {

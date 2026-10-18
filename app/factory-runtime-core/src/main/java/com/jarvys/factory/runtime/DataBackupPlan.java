@@ -37,7 +37,8 @@ public final class DataBackupPlan {
     public String sha256() { return isStorage() ? storage.sha256() : database.sha256(); }
     public JSONObject targetRows() { return database == null ? new JSONObject() : database.targetRows(); }
     public void validateArchive(DataBackupArchive archive) throws FactoryException {
-        if (archive == null || isStorage() != archive.isStorage()) throw DatabaseRequest.invalid();
+        if (archive == null || isStorage() != archive.isStorage())
+            throw DatabaseRequest.invalid("dataBackup.archive must match the selected database or storage backup plan");
         if (isStorage()) storage.validateArchive(archive.storage); else database.validateArchive(archive.database);
     }
     public static DataBackupPlan parse(String text) throws FactoryException {
@@ -45,6 +46,6 @@ public final class DataBackupPlan {
         // Disjoint required fields choose the parser; its exact-field checks reject hybrids.
         if (value.has("storageVersion") && !value.has("databaseVersion")) return of(StorageBackupPlan.parse(text));
         if (value.has("databaseVersion") && !value.has("storageVersion")) return of(DatabaseBackupPlan.parse(text));
-        throw DatabaseRequest.invalid();
+        throw DatabaseRequest.invalid("dataBackup.plan must contain exactly one databaseVersion or storageVersion field");
     }
 }

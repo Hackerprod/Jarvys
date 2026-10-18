@@ -45,19 +45,23 @@ public final class LocationRequest {
         FactoryConfig.exactKeys(args, "provider", "timeoutMs", "maxAgeMs", "maxAccuracyMeters", "allowMock");
         try {
             String provider = args.has("provider") ? FactoryConfig.string(args, "provider") : "auto";
-            if (!"auto".equals(provider) && !"gps".equals(provider) && !"network".equals(provider)) throw invalid();
+            if (!"auto".equals(provider) && !"gps".equals(provider) && !"network".equals(provider))
+                throw invalid("location.current: provider must be auto, gps, or network.");
             int timeout = integer(args, "timeoutMs", 15000, 1000, MAX_TIMEOUT_MS);
             int age = integer(args, "maxAgeMs", 0, 0, MAX_AGE_MS);
             double accuracy = number(args, "maxAccuracyMeters", 0);
-            if (!finite(accuracy) || accuracy < 0 || accuracy > MAX_ACCURACY_METERS) throw invalid();
+            if (!finite(accuracy) || accuracy < 0 || accuracy > MAX_ACCURACY_METERS)
+                throw invalid("location.current: maxAccuracyMeters must be a finite number from 0 through 100000.");
             boolean mock = true;
             if (args.has("allowMock")) {
                 Object value = args.get("allowMock");
-                if (!(value instanceof Boolean)) throw invalid();
+                if (!(value instanceof Boolean)) throw invalid("location.current: allowMock must be a boolean.");
                 mock = (Boolean) value;
             }
             return new Current(provider, timeout, age, accuracy, mock);
-        } catch (JSONException malformed) { throw invalid(); }
+        } catch (JSONException malformed) {
+            throw invalid("location.current: provider must be a string; numeric options must be numbers; allowMock must be a boolean.");
+        }
     }
 
     public static Permission parsePermission(String json) throws FactoryException {
@@ -67,9 +71,10 @@ public final class LocationRequest {
         bounded(args); FactoryConfig.exactKeys(args, "precision");
         try {
             String precision = args.has("precision") ? FactoryConfig.string(args, "precision") : "approximate";
-            if (!"approximate".equals(precision) && !"precise".equals(precision)) throw invalid();
+            if (!"approximate".equals(precision) && !"precise".equals(precision))
+                throw invalid("location.requestPermission: precision must be approximate or precise.");
             return new Permission(precision);
-        } catch (JSONException malformed) { throw invalid(); }
+        } catch (JSONException malformed) { throw invalid("location.requestPermission: precision must be a string."); }
     }
 
     public static void parseStatus(String json) throws FactoryException { parseEmpty(StrictJson.object(json, MAX_ARGS_BYTES)); }
@@ -80,21 +85,22 @@ public final class LocationRequest {
 
     private static int integer(JSONObject args, String key, int fallback, int min, int max) throws JSONException, FactoryException {
         double value = number(args, key, fallback);
-        if (!finite(value) || value != Math.rint(value) || value < min || value > max) throw invalid();
+        if (!finite(value) || value != Math.rint(value) || value < min || value > max)
+            throw invalid("location.current: " + key + " must be an integer from " + min + " through " + max + ".");
         return (int) value;
     }
     private static double number(JSONObject args, String key, double fallback) throws JSONException, FactoryException {
         if (!args.has(key)) return fallback;
         Object value = args.get(key);
-        if (!(value instanceof Number)) throw invalid();
+        if (!(value instanceof Number)) throw invalid("location.current: " + key + " must be a number.");
         return ((Number) value).doubleValue();
     }
     static boolean finite(double value) { return !Double.isNaN(value) && !Double.isInfinite(value); }
     private static void bounded(JSONObject args) throws FactoryException {
-        if (args == null) throw invalid();
+        if (args == null) throw invalid("location: arguments must be an object.");
         String encoded = args.toString();
         if (encoded == null || encoded.length() > MAX_ARGS_BYTES || encoded.getBytes(StandardCharsets.UTF_8).length > MAX_ARGS_BYTES)
             throw new FactoryException("TOO_LARGE", "Location arguments exceed the transport limit.");
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed foreground location arguments."); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
 }

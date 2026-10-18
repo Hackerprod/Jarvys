@@ -6,6 +6,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import static org.junit.Assert.*;
 import static com.jarvys.factory.runtime.DatabaseRequestTest.invalid;
 import static com.jarvys.factory.runtime.DatabaseRequestTest.repeat;
 
@@ -53,5 +54,32 @@ public class DatabaseBackupRequestTest {
         JSONArray tables=new JSONArray(); for(int i=0;i<8;i++) tables.put("t"+i);
         DatabaseBackupRequest.validate("database.backupExport",export().put("tables",tables));
         tables.put("t8"); invalid(()->DatabaseBackupRequest.validate("database.backupExport",export().put("tables",tables)));
+    }
+    @Test public void invalidFieldsNameTheirExpectationWithoutEchoingSubmittedValues() throws Exception {
+        for (JSONObject args : new JSONObject[]{
+                export().put("filename", "../../private-name"),
+                export().put("version", 1.0),
+                export().put("tables", new JSONArray().put("../../private-table")),
+                importing().put("handle", "private-handle"),
+                importing().put("mode", "private-mode")}) {
+            String method = args.has("filename") ? "database.backupExport" : "database.backupImport";
+            try { DatabaseBackupRequest.validate(method, args); fail("Expected INVALID_ARGUMENT"); }
+            catch (FactoryException failure) {
+                assertEquals("INVALID_ARGUMENT", failure.code);
+                assertTrue(failure.getMessage().contains(method + "."));
+                assertFalse(failure.getMessage().contains("private"));
+            }
+        }
+    }
+    @Test public void unknownImportFieldsUseTheActualMethodAndClosedFieldGrammar() throws Exception {
+        try {
+            DatabaseBackupRequest.validate("database.backupImport", importing().put("private-field", "private-value"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals("database.backupImport.args may contain only version, handle, tables, mode.", failure.getMessage());
+            assertFalse(failure.getMessage().contains("private-field"));
+            assertFalse(failure.getMessage().contains("private-value"));
+        }
     }
 }

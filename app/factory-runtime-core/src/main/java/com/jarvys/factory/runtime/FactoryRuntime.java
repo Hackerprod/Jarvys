@@ -155,6 +155,8 @@ public final class FactoryRuntime implements AutoCloseable {
         /** Nonblocking revocation flag only; preview adapters must not perform I/O here. */
         default boolean isSessionOpen() { return isActive(); }
         default void onTrace(String operation, String outcome) { }
+        /** Retain fixed validator diagnostics only; preview adapters must not retain request data. */
+        default void onValidationFailure(String method, String code, String message) { }
         default void resetStorage() { }
     }
     private final Activity activity;
@@ -446,7 +448,13 @@ public final class FactoryRuntime implements AutoCloseable {
         }
         final BridgeProtocol.Request request;
         try { request = BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, config); }
-        catch (FactoryException e) { safePost(proxy, BridgeProtocol.failure(BridgeProtocol.requestId(raw), e.code, e.getMessage())); return; }
+        catch (FactoryException e) {
+            if (host.isPreview() && "INVALID_ARGUMENT".equals(e.code)) {
+                String method = BridgeProtocol.knownMethod(raw);
+                if (method != null) host.onValidationFailure(method, e.code, e.getMessage());
+            }
+            safePost(proxy, BridgeProtocol.failure(BridgeProtocol.requestId(raw), e.code, e.getMessage())); return;
+        }
         boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NFC_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_STOP_SCAN || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_UNSUBSCRIBE || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_DISCONNECT || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.JOBS_CANCEL ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP ||
@@ -1093,7 +1101,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 IncomingTake work = new IncomingTake(owner, input.id, claim, documents, reply);
                 try {
                     // The native claim, not renderer-provided details, binds the exact content and indices.
-                    work.attach(nativeOperations.authorize("incomingShare.take", claim.authorizationDetails(), work));
+                    work.attach(nativeOperations.authorizeLocal("incomingShare.take", claim.authorizationDetails(), work));
                 } catch (Exception failed) { work.cancel(); throw failed; }
                 return;
             default: throw new FactoryException("UNKNOWN_METHOD", "Incoming sharing method is unavailable.");
@@ -1743,7 +1751,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
                 String[] packages=activity.getPackageManager().getPackagesForUid(hostUid);
                 if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
-                    throw new FactoryException("UNAVAILABLE","The sharing host has an ambiguous UID.");
+                    throw new FactoryException("SOURCE_UNAVAILABLE","This operation requires Jarvys installed and active; its signed handoff identity could not be verified.");
                 work.snapshot=admission.prepare(new StreamingFileShareTransfer.SnapshotWriter() {
                     private DocumentHandles.ShareSource shareSource;
                     @Override public void write(java.io.OutputStream output,Runnable active) throws Exception {
@@ -1793,8 +1801,10 @@ public final class FactoryRuntime implements AutoCloseable {
                 main.post(() -> {
                     if (fileShare == work) fileShare=null;
                     if (uiOwner == reply) uiOwner=null;
-                    reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "SHARE_UNAVAILABLE",
-                            "The bounded file snapshot could not be prepared. Reopen the document to retry.");
+                    String code=failure instanceof FactoryException ? ((FactoryException)failure).code : "SHARE_UNAVAILABLE";
+                    String message="SOURCE_UNAVAILABLE".equals(code) ? failure.getMessage()
+                            : "The bounded file snapshot could not be prepared. Reopen the document to retry.";
+                    reply.fail(code,message);
                 });
             }
         }); } catch (RejectedExecutionException failure) {
@@ -1914,7 +1924,7 @@ public final class FactoryRuntime implements AutoCloseable {
         final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
         String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
         if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
-            throw new FactoryException("UNAVAILABLE", "The browser host has an ambiguous UID.");
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This operation requires Jarvys installed and active; its signed handoff identity could not be verified.");
         BrowserLaunchControl.HostVerifier verifiedHost = uid -> {
             if (uid != hostUid) return false;
             try {
@@ -2015,7 +2025,7 @@ public final class FactoryRuntime implements AutoCloseable {
         final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
         String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
         if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
-            throw new FactoryException("UNAVAILABLE", "The external action host has an ambiguous UID.");
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This operation requires Jarvys installed and active; its signed handoff identity could not be verified.");
         ExternalLaunchControl.HostVerifier verifiedHost = uid -> {
             if (uid != hostUid) return false;
             try {
@@ -2117,7 +2127,7 @@ public final class FactoryRuntime implements AutoCloseable {
         final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
         String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
         if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
-            throw new FactoryException("UNAVAILABLE", "The contact selection host has an ambiguous UID.");
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This operation requires Jarvys installed and active; its signed handoff identity could not be verified.");
         ExternalLaunchControl.HostVerifier verifiedHost = uid -> {
             if (uid != hostUid) return false;
             try {
@@ -2241,7 +2251,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
                 String[] packages=activity.getPackageManager().getPackagesForUid(hostUid);
                 if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
-                    throw new FactoryException("UNAVAILABLE","The audio host has an ambiguous UID.");
+                    throw new FactoryException("SOURCE_UNAVAILABLE","This operation requires Jarvys installed and active; its signed handoff identity could not be verified.");
                 FileShareTransfer.HostVerifier verifiedHost = uid -> {
                     if (uid != hostUid) return false;
                     try {
@@ -2295,8 +2305,10 @@ public final class FactoryRuntime implements AutoCloseable {
                 main.post(() -> {
                     if (audioPlayback == work) audioPlayback=null;
                     if (uiOwner == reply) uiOwner=null;
-                    reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "AUDIO_UNAVAILABLE",
-                            "The bounded audio snapshot could not be prepared. Reopen the document to retry.");
+                    String code=failure instanceof FactoryException ? ((FactoryException)failure).code : "AUDIO_UNAVAILABLE";
+                    String message="SOURCE_UNAVAILABLE".equals(code) ? failure.getMessage()
+                            : "The bounded audio snapshot could not be prepared. Reopen the document to retry.";
+                    reply.fail(code,message);
                 });
             }
         }); } catch (RejectedExecutionException failure) {

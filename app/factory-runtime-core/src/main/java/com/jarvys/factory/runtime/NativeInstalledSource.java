@@ -2,9 +2,15 @@ package com.jarvys.factory.runtime;
 
 import android.content.Context;
 import android.net.Uri;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import com.jarvys.factory.contract.ResourceBudgets;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -28,12 +34,74 @@ public final class NativeInstalledSource {
 
     /**
      * Call only from a bounded background worker. The caller's current callback must independently
-     * expire its receiver/session. A successful description does not authorize any native effect:
-     * obtain and check a fresh NativeBackgroundAuthorization lease at the actual effect boundary.
+     * expire its receiver/session. A successful description does not authorize any native effect;
+     * the owning foreground or background path must check its current authorization at the effect boundary.
      */
     public static NativeInstalledSource describe(Context context, FactoryConfig config, String capability,
                                                 long receiverDeadlineElapsedMs, BooleanSupplier current) throws FactoryException {
         return describeInternal(context,config,capability,receiverDeadlineElapsedMs,current);
+    }
+
+    /**
+     * Local identity for work owned entirely by this generated application. Android verifies the
+     * installed package signature; capabilities and budgets come from its packaged configuration.
+     * The derived digests scope private ledgers to this package/version/config and are not a Jarvys
+     * artifact receipt or authorization.
+     */
+    @SuppressWarnings("deprecation")
+    public static NativeInstalledSource describeLocal(Context context, FactoryConfig config, String capability) throws FactoryException {
+        try {
+            String packaged = FactoryRuntime.readConfiguration(context.getAssets().open("factory-app.json"));
+            return describeLocal(context, config, capability, packaged);
+        } catch (FactoryException failure) {
+            throw failure;
+        } catch (Exception unavailable) {
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This app's installed identity or packaged capability budgets are unavailable.");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    static NativeInstalledSource describeLocal(Context context, FactoryConfig config, String capability,
+                                               String packaged) throws FactoryException {
+        if (context == null || config == null || capability == null ||
+                !config.appId.equals(context.getPackageName()) || !config.capabilities.contains(capability))
+            throw new FactoryException("CAPABILITY_REQUIRED", "The installed application must declare this capability.");
+        try {
+            if (packaged == null || packaged.getBytes(StandardCharsets.UTF_8).length > 8192)
+                throw new SecurityException("Packaged configuration is unavailable");
+            FactoryConfig installed = FactoryConfig.parse(packaged, context.getPackageName());
+            if (!installed.appId.equals(config.appId) || !installed.capabilities.equals(config.capabilities) ||
+                    !installed.capabilities.contains(capability) ||
+                    !ResourceBudgetsJson.toJson(installed.resources).toString().equals(ResourceBudgetsJson.toJson(config.resources).toString()))
+                throw new SecurityException("Packaged configuration identity changed");
+            PackageInfo own = context.getPackageManager().getPackageInfo(context.getPackageName(),
+                    Build.VERSION.SDK_INT >= 28 ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES);
+            Signature[] signers = Build.VERSION.SDK_INT >= 28
+                    ? own.signingInfo == null ? null : own.signingInfo.getApkContentsSigners() : own.signatures;
+            if (!context.getPackageName().equals(own.packageName) || signers == null || signers.length != 1)
+                throw new SecurityException("Installed package signer is unavailable");
+            String certificate = digest(signers[0].toByteArray());
+            long version = Build.VERSION.SDK_INT >= 28 ? own.getLongVersionCode() : own.versionCode;
+            if (version < 1) throw new SecurityException("Installed package version is unavailable");
+            String configDigest = digest(packaged.getBytes(StandardCharsets.UTF_8));
+            String artifact = digest(("factory-local-app-v1\n" + own.packageName + "\n" + certificate + "\n" + version + "\n" + configDigest).getBytes(StandardCharsets.UTF_8));
+            String record = digest(("factory-local-policy-v1\n" + capability + "\n" + configDigest + "\n" +
+                    ResourceBudgetsJson.toJson(installed.resources)).getBytes(StandardCharsets.UTF_8));
+            return new NativeInstalledSource(installed.appId, certificate, artifact, record, version, installed.resources);
+        } catch (FactoryException failure) {
+            throw failure;
+        } catch (Exception unavailable) {
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This app's installed identity or packaged capability budgets are unavailable.");
+        }
+    }
+
+    private static String digest(byte[] value) {
+        try {
+            byte[] bytes = MessageDigest.getInstance("SHA-256").digest(value);
+            StringBuilder result = new StringBuilder(64);
+            for (byte b : bytes) result.append(Character.forDigit((b >>> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
+            return result.toString();
+        } catch (Exception impossible) { throw new IllegalStateException(impossible); }
     }
     private static NativeInstalledSource describeInternal(Context context,FactoryConfig config,String capability,
                                                          long receiverDeadlineElapsedMs,BooleanSupplier current) throws FactoryException {
@@ -77,7 +145,7 @@ public final class NativeInstalledSource {
             requireCurrent(current, deadline);
             return new NativeInstalledSource(config.appId, certificate, apk, record, (Long) version, resources);
         } catch (Exception unavailable) {
-            throw new FactoryException("SOURCE_UNAVAILABLE", "Current authenticated installed source is unavailable; no authority was assumed.");
+            throw new FactoryException("SOURCE_UNAVAILABLE", "This operation requires Jarvys installed and active; signed installed-source authority is unavailable.");
         }
     }
 

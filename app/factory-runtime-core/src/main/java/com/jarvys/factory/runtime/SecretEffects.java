@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Installed-app secret effects. Each Prepared input remains bound to its authenticated caller session.
+ * Installed-app secret effects. Each Prepared input remains bound to its current operation lease.
  * This adapter does not request another approval or transport values through the host.
  * Native capture is optional input UI; put/get deliberately allow authorized programmatic values.
  */

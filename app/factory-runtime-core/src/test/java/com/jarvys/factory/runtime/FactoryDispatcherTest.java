@@ -167,16 +167,16 @@ public class FactoryDispatcherTest {
         assertEquals(0, installed.getJSONArray("unavailableCapabilities").length());
     }
 
-    @Test public void photosCapabilityNeverAddsManifestPermissionsComponentsOrQueries() {
+    @Test public void photosAddsOnlyTheExactBrokerPackageQueries() {
         CapabilityCatalog.Capability photos = CapabilityCatalog.CAPABILITIES.get("photos");
         assertNotNull(photos);
         assertEquals(2, photos.methods.size());
-        assertTrue(photos.manifestNodes.isEmpty());
+        assertEquals(1, photos.manifestNodes.size());
         assertTrue(photos.permissions.isEmpty());
         assertTrue(photos.features.isEmpty());
         assertTrue(photos.components.isEmpty());
-        assertTrue(photos.queries.isEmpty());
-        assertTrue(CapabilityCatalog.manifestContributions(Arrays.asList("photos")).isEmpty());
+        assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, photos.queries);
+        assertEquals(1, CapabilityCatalog.manifestContributions(Arrays.asList("photos")).size());
         assertEquals(CapabilityCatalog.manifestContributions(Arrays.asList("documents")).size(),
                 CapabilityCatalog.manifestContributions(Arrays.asList("documents", "photos")).size());
     }
@@ -261,7 +261,7 @@ public class FactoryDispatcherTest {
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
             boolean host = false;
-            for(String name:java.util.Arrays.asList("browser","documents","maps","phone","email","sms","contacts","calendar","clipboard","share","export","sensors"))host |= selected.contains(name);
+            for(String name:java.util.Arrays.asList("browser","documents","photos","audio","maps","phone","email","sms","contacts","calendar","clipboard","share","export"))host |= selected.contains(name);
             java.util.List<String> permissions=new java.util.ArrayList<>();
             if(selected.contains("sensors"))permissions.add("android.permission.HIGH_SAMPLING_RATE_SENSORS");
             if(selected.contains("biometrics"))permissions.add("android.permission.USE_BIOMETRIC");

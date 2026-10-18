@@ -76,7 +76,7 @@ public class NativeOperationAuthorizationTest {
     }
     @Test public void terminalCallbackIsDeliveredWithoutWaitingForAnotherCheck() throws Exception {
         CountDownLatch ended = new CountDownLatch(1);
-        NativeOperationAuthorization host = host(new AtomicInteger(0), new AtomicBoolean(true), new AtomicInteger(), () -> {});
+        NativeOperationAuthorization host = host(new AtomicInteger(NativeOperationAuthorization.ACTIVE), new AtomicBoolean(true), new AtomicInteger(), () -> {});
         NativeOperationAuthorization.Client client = worker(() -> NativeOperationAuthorization.connect(host, NONCE, BINDING, uid -> true, ended::countDown));
         host.close(); assertTrue(ended.await(5, TimeUnit.SECONDS)); assertTrue(client.isClosed());
     }

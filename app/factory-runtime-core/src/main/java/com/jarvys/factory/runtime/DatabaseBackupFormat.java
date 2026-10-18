@@ -39,45 +39,51 @@ public final class DatabaseBackupFormat {
 
     public static Archive parse(byte[] bytes) throws FactoryException {
         // Own the input before parsing so a provider/caller cannot race the canonical-byte comparison.
-        if (bytes == null) throw DatabaseRequest.invalid();
+        if (bytes == null) throw invalidArchive();
         if (bytes.length > MAX_BYTES) throw BackupJson.tooLarge();
-        byte[] owned = bytes.clone(); JSONObject envelope = BackupJson.object(owned);
+        byte[] owned = bytes.clone();
+        JSONObject envelope;
+        try { envelope = BackupJson.object(owned); }
+        catch (FactoryException malformed) { throw invalidArchive(); }
         try {
             DatabaseBackupRequest.required(envelope, "certificateSha256", "databaseVersion", "format", "formatVersion", "packageName", "tables");
             if (!"jarvys-sqlite-data".equals(DatabaseRequest.string(envelope, "format")) ||
-                    DatabaseRequest.integer(envelope, "formatVersion", 1, 1) != 1) throw DatabaseRequest.invalid();
+                    DatabaseRequest.integer(envelope, "formatVersion", 1, 1) != 1) throw invalidArchive();
             JSONObject tables = envelope.getJSONObject("tables"), schema = new JSONObject(), data = new JSONObject();
             for (String table : BackupJson.keys(tables)) {
                 JSONObject content = tables.getJSONObject(table);
                 DatabaseBackupRequest.required(content, "columns", "rows");
-                schema.put(table, content.getJSONObject("columns")); data.put(table, content.getJSONArray("rows"));
+                JSONObject columns=content.getJSONObject("columns");
+                validateColumns(columns,"database.backupImport","archive.tables."+table+".columns");
+                schema.put(table, columns); data.put(table, content.getJSONArray("rows"));
             }
             Archive archive = create(DatabaseRequest.string(envelope, "packageName"), DatabaseRequest.string(envelope, "certificateSha256"),
                     DatabaseRequest.integer(envelope, "databaseVersion", 1, 1000), schema, data);
-            if (!Arrays.equals(owned, archive.encoded)) throw DatabaseRequest.invalid();
+            if (!Arrays.equals(owned, archive.encoded)) throw invalidArchive();
             return archive;
-        } catch (JSONException e) { throw DatabaseRequest.invalid(); }
+        } catch (JSONException e) { throw invalidArchive(); }
     }
 
     public static Archive create(String appId, String certificate, int version, JSONObject selectedSchema, JSONObject selectedRows) throws FactoryException {
         if (appId == null || appId.length() > 160 || !appId.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*){1,15}") ||
                 certificate == null || !certificate.matches("[a-f0-9]{64}") || version < 1 || version > 1000 ||
                 selectedSchema == null || selectedRows == null || selectedSchema.length() < 1 || selectedSchema.length() > MAX_TABLES)
-            throw DatabaseRequest.invalid();
+            throw invalidArchive();
         List<String> tables = BackupJson.keys(selectedSchema);
-        if (!tables.equals(BackupJson.keys(selectedRows))) throw DatabaseRequest.invalid();
+        if (!tables.equals(BackupJson.keys(selectedRows))) throw invalidArchive();
         try {
             JSONObject schema = new JSONObject(), data = new JSONObject(), contents = new JSONObject(); int totalRows = 0; long encodedRows = 0;
             for (String table : tables) {
                 DatabaseRequest.identifier(table);
-                JSONObject columns = selectedSchema.getJSONObject(table); validateColumns(columns);
+                JSONObject columns = selectedSchema.getJSONObject(table);
+                validateColumns(columns,"database.backupExport","tables."+table+".columns");
                 JSONObject ownedColumns = (JSONObject) BackupJson.copy(columns); schema.put(table, ownedColumns);
                 JSONArray source = selectedRows.getJSONArray(table);
-                if (source.length() > DatabaseRequest.MAX_ROWS - totalRows) throw DatabaseRequest.invalid();
+                if (source.length() > DatabaseRequest.MAX_ROWS - totalRows) throw invalidArchive();
                 totalRows += source.length(); List<JSONObject> sorted = new ArrayList<>(); Set<String> ids = new HashSet<>();
                 for (int i = 0; i < source.length(); i++) {
                     JSONObject row = normalizeRow(source.getJSONObject(i), ownedColumns);
-                    if (!ids.add(row.getString("id"))) throw DatabaseRequest.invalid();
+                    if (!ids.add(row.getString("id"))) throw invalidArchive();
                     encodedRows += canonical(row).length + 1L;
                     if (encodedRows > MAX_BYTES) throw BackupJson.tooLarge();
                     sorted.add(row);
@@ -89,13 +95,16 @@ public final class DatabaseBackupFormat {
             JSONObject envelope = new JSONObject().put("certificateSha256", certificate).put("databaseVersion", version)
                     .put("format", "jarvys-sqlite-data").put("formatVersion", 1).put("packageName", appId).put("tables", contents);
             return new Archive(appId, certificate, version, tables, schema, data, canonical(envelope));
-        } catch (JSONException e) { throw DatabaseRequest.invalid(); }
+        } catch (JSONException e) { throw invalidArchive(); }
     }
 
     static void validateColumns(JSONObject columns) throws JSONException, FactoryException {
+        validateColumns(columns,"database.backupExport","columns");
+    }
+    private static void validateColumns(JSONObject columns,String method,String path) throws JSONException, FactoryException {
         // V1 archives keep their original schema envelope even when the paged database grows.
-        if (columns.length() > DatabaseRequest.MAX_COLUMNS) throw DatabaseRequest.invalid();
-        DatabaseRequest.columns(columns);
+        if (columns.length() > DatabaseRequest.MAX_COLUMNS) throw invalidArchive();
+        DatabaseRequest.columns(columns,method,path);
         for (String name : BackupJson.keys(columns)) DatabaseBackupRequest.required(columns.getJSONObject(name), "type", "nullable");
     }
     /** A full persisted row, including explicit null cells. Real columns always use the finite-double form. */
@@ -108,19 +117,19 @@ public final class DatabaseBackupFormat {
     }
     private static JSONObject normalizeRow(JSONObject source, JSONObject columns, int maxCellBytes, int maxRowBytes)
             throws JSONException, FactoryException {
-        if (source.length() != columns.length() + 1 || !source.has("id")) throw DatabaseRequest.invalid();
+        if (source.length() != columns.length() + 1 || !source.has("id")) throw invalidArchive();
         JSONObject row = new JSONObject().put("id", DatabaseRequest.id(DatabaseRequest.string(source, "id")));
         for (String name : BackupJson.keys(columns)) {
-            if (!source.has(name)) throw DatabaseRequest.invalid();
+            if (!source.has(name)) throw invalidArchive();
             JSONObject definition = columns.getJSONObject(name); Object value = source.get(name);
-            DatabaseRequest.typed(value, definition, maxCellBytes);
+            DatabaseRequest.typed(value, definition, "database.backup.rows.<column>", maxCellBytes);
             if (value != JSONObject.NULL && "real".equals(definition.getString("type"))) {
                 double real = ((Number) value).doubleValue(); value = real == 0.0 ? 0.0 : real;
             }
             row.put(name, value);
         }
         // Use the same typed database row quota, independent of JSON's defensive presentation escapes.
-        if (DatabaseRequest.bytes(row) > maxRowBytes) throw DatabaseRequest.invalid();
+        if (DatabaseRequest.bytes(row) > maxRowBytes) throw invalidArchive();
         return row;
     }
     public static byte[] canonical(Object value) throws FactoryException { return BackupJson.canonical(value); }
@@ -135,4 +144,7 @@ public final class DatabaseBackupFormat {
         return new String(result);
     }
     public static boolean sameTables(Archive archive, List<String> tables) { return archive != null && archive.tables.equals(tables); }
+    private static FactoryException invalidArchive() {
+        return new FactoryException("INVALID_ARGUMENT", "database.backupImport.archive must match the frozen v1 fields, types, and limits.");
+    }
 }

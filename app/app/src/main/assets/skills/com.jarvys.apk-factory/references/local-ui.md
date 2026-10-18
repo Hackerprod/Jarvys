@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v89 / local-ui
+# Factory guidance factory-guidance-v90 / local-ui
 
 Link /factory-ui/pure-3.0.0/pure-min.css,then /factory-ui/pure-3.0.0/grids-responsive-min.css,then local styles. Classes pure-form/pure-form-stacked,pure-button/pure-button-primary,pure-table,pure-g with pure-u-1/pure-u-md-1-2. Viewport meta,semantic labels/visible focus,local separate JS listeners,no inline handlers/eval/CDN.
 Fixed runtime inclusion retains both CSS files,LICENSE.txt,normalize-LICENSE.txt,PROVENANCE.json under that versioned path even if unused. Exact pinned bytes,no project replacement/copy into webDir; bundled in each APK,not supplied by an installed host. Library overhead≤32KiB/file,64KiB total,distinct from signed project packaging budgets. No per-app compiler/download.

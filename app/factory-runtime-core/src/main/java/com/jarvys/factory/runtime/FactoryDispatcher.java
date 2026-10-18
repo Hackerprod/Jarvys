@@ -44,7 +44,7 @@ public final class FactoryDispatcher {
                 case NOTIFICATIONS_SCHEDULE: case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS: case NOTIFICATIONS_CANCEL_SCHEDULED: case NOTIFICATIONS_FORGET_SCHEDULED: case NOTIFICATIONS_POLL_ACTIONS: case NOTIFICATIONS_ACK_ACTION: case NOTIFICATIONS_GENERATION_STATUS: case NOTIFICATIONS_FORGET_GENERATION: case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
-                    throw new FactoryException("UNAVAILABLE", "Native network, notifications, speech, recognition and location require an installed generated app and live Jarvys policy. ICMP also requires an available Android ping utility. Preview does not perform or simulate these effects.");
+                    throw new FactoryException("UNAVAILABLE", "Native effects require an installed generated app and their declared capability and Android permissions. Host-mediated operations also require Jarvys installed and active. ICMP requires an available Android ping utility. Preview does not perform or simulate these effects.");
                 case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
@@ -114,7 +114,8 @@ public final class FactoryDispatcher {
                         .put("recordingForegroundOnly", true).put("recordingOutput", "documents-read-handle").put("recordingFormat", "wav-pcm16")
                         .put("voiceRecognitionMayUseNetwork", true).put("locationForegroundOnly", true)
                         .put("nativePingProtocol", "icmp").put("platformPingUtilityRequired", true)
-                        .put("nativeOperationsPolicy", "host_allow_ask_deny").put("speechEngineMayUseNetwork", true)
+                        .put("nativeOperationsPolicy", "host_allow_ask_deny")
+                        .put("nativeOperationsAuthorization", "declared_capability_and_android_permissions").put("speechEngineMayUseNetwork", true)
                         .put("notificationAcceptedMeansDelivered", false).put("browserMayUseExternalNetwork", true)
                         .put("externalRecipientsMayUseNetwork", true)
                         .put("externalActionConfirmed", false)
@@ -132,7 +133,7 @@ public final class FactoryDispatcher {
                         .put("biometricsDeviceCredentialAllowed", false).put("biometricsForegroundOnly", true)
                         .put("biometricsLocalOnly", true).put("biometricsAuthorizesOtherActions", false)
                         .put("sensorsProtocolVersion", 2).put("sensorsBrokerRequired", false)
-                        .put("sensorsSubscriptionBrokerRequired", true).put("sensorsSubscriptionsForegroundOnly", true)
+                        .put("sensorsSubscriptionBrokerRequired", false).put("sensorsSubscriptionsForegroundOnly", true)
                         .put("sensorsSubscriptionMinimumIntervalUs", config.resources.sensors.minimumIntervalUs)
                         .put("sensorsSubscriptionRequestedRateCeilingHz", config.resources.sensors.minimumIntervalUs == 0 ? JSONObject.NULL : 1000000.0 / config.resources.sensors.minimumIntervalUs)
                         .put("sensorsSubscriptionRateGuaranteed", false).put("sensorsSubscriptionBufferSamples", config.resources.sensors.bufferedSamples)

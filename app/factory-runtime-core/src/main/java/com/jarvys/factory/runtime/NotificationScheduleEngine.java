@@ -6,7 +6,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import static com.jarvys.factory.runtime.NotificationScheduleMachine.*;
 
-/** One-shot durable scheduler. All host, OS and persistence effects are explicit injected boundaries. */
+/** One-shot durable scheduler. App-local, OS and persistence effects are explicit injected boundaries. */
 public final class NotificationScheduleEngine {
     public interface Clock { long epochMs(); long elapsedMs(); }
     public enum Mode { BACKGROUND_NO_UI, FOREGROUND }
@@ -26,7 +26,7 @@ public final class NotificationScheduleEngine {
         @Override public void close() { if (lease != null) lease.close(); }
     }
     public interface Authority {
-        /** Must bind notifications.schedule, the complete stored request and verified source. No UI in BACKGROUND_NO_UI. */
+        /** Must bind notifications.schedule, the complete stored request and current app-local source. No UI in BACKGROUND_NO_UI. */
         Decision acquire(Row row, Source currentSource, Mode mode, Session session) throws FactoryException;
     }
     public interface Store {
@@ -52,7 +52,7 @@ public final class NotificationScheduleEngine {
         void post(Row row, List<ActionToken> actions, Checkpoint checkpoint) throws FactoryException;
     }
     public interface Checkpoint { void check(); }
-    /** Receipt-authenticated budgets only. Retained rows include tombstones; no automatic eviction. */
+    /** Packaged resource budgets. Retained rows include tombstones; no automatic eviction. */
     public static final class Limits {
         public final int schedules, inboxEvents, tombstones;
         public final long ledgerBytes;
@@ -62,7 +62,7 @@ public final class NotificationScheduleEngine {
             this.schedules = schedules; inboxEvents = events; this.tombstones = tombstones; ledgerBytes = bytes;
         }
     }
-    /** Construct only from the trusted installed-artifact verifier, never from JS arguments or Intent extras. */
+    /** Construct from the installed app identity and packaged config, never from JS arguments or Intent extras. */
     public static final class Source {
         public final String appId, certificateSha256, artifactSha256, receiptSha256, fingerprint, ownerFingerprint;
         public final long versionCode;
@@ -258,12 +258,12 @@ public final class NotificationScheduleEngine {
         if (firing && clock.epochMs() < row.request.atEpochMs) return row;
         if (clock.epochMs() > row.request.expiresAtEpochMs) return transitionOrCurrent(row, State.EXPIRED, "delivery_window_ended", session);
         // Persist a safe observable state BEFORE a host IPC can hang or the process can die.
-        Row pending = transition(row, State.QUEUED_SESSION_UNAVAILABLE, "acquiring_host_session", session.attempt);
+        Row pending = transition(row, State.QUEUED_SESSION_UNAVAILABLE, "acquiring_local_authority", session.attempt);
         if (pending == null) return current(row);
         Decision decision;
         try { decision = authority.acquire(pending, source, mode, session); }
-        catch (FactoryException | RuntimeException unavailable) { return queueUnavailable(pending, "authenticated_host_unavailable", session); }
-        if (decision == null) return queueUnavailable(pending, "authenticated_host_unavailable", session);
+        catch (FactoryException | RuntimeException unavailable) { return queueUnavailable(pending, "local_authority_unavailable", session); }
+        if (decision == null) return queueUnavailable(pending, "local_authority_unavailable", session);
         try (Decision active = decision) {
             if (!session.active()) return queueUnavailable(pending, "receiver_deadline", session);
             boolean ready = platform.notificationsReady(pending.notification);

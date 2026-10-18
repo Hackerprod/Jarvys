@@ -63,7 +63,8 @@ public final class NotificationScheduleRequest {
         /** Request identity only; source artifact proof and live policy remain separate requirements. */
         public String fingerprint() { return sha256(canonical(authorizationDetails(), 0)); }
         public void requireFuture(long nowEpochMs) throws FactoryException {
-            if (nowEpochMs < 0 || atEpochMs <= nowEpochMs) throw invalid();
+            if (nowEpochMs < 0 || atEpochMs <= nowEpochMs)
+                throw invalid("notifications.schedule", "atEpochMs must be later than the current time");
         }
     }
 
@@ -71,89 +72,115 @@ public final class NotificationScheduleRequest {
         return parseSchedule(StrictJson.object(json, MAX_ARGS_BYTES));
     }
     public static Schedule parseSchedule(JSONObject args) throws FactoryException {
-        bounded(args, MAX_ARGS_BYTES);
-        FactoryConfig.exactKeys(args, "scheduleId", "atEpochMs", "expiresAtEpochMs", "precision", "allowWhileIdle", "notification");
+        final String method = "notifications.schedule";
+        bounded(args, MAX_ARGS_BYTES, method);
+        exact(args, method, "scheduleId", "atEpochMs", "expiresAtEpochMs", "precision", "allowWhileIdle", "notification");
         try {
-            String id = identifier(args.get("scheduleId"));
-            long at = integer(args.get("atEpochMs")), expires = integer(args.get("expiresAtEpochMs"));
-            if (expires < at) throw invalid();
-            String precision = args.has("precision") ? FactoryConfig.string(args, "precision") : "inexact";
-            if (!"inexact".equals(precision) && !"exact".equals(precision)) throw invalid();
+            String id = identifier(args.get("scheduleId"), method, "scheduleId");
+            long at = integer(args.get("atEpochMs"), method, "atEpochMs"), expires = integer(args.get("expiresAtEpochMs"), method, "expiresAtEpochMs");
+            if (expires < at) throw invalid(method, "expiresAtEpochMs must be greater than or equal to atEpochMs");
+            String precision = args.has("precision") ? string(args.get("precision"), method, "precision") : "inexact";
+            if (!"inexact".equals(precision) && !"exact".equals(precision)) throw invalid(method, "precision must be exact or inexact");
             Object idle = args.has("allowWhileIdle") ? args.get("allowWhileIdle") : Boolean.FALSE;
-            if (!(idle instanceof Boolean) || !(args.get("notification") instanceof JSONObject)) throw invalid();
+            if (!(idle instanceof Boolean)) throw invalid(method, "allowWhileIdle must be a boolean");
+            if (!(args.get("notification") instanceof JSONObject)) throw invalid(method, "notification must be an object");
             return new Schedule(id, at, expires, "exact".equals(precision) ? Precision.EXACT : Precision.INEXACT,
-                    (Boolean) idle, parseNotification((JSONObject) args.get("notification")));
-        } catch (JSONException failure) { throw invalid(); }
+                    (Boolean) idle, parseNotification((JSONObject) args.get("notification"), method + ".notification"));
+        } catch (JSONException failure) { throw invalid(method, "scheduleId, atEpochMs, expiresAtEpochMs, and notification are required"); }
     }
     /** Also suitable for immediate show; scheduling remains a separate operation. */
     public static Notification parseNotification(String json) throws FactoryException {
         return parseNotification(StrictJson.object(json, MAX_ARGS_BYTES));
     }
     public static Notification parseNotification(JSONObject args) throws FactoryException {
-        bounded(args, MAX_ARGS_BYTES);
-        FactoryConfig.exactKeys(args, "id", "channelId", "title", "body", "priority", "actions");
+        return parseNotification(args, "notifications.show");
+    }
+    private static Notification parseNotification(JSONObject args, String method) throws FactoryException {
+        bounded(args, MAX_ARGS_BYTES, method);
+        exact(args, method, "id", "channelId", "title", "body", "priority", "actions");
         try {
             JSONObject show = new JSONObject();
             for (String key : new String[]{"id", "channelId", "title", "body", "priority"})
                 if (args.has(key)) show.put(key, args.get(key)); // Preserve exact number types.
-            NotificationRequest.Show request = NotificationRequest.parseShow(show);
+            NotificationRequest.Show request = NotificationRequest.parseShow(show, method);
             List<Action> actions = new ArrayList<>(); Set<String> ids = new HashSet<>();
             if (args.has("actions")) {
-                Object raw = args.get("actions"); if (!(raw instanceof JSONArray)) throw invalid();
-                JSONArray list = (JSONArray) raw; if (list.length() > MAX_ACTIONS) throw invalid();
+                Object raw = args.get("actions"); if (!(raw instanceof JSONArray)) throw invalid(method, "actions must be an array of at most " + MAX_ACTIONS + " objects");
+                JSONArray list = (JSONArray) raw; if (list.length() > MAX_ACTIONS) throw invalid(method, "actions must contain at most " + MAX_ACTIONS + " objects");
                 for (int i = 0; i < list.length(); i++) {
-                    Object item = list.get(i); if (!(item instanceof JSONObject)) throw invalid();
+                    Object item = list.get(i); if (!(item instanceof JSONObject)) throw invalid(method, "actions entries must be objects");
                     JSONObject action = (JSONObject) item;
-                    FactoryConfig.exactKeys(action, "id", "title", "data");
-                    String id = identifier(action.get("id")); if (!ids.add(id)) throw invalid();
-                    String title = label(FactoryConfig.string(action, "title"), 120);
+                    String actionPath = method + ".actions[" + i + "]";
+                    exact(action, actionPath, "id", "title", "data");
+                    String id = identifier(action.get("id"), actionPath, "id"); if (!ids.add(id)) throw invalid(actionPath, "id must be unique within actions");
+                    String title = label(string(action.get("title"), actionPath, "title"), 120, actionPath, "title");
                     Object payload = action.has("data") ? action.get("data") : new JSONObject();
-                    if (!(payload instanceof JSONObject)) throw invalid();
-                    JSONObject data = (JSONObject) payload; bounded(data, MAX_DATA_BYTES);
+                    if (!(payload instanceof JSONObject)) throw invalid(actionPath, "data must be an object");
+                    JSONObject data = (JSONObject) payload; bounded(data, MAX_DATA_BYTES, actionPath + ".data");
                     String snapshot;
-                    try { snapshot = canonical(data, 0); } catch (IllegalArgumentException invalid) { throw invalid(); }
+                    try { snapshot = canonical(data, 0); } catch (IllegalArgumentException invalid) { throw invalid(actionPath, "data must contain valid JSON values within the supported depth"); }
                     actions.add(new Action(id, title, snapshot));
                 }
             }
             return new Notification(request, actions);
-        } catch (JSONException failure) { throw invalid(); }
+        } catch (JSONException failure) { throw invalid(method, "notification fields must use their documented types"); }
     }
     /** Status, cancelScheduled and resume operate on one immutable identifier. No cancel-all. */
     public static String parseScheduleId(String json) throws FactoryException {
-        JSONObject args = StrictJson.object(json, 256); FactoryConfig.exactKeys(args, "scheduleId");
-        try { return identifier(args.get("scheduleId")); } catch (JSONException failure) { throw invalid(); }
+        return parseScheduleId(json, "notifications.scheduleId");
+    }
+    public static String parseScheduleId(String json, String method) throws FactoryException {
+        JSONObject args = StrictJson.object(json, 256); exact(args, method, "scheduleId");
+        try { return identifier(args.get("scheduleId"), method, "scheduleId"); }
+        catch (JSONException failure) { throw invalid(method, "scheduleId is required"); }
     }
     public static String parseEventAck(String json) throws FactoryException {
-        JSONObject args = StrictJson.object(json, 256); FactoryConfig.exactKeys(args, "eventId");
+        return parseEventAck(json, "notifications.ackAction");
+    }
+    public static String parseEventAck(String json, String method) throws FactoryException {
+        JSONObject args = StrictJson.object(json, 256); exact(args, method, "eventId");
         try {
             Object value = args.get("eventId");
-            if (!(value instanceof String) || !((String) value).matches("[a-f0-9]{64}")) throw invalid();
+            if (!(value instanceof String) || !((String) value).matches("[a-f0-9]{64}")) throw invalid(method, "eventId must be a 64-character lowercase hexadecimal token");
             return (String) value;
-        } catch (JSONException failure) { throw invalid(); }
+        } catch (JSONException failure) { throw invalid(method, "eventId is required"); }
     }
     public static void parsePollActions(String json) throws FactoryException {
-        FactoryConfig.exactKeys(StrictJson.object(json, 64));
+        parsePollActions(json, "notifications.pollActions");
     }
-    private static long integer(Object value) throws FactoryException {
-        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid();
+    public static void parsePollActions(String json, String method) throws FactoryException {
+        exact(StrictJson.object(json, 64), method);
+    }
+    private static long integer(Object value, String method, String field) throws FactoryException {
+        if (!(value instanceof Integer) && !(value instanceof Long)) throw invalid(method, field + " must be a positive safe integer");
         long number = ((Number) value).longValue();
-        if (number < 1 || number > MAX_SAFE_INTEGER) throw invalid(); return number;
+        if (number < 1 || number > MAX_SAFE_INTEGER) throw invalid(method, field + " must be a positive safe integer"); return number;
     }
-    private static String identifier(Object value) throws FactoryException {
-        if (!(value instanceof String) || !((String) value).matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")) throw invalid();
+    private static String identifier(Object value, String method, String field) throws FactoryException {
+        if (!(value instanceof String) || !((String) value).matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")) throw invalid(method, field + " must be 1 to 64 letters, digits, dots, underscores, or hyphens, starting with a letter or digit");
         return (String) value;
     }
-    private static String label(String value, int max) throws FactoryException {
-        if (value.trim().isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > max) throw invalid();
-        for (int i = 0; i < value.length(); i++) if (Character.isISOControl(value.charAt(i))) throw invalid();
-        try { unicode(value); } catch (IllegalArgumentException failure) { throw invalid(); }
+    private static String label(String value, int max, String method, String field) throws FactoryException {
+        if (value.trim().isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > max) throw invalid(method, field + " must be non-empty and at most " + max + " UTF-8 bytes");
+        for (int i = 0; i < value.length(); i++) if (Character.isISOControl(value.charAt(i))) throw invalid(method, field + " must not contain control characters");
+        try { unicode(value); } catch (IllegalArgumentException failure) { throw invalid(method, field + " must contain valid Unicode"); }
         return value;
     }
-    private static void bounded(JSONObject args, int bytes) throws FactoryException {
-        if (args == null) throw invalid();
-        String encoded = args.toString(); if (encoded == null) throw invalid();
+    private static String string(Object value, String method, String field) throws FactoryException {
+        if (!(value instanceof String)) throw invalid(method, field + " must be a string");
+        return (String) value;
+    }
+    private static void bounded(JSONObject args, int bytes, String method) throws FactoryException {
+        if (args == null) throw invalid(method, "arguments must be an object within the documented byte limit");
+        String encoded = args.toString(); if (encoded == null) throw invalid(method, "arguments must be valid JSON within the documented byte limit");
         // Guard direct JSONObject entry points against permissive JSON and excessive nesting.
         StrictJson.object(encoded, bytes);
+    }
+    private static void exact(JSONObject args, String method, String... keys) throws FactoryException {
+        if (args == null) throw invalid(method, "arguments must be an object with only the documented fields");
+        Set<String> allowed = new HashSet<>(java.util.Arrays.asList(keys));
+        for (Iterator<String> it = args.keys(); it.hasNext();) if (!allowed.contains(it.next()))
+            throw invalid(method, "arguments must contain only the documented fields");
     }
     /** Arrays and null are required for actions; NativeOperationRequest's old canonicalizer lacks them. */
     static String canonical(Object item, int depth) {
@@ -203,5 +230,7 @@ public final class NotificationScheduleRequest {
             return result.toString();
         } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid scheduled notification or own-app action."); }
+    private static FactoryException invalid(String method, String expectation) {
+        return new FactoryException("INVALID_ARGUMENT", method + ": " + expectation + ".");
+    }
 }

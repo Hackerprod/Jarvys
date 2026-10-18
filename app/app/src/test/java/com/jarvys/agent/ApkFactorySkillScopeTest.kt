@@ -509,7 +509,7 @@ class ApkFactorySkillScopeTest {
             "contacts-calendar" to listOf("Returns only {kind,value}", "no broad query/new permission/fallback",
                 "Opening shares fields; recipient can ignore/change/save/sync", "never auto-presses Save", "both UTC midnight,exclusive end"),
             "database" to listOf("rollbackConfirmed:false", "No total disk/RAM guarantee", "no physical durability",
-                "Device/provider/restore/update acceptance remains unverified"),
+                "Device/provider/restore/update acceptance unverified"),
             "presentation" to listOf("preferencesCommitted:true", "Android memory may already differ; readback is no disk proof",
                 "Pause/navigation/close cancel callbacks; saved values may apply next launch", "orientationGuaranteed:false", "font scale"),
             "sensors" to listOf("device-natural", "includesGravity", "16KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),

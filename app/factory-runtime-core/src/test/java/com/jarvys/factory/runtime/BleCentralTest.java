@@ -274,6 +274,8 @@ public final class BleCentralTest {
             String id=UUID.randomUUID().toString();
             for(String json:new String[]{"{\"serviceUuids\":[],\"durationMs\":1,\"durationMs\":2}","{\"serviceUuids\":[],\"durationMs\":\"1\"}","{\"serviceUuids\":[],\"durationMs\":1.0}","{\"serviceUuids\":[],\"durationMs\":1,\"x\":2}","{\"serviceUuids\":[\"180d\"],\"durationMs\":1}"})error("INVALID_REQUEST",()->BleRequest.parse("bluetooth.scan",json));
             for(String b64:new String[]{"A","AB==","AQ","AQ==\n","_w=="})error("INVALID_REQUEST",()->BleRequest.parse("bluetooth.write",new JSONObject().put("connectionId",id).put("attributeId",id).put("valueBase64",b64).put("writeType","response")));
+            try { BleRequest.parse("bluetooth.scan",new JSONObject().put("serviceUuids",new JSONArray().put("private-value")).put("durationMs",0)); throw new AssertionError("Expected INVALID_REQUEST"); }
+            catch (FactoryException failure) { eq("INVALID_REQUEST",failure.code); eq("bluetooth.scan: durationMs must be an integer from 1 through 300000 and serviceUuids must contain at most 16 unique canonical UUIDs.",failure.getMessage()); yes(!failure.getMessage().contains("private-value")); }
         });
         test("parser supports arbitrary canonical UUIDs and no policy on poll or teardown", () -> {
             BleRequest r=BleRequest.parse("bluetooth.scan","{\"serviceUuids\":[\"12345678-1234-5678-1234-567812345678\"],\"durationMs\":300000}");eq(SERVICE,r.serviceUuids.get(0));yes(r.needsPolicy());

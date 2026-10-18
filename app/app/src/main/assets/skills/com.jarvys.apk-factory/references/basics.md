@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v89 / basics
+# Factory guidance factory-guidance-v90 / basics
 
 ## SDK/data
 SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `factory.json` capabilities select all; an explicit subset remains closed (`CAPABILITY_DENIED`). Generated schema1 `factory-app.json` records the effective list. Methods require capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
@@ -17,8 +17,8 @@ SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `facto
 
 Storage keys match [a-zA-Z0-9_.:-]{1,96}; values need valid paired Unicode. Serialize dependent writes. Signed resourceBudgets:{version:1,storage:{totalBytes,entries,valueBytes}} permits partial fields. Defaults:1MiB/256/64KiB; maxima:16MiB/65536/523264 raw-value bytes. Escaped request/result content must still fit 511KiB, full bridge512KiB; whole-map adapter ceiling,not Android disk limit. Lowered quotas preserve reads/deletes/non-growing replacements.
 
-## Authenticated native operations
-Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. Jarvys does not add an operation approval screen.
+## Native operation boundaries
+App-owned effects check packaged capability/page in process. Document/file/photo/audio brokers, share.text/share.file, export.text, clipboard, backups and host handoffs authenticate appId/certificate/source/scope through pinned-host Binder. Android controls permissions, URI grants, the text export picker and share.text chooser; Jarvys adds no approval screen. After host loss, retry when Jarvys is installed and active; never replay an unknown outcome.
 
 Invalid or missing caller/source evidence fails closed; a newer artifact cannot lend identity or scope. Revocation stops future effects, not completed work or open descriptors; receipts do not prove evidence was erased. Cleanup/status report or close owned work; no blind replay.
 
@@ -35,6 +35,6 @@ Declare dataBackup:{"keys":["settings","tasks"]}; dataBackup.keys defaults empty
 
 Canonical plaintext jarvys-preferences-data, formatVersion:1/storageVersion:1, ≤1MiB, ≤32 selected keys, ≤64KiB per value. Expanded live budgets do not expand backup v1; reject incompatibility,no truncation/upgrade. Package/certificate labels are compatibility,not authenticity. Secrets unsupported; strings cannot be reliably screened.
 
-The authenticated installed artifact and pinned host are checked before backup effects. Android destination selection and provider upload/cloud-sync/retention disclosure remain. Import uses locked replacement; no lock during I/O. Commit false/exception is an unknown outcome, with possible changed memory/disk, no rollback or automatic replay.
+The authenticated artifact and pinned host are checked before backup effects. Android destination selection and provider upload/cloud-sync/retention disclosure remain. Import uses locked replacement, not during I/O. Commit false/exception is unknown: memory/disk may have changed; no rollback or automatic replay.
 
 Export providerCommitConfirmed:false, closeStatus:"close_requested" proves no durability. Empty/partial file possible. Five-minute lifetime/310000ms SDK timeout; documents.cancel shares backup cleanup budget with database.cancel, proves no rollback/closure. No storage.cancel. Both UNAVAILABLE in preview before any storage snapshot/handle allocation.

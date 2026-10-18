@@ -78,7 +78,7 @@ final class NativeBleEffects implements AutoCloseable {
             if (!request.needsPolicy()) { immediate(request,reply); request.clear(); armTick(); return; }
             Grant grant = new Grant(request,reply); grants.add(grant);
             try {
-                grant.lease = sessions.authorize(request.method,request.authorizationDetails(),new NativeOperationSessions.Callback() {
+                grant.lease = sessions.authorizeLocal(request.method,request.authorizationDetails(),new NativeOperationSessions.Callback() {
                     public boolean current() { return grant.current(); }
                     public boolean claimUi() { return foreground && grant.current() && reply.claimUi(); }
                     public void releaseUi() { reply.releaseUi(); }
@@ -175,7 +175,7 @@ final class NativeBleEffects implements AutoCloseable {
         try {
             if (!grant.current()) { grant.close(); return; }
             Map<String,Object> value = platform.status(); value.put("permissionRequestStatus","returned"); value.put("requestedPermissions",requested);
-            grant.deliver(value,false); // Rechecks the authenticated host session; status comes from the OS.
+            grant.deliver(value,false); // Rechecks page ownership; permission status comes from Android.
         } catch (Exception failure) { fail(grant,failure); }
     }
     private void releasePermission() {

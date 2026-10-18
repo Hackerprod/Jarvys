@@ -197,7 +197,7 @@ public final class NotificationScheduleLedger implements Store, NotificationActi
     public synchronized void queueUnavailable(String token, String process, long now) throws FactoryException {
         Row row = byAlarmToken(token);
         if (row == null || row.kind!=Kind.SCHEDULED || now < row.request.atEpochMs || (row.state != State.SCHEDULED && row.state != State.PENDING && row.state != State.SCHEDULE_UNKNOWN)) return;
-        change(row, State.QUEUED_SESSION_UNAVAILABLE, "authenticated_host_unavailable", process, "", now);
+        change(row, State.QUEUED_SESSION_UNAVAILABLE, "receiver_work_pending", process, "", now);
     }
     public synchronized void invalidateVisibleActions(String artifact, int notificationId) {
         ContentValues values = new ContentValues(); values.put("enabled", 0);
@@ -254,7 +254,7 @@ public final class NotificationScheduleLedger implements Store, NotificationActi
         Kind kind=Kind.valueOf(c.getString(22));
         State state=readState(c.getString(12));
         if (!state.name().equals(c.getString(12))) {
-            ContentValues migration=new ContentValues(); migration.put("state",state.name()); migration.put("reason","authenticated_host_unavailable");
+            ContentValues migration=new ContentValues(); migration.put("state",state.name()); migration.put("reason","receiver_work_pending");
             helper.getWritableDatabase().update("schedules",migration,"artifact=? AND schedule_id=? AND state=?",
                     new String[]{c.getString(20),kind==Kind.SCHEDULED?NotificationScheduleRequest.parseSchedule(c.getString(10)).scheduleId:"@"+c.getString(11),c.getString(12)});
         }

@@ -16,7 +16,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 
-/** Live session adapter that authenticates the installed source at each native effect. */
+/** Foreground operation lifetime adapter; only host-owned operations acquire a Binder lease. */
 final class NativeOperationSessions implements AutoCloseable {
     interface Callback {
         boolean current();
@@ -30,21 +30,23 @@ final class NativeOperationSessions implements AutoCloseable {
         final NativeOperationRequest request;
         final String nonce;
         final AtomicBoolean ended = new AtomicBoolean();
+        final boolean local;
         volatile NativeOperationAuthorization.Client client;
         volatile boolean externalHandoff, delivered;
         volatile Runnable cancellation;
         final Runnable expiry = () -> fail(this, "TIMEOUT", "Native operation session expired; earlier effects are not undone.");
-        Lease(NativeOperationRequest request, Callback callback) {
-            this.request = request; this.callback = callback;
+        Lease(NativeOperationRequest request, Callback callback) { this(request, callback, false); }
+        Lease(NativeOperationRequest request, Callback callback, boolean local) {
+            this.request = request; this.callback = callback; this.local = local;
             byte[] bytes = new byte[32]; new SecureRandom().nextBytes(bytes);
             StringBuilder value = new StringBuilder();
             for (byte b : bytes) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
             nonce = value.toString();
         }
         @Override public void check() {
-            if (ended.get() || closed || !foreground || !callback.current() || client == null)
+            if (ended.get() || closed || !foreground || !callback.current() || (!local && client == null))
                 throw new SecurityException("Native operation no longer owns the foreground page");
-            client.check();
+            if (!local) client.check();
             if (ended.get() || closed || !foreground || !callback.current()) throw new SecurityException("Native operation session ended");
         }
         void onCancelled(Runnable action) {
@@ -77,6 +79,26 @@ final class NativeOperationSessions implements AutoCloseable {
         catch (RuntimeException busy) { fail(lease, "BUSY", "Native operation session worker is busy."); }
         return lease;
     }
+    /** Authorize an app-owned effect against its packaged capability and current page, without contacting Jarvys. */
+    Lease authorizeLocal(String operation, JSONObject details, Callback callback) throws Exception {
+        if (closed || !foreground || !callback.current())
+            throw new FactoryException("UNAVAILABLE", "Native operations require the active foreground page.");
+        NativeOperationRequest request = NativeOperationRequest.parse(operation, details);
+        requirePackagedCapabilities(request);
+        Lease lease = new Lease(request, callback, true); leases.add(lease); main.postDelayed(lease.expiry, 300_000);
+        if (!main.post(() -> deliver(lease))) fail(lease, "BUSY", "Native operation main-thread dispatcher is unavailable.");
+        return lease;
+    }
+    private void requirePackagedCapabilities(NativeOperationRequest request) throws FactoryException {
+        if (!config.capabilities.contains(request.capability))
+            throw new FactoryException("CAPABILITY_DENIED", "Operation requires the declared " + request.capability + " capability.");
+        if (("secrets.request".equals(request.operation) || "jobs.enqueueHttp".equals(request.operation)) &&
+                !config.capabilities.contains("network"))
+            throw new FactoryException("CAPABILITY_DENIED", "Operation also requires the declared network capability.");
+        if (("network.upload".equals(request.operation) || "network.download".equals(request.operation) || "recording.record".equals(request.operation)) &&
+                !config.capabilities.contains("documents"))
+            throw new FactoryException("CAPABILITY_DENIED", "This operation also requires the declared documents capability.");
+    }
     private void acquire(Lease lease) {
         try {
             if (lease.ended.get() || !lease.callback.current()) throw new SecurityException();
@@ -91,12 +113,12 @@ final class NativeOperationSessions implements AutoCloseable {
                 throw new SecurityException();
             NativeOperationAuthorization.Client client = NativeOperationAuthorization.connect(response.getBinder("lease"), lease.nonce,
                     lease.request.binding(lease.nonce), uid -> uid == hostUid && verifiedUid(hostUid),
-                    () -> fail(lease, "CANCELLED", "The authenticated Factory host session ended; earlier effects are not undone."));
+                    () -> fail(lease, "CANCELLED", "This operation requires Jarvys installed and active; earlier effects are not undone."));
             lease.client = client;
             if (lease.ended.get()) { client.close(); return; }
             if (client.status() != NativeOperationAuthorization.ACTIVE) throw new SecurityException();
             main.post(() -> deliver(lease));
-        } catch (Exception unavailable) { fail(lease, "UNAVAILABLE", "The installed Factory app could not be authenticated for this operation."); }
+        } catch (Exception unavailable) { fail(lease, "UNAVAILABLE", "This operation requires Jarvys installed and active."); }
     }
     private int verifyHost() throws Exception { return NativeOperationHostIdentity.verify(activity, config.documentBroker); }
     private boolean verifiedUid(int uid) { return NativeOperationHostIdentity.verifiedUid(activity, config.documentBroker, uid); }

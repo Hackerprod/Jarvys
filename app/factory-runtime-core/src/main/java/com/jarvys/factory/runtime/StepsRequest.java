@@ -29,11 +29,11 @@ public final class StepsRequest {
             Object raw = args.get("timeoutMs");
             // Require an integer token/type, avoiding rounding a fractional/exponent input into
             // an allowed integer on Android's Double-based JSON implementation.
-            if (!(raw instanceof Integer) && !(raw instanceof Long)) throw invalid();
+            if (!(raw instanceof Integer) && !(raw instanceof Long)) throw invalid("steps.current: timeoutMs must be an integer from 1000 through 120000.");
             long value = ((Number) raw).longValue();
-            if (value < MIN_TIMEOUT_MS || value > MAX_TIMEOUT_MS) throw invalid();
+            if (value < MIN_TIMEOUT_MS || value > MAX_TIMEOUT_MS) throw invalid("steps.current: timeoutMs must be an integer from 1000 through 120000.");
             return new Current((int) value);
-        } catch (JSONException malformed) { throw invalid(); }
+        } catch (JSONException malformed) { throw invalid("steps.current: timeoutMs must be an integer."); }
     }
     public static void parseStatus(String json) throws FactoryException { parseEmpty(StrictJson.object(json, MAX_ARGS_BYTES)); }
     public static void parseStatus(JSONObject args) throws FactoryException { parseEmpty(args); }
@@ -44,10 +44,10 @@ public final class StepsRequest {
     public static void parseEmpty(JSONObject args) throws FactoryException { bounded(args); FactoryConfig.exactKeys(args); }
 
     private static void bounded(JSONObject args) throws FactoryException {
-        if (args == null) throw invalid();
+        if (args == null) throw invalid("steps: arguments must be an object.");
         String encoded = args.toString();
         if (encoded == null || encoded.length() > MAX_ARGS_BYTES || encoded.getBytes(StandardCharsets.UTF_8).length > MAX_ARGS_BYTES)
             throw new FactoryException("TOO_LARGE", "Step-counter arguments exceed the transport limit.");
     }
-    private static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed foreground step-counter arguments."); }
+    private static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT", message); }
 }

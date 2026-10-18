@@ -150,7 +150,7 @@ public class FactoryRuntimeBrowserTest {
     }
     @Test public void sharedUidAndChangedPinnedHostNeverLaunch()throws Exception{
         Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(hostUid(),DocumentBrokerIdentity.PRIMARY,"com.other.app");
-        assertEquals("UNAVAILABLE",open().error());assertNull(screen.launched);
+        assertEquals("SOURCE_UNAVAILABLE",open().error());assertNull(screen.launched);
         Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(hostUid(),DocumentBrokerIdentity.PRIMARY);
         Response pending=open();DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(new byte[]{9,8,7}));idle();
         assertEquals("BROWSER_UNAVAILABLE",pending.error());assertNull(screen.launched);assertNull(work());

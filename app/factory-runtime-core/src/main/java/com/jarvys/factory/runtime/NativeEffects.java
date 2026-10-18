@@ -91,7 +91,7 @@ final class NativeEffects implements AutoCloseable {
             if (notificationSession != null) notificationSession.check();
             if (httpSession != null) httpSession.check();
             if (!ownData) {
-                if (lease == null) throw new SecurityException("Native operation has no live host session.");
+                if (lease == null) throw new SecurityException("Native operation has no live authorization lease.");
                 lease.check();
             }
         }
@@ -171,7 +171,14 @@ final class NativeEffects implements AutoCloseable {
         }
         void fail(Exception error) {
             if (error instanceof FactoryException) fail(((FactoryException) error).code, error.getMessage());
-            else if (error instanceof SecurityException) fail("PERMISSION_DENIED", "Native operation permission ended; earlier effects are not undone.");
+            else if (error instanceof SecurityException) {
+                if (lease != null && lease.ended.get()) fail("CANCELLED", lease.local
+                        ? "Native operation page or foreground session ended; earlier effects are not undone."
+                        : "This operation requires Jarvys installed and active; earlier effects are not undone.");
+                else fail("PERMISSION_DENIED", lease != null && !lease.local
+                        ? "This operation requires Jarvys installed and active; earlier effects are not undone."
+                        : "Native operation permission ended; earlier effects are not undone.");
+            }
             else fail("NATIVE_ERROR", "Native operation could not be completed.");
         }
         void worker(Executor executor, Work work) {
@@ -241,8 +248,8 @@ final class NativeEffects implements AutoCloseable {
             case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
                 SecretEffects.Prepared prepared = SecretEffects.prepare(request.method, request.args);
                 try {
-                    // Own the native put bytes before caller authentication can time out or lose its page.
-                    // The same immutable parse and single lease bind storage and native HTTP injection.
+                    // Own the native put bytes before page-bound authorization can expire or lose its page.
+                    // The same immutable parse and operation lifetime bind storage and native HTTP injection.
                     authorize(request, reply, prepared.authorizationDetails(), prepared::close, job -> {
                         SecretEffects.Handle handle = secrets().execute(prepared, job.lease,
                                 () -> foreground && !closed && job.current(), new SecretEffects.Callback() {
@@ -276,7 +283,6 @@ final class NativeEffects implements AutoCloseable {
             case STEPS_REQUEST_PERMISSION:
                 authorize(request, reply, new JSONObject(), this::requestStepsPermission); return;
             case SENSORS_SUBSCRIBE:
-                if (config.documentBroker == null) throw new FactoryException("UNAVAILABLE", "Sensor subscriptions require a generated app with an authenticated host; legacy finite capture remains available.");
                 SensorSubscriptionRequest.Subscribe subscribed = SensorSubscriptionRequest.parseSubscribe(request.args);
                 authorize(request, reply, subscribed.authorizationDetails(), job -> {
                     AtomicBoolean settingUp = new AtomicBoolean(true), terminated = new AtomicBoolean();
@@ -430,7 +436,7 @@ final class NativeEffects implements AutoCloseable {
                 authorize(request, reply, scheduled.authorizationDetails(), job -> notificationWorker(job,
                         value -> value.complete(notificationEffects().schedule(scheduled, null, value.lease, value.notificationSession)))); return;
             case NOTIFICATIONS_RESUME_SCHEDULED:
-                String resumedId = NotificationScheduleRequest.parseScheduleId(request.args.toString());
+                String resumedId = NotificationScheduleRequest.parseScheduleId(request.args.toString(), request.method);
                 ownNotificationWork(request, reply, job -> {
                     NotificationScheduleEngine.Row original = notificationEffects().storedSchedule(resumedId, job.notificationSession);
                     if (original == null) { job.complete(new JSONObject().put("status", "not_found").put("scheduleId", resumedId)); return; }
@@ -440,16 +446,16 @@ final class NativeEffects implements AutoCloseable {
                             // Resume discloses and reauthorizes the complete immutable original schedule.
                             // A separate resume allow must never bypass notifications.schedule denial.
                             job.ownData = false;
-                            authorize(job, "notifications.schedule", original.request.authorizationDetails(), activeJob -> notificationWorker(activeJob,
+                            authorizeLocal(job, "notifications.schedule", original.request.authorizationDetails(), activeJob -> notificationWorker(activeJob,
                                     value -> value.complete(notificationEffects().schedule(original.request, original, value.lease, value.notificationSession))));
                         } catch (Exception failure) { job.fail(failure); }
                     });
                 }); return;
             case NOTIFICATIONS_SCHEDULE_STATUS:
-                String statusId = NotificationScheduleRequest.parseScheduleId(request.args.toString());
+                String statusId = NotificationScheduleRequest.parseScheduleId(request.args.toString(), request.method);
                 ownNotificationWork(request, reply, job -> job.complete(notificationEffects().scheduleStatus(statusId, job.notificationSession))); return;
             case NOTIFICATIONS_CANCEL_SCHEDULED:
-                String cancelledId = NotificationScheduleRequest.parseScheduleId(request.args.toString());
+                String cancelledId = NotificationScheduleRequest.parseScheduleId(request.args.toString(), request.method);
                 ownNotificationWork(request, reply, job -> job.complete(notificationEffects().cancelScheduled(cancelledId, job.notificationSession))); return;
             case NOTIFICATIONS_FORGET_SCHEDULED:
                 NotificationScheduleControl.Forget forgotten = NotificationScheduleControl.parseForget(request.args.toString());
@@ -461,13 +467,13 @@ final class NativeEffects implements AutoCloseable {
                 NotificationScheduleControl.Generation generation = NotificationScheduleControl.parseForgetGeneration(request.args.toString());
                 ownNotificationWork(request, reply, job -> job.complete(notificationEffects().forgetGeneration(generation, job.notificationSession))); return;
             case NOTIFICATIONS_POLL_ACTIONS:
-                NotificationScheduleRequest.parsePollActions(request.args.toString());
+                NotificationScheduleRequest.parsePollActions(request.args.toString(), request.method);
                 ownNotificationWork(request, reply, job -> job.complete(notificationEffects().pollActions(job.notificationSession))); return;
             case NOTIFICATIONS_ACK_ACTION:
-                String eventId = NotificationScheduleRequest.parseEventAck(request.args.toString());
+                String eventId = NotificationScheduleRequest.parseEventAck(request.args.toString(), request.method);
                 ownNotificationWork(request, reply, job -> job.complete(notificationEffects().acknowledgeAction(eventId, job.notificationSession))); return;
             case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS:
-                NotificationScheduleRequest.parsePollActions(request.args.toString());
+                NotificationScheduleRequest.parsePollActions(request.args.toString(), request.method);
                 authorize(request, reply, new JSONObject(), job -> notificationWorker(job, value -> {
                     NotificationEffects.ExactAccess access = notificationEffects().exactAccess(value.notificationSession);
                     main.post(() -> requestExactAlarmAccess(value, access));
@@ -511,7 +517,7 @@ final class NativeEffects implements AutoCloseable {
         jobs.put(job.key, job);
         job.httpTimeout = HTTP_WATCH.schedule(() -> job.fail("TIMEOUT", "Finite job page session ended; a committed HTTP effect may already have occurred."),
                 HttpJobEngine.Session.MAX_LIFETIME_MS, TimeUnit.MILLISECONDS);
-        // Host session IPC uses io. Never wait for that IPC while occupying the same executor.
+        // Finite HTTP work remains fenced to the page and its bounded local job session.
         job.worker(networkIo, current -> {
             JSONObject result = NativeHttpJobs.execute(activity, config, request.method, request.args,
                     (row, source, mode, active) -> acquireHttpJobAuthority(current, row, source, mode, active), session);
@@ -523,7 +529,7 @@ final class NativeEffects implements AutoCloseable {
             current.complete(result);
         });
     }
-    /** Bounded cancellable worker-to-main rendezvous; the live source session owns its authenticated host lease. */
+    /** Bounded cancellable worker-to-main rendezvous; the generated app's live page owns the local lease. */
     private HttpJobEngine.Decision acquireHttpJobAuthority(Job job, HttpJobEngine.Row row, HttpJobEngine.Source source,
                                                           HttpJobEngine.Mode mode, HttpJobEngine.Session session) throws FactoryException {
         if (mode == HttpJobEngine.Mode.BACKGROUND_NO_UI || !source.owner.equals(row.source.owner))
@@ -537,7 +543,7 @@ final class NativeEffects implements AutoCloseable {
             if (!awaiting.get() || !session.active() || !job.current()) { ready.countDown(); return; }
             try {
                 job.checkAuthority(); job.ownData = false;
-                authorize(job, "jobs.enqueueHttp", details, approved -> {
+                authorizeLocal(job, "jobs.enqueueHttp", details, approved -> {
                     NativeOperationSessions.Lease lease = approved.lease;
                     if (!awaiting.get() || !session.active() || !approved.current()) {
                         lease.close(); ready.countDown();
@@ -550,7 +556,7 @@ final class NativeEffects implements AutoCloseable {
         try {
             while (!ready.await(50, TimeUnit.MILLISECONDS)) {
                 session.check();
-                // Host session acquisition may temporarily pause the application. No HTTP runs here.
+                // Page-local authorization may be delayed; no HTTP runs before the lease arrives.
                 if (!job.current()) throw new FactoryException("CANCELLED", "Foreground job session ended.");
             }
             session.check();
@@ -585,7 +591,7 @@ final class NativeEffects implements AutoCloseable {
                     prepared.requiresSession() ? current::checkAuthority : null);
             current.complete(result);
         });
-        if (prepared.requiresSession()) authorize(job, prepared.operation(), prepared.authorizationDetails(), execute);
+        if (prepared.requiresSession()) authorizeLocal(job, prepared.operation(), prepared.authorizationDetails(), execute);
         else execute.run(job);
     }
     private NfcRequest.Limits nfcLimits() {
@@ -635,7 +641,7 @@ final class NativeEffects implements AutoCloseable {
         if (recording == null) recording = new RecordingEffects(new NativeAudioRecording(activity, config.appId), documents, config.resources);
         return recording;
     }
-    /** Invoked only from a current authenticated Job; constructing the adapter still does not open the vault. */
+    /** Invoked only from a current page-authorized Job; constructing the adapter still does not open the vault. */
     private SecretEffects secrets() {
         if (secrets == null) secrets = new SecretEffects(activity, new NativeSecrets.Limits(
                 config.resources.secrets.entries, config.resources.secrets.valueBytes, config.resources.secrets.vaultBytes), network);
@@ -657,14 +663,18 @@ final class NativeEffects implements AutoCloseable {
         authorize(request, reply, details, null, work);
     }
     private void authorize(BridgeProtocol.Request request, Reply reply, JSONObject details, Runnable initialCancellation, Work work) throws Exception {
+        // NativeEffects handles app-owned effects; host-mediated handoffs are dispatched by FactoryRuntime.
         Job job = new Job(request.id, request.method, reply);
         job.cancellation = initialCancellation;
         jobs.put(job.key, job);
-        authorize(job, request.method, details, work);
+        authorizeLocal(job, request.method, details, work);
     }
-    private void authorize(Job job, String operation, JSONObject details, Work work) throws Exception {
+    private void authorizeLocal(Job job, String operation, JSONObject details, Work work) throws Exception {
+        authorizeWithPageLease(job, operation, details, work);
+    }
+    private void authorizeWithPageLease(Job job, String operation, JSONObject details, Work work) throws Exception {
         try {
-            job.lease = sessions.authorize(operation, details, new NativeOperationSessions.Callback() {
+            NativeOperationSessions.Callback callback = new NativeOperationSessions.Callback() {
                 public boolean current() { return job.current(); }
                 public boolean claimUi() { return job.current() && job.reply.claimUi(); }
                 public void releaseUi() { job.reply.releaseUi(); }
@@ -674,7 +684,8 @@ final class NativeEffects implements AutoCloseable {
                     try { lease.check(); work.run(job); } catch (Exception failure) { job.fail(failure); }
                 }
                 public void failed(String code, String message) { job.fail(code, message); }
-            });
+            };
+            job.lease = sessions.authorizeLocal(operation, details, callback);
             // An executor may reject authorization synchronously, before its returned lease is assigned.
             if (job.done.get()) job.lease.close();
         } catch (Exception unavailable) { job.fail(unavailable); }

@@ -52,6 +52,9 @@ public class SpeechRequestTest {
         for (double volume : new double[]{-0.01, 1.01})
             assertThrows(FactoryException.class, () -> SpeechRequest.parseSpeak(new JSONObject().put("text", "x").put("volume", volume)));
         assertThrows(FactoryException.class, () -> SpeechRequest.parseSpeak("{\"text\":\"x\",\"rate\":1e1000}"));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> SpeechRequest.parseSpeak(new JSONObject().put("text", "x").put("rate", true)));
+        assertEquals("speech.speak: rate must be a number.", field.getMessage());
     }
 
     @Test public void unicodeIsPreservedAndMalformedSurrogatesAndControlsRejected() throws Exception {

@@ -48,6 +48,8 @@ public final class SecretRequestTest {
         invalid(() -> SecretRequest.parseCapture(capture().put("label", JSONObject.NULL)));
         invalid(() -> SecretRequest.parseCapture(capture().put("label", "private-fixture\n")));
         invalid(() -> SecretRequest.parseCapture(capture().put("label", repeat('x', 81))));
+        FactoryException field = assertThrows(FactoryException.class, () -> SecretRequest.parsePut(put().put("value", 17)));
+        assertEquals("secrets: value must be a string.", field.getMessage());
     }
     @Test public void duplicateAndLenientJsonAreRejected() throws Exception {
         invalid(() -> SecretRequest.parsePut("{\"value\":\"a\",\"value\":\"b\"}"));

@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun catalogHashesBoundsAndImmutableMapAreVerified() {
         val bundle = load()
-        assertEquals("factory-guidance-v89", bundle.version)
+        assertEquals("factory-guidance-v90", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar", "database",
             "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services", "native-input", "radios", "durable-native"), FactoryGuidanceBundle.NAMES)
         assertEquals(14, bundle.resources.size)
@@ -42,11 +42,12 @@ class FactoryGuidanceBundleTest {
         for (method in CapabilityCatalog.METHODS.keys) assertTrue("Undocumented method: $method", all.contains(method))
     }
 
-    @Test fun factoryActionsKeepCallerAuthenticationAndSystemOwnedInteractions() {
-        contract("basics", "Authenticated native operations", "installed app caller is authenticated", "Android runtime permission prompts",
-            "user selects documents, contacts, photos or recipients",
-            "backup protocol v2", "legacy v1", "authenticated installed artifact", "no blind replay", "performed:false")
-        for (text in listOf("appId+certificate", "64 recent artifacts", "retain exact signed scope", "Nonce/request/source-bound",
+    @Test fun factoryEffectsUseLocalCapabilityChecksAndKeepHostAuthenticationForBrokerEffects() {
+        contract("basics", "Native operation boundaries", "App-owned effects check packaged capability/page in process",
+            "Document/file/photo/audio brokers, share.text/share.file, export.text, clipboard, backups and host handoffs authenticate appId/certificate/source/scope through pinned-host Binder",
+            "text export picker and share.text chooser", "Android controls permissions, URI grants",
+            "backup protocol v2", "legacy v1", "authenticated artifact and pinned host", "no blind replay", "performed:false")
+        for (text in listOf("appId+certificate", "64 recent artifacts", "retain exact signed scope", "nonce/request/source-bound Binder leases",
             "Android runtime permissions", "system selectors", "Damaged/missing evidence fails closed", "precompiled DEX",
             "no arbitrary per-app native compiler", "final packaged acceptance")) assertTrue("Missing core boundary: $text", core().contains(text, true))
     }
@@ -55,11 +56,11 @@ class FactoryGuidanceBundleTest {
         contract("basics", "storage.listPage({afterKey?,limit?})", "nextAfterKey", "snapshotAcrossPages:false", "TOO_LARGE",
             "523264", "65536", "storage.backupExport", "storage.backupImport", "dataBackup.keys defaults empty",
             "storage+documents", "jarvys-preferences-data", "storageVersion:1", "insertOnly", "replaceSelectedKeys",
-            "even if equal", "unselected", "not a secret detector", "unknown outcome", "no rollback", "310000", "UNAVAILABLE")
+            "even if equal", "unselected", "not a secret detector", "unknown outcome", "no rollback", "310000", "UNAVAILABLE",
+            "protocol v2", "providerCommitConfirmed:false", "partial file", "no blind replay")
         contract("database", "database.migrate", "database.transact", "database.select", "nextAfterId", "261120", "2046",
-            "dataBackup.tables defaults empty", "database.backupExport", "database.backupImport", "replaceSelectedTables",
-            "insertOnly", "No migration", "not authentication", "plaintext", "protocol v2", "legacy v1",
-            "providerCommitConfirmed:false", "partial file", "never automatically retry", "UNAVAILABLE")
+            "`dataBackup.tables` defaults empty", "database.backupExport", "database.backupImport", "replaceSelectedTables",
+            "insertOnly", "No migration", "not authentication", "plaintext", "UNAVAILABLE")
     }
 
     @Test fun sensorAndBiometricSemanticsRemainExplicit() {

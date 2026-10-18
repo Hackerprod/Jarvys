@@ -143,7 +143,7 @@ public class TemplateApkTest {
         return new java.util.ArrayList<>(cases);
     }
 
-    @Test public void originalManifestDependencyAxesRetainSixCurrentArtifactShapes() throws Exception {
+    @Test public void originalManifestDependencyAxesRetainEightCurrentArtifactShapes() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
@@ -157,15 +157,22 @@ public class TemplateApkTest {
         ManifestAudit.Document sensorsDecoded=ManifestAudit.read(unzip(sensors).get("AndroidManifest.xml"));
         byte[] sensorsBiometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","sensors")),icon,assets);
         ManifestAudit.Document sensorsBiometricDecoded=ManifestAudit.read(unzip(sensorsBiometric).get("AndroidManifest.xml"));
+        byte[] sensorsDocuments=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("documents","sensors")),icon,assets);
+        ManifestAudit.Document sensorsDocumentsDecoded=ManifestAudit.read(unzip(sensorsDocuments).get("AndroidManifest.xml"));
+        byte[] sensorsDocumentsBiometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents","sensors")),icon,assets);
+        ManifestAudit.Document sensorsDocumentsBiometricDecoded=ManifestAudit.read(unzip(sensorsDocumentsBiometric).get("AndroidManifest.xml"));
         assertEquals(33, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         int checked=0;
         for(List<String> selected:legacyManifestSelections()) {
             List<String> requested=new ArrayList<>(selected);
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
             boolean hasSensors=requested.contains("sensors");
-            boolean hasQueries=hasSensors || requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard") || requested.contains("share") || requested.contains("export");
+            boolean hasQueries=CapabilityCatalog.requiresHostBroker(requested);
             boolean hasBiometrics=requested.contains("biometrics");
-            (hasSensors ? (hasBiometrics ? sensorsBiometricDecoded : sensorsDecoded) : hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
+            (hasSensors ? (hasQueries ? (hasBiometrics ? sensorsDocumentsBiometricDecoded : sensorsDocumentsDecoded)
+                    : hasBiometrics ? sensorsBiometricDecoded : sensorsDecoded)
+                    : hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded)
+                    : (hasQueries ? documentDecoded : decoded)).verify(plan);
             List<String> permissions=new ArrayList<>();if(hasSensors)permissions.add(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION);if(hasBiometrics)permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
             assertEquals(permissions,plan.permissions);
             assertEquals(hasQueries ? Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest") : Collections.emptyList(),plan.queries);
@@ -185,8 +192,10 @@ public class TemplateApkTest {
         org.json.JSONArray profiles=new org.json.JSONArray();
         FactoryApkEvidence.write("profile-sensors-unsigned.apk",sensors);
         FactoryApkEvidence.write("profile-sensors-biometrics-unsigned.apk",sensorsBiometric);
-        String[] names={"zero","queries","biometrics","biometrics-queries","sensors","sensors-biometrics"};
-        byte[][] artifacts={apk,docs,biometric,combined,sensors,sensorsBiometric};
+        FactoryApkEvidence.write("profile-sensors-queries-unsigned.apk",sensorsDocuments);
+        FactoryApkEvidence.write("profile-sensors-biometrics-queries-unsigned.apk",sensorsDocumentsBiometric);
+        String[] names={"zero","queries","biometrics","biometrics-queries","sensors","sensors-biometrics","sensors-queries","sensors-biometrics-queries"};
+        byte[][] artifacts={apk,docs,biometric,combined,sensors,sensorsBiometric,sensorsDocuments,sensorsDocumentsBiometric};
         for(int index=0;index<names.length;index++) {
             TemplateApk.ManifestInfo evidence=TemplateApk.inspect(artifacts[index]);
             profiles.put(new org.json.JSONObject().put("name",names[index]).put("file","profile-"+names[index]+"-unsigned.apk")
@@ -252,7 +261,7 @@ public class TemplateApkTest {
                         .put("sha256", com.jarvys.agent.coding.ProjectScope.sha256(generated)));
             }
         }
-        assertEquals(18, shapes.size());
+        assertEquals(32, shapes.size());
         FactoryApkEvidence.write("native-manifest-profiles.json", utf8(new org.json.JSONObject().put("schemaVersion", 1)
                 .put("testFixtureOnly", true).put("surfaceBasisSelections", 32).put("profiles", profiles).toString()));
     }
@@ -309,13 +318,16 @@ public class TemplateApkTest {
             byte[] generated=TemplateApk.build(template,selected,icon,assets);
             TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected),inferred=TemplateApk.inspect(generated);
             boolean sensors=capabilities.contains("sensors");
-            boolean broker=capabilities.contains("documents") || capabilities.contains("browser") || sensors;
+            boolean broker=capabilities.contains("documents") || capabilities.contains("browser");
             assertEquals(selected.capabilities,verified.plan.capabilities);
             assertEquals(sensors?Arrays.asList(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION,CapabilityCatalog.BIOMETRIC_PERMISSION)
                     :Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION),verified.permissions);
             assertEquals(verified.permissions,inferred.permissions);
-            assertEquals(sensors?Arrays.asList("biometrics","documents","sensors")
-                    :broker?Arrays.asList("biometrics","documents"):Collections.singletonList("biometrics"),inferred.plan.capabilities);
+            java.util.Set<String> inferredCapabilities=new java.util.LinkedHashSet<>();
+            inferredCapabilities.add("biometrics");
+            if(sensors) inferredCapabilities.add("sensors");
+            if(broker) inferredCapabilities.add("documents");
+            assertEquals(inferredCapabilities,new java.util.LinkedHashSet<>(inferred.plan.capabilities));
             assertEquals(broker?Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"):Collections.emptyList(),verified.plan.queries);
             assertEquals(verified.plan.queries,inferred.plan.queries);
             assertTrue(verified.plan.queryActions.isEmpty());
@@ -338,6 +350,26 @@ public class TemplateApkTest {
                     :Collections.emptyList(),TemplateApk.inspect(absent).permissions);
             rejects(()->TemplateApk.verify(absent,selected));
             rejects(()->TemplateApk.verifyAgainstPlan(absent,verified.plan));
+        }
+    }
+
+    @Test public void approvedIntentQueriesNeedNoHostPackageAndKeepAClosedActionList() throws Exception {
+        for(String capability:new String[]{"speech","voiceRecognition"}) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList(capability));
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected);
+            TemplateApk.ManifestInfo inspected=TemplateApk.inspect(generated);
+            String action="speech".equals(capability)?CapabilityCatalog.TTS_SERVICE_ACTION:CapabilityCatalog.RECOGNIZE_SPEECH_ACTION;
+            assertTrue(verified.plan.queries.isEmpty());
+            assertEquals(Collections.singletonList(action),verified.plan.queryActions);
+            assertTrue(inspected.plan.queries.isEmpty());
+            assertEquals(Collections.singletonList(capability),inspected.plan.capabilities);
+
+            Map<String,byte[]> files=unzip(generated);
+            files.put("AndroidManifest.xml",renamePoolString(files.get("AndroidManifest.xml"),action,"android.intent.action.SEND"));
+            byte[] unapproved=alignedZip(files);
+            rejects(()->TemplateApk.verify(unapproved,selected));
+            rejects(()->TemplateApk.inspect(unapproved));
         }
     }
 

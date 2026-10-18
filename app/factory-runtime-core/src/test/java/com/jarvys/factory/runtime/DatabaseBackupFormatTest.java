@@ -107,6 +107,28 @@ public class DatabaseBackupFormatTest {
         invalid(()->DatabaseBackupFormat.parse(new byte[]{(byte)0xc3,(byte)0x28}));
         invalid(()->DatabaseBackupFormat.parse(new byte[0])); invalid(()->DatabaseBackupFormat.parse(null));
     }
+    @Test public void malformedArchiveErrorNamesItsFieldWithoutEchoingInput() throws Exception {
+        byte[] supplied = "{\"private-value\":\"do-not-echo\"}".getBytes(StandardCharsets.UTF_8);
+        try { DatabaseBackupFormat.parse(supplied); fail("Expected INVALID_ARGUMENT"); }
+        catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertTrue(failure.getMessage().contains("database.backupImport.archive"));
+            assertFalse(failure.getMessage().contains("do-not-echo"));
+        }
+    }
+    @Test public void importedColumnDefinitionErrorsNameTheBackupImportPath() throws Exception {
+        JSONObject input=envelope(archive());
+        input.getJSONObject("tables").getJSONObject("notes").getJSONObject("columns")
+                .getJSONObject("title").put("default", "private-value");
+        try {
+            DatabaseBackupFormat.parse(DatabaseBackupFormat.canonical(input));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals("database.backupImport.archive.tables.notes.columns.<column> may contain only type, nullable.", failure.getMessage());
+            assertFalse(failure.getMessage().contains("private-value"));
+        }
+    }
     @Test public void exactIntegerLexemesAndFiniteCanonicalRealsNeverSilentlyRound() throws Exception {
         String valid=text(archive(row("one")).bytes());
         for(String number:new String[]{"9007199254740992","9007199254740993","9223372036854775808","-9223372036854775809","9.007199254740991E15","9007199254740991.0"})

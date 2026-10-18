@@ -38,6 +38,9 @@ public class LocationRequestTest {
         assertThrows(FactoryException.class, () -> LocationRequest.parseCurrent("{\"maxAccuracyMeters\":100000.1}"));
         assertThrows(FactoryException.class, () -> LocationRequest.parseCurrent("{\"maxAccuracyMeters\":1e1000}"));
         assertThrows(FactoryException.class, () -> LocationRequest.parseCurrent("{\"timeoutMs\":1e1000}"));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> LocationRequest.parseCurrent(new JSONObject().put("timeoutMs", "soon")));
+        assertEquals("location.current: timeoutMs must be a number.", field.getMessage());
     }
 
     @Test public void noStringBooleanCoercionOrUnknownProvider() throws Exception {
@@ -69,6 +72,9 @@ public class LocationRequestTest {
         }
         for (Object bad : new Object[]{"fine", "coarse", "Precise", "", true, 1, JSONObject.NULL})
             assertThrows(FactoryException.class, () -> LocationRequest.parsePermission(new JSONObject().put("precision", bad)));
+        FactoryException field = assertThrows(FactoryException.class,
+                () -> LocationRequest.parsePermission(new JSONObject().put("precision", "fine")));
+        assertEquals("location.requestPermission: precision must be approximate or precise.", field.getMessage());
         assertThrows(FactoryException.class, () -> LocationRequest.parsePermission("{\"background\":true}"));
         assertThrows(FactoryException.class, () -> LocationRequest.parsePermission("{\"precision\":\"precise\",\"precision\":\"approximate\"}"));
     }

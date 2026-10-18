@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v89 / sensors
+# Factory guidance factory-guidance-v90 / sensors
 
 ## Finite capture
 Declared sensors, installed foreground page; preview UNAVAILABLE, including list/cancel. Fixed kinds: light (lux/scalar), accelerometer (m/s2/device-natural), gyroscope (rad/s/device-natural). No vendor/ID enumeration. Discovery is no output guarantee. TYPE_GYROSCOPE angular velocity, no orientation/fusion/uncalibrated fallback. Natural x right/y top/z out, right-hand rotation, no display remap. Accelerometer includesGravity:true; others false.
@@ -17,7 +17,7 @@ Finite capture≤10Hz across captures/kinds,possibly zero light samples. One cap
 
 Metadata includes unit/frame/includesGravity, requestedSamplingPeriodUs, bufferCapacity,foregroundOnly:true,rateGuaranteed:false,mode:"installed",simulated:false. Fixed ring max50 samples, oldest overwritten with droppedSamples reported. One subscription per helper, process max8 listeners. Signed resources.sensors: captureDurationMs default5000/max300000; captureSamples50/max50; minimumIntervalUs100000/range0..1000000; bufferedSamples50/max50, captureSamples≤bufferedSamples. Native emitted events are not arbitrarily capped to10Hz for subscriptions. HIGH_SAMPLING_RATE_SENSORS is selectively declared; actual Android permission/rate/privacy behavior still applies. Requested rate never proves observed rate.
 
-Exact-page/foreground/live-lease bound; pause/navigation/revocation drops undelivered samples. Failed unregister retains admission; no hardware-stop guarantee/recreation bypass. Avoid logging/health inference.
+Exact-page/foreground operation lifetime; pause/navigation/revocation drops undelivered samples. No host lease is needed. Failed unregister retains admission; no hardware-stop guarantee/recreation bypass. Avoid logging/health inference.
 
 ## Step counter
 Separate steps capability. steps.status({}) discovers actual step-counter/permission/foreground/cleanup state without a retained count. steps.requestPermission({}) uses ACTIVITY_RECOGNITION on API29+; API24–28 needs no dangerous grant. No body-sensor/background grant or accelerometer fallback.

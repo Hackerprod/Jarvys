@@ -87,7 +87,7 @@ public final class HttpJobEngine {
         if(store==null||authority==null||platform==null||transport==null||clock==null||source==null||process==null)throw new IllegalArgumentException();
         this.store=store;this.authority=authority;this.platform=platform;this.transport=transport;this.clock=clock;this.source=source;this.process=process;
     }
-    /** Admission is durable and inert. The authenticated host session is acquired only when HTTP can run. */
+    /** Admission is durable and inert. Page-local or bounded OS execution authority is acquired only before HTTP. */
     public Row enqueue(HttpJobRequest request,Session session) throws FactoryException {
         session.check();
         Row existing=store.get(source.owner,request.jobId);

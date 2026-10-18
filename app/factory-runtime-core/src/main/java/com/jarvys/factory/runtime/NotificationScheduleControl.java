@@ -11,8 +11,10 @@ public final class NotificationScheduleControl {
         JSONObject value=StrictJson.object(json,384);
         FactoryConfig.exactKeys(value,"scheduleId","acknowledgeDeliveryUnknown");
         Object id=value.opt("scheduleId"), ack=value.opt("acknowledgeDeliveryUnknown");
-        if (!(id instanceof String) || !((String)id).matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}") || (value.has("acknowledgeDeliveryUnknown") && !(ack instanceof Boolean)))
-            throw new FactoryException("INVALID_ARGUMENT","Invalid scheduled notification retention control.");
+        if (!(id instanceof String) || !((String)id).matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}"))
+            throw invalid("notifications.forgetScheduled", "scheduleId must be a valid 1–64 character identifier");
+        if (value.has("acknowledgeDeliveryUnknown") && !(ack instanceof Boolean))
+            throw invalid("notifications.forgetScheduled", "acknowledgeDeliveryUnknown must be a boolean");
         return new Forget((String)id,Boolean.TRUE.equals(ack));
     }
     public static final class Generation {
@@ -21,14 +23,19 @@ public final class NotificationScheduleControl {
     }
     public static String parseGenerationStatus(String json)throws FactoryException {
         JSONObject value=StrictJson.object(json,256);FactoryConfig.exactKeys(value,"generationId");
-        Object id=value.opt("generationId");if(!(id instanceof String)||!NotificationActionEvents.validToken((String)id))throw invalid();return (String)id;
+        Object id=value.opt("generationId");if(!(id instanceof String)||!NotificationActionEvents.validToken((String)id))
+            throw invalid("notifications.generationStatus", "generationId must be a 64-character lowercase hexadecimal token");
+        return (String)id;
     }
     public static Generation parseForgetGeneration(String json)throws FactoryException {
         JSONObject value=StrictJson.object(json,384);FactoryConfig.exactKeys(value,"generationId","acknowledgeDeliveryUnknown");
         Object id=value.opt("generationId"),ack=value.opt("acknowledgeDeliveryUnknown");
-        if(!(id instanceof String)||!NotificationActionEvents.validToken((String)id)||(value.has("acknowledgeDeliveryUnknown")&&!(ack instanceof Boolean)))throw invalid();
+        if(!(id instanceof String)||!NotificationActionEvents.validToken((String)id))
+            throw invalid("notifications.forgetGeneration", "generationId must be a 64-character lowercase hexadecimal token");
+        if(value.has("acknowledgeDeliveryUnknown")&&!(ack instanceof Boolean))
+            throw invalid("notifications.forgetGeneration", "acknowledgeDeliveryUnknown must be a boolean");
         return new Generation((String)id,Boolean.TRUE.equals(ack));
     }
-    private static FactoryException invalid(){return new FactoryException("INVALID_ARGUMENT","Invalid notification generation control.");}
+    private static FactoryException invalid(String method,String expectation){return new FactoryException("INVALID_ARGUMENT",method+": "+expectation+".");}
     private NotificationScheduleControl() { }
 }

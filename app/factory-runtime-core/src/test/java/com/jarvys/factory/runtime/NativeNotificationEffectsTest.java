@@ -17,7 +17,7 @@ import static com.jarvys.factory.runtime.NativeOperationSessionsTest.idle;
 import static com.jarvys.factory.runtime.NotificationScheduleEngine.*;
 import static org.junit.Assert.*;
 
-/** Real foreground lease/Job wiring with a synthetic adapter; no alarms, notifications or settings UI. */
+/** Real foreground page-lease/Job wiring with a synthetic adapter; no real alarms or settings UI. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
@@ -29,11 +29,9 @@ public class NativeNotificationEffectsTest {
     private int sequence;
 
     @Before public void setup() throws Exception {
-        fixture = new NativeOperationSessionsTest.Fixture();
+        fixture = new NativeOperationSessionsTest.Fixture("[\"notifications\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"notifications\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256))
+                .put("appId", fixture.config.appId)
                 .put("notifications", new JSONObject().put("scheduling", true).put("exactAlarms", true)).toString(), fixture.config.appId);
         effects = new NativeEffects(fixture.screen, config, fixture.sessions, fixture.io, true);
         adapter = new Adapter(); ReflectionHelpers.setField(effects, "notificationEffects", adapter);
@@ -51,7 +49,7 @@ public class NativeNotificationEffectsTest {
         fixture.pump();
         assertEquals(1, adapter.schedules); assertEquals(bound,
                 NativeOperationRequest.parse("notifications.schedule", adapter.scheduled.authorizationDetails()).canonicalJson());
-        assertEquals(1, fixture.provider.issued.size()); assertEquals(0, result.claims); assertEquals(1, result.successes);
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(0, result.claims); assertEquals(1, result.successes);
         assertTrue(lease.ended.get()); assertFalse(adapter.lastSession.active()); assertTrue(jobs().isEmpty());
     }
 
@@ -61,7 +59,7 @@ public class NativeNotificationEffectsTest {
         assertEquals("notifications.show", lease.request.operation);
         assertEquals("details", lease.request.details().getJSONArray("actions").getJSONObject(0).getString("id"));
         fixture.pump();
-        assertEquals(1, adapter.shows); assertEquals(1, fixture.provider.issued.size());
+        assertEquals(1, adapter.shows); assertTrue(fixture.provider.issued.isEmpty());
         assertEquals(1, adapter.shown.actions.size()); assertEquals(1, result.successes); assertEquals(0, result.claims);
     }
 
@@ -75,14 +73,14 @@ public class NativeNotificationEffectsTest {
         assertEquals(adapter.original.request.fingerprint(), NotificationScheduleRequest.parseSchedule(lease.request.details()).fingerprint());
         fixture.pump();
         assertEquals(1, adapter.reads); assertEquals(1, adapter.schedules); assertSame(adapter.original, adapter.resumed);
-        assertEquals(1, fixture.provider.issued.size()); assertEquals(1, result.successes);
+        assertTrue(fixture.provider.issued.isEmpty()); assertEquals(1, result.successes);
     }
 
-    @Test public void resumeRequiresAuthenticatedHostSession() throws Exception {
+    @Test public void resumeUsesTheStoredScheduleEvenWhenJarvysIsUnavailable() throws Exception {
         adapter.original = original(); fixture.provider.unavailable = true;
         Result result = perform("notifications.resumeScheduled", new JSONObject().put("scheduleId", adapter.original.scheduleId));
         fixture.pump();
-        assertEquals(1, adapter.reads); assertEquals(0, adapter.schedules); assertEquals("UNAVAILABLE", result.error);
+        assertEquals(1, adapter.reads); assertEquals(1, adapter.schedules); assertEquals(1, result.successes);
         assertTrue(fixture.provider.issued.isEmpty()); assertEquals(0, result.claims); assertTrue(jobs().isEmpty());
     }
 
@@ -105,7 +103,7 @@ public class NativeNotificationEffectsTest {
 
     @Test public void pauseInvalidatesApprovedSessionBeforeTheQueuedEffect() throws Exception {
         Result result = perform("notifications.schedule", schedule());
-        fixture.io.runNext(); idle(); // Approval posts the effect worker but has not run it yet.
+        idle(); // Page-local authorization posts the effect worker but has not run it yet.
         Session session = ReflectionHelpers.getField(job(), "notificationSession"); assertNotNull(session);
         effects.onPause(); fixture.sessions.onPause(); fixture.pump();
         assertFalse(session.active()); assertEquals(0, adapter.schedules); assertEquals("CANCELLED", result.error);
@@ -114,7 +112,7 @@ public class NativeNotificationEffectsTest {
 
     @Test public void closeAfterEffectSuppressesQueuedReceiptWithoutClaimingRollback() throws Exception {
         Result result = perform("notifications.schedule", schedule());
-        fixture.io.runNext(); idle(); fixture.io.runNext(); // Synthetic durable acceptance, reply still queued.
+        idle(); fixture.io.runNext(); // Synthetic durable acceptance, reply still queued.
         assertEquals(1, adapter.schedules); assertEquals(0, result.successes);
         effects.close(); idle();
         assertEquals("CANCELLED", result.error); assertEquals(0, result.successes); assertFalse(adapter.lastSession.active());
@@ -129,7 +127,7 @@ public class NativeNotificationEffectsTest {
         fixture.sessions.onResume(); effects.onResume(); fixture.pump();
         assertEquals("granted", result.value.getString("exactAlarmAccess")); assertEquals(1, adapter.settingsReads);
         assertEquals(1, result.releases); assertEquals(1, result.successes); assertFalse(effects.hasPendingActivity());
-        assertEquals(1, fixture.provider.issued.size());
+        assertTrue(fixture.provider.issued.isEmpty());
     }
 
     @Test public void revokedSettingsRetainsUiTombstoneUntilReturnAndNeverSucceedsLate() throws Exception {
@@ -171,7 +169,7 @@ public class NativeNotificationEffectsTest {
     }
     private Row original() throws Exception {
         return new Row(source(token('3')), NotificationScheduleRequest.parseSchedule(schedule()), token('4'),
-                NotificationScheduleMachine.State.QUEUED_SESSION_UNAVAILABLE, 1, "authenticated_host_unavailable", "", "", 1, 1);
+                NotificationScheduleMachine.State.QUEUED_SESSION_UNAVAILABLE, 1, "local_authority_unavailable", "", "", 1, 1);
     }
     private Source source(String apk) { return new Source(config.appId, token('1'), apk, token('2'), 1, true, true, true, new Limits(8, 8, 32, 131072)); }
     private static String token(char value) { return new String(new char[64]).replace('\0', value); }

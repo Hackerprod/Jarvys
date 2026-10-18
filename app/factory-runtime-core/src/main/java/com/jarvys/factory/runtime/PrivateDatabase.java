@@ -70,7 +70,7 @@ public final class PrivateDatabase implements AutoCloseable {
             database.beginTransaction();
             Object result;
             try {
-                JSONObject schema=readSchema(signal); int version=database.getVersion();
+                JSONObject schema=readSchema(signal,method); int version=database.getVersion();
                 if("database.info".equals(method)) result=info(schema,version);
                 else if("database.migrate".equals(method)) {
                     if(args.getInt("fromVersion")!=version) throw versionConflict();
@@ -107,11 +107,11 @@ public final class PrivateDatabase implements AutoCloseable {
     /** All archive rows are read under one SQLite snapshot, with no keyset/page query boundary. */
     public synchronized DatabaseBackupFormat.Archive backupExport(String appId,String certificate,int version,List<String> tables,
                                                                   long ticket,BooleanSupplier current) throws Exception {
-        if(tables==null) throw DatabaseRequest.invalid();
+        if(tables==null) throw DatabaseRequest.invalid("database.backupExport.tables must be a non-empty selected table list");
         final List<String> selected=DatabaseBackupRequest.tables(new JSONArray(tables));
-        if(version<1 || version>1000) throw DatabaseRequest.invalid();
+        if(version<1 || version>1000) throw DatabaseRequest.invalid("database.backupExport.version must be an integer from 1 through 1000");
         if(context!=null && !context.getPackageName().equals(appId)) throw backupIdentity();
-        return backupTransaction(ticket,current,(schema,signal)-> {
+        return backupTransaction(ticket,current,"database.backupExport",(schema,signal)-> {
             if(database.getVersion()!=version) throw versionConflict();
             JSONObject selectedSchema=backupSchema(schema,selected), data=new JSONObject();
             long encodedRows=0;
@@ -132,7 +132,7 @@ public final class PrivateDatabase implements AutoCloseable {
     }
     public synchronized Baseline backupBaseline(DatabaseBackupFormat.Archive archive,long ticket,BooleanSupplier current) throws Exception {
         backupIdentity(archive);
-        return backupTransaction(ticket,current,(schema,signal)-> {
+        return backupTransaction(ticket,current,"database.backupImport",(schema,signal)-> {
             backupCompatible(archive,schema);
             return backupSnapshot(archive,schema,signal,ticket,current);
         });
@@ -141,7 +141,7 @@ public final class PrivateDatabase implements AutoCloseable {
                                                   long ticket,BooleanSupplier current) throws Exception {
         backupIdentity(archive); DatabaseBackupRequest.mode(mode);
         if(baseline==null || !archive.sha256.equals(baseline.archiveSha256)) throw backupConflict();
-        return backupTransaction(ticket,current,(schema,signal)-> {
+        return backupTransaction(ticket,current,"database.backupImport",(schema,signal)-> {
             backupCompatible(archive,schema);
             Baseline actual=backupSnapshot(archive,schema,signal,ticket,current);
             if(!actual.preimageSha256.equals(baseline.preimageSha256) || !actual.schemaSha256.equals(baseline.schemaSha256) ||
@@ -188,13 +188,13 @@ public final class PrivateDatabase implements AutoCloseable {
                     .put("counts",imported).put("committed",true);
         });
     }
-    private <T> T backupTransaction(long ticket,BooleanSupplier current,BackupWork<T> work) throws Exception {
+    private <T> T backupTransaction(long ticket,BooleanSupplier current,String method,BackupWork<T> work) throws Exception {
         check(ticket,current); CancellationSignal signal=new CancellationSignal(); active=signal;
         try {
             check(ticket,current); open(); check(ticket,current); database.beginTransaction();
             T result; Exception primaryFailure=null;
             try {
-                result=work.run(readSchema(signal),signal);
+                result=work.run(readSchema(signal,method),signal);
                 check(ticket,current); // Last authority check immediately before the irreversible commit boundary.
                 database.setTransactionSuccessful();
             } catch(Exception failure) {
@@ -223,7 +223,7 @@ public final class PrivateDatabase implements AutoCloseable {
         } finally { active=null; }
     }
     private void backupIdentity(DatabaseBackupFormat.Archive archive) throws FactoryException {
-        if(archive==null) throw DatabaseRequest.invalid();
+        if(archive==null) throw DatabaseRequest.invalid("database.backupImport.archive must be a validated frozen v1 database archive");
         if(context!=null && !context.getPackageName().equals(archive.appId)) throw backupIdentity();
     }
     private static FactoryException backupIdentity() {
@@ -306,13 +306,16 @@ public final class PrivateDatabase implements AutoCloseable {
             database=opened;
         } catch(Exception failure) { opened.close(); throw failure; }
     }
-    private JSONObject readSchema(CancellationSignal signal) throws Exception {
+    private JSONObject readSchema(CancellationSignal signal,String method) throws Exception {
         try(Cursor cursor=database.rawQuery("SELECT schema_json FROM factory_schema WHERE id=1",null,signal)) {
             if(!cursor.moveToFirst()) throw corrupt();
             JSONObject schema=StrictJson.object(cursor.getString(0),ResourceBudgets.DATABASE_SCHEMA_BYTES,8,
                     1+DatabaseRequest.HARD_MAX_TABLES*(1+3*DatabaseRequest.HARD_MAX_COLUMNS));
             if(schema.length()>DatabaseRequest.HARD_MAX_TABLES) throw corrupt();
-            for(String table:keys(schema)) { DatabaseRequest.identifier(table); DatabaseRequest.columns(schema.getJSONObject(table)); }
+            for(String table:keys(schema)) {
+                DatabaseRequest.identifier(table);
+                DatabaseRequest.columns(schema.getJSONObject(table),method,"schema."+table+".columns");
+            }
             int version=database.getVersion();
             if(version<0 || version>1000 || ((version==0)!=(schema.length()==0))) throw corrupt();
             verifySchema(schema,signal);
@@ -359,7 +362,7 @@ public final class PrivateDatabase implements AutoCloseable {
         for(int i=0;i<steps.length();i++) {
             check(ticket,current); JSONObject step=steps.getJSONObject(i); String table=step.getString("table");
             if("createTable".equals(step.getString("kind"))) {
-                if(schema.has(table)) throw DatabaseRequest.invalid();
+                if(schema.has(table)) throw DatabaseRequest.invalid("database.migrate.steps["+i+"].table must name a table that does not already exist");
                 if(schema.length()>=budget.tables) throw quota();
                 JSONObject columns=step.getJSONObject("columns");
                 if(columns.length()>budget.columnsPerTable) throw quota();
@@ -368,7 +371,7 @@ public final class PrivateDatabase implements AutoCloseable {
                 database.execSQL(sql.append(')').toString()); schema.put(table,new JSONObject(columns.toString()));
             } else {
                 JSONObject columns=columns(schema,table); String column=step.getString("column");
-                if(columns.has(column)) throw DatabaseRequest.invalid();
+                if(columns.has(column)) throw DatabaseRequest.invalid("database.migrate.steps["+i+"].column must name a column that does not already exist");
                 if(columns.length()>=budget.columnsPerTable) throw quota();
                 JSONObject definition=step.getJSONObject("definition");
                 database.execSQL("ALTER TABLE "+table(table)+" ADD COLUMN "+column(column)+" "+sqlType(definition));
@@ -405,11 +408,12 @@ public final class PrivateDatabase implements AutoCloseable {
                 JSONObject previous="update".equals(kind)?readRow(table,columns,id,signal):null;
                 JSONObject values=operation.getJSONObject("values"); ContentValues content=new ContentValues();
                 for(String name:keys(values)) {
-                    if(!columns.has(name)) throw DatabaseRequest.invalid();
-                    Object value=values.get(name); DatabaseRequest.typed(value,columns.getJSONObject(name)); put(content,column(name),value);
+                    if(!columns.has(name)) throw DatabaseRequest.invalid("database.transact.operations["+i+"].values keys must name columns declared for this table");
+                    Object value=values.get(name); DatabaseRequest.typed(value,columns.getJSONObject(name),"database.transact.operations["+i+"].values.<column>"); put(content,column(name),value);
                 }
                 if("insert".equals(kind)) {
-                    for(String name:keys(columns)) if(!values.has(name) && !columns.getJSONObject(name).getBoolean("nullable")) throw DatabaseRequest.invalid();
+                    for(String name:keys(columns)) if(!values.has(name) && !columns.getJSONObject(name).getBoolean("nullable"))
+                        throw DatabaseRequest.invalid("database.transact.operations["+i+"].values must include every non-nullable column for insert");
                     content.put("id",id); database.insertOrThrow(table(table),null,content); changed=1;
                 } else {
                     changed=database.update(table(table),content,"id=?",new String[]{id});
@@ -432,8 +436,8 @@ public final class PrivateDatabase implements AutoCloseable {
             if("id".equals(name)) {
                 sql.append(" AND id=?"); binds.add(DatabaseRequest.id((String)value)); continue;
             }
-            if(!columns.has(name)) throw DatabaseRequest.invalid();
-            DatabaseRequest.typed(value,columns.getJSONObject(name));
+            if(!columns.has(name)) throw DatabaseRequest.invalid("database.select.where keys must name id or declared columns");
+            DatabaseRequest.typed(value,columns.getJSONObject(name),"database.select.where.<column>");
             if(value==JSONObject.NULL) sql.append(" AND ").append(column(name)).append(" IS NULL");
             else { sql.append(" AND ").append(column(name)).append("=?"); binds.add(value instanceof Boolean?((Boolean)value?"1":"0"):value.toString()); }
         }
@@ -541,7 +545,7 @@ public final class PrivateDatabase implements AutoCloseable {
                 case "boolean": long flag=cursor.getLong(index); if(flag!=0 && flag!=1) throw corrupt(); value=flag==1; break;
                 default: value=cursor.getString(index);
             }
-            DatabaseRequest.typed(value,definition); result.put(name,value); index++;
+            DatabaseRequest.typed(value,definition,"database.select.rows.<column>"); result.put(name,value); index++;
         }
         return result;
     }

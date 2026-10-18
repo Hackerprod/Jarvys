@@ -165,6 +165,9 @@ public final class NfcRequest {
         return result;
     }
     private static int digit(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
-    static FactoryException invalid() { return new FactoryException("INVALID_ARGUMENT", "Invalid typed NFC NDEF request."); }
+    static FactoryException invalid() {
+        return new FactoryException("INVALID_ARGUMENT",
+                "nfc: read accepts optional integer timeoutMs; write requires records as NDEF objects with integer tnf and lowercase even-length typeHex, idHex, and payloadHex strings plus optional boolean allowFormat; clear accepts no fields.");
+    }
     static FactoryException tooLarge() { return new FactoryException("TOO_LARGE", "NDEF data exceeds the signed NFC budget."); }
 }

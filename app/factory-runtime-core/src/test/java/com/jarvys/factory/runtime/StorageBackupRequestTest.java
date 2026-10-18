@@ -42,4 +42,15 @@ public class StorageBackupRequestTest {
         denied("storage.backupExport",export().put("filename",true)); denied("storage.backupImport",importing().put("handle",123));
         denied("storage.backupExport",export().put("filename",repeat("a",4097)));
     }
+    @Test public void typedFailuresNameTheBackupFieldWithoutEchoingValues() throws Exception {
+        FactoryException keys = assertThrows(FactoryException.class, () -> StorageBackupRequest.validate(
+                "storage.backupExport", export().put("keys", new JSONArray().put("private/key-value"))));
+        assertEquals("storage.backupExport.keys entries must match the supported key-name grammar.", keys.getMessage());
+        assertFalse(keys.getMessage().contains("private/key-value"));
+
+        FactoryException mode = assertThrows(FactoryException.class, () -> StorageBackupRequest.validate(
+                "storage.backupImport", importing().put("mode", "private-mode-value")));
+        assertEquals("storage.backupImport.mode must be insertOnly or replaceSelectedKeys.", mode.getMessage());
+        assertFalse(mode.getMessage().contains("private-mode-value"));
+    }
 }
