@@ -26,7 +26,7 @@ File snapshots retain the existing 256 MiB ceiling, bounded HTML preview behavio
 
 ## Deliberate boundaries of this slice
 
-- No automatic background result delivery, push queue or inference triggered merely by opening a workspace. Central can inspect retained results using read.
+- A terminal worker result creates a durable reference-only wake for Central; the service queues a system-origin turn and Central can inspect the retained result using `workspaces` read. Opening a workspace alone still does not trigger inference, and raw worker output is never copied into the wake.
 - No migration of legacy conversations or task/proactive channels.
 - No universal resumability for legacy profiles without suitable checkpoints.
 - No new server, scheduler, private-memory mount for workers or cross-workspace memory index.

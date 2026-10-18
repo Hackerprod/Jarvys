@@ -375,12 +375,48 @@ public final class LocalRunStore {
     }
 
     /** Receipt existence proves local delivery only; no worker text, role, or approval is copied. */
-    public synchronized WorkspaceResultReference appendWorkspaceResultNoticeIfAbsent(
+    public WorkspaceResultReference appendWorkspaceResultNoticeIfAbsent(
             WorkspaceResultReference reference, Runnable beforeWrite) {
         requireResultReference(reference, beforeWrite);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeSync(
                 reference, beforeWrite::run), "append workspace result notice");
+    }
+
+    public WorkspaceResultReference appendWorkspaceResultNoticeAndWake(
+            WorkspaceResultReference reference, Runnable beforeWrite) {
+        requireResultReference(reference, beforeWrite);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeAndWakeSync(
+                reference, beforeWrite::run), "append workspace result notice and wake");
+    }
+
+    public synchronized boolean ensureWorkspaceResultWakePending(String referenceId) {
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.ensureWorkspaceResultWakePendingSync(referenceId),
+                "ensure workspace result wake");
+    }
+
+    public synchronized boolean claimWorkspaceResultWake(String referenceId) {
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.claimWorkspaceResultWakeSync(referenceId),
+                "claim workspace result wake");
+    }
+
+    public synchronized boolean acknowledgeWorkspaceResultWake(String referenceId) {
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.acknowledgeWorkspaceResultWakeSync(referenceId),
+                "acknowledge workspace result wake");
+    }
+
+    public synchronized boolean isWorkspaceResultWakePending(String referenceId) {
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.isWorkspaceResultWakePendingSync(referenceId),
+                "read workspace result wake state");
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultNotice(String centralSessionId, String referenceId) {
@@ -1560,6 +1596,11 @@ public final class LocalRunStore {
     /** Persists one checkpoint and acknowledges its inputs in the same Room transaction. */
     synchronized void appendModelTranscriptCheckpoint(String sessionId, List<JSONObject> rows,
             List<String> incorporatedMessageIds) {
+        appendModelTranscriptCheckpoint(sessionId, rows, incorporatedMessageIds, Collections.emptyList());
+    }
+
+    synchronized void appendModelTranscriptCheckpoint(String sessionId, List<JSONObject> rows,
+            List<String> incorporatedMessageIds, List<String> workspaceResultWakeReferenceIds) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         List<com.jarvys.agent.chatdb.ModelTranscriptWrite> writes = new ArrayList<>();
         for (JSONObject row : rows) writes.add(modelTranscriptWrite(sessionId, row));
@@ -1568,7 +1609,10 @@ public final class LocalRunStore {
         String inputState = messageIds.isEmpty() ? null : "incorporated";
         requireChatDbSuccess(chatDatabaseBridge.appendModelTurnSync(
                 new com.jarvys.agent.chatdb.ConversationModelTurnInput(
-                        sessionId, writes, messageIds, inputState)), "persist model checkpoint and acknowledge inputs");
+                        sessionId, writes, messageIds, inputState,
+                        workspaceResultWakeReferenceIds == null
+                                ? Collections.emptyList() : new ArrayList<>(workspaceResultWakeReferenceIds))),
+                "persist model checkpoint, inputs, and workspace result wakes");
     }
 
     private static com.jarvys.agent.chatdb.ModelTranscriptWrite modelTranscriptWrite(

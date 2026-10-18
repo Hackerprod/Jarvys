@@ -28,6 +28,103 @@ class MainAgentInteractionTest {
         StopController.getInstance().stopRun()
     }
 
+    @Test fun workspaceWakeWaitsBehindActiveCentralRunAndDuplicateIntentRunsOnce() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(com.jarvys.agent.workspaces.WorkspaceRegistry.DATABASE_NAME)
+        val store = LocalRunStore(context)
+        val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val userId = chatTestStore.onDatabaseWorker {
+            store.appendConversationMessage(session, "user", "Run already in progress")
+        }
+        val service = startManagedService(context)
+        val userEntered = CountDownLatch(1)
+        val releaseUser = CountDownLatch(1)
+        val wakeEntered = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val wakeHistory = AtomicReference<List<ConversationTurn>>()
+        val referenceId = AtomicReference<String>()
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, history, _, _, progress ->
+            when (calls.incrementAndGet()) {
+                1 -> {
+                    userEntered.countDown()
+                    while (releaseUser.count > 0) {
+                        try { releaseUser.await() } catch (_: InterruptedException) { }
+                    }
+                    progress.onInitialUserMessageIncorporated()
+                    CoreAgentLoop.Result("central-user-run", "Finished the active request", 1, "PARTIAL")
+                }
+                2 -> {
+                    assertEquals("", goal)
+                    wakeHistory.set(history)
+                    wakeEntered.countDown()
+                    store.appendModelTranscriptCheckpoint(session, emptyList(), emptyList(), listOf(referenceId.get()))
+                    CoreAgentLoop.Result("workspace-wake-run", "The reported result was inspected", 1, "PARTIAL")
+                }
+                else -> throw AssertionError("A duplicate workspace result started another turn")
+            }
+        }
+        AgentRunUiState.resetSession(session)
+        val serviceIntent = AgentForegroundService.storedChatMessageIntent(context, session, userId)
+        service.onStartCommand(serviceIntent, 0, 1)
+        var registry: com.jarvys.agent.workspaces.WorkspaceRegistry? = null
+        try {
+            assertTrue("Central's existing run takes the lane", userEntered.await(5, TimeUnit.SECONDS))
+            registry = com.jarvys.agent.workspaces.WorkspaceRegistry(context)
+            val scope = registry.createWorkspace("wake-test", "Wake test")
+            val prepared = registry.prepareAssignment(scope.workspaceId, "assignment", "request", "Synthetic request",
+                "coding", "Synthetic mission", emptyList(), null, com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
+            val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "test-process")
+            val bound = registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, "wake-bot")
+            val evidence = com.jarvys.agent.crew.CrewResultEvidence.create(scope.executionSessionId,
+                bound.missionId, "wake-bot", java.util.UUID.randomUUID().toString(), "FAILED",
+                "unverified failure details", System.currentTimeMillis())
+            chatTestStore.onDatabaseWorker { store.appendCrewResultEvidence(evidence, Runnable {}) }
+            WorkspaceResultDelivery(context, store) { _, _ -> }
+                .reconcile(scope.workspaceId, CancellationToken.uncancellable())
+            val id = store.listWorkspaceResultNotices(session, 10, null).single().referenceId
+            referenceId.set(id)
+            assertTrue(store.isWorkspaceResultWakePending(id))
+
+            chatTestStore.onDatabaseWorker { AgentForegroundService.startWorkspaceResultWake(context, id) }
+            deliverStartedServices(context)
+            chatTestStore.onDatabaseWorker { AgentForegroundService.startWorkspaceResultWake(context, id) }
+            deliverStartedServices(context)
+            assertEquals("The active run is not overwritten and the queued turn has not started", 1, calls.get())
+            assertEquals(1L, wakeEntered.count)
+
+            releaseUser.countDown()
+            assertTrue("The queued result wake runs after Central is free", awaitServiceCallback(wakeEntered, 10))
+            assertTrue(awaitRunFinished(service, context))
+            assertEquals(2, calls.get())
+            val event = wakeHistory.get().single { it.kind == ConversationTurn.Kind.SYSTEM_EVENT }
+            assertEquals("system", event.role)
+            assertEquals(id, event.systemEventReferenceId)
+            assertTrue(event.content.contains("reported_state=FAILED"))
+            assertFalse(event.content.contains("unverified failure details"))
+            assertFalse(store.isWorkspaceResultWakePending(id))
+
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
+            assertEquals(1, messages.count { it.optString("role") == "user" })
+            assertEquals(2, messages.count { it.optString("role") == "assistant" })
+            assertEquals("Run already in progress", chatTestStore.onDatabaseWorker {
+                store.readFirstUserMessage(session)
+            })
+            assertEquals(1, AgentRunUiState.snapshotForSession(session).events.count { it.kind == "user" })
+
+            chatTestStore.onDatabaseWorker { AgentForegroundService.startWorkspaceResultWake(context, id) }
+            deliverStartedServices(context)
+            assertTrue(awaitRunFinished(service, context))
+            assertEquals("An acknowledged result is a no-op on another intent/reconciliation", 2, calls.get())
+        } finally {
+            releaseUser.countDown()
+            AgentForegroundService.stopRun(session)
+            try { service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS) } catch (_: Exception) { }
+            registry?.close()
+            stopManagedService(context)
+        }
+    }
+
     @Test fun oldGenerationCannotCompleteOrMutateNewOne() {
         AgentRunUiState.beginRun("identity", "first")
         AgentRunUiState.bindGeneration("identity", 10)

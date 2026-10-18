@@ -24,13 +24,16 @@ public final class ConversationTurn {
   public final List<ModelReply.ProviderOutputItem> providerOutputItems;
   /** Safe structural code for a model request that failed before producing a reply. */
   public final String modelErrorCode;
+  /** Reference carried by a durable system-origin event; empty for all other turns. */
+  public final String systemEventReferenceId;
 
   public enum Kind {
     MESSAGE,
     COMPACTION_SUMMARY,
     TOOL_CALLS,
     TOOL_RESULT,
-    MODEL_ERROR
+    MODEL_ERROR,
+    SYSTEM_EVENT
   }
 
   public static final class IncomingMetadata {
@@ -130,6 +133,7 @@ public final class ConversationTurn {
     this.toolCalls = Collections.emptyList();
     this.providerOutputItems = Collections.emptyList();
     this.modelErrorCode = "";
+    this.systemEventReferenceId = "";
     this.toolCallId = "";
     this.toolName = "";
     this.originalMessageIndex = originalMessageIndex;
@@ -184,12 +188,29 @@ public final class ConversationTurn {
       int summarizedMessageCount,
       List<ModelReply.ProviderOutputItem> providerOutputItems,
       String modelErrorCode) {
+    this(kind, role, content, calls, toolCallId, toolName, originalMessageIndex,
+        summarizedMessageCount, providerOutputItems, modelErrorCode, "");
+  }
+
+  private ConversationTurn(
+      Kind kind,
+      String role,
+      String content,
+      List<ModelReply.Call> calls,
+      String toolCallId,
+      String toolName,
+      int originalMessageIndex,
+      int summarizedMessageCount,
+      List<ModelReply.ProviderOutputItem> providerOutputItems,
+      String modelErrorCode,
+      String systemEventReferenceId) {
     this.kind = kind;
     this.role = role;
     this.content = content == null ? "" : content;
     this.toolCalls = immutable(calls);
     this.providerOutputItems = immutable(providerOutputItems);
     this.modelErrorCode = modelErrorCode == null ? "" : modelErrorCode;
+    this.systemEventReferenceId = systemEventReferenceId == null ? "" : systemEventReferenceId;
     this.toolCallId = toolCallId == null ? "" : toolCallId;
     this.toolName = toolName == null ? "" : toolName;
     this.originalMessageIndex = originalMessageIndex;
@@ -209,6 +230,7 @@ public final class ConversationTurn {
     this.toolCalls = raw.toolCalls;
     this.providerOutputItems = raw.providerOutputItems;
     this.modelErrorCode = raw.modelErrorCode;
+    this.systemEventReferenceId = raw.systemEventReferenceId;
     this.toolCallId = raw.toolCallId;
     this.toolName = raw.toolName;
     this.originalMessageIndex = raw.originalMessageIndex;
@@ -245,6 +267,15 @@ public final class ConversationTurn {
   public static ConversationTurn modelError(String errorCode) {
     return new ConversationTurn(Kind.MODEL_ERROR, "assistant", "", Collections.emptyList(), "", "",
         -1, 0, Collections.emptyList(), errorCode);
+  }
+
+  /** A durable system-origin event. It is never represented as an owner message. */
+  public static ConversationTurn systemEvent(String referenceId, String text) {
+    if (referenceId == null || referenceId.trim().isEmpty() || text == null || text.trim().isEmpty()) {
+      throw new IllegalArgumentException("System event reference and content are required");
+    }
+    return new ConversationTurn(Kind.SYSTEM_EVENT, "system", text, Collections.emptyList(), "", "", -1, 0,
+        Collections.emptyList(), "", referenceId);
   }
 
   public static ConversationTurn assistantReply(

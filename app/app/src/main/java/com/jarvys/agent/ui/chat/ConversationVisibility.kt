@@ -13,6 +13,8 @@ internal object ConversationVisibility {
     )
 
     fun visible(event: AgentRunUiEvent): Boolean {
+        // The strict journal row is durable model/recovery evidence, not a chat card for its owner.
+        if (event.kind == "workspace_result") return false
         if (event.kind == "memory" && event.stage == "SEED") return false
         if (event.kind == "progress" && event.stage in internalStages) return false
         // A model preamble accompanying tool calls is not the final user-facing answer.

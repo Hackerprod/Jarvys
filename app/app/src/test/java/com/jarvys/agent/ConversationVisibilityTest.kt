@@ -57,7 +57,7 @@ class ConversationVisibilityTest {
             AgentRunUiEvent.activityEvent(9L, activity("write_file", "tool_result")),
             AgentRunUiEvent.toolEvent(10L, "tool_result", "workspaces", "legacy unknown identity", null, null, 1L),
         )
-        assertEquals(events, ConversationVisibility.project(events))
+        assertEquals(events.filterNot { it.kind == "workspace_result" }, ConversationVisibility.project(events))
         for (stage in listOf("tool_error", "tool_interrupted", "tool_not_started")) {
             assertTrue(ConversationVisibility.visible(AgentRunUiEvent.activityEvent(11L, activity("workspaces", stage))))
         }

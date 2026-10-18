@@ -153,15 +153,16 @@ class ChatDatabaseBridge private constructor(context: Context) {
                 val database = JarvysChatDatabaseProvider.getInstance(applicationContext)
                 val conversations = ConversationRepository(database)
                 val transcript = ModelTranscriptRepository(database)
+                val strictJournals = StrictJournalRepository(database)
                 Repositories(
                     database,
                     conversations,
                     transcript,
                     MemoryTimelineRepository(database),
                     ConversationArtifactsRepository(database),
-                    StrictJournalRepository(database),
+                    strictJournals,
                     ConversationReader(database),
-                    ConversationModelTurnWriter(database, conversations, transcript),
+                    ConversationModelTurnWriter(database, conversations, transcript, strictJournals),
                     PersonalAgentRepository(database),
                 ).also { repositories = it }
             } catch (failure: Exception) {
@@ -755,6 +756,30 @@ class ChatDatabaseBridge private constructor(context: Context) {
         beforeWrite: BeforeChatWrite? = null,
     ): ChatDbResult<WorkspaceResultReference> = execute {
         it.strictJournals.appendWorkspaceResultNotice(reference) { beforeWrite?.check() }
+    }
+
+    @JvmOverloads
+    fun appendWorkspaceResultNoticeAndWakeSync(
+        reference: WorkspaceResultReference,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<WorkspaceResultReference> = execute {
+        it.strictJournals.appendWorkspaceResultNoticeAndWake(reference) { beforeWrite?.check() }
+    }
+
+    fun ensureWorkspaceResultWakePendingSync(referenceId: String): ChatDbResult<Boolean> = execute {
+        it.strictJournals.ensureWorkspaceResultWakePending(referenceId)
+    }
+
+    fun claimWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
+        it.strictJournals.claimWorkspaceResultWake(referenceId)
+    }
+
+    fun acknowledgeWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
+        it.strictJournals.acknowledgeWorkspaceResultWake(referenceId)
+    }
+
+    fun isWorkspaceResultWakePendingSync(referenceId: String): ChatDbResult<Boolean> = execute {
+        it.strictJournals.isWorkspaceResultWakePending(referenceId)
     }
 
     fun readWorkspaceResultReferenceSync(

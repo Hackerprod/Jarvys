@@ -20,6 +20,7 @@ import com.jarvys.agent.chatdb.MessageWindow
 import com.jarvys.agent.chatdb.ModelTranscriptEntry
 import com.jarvys.agent.chatdb.ModelTranscriptRepository
 import com.jarvys.agent.chatdb.ModelTranscriptSnapshot
+import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.chatdb.ReflectionPayloadSnapshot
 import com.jarvys.agent.chatdb.StrictJournalRepository
 import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
@@ -96,6 +97,17 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 emptyList(),
             )
         }
+        val wakeEvents = if (WorkspaceIdentity.isCentral(conversationId)) {
+            (strictJournals.listPendingWorkspaceResultWakes(conversationId) as? ChatDbResult.Success)
+                ?.value.orEmpty().map { wake ->
+                val reference = wake.reference
+                ConversationTurn.systemEvent(reference.referenceId,
+                    "Workspace result registered: workspace_id=${reference.workspaceId}; " +
+                        "assignment_id=${reference.assignmentId}; reported_state=${reference.reportedStatus}; " +
+                        "result_reference_id=${reference.referenceId}"
+                )
+            }
+        } else emptyList()
         val context = ArrayList<ConversationTurn>()
         if (compaction != null && compaction.summary.isNotEmpty()) {
             context += ConversationTurn.compactionSummary(compaction.summary, compaction.summarized_messages.toInt())
@@ -121,6 +133,10 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                     )
                 }
             }
+        // The wake marker's ledger sequence belongs to a different ordering domain from message
+        // and model-transcript positions. Pending system events are current input, so append them
+        // after the ordinary transcript instead of sorting their sequence values together.
+        context.addAll(wakeEvents)
         context
     }
 

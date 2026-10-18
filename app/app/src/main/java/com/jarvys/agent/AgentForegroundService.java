@@ -38,6 +38,7 @@ public final class AgentForegroundService extends Service {
   public static final String ACTION_START_STOP_TEST = "com.jarvys.agent.START_STOP_TEST";
   public static final String ACTION_MANUAL_DEVICE_TEST = "com.jarvys.agent.MANUAL_DEVICE_TEST";
   public static final String ACTION_REAL_AGENT = "com.jarvys.agent.REAL_AGENT";
+  public static final String ACTION_WORKSPACE_RESULT_WAKE = "com.jarvys.agent.WORKSPACE_RESULT_WAKE";
   public static final String ACTION_COMPACT_CONVERSATION = "com.jarvys.agent.COMPACT_CONVERSATION";
   public static final String ACTION_REFLECT_MEMORY = "com.jarvys.agent.REFLECT_MEMORY";
   public static final String ACTION_RECOVER_PENDING_INPUTS = "com.jarvys.agent.RECOVER_PENDING_INPUTS";
@@ -48,6 +49,7 @@ public final class AgentForegroundService extends Service {
   private static final int NOTIFICATION_ID = 31001;
   private static final Map<String, Object> INTERRUPT_ADMISSION_LOCKS = new ConcurrentHashMap<>();
   private static final Map<String, Set<String>> FOLLOW_UP_CLAIMS = new ConcurrentHashMap<>();
+  private static final Set<String> WORKSPACE_RESULT_WAKE_REQUESTS = ConcurrentHashMap.newKeySet();
   private static final int TEST_STEPS = 120;
   private static volatile String lastRunReport = "Etapa B: sin ejecuciones todavía.";
   private static volatile AgentForegroundService currentInstance;
@@ -523,6 +525,25 @@ public final class AgentForegroundService extends Service {
       String originalUserMessage) {
     startRealAgentInternal(
         context, taskGoal, skillIds, sessionId, originalUserMessage, true, false);
+  }
+
+  /** Queue a system-origin Central turn carrying only a durable result reference id. */
+  public static void startWorkspaceResultWake(Context context, String referenceId) {
+    if (referenceId == null || referenceId.isEmpty()) return;
+    com.jarvys.agent.workspaces.WorkspaceResultReference.requireReferenceId(referenceId);
+    if (!new LocalRunStore(context).isWorkspaceResultWakePending(referenceId)) return;
+    if (!WORKSPACE_RESULT_WAKE_REQUESTS.add(referenceId)) return;
+    Intent intent = new Intent(context, AgentForegroundService.class)
+        .setAction(ACTION_WORKSPACE_RESULT_WAKE)
+        .putExtra("workspace_result_reference_id", referenceId)
+        .putExtra("chat_session_id", com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION);
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
+      else context.startService(intent);
+    } catch (RuntimeException failure) {
+      WORKSPACE_RESULT_WAKE_REQUESTS.remove(referenceId);
+      throw failure;
+    }
   }
 
   /**
@@ -1028,6 +1049,8 @@ public final class AgentForegroundService extends Service {
     currentInstance = this;
     createNotificationChannel();
     startForegroundCompat();
+    // Recover durable pending wakes for background service restarts that do not resume MainActivity.
+    WorkspaceResultDelivery.scheduleCatalog(getApplicationContext());
   }
 
   @Override
@@ -1058,6 +1081,31 @@ public final class AgentForegroundService extends Service {
       }
       PersonalMemoryExtractionWorker.enqueue(this, session, false);
       stopServiceIfIdle();
+      return START_NOT_STICKY;
+    }
+    if (ACTION_WORKSPACE_RESULT_WAKE.equals(intent.getAction())) {
+      String referenceId = intent.getStringExtra("workspace_result_reference_id");
+      if (referenceId == null || referenceId.isEmpty()
+          || !com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION.equals(
+              intent.getStringExtra("chat_session_id"))) {
+        if (referenceId != null) WORKSPACE_RESULT_WAKE_REQUESTS.remove(referenceId);
+        stopServiceIfIdle();
+        return START_NOT_STICKY;
+      }
+      enqueueSessionRun(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,
+          new SessionRequest(active -> {
+            try {
+              LocalRunStore store = new LocalRunStore(this);
+              // This claim occurs when the serialized lane takes the request, never at enqueue.
+              if (!store.claimWorkspaceResultWake(referenceId)) return;
+              runRealAgent(active.token, "", new ArrayList<>(),
+                  com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION,
+                  "", true, false, false, "", referenceId);
+            } finally {
+              WORKSPACE_RESULT_WAKE_REQUESTS.remove(referenceId);
+            }
+          }, true, () -> WORKSPACE_RESULT_WAKE_REQUESTS.remove(referenceId), "",
+              () -> WORKSPACE_RESULT_WAKE_REQUESTS.remove(referenceId)));
       return START_NOT_STICKY;
     }
     boolean manualDeviceTest =
@@ -1108,7 +1156,7 @@ public final class AgentForegroundService extends Service {
         try {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else runRealAgent(active.token, chatAgentGoal, runSkillIds, chatSessionId, chatDisplayGoal,
-              userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration, existingUserMessageId);
+              userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration, existingUserMessageId, null);
         } catch (RuntimeException earlyFailure) {
           if (!isInteractive) throw earlyFailure;
           String message = getString(R.string.chat_interrupt_start_failed);
@@ -1279,7 +1327,8 @@ public final class AgentForegroundService extends Service {
       boolean userMessageAlreadyRecorded,
       boolean memoryDisabledForConversation,
       boolean regeneration,
-      String existingUserMessageId) {
+      String existingUserMessageId,
+      String workspaceWakeReferenceId) {
     // Mission lifetime is independent of elapsed wall time. STOP still owns cancellation.
     new JarvysUiPreferences(this); // Retire restored legacy deadline settings before starting.
     LocalRunStore conversationStore = new LocalRunStore(this);
@@ -1288,11 +1337,12 @@ public final class AgentForegroundService extends Service {
     String userMessageId = existingUserMessageId;
     final AtomicReference<String> assistantOwnerMessageId =
         new AtomicReference<>(existingUserMessageId == null ? "" : existingUserMessageId);
+    boolean systemWake = workspaceWakeReferenceId != null;
     AgentErrorReporter.AttachmentScope privateContentScope = null;
     MainChatTurnContextProvider steeringProvider = null;
     try {
       token.throwIfCancelled();
-      if (userMessageAlreadyRecorded
+      if (!systemWake && userMessageAlreadyRecorded
           && (goal == null || goal.trim().isEmpty())
           && userMessageId != null
           && !userMessageId.isEmpty()) {
@@ -1302,14 +1352,14 @@ public final class AgentForegroundService extends Service {
           displayGoal = storedMessage;
         }
       }
-      if (userMessageAlreadyRecorded && (userMessageId == null || userMessageId.isEmpty())) {
+      if (!systemWake && userMessageAlreadyRecorded && (userMessageId == null || userMessageId.isEmpty())) {
         userMessageId = conversationStore.latestUserMessageId(sessionId);
       }
       List<ChatAttachment> attachments =
           userMessageId == null || userMessageId.isEmpty()
               ? java.util.Collections.emptyList()
               : conversationStore.readConversationAttachments(sessionId, userMessageId);
-      if ((goal == null || goal.trim().isEmpty()) && attachments.isEmpty()) {
+      if (!systemWake && (goal == null || goal.trim().isEmpty()) && attachments.isEmpty()) {
         throw new IllegalArgumentException(AppLanguageRuntime.localizedContext(this).getString(R.string.agent_goal_required));
       }
       goal = goal == null ? "" : goal;
@@ -1318,17 +1368,21 @@ public final class AgentForegroundService extends Service {
           || conversationStore.conversationHasPrivateCode(sessionId)) {
         privateContentScope = AgentErrorReporter.suppressForPrivateContent();
       }
-      AgentRunUiState.beginServiceRun(sessionId, displayGoal.trim(), attachments, regeneration,
+      if (systemWake) AgentRunUiState.beginSystemServiceRun(sessionId, token.generation());
+      else AgentRunUiState.beginServiceRun(sessionId, displayGoal.trim(), attachments, regeneration,
           token.generation(), userMessageId);
       List<ConversationTurn> conversationHistory =
           conversationStore.loadConversationContext(sessionId);
-      if (userMessageAlreadyRecorded && !conversationHistory.isEmpty()) {
+      if (!systemWake && userMessageAlreadyRecorded && !conversationHistory.isEmpty()) {
         ConversationTurn last = conversationHistory.get(conversationHistory.size() - 1);
         if ("user".equals(last.role) && displayGoal.trim().equals(last.content)) {
           conversationHistory.remove(conversationHistory.size() - 1);
         }
       }
-      if (!userMessageAlreadyRecorded) {
+      if (systemWake) {
+        userMessageId = "";
+        assistantOwnerMessageId.set(null);
+      } else if (!userMessageAlreadyRecorded) {
         userMessageId =
             conversationStore.appendConversationMessage(sessionId, "user", displayGoal.trim());
       } else if (userMessageId == null || userMessageId.isEmpty()) {
@@ -1336,7 +1390,7 @@ public final class AgentForegroundService extends Service {
       }
       userMessageRecorded = true;
       assistantOwnerMessageId.set(userMessageId == null ? "" : userMessageId);
-      AgentRunUiState.bindCurrentUserMessage(sessionId, userMessageId);
+      if (!systemWake) AgentRunUiState.bindCurrentUserMessage(sessionId, userMessageId);
       SkillRepository skills = SkillRepository.Companion.get(this);
       List<SkillEntry> enabledSkills =
           selectedSkillIds == null || selectedSkillIds.isEmpty()
@@ -1496,7 +1550,7 @@ public final class AgentForegroundService extends Service {
       }
       if (!timedOut) token.throwIfCancelled();
       String proactiveThreadKey =
-          conversationStore.proactiveThreadKeyForUserMessage(sessionId, assistantOwnerMessageId.get());
+          systemWake ? null : conversationStore.proactiveThreadKeyForUserMessage(sessionId, assistantOwnerMessageId.get());
       String assistantMessageId =
           conversationStore.appendConversationMessage(
               sessionId,
@@ -1508,9 +1562,10 @@ public final class AgentForegroundService extends Service {
               timedOut ? "PARTIAL" : result.outcome,
               proactiveThreadKey);
       String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
-      if (isTerminalFailure(responseOutcome))
+      if (isTerminalFailure(responseOutcome) && !systemWake) {
         conversationStore.markConversationMessagesResolved(sessionId,
             java.util.Collections.singletonList(assistantOwnerMessageId.get()));
+      }
       AgentRunUiState.completeGeneration(sessionId, token.generation(),
           result.runId, responseOutcome, chatMessage, assistantMessageId, result.durationMs);
       if (proactiveThreadKey != null && !timedOut) {
@@ -1520,7 +1575,7 @@ public final class AgentForegroundService extends Service {
       finishCoreRun(token, chatMessage);
       if (!token.wasStoppedByUser() && steeringProvider != null && steeringRemainsUnconsumed)
         enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
-      if (!timedOut && "COMPLETED".equals(result.outcome)) {
+      if (!systemWake && !timedOut && "COMPLETED".equals(result.outcome)) {
         enqueueAutomaticReflection(sessionId, assistantMessageId);
       }
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
@@ -1546,8 +1601,10 @@ public final class AgentForegroundService extends Service {
               "",
               assistantOwnerMessageId.get(),
               stopped ? "STOPPED" : timedOut ? "PARTIAL" : "FAILED");
-          conversationStore.markConversationMessagesResolved(sessionId,
-              java.util.Collections.singletonList(assistantOwnerMessageId.get()));
+          if (!systemWake) {
+            conversationStore.markConversationMessagesResolved(sessionId,
+                java.util.Collections.singletonList(assistantOwnerMessageId.get()));
+          }
         } catch (RuntimeException persistenceFailure) {
           reportStopPersistenceFailure(persistenceFailure);
         }

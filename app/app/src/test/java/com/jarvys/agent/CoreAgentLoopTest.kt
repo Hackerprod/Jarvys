@@ -12,6 +12,46 @@ import java.util.concurrent.atomic.AtomicReference
 class CoreAgentLoopTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
+    @Test fun systemWakeIsNotAUserAndIsAcknowledgedInTheResponseCheckpoint() {
+        val referenceId = "workspace-result-" + "a".repeat(64)
+        val systemEvent = ConversationTurn.systemEvent(referenceId,
+            "Workspace result registered: workspace_id=ws; assignment_id=assignment; reported_state=DONE; result_reference_id=$referenceId")
+        val checkpoints = mutableListOf<CoreAgentLoop.Checkpoint>()
+        val order = mutableListOf<String>()
+        val request = AtomicReference<List<ConversationTurn>>()
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                tools: List<ToolSpec>, token: CancellationToken): ModelReply {
+                request.set(transcript.toList())
+                assertEquals("", prompt)
+                return ModelReply("Result inspected.", emptyList())
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "system instructions", "central")
+        loop.setCheckpointListener { checkpoint ->
+            checkpoints += checkpoint
+            order += "checkpoint"
+            if (checkpoint.workspaceResultWakeReferenceIds.isNotEmpty()) {
+                order += "ack-checkpoint"
+                assertEquals(listOf(referenceId), checkpoint.workspaceResultWakeReferenceIds)
+                assertTrue(checkpoint.transcript.any {
+                    it.kind == ConversationTurn.Kind.MESSAGE && it.role == "assistant" && it.content == "Result inspected."
+                })
+            }
+        }
+
+        val result = loop.run("", listOf(systemEvent), CancellationToken.uncancellable(), null)
+
+        assertEquals("Result inspected.", result.text)
+        assertEquals("Only the system event is model input: ${request.get().map { it.role }}",
+            listOf("system"), request.get().map { it.role })
+        assertTrue(request.get().single().kind == ConversationTurn.Kind.SYSTEM_EVENT)
+        assertEquals("ack-checkpoint", order.last())
+        assertEquals(1, order.count { it == "ack-checkpoint" })
+        assertEquals(listOf(referenceId), checkpoints.last().reconciled().workspaceResultWakeReferenceIds)
+        assertTrue(checkpoints.last().transcript.none { it.role == "user" })
+    }
+
     @Test
     fun toolResultReturnsIntoTranscriptBeforeTheModelWritesItsFinalAnswer() {
         val declaration = ToolSpec("lookup", "test", "lookup a fact", "test",

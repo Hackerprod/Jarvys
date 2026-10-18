@@ -1273,6 +1273,19 @@ object AgentRunUiState {
         }
     } }
 
+    /** Starts a system-origin run without appending a synthetic user bubble. */
+    @JvmStatic
+    fun beginSystemServiceRun(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId == sessionId || current.sessionId == null) {
+            _state.value = current.copy(sessionId = sessionId, goal = "", running = true,
+                stopping = false, outcome = null, liveRunIdentity = "$sessionId:$generation")
+        } else {
+            ownedLiveSnapshot = AgentRunUiSnapshot(sessionId = sessionId, running = true,
+                interactiveOwnerSessionId = sessionId, liveRunIdentity = "$sessionId:$generation")
+        }
+    } }
+
     @JvmStatic
     fun ownsGeneration(sessionId: String, generation: Long): Boolean = inSession(sessionId) { synchronized(lock) {
         _state.value.sessionId == sessionId && ownedRunActive && ownedSessionId == sessionId

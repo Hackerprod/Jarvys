@@ -80,6 +80,25 @@ class ConversationCompactionTest {
     }
 
     @Test
+    fun pendingSystemEventRemainsTypedInKeepForAllAndSlidingCompaction() {
+        val referenceId = "workspace-result-" + "a".repeat(64)
+        val transcript = messages(8, 3_000) + ConversationTurn.systemEvent(
+            referenceId,
+            "Workspace result registered: reported_state=FAILED; result_reference_id=$referenceId",
+        )
+
+        val all = ConversationCompactionPolicy.planAll(transcript)
+        assertTrue(all.summarize.none { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
+        assertEquals(ConversationTurn.Kind.SYSTEM_EVENT, all.keep.last().kind)
+        assertEquals(referenceId, all.keep.last().systemEventReferenceId)
+
+        val sliding = ConversationCompactionPolicy.planSliding(transcript, 20_000, 0.3)
+        assertTrue(sliding.summarize.none { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
+        assertEquals(ConversationTurn.Kind.SYSTEM_EVENT, sliding.keep.last().kind)
+        assertEquals(referenceId, sliding.keep.last().systemEventReferenceId)
+    }
+
+    @Test
     fun summaryPromptsKeepContinuationContextLimitsAndTrustInstructions() {
         assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("current work"))
         assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("latest request"))

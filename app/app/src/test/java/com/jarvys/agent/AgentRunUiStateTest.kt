@@ -19,6 +19,19 @@ import java.util.concurrent.atomic.AtomicReference
 class AgentRunUiStateTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
+    @Test fun systemOriginServiceRunDoesNotCreateUserBubble() {
+        val session = "system-wake-ui-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        try {
+            AgentRunUiState.beginSystemServiceRun(session, 7L)
+            val snapshot = AgentRunUiState.snapshotForSession(session)
+            assertTrue(snapshot.running)
+            assertTrue(snapshot.events.none { it.kind == "user" })
+        } finally {
+            AgentRunUiState.resetSession(session)
+        }
+    }
+
     @Test
     fun codexAssistantStreamUsesStableTransientRowAndIsReplacedByDurableCompletion() {
         val session = "codex-stream-${System.nanoTime()}"

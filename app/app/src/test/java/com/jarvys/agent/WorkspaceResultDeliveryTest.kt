@@ -3,6 +3,7 @@ package com.jarvys.agent
 import android.app.Application
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatDbResult
+import com.jarvys.agent.ui.chat.ConversationVisibility
 import com.jarvys.agent.crew.CrewMissionAccess
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.*
@@ -13,6 +14,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 import org.junit.runner.RunWith
+import org.json.JSONArray
+import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
@@ -35,7 +38,7 @@ class WorkspaceResultDeliveryTest {
         app = RuntimeEnvironment.getApplication()
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
-        delivery = WorkspaceResultDelivery(app, ledger)
+        delivery = WorkspaceResultDelivery(app, ledger) { _, _ -> }
         assertTrue(ChatDatabaseBridge.getInstance(app)
             .ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
         scope = registry.createWorkspace("scope", "Synthetic scope")
@@ -46,8 +49,12 @@ class WorkspaceResultDeliveryTest {
     }
     @After fun close() { registry.close(); app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME) }
     private fun bind() { target = registry.bindBot(scope.workspaceId, target.assignmentId, target.revision, "bot") }
-    private fun evidence(text: String = "UNTRUSTED synthetic result", cycle: String = UUID.randomUUID().toString()): CrewResultEvidence =
-        CrewResultEvidence.create(scope.executionSessionId, target.missionId, "bot", cycle, "DONE", text, 1234L).also {
+    private fun evidence(
+        text: String = "UNTRUSTED synthetic result",
+        cycle: String = UUID.randomUUID().toString(),
+        reportedStatus: String = "DONE",
+    ): CrewResultEvidence =
+        CrewResultEvidence.create(scope.executionSessionId, target.missionId, "bot", cycle, reportedStatus, text, 1234L).also {
             ledger.appendCrewResultEvidence(it, noAdmission)
         }
     private fun references() = ledger.listWorkspaceResultReferences(scope.executionSessionId, 50, null)
@@ -56,7 +63,8 @@ class WorkspaceResultDeliveryTest {
 
     @Test fun completionBeforeBindingWaitsThenCatchesUpExactlyOnceAcrossInstances() {
         evidence(); reconcile(); assertTrue(references().isEmpty())
-        bind(); reconcile(); WorkspaceResultDelivery(app, LocalRunStore(app)).reconcile(scope.workspaceId, CancellationToken.uncancellable())
+        bind(); reconcile(); WorkspaceResultDelivery(app, LocalRunStore(app)) { _, _ -> }
+            .reconcile(scope.workspaceId, CancellationToken.uncancellable())
         assertEquals(1, references().size); assertEquals(1, notices().size)
         assertEquals(target.revision, references().single().observedAssignmentRevision)
     }
@@ -74,8 +82,103 @@ class WorkspaceResultDeliveryTest {
         assertTrue(ledger.readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION).isEmpty())
         assertTrue(ledger.readActiveConversationMessages(WorkspaceIdentity.CENTRAL_SESSION).isEmpty())
         assertFalse(ledger.readConversationContext(WorkspaceIdentity.CENTRAL_SESSION).contains(evidence.resultText))
-        assertEquals(1, ledger.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION).count { it.kind == "workspace_result" })
+        val context = ledger.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+        assertFalse(context.any { it.content.contains(evidence.resultText) })
+        val systemEvents = context.filter { it.kind == ConversationTurn.Kind.SYSTEM_EVENT }
+        assertEquals(1, systemEvents.size)
+        assertEquals("system", systemEvents.single().role)
+        assertEquals(notices().single().referenceId, systemEvents.single().systemEventReferenceId)
+        assertTrue(systemEvents.single().content.contains("reported_state=DONE"))
+        assertFalse(systemEvents.single().content.contains("Inspect this"))
+        val timeline = ledger.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION)
+        assertEquals(1, timeline.count { it.kind == "workspace_result" })
+        assertFalse(ConversationVisibility.project(timeline).any { it.kind == "workspace_result" })
         assertTrue(ledger.readConversationMessages("ordinary-unrelated").isEmpty())
+    }
+
+    @Test fun pendingWakeSurvivesReconciliationAndStartedClaimUntilResponseCheckpointAcknowledgesAtomically() {
+        bind(); evidence("unverified terminal bytes"); reconcile()
+        val referenceId = notices().single().referenceId
+        assertTrue(ledger.isWorkspaceResultWakePending(referenceId))
+        assertTrue(ledger.claimWorkspaceResultWake(referenceId))
+
+        // A recreated delivery/service reprojects the same one pending event; a prior started
+        // marker cannot suppress it because the process may have died before the provider call.
+        WorkspaceResultDelivery(app, LocalRunStore(app)) { _, _ -> }
+            .reconcile(scope.workspaceId, CancellationToken.uncancellable())
+        val reopened = LocalRunStore(app)
+        val events = reopened.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+            .filter { it.kind == ConversationTurn.Kind.SYSTEM_EVENT }
+        assertEquals(1, events.size)
+        assertEquals(referenceId, events.single().systemEventReferenceId)
+        assertTrue(reopened.isWorkspaceResultWakePending(referenceId))
+        assertTrue(reopened.claimWorkspaceResultWake(referenceId))
+
+        // Transcript rows and the wake acknowledgement commit as one chat database transaction.
+        reopened.appendModelTranscriptCheckpoint(WorkspaceIdentity.CENTRAL_SESSION,
+            emptyList(), emptyList(), listOf(referenceId))
+        assertFalse(reopened.claimWorkspaceResultWake(referenceId))
+        assertFalse(reopened.isWorkspaceResultWakePending(referenceId))
+        // Process recreation/reconciliation cannot schedule a second successful wake.
+        WorkspaceResultDelivery(app, LocalRunStore(app)) { _, _ -> }
+            .reconcile(scope.workspaceId, CancellationToken.uncancellable())
+        assertFalse(LocalRunStore(app).isWorkspaceResultWakePending(referenceId))
+        assertTrue(reopened.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+            .none { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
+        assertTrue(reopened.readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
+            .none { it.optString("role") == "user" })
+        assertEquals(0, reopened.conversationMessageCount(WorkspaceIdentity.CENTRAL_SESSION))
+        assertNull(reopened.readFirstUserMessage(WorkspaceIdentity.CENTRAL_SESSION))
+    }
+
+    @Test fun failedTerminalEvidencePersistsAndWakesCentralForInspection() {
+        bind(); evidence("worker-reported failure details", reportedStatus = "FAILED"); reconcile()
+
+        val reference = notices().single()
+        assertEquals("FAILED", reference.reportedStatus)
+        assertTrue(ledger.isWorkspaceResultWakePending(reference.referenceId))
+        val systemEvent = ledger.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+            .single { it.kind == ConversationTurn.Kind.SYSTEM_EVENT }
+        assertEquals(reference.referenceId, systemEvent.systemEventReferenceId)
+        assertEquals("system", systemEvent.role)
+        assertTrue(systemEvent.content.contains("reported_state=FAILED"))
+        assertFalse(systemEvent.content.contains("worker-reported failure details"))
+    }
+
+    @Test fun pendingSystemEventIsLastAfterLaterConversationAndToolTranscriptRows() {
+        bind(); evidence(); reconcile()
+        val referenceId = notices().single().referenceId
+        val ownerMessageId = ledger.appendConversationMessage(
+            WorkspaceIdentity.CENTRAL_SESSION, "user", "Later ordinary message",
+        )
+        val batchId = UUID.randomUUID().toString()
+        ledger.appendModelTranscriptRow(WorkspaceIdentity.CENTRAL_SESSION,
+            JSONObject().put("type", "model_tool_calls").put("batchId", batchId)
+                .put("userMessageId", ownerMessageId).put("messageIndex", 0L)
+                .put("assistantText", "Checking result reference").put("timestamp", 1)
+                .put("calls", JSONArray().put(JSONObject().put("id", "lookup-call")
+                    .put("name", "workspaces").put("arguments", JSONObject()))))
+        ledger.appendModelTranscriptRow(WorkspaceIdentity.CENTRAL_SESSION,
+            JSONObject().put("type", "model_tool_result").put("batchId", batchId)
+                .put("callId", "lookup-call").put("toolName", "workspaces")
+                .put("timestamp", 2).put("output", "Workspace metadata"))
+
+        val context = ledger.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+        assertEquals(ConversationTurn.Kind.SYSTEM_EVENT, context.last().kind)
+        assertEquals("system", context.last().role)
+        assertEquals(referenceId, context.last().systemEventReferenceId)
+        assertTrue(context.dropLast(1).any { it.kind == ConversationTurn.Kind.TOOL_RESULT })
+    }
+
+    @Test fun intermediateCrewStateCannotBecomeAResultWake() {
+        bind()
+        assertThrows(IllegalArgumentException::class.java) {
+            CrewResultEvidence.create(scope.executionSessionId, target.missionId, "bot",
+                UUID.randomUUID().toString(), "RUNNING", "not terminal", 1234L)
+        }
+        reconcile()
+        assertTrue(references().isEmpty())
+        assertTrue(notices().isEmpty())
     }
 
     @Test fun oldExactResultRemainsReadableAfterNewCycleWithoutClaimingCurrentCompletion() {

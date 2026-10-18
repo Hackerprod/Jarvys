@@ -361,6 +361,8 @@ public final class CoreAgentLoop {
         public final Map<String, CrewInputIncorporation> incorporations;
         /** Complete tool outputs supplied only to checkpoint persistence before transcript budgeting. */
         public final Map<String, String> completedToolResults;
+        /** System events acknowledged atomically with this successful model response checkpoint. */
+        public final List<String> workspaceResultWakeReferenceIds;
 
         public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle, int genuineUserIndex) {
             this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, Collections.emptyMap());
@@ -374,6 +376,13 @@ public final class CoreAgentLoop {
         Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
                 int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations,
                 Map<String, String> completedToolResults) {
+            this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, incorporations,
+                    completedToolResults, Collections.emptyList());
+        }
+
+        Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
+                int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations,
+                Map<String, String> completedToolResults, List<String> workspaceResultWakeReferenceIds) {
             Map<String, CrewInputIncorporation> copy = new LinkedHashMap<>();
             for (Map.Entry<String, CrewInputIncorporation> entry : incorporations.entrySet()) {
                 if (entry.getValue() == null || !entry.getValue().binding.mailboxMessageId.equals(entry.getKey())
@@ -383,6 +392,9 @@ public final class CoreAgentLoop {
             }
             this.incorporations = Collections.unmodifiableMap(copy);
             this.completedToolResults = Collections.unmodifiableMap(new LinkedHashMap<>(completedToolResults));
+            this.workspaceResultWakeReferenceIds = Collections.unmodifiableList(
+                    new ArrayList<>(workspaceResultWakeReferenceIds == null
+                            ? Collections.emptyList() : workspaceResultWakeReferenceIds));
             this.transcript = Collections.unmodifiableList(new ArrayList<>(transcript));
             this.appliedIncomingIds = Collections.unmodifiableSet(new LinkedHashSet<>(appliedIncomingIds));
             this.toolLifecycle = Collections.unmodifiableMap(new LinkedHashMap<>(toolLifecycle));
@@ -439,7 +451,7 @@ public final class CoreAgentLoop {
                 }
             }
             return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine),
-                    incorporations, completedToolResults);
+                    incorporations, completedToolResults, workspaceResultWakeReferenceIds);
         }
     }
 
@@ -483,10 +495,15 @@ public final class CoreAgentLoop {
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript) {
-        updateTranscriptSnapshot(transcript, Collections.emptyMap());
+        updateTranscriptSnapshot(transcript, Collections.emptyMap(), Collections.emptyList());
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults) {
+        updateTranscriptSnapshot(transcript, completedToolResults, Collections.emptyList());
+    }
+
+    private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults,
+            List<String> workspaceResultWakeReferenceIds) {
         for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 for (ModelReply.Call call : turn.toolCalls) {
@@ -499,13 +516,16 @@ public final class CoreAgentLoop {
             }
         }
         transcriptSnapshot = Collections.unmodifiableList(new ArrayList<>(transcript));
-        checkpoint = new Checkpoint(transcriptSnapshot, appliedIncomingIds, toolLifecycle, protectedGenuineUser == null ? -1 : transcript.indexOf(protectedGenuineUser), incorporations);
+        checkpoint = new Checkpoint(transcriptSnapshot, appliedIncomingIds, toolLifecycle,
+                protectedGenuineUser == null ? -1 : transcript.indexOf(protectedGenuineUser), incorporations,
+                completedToolResults, workspaceResultWakeReferenceIds);
         CheckpointListener listener = checkpointListener;
         if (listener != null) {
             try {
                 listener.persist(completedToolResults == null || completedToolResults.isEmpty() ? checkpoint
                         : new Checkpoint(checkpoint.transcript, checkpoint.appliedIncomingIds, checkpoint.toolLifecycle,
-                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults));
+                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults,
+                                checkpoint.workspaceResultWakeReferenceIds));
             } catch (CheckpointFailure failure) {
                 throw failure;
             } catch (RuntimeException failure) {
@@ -593,7 +613,8 @@ public final class CoreAgentLoop {
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
         boolean transcriptHasPendingInput = ConversationTurn.hasCurrentUserMessage(previousTranscript)
-                || ConversationTurn.endsWithToolResult(previousTranscript);
+                || ConversationTurn.endsWithToolResult(previousTranscript)
+                || containsSystemEvent(previousTranscript);
         if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty()
                 && turnContextProvider == null && !transcriptHasPendingInput) {
             throw new IllegalArgumentException("A user request is required");
@@ -603,13 +624,14 @@ public final class CoreAgentLoop {
         Map<String, ToolActivity> activeActivities = new java.util.concurrent.ConcurrentHashMap<>();
         List<ConversationTurn> transcript = new ArrayList<>(previousTranscript == null ? Collections.emptyList() : previousTranscript);
         boolean hasRunRequest = !request.trim().isEmpty() || !currentAttachments.isEmpty();
-        boolean requestInTranscript = !currentAttachments.isEmpty()
+        boolean systemEventInput = containsSystemEvent(transcript);
+        boolean requestInTranscript = systemEventInput || !currentAttachments.isEmpty()
                 || (turnContextProvider != null && !request.trim().isEmpty());
         if (requestInTranscript && hasRunRequest) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
         updateTranscriptSnapshot(transcript);
         String prompt = requestInTranscript ? "" : request.trim();
         boolean modelHasInput = hasRunRequest || ConversationTurn.hasCurrentUserMessage(transcript)
-                || ConversationTurn.endsWithToolResult(transcript);
+                || ConversationTurn.endsWithToolResult(transcript) || systemEventInput;
         int modelTurns = 0;
         long startedAtMs = System.currentTimeMillis();
         int overflowCompactions = 0;
@@ -732,7 +754,7 @@ public final class CoreAgentLoop {
                             transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
                         }
                         transcript.add(ConversationTurn.assistantReply("", reply.providerOutputItems));
-                        updateTranscriptSnapshot(transcript);
+                        updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
                         if (drainTurnContext(transcript, true, listener, null, "")) {
                             requestInTranscript = true;
                             modelHasInput = true;
@@ -744,7 +766,7 @@ public final class CoreAgentLoop {
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
                         transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
-                        updateTranscriptSnapshot(transcript);
+                        updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
                     }
                     if (drainTurnContext(transcript, true, listener, answer, runId)) {
                         requestInTranscript = true;
@@ -760,7 +782,7 @@ public final class CoreAgentLoop {
                     requestInTranscript = true;
                 }
                 transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls, reply.providerOutputItems));
-                updateTranscriptSnapshot(transcript);
+                updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
                 if (listener != null && reply.text != null && !reply.text.trim().isEmpty()) {
                     token.throwIfCancelled();
                     listener.onAssistantProgress(reply.calls.get(0).id, reply.text.trim());
@@ -803,6 +825,24 @@ public final class CoreAgentLoop {
             }
             throw failure;
         }
+    }
+
+    private static boolean containsSystemEvent(List<ConversationTurn> transcript) {
+        if (transcript == null) return false;
+        for (ConversationTurn turn : transcript) {
+            if (turn != null && turn.kind == ConversationTurn.Kind.SYSTEM_EVENT && "system".equals(turn.role)) return true;
+        }
+        return false;
+    }
+
+    private static List<String> systemEventReferenceIds(List<ConversationTurn> transcript) {
+        List<String> referenceIds = new ArrayList<>();
+        if (transcript == null) return referenceIds;
+        for (ConversationTurn turn : transcript) {
+            if (turn != null && turn.kind == ConversationTurn.Kind.SYSTEM_EVENT && "system".equals(turn.role)
+                    && !turn.systemEventReferenceId.isEmpty()) referenceIds.add(turn.systemEventReferenceId);
+        }
+        return referenceIds;
     }
 
     private ToolBatchOutcome executeToolBatch(List<ModelReply.Call> calls, ModelReply reply,

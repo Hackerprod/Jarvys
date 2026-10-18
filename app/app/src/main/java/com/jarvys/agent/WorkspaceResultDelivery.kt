@@ -9,10 +9,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Local receipt reconciliation only. Never launches a worker, model turn or external effect. */
+/** Reconciles local receipts and queues a reference-only Central turn; it never launches a worker. */
 class WorkspaceResultDelivery internal constructor(
     context: Context,
     private val ledger: LocalRunStore,
+    private val startWake: (Context, String) -> Unit = { owner, referenceId ->
+        AgentForegroundService.startWorkspaceResultWake(owner, referenceId)
+    },
 ) {
     constructor(context: Context) : this(context, LocalRunStore(context))
     private val app = context.applicationContext
@@ -63,9 +66,11 @@ class WorkspaceResultDelivery internal constructor(
             // Same lock order as artifact delivery and coordination: delivery → STOP → ledger.
             if (!token.runIfActive {
                     token.throwIfCancelled(); admission.run()
-                    ledger.appendWorkspaceResultNoticeIfAbsent(reference, Runnable { token.throwIfCancelled(); admission.run() })
+                    ledger.appendWorkspaceResultNoticeAndWake(reference, Runnable { token.throwIfCancelled(); admission.run() })
                 }) token.throwIfCancelled()
         }
+        // The notice and reference-only wake intent committed in one Room transaction.
+        startWake(app, reference.referenceId)
         AgentRunUiState.workspaceResultAdded(reference)
         WorkspaceChanges.changed()
     }
