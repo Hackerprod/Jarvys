@@ -1,19 +1,19 @@
 {
-  "version": "factory-guidance-v87",
+  "version": "factory-guidance-v89",
   "sha256": {
-    "basics": "9cdc87392763401307d230db813cfba79cb18be3ff78706b738fd5ea2b5f559e",
-    "biometrics": "bc98bd88968ee1f77661e9a2916776b449a3f9d1f84e62c7fec9540e2c61fb62",
-    "contacts-calendar": "33c6e18cfa4ec91cdd4729daa776a53d75f8c4c838d3eb7b95e6de36e26d8a37",
-    "database": "eef3f3d24ea39591c5e40d83688079a9e571178c13f26c6b87aec1f7ad030842",
-    "documents-media": "4ed256a5b06a946b9c3d425097dc3e5e7972067323be1a33f66c3b9dd69bd364",
-    "durable-native": "9b1c53e5ab6a86b31523b6b66f8202dd556949a0d184ffb5c90851f1b4111ab7",
-    "external-actions": "2a74ab081fb2b274b78a83005d49ca1140467c53b9d5db1acf001b73a0e1661a",
-    "lifecycle": "5a841ed4b4c6de32adf3806346ceeae5af00f304ce207f908a8b711180a81038",
-    "local-ui": "557e21ab071fc38da9876b3c00adbac2c845f92616396d9eb8572296b0b38834",
-    "native-input": "b3fe042df1dee5fdd89288edd99e93041c40924c2a341ec9952cf1ce6dbf8cc8",
-    "native-services": "359623517c5f927da1253f007d55532e403f6e03886624418a97a6f0174e5003",
-    "presentation": "0484e93f4b186356473b0440076f8aa80ac385d16917e21e3e5f3d61f9f4fd4a",
-    "radios": "e49fc98418f769799e55a7c0e506e4604cd142f4e5f6a1e8817df8a32520315e",
-    "sensors": "a099463583b8dc8f86fda5860d3a8977d9c2c6dc75a35c3d4576cbf1a41085b1"
+    "basics": "3cbe3eb8af198b93f4b3b8ba2de07f058d2d5c65c5db0a35154d20ed74f6bfc7",
+    "documents-media": "87350bdeb3ea89c4705a3128e54ac74053669a0e48e19c71e17d8b43e8508ad8",
+    "external-actions": "00c617e1834e8cc46add2afa0067b10abd54c462f164ebafd77ae48a2d17fbcf",
+    "contacts-calendar": "a37122747c4906c33ac081e97ef4465280dc432eb790651c76e8b40acf49fd40",
+    "database": "b6f86b0b5f2e4ed2f32cdfc5248ae9756a851cf93532dbd54a0150cf23bf74de",
+    "presentation": "18e9b7c16b4bdcc3bf6e7fedfadfaaa8d6ea08bed220cbd46e02e9eb9292d49c",
+    "lifecycle": "cef6dce4a6b18aa16d75401d4cd5c3a6d86d0839980835ce37250c6a8d4cdaef",
+    "sensors": "2dbaab6865b9ab9c801558680418ee9602d26b3bb84684acc6aa1cbece0af42a",
+    "biometrics": "b1947410115226b8147accc9ce5e1259e77131fce8eb9d182db9f6bbb719fe3c",
+    "local-ui": "e6f16580731c23df2a88540fee2c53cdfaeac9733927c60e52d826150c420681",
+    "native-services": "01dda42595c743c70c24f729f11e35594f80595de5cc5700be6fbd59d55d246f",
+    "native-input": "e0116276e39f6d42e149d0feeeacc496355a8a5055a984f5935b6ad7d4b85d7c",
+    "radios": "0be90099c153af0173f7970fe066c8a2ebf29f5d596aa03ad2d67ebbf96186cc",
+    "durable-native": "6dd5b0f065e983a3a2ad4ee69d19c0c44e893ced228b6c68c79f4f8a072ed5b5"
   }
 }

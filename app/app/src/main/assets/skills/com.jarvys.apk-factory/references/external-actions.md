@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v87 / external-actions
+# Factory guidance factory-guidance-v89 / external-actions
 
 Named capabilities+pinned host/retained exact artifact/recipient checks; no documents dependency. Dispatches to a verified default recipient or opens the relevant Android chooser for the user to select one. Five-minute operation lifetime, no replay or closure acknowledgment. Cancel cannot recall data/close recipient tasks. Preview UNAVAILABLE; documents.cancel unrelated. Receipts prove dispatch,not rendering/navigation/dial/draft/event/send/delivery. A new interaction automatically closes an interrupted one from the same family while preserving its uncertain outcome.
 

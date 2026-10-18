@@ -20,6 +20,18 @@ class FactorySpecTest {
         assertEquals("www/index.html",config.getString("entryPoint"))
         assertEquals(setOf("schemaVersion","appId","name","entryPoint","capabilities","resourceBudgets","documentBroker"),config.keys().asSequence().toSet())
     }
+    @Test fun omittedCapabilitiesSelectTheCompiledCatalogAndSerializeExplicitSchemaOneConfig() {
+        val input = spec().apply { remove("capabilities") }
+        val value = FactorySpec.parse(input)
+        assertEquals(FactorySpec.CAPABILITIES.sorted(), value.capabilities)
+        val configText = String(value.runtimeConfig(broker()))
+        assertEquals(1, JSONObject(configText).getInt("schemaVersion"))
+        val config = com.jarvys.factory.runtime.FactoryConfig.parse(configText, value.appId)
+        assertEquals(FactorySpec.CAPABILITIES.toSet(), config.capabilities)
+        assertEquals(listOf("*/*"), config.incomingShare.mimeTypes)
+        assertTrue(config.incomingShare.multiple)
+        assertEquals("full", config.bluetooth.scanPrivacy)
+    }
     @Test fun reservedAndInvalidPackageIdsAreRejected() {
         for(id in listOf("com.jarvys.agent","com.jarvys.factory.template","android.hidden","single","org.Example.x","org.a/evil","org..x","org."+"x".repeat(125))) rejects{it.put("appId",id)}
     }

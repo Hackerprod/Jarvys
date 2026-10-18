@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun catalogHashesBoundsAndImmutableMapAreVerified() {
         val bundle = load()
-        assertEquals("factory-guidance-v87", bundle.version)
+        assertEquals("factory-guidance-v89", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar", "database",
             "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services", "native-input", "radios", "durable-native"), FactoryGuidanceBundle.NAMES)
         assertEquals(14, bundle.resources.size)
@@ -46,7 +46,7 @@ class FactoryGuidanceBundleTest {
         contract("basics", "Authenticated native operations", "installed app caller is authenticated", "Android runtime permission prompts",
             "user selects documents, contacts, photos or recipients",
             "backup protocol v2", "legacy v1", "authenticated installed artifact", "no blind replay", "performed:false")
-        for (text in listOf("appId+certificate", "64 recent artifacts", "retained exact signed scope", "Nonce/request/source-bound",
+        for (text in listOf("appId+certificate", "64 recent artifacts", "retain exact signed scope", "Nonce/request/source-bound",
             "Android runtime permissions", "system selectors", "Damaged/missing evidence fails closed", "precompiled DEX",
             "no arbitrary per-app native compiler", "final packaged acceptance")) assertTrue("Missing core boundary: $text", core().contains(text, true))
     }

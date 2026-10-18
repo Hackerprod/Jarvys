@@ -79,8 +79,9 @@ data class FactorySpec(
         const val MAX_PATH_SEGMENTS = (MAX_PATH_CHARACTERS + 1) / 2
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
-            val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" || key == "adaptiveIcon" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth/adaptiveIcon" }
+            val requiredFields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "webDir", "icon")
+            val optionalFields = setOf("capabilities", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth", "adaptiveIcon")
+            require(json.keys().asSequence().toSet().let { it.containsAll(requiredFields) && it.all { key -> key in requiredFields || key in optionalFields } }) { "factory.json requires ${requiredFields.joinToString()} and optional ${optionalFields.joinToString()}" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -91,19 +92,23 @@ data class FactorySpec(
             require(version > 0) { "versionCode must be a positive 32-bit integer" }
             val versionName = string(json, "versionName")
             require(versionName.isNotBlank() && versionName.length <= 64 && versionName.none { it.isISOControl() }) { "versionName must be 1–64 printable characters" }
-            val raw = json.opt("capabilities")
-            require(raw is JSONArray && raw.length() <= CAPABILITIES.size) { "capabilities must be a bounded array" }
-            val caps = (0 until raw.length()).map { index ->
-                val value = raw.opt(index)
-                require(value is String && value in CAPABILITIES) { "Unsupported native capability; update the runtime template before using it" }
-                value
+            val allCapabilitiesByDefault = !json.has("capabilities")
+            val caps = if (allCapabilitiesByDefault) CAPABILITIES else {
+                val raw = json.opt("capabilities")
+                require(raw is JSONArray && raw.length() <= CAPABILITIES.size) { "capabilities must be a bounded array" }
+                (0 until raw.length()).map { index ->
+                    val value = raw.opt(index)
+                    require(value is String && value in CAPABILITIES) { "Unsupported native capability; update the runtime template before using it" }
+                    value
+                }.also { require(it.distinct().size == it.size) { "Duplicate capability" } }
             }
-            require(caps.distinct().size == caps.size) { "Duplicate capability" }
-            val incomingShare = if (json.has("incomingShare")) IncomingSharePolicyJson.parse(json.getJSONObject("incomingShare")) else null
+            val incomingShare = if (json.has("incomingShare")) IncomingSharePolicyJson.parse(json.getJSONObject("incomingShare"))
+                else if (allCapabilitiesByDefault) IncomingSharePolicy(listOf("*/*"), true) else null
             IncomingSharePolicy.validateSelection(caps, incomingShare)
             val notifications = if (json.has("notifications")) NotificationPolicyJson.parse(json.getJSONObject("notifications")) else null
             NotificationPolicy.validateSelection(caps, notifications)
-            val bluetooth = if (json.has("bluetooth")) BluetoothPolicyJson.parse(json.getJSONObject("bluetooth")) else null
+            val bluetooth = if (json.has("bluetooth")) BluetoothPolicyJson.parse(json.getJSONObject("bluetooth"))
+                else if (allCapabilitiesByDefault) BluetoothPolicy("full") else null
             BluetoothPolicy.validateSelection(caps, bluetooth)
             F3ManifestPolicy.validateSelection(caps)
             val policy = if (json.has("dataBackup")) {

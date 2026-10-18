@@ -1,7 +1,9 @@
-# Factory guidance factory-guidance-v87 / basics
+# Factory guidance factory-guidance-v89 / basics
 
 ## SDK/data
-33 capabilities/134 methods including runtime.info; SDK2/schema1. Inspect first. Methods require declared capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
+SDK2/schema1; 33 capabilities/134 methods including runtime.info. Omitted `factory.json` capabilities select all; an explicit subset remains closed (`CAPABILITY_DENIED`). Generated schema1 `factory-app.json` records the effective list. Methods require capabilities/dependencies, closed typed JSON and awaited Promise/error handling.
+
+`apk_factory` defaults to compact state/counts plus failures and relevant warnings; inspect, test and preview also retain evidence limits. Test still runs the full shared contract but omits passing rows. Its `evidence_limit`: “Shared handlers only: isolated RAM/SQLite, simulated effects; no project JS/WebView, installed behavior, Android grants, persistence or zero-egress proof.”
 
 - runtime.info(): actual capability/configuration/limits metadata, never a grant.
 - storage.get(key): string or null. storage.set(key,value): string key/value. storage.remove(key): deletes one key. No startup clear.
@@ -18,9 +20,9 @@ Storage keys match [a-zA-Z0-9_.:-]{1,96}; values need valid paired Unicode. Seri
 ## Authenticated native operations
 Native operations run after the installed app caller is authenticated against its appId, signing certificate, source and retained artifact scope. Android runtime permission prompts and system selectors remain part of the relevant platform flows; the user selects documents, contacts, photos or recipients when Android presents those selectors. Jarvys does not add an operation approval screen.
 
-Invalid or missing caller/source evidence fails closed. An operation cannot borrow identity or capabilities from a newer artifact. Cleanup and status methods report or close owned work without replaying completed effects; durable work rechecks caller/source identity before effects.
+Invalid or missing caller/source evidence fails closed; a newer artifact cannot lend identity or scope. Revocation stops future effects, not completed work or open descriptors; receipts do not prove evidence was erased. Cleanup/status report or close owned work; no blind replay.
 
-Backup protocol v2 rechecks before writes/commit; legacy v1 ends at final host authorization. Open FDs/completed effects/remote copies cannot be recalled. No blind replay.
+Backup protocol v2 rechecks before writes/commit; legacy v1 ends at final host authorization.
 
 SDK:16 ordinary/20 total pending with recognized cleanup controls,one pending per control method. Shared ceiling,no guaranteed slots per control; timeout proves no rollback.
 

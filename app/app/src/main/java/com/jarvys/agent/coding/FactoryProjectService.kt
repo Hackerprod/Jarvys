@@ -14,6 +14,12 @@ import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.factory.runtime.FactoryUiAssets
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
+import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.contract.BluetoothPolicy
+import com.jarvys.factory.contract.F3ManifestPolicy
+import com.jarvys.factory.contract.IncomingSharePolicy
+import com.jarvys.factory.contract.ManifestPlan
+import com.jarvys.factory.contract.NotificationPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -67,32 +73,56 @@ internal class FactoryProjectService(
         checkActive(token)
         val bytes = template(token)
         val manifest = TemplateApk.inspect(bytes)
-        return JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
+        return JSONObject().put("state", if (Build.VERSION.SDK_INT >= 26) "ready" else "unavailable")
+            .put("schemaVersion", 1).put("runtimeVersion", 1)
             .put("templateSha256", ProjectScope.sha256(bytes)).put("templateBytes", bytes.size)
-            .put("templatePackage", manifest.appId).put("implementedCapabilities", JSONArray(FactorySpec.CAPABILITIES))
-            .put("manifestPermissions", JSONArray(manifest.permissions))
-            .put("manifestFeatures", JSONArray(manifest.plan.features)).put("manifestQueries", JSONArray(manifest.plan.queries))
-            .put("exportedComponents", JSONArray(manifest.plan.exportedComponents)).put("allowedHosts", JSONArray(manifest.plan.hosts))
-            .put("resourceBindings", JSONObject().apply {
-                manifest.resourceBindings.forEach { (role, binding) -> put(role, JSONObject()
-                    .put("id", binding.id).put("type", binding.type).put("name", binding.name).put("path", binding.path)) }
-            }).put("componentDex", JSONObject(manifest.componentDex))
-            .put("dexSha256", JSONObject(manifest.dexSha256)).put("perAppGradleRequired", false).put("nativeToolchainRequired", false)
+            .put("templatePackage", manifest.appId)
+            .put("capabilityCount", FactorySpec.CAPABILITIES.size)
+            .put("methodCount", CapabilityCatalog.METHODS.size)
+            .put("perAppGradleRequired", false).put("nativeToolchainRequired", false)
             .put("factoryMinimumApi", 26).put("factoryAvailable", Build.VERSION.SDK_INT >= 26).put("generatedAppMinimumApi", 24)
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
-            .put("localUiLibraries", localUiLibraries())
-            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth", "adaptiveIcon")))
+            .put("requiredSpecFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "webDir", "icon")))
+            .put("optionalSpecFields", JSONArray(listOf("capabilities", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth", "adaptiveIcon")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES)
                 .put("sourceBudgetMaxima", JSONObject().put("sourceFiles", TemplateApk.MAX_ENTRIES)
                     .put("singleSourceBytes", TemplateApk.MAX_ENTRY_BYTES).put("totalSourceBytes", TemplateApk.MAX_APK_BYTES))
-                .put("technicalZipEntries", TemplateApk.MAX_ENTRIES).put("technicalExpandedBytes", TemplateApk.MAX_APK_BYTES)
                 .put("technicalApkBytes", TemplateApk.MAX_APK_BYTES)
                 .put("resourceAdmission", "Defaults shown above; signed resourceBudgets.packaging can raise source limits within maxima. Complete APK includes fixed runtime/config/provenance and ZIP overhead. One process-local operation with conservative actual-size heap admission; availability is not guaranteed.").put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON")
                 .put("adaptiveIcon", "Optional foreground PNG or transparent geometric JSON, opaque #RRGGBB background, insetPercent 0–40 (default 0 preserves canvas); compiled API26 adaptive resource plus legacy fallback"))
-            .put("signing", "Signing uses a separate RSA key for each app, created locally in AndroidKeyStore on first signing. Android still controls any later installation confirmation and the source-specific install setting.")
-            .put("unsupported", "Implemented operations depend on declared capabilities, applicable user grants, and device/OS availability. Native APIs outside the compiled capability catalog require a reviewed template update; per-app native code and compilation are unsupported.")
+            .put("scopeWarning", defaultScopeWarning())
+            .put("evidence_limit", "Bundled template and compiled catalog only; no project app behavior was tested.")
+            .put("signing", "A per-app RSA key is created locally in AndroidKeyStore on first signing. Android controls installation confirmation and the source-specific install setting.")
+            .put("unsupported", "Native APIs outside the compiled catalog require a reviewed template update; per-app native code and compilation are unsupported.")
+    }
+
+    private fun defaultScopeWarning(): String {
+        val omitted = FactorySpec.parse(JSONObject().put("schemaVersion", 1).put("appId", "org.example.factoryscope")
+            .put("name", "Factory scope").put("versionCode", 1).put("versionName", "1")
+            .put("webDir", "web").put("icon", "icon.png"))
+        val capabilities = omitted.capabilities.toSet()
+        val catalog = capabilities.map { CapabilityCatalog.CAPABILITIES.getValue(it) }
+        val permissions = catalog.flatMap { it.permissions }.toMutableSet()
+        if ("nfc" in capabilities) permissions += F3ManifestPolicy.NFC_PERMISSION
+        if ("bluetooth" in capabilities) permissions += setOf(F3ManifestPolicy.BLUETOOTH_PERMISSION,
+            F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION, F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION,
+            F3ManifestPolicy.BLUETOOTH_CONNECT_PERMISSION)
+        if ("jobs" in capabilities) permissions += setOf(F3ManifestPolicy.NETWORK_STATE_PERMISSION, NotificationPolicy.BOOT_PERMISSION)
+        val features = buildSet {
+            if ("nfc" in capabilities) add(F3ManifestPolicy.NFC_FEATURE)
+            if ("bluetooth" in capabilities) add(F3ManifestPolicy.BLE_FEATURE)
+        }
+        val components = buildSet {
+            add(ManifestPlan.ACTIVITY)
+            if ("widgets" in capabilities) addAll(listOf(F3ManifestPolicy.WIDGET_PROVIDER, F3ManifestPolicy.WIDGET_ACTION_RECEIVER))
+            if ("jobs" in capabilities) add(F3ManifestPolicy.JOB_SERVICE)
+        }
+        val incomingShare = omitted.incomingShare ?: IncomingSharePolicy(listOf("*/*"), true)
+        val bluetooth = omitted.bluetooth ?: BluetoothPolicy("full")
+        val cleartext = "enabled".takeIf { "network" in capabilities } ?: "disabled"
+        return "Omitting capabilities selects all ${capabilities.size} compiled APIs. Derived manifest scope: permissions=${permissions.sorted()}, features=${features.sorted()}, package queries=${catalog.flatMap { it.queries }.toSet().sorted()}, intent queries=${catalog.flatMap { it.queryActions }.toSet().sorted()}, components=${components.sorted()}, cleartext traffic=$cleartext. Defaults: incomingShare ${incomingShare.mimeTypes} / multiple=${incomingShare.multiple}; Bluetooth scanPrivacy=${bluetooth.scanPrivacy}. Manifest declarations do not grant Android runtime permissions."
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject =
         FactoryPackagingResources.acquire().use { buildOwned(specPath, outputPath, expectedVersion, token) }
@@ -390,12 +420,12 @@ internal class FactoryProjectService(
             .put("app_id", spec.appId).put("version_code", spec.versionCode).put("version_name", spec.versionName)
             .put("android_api", Build.VERSION.SDK_INT).put("webview_version", JSONObject.NULL)
         validate()
-        if (action == "preview_status") return FactoryPreviewRegistry.status(metadata)
+        if (action == "preview_status") return compactPreviewStatus(FactoryPreviewRegistry.status(metadata))
         val snapshot = FactoryPreviewRegistry.Snapshot(metadata, runtimeConfig, assets, spec.resources.packaging)
         if (action == "test") {
             val result = FactoryRuntimeContractTests.run(snapshot, context.packageName, Build.VERSION.SDK_INT, context.applicationInfo.targetSdkVersion, ::validate)
             validate()
-            return result
+            return compactContractTestResult(result)
         }
         val key = FactoryPreviewRegistry.issue(snapshot, ::validate, token)
         try {
@@ -409,8 +439,55 @@ internal class FactoryProjectService(
             throw failure
         }
         return metadata.put("mode", "functional_preview").put("state", "launch_requested")
-            .put("notice", "One isolated preview with RAM app storage and a separate disposable browser profile replaces the previous preview. Native effects are simulated. Launch request is not proof of WebView rendering or installed-app behavior; use preview_status for bounded observed events.")
+            .put("notice", "Launch requested. Preview uses RAM storage, a disposable browser profile and simulated native effects; it does not confirm rendering or installed-app behavior.")
     }
+
+    internal fun compactContractTestResult(full: JSONObject): JSONObject {
+        val observations = full.getJSONArray("observations")
+        val failures = JSONArray()
+        var failed = 0
+        for (index in 0 until observations.length()) {
+            val observation = observations.getJSONObject(index)
+            if (observation.optString("outcome") != "passed") {
+                failed++
+                failures.put(JSONObject(observation.toString()))
+            }
+        }
+        val compact = JSONObject()
+        val keys = full.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key != "observations" && key != "evidence_limit") compact.put(key, full.get(key))
+        }
+        return compact.put("total_checks", observations.length()).put("failed_checks", failed)
+            .put("observations", failures)
+            .put("evidence_limit", "Shared handlers only: isolated RAM/SQLite, simulated effects; no project JS/WebView, installed behavior, Android grants, persistence or zero-egress proof.")
+    }
+
+    internal fun compactPreviewStatus(full: JSONObject): JSONObject {
+        val observations = full.getJSONArray("observations")
+        val retained = JSONArray()
+        var totalCount = 0L
+        for (index in 0 until observations.length()) {
+            val observation = observations.getJSONObject(index)
+            val count = observation.optLong("count", 1L).coerceAtLeast(0L)
+            totalCount = saturatedAdd(totalCount, count)
+            retained.put(JSONObject(observation.toString()))
+        }
+        val compact = JSONObject()
+        val keys = full.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key != "observations" && key != "evidence_limit") compact.put(key, full.get(key))
+        }
+        return compact.put("total_observations", totalCount)
+            .put("observations", retained)
+            .put("evidence_limit", "Shared-runtime events only; installed rendering, Android grants, persistence and network absence are unverified.")
+    }
+
+    private fun saturatedAdd(left: Long, right: Long): Long =
+        if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
+
     /** Exact historical profiles are selected only by this project's authenticated receipt. */
     private fun verifyReceiptManifest(bytes: ByteArray, spec: TemplateApk.Spec, receipt: JSONObject): TemplateApk.ManifestInfo =
         when (receipt.optString("manifestContract")) {
@@ -447,7 +524,8 @@ internal class FactoryProjectService(
         }
     }
 
-    private fun publicReceipt(receipt: JSONObject): JSONObject = JSONObject().put("build_id", receipt.getString("buildId"))
+    internal fun publicReceipt(receipt: JSONObject): JSONObject = JSONObject().put("build_id", receipt.getString("buildId"))
+        .put("state", receipt.getString("state"))
         .put("output_path", receipt.getString("outputPath")).put("sha256", receipt.getString("apkSha256"))
         .put("bytes", receipt.getLong("apkBytes")).put("signed", receipt.getBoolean("signed"))
         .put("app_id", receipt.getJSONObject("spec").getString("appId"))

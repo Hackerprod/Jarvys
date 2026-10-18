@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v87 / documents-media
+# Factory guidance factory-guidance-v89 / documents-media
 
 ## Sequential document handles
 documents: authenticated retained artifact and pinned host, no raw paths/URIs/persistent grants. Two hosts block broker choice. Opens the Android document picker, where the user chooses a document. Jarvys adds no operation approval.

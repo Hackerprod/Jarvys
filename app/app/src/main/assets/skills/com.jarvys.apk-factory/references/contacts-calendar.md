@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v87 / contacts-calendar
+# Factory guidance factory-guidance-v89 / contacts-calendar
 
 ## Selected contact
 contacts.pick({kind:"phone"|"email"}): contacts capability,exact keys/no default. Opens the Android contact selector, where the user chooses a datum. Returns only {kind,value}: unchanged nonblank paired Unicode≤256codepoints/1024UTF8bytes,no ISO/format/bidi/line/paragraph controls. No name/ID/URI/normalization/dialability/existence proof. Selected row/temporary grant/existing host READ_CONTACTS only,no broad query/new permission/fallback. An interrupted interaction is closed automatically when a new contact interaction starts; uncertain delivery is not replayed. No implied call/send/calendar authority.

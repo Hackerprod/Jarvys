@@ -3,11 +3,11 @@
 Current development source contract: 33 capabilities / 134 methods; SDK 2 and schema/protocol 1. No new APK release is implied.
 Selected SQLite and string key-value backups are documented at the end of this guide. Implementation and host
 validation do not establish physical device, provider durability or independent restore evidence.
-Versioned technical sections retain their API/data scope; the current operation-policy section
-supersedes forced host-confirmation behavior. The v83/v84 backup contracts supersede older
+Versioned technical sections retain their API/data scope; obsolete descriptions of saved operation
+approval policies are removed. The v83/v84 backup contracts supersede older
 no-import/export restrictions within explicit table/key selections only.
 
-Current source additions are documented in [Native network, notifications and speech (v85)](#native-network-notifications-and-speech-v85). This implementation batch permits compilation and small directed checks only; the final global suite, audit and APK generation/release remain deferred until the batch is complete. This document claims no completed validation or release. Historical versioned sections preserve API/data anchors. Their latest-only admission, forced extra host confirmation, old capability totals, blanket zero-permission/offline and pending TTS/network/notification statements are superseded by the current policy and native-services sections. No unimplemented Android family is implied.
+Current source additions are documented in [Native network, notifications and speech (v85)](#native-network-notifications-and-speech-v85). This implementation batch permits compilation and small directed checks only; the final global suite, audit and APK generation/release remain deferred until the batch is complete. This document claims no completed validation or release. Historical versioned sections preserve API/data anchors. Their latest-only admission, obsolete saved-operation approval descriptions, old capability totals, blanket zero-permission/offline and pending TTS/network/notification statements do not describe the current code. No unimplemented Android family is implied.
 
 
 
@@ -17,7 +17,7 @@ Signed budgets preserve legacy defaults while allowing larger sources. `fileShar
 
 Share/audio preparation streams into a private immutable unlinked file descriptor with 32 KiB working buffers. Small transfers retain the authenticated v1 wire format; larger transfers use v2 long lengths. The host streams canonical PCM16 WAV playback rather than allocating the entire clip. Mono/stereo 8–48 kHz remains the supported format. Very short clips use a bounded static path; longer clips use AudioTrack streaming. Cancellation/revocation cannot recall sound or bytes already exposed, and uncertain native cleanup retains ownership rather than permitting blind retry. After process death during snapshot preparation, a bounded private provisional cache file can remain until the next materialization validates and removes it before allocating another. Completed snapshots are unlinked; recovery receipts do not certify disk reclamation or erasure of every cache byte.
 
-Before large share/audio preparation, an authenticated read-only operation-policy query rejects saved DENY without reading source content or allocating a snapshot. It returns no grant and opens no UI. ALLOW/ASK still requires fresh exact source/hash-bound authority after preparation; an ASK operation has one meaningful host review. A policy change after the point-in-time query can race with already-authorized document preparation; final effects remain live-checked. The optional descriptor extension requires a compatible host for these new clients; existing clients retain their prior authenticated protocol behavior.
+Before large share/audio preparation, authenticated source checks bind the installed caller and required capabilities. The host issues a fresh exact source-bound lease for native effects after preparation; it does not consult a saved operation policy or open an approval screen. Final effects remain live-checked. The optional descriptor extension requires a compatible host for these new clients; existing clients retain their prior authenticated protocol behavior.
 
 Optional [adaptive launcher icons](../docs/FACTORY_ADAPTIVE_ICONS.md) use compiled Android resources and preserve the authored foreground canvas by default. [Packaging budgets](../docs/FACTORY_PACKAGING_BUDGETS.md) permit up to 512 website files, 16 MiB per file and 32 MiB total, subject to complete-archive entry/expanded/APK bounds and actual-size advisory heap admission. The precompiled DEX architecture remains unchanged. Historical fixed media/source ceilings below describe earlier releases and are superseded by this section for current development source.
 
@@ -25,12 +25,12 @@ These changes are undergoing targeted checks. No rebuilt-template, final APK, so
 
 ## Generic hardware, widgets and finite jobs in development
 
-The current source adds NFC NDEF, Bluetooth LE central, RemoteViews widgets and finite HTTP jobs through the same SDK and operation policy. These are bounded generic Android building blocks. They do not activate arbitrary Java classes, native libraries, a background JavaScript engine or app-specific workflows. Source integration and focused tests are not a rebuilt-template, release or physical-device acceptance claim.
+The current source adds NFC NDEF, Bluetooth LE central, RemoteViews widgets and finite HTTP jobs through the same SDK, capability checks and authenticated host leases. These are bounded generic Android building blocks. They do not activate arbitrary Java classes, native libraries, a background JavaScript engine or app-specific workflows. Source integration and focused tests are not a rebuilt-template, release or physical-device acceptance claim.
 
-- `nfc.status/read/write/cancel`: foreground reader mode; exact typed NDEF records (`tnf`, `typeHex`, `idHex`, `payloadHex`). Read and write are separate policies. Optional formatting must be explicit; cancellation after writing starts may leave changed contents. Normal NFC manifest permission, optional hardware feature, no invented runtime permission prompt.
+- `nfc.status/read/write/cancel`: foreground reader mode; exact typed NDEF records (`tnf`, `typeHex`, `idHex`, `payloadHex`). Read and write are separate operations. Optional formatting must be explicit; cancellation after writing starts may leave changed contents. Normal NFC manifest permission, optional hardware feature, no invented runtime permission prompt.
 - `bluetooth.status/requestPermissions/scan/poll/stopScan/connect/services/read/write/requestMtu/subscribe/unsubscribe/disconnect/cancel`: generic GATT central with opaque page-owned handles, paginated services/attributes, serialized operations and bounded event queues. Explicit signed `bluetooth:{version:1,scanPrivacy:"full"|"neverForLocation"}` selects real Android permission semantics; neverForLocation can filter beacon results. Actual Android pairing/authentication UI may occur. No-response writes follow the callback-confirmed MTU; initial MTU23 allows20 data bytes. Poll retains original live grants through accepted delivery. Raw UUID/profile payloads are developer data, never predefined business commands.
 - `widgets.availability/list/read/requestPin/update/remove/pollActions/acknowledgeAction`: generic compiled RemoteViews row/column/text/image/progress/button trees. Effects share `widgets.manage`; native launcher pinning remains an Android flow. Remove clears owned configuration, not launcher placement. Repeatable actions create native events per accepted Intent delivery; optional oncePerGeneration deduplicates. Events do not execute app code or grant external effects. Unknown updates are never blindly replayed.
-- `jobs.enqueueHttp/status/cancel/readResult/forget/resume`: durable one-shot typed HTTP requests through JobScheduler, with network/charging/delay constraints. Requires jobs+network. ASK in background waits without UI; foreground resume explicitly chooses execution now and must acknowledge an uncertain prior dispatch where applicable. Existing NetworkRequest timeout bounds apply; no background document handles or arbitrary scripts are persisted. Results and admission status are distinct from successful remote delivery.
+- `jobs.enqueueHttp/status/cancel/readResult/forget/resume`: durable one-shot typed HTTP requests through JobScheduler, with network/charging/delay constraints. Requires jobs+network. If background prerequisites or caller/source authorization are unavailable, dispatch waits; foreground resume explicitly chooses execution now and must acknowledge an uncertain prior dispatch where applicable. Existing NetworkRequest timeout bounds apply; no background document handles or arbitrary scripts are persisted. Results and admission status are distinct from successful remote delivery.
 
 All four use signed `resourceBudgets` sections and explicit bounded native lifetime/cleanup. NFC/tag capability, Bluetooth stack, launcher support and Android background scheduling can independently be unavailable. Current foreground capture/location/recording APIs do not become continuous background APIs merely because jobs exists. Local model inference remains contingent on a chosen engine/model/license/ABI and measured device budget; remote model HTTP protocols compose network and scoped secrets without a provider-specific runtime.
 
@@ -44,67 +44,45 @@ These additions are generic composable APIs, with no ping-specific runtime behav
 
 ### Per-app encrypted secrets
 
-Declare `secrets`; `secrets.request` additionally requires `network`. Methods: put, capture, get, list, describe, remove, reset, request. Put accepts an explicit value; capture is optional native input; get deliberately returns plaintext. Each uses its own unified policy operation. A scope binds one exact HTTPS origin, uppercase HTTP methods, a non-transport header and prefix. `request({id,request:<ordinary network options>})` obtains one complete secrets.request grant; it does not ask separately for network.request. Injection is connection-local and rechecks scope on every redirect, rejects collisions and HTTPS downgrade, and never places plaintext into the authorization disclosure or a reusable redirect map. A server may reflect a credential in a response, so there is no universal never-JavaScript promise.
+Declare `secrets`; `secrets.request` additionally requires `network`. Methods: put, capture, get, list, describe, remove, reset, request. Put accepts an explicit value; capture is optional native input; get deliberately returns plaintext. Each uses its own authenticated native operation lease. A scope binds one exact HTTPS origin, uppercase HTTP methods, a non-transport header and prefix. `request({id,request:<ordinary network options>})` obtains one complete secrets.request lease; it does not acquire a separate network.request lease. Injection is connection-local and rechecks scope on every redirect, rejects collisions and HTTPS downgrade, and never places plaintext into the authorization disclosure or a reusable redirect map. A server may reflect a credential in a response, so there is no universal never-JavaScript promise.
 
 AndroidKeyStore protects the app's AES-GCM key; the encrypted vault is in private no-backup storage. Invalidated/lost keys or corrupt storage are explicit errors, not silent key replacement. Reset is an explicit configured operation. Signed `resourceBudgets.secrets` fields are entries (default32, maximum256), valueBytes (8192/32768), vaultBytes (524288/4194304). Vault capacity must cover valueBytes+8192. Native buffers/input are cleared when released; Java/JavaScript Strings cannot be reliably wiped. A cancelled storage/network operation may already have committed or transmitted, and is never blindly replayed.
 
 ### Incoming Android sharing
 
-Declare `incomingShare` plus `documents` and `incomingShare:{mimeTypes:[...],multiple:boolean}`. MIME patterns are sorted unique lowercase values (1–32); exact SEND and optional SEND_MULTIPLE filters are generated separately. No general file/storage permission is added. list returns bounded metadata; take({id,attachmentIndices?}) uses one policy grant bound to the immutable envelope and selection; discard forgets remaining local data. Android grants and content URI grammar are checked before opening and each read. Only explicit ALLOW or accepted ASK permits provider opening. All selected document slots are reserved before the first open; cleanup uncertainty retains capacity.
+Declare `incomingShare` plus `documents` and `incomingShare:{mimeTypes:[...],multiple:boolean}`. MIME patterns are sorted unique lowercase values (1–32); exact SEND and optional SEND_MULTIPLE filters are generated separately. No general file/storage permission is added. list returns bounded metadata; take({id,attachmentIndices?}) uses a live host lease bound to the immutable envelope and selection; discard forgets remaining local data. Android grants and content URI grammar are checked before opening and each read. All selected document slots are reserved before the first open; cleanup uncertainty retains capacity.
 
 Initial sharing transfers once to the first trusted page; a new Intent binds to the current page. Original Intents/extras are not persisted. Envelopes are process-local and cannot survive Activity/process replacement; incoming MIME/labels are untrusted data. Text is delivered once and attachments become ordinary read handles. Commit precedes bridge posting, so a lost reply never requeues already-consumed content. Signed incomingShare budgets bound envelopes, attachments, text and queued bytes. Existing Android grants are not globally revoked while another live owner may use them.
 
 ### Notification actions and durable scheduling
 
-`notifications.show` accepts optional actions [{id,title,data?}] and uses the same show grant. Actions open this app and enqueue inert typed events; native code does not execute their payload. `pollActions` repeats the oldest event until `ackAction({eventId})`. Immediate action receipts include generationId, managed by generationStatus/forgetGeneration. Plain notifications need no alarm component or durable generation row.
+`notifications.show` accepts optional actions [{id,title,data?}] and uses the same authenticated operation lease. Actions open this app and enqueue inert typed events; native code does not execute their payload. `pollActions` repeats the oldest event until `ackAction({eventId})`. Immediate action receipts include generationId, managed by generationStatus/forgetGeneration. Plain notifications need no alarm component or durable generation row.
 
 Opt into `notifications:{scheduling:true,exactAlarms:false}` for schedule/resumeScheduled/scheduleStatus/cancelScheduled/forgetScheduled. schedule accepts scheduleId, atEpochMs, expiresAtEpochMs, precision, allowWhileIdle and a notification. Resume reacquires the original complete notifications.schedule operation. There is no arbitrary app callback or always-running JavaScript service. Private SQLite commits immutable generations before alarm setup and reserves dispatch before notify; a crash after dispatch reservation yields delivery_unknown and no blind replay. Data ownership is app+signer; same-signer updates retain data but revalidate current capabilities, signed budgets and policy. Unknown outcomes can be explicitly forgotten with acknowledgeDeliveryUnknown, never by pretending delivery was absent.
 
 Scheduling adds two private default-process receivers and RECEIVE_BOOT_COMPLETED. exactAlarms:true additionally declares SCHEDULE_EXACT_ALARM; requestExactAlarmAccess opens genuine Android settings. Inexact is the default; explicit exact denial never silently downgrades. Android permission/channel state, Doze, process lifecycle and OEM behavior still govern delivery. Accepted means notify returned, not displayed/read or exact timing.
 
-Cold background work authenticates the current installed source through the pinned host, then binds its exact app/certificate/APK/receipt/version to a fresh background lease. Acquisition is bounded to2s and background authority expires at the receiver deadline (maximum8s), even after connection. ASK queues without launching UI, DENY prevents dispatch, ALLOW rechecks live authority through the final effect checkpoint. Foreground scheduling uses the existing single ASK flow. Cleanup/status/action acknowledgment use verified own-data identity without needing an action grant or available host. Signed notifications budgets govern schedules, inbox events, retained deduplication/tombstones and ledger storage; explicit terminal cleanup makes these capacity limits reusable.
+Cold background work authenticates the current installed source through the pinned host, then binds its exact app/certificate/APK/receipt/version to a fresh background lease. Acquisition is bounded to2s and background authority expires at the receiver deadline (maximum8s), even after connection. If caller/source authorization or Android prerequisites are unavailable, dispatch waits; live authority is rechecked through the final effect checkpoint. Foreground scheduling uses the same authenticated lease flow. Cleanup/status/action acknowledgment use verified own-data identity without needing an action lease or available host. Signed notifications budgets govern schedules, inbox events, retained deduplication/tombstones and ledger storage; explicit terminal cleanup makes these capacity limits reusable.
 
 ## What it does
 
-Coding can turn a reviewed HTML/CSS/JavaScript project into a separate Android APK with its own application ID, name, icon, version and selected native capabilities. The HTML describes the requested product; the offline notebook included with the runtime is an acceptance example, not a fixed application generator.
+Coding can turn a reviewed HTML/CSS/JavaScript project into a separate Android APK with its own application ID, name, icon and version. In `factory.json`, omit `capabilities` to select every compiled capability; an explicit array keeps only that subset. Omission includes the generic widget provider and receiver, so the app appears as a widget source in launchers that expose the widget picker; pinning and placement remain launcher-controlled. The HTML describes the requested product; the offline notebook included with the runtime is an acceptance example, not a fixed application generator.
 
-The native Activity and AndroidX WebKit bridge are compiled into DEX once when Jarvys is built. Each new app reuses those exact DEX bytes. Jarvys transforms the binary manifest and the resource package name with a bounded, typed parser, replaces the launcher PNG and website assets, writes an aligned ZIP, and signs according to the saved factory.sign policy (default ALLOW_ALWAYS, configurable ASK/DENY). It never runs Gradle, AAPT, a shell, a downloaded compiler, or x86 emulation for an individual app.
+The native Activity and AndroidX WebKit bridge are compiled into DEX once when Jarvys is built. Each new app reuses those exact DEX bytes. Jarvys transforms the binary manifest and the resource package name with a bounded, typed parser, replaces the launcher PNG and website assets, writes an aligned ZIP, and signs the exact completed same-project artifact with its per-app AndroidKeyStore identity when requested. It never runs Gradle, AAPT, a shell, a downloaded compiler, or x86 emulation for an individual app.
 
 This is the established hybrid-app pattern used by projects such as [Cordova](https://cordova.apache.org/docs/en/latest/guide/overview/) and [Capacitor](https://capacitorjs.com/docs). The template adds a deliberately bounded local factory and a restricted native API; it does not invent a new app architecture or promise arbitrary native functionality from JavaScript.
 
-## Factory operation permissions
+## Native operation authority
 
-Settings → Factory permissions starts with ALLOW_ALWAYS. The user can choose ASK or DENY as the default and override each operation for each authenticated app. “Use default” removes that override. The protected permission editor cannot be operated by an agent to expand its own authority. Factory permissions are separate from Coding autonomy.
+There is no saved per-operation ALLOW/ASK/DENY policy, Factory permissions editor or Jarvys approval screen for generated-app operations, signing or installation. The owner authorizes APK Factory actions through the requested Coding task. `sign` verifies the completed same-project artifact and signs it with that app's AndroidKeyStore identity. `install` verifies the exact signed artifact and submits it to Android PackageInstaller; Android may require its per-source install setting or a system confirmation.
 
-The configurable operations are exactly:
-- documents.open, documents.create
-- photos.pick, photos.capture, audio.play
-- browser.open, contacts.pick, share.file
-- maps.open, phone.dial, email.compose, sms.compose, calendar.insert
-- database.backupExport, database.backupImport
-- storage.backupExport, storage.backupImport
-- factory.sign, factory.install, clipboard.write
-- share.text, export.text
-- network.request, network.probe, network.ping
-- notifications.channel, notifications.requestPermission, notifications.show, notifications.cancel
-- speech.voices, speech.speak, speech.stop
-- voiceRecognition.recognize, location.current, location.requestPermission
-- recording.record, recording.requestPermission, steps.current, steps.requestPermission, sensors.subscribe
-- secrets.put, secrets.capture, secrets.get, secrets.list, secrets.describe, secrets.remove, secrets.reset, secrets.request
-- incomingShare.take, notifications.schedule, notifications.requestExactAlarmAccess
+For native calls, the pinned host authenticates the actual UID, package, certificate, version, APK hash and retained exact capability scope. A nonce/request/source-bound Binder lease authenticates both endpoints and remains live-checked before effects. This is technical caller and scope authorization, not a user approval prompt. Revocation, process death or a stale source ends the lease. Read-only status does not grant authority; no JavaScript flag, cached grant or Intent label substitutes for these checks.
 
-ALLOW_ALWAYS advances without a Jarvys approval prompt. ASK asks once for the exact request, then continues without duplicate Use, Play, all-values, sign or install confirmations. DENY prevents that operation's effects. Android document/photo/contact selection, recipient choice when no verified default exists, genuine Android grants, biometric authentication and installer consent remain when required. This is saved application authority, not a bypass for Android security. Capability declarations and backup table/key selections still constrain scope.
+Generated apps still require declared capabilities. Android runtime permission prompts, document/photo/contact selectors, recipient choices, biometric prompts, widget pinning and PackageInstaller consent remain system-controlled when Android requires them. Completed effects and recipient copies cannot be recalled; uncertain outcomes are not automatically replayed. Signed-artifact history retains 64 recent exact receipts plus an older installed matching-certificate artifact when applicable. Older installed artifacts retain only their own exact scope; legacy compatibility is exact-latest only. Missing or damaged evidence fails closed.
 
-Identity is appId plus authenticated certificate, never an Intent label. First signing uses a project-bound new-identity subject; explicit choices transfer to the resulting certificate. Atomic persisted policy revisions invalidate affected pending grants after a default/override change. “Revoke this app’s pending operations” persists revocation without changing future policy. Unreadable or failed policy persistence fails closed. A grant binds one exact request and cannot survive relevant policy revision, lifecycle or identity loss.
+New backup protocol v2 authenticates both Binder endpoints and checks its live lease before each export write and import commit. Legacy backup protocol v1 remains authenticated, but its final host authorization is the last enforceable checkpoint; older DEX has no later callback. Already-open file descriptors, completed writes, clipboard copies, installation commits, emitted speech, transmitted network bytes and recipient copies cannot be undone. New share-file opens recheck authority; an already-open recipient descriptor may remain usable. Never claim cancellation proves rollback or external task closure.
 
-The generic host authorization provider authenticates the actual caller UID, package, certificate, version, APK hash and retained exact capability scope. A nonce/request/source-bound Binder lease authenticates both endpoints and checks live authority before native effects; pending ASK is not approval. Revocation, process death or a stale source ends the lease. Read-only status does not grant authority. No JavaScript flag, cached grant or Intent label substitutes for these checks.
-
-Signed-artifact history retains 64 recent exact receipts plus an older installed matching-certificate artifact when applicable. A retained installed version can remain authorized after a newer version is signed; latest-only admission is superseded. Verification still requires the exact installed hash/version/certificate and that artifact's declared capabilities, never the newest release's broader scope. Missing legacy history permits only existing exact-latest compatibility; damaged history, missing retained entries and unresolved identity fail closed. Retention is bounded, not perpetual trust. Already-generated APKs retain their packaged DEX and need a same-ID/key, increased-version update for new runtime behavior. Packaged precompiled DEX is supported; no Gradle compiler or arbitrary native compilation is added inside Jarvys.
-
-New backup protocol v2 authenticates both Binder endpoints and checks live policy before each export write and import commit. Legacy backup protocol v1 remains authenticated, but its final host authorization is the last enforceable checkpoint; older DEX has no later callback. Already-open file descriptors cannot be revoked retroactively, nor can completed writes, clipboard copies, installation commits, emitted speech, transmitted network bytes or recipient copies be undone. New share-file opens recheck authority; an already-open recipient descriptor may remain usable. Never claim cancellation proves rollback or external task closure.
-
-This is a 51-operation policy, not a switch for all 99 SDK methods. share.text and export.text now use the generic host lease before their existing chooser/document flows. Local storage, ordinary SQLite, haptics, device information, presentation, sensors and biometrics retain their direct runtime contracts. Clipboard preview stays simulated with performed:false and never writes the system clipboard. All network, notifications and speech methods reject UNAVAILABLE in preview before effects. Byte/file/row/rate/deadline budgets remain technical quotas, not permission settings. Dispatch, chooser return and cleaned-up audio need no invented success attestation; unknown outcomes still require reconciliation and are never replayed automatically.
-
+`share.text` and `export.text` use authenticated host leases before their chooser/document flows. Local storage, ordinary SQLite, haptics, device information, presentation, sensors and biometrics retain their direct runtime contracts. Clipboard preview stays simulated with performed:false and never writes the system clipboard. All network, notifications and speech methods reject UNAVAILABLE in preview before effects. Byte/file/row/rate/deadline budgets are technical quotas, not operation permissions. Dispatch, chooser return and cleaned-up audio need no invented success attestation; unknown outcomes still require reconciliation and are never replayed automatically.
 ## A. Architecture and ARM64 viability
 
 The per-app path is Java/Kotlin running inside Jarvys on Android. It contains no native executable or ABI-specific library, so Ubuntu PRoot is not a prerequisite. The generated apps likewise contain no native `.so` libraries. Both Jarvys flavors can use this native factory on Android 8/API 26 or later, which supplies bounded no-follow directory enumeration. Generated applications support Android 7/API 24 or later.
@@ -147,9 +125,9 @@ Window fixes ship in the compiled template. An APK previously generated by Jarvy
 old runtime until rebuilt and signed as an update with the same application ID and existing key,
 and a larger version code. Updating Jarvys alone does not modify already generated applications.
 
-The runtime implements `storage`, `export`, `share`, `clipboard`, `haptics`, `device`, `documents`, `photos`, `audio`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts`, `calendar`, `database`, `presentation`, `sensors`, `biometrics`, `network`, `notifications` and `speech`. Documents adds temporary binary handles through a compatible installed Jarvys host; it does not add general filesystem access. `runtime.info` returns non-sensitive API/capability metadata without granting any capability. Every functional method checks the generated app's declared capability before executing it. Storage is private to that installed app. Export uses the Android document picker, sharing uses a system chooser, and clipboard writes in the new runtime use the authenticated host operation policy; preview is simulated with performed:false.
+The runtime implements `storage`, `export`, `share`, `clipboard`, `haptics`, `device`, `documents`, `photos`, `audio`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts`, `calendar`, `database`, `presentation`, `sensors`, `biometrics`, `network`, `notifications` and `speech`. Documents adds temporary binary handles through a compatible installed Jarvys host; it does not add general filesystem access. `runtime.info` returns non-sensitive API/capability metadata without granting any capability. Every functional method checks the generated app's declared capability before executing it. Storage is private to that installed app. Export uses the Android document picker, sharing uses a system chooser, and clipboard writes in the new runtime use the authenticated host; preview is simulated with performed:false.
 
-The compiled template declares **zero Android permissions**. Selected generated capabilities contribute only their exact manifest scope: `biometrics` adds `USE_BIOMETRIC`, `network` adds `INTERNET` and cleartext support, `notifications` adds `POST_NOTIFICATIONS`, and `speech` adds the exact TTS service query. API24–29 biometrics remain unsupported. `notifications.requestPermission` requests the real Android grant where required; JavaScript cannot grant it. Other unimplemented Android APIs and arbitrary permissions remain unavailable. Listing a desired method cannot add absent DEX. WebView local-only configuration is not process isolation: `INTERNET` is process-wide, and TTS engines/providers/recipients may use their own network permissions.
+The compiled template declares **zero Android permissions**. Selected generated capabilities contribute only their exact catalog manifest scope. Omitting `capabilities` derives all catalog entries and can add `USE_BIOMETRIC`, `INTERNET` with cleartext enabled, `POST_NOTIFICATIONS`, `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `RECORD_AUDIO`, `ACTIVITY_RECOGNITION`, `HIGH_SAMPLING_RATE_SENSORS`, `NFC` plus its optional hardware feature, `BLUETOOTH`, `BLUETOOTH_ADMIN`, `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` and the BLE feature, `ACCESS_NETWORK_STATE`, `RECEIVE_BOOT_COMPLETED`, queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`, and intent queries for `android.intent.action.TTS_SERVICE` and `android.speech.action.RECOGNIZE_SPEECH`. These declarations do not grant Android runtime permissions; the generated app still relies on user-controlled Android grants and system flows. The generated schema-1 `factory-app.json` records the effective explicit capability list; existing explicit subsets keep their scope. API24–29 biometrics remain unsupported. `notifications.requestPermission` requests the real Android grant where required; JavaScript cannot grant it. Other unimplemented Android APIs and arbitrary permissions remain unavailable. Listing a desired method cannot add absent DEX. WebView local-only configuration is not process isolation: `INTERNET` is process-wide, and TTS engines/providers/recipients may use their own network permissions.
 
 ### Closed capability and manifest contract (UX42 F0a-1)
 
@@ -175,7 +153,9 @@ Previously completed v1 receipts remain usable. Receipt-less or foreign artifact
 
 Create these inside the Coding project's existing scope:
 
-- `factory.json`: required keys `schemaVersion` (1), `appId`, `name`, `versionCode`, `versionName`, `capabilities`, `webDir`, `icon`; optional `dataBackup` selects bounded table/key backups below.
+- `factory.json`: required keys `schemaVersion` (1), `appId`, `name`, `versionCode`, `versionName`, `webDir`, `icon`; optional `capabilities` selects a subset (omitted means all compiled capabilities). Optional `dataBackup` selects bounded table/key backups below.
+
+Omitting `capabilities` also derives the full catalog manifest: biometric, process-wide internet/cleartext, notification, coarse/fine location, microphone, activity/sensor, NFC and BLE declarations, boot/network state, package queries for Jarvys and TTS/speech intent queries. It adds schema-v1 defaults for the exact policies that require a config: incoming shares accept `*/*` and multiple items; Bluetooth uses `scanPrivacy: "full"`. These declarations do not grant Android runtime permissions. Use an explicit subset to narrow derived scope; Android grants remain under user control.
 - The directory named by `webDir`, containing `index.html`, separate scripts and styles, and local assets. Up to 128 files, 1 MiB each and 8 MiB total, with bounded directory depth and 256 total directory entries. Hidden paths, symlinks, special files and parent traversal are rejected.
 - An icon file: PNG (48–1024 pixels per side, at most 1 MiB), or bounded geometric JSON authored with text tools.
 
@@ -186,9 +166,9 @@ Vector icon schema: `schemaVersion: 1`, an opaque `background` color in `#RRGGBB
 ### Real tool actions
 
 1. In built-in Coding, load `com.jarvys.apk-factory` using `read_skill` and inspect the real `apk_factory` tool.
-2. `apk_factory` with `action: inspect` reports the template hash, actual capability ceiling and project version.
+2. `apk_factory` with `action: inspect` returns a compact readiness/capability summary, template hash and project version; it does not return full method or resource inventories.
 3. `action: build`, `spec_path`, `output_path`, `expected_scope_version` snapshots files, checks the template hash, creates a deterministic aligned unsigned APK and returns its SHA-256. The output parent directory must already exist; existing files are never replaced.
-4. `action: sign`, `input_path`, `expected_sha256`, `output_path`, `expected_scope_version` accepts only an exact, completed factory artifact from this same project. It applies factory.sign policy (ALLOW_ALWAYS, ASK once, or DENY), signs and independently verifies using AOSP apksig.
+4. `action: sign`, `input_path`, `expected_sha256`, `output_path`, `expected_scope_version` accepts only an exact, completed factory artifact from this same project. It signs with the per-app AndroidKeyStore identity and independently verifies using AOSP apksig.
 
 The principal only discovers that Coding has this workflow. Custom bots, Android-use and nested delegates cannot inherit the factory tool or its full skill. Disabling the skill or changing the active bot policy revokes availability; bundled instructions do not authorize actions by themselves.
 
@@ -196,7 +176,7 @@ Unsigned archives include a public provenance asset with the template SHA-256, i
 
 ### Signing identity and limitations
 
-Existing schema-v1 identities retain their distinct non-exportable AndroidKeyStore key. They cannot be exported or converted, even if their key is missing. Missing keys, mismatches, interrupted creation and unsupported records fail closed. First signing creates a non-exportable key under factory.sign policy unless a recoverable identity already exists. To choose recoverable signing, use **Settings → Device → Factory identities** before requesting the first signature; ALLOW_ALWAYS does not pause for a key-choice prompt. No tool, bridge, project file or prompt accepts passphrases or private keys.
+Existing schema-v1 identities retain their distinct non-exportable AndroidKeyStore key. They cannot be exported or converted, even if their key is missing. Missing keys, mismatches, interrupted creation and unsupported records fail closed. First signing creates a non-exportable key unless a recoverable identity already exists. To choose recoverable signing, use **Settings → Device → Factory identities** before requesting the first signature. No tool, bridge, project file or prompt accepts passphrases or private keys.
 
 For a new recoverable identity, the native secure screen obtains an explicit file destination and a user-entered, confirmed passphrase. It generates a portable RSA identity only after approval, saves and reads back an authenticated encrypted backup, and then commits the local identity. The local PKCS#8 copy is encrypted with a distinct per-app AndroidKeyStore AES-GCM wrapping key in no-backup app storage. This wrapper is not the recovery backup. The versioned portable container uses PBKDF2-HMAC-SHA256 (600,000 iterations, random salt) and AES-256-GCM with authenticated format parameters and random nonce. It includes the exact certificate, appId, private key and known version/hash evidence. A strong, unique passphrase is essential; the 12-character minimum alone does not guarantee strength. Losing the passphrase or the only usable backup may permanently prevent updates.
 
@@ -214,7 +194,7 @@ Signing creates a local artifact. It does not install, publish, upload, grant An
 
 ## E. Acceptance gates
 
-Host acceptance covers two distinct IDs and an update, labels/icons/resource-package identities, exact DEX preservation, deterministic unsigned bytes, no unexpected permissions, signing verification using isolated test fixtures, archive attacks, bridge policy/argument failures, storage isolation semantics, source scope/leases, output collisions, cancellation, approval denial/revocation and real skill-to-tool routing.
+Host acceptance covers two distinct IDs and an update, labels/icons/resource-package identities, exact DEX preservation, deterministic unsigned bytes, no unexpected permissions, signing verification using isolated test fixtures, archive attacks, bridge capability/argument failures, storage isolation semantics, source scope/leases, output collisions, cancellation, lease revocation and real skill-to-tool routing.
 
 Physical acceptance still requires a supported Android ARM64 device with a current WebView: generate and sign two apps; install both with explicit approval; write different notes; kill/relaunch each; export via SAF; sign an increased-version update with the first app's retained key; install that update and confirm data survives. Also test denial/cancellation, background/rotation, oversized inputs, uninstall/key-loss messaging and obsolete WebView. Do not infer any of those results from package inspection or JVM tests.
 
@@ -233,7 +213,7 @@ The binary transformer is original bounded code informed by the published resour
 
 ## F0c: functional preview and bounded shared-core tests
 
-The Coding-only `apk_factory` actions `preview`, `preview_status` and `test` require exactly `input_path`, `expected_sha256` and `expected_scope_version` in addition to `action`. They accept a completed same-project build receipt and exact verified APK, with the currently bundled template. Old-template builds need rebuilding; neither preview nor test signs or installs anything. The snapshot binds durable project identity, scope version, build identity, source-manifest digest, template/APK digests, appId and version. Assets are copied from the verified APK, not read from mutable project paths while rendering. Existing website/file/count limits bound the snapshot; a single active preview replaces its predecessor.
+The Coding-only `apk_factory` actions `preview`, `preview_status` and `test` require exactly `input_path`, `expected_sha256` and `expected_scope_version` in addition to `action`. They accept a completed same-project build receipt and exact verified APK, with the currently bundled template. Old-template builds need rebuilding; neither preview nor test signs or installs anything. Results return compact state/counts plus failed checks and relevant warnings; passing checks are still fully executed and omitted from the returned observations. The short evidence limit remains in each result. The snapshot binds durable project identity, scope version, build identity, source-manifest digest, template/APK digests, appId and version. Assets are copied from the verified APK, not read from mutable project paths while rendering. Existing website/file/count limits bound the snapshot; a single active preview replaces its predecessor.
 
 `preview` requests a private native Activity using a process-local one-shot token. Its permanent native header identifies the APK and functional/simulated mode, with Reset test data and Close. Native storage is an isolated bounded RAM backend; resetting discards it and starts the same immutable snapshot. Sharing, clipboard, haptics and document export use explicit simulation adapters: no system chooser, clipboard write, vibration, document write or permission request occurs. `documents.*` instead rejects `UNAVAILABLE`, without fake handles or a real picker. All three `presentation.*` methods also reject `UNAVAILABLE`, without changing host settings. Simulated effect results are `{simulated:true, performed:false, mode:"preview", operation:...}` rather than a claim of a completed external effect. Runtime/device info distinguish declared appId from the actual Jarvys host package. Installed apps retain mandatory package/config binding and their actual adapters.
 
@@ -243,35 +223,32 @@ Both preview and generated apps use `:factory-runtime-core` for validators, requ
 
 `test` executes fixed synthetic requests against the actual shared validators and dispatcher with isolated RAM storage and simulated effects. It checks catalog method paths (including undeclared-capability rejection and explicit documents unavailability), storage isolation and origin/subframe rejection, returning each assertion actually observed. It does not evaluate project JavaScript, render a browser, execute the APK's DEX, install an app, test hardware, grant permissions, or establish absence of network traffic. Project workflow testing still requires explicit UI/browser/device evidence. `preview` returning `launch_requested` alone proves none of those outcomes.
 
-The originating active Coding token's cancellation, scope/version change, profile/skill revocation, replacement and native Close invalidate preview operations. Normal completed Coding work does not itself clear its standalone token. A global stop of already completed work is not a new cancellation guarantee; the native session closes when backgrounded. Queued stale operations cannot be replayed into a new generation; an already-started installed-app external effect may finish and is never silently retried. Installation is separately authorized through the workflow below.
+The originating active Coding token's cancellation, scope/version change, profile/skill revocation, replacement and native Close invalidate preview operations. Normal completed Coding work does not itself clear its standalone token. A global stop of already completed work is not a new cancellation guarantee; the native session closes when backgrounded. Queued stale operations cannot be replayed into a new generation; an already-started installed-app external effect may finish and is never silently retried. Installation is a separate `apk_factory` action that submits the exact signed artifact to Android PackageInstaller.
 
-## F0c: separately authorized installation
+## F0c: Android installation
 
-`install`, `install_status` and `install_cancel` take exactly `input_path`, `expected_sha256` and `expected_scope_version`. They require a completed signed same-project receipt, with immutable app/version, APK SHA-256, certificate SHA-256 and receipt digest. Native Full installation verifies signed bytes with apksig and checks manifest/DEX bindings; project identity, scope, receipt and source artifact are revalidated after review and the immutable private snapshot is reverified before commit. Signing never requests installation; a requested install checks the separate factory.install policy.
+`install`, `install_status` and `install_cancel` take exactly `input_path`, `expected_sha256` and `expected_scope_version`. They require a completed signed same-project receipt, with immutable app/version, APK SHA-256, certificate SHA-256 and receipt digest. The Full host verifies signed bytes with apksig and checks manifest/DEX bindings; project identity, scope, receipt and source artifact are revalidated, and the immutable private snapshot is reverified before commit. Signing never requests installation. Jarvys adds no operation approval screen for installation.
 
-Full alone declares `REQUEST_INSTALL_PACKAGES`. Android's per-source permission must have been enabled by the user before installation; Jarvys neither grants it nor opens settings automatically. Permission inspection creates no global automation guard. Denied, failed-query or unsupported configurations retain distinct status records without creating a session. Granting permission never resumes old authority; request a fresh install after changing the Android grant. Play returns an explicit unavailable result and leaves the artifact available in the project. Generated profiles use the selective capability permissions described above and never receive package-install permission. No claim of Google Play eligibility or approval is made. Managed-owner and privileged-installer modes are rejected; API 31+ explicitly requires system user action, and older supported versions use the ordinary unprivileged installer path.
+Full alone declares `REQUEST_INSTALL_PACKAGES`. If Android's per-source install setting is unavailable, Jarvys reports that state and provides a link to the Android setting; Jarvys does not grant it. After the setting changes, issue a fresh install request. Play returns an explicit unavailable result and leaves the artifact in the project. Generated profiles never receive package-install permission. No claim of Google Play eligibility or approval is made. Managed-owner and privileged-installer modes are rejected; API 31+ requests `USER_ACTION_NOT_REQUIRED` where available, but Android still decides whether confirmation is required.
 
-`install` opens a private screenshot-protected native review screen. It discloses app identity, version, exact hashes and replacement/data risks. ALLOW_ALWAYS stages and commits without a host approval; ASK requires one protected review. Android's returned consent Intent opens from the live foreground flow without a second host confirmation. DENY blocks staging. Real Android installer consent remains protected; no receiver starts UI in the background. Durable state preserves unknown outcomes without restoring a process-global automation lock. Protection belongs to live ASK or genuine Android consent, and ends with terminal/cancellation evidence. An ASK screen entered during an already-active automated action cannot approve the request.
+The native install activity displays exact app identity, version, hashes and current installation status, and submits the validated artifact to Android PackageInstaller. Android may return a consent Intent, which opens from the live foreground flow; no receiver starts Android UI in the background. Durable state preserves unknown outcomes and never replays a commit. Only an authenticated `STATUS_SUCCESS` callback establishes session success. Android rejection/abort, other errors, pre-commit cancellation and post-commit unknown cancellation remain distinct outcomes. Android's aborted status does not reliably distinguish every user denial from other abort causes. Closing system UI, a disappeared session or an installed package/version do not establish success; cancellation cannot promise rollback.
 
-A single atomic no-backup journal records the latest session. Session ID is saved before commit; `committing` is written before Binder. A crash or uncertain call is never replayed. Pending-system Intents remain process-local and are not reconstructed after restart. Callback delivery uses an explicit private mutable PendingIntent with a fixed unique URI nonce and checked session/state. Only `STATUS_SUCCESS` establishes session success. Rejection/abort, policy blocking, other errors, pre-commit cancellation and post-commit unknown cancellation are distinct states. Android's aborted status does not reliably distinguish all user denials from other abort causes. Closing the system UI, a disappeared session or an installed package/version do not establish success. Cancellation cannot promise rollback.
-
-Status/cancel bind the durable receipt even if APK bytes are no longer readable; changed project scope or inaccessible receipts require **Settings → Factory installations** recovery. Background/recreation revokes uncommitted authority. A malformed journal remains unavailable for new installation until recovery; it does not create a process-global lock. Explicit native recovery can cancel up to 16 validated Jarvys-owned installer sessions (not installed apps), with foreground checks and a required empty final query, then atomically preserve an unknown-outcome record. Query, cancellation or write failure retains the unresolved journal state. A separate native Close rechecks no owned sessions remain. No signing identity or project artifact is reset. Crash-created uncommitted orphan sessions can never commit themselves; real-device lifecycle, OEM system UI, source permission denial, update/data preservation and recovery remain acceptance gates. Synthetic tests do not install anything, change settings or use real signing keys.
+A single atomic no-backup journal records the latest session. Session ID is saved before commit; `committing` is written before Binder. Pending-system Intents remain process-local and are not reconstructed after restart. Status/cancel bind the durable receipt even if APK bytes are no longer readable; changed project scope or inaccessible receipts require **Settings → Factory installations** recovery. Background/recreation revokes uncommitted authority. A malformed journal remains unavailable for new installation until recovery. Explicit native recovery can cancel up to 16 validated Jarvys-owned installer sessions (not installed apps), with foreground checks and a required empty final query, then atomically preserve an unknown-outcome record. Query, cancellation or write failure retains the unresolved journal state. A separate native Close rechecks no owned sessions remain. No signing identity or project artifact is reset. Crash-created uncommitted orphan sessions can never commit themselves; real-device lifecycle, OEM system UI, source permission denial, update/data preservation and recovery remain acceptance gates. Synthetic tests do not install anything, change settings or use real signing keys.
 
 References: [Android PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller), [session commit](https://developer.android.com/reference/android/content/pm/PackageInstaller.Session), [required user action](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setRequireUserAction(int)), and [Google Play permission policy](https://support.google.com/googleplay/android-developer/answer/12085295).
 
-Automation protection covers the configured ASK review and actual Android installer consent. Permission errors and old uncertainty do not create a blanket lock on unrelated automation.
-
+Automation protection belongs to active PackageInstaller interaction and genuine Android confirmation. There is no configured Jarvys operation review; permission errors and old uncertainty remain local to installation and do not lock unrelated work.
 ## v67: temporary binary documents
 
 Declare `documents` in factory.json and use the Promise SDK contract in [RUNTIME.md](apk-runtime/docs/RUNTIME.md#temporary-binary-documents-v67). The factory writes build-pinned `documentBroker` package/certificate metadata into runtime-owned factory-app.json; the project cannot choose or replace that trust anchor. A compatible Jarvys host must remain installed. Both known host packages installed together blocks access.
 
-Jarvys's exported native `FactoryDocumentActivity` verifies the caller's actual installed package, unique UID, certificate, version and exact APK hash against the latest signed identity/scope evidence. Unknown, restored-but-unresolved or mismatched evidence fails closed. Signing a newer release makes the previously installed release unavailable for documents until that exact newer APK is installed; signing alone does not update it. Saved documents.open/create policy controls picker launch: ALLOW_ALWAYS proceeds, ASK reviews once, and DENY blocks. A validated Android selection returns temporary access without a second **Use this document** confirmation. Policy and foreground authority are rechecked before delivery; already-open descriptors cannot be recalled retroactively. Generated apps add only the two exact package queries, no permissions or components; the broker belongs to Jarvys.
+Jarvys's exported native `FactoryDocumentActivity` verifies the caller's actual installed package, unique UID, certificate, version and exact APK hash against the retained signed identity/scope evidence. Unknown, restored-but-unresolved or mismatched evidence fails closed. Signing a newer release does not update the previously installed app. Android presents the document picker; a validated selection returns temporary access without a second **Use this document** confirmation. Foreground authority is rechecked before delivery; already-open descriptors cannot be recalled retroactively. Generated apps add only the two exact package queries, no permissions or components; the broker belongs to Jarvys.
 
 Handles carry no path/URI and cannot be persisted or restored. Reads/writes are sequential, canonical-base64 chunks of at most 32 KiB, 16 MiB per handle and 32 MiB cumulative per page/session, with four admission slots and five-minute expiry. Cancel/close do not replenish the cumulative budget. Backgrounding, page reset and rotation revoke authority; installed selection is effectively one at a time. Selecting the next document closes the previous one and may return BUSY across runtime instances while provider cleanup remains pending.
 
-Cancellation cannot roll back provider work. Create may leave an empty or partial file even if no handle is returned; a user-selected cloud provider may transfer data remotely. `close_requested` and `providerCommitConfirmed:false` do not certify flush, durable commit or upload. At exact quota, close rather than reading an extra byte to prove EOF. Interrupted-picker recovery in **Settings → Factory documents** acknowledges uncertainty without proving task closure or restoring authority. A fresh ALLOW_ALWAYS request may retire historical uncertainty before acquiring new authority; it never replays the old request.
+Cancellation cannot roll back provider work. Create may leave an empty or partial file even if no handle is returned; a user-selected cloud provider may transfer data remotely. `close_requested` and `providerCommitConfirmed:false` do not certify flush, durable commit or upload. At exact quota, close rather than reading an extra byte to prove EOF. Interrupted-picker recovery in **Settings → Factory documents** acknowledges uncertainty without proving task closure or restoring authority. A fresh authenticated request may retire historical uncertainty before acquiring new authority; it never replays the old request.
 
-v67 host test and delivery results are recorded in recovery/factory-documents. Physical acceptance remains pending. The bounded v68 file-sharing extension is described below; the other F1/F2/F3 families remain closed. Required device checks include exact-latest identity rejection, both-host ambiguity, picker denial/cancel, policy revocation/no duplicate Use confirmation, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
+v67 host test and delivery results are recorded in recovery/factory-documents. Physical acceptance remains pending. The bounded v68 file-sharing extension is described below; the other F1/F2/F3 families remain closed. Required device checks include retained-artifact identity rejection, both-host ambiguity, picker denial/cancel, live-lease revocation/no duplicate Use confirmation, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
 
 
 ## v68: bounded binary file sharing
@@ -283,14 +260,14 @@ Binder sends sequential chunks of at most 32 KiB to the pinned, uniquely identif
 length/hash/EOF validation precedes publication. One process-wide transfer admission and a
 five-minute lifetime bound authority. No caller URI/path or persistent grant is introduced.
 
-The host rechecks exact latest signed caller identity and both capabilities, then stages one
-private snapshot. The sharing coordinator applies share.file policy and shared document/share
-admission; ASK requires one protected review, ALLOW_ALWAYS advances automatically. Host-only FileProvider
+The host rechecks exact signed caller identity and both capabilities, then stages one
+private snapshot. The sharing coordinator checks live authenticated authority and shared document/share
+admission, then opens Android's system chooser. Host-only FileProvider
 `${applicationId}.factory.files` exposes only `cache/factory-file-shares/`, with an exact registered
 URI, monotonic expiry, read-only operations and process-death fail-closed behavior. Generated
 manifest permissions/providers are unchanged. See [the complete API and lifecycle contract](apk-runtime/docs/RUNTIME.md#binary-file-sharing-v68).
 
-Policy-authorized launch opens the system chooser. Read-only URI grants never include write,
+A valid live host lease opens the system chooser. Read-only URI grants never include write,
 prefix or persistable authority. Chooser return delivers a dispatch-only receipt and detaches the
 bounded recipient lease, without a second closure acknowledgment. New provider opens recheck
 live authority; Settings recovery handles uncertain state without claiming recipient closure. No outcome is reported as delivery; `deliveryConfirmed` is always false.
@@ -316,9 +293,8 @@ repeat opens and modes other than `w`; capture identity is pinned and checked be
 Cameras requiring seekable descriptors or reopening output are unsupported. There is no
 silent thumbnail fallback. Generated APK permissions/components remain unchanged.
 
-Both flows apply photos.pick/capture policy with the same latest signed APK/certificate/receipt
-checks and shared admission. ALLOW_ALWAYS launches automatically; ASK reviews once before the
-Android picker/camera. Validated image delivery has no second **Use this photo** confirmation.
+Both flows check photos.pick/capture capability and retained signed APK/certificate/receipt
+identity with shared admission. Android presents the picker or camera flow. Validated image delivery has no second **Use this photo** confirmation.
 A durable native recovery latch retains uncertainty. Interrupted work cannot resume or restore image authority. Recovery
 reconciles uncertainty, never proves external-task closure or restores old authority.
 No user photo, real camera or device is accessed during synthetic host validation.
@@ -340,7 +316,7 @@ metadata, potentially including location, are retained. Jarvys does not write to
 or automatically send the photo; an external camera or cloud provider may retain/transfer
 its own copy. Revocation cannot recall copies. Preview returns unavailable.
 
-A compatible single Jarvys host and its exact latest signed receipt remain mandatory;
+A compatible single Jarvys host and its retained exact signed receipt remain mandatory;
 newly signing another release does not update the installed generated app. Host tests do
 not establish OEM camera/picker/FD behavior, Binder interoperability, actual grant revocation,
 installation/update or data preservation. Other F1/F2/F3 families remain closed.
@@ -355,7 +331,7 @@ References: [photo picker](https://developer.android.com/training/data-storage/s
 
 Declare `audio` and `documents`; call `Jarvys.audio.play({handle})` with an untouched read
 handle. This consumes a complete snapshot with charged quota and EOF proof, capped at 6 MiB
-before materialization. The exact-latest signed installed APK, unique compatible host and
+before materialization. The retained exact signed installed APK, unique compatible host and
 native-only Binder peers are authenticated. No URI, path, bytes or target enters this API.
 
 Only canonical little-endian WAV is accepted: exactly 44 header bytes, RIFF/WAVE, fmt length
@@ -365,8 +341,7 @@ extra chunks. Frames must not exceed sampleRate × 30. Maximum valid data is 5,7
 No compressed codec, external playback/synthesis engine, network addition or new permission.
 Earlier document selection may involve a cloud provider; local playback does not change that.
 
-The host validates the bytes and applies audio.play policy: ALLOW_ALWAYS plays automatically,
-ASK reviews once with **Play once**, and DENY blocks. Durable
+The host validates the bytes and checks live authenticated authority before playback. Durable
 play_pending precedes native playback. Allocation and exact single STATIC PCM write run on
 a bounded worker without playing; a final installed identity check precedes main-thread
 foreground/generation/guard checks and immediate-granted audio focus. API26+ disables delayed
@@ -381,7 +356,7 @@ source cancellation latches irrevocably and requests host revocation on a bounde
 lane; oneway delivery never proves completed stop. Process death also revokes. Late callbacks
 cannot authorize playback or another request. Restart restores only protected unknown outcome,
 never bytes/player authority. Pending preparation and uncertain native cleanup keep admission
-until native cleanup is confirmed. ALLOW_ALWAYS then completes without a separate user attestation;
+until native cleanup is confirmed. The operation then completes without a separate audibility attestation;
 unknown cleanup remains blocked. The result `{playbackAttempted,audibilityConfirmed:false}`
 never establishes that sound was heard; interrupted requests may instead reject as unavailable.
 
@@ -408,8 +383,8 @@ implicitly granted. SDK 2 and schema/protocol 1 remain unchanged. Factory-genera
 uses the existing `documentBroker` key for its build-owned Jarvys pin; either browser or documents
 requires that pin. Both capabilities share exactly two deduplicated host package queries, with
 zero generated permissions and no new generated components. A compatible single Jarvys host
-must remain installed. The host verifies the source APK hash, certificate, version and exact
-latest signed scope; signing a newer release requires updating the installed generated app.
+must remain installed. The host verifies the source APK hash, certificate, version and retained
+exact signed scope; signing a newer release does not change the installed artifact's scope.
 
 URLs are immutable printable ASCII, 1–2,048 characters, exact lowercase `https`, strict lowercase
 DNS labels (1–63 characters, at least two labels, at most 253 total), no user information, fragment,
@@ -419,10 +394,8 @@ controls/space/DEL/backslash. Paths and queries remain exact, without decoding o
 These rules do not detect arbitrary secrets in a path/query or prove a public/safe destination.
 Do not put passwords, tokens or other secrets into a URL.
 
-An authenticated FLAG_SECURE view displays the exact URL/host. ASK protects one native approval
-and rejects obscured touches, including partial obscuration on API29+. ALLOW_ALWAYS proceeds with
-a verified Android default browser; if no eligible default exists, recipient choice is still needed.
-DENY blocks. These controls do not control unrelated accessibility services. The selected target is a
+An authenticated FLAG_SECURE disclosure view displays the exact URL/host and rejects obscured touches, including partial obscuration on API29+. Dispatch uses a verified Android default browser; if no eligible default exists, Android presents recipient choice.
+These controls do not control unrelated accessibility services. The selected target is a
 native browser component; JavaScript cannot choose packages, components, flags, extras or schemes.
 Discovery uses a single host-only HTTPS/BROWSABLE query and public GET_RESOLVED_FILTER metadata.
 Eligible components have a general HTTPS filter without authority/path/SSP/MIME/relative-filter
@@ -477,7 +450,7 @@ capabilities. Neither grants documents, browser, device location, contact access
 SDK 2/schema/protocol 1 remain unchanged. Like browser, either requires the factory-owned
 `documentBroker` pin and exactly the two existing host package queries. All generated APKs
 remain permissionless with the same launcher. A compatible exact-pinned Jarvys host must be
-installed; source identity must match its exact latest signed APK hash/certificate/version/scope.
+installed; source identity must match its retained signed APK hash/certificate/version/scope.
 No new host permission is added. The host already has unrelated legacy permissions; the new
 paths do not use them. Only narrow host ACTION_VIEW/geo and ACTION_DIAL/tel visibility queries
 and a separate authenticated native review Activity are added.
@@ -506,8 +479,8 @@ intent resolution after source verification, before explicit dispatch. No implic
 Eligibility is not proof that the recipient is trustworthy or behaves as requested.
 
 FLAG_SECURE native review shows the full query/coordinates/number, source app, operation and
-chosen native recipient. ASK reviews once with obscured-touch protection. ALLOW_ALWAYS dispatches
-to a verified Android default or waits for recipient choice; DENY blocks.
+chosen native recipient. The native launch view uses obscured-touch protection. Dispatch uses
+a verified Android default or Android recipient choice.
 The disclosure says the selected app receives these data and may use its own network,
 accounts and history. Maps may send a location query to its provider. Dialer apps also receive
 the number. External app behavior is outside Jarvys control; ACTION_DIAL requests a dialer UI,
@@ -577,19 +550,18 @@ zero permissions and the same two exact host package queries, factory-owned `doc
 pin and launcher. Rebuild older generated apps with the same ID/key and a higher version.
 
 This reuses the v72 closed external broker, journal, Binder protocol and recipient checks;
-there is no generic intent API. Exact latest signed source APK and exact pinned host verification
+there is no generic intent API. Retained exact signed source APK and exact pinned host verification
 remain mandatory, as do bounded eligible-recipient discovery and selected component/certificate/
 UID/version/update-time revalidation immediately before dispatch. Two installed hosts fail closed.
 Native review displays complete, separately labelled recipient, subject and body (including empty
 values), source and selected app. FLAG_SECURE, disabled saved view state/autofill descendants/content
-capture and, for ASK, human-only controls protect the single policy review. These protections do
+capture and obscured-touch protection apply to the native disclosure screen. These protections do
 not erase IME/JVM copies or control the recipient app. No content is persisted in the journal.
 
 Opening itself shares the fields with the selected app. It may ignore/change them, save or
 cloud-sync drafts, or transmit content using its own accounts/network/permissions. Do not submit
 secrets. ACTION_SENDTO requests an editor; Jarvys never presses Send, but cannot enforce recipient
-behavior. Inspect the external editor before any further action. ASK reviews all fields once;
-ALLOW_ALWAYS uses saved authority even when an external app later ignores the fields.
+behavior. Inspect the external editor before any further action. Native disclosure displays the fields before dispatch; there is no saved per-operation approval policy.
 
 Five-minute expiry, cancellation/source death, stale/lost lifecycle authority, durable consumed
 launch state, pending-worker ownership and no-replay recovery remain unchanged. Cancellation cannot
@@ -623,12 +595,12 @@ permission or intent extras can be supplied by JavaScript. SDK 2/schema/protocol
 The capability contributes only the same two exact host-package visibility queries and
 factory-owned `documentBroker` binding. Generated APKs remain permissionless.
 
-The generated app authenticates its pinned host; the host verifies the exact latest signed
-installed generated APK, version, certificate, hash and signing scope. Source/host shared-UID
+The generated app authenticates its pinned host; the host verifies the retained exact signed
+installed APK, version, certificate, hash and signing scope. Source/host shared-UID
 ambiguity and two installed Jarvys hosts fail closed. A separate bounded control endpoint
 handles cancellation and source death; no document handle or photo transfer is used.
 
-Saved contacts.pick policy opens one verified system `ACTION_PICK` component (ASK reviews once) using only the
+The contacts.pick capability and a live host lease open one verified system `ACTION_PICK` component using only the
 Phone or Email `CONTENT_TYPE`. Picker and canonical contacts-provider package/component,
 UID, certificate set, version and update time are pinned and rechecked. A legitimate platform
 contacts provider may have a shared UID. System provenance is not universal OEM compatibility.
@@ -657,7 +629,7 @@ format/bidi and line/paragraph separators fail. Cursor/provider allocation is ou
 accepted-value bound. Provider Binder cancellation is best effort, not a hard I/O timeout.
 
 The human selects the datum in Android. The validated frozen string is delivered without a second
-host approval. Delivery rechecks saved policy, latest source proof/control and consumes authority
+host approval. Delivery rechecks the latest source proof/control and consumes the live authority lease
 durably before returning exactly
 `{kind,value}`. The returned value is unchanged: no normalization, dialability, mailbox validity,
 contact ownership or external action claim. No URI/ID/name/permissions are returned. A generated
@@ -667,9 +639,9 @@ Review uses FLAG_SECURE, disabled saved state/autofill descendants/content captu
 and partially obscured touch filtering; human accessibility remains. These protections do not
 erase immutable JVM strings or control another app. Journals contain state/open/nonce only.
 Five-minute expiry, background/focus loss after return, cancellation and restart revoke delivery.
-Shared admission remains while provider work is blocked; ASK protection ends after its one approval.
+Shared admission remains while provider work is blocked; Native interaction protection ends when the external action is dispatched or cancelled.
 Settings → Contact selection review provides native uncertain-outcome recovery; acknowledgment
-is not OS closure proof. A new ALLOW_ALWAYS request may retire historical uncertainty without
+is not OS closure proof. A fresh authorized request may retire historical uncertainty without
 restoring old authority. Recovery never returns data or replays selection. Cancellation cannot erase copies already received.
 
 Preview returns UNAVAILABLE. `documents.cancel` is unrelated. `runtime.info` exposes
@@ -713,7 +685,7 @@ reminders, arbitrary URI/component/extra/flags, permission request or automatic 
 No `READ_CALENDAR`/`WRITE_CALENDAR` permission is added. Existing host permissions are unchanged;
 generated APKs remain permissionless and acquire only the two reviewed host-package queries.
 
-The v72–v74 exact latest signed source APK, authenticated pinned host, bounded discovery and
+The v72–v74 retained exact signed source APK, authenticated pinned host, bounded discovery and
 recipient component/certificate/UID/version/update-time revalidation apply unchanged. The host
 adds one narrow ACTION_INSERT/DEFAULT/event-MIME visibility query. Recipient filters must have
 exactly that sole MIME, no scheme/authority/path/scheme-specific-part/relative-URI restrictions,
@@ -722,14 +694,13 @@ subset can reject otherwise legitimate OEM or content-scheme handlers; no generi
 
 The native view shows source app/version/APK hash/certificate, every field in separate
 labelled views, exact epochs and readable timezone offsets (UTC dates for all-day), and the exact
-selected recipient. ASK reviews once; ALLOW_ALWAYS dispatches to a verified default or waits for
-recipient choice; DENY blocks. Description is last and never interpreted as labels or links. Opening itself
+selected recipient. Dispatch uses authenticated host authority and a verified Android default or recipient chooser. Description is last and never interpreted as labels or links. Opening itself
 shares all fields with the app. It may ignore/change times, timezone, all-day or other values,
 save or transmit data, and cloud-sync a draft using its own accounts/network/permissions. Jarvys
 never presses Save. Inspect all fields again in the external editor; never submit secrets.
 
 FLAG_SECURE, disabled saved state/autofill descendant export/content capture, obscured-touch
-filtering protect ASK review; they do not erase JVM copies or control external-app behavior.
+filtering protect the native disclosure screen; they do not erase JVM copies or control external-app behavior.
 Five-minute expiry, cancellation/source death, lifecycle loss, consumed launch authority and
 uncertain-state recovery prohibit replay. Dispatch needs no extra user-declared closure. Journals retain only
 state/open/nonce, never event content. Cancellation cannot recall content or close another app.
@@ -992,7 +963,7 @@ are shown in the system prompt. No arbitrary title or button labels from JavaScr
   mode:"installed",simulated:false}`. It records only this local OS biometric event. It is not
   remote identity, identity proof, a cryptographic assertion, a token or a grant for payment,
   signing, sending, installation, data release or any other action. Each operation still requires
-  its own saved policy and capability checks; ASK and required Android consent are not satisfied by a biometric receipt. Never persist a receipt as reusable
+  its own capability and Android prompt; required Android consent is not satisfied by a biometric receipt. Never persist a receipt as reusable
   authorization, claim who authenticated, or use it to unlock an unrelated protected action.
 - `biometrics.cancel({})` (or no argument) accepts only empty args. It rejects an active
   authentication with `CANCELLED` and returns `{cancelRequested:boolean,cancellationAcknowledged:false}`.
@@ -1055,8 +1026,8 @@ particular test run or physical acceptance completed.
 Every new generated APK contains the exact Pure.css 3.0.0 distribution stylesheets plus
 BSD-3-Clause and embedded normalize MIT notices and provenance. This is fixed-inclusion
 runtime data, not a capability: 20 capabilities/42 methods, SDK2/schema1 and permissions
-are unchanged. `apk_factory inspect` exposes `localUiLibraries` with exact paths, bytes,
-SHA-256, licenses and inclusion policy. Public build provenance repeats this inventory;
+are unchanged. `apk_factory inspect` reports summary counts, not `localUiLibraries`.
+Public `factory-provenance.json` records the exact paths, bytes, SHA-256, licenses and inclusion policy;
 project-source hashes continue to describe only actual project inputs.
 
 Link `/factory-ui/pure-3.0.0/pure-min.css` and
@@ -1113,11 +1084,11 @@ physical rotation/lifecycle behavior or installation acceptance.
 Original native-network checkpoint: 23 capabilities/59 methods, SDK2/schema1. Current totals and added generic services are described above. This reference grants no authority or validation. All methods below require their declared capability and installed foreground runtime; all reject UNAVAILABLE in preview before effects, including status/cancel. Inspect the actual template. Same-ID/key, increased-version rebuild is needed for existing APKs.
 
 ### Shared authority and manifest
-Read basics: default ALLOW_ALWAYS, optional ASK once per exact operation or DENY. Real Android permissions remain. The pinned host verifies exact caller/retained artifact capability scope and issues a live nonce/request/source-bound lease. Network requests/probes/ping, notification mutations/permission request and speech voices/speak/stop are covered. Status is read-only; network.cancel cleans up owned jobs without new effect authority. Lifecycle/session/policy loss ends pending work. No blind replay after reply loss; prior transmission/audio/notifications/files can remain.
+The pinned host verifies the exact caller and retained artifact capability scope and issues a live nonce/request/source-bound lease for network requests/probes/ping, notification mutations/permission request, and speech voices/speak/stop. Status is read-only; network.cancel cleans up owned jobs without new effect authority. Lifecycle/session loss ends pending work. No blind replay after reply loss; prior transmission/audio/notifications/files can remain.
 
 The permission-free template stays unchanged. Selected network adds INTERNET and generated usesCleartextTraffic=true; notifications adds POST_NOTIFICATIONS; biometrics adds USE_BIOMETRIC independently. speech adds the exact android.intent.action.TTS_SERVICE visibility query, with the two exact Jarvys host packages. Export/share and native families require the host pin. No broad package visibility or per-app compiler is required. The original checkpoint added no service/receiver; current opt-in notification scheduling adds the exact private receivers documented above. INTERNET is process-wide: local-only WebView/CSP settings do not prove zero process egress. Native TLS trust and hostname verification remain platform-owned. A TTS engine/provider/recipient can use its own network even when the generated app has no INTERNET.
 
-`runtime.info` now reports `offlineScope:"embedded_webview_configuration_not_process_isolation"`; `offline` is false with network selected and otherwise describes only configured WebView behavior. `processInternetPermission` follows network selection; `speechEngineMayUseNetwork:true`, `nativeProbeIsIcmp:false` and `nativePingProtocol:"icmp"` disclose boundaries, not authority or test evidence. Pending generic lease acquisition/ASK expires after five minutes; approved foreground work continues with live checks. SDK waits are 420000 ms for network/notifications and speech status/voices/stop, 86400000 ms for speak. SDK timeout never proves rollback or remote closure.
+`runtime.info` now reports `offlineScope:"embedded_webview_configuration_not_process_isolation"`; `offline` is false with network selected and otherwise describes only configured WebView behavior. `processInternetPermission` follows network selection; `speechEngineMayUseNetwork:true`, `nativeProbeIsIcmp:false` and `nativePingProtocol:"icmp"` disclose boundaries, not authority or test evidence. A generic foreground lease expires after five minutes and remains live-checked while active. SDK waits are 420000 ms for network/notifications and speech status/voices/stop, 86400000 ms for speak. SDK timeout never proves rollback or remote closure.
 
 ### Native HTTP
 Jarvys.network.request({url,method?,headers?,body?,bodyBase64?,responseType?,connectTimeoutMs?,readTimeoutMs?,timeoutMs?,maxRequestBytes?,maxResponseBytes?,maxHeaderBytes?,redirect?,maxRedirects?,allowHttpsDowngrade?}). Exact keys/types; absolute HTTP(S) URL ≤8192 UTF-8 bytes, no userinfo/fragment, invalid port, control/space/backslash. Methods are HTTP tokens ≤32 chars, default GET; platform-unsupported methods reject. Choose UTF-8 body or canonical padded bodyBase64, never both; GET/HEAD/TRACE bodies reject. responseType text(default)|base64. No automatic cookie/session credential management is promised.
@@ -1146,7 +1117,7 @@ channel({id,name,description?,importance?}): id [A-Za-z0-9][A-Za-z0-9_.-]{0,63},
 
 show({id,channelId,title,body,priority?}): integer id1–2147483647, same channel grammar, nonblank title≤240 UTF-8 bytes, body≤4096 (may be empty), priority low|default|high. Valid paired Unicode; title/name no controls, body/description permit LF/TAB. App-scoped tag/id replaces its prior notification. API26+ channel and current OS permission/settings must permit it. Receipt {status:"accepted",id} confirms notify call only. Tap uses an immutable Intent to this app's verified launcher, no arbitrary URL/component/extra/actions.
 
-cancel({id}) requests removal of this app's exact ID: {status:"cancel_requested",id}; no read/closure proof. requestPermission({}) uses the real Android 13+/target 33+ POST_NOTIFICATIONS flow when absent and rereads OS status after callback; Android can suppress the dialog or deny. Earlier APIs need no runtime grant. Saved Factory approval never grants OS permission or unblocks system settings. That original checkpoint supported immediate notifications only. The current generic-services section adds opt-in durable alarms/reboot recovery and own-app actions, without promising physical delivery or introducing an always-running background JavaScript service.
+cancel({id}) requests removal of this app's exact ID: {status:"cancel_requested",id}; no read/closure proof. requestPermission({}) uses the real Android 13+/target 33+ POST_NOTIFICATIONS flow when absent and rereads OS status after callback; Android can suppress the dialog or deny. Earlier APIs need no runtime grant. A Jarvys host lease never grants OS permission or changes system settings. That original checkpoint supported immediate notifications only. The current generic-services section adds opt-in durable alarms/reboot recovery and own-app actions, without promising physical delivery or introducing an always-running background JavaScript service.
 
 ### Platform text-to-speech
 Jarvys.speech.status({}) discovers installed TTS service packages without engine initialization and reports available,busy,engineInitialized,completedChunks,error/status. Discovery/availability does not promise a usable language/voice or sound. voices({engine?}) initializes the chosen/default installed engine under live policy; returns sorted voice descriptors {name,language,quality,latency,networkRequired}, totalVoices/truncated. Voice-list data is bounded to 256 KiB; truncation is explicit.
@@ -1162,15 +1133,15 @@ stop({}) requests cleanup of the owned operation, returning status:"stop_request
 
 The current catalog has 20 capabilities / 46 methods, SDK 2 and schema/protocol 1. database.backupExport and database.backupImport belong to database and also require documents. The existing six database methods remain unchanged. Both backup methods are UNAVAILABLE in preview before any database or document handle is allocated; ordinary preview database operations still work in ephemeral SQLite.
 
-Declare the optional factory.json policy dataBackup:{"tables":["notes","tasks"]}. tables permits at most eight database identifiers in ascending order, without duplicates; the optional independent keys policy is documented in basics. Absence or an empty tables list disables SQLite backup; it grants nothing implicitly. Nonempty policy requires both database and documents capabilities. Signing discloses this exact policy, and the receipt must match the embedded runtime configuration. No manifest permission, signing key or signing-identity backup format changes.
+Declare the optional factory.json dataBackup:{"tables":["notes","tasks"]}. tables permits at most eight database identifiers in ascending order, without duplicates; the optional independent keys selection is documented in basics. Absence or an empty tables list disables SQLite backup; it grants nothing implicitly. Nonempty selection requires both database and documents capabilities. Signing discloses this exact configuration, and the receipt must match the embedded runtime configuration. No manifest permission, signing key or signing-identity backup format changes.
 
 - Jarvys.database.backupExport({version,tables,filename}) exports exactly the nonempty, sorted, unique selected subset of the declared tables. version is the exact current database version (1–1000); filename uses the existing simple document filename grammar. It does not export every declared table automatically.
-- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); Android selection remains; the saved documents.open policy adds at most one ASK review, with no extra Use step. The file's table set must exactly match the explicit selection, within the declared policy. The same exact database version and selected-table schema must already exist. No migration occurs.
+- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); Android presents the document picker and the user selects a source file. The file's table set must exactly match the explicit selection. The same exact database version and selected-table schema must already exist. No migration occurs.
 - mode:"insertOnly" inserts rows only; any existing ID collision in any selected table rolls back the entire import. mode:"replaceSelectedTables" atomically deletes and replaces rows in selected tables only. Both preserve every unselected table. Target data or schema changes after native review produce a conflict, requiring a fresh review.
 
 The bounded format is canonical plaintext JSON, at most 1 MiB, named jarvys-sqlite-data with formatVersion:1. It contains selected table schemas and typed rows plus database version, package and certificate labels. It contains no SQL, ZIP, signing keys, preferences, arbitrary files or document contents. It is unencrypted. Package/certificate labels are compatibility checks, not authentication of a backup's author or contents; an attacker can rewrite them. Secrets are unsupported and cannot be reliably detected. Never claim that scanning or a label makes a backup safe.
 
-An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. The backup operation policy controls authorization: ALLOW_ALWAYS continues automatically, ASK reviews all values, the operation, table selection, counts and consequences once, and DENY blocks. Export discloses that the destination provider may upload, cloud-sync or retain plaintext copies; Android destination selection remains without a second host approval. File selection or a matching label alone is not restore authority. New protocol v2 checks live authorization before each write/commit; authenticated legacy v1 ends at the final host authorization.
+An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. Declared capabilities and the authenticated host lease authorize the native call; selected tables remain limited to dataBackup.tables. Protocol v2 rechecks the live lease before each write/commit; authenticated legacy v1 ends at its final host authorization. Export discloses that the destination provider may upload, cloud-sync or retain plaintext copies; Android presents destination selection. File selection or a matching label alone does not authenticate a backup.
 
 Export reports bytes/hash with providerCommitConfirmed:false and closeStatus:"close_requested"; it does not prove provider durability, upload completion or recoverability. Cancellation or failure may leave an empty or partial file. Import reports the native transaction result, not physical durability or a successful independent restore test. A cancellation, lost reply or timeout may occur after commit; inspect state and never automatically retry or claim rollback. database.cancel and documents.cancel share the native backup control rate budget. Each has a bounded SDK control slot beside sensors.cancel and biometrics.cancel (16 ordinary requests plus four controls); cancellation still proves no rollback. The native backup lifetime is five minutes; SDK timeout is 310000 ms, allowing the terminal callback. Lifecycle revocation and cleanup remain authoritative; no background/resume permission is added.
 
@@ -1181,14 +1152,14 @@ The catalog remains 20 capabilities with 46 methods, SDK 2 and schema/protocol 1
 Declare optional dataBackup:{"keys":["settings","tasks"]}. dataBackup.keys defaults empty, allows 0–32 sorted, unique names matching [a-zA-Z0-9_.:-]{1,96}, and independently requires storage+documents when nonempty. dataBackup may contain keys, legacy tables, or both, with at least one field and no extras. Legacy tables-only serialization and SQLite behavior remain unchanged; empty keys are omitted when serializing. Nonempty tables still require database+documents independently. The signed receipt must exactly match both embedded policies. An allowlist grants no approval and is not a secret detector.
 
 - Jarvys.storage.backupExport({version:1,keys,filename}): select 1–32 sorted, unique allowed keys explicitly. Every selected key must exist; missing selected export keys reject the whole operation. filename uses the existing simple document filename grammar. Export never selects all allowed keys implicitly.
-- Jarvys.storage.backupImport({version:1,keys,handle,mode}): consumes an untouched document read handle opened through documents.open({mimeType:"application/json"}) and Android selection under the saved documents.open policy, with no extra Use step. The archive key set must exactly match the nonempty explicit selection. version is exactly the integer 1, not the SQLite database version. No migration or key renaming occurs.
+- Jarvys.storage.backupImport({version:1,keys,handle,mode}): consumes an untouched document read handle opened through documents.open({mimeType:"application/json"}); Android presents the document picker and the user selects a source file. The archive key set must exactly match the nonempty explicit selection. version is exactly the integer 1, not the SQLite database version. No migration or key renaming occurs.
 - mode:"insertOnly": any existing selected key is a collision, even if its value equals the archive value. mode:"replaceSelectedKeys": writes only selected archive values, replacing selected existing keys or inserting selected absent keys. It never clears the store or deletes unselected keys. The reviewed selected-key preimage must still match before mutation; changed selected targets require fresh review. Unselected state is preserved and current whole-store quotas are rechecked.
 
 The canonical plaintext JSON format is jarvys-preferences-data with formatVersion:1 and storageVersion:1, at most 1 MiB. It contains selected string keys/values plus package/certificate compatibility labels. Values require valid paired Unicode. Existing string limits remain: 64 KiB UTF-8 per value, 256 total store entries and 1 MiB total key/value bytes; archive escaping/metadata also count toward the independent archive limit. It is unencrypted. Labels are not authentication of the author or contents; an attacker can rewrite them. Secrets are unsupported, and arbitrary strings cannot be reliably detected as secret-free.
 
-Installed generated app, exact current signed receipt and matching pinned Jarvys host are required. The backup operation policy supplies ALLOW_ALWAYS authority or one ASK all-values approval showing selected keys, counts, mode and overwrite impact; DENY blocks. Export discloses that the provider may upload, cloud-sync or retain plaintext copies and retains Android destination selection, with no second host approval. File selection and compatible labels alone do not authorize restore. New protocol v2 checks live authorization before each write/commit; authenticated legacy v1 ends at the final host authorization.
+An installed generated app, exact current signed receipt and matching pinned Jarvys host are required. Declared capabilities, selected keys and the authenticated host lease constrain the operation. Protocol v2 rechecks the lease before each write/commit; authenticated legacy v1 ends at its final host authorization. Export discloses that the provider may upload, cloud-sync or retain plaintext copies, and Android presents destination selection. File selection and compatible labels alone do not authenticate a backup.
 
-Import uses one bounded store replacement under the same transaction lock as ordinary storage, after validation and review-preimage checks. No lock spans human review or provider I/O. A backend commit returning false or throwing is an unknown outcome: memory or disk may already have changed, no rollback is promised and no automatic replay is allowed. Cancellation, process death, reply loss or timeout can follow mutation. Inspect state before a fresh policy-authorized attempt; a receipt proves no physical durability or independent recovery.
+Import uses one bounded store replacement under the same transaction lock as ordinary storage, after validation and selected-key preimage checks. No lock spans source selection or provider I/O. A backend commit returning false or throwing is an unknown outcome: memory or disk may already have changed, no rollback is promised and no automatic replay is allowed. Cancellation, process death, reply loss or timeout can follow mutation. Inspect state before a fresh request; a receipt proves no physical durability or independent recovery.
 
 Export returns providerCommitConfirmed:false and closeStatus:"close_requested"; provider close does not prove durable storage, cloud completion or recoverability. Failed or cancelled exports may leave empty/partial files. The operation lifetime is five minutes and both backup families use a 310000 ms SDK timeout with an ambiguity warning. documents.cancel uses the existing authenticated cancellation path for storage-only apps; database.cancel and documents.cancel share the native backup control rate budget. SDK admission reserves one slot for each of documents.cancel, database.cancel, sensors.cancel and biometrics.cancel alongside 16 ordinary requests (20 maximum). Cancellation proves neither rollback nor provider closure; cleanup may remain busy. No new storage.cancel method exists.
 
