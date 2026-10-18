@@ -1871,6 +1871,17 @@ private fun JarvysApp(
             }.getOrNull()
         })
     }
+    var workspaceComposerText by rememberSaveable(routeWorkspaceId) { mutableStateOf("") }
+    var workspaceSelectedAssignmentId by rememberSaveable(routeWorkspaceId) { mutableStateOf<String?>(null) }
+    val workspaceAssignments = workspaceChatState.value?.assignments.orEmpty()
+    val workspaceSelectedAssignment = workspaceAssignments.firstOrNull {
+        it.id == workspaceSelectedAssignmentId && (it.canCorrect || it.canPause)
+    } ?: workspaceAssignments.firstOrNull { it.canCorrect || it.canPause }
+    val workspaceHasActiveWork = workspaceChatState.value?.let { workspace ->
+        workspace.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
+            WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING) ||
+            workspace.events.any { it.crewMissionSnapshot?.active() == true }
+    } == true
     var workspaceChatReload by remember { mutableIntStateOf(0) }
     var workspaceOlderHistoryLoading by remember(routeWorkspaceId) { mutableStateOf(false) }
     var workspaceOlderHistoryLoadError by remember(routeWorkspaceId) { mutableStateOf(false) }
@@ -1895,7 +1906,7 @@ private fun JarvysApp(
             workspaceOlderHistoryLoadError = false
             workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
                 previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
-                previous?.events.orEmpty(), loading = true)
+                previous?.events.orEmpty(), loading = true, assignments = previous?.assignments.orEmpty())
             AgentRunUiState.showSession(executionSessionId)
             try {
                 val loaded = withContext(workspaceProjectionDispatcher) {
@@ -1909,7 +1920,8 @@ private fun JarvysApp(
                 AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
                 workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
                     previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
-                    previous?.events.orEmpty(), error = context.getString(R.string.workspace_chat_load_error))
+                    previous?.events.orEmpty(), error = context.getString(R.string.workspace_chat_load_error),
+                    assignments = previous?.assignments.orEmpty())
                 AgentRunUiState.restoreSession(executionSessionId, previous?.events.orEmpty())
             }
         } else {
@@ -2004,6 +2016,16 @@ private fun JarvysApp(
         onWorkspaceMenuAction = {
             routeWorkspaceId?.let { id -> navController.navigate("workspace/${Uri.encode(id)}/files") { launchSingleTop = true } }
         },
+        workspaceBotsActionTitle = if (workspaceChatActive) stringResource(R.string.workspace_view_bots) else null,
+        onWorkspaceBotsAction = {
+            workspaceChatState.value?.let { state ->
+                workspaceCrewSessionId = state.executionSessionId
+                val latestMission = state.events.lastOrNull { it.kind == "crew_mission" }?.crewMissionSnapshot
+                navController.navigate(latestMission?.let { Routes.crew(it.missionId) } ?: Routes.CREW_EMPTY) {
+                    launchSingleTop = true
+                }
+            }
+        },
         onConversationAction = onConversationAction,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW
             && route != Routes.WORKSPACE_SESSION_PREVIEW && route != Routes.ARTIFACT_PREVIEW
@@ -2070,11 +2092,21 @@ private fun JarvysApp(
         onReflect = onReflectionManual,
         bottomBar = {
             if (route == Routes.CHAT || workspaceChatActive) ChatComposer(
-                    goal = if (workspaceChatActive) "" else goal,
-                    onGoalChange = if (workspaceChatActive) ({ _: String -> }) else onGoalChange,
-                    onSend = if (workspaceChatActive) ({}) else onSubmitMessage,
+                    goal = if (workspaceChatActive) workspaceComposerText else goal,
+                    onGoalChange = if (workspaceChatActive) ({ text: String -> workspaceComposerText = text }) else onGoalChange,
+                    onSend = if (workspaceChatActive) ({
+                        workspaceSelectedAssignment?.takeIf { it.canCorrect }?.let { assignment ->
+                            if (workspaceComposerText.isNotBlank()) {
+                                onWorkspaceControl(routeWorkspaceId.orEmpty(), assignment.id, assignment.revision,
+                                    WorkspaceControlType.CORRECT, workspaceComposerText)
+                                workspaceComposerText = ""
+                            }
+                        }
+                        Unit
+                    }) else onSubmitMessage,
                     onInterruptAndSend = if (workspaceChatActive) ({}) else onInterruptAndSend,
-                    sendAllowed = !workspaceChatActive && agentState.interactiveOwnerSessionId == null,
+                    sendAllowed = if (workspaceChatActive) workspaceSelectedAssignment?.canCorrect == true
+                        else agentState.interactiveOwnerSessionId == null,
                     canInterrupt = !workspaceChatActive && agentState.running && agentState.sessionId == conversationSessionId
                         && agentState.interactiveOwnerSessionId == conversationSessionId
                         && MessageReactionTool.isOrdinaryChat(conversationSessionId)
@@ -2086,13 +2118,19 @@ private fun JarvysApp(
                     onAttachmentCamera = onAttachmentCamera,
                     onAttachmentPhotos = onAttachmentPhotos,
                     onAttachmentFiles = onAttachmentFiles,
-                    onStop = onStopRun,
+                    onStop = if (workspaceChatActive) ({
+                        workspaceSelectedAssignment?.takeIf { it.canPause }?.let { assignment ->
+                            onWorkspaceControl(routeWorkspaceId.orEmpty(), assignment.id, assignment.revision,
+                                WorkspaceControlType.PAUSE, "")
+                        }
+                        Unit
+                    }) else onStopRun,
                     onSelectModel = { if (!workspaceChatActive) quickModelProvider = providersState.activeProvider },
                     modelLabel = composerModelName,
                     effortLabel = composerEffortLabel,
                     effortAppearance = composerEffortAppearance,
                     effortMotionActive = quickModelProvider == null && drawerState.isClosed,
-                    running = agentState.running || agentState.compacting
+                    running = if (workspaceChatActive) workspaceHasActiveWork else agentState.running || agentState.compacting
                             || agentState.reflecting && agentState.reflectionSessionId == visibleConversationSessionId,
                     captureContextRequested = !workspaceChatActive && captureContextRequested,
                     onCaptureContext = onCaptureContext,
@@ -2114,8 +2152,20 @@ private fun JarvysApp(
                             }
                         }
                     },
-                    inputEnabled = !workspaceChatActive,
-                    disabledHint = if (workspaceChatActive) stringResource(R.string.workspace_chat_input_hint) else null,
+                    inputEnabled = true,
+                    recipientContent = if (workspaceChatActive) ({
+                        com.jarvys.agent.workspaces.WorkspaceAssignmentSelector(
+                            assignments = workspaceAssignments,
+                            selectedAssignmentId = workspaceSelectedAssignment?.id,
+                            onSelect = { workspaceSelectedAssignmentId = it.id },
+                        )
+                    }) else null,
+                    showModelSelector = !workspaceChatActive,
+                    showContextActions = !workspaceChatActive,
+                    showMicrophoneButton = !workspaceChatActive,
+                    separateStopAction = workspaceChatActive,
+                    stopActionEnabled = !workspaceChatActive || workspaceSelectedAssignment?.canPause == true,
+                    stopActionLabel = if (workspaceChatActive) stringResource(R.string.workspace_pause) else null,
             )
         },
     ) { padding ->

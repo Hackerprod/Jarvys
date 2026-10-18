@@ -1,22 +1,20 @@
 package com.jarvys.agent.workspaces
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.chat.ConversationListRow
+import com.jarvys.agent.ui.chat.ConversationRowMenuAction
 
 /** Reconstructed from delivered v95: catalog presentation does not start workspace execution. */
 @Composable
@@ -59,19 +57,21 @@ fun WorkspaceListScreen(
             )
         }
         items(workspaces, key = { "workspace-" + it.id }) { workspace ->
-            Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("workspace-list-row-${workspace.id}")
-                    .clickable(enabled = actionsEnabled && !workspacesLoading && workspaceError == null, role = Role.Button) {
-                        onOpenWorkspace(workspace.id)
-                    }.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256),
-                        style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    WorkspaceStatusText(workspace.status)
-                    WorkspaceCoordinationIndicator(workspace.coordination)
-                    if (workspace.statusPageLimited) Text(stringResource(R.string.workspace_status_page_scope),
-                        style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            val title = workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256)
+            val active = workspace.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
+                WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING)
+            ConversationListRow(
+                title = title,
+                subtitle = stringResource(workspaceStatusResource(workspace.status)),
+                selected = false,
+                active = active,
+                enabled = actionsEnabled && !workspacesLoading && workspaceError == null,
+                onClick = { if (actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
+                actionsEnabled = actionsEnabled && !workspacesLoading && workspaceError == null,
+                menuActions = listOf(ConversationRowMenuAction("open", R.string.workspace_open)),
+                onMenuAction = { if (it == "open" && actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
+                modifier = Modifier.testTag("workspace-list-row-${workspace.id}"),
+            )
         }
         if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {
             WorkspacePageButtons(canPreviousWorkspacePage, canFirstWorkspacePage, canNextWorkspacePage,

@@ -133,6 +133,13 @@ fun ChatComposer(
     onInterruptAndSend: () -> Unit = {},
     inputEnabled: Boolean = true,
     disabledHint: String? = null,
+    recipientContent: (@Composable () -> Unit)? = null,
+    showModelSelector: Boolean = true,
+    showContextActions: Boolean = true,
+    showMicrophoneButton: Boolean = true,
+    separateStopAction: Boolean = false,
+    stopActionEnabled: Boolean = true,
+    stopActionLabel: String? = null,
 ) {
     var trayOpen by remember { mutableStateOf(false) }
     var skillsOpen by remember { mutableStateOf(false) }
@@ -156,6 +163,7 @@ fun ChatComposer(
         tonalElevation = 1.dp,
     ) {
         Column(Modifier.fillMaxWidth().padding(start = 14.dp, top = 9.dp, end = 8.dp, bottom = 7.dp)) {
+            recipientContent?.invoke()
             if (pendingAttachments.isNotEmpty()) PendingChatAttachments(pendingAttachments, attachmentSessionId, onRemoveAttachment, Modifier.padding(bottom = 7.dp))
             if (!inputEnabled && !disabledHint.isNullOrBlank()) {
                 Text(disabledHint, Modifier.fillMaxWidth().padding(bottom = 4.dp)
@@ -212,19 +220,21 @@ fun ChatComposer(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(onClick = { trayOpen = !trayOpen }, enabled = inputEnabled && !running && !attachmentSending,
-                    modifier = Modifier.size(48.dp).testTag("chat-plus-button").semantics {
-                        contentDescription = trayToggleDescription
-                    }) {
-                    Box(Modifier.size(40.dp).testTag("chat-plus-visual").clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (running || attachmentSending) 0.38f else 0.72f)),
-                        contentAlignment = Alignment.Center) {
-                        Icon(LucideIcons.Plus, contentDescription = null,
-                            modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = expandedPlus.value },
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (running || attachmentSending) 0.38f else 1f))
+                if (showContextActions) {
+                    IconButton(onClick = { trayOpen = !trayOpen }, enabled = inputEnabled && !running && !attachmentSending,
+                        modifier = Modifier.size(48.dp).testTag("chat-plus-button").semantics {
+                            contentDescription = trayToggleDescription
+                        }) {
+                        Box(Modifier.size(40.dp).testTag("chat-plus-visual").clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (running || attachmentSending) 0.38f else 0.72f)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(LucideIcons.Plus, contentDescription = null,
+                                modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = expandedPlus.value },
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (running || attachmentSending) 0.38f else 1f))
+                        }
                     }
                 }
-                ComposerModelPill(
+                if (showModelSelector) ComposerModelPill(
                     modelLabel = modelLabel,
                     effortLabel = effortLabel,
                     effortAppearance = effortAppearance,
@@ -232,21 +242,35 @@ fun ChatComposer(
                     motionActive = effortMotionActive && !trayOpen && !skillsOpen && unavailableAction == null,
                     onClick = onSelectModel,
                     modifier = Modifier.weight(1f),
-                )
-                val microphoneDescription = stringResource(R.string.chat_microphone_unavailable)
-                Box(Modifier.size(48.dp).testTag("chat-microphone-button").semantics {
-                    contentDescription = microphoneDescription
-                    role = Role.Button
-                    disabled()
-                }, contentAlignment = Alignment.Center) {
-                    Icon(LucideIcons.Mic, contentDescription = null, modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                ) else Spacer(Modifier.weight(1f))
+                if (showMicrophoneButton) {
+                    val microphoneDescription = stringResource(R.string.chat_microphone_unavailable)
+                    Box(Modifier.size(48.dp).testTag("chat-microphone-button").semantics {
+                        contentDescription = microphoneDescription
+                        role = Role.Button
+                        disabled()
+                    }, contentAlignment = Alignment.Center) {
+                        Icon(LucideIcons.Mic, contentDescription = null, modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                    }
                 }
-                val sendStopEnabled = inputEnabled && (running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments))
+                if (separateStopAction) IconButton(
+                    onClick = onStop,
+                    enabled = inputEnabled && stopActionEnabled,
+                    modifier = Modifier.size(48.dp).testTag("chat-separate-stop-button").semantics {
+                        contentDescription = stopActionLabel ?: stopDescription
+                    },
+                ) {
+                    Icon(LucideIcons.CircleStop, contentDescription = null, tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp))
+                }
+                val sendStopEnabled = inputEnabled && (if (separateStopAction) {
+                    sendAllowed && canSendWithAttachments(goal, pendingAttachments) && !attachmentSending
+                } else running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments))
                 val defaultSendStopColors = ButtonDefaults.buttonColors()
                 val sendStopContainerColor = if (sendStopEnabled) defaultSendStopColors.containerColor
                     else defaultSendStopColors.disabledContainerColor
-                Button(onClick = { if (running || attachmentSending) onStop() else onSend() },
+                Button(onClick = { if (!separateStopAction && (running || attachmentSending)) onStop() else onSend() },
                     enabled = sendStopEnabled, shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, disabledContainerColor = Color.Transparent),
                     modifier = Modifier.size(48.dp).drawWithCache {
@@ -262,7 +286,7 @@ fun ChatComposer(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                     Box(Modifier.size(40.dp).clip(CircleShape).background(sendStopContainerColor).testTag("chat-send-stop-visual"),
                         contentAlignment = Alignment.Center) {
-                        AnimatedContent(targetState = running || attachmentSending, transitionSpec = {
+                        AnimatedContent(targetState = !separateStopAction && (running || attachmentSending), transitionSpec = {
                             if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
                             else fadeIn(JarvysMotion.feedback()) togetherWith fadeOut(JarvysMotion.feedback())
                         }, label = "send-stop-control") { isActive ->

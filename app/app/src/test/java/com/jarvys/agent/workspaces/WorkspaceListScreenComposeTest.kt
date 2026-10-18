@@ -44,6 +44,27 @@ class WorkspaceListScreenComposeTest {
         compose.onNodeWithTag("drawer-open-workspaces").assertDoesNotExist()
     }
 
+    @Test fun workspaceRowUsesChatStyleStatusAndOnlyOffersOpenInItsOverflowMenu() {
+        val opened = mutableListOf<String>()
+        compose.setContent { MaterialTheme {
+            WorkspaceListScreen(rows.take(1), onOpenWorkspace = { opened += it })
+        } }
+        settle()
+        compose.onNodeWithTag("workspace-list-row-alpha").assertIsDisplayed()
+        compose.onNodeWithText("Alpha recorded project").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_status_waiting)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            compose.activity.getString(R.string.drawer_chat_actions, "Alpha recorded project"),
+        ).performClick()
+        compose.mainClock.advanceTimeBy(500)
+        awaitReactionDrawIdle(compose)
+        compose.onNodeWithTag("conversation-row-action-open").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_archive)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_pin)).assertDoesNotExist()
+        compose.onNodeWithTag("conversation-row-action-open").performClick()
+        assertEquals(listOf("alpha"), opened)
+    }
+
     @Test fun loadingErrorsAndDisabledActionsBlockStaleRowNavigation() {
         val loading = mutableStateOf(true)
         val error = mutableStateOf<String?>(null)

@@ -126,6 +126,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
+/** Generic controls available on assistant replies in a timeline host. */
+data class AssistantReplyCapabilities(
+    val translate: Boolean = true,
+    val regenerate: Boolean = true,
+    val speak: Boolean = true,
+    val delete: Boolean = true,
+    val proactiveReplies: Boolean = true,
+) {
+    companion object {
+        val Workspace = AssistantReplyCapabilities(
+            translate = false, regenerate = false, speak = false, delete = false, proactiveReplies = false,
+        )
+    }
+}
+
 /** Jarvys transcript renderer: a readable response stream with a narrow intent trail. */
 @Composable
 fun ConversationTimeline(
@@ -171,6 +186,7 @@ fun ConversationTimeline(
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
     showAssistantProgress: Boolean = false,
+    assistantReplyCapabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
     benchmarkListState: LazyListState? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -285,6 +301,7 @@ fun ConversationTimeline(
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
                             onProactiveSuggestedReply = onProactiveSuggestedReply,
+                            assistantReplyCapabilities = assistantReplyCapabilities,
                         )
                     }
                     is ConversationTimelineItem.ToolGroup -> {
@@ -435,6 +452,7 @@ private fun JarvysConversationEvent(
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     animateEntry: Boolean = false,
     isGeneratingAnswer: Boolean = false,
+    assistantReplyCapabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
 ) {
     when (event.kind) {
         "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
@@ -442,7 +460,8 @@ private fun JarvysConversationEvent(
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
                 onCancelTranslation, onDeleteAssistant, activeTranslationMessageId, translationErrorMessageId,
-                translationError, streamActive, onProactiveSuggestedReply, isGeneratingAnswer)
+                translationError, streamActive, onProactiveSuggestedReply, isGeneratingAnswer,
+                assistantReplyCapabilities)
         }
         "assistant_translation" -> TranslationNote(event, onOpenSkillFile, onHideTranslation)
         "progress" -> RunProgressLine(event)
@@ -570,6 +589,7 @@ internal fun AssistantReplyView(
     streamActive: Boolean = false,
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     isGeneratingAnswer: Boolean = streamActive,
+    capabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
@@ -594,7 +614,8 @@ internal fun AssistantReplyView(
                     streaming = isGeneratingAnswer)
             }
         }
-        if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
+        if (capabilities.proactiveReplies && event.proactiveReplies.isNotEmpty())
+            SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
             visible = !isError && event.stage == null && !isGeneratingAnswer,
             enter = if (reducedMotion) EnterTransition.None else
@@ -610,18 +631,18 @@ internal fun AssistantReplyView(
                             context.getString(R.string.chat_footer_clip_label), event.text))
                         Toast.makeText(context, R.string.chat_footer_copied, Toast.LENGTH_SHORT).show()
                     }
-                    if (isLastAssistant && event.canRegenerate) ReplyAction(LucideIcons.RefreshCw, stringResource(R.string.chat_footer_regenerate)) {
+                    if (capabilities.regenerate && isLastAssistant && event.canRegenerate) ReplyAction(LucideIcons.RefreshCw, stringResource(R.string.chat_footer_regenerate)) {
                         confirmRegenerate = true
                     }
-                    ReplyAction(if (speaking) LucideIcons.CircleStop else LucideIcons.Volume2,
+                    if (capabilities.speak) ReplyAction(if (speaking) LucideIcons.CircleStop else LucideIcons.Volume2,
                         stringResource(if (speaking) R.string.chat_footer_stop_speaking else R.string.chat_footer_speak)) {
                         onSpeak(event.messageId, if (speaking) "" else event.text)
                     }
-                    ReplyAction(LucideIcons.Languages, stringResource(R.string.chat_footer_translate)) {
+                    if (capabilities.translate) ReplyAction(LucideIcons.Languages, stringResource(R.string.chat_footer_translate)) {
                         if (activeTranslationMessageId == event.messageId) onCancelTranslation(event.messageId)
                         else languageDialog = true
                     }
-                    ReplyAction(LucideIcons.Ellipsis, stringResource(R.string.chat_footer_more)) { actionSheet = true }
+                    if (capabilities.delete) ReplyAction(LucideIcons.Ellipsis, stringResource(R.string.chat_footer_more)) { actionSheet = true }
                 }
                 if (activeTranslationMessageId == event.messageId) BackgroundStatusMarker(stringResource(R.string.chat_footer_translating))
                 if (translationErrorMessageId == event.messageId && translationError != null) {
@@ -649,18 +670,18 @@ internal fun AssistantReplyView(
     )
     if (actionSheet) JarvysChoiceSheet(
         title = stringResource(R.string.chat_footer_more),
-        choices = listOf(
-            JarvysChoiceOption("share", stringResource(R.string.chat_footer_share)),
-            JarvysChoiceOption("select_copy", stringResource(R.string.chat_footer_select_copy)),
-            JarvysChoiceOption("delete", stringResource(R.string.chat_footer_delete)),
-        ),
+        choices = buildList<JarvysChoiceOption<String>> {
+            add(JarvysChoiceOption("share", stringResource(R.string.chat_footer_share)))
+            add(JarvysChoiceOption("select_copy", stringResource(R.string.chat_footer_select_copy)))
+            if (capabilities.delete) add(JarvysChoiceOption("delete", stringResource(R.string.chat_footer_delete)))
+        },
         selected = null,
         onClose = { actionSheet = false },
         onSelect = { action -> when (action) {
             "share" -> context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
                 .putExtra(Intent.EXTRA_TEXT, event.text), context.getString(R.string.chat_footer_share)))
             "select_copy" -> showSelection = true
-            "delete" -> confirmDelete = true
+            "delete" -> if (capabilities.delete) confirmDelete = true
         } },
     )
     if (showSelection) AlertDialog(

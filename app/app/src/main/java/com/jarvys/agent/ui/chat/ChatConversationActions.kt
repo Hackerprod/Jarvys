@@ -5,6 +5,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,7 +33,10 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -126,21 +130,81 @@ internal fun ConversationSessionRow(title: String, selected: Boolean, active: Bo
     pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean,
     showPinnedMarker: Boolean = true, verticalOverflow: Boolean = false,
     protectedWorkspace: Boolean = false, onAction: (ConversationAction) -> Unit) {
+    val menuActions = if (protectedWorkspace) emptyList() else buildList {
+        add(ConversationRowMenuAction("${if (pinned) "unpin" else "pin"}",
+            if (pinned) R.string.drawer_unpin else R.string.drawer_pin))
+        add(ConversationRowMenuAction("rename", R.string.drawer_rename_chat))
+        add(ConversationRowMenuAction("${if (archived) "restore" else "archive"}",
+            if (archived) R.string.drawer_unarchive else R.string.drawer_archive))
+        if (!managed) add(ConversationRowMenuAction("delete", R.string.drawer_delete_action, destructive = true))
+    }
+    ConversationListRow(
+        title = title,
+        selected = selected,
+        active = active,
+        onClick = onClick,
+        actionsEnabled = actionsEnabled,
+        verticalOverflow = verticalOverflow,
+        pinned = pinned && showPinnedMarker,
+        menuActions = menuActions,
+        onMenuAction = { key ->
+            val action = when (key) {
+                "pin" -> ConversationAction.PIN
+                "unpin" -> ConversationAction.UNPIN
+                "rename" -> ConversationAction.RENAME
+                "archive" -> ConversationAction.ARCHIVE
+                "restore" -> ConversationAction.RESTORE
+                "delete" -> ConversationAction.DELETE
+                else -> null
+            }
+            action?.let(onAction)
+        },
+    )
+}
+
+internal data class ConversationRowMenuAction(
+    val key: String,
+    @androidx.annotation.StringRes val labelResource: Int,
+    val destructive: Boolean = false,
+)
+
+/** Shared compact chat row used by the conversation drawer and the workspace catalog. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ConversationListRow(
+    title: String,
+    subtitle: String? = null,
+    selected: Boolean,
+    active: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    actionsEnabled: Boolean,
+    menuActions: List<ConversationRowMenuAction>,
+    onMenuAction: (String) -> Unit,
+    pinned: Boolean = false,
+    verticalOverflow: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
     var menuOpen by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).combinedClickable(onClick = onClick,
-        onLongClick = { if (actionsEnabled) menuOpen = true })
+    Row(modifier.fillMaxWidth().heightIn(min = 62.dp).semantics { role = Role.Button }
+        .combinedClickable(enabled = enabled, onClick = onClick,
+        onLongClick = { if (actionsEnabled && menuActions.isNotEmpty()) menuOpen = true })
         .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
             else Color.Transparent, RoundedCornerShape(13.dp)).padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
         Box(Modifier.width(3.dp).height(36.dp).background(
             if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
             RoundedCornerShape(2.dp)))
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (pinned && showPinnedMarker) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            subtitle?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        if (pinned) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary)
-        if (!protectedWorkspace) {
+        if (menuActions.isNotEmpty()) {
             Box {
                 IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
                     Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title),
@@ -148,18 +212,15 @@ internal fun ConversationSessionRow(title: String, selected: Boolean, active: Bo
                             .testTag(if (verticalOverflow) "conversation-overflow-vertical" else "conversation-overflow-horizontal"))
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    val availableActions = buildList {
-                        add((if (pinned) ConversationAction.UNPIN else ConversationAction.PIN) to
-                            (if (pinned) R.string.drawer_unpin else R.string.drawer_pin))
-                        add(ConversationAction.RENAME to R.string.drawer_rename_chat)
-                        add((if (archived) ConversationAction.RESTORE else ConversationAction.ARCHIVE) to
-                            (if (archived) R.string.drawer_unarchive else R.string.drawer_archive))
+                    menuActions.forEach { action ->
+                        DropdownMenuItem(
+                            modifier = Modifier.testTag("conversation-row-action-${action.key}"),
+                            text = { Text(stringResource(action.labelResource),
+                                color = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) },
+                            onClick = { menuOpen = false; onMenuAction(action.key) },
+                            enabled = actionsEnabled,
+                        )
                     }
-                    availableActions.forEach { (action, label) ->
-                        DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { menuOpen = false; onAction(action) }, enabled = actionsEnabled)
-                    }
-                    if (!managed) DropdownMenuItem(text = { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) },
-                        onClick = { menuOpen = false; onAction(ConversationAction.DELETE) }, enabled = actionsEnabled)
                 }
             }
         }

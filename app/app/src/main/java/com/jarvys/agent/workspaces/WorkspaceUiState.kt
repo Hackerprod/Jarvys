@@ -127,8 +127,10 @@ class WorkspaceChatUiState(
     translationMessageIds: Set<String> = emptySet(),
     invalidatedToolTurnMessageIds: Set<String> = emptySet(),
     val projectionMarkers: LocalRunStore.TimelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers(),
+    assignments: List<WorkspaceAssignmentUi> = emptyList(),
 ) {
     val events: List<AgentRunUiEvent> = Collections.unmodifiableList(ArrayList(events))
+    val assignments: List<WorkspaceAssignmentUi> = Collections.unmodifiableList(ArrayList(assignments))
     val hiddenAssistantMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(hiddenAssistantMessageIds))
     val hiddenTranslationMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(hiddenTranslationMessageIds))
     val translationMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(translationMessageIds))
@@ -156,6 +158,7 @@ class WorkspaceChatUiState(
         translationMessageIds = page.translationMessageIds,
         invalidatedToolTurnMessageIds = page.invalidatedToolTurnMessageIds,
         projectionMarkers = page.projectionMarkers,
+        assignments = assignments,
     )
 
     fun withOlderTimelinePage(page: LocalRunStore.ConversationTimelinePage): WorkspaceChatUiState = WorkspaceChatUiState(
@@ -173,6 +176,7 @@ class WorkspaceChatUiState(
         translationMessageIds = translationMessageIds + page.translationMessageIds,
         invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds + page.invalidatedToolTurnMessageIds,
         projectionMarkers = page.projectionMarkers,
+        assignments = assignments,
     )
 }
 
@@ -185,6 +189,7 @@ internal fun workspaceChatUiState(
     title = detail.title,
     status = detail.status,
     events = events,
+    assignments = detail.assignments,
 )
 
 internal fun workspaceChatUiState(
@@ -196,6 +201,7 @@ internal fun workspaceChatUiState(
     title = detail.title,
     status = detail.status,
     events = page.events,
+    assignments = detail.assignments,
     hasOlderHistory = page.hasOlder,
     olderHistoryCursor = page.olderCursor,
     hiddenAssistantMessageIds = page.hiddenAssistantMessageIds,

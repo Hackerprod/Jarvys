@@ -20,6 +20,7 @@ import com.jarvys.agent.R
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.skills.SkillFileLink
 import com.jarvys.agent.ui.chat.ConversationTimeline
+import com.jarvys.agent.ui.chat.AssistantReplyCapabilities
 
 /** The workspace detail body is the shared chat timeline for its registered execution session. */
 @Composable
@@ -38,18 +39,24 @@ fun WorkspaceDetailScreen(
     modifier: Modifier = Modifier,
 ) {
     val sessionSnapshot = runSnapshot.takeIf { it.sessionId == state.executionSessionId }
-    val events = (sessionSnapshot?.events ?: state.events).filter {
-        showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
-    }
+    val sourceEvents = sessionSnapshot?.events ?: state.events
+    val events = WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
+    val crewRunning = sourceEvents.any { it.crewMissionSnapshot?.active() == true }
+    val workspaceRunning = crewRunning || state.status in setOf(
+        WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
+        WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING,
+    ) || sessionSnapshot?.running == true
+    val timelineSnapshot = (sessionSnapshot ?: AgentRunUiSnapshot(sessionId = state.executionSessionId))
+        .copy(events = events, running = workspaceRunning)
     Box(modifier.fillMaxSize().testTag("workspace-chat-timeline")) {
         when {
-            state.loading -> JarvysEmptyState(
+            state.loading && events.isEmpty() -> JarvysEmptyState(
                 icon = LucideIcons.Boxes,
                 title = stringResource(R.string.workspace_chat_loading),
                 body = "",
                 modifier = Modifier.fillMaxSize().testTag("workspace-chat-loading"),
             )
-            state.error != null -> JarvysEmptyState(
+            state.error != null && events.isEmpty() -> JarvysEmptyState(
                 icon = LucideIcons.Boxes,
                 title = stringResource(R.string.workspace_chat_load_error),
                 body = state.error,
@@ -61,7 +68,7 @@ fun WorkspaceDetailScreen(
                     }
                 },
             )
-            events.isEmpty() && sessionSnapshot?.running != true -> JarvysEmptyState(
+            events.isEmpty() && !workspaceRunning -> JarvysEmptyState(
                 icon = LucideIcons.Boxes,
                 title = stringResource(R.string.workspace_chat_empty),
                 body = "",
@@ -75,7 +82,7 @@ fun WorkspaceDetailScreen(
                 isLoadingOlderHistory = isLoadingOlderHistory,
                 olderHistoryLoadError = olderHistoryLoadError,
                 onLoadOlderHistory = onLoadOlderHistory,
-                isRunning = sessionSnapshot?.running == true,
+                isRunning = workspaceRunning,
                 connectorRegistry = connectorRegistry,
                 onOpenPreview = onOpenPreview,
                 onOpenSkillFile = onOpenSkillFile,
@@ -87,7 +94,8 @@ fun WorkspaceDetailScreen(
                     && sessionSnapshot.reflectionSessionId == state.executionSessionId,
                 reflectionStatus = sessionSnapshot?.reflectionStatus,
                 onOpenCrewMission = onOpenCrewMission,
-                runSnapshot = sessionSnapshot,
+                runSnapshot = timelineSnapshot,
+                assistantReplyCapabilities = AssistantReplyCapabilities.Workspace,
                 allowMessageEntrance = sessionSnapshot != null,
             )
         }

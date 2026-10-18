@@ -70,6 +70,8 @@ fun JarvysRouteTopBar(
     onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
     workspaceMenuActionTitle: String? = null,
     onWorkspaceMenuAction: () -> Unit = {},
+    workspaceBotsActionTitle: String? = null,
+    onWorkspaceBotsAction: () -> Unit = {},
 ) {
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
@@ -158,6 +160,16 @@ fun JarvysRouteTopBar(
                     enabled = conversationActionsEnabled,
                     modifier = Modifier.testTag("workspace/topbar-action"),
                     onClick = { closeMenu(); onWorkspaceMenuAction() },
+                )
+            }
+            workspaceBotsActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
+                DropdownMenuItem(
+                    text = { Text(actionTitle) },
+                    leadingIcon = { Icon(LucideIcons.Bot, contentDescription = null,
+                        modifier = Modifier.testTag("workspace/topbar-bots-icon")) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("workspace/topbar-bots-action"),
+                    onClick = { closeMenu(); onWorkspaceBotsAction() },
                 )
             }
             if (workspaceMenuActionTitle == null) {

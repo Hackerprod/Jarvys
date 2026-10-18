@@ -67,6 +67,8 @@ fun JarvysShellFrame(
     onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
     workspaceMenuActionTitle: String? = null,
     onWorkspaceMenuAction: () -> Unit = {},
+    workspaceBotsActionTitle: String? = null,
+    onWorkspaceBotsAction: () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -124,6 +126,8 @@ fun JarvysShellFrame(
                     onConversationAction = onConversationAction,
                     workspaceMenuActionTitle = workspaceMenuActionTitle,
                     onWorkspaceMenuAction = onWorkspaceMenuAction,
+                    workspaceBotsActionTitle = workspaceBotsActionTitle,
+                    onWorkspaceBotsAction = onWorkspaceBotsAction,
                 )
                 }
             },

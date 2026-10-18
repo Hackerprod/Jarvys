@@ -50,12 +50,9 @@ object WorkspaceProjection {
 
     /** Projects chat from the execution session recorded for this workspace, never from central. */
     fun chat(context: Context, id: String, cached: WorkspaceChatUiState? = null): WorkspaceChatUiState {
-        // The chat view only displays the workspace title and aggregate status. Reuse those
-        // stable presentation fields during ledger refreshes so a message append does not
-        // rebuild assignment detail and reread all Crew snapshots.
-        val detail = if (cached != null && cached.workspaceId == id && cached.title.isNotBlank()) {
-            WorkspaceDetailUiState(id, cached.title, cached.status)
-        } else detail(context, id)
+        // Assignment revisions and control availability are exact input to the workspace composer.
+        // Refresh them with the chat projection so stale controls are rejected before submission.
+        val detail = detail(context, id)
         val sessionId = WorkspaceIdentity.executionSessionId(detail.id)
         val page = LocalRunStore(context).readConversationTimelinePage(
             sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)

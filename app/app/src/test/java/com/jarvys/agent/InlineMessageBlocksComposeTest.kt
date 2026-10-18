@@ -391,6 +391,11 @@ class InlineMessageBlocksComposeTest {
                 AssistantMarkdown("$svg\n\n$chart\n\n$invalid", onOpenSkillFile = {})
             }
         }
+        compose.waitUntil(5_000L) {
+            compose.onAllNodesWithContentDescription("Circle diagram").fetchSemanticsNodes().isNotEmpty() &&
+                compose.onAllNodesWithContentDescription("Monthly numbers. Total: Jan 3.0, Feb 5.0")
+                    .fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithContentDescription("Circle diagram").assertIsDisplayed()
         compose.onNodeWithContentDescription("Monthly numbers. Total: Jan 3.0, Feb 5.0").assertIsDisplayed()
         compose.onAllNodesWithText("Copy").assertCountEquals(1)
