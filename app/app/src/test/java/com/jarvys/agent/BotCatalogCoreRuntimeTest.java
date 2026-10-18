@@ -11,6 +11,8 @@ import com.jarvys.agent.crew.CrewProfile;
 import com.jarvys.agent.crew.CrewProfileRepository;
 import com.jarvys.agent.crew.CrewRole;
 import com.jarvys.agent.crew.CrewRoleTemplates;
+import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillRepository;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
@@ -38,6 +40,7 @@ public class BotCatalogCoreRuntimeTest {
 
     @Before public void installTestSecretStorage() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
+        deleteRecursively(new File(context.getFilesDir(), "crew_profiles"));
         android.content.SharedPreferences preferences = context.getSharedPreferences("bot-catalog-runtime-secrets", Context.MODE_PRIVATE);
         assertTrue(preferences.edit().clear().commit());
         Field singleton = SecretStore.class.getDeclaredField("singleton");
@@ -82,6 +85,30 @@ public class BotCatalogCoreRuntimeTest {
             assertFalse(result.success);
             assertTrue(result.content, result.content.contains("disabled"));
             assertTrue(bot.token.isCancellationRequested());
+        }
+    }
+
+    @Test public void internalBundledSkillsReachCustomBotReadSkillWithoutChangingItsProfile() {
+        Context context = ApplicationProvider.getApplicationContext();
+        String session = "catalog-internal-skills";
+        CrewProfileRepository repository = new CrewProfileRepository(context);
+        CrewProfile profile = new CrewProfile(CrewProfileRepository.newCustomId(), 1, "Internal skill reader",
+                "Read relevant internal skill guidance", "Use only declared tools", Collections.emptyList(), Collections.emptyList());
+        repository.create(profile, Collections.emptyList(), Collections.emptyList());
+        assertFalse(profile.capabilities.contains("read_skill"));
+
+        SkillEntry skill = SkillRepository.Companion.get(context).internalSkillsForProfile(profile.id).get(0);
+        CoreAgentRuntime runtime = new CoreAgentRuntime(context, session, Collections.emptyList());
+        try (CrewManager manager = manager(session, null, null)) {
+            CrewManager.Bot bot = historical(manager, profile.resolveRole(profile.capabilities, profile.skillIds));
+            CoreToolRegistry tools = runtime.createCrewBotTools(context, session, new CoreToolRegistry(Collections.emptyList()), bot, manager);
+
+            assertTrue(tools.names().contains("read_skill"));
+            CoreToolResult result = tools.invoke("read_skill", Collections.singletonMap("skill_id", skill.getMetadata().getId()), bot.token);
+            assertTrue(result.content, result.success);
+            assertTrue(result.content.contains(skill.getBody().substring(0, Math.min(80, skill.getBody().length()))));
+            assertTrue(profile.skillIds.isEmpty());
+            assertTrue(profile.capabilities.isEmpty());
         }
     }
 
@@ -172,5 +199,10 @@ public class BotCatalogCoreRuntimeTest {
         CrewBotSnapshot bot = new CrewBotSnapshot("bot-historical", role.id, role.name, role.name, role.colorKey, "Saved mission", "INTERRUPTED", "", "", "", role.tools, 1, 0);
         CrewMissionSnapshot mission = new CrewMissionSnapshot("mission", manager.conversationId(), "past", "Saved mission", "INTERRUPTED", "", 1, 0, Collections.singletonList(bot), Collections.emptyList());
         return manager.restoreBot(mission, bot, role, CoreAgentLoop.Checkpoint.empty(), new JSONObject(), "scope", Collections.emptyList(), 0, Collections.emptyList(), Collections.emptyList(), "");
+    }
+    private static void deleteRecursively(File target) {
+        File[] children = target.listFiles();
+        if (children != null) for (File child : children) deleteRecursively(child);
+        if (target.exists() && !target.delete()) throw new AssertionError("Could not clear test profile storage: " + target);
     }
 }

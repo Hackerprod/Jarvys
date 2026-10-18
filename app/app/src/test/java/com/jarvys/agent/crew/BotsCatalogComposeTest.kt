@@ -31,6 +31,11 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.jarvys.agent.ui.jarvysColorScheme
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.ui.motion.LocalReducedMotion
+import com.jarvys.agent.skills.SkillEntry
+import com.jarvys.agent.skills.SkillMetadata
+import com.jarvys.agent.skills.SkillSource
+import com.jarvys.agent.skills.botPickerHiddenSkillIds
+import com.jarvys.agent.skills.botPickerSkillEntries
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Before
@@ -54,6 +59,48 @@ class BotsCatalogComposeTest {
         compose.setContent { MaterialTheme(colorScheme = jarvysColorScheme(false)) {
             BotDefinitionEditor(bot, false, options, emptyList(), save, close, {}, {}, {}, iconAvailable = true)
         } }
+    }
+
+    @Test fun internalTagHidesSkillsFromBotPickerWithoutSkillIdRules() {
+        fun skill(id: String, tags: List<String>) = SkillEntry(
+            SkillMetadata(id, id, "A test skill", 1, emptyList(), tags), "Instructions", SkillSource.BUNDLED, true, 0)
+        val entries = listOf(skill("com.example.hidden", listOf("internal")), skill("com.example.visible", listOf("review")))
+
+        assertEquals(listOf("com.example.visible"), botPickerSkillEntries(entries).map { it.metadata.id })
+        assertEquals(setOf("com.example.hidden"), botPickerHiddenSkillIds(entries))
+    }
+
+    @Test fun selectedInternalMissingSkillStaysHiddenAndSurvivesUnrelatedSave() {
+        val internalId = "com.example.internal-review"
+        val profile = CrewProfile("custom-review", 1, "Review", "Original description", "Review code carefully.",
+            listOf(internalId), listOf("read", "read_skill"))
+        val bot = BotDefinition(profile, 1, true, false, "")
+        var saved: BotDefinition? = null
+        val capabilities = options + CrewProfileOption("read_skill", "Read skill")
+        compose.setContent { MaterialTheme(colorScheme = jarvysColorScheme(false)) {
+            BotDefinitionEditor(bot, false, capabilities, listOf(CrewProfileOption("visible-skill", "Visible skill")),
+                { saved = it }, {}, {}, {}, {}, hiddenSkillIds = setOf(internalId))
+        } }
+
+        compose.onNodeWithText(internalId).assertDoesNotExist()
+        compose.onNodeWithText("Visible skill").assertExists()
+        compose.onNodeWithTag("bot-editor-description").performScrollTo().performTextReplacement("Updated description")
+        compose.onNodeWithTag("bot-editor-save").performScrollTo().performClick()
+
+        assertEquals("Updated description", saved!!.profile.description)
+        assertEquals(listOf(internalId), saved!!.profile.skillIds)
+    }
+
+    @Test fun readOnlyBotConfigurationDoesNotRevealInternalSkillIds() {
+        val internalId = "com.example.internal-review"
+        val profile = CrewProfile("coding", 1, "Coding", "Built-in", "Instructions", listOf(internalId), emptyList())
+        compose.setContent { MaterialTheme(colorScheme = jarvysColorScheme(false)) {
+            BotDefinitionEditor(BotDefinition(profile, 1, true, true, ""), false, emptyList(), emptyList(),
+                {}, {}, {}, {}, {}, hiddenSkillIds = setOf(internalId))
+        } }
+
+        compose.onNodeWithTag("bot-read-only").assertExists()
+        compose.onNodeWithText(internalId).assertDoesNotExist()
     }
 
     @Test fun gridHasTwoColumnsWithOnlyIconsNamesAndTopRightCreate() {

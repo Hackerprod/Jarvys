@@ -40,6 +40,7 @@ class ApkFactorySkillScopeTest {
         previousSkills = skillField.get(null)
         previousSecrets = secretField.get(null)
         skillField.set(null, null)
+        File(context.filesDir, "crew_profiles").deleteRecursively()
         context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit().clear().commit()
         secretField.set(null, SecretStore(context.getSharedPreferences("factory-skill-test-secrets", Context.MODE_PRIVATE)))
     }
@@ -133,7 +134,10 @@ class ApkFactorySkillScopeTest {
         }
 
         val principalSkills = repo.enabledForRun().filter { it.source == SkillSource.BUNDLED }
-        val tool = LoadSkillTool(principalSkills, CorePromptBudget.standard().loadedSkillChars,
+        val completeSkillChars = principalSkills.maxOf {
+            "Skill ${it.metadata.id} — ${it.metadata.name}\n${it.body}".length
+        }
+        val tool = LoadSkillTool(principalSkills, completeSkillChars,
             { key -> repo.enabledForProfile(null).any { it.metadata.id == key } })
         principalSkills.forEach { skill ->
             assertTrue(skill.metadata.id, tool.execute(mapOf("skill_id" to skill.metadata.id),
