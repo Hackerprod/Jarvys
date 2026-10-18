@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.jarvys.agent.AgentErrorReporter
 import com.jarvys.agent.AgentRunUiEvent
@@ -71,10 +72,11 @@ internal fun ChatCanvasTimeline(
     benchmarkStartedAtNanos: Long? = null,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val snapshot = androidx.compose.runtime.remember { AtomicReference<ChatCanvasSerializedSnapshot?>(null) }
     val update by produceState<ChatCanvasUpdate?>(null, events, running, allowRetry, loadingOlder, benchmarkMode) {
         value = withContext(Dispatchers.Default) {
-            val payload = ChatCanvasEventSerializer.page(events, running, allowRetry, loadingOlder = loadingOlder)
+            val payload = ChatCanvasEventSerializer.page(context, events, running, allowRetry, loadingOlder = loadingOlder)
                 .put("benchmark", benchmarkMode)
             val orderArray = payload.getJSONArray("order")
             val orderKey = orderArray.toString()

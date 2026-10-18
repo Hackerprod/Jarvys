@@ -1,19 +1,36 @@
 package com.jarvys.agent.canvas
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ChatAttachment
+import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.CorePromptBudget
+import com.jarvys.agent.LoadSkillTool
 import com.jarvys.agent.PreviewResponsePolicy
+import com.jarvys.agent.R
+import com.jarvys.agent.TestSecretStoreRule
+import com.jarvys.agent.ToolActivity
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.skills.SkillRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
 import org.mozilla.javascript.Context as RhinoContext
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.nio.file.Files
 import java.nio.file.Paths
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class ChatCanvasContractTest {
+    @get:Rule val testSecrets = TestSecretStoreRule()
+    private val context: Context get() = ApplicationProvider.getApplicationContext()
     @Test
     fun hostActionAllowlistRejectsUnknownStaleAndOutOfScopeActions() {
         val user = AgentRunUiEvent.messageEvent(10, "user", "hola", 1)
@@ -58,7 +75,7 @@ class ChatCanvasContractTest {
             AgentRunUiEvent.messageEvent(17, "assistant", "segundo", 2).copy(messageId = "m-17"),
         )
 
-        val page = ChatCanvasEventSerializer.page(events, running = false)
+        val page = ChatCanvasEventSerializer.page(context, events, running = false)
         assertEquals("[80,17]", page.getJSONArray("order").toString())
         assertEquals(80L, page.getJSONArray("events").getJSONObject(0).getLong("seq"))
         assertEquals(17L, page.getJSONArray("events").getJSONObject(1).getLong("seq"))
@@ -72,7 +89,7 @@ class ChatCanvasContractTest {
             messageId = "loop-run",
         )
 
-        val serialized = ChatCanvasEventSerializer.page(listOf(stream), running = true)
+        val serialized = ChatCanvasEventSerializer.page(context, listOf(stream), running = true)
             .getJSONArray("events").getJSONObject(0)
 
         assertEquals("assistant", serialized.getString("kind"))
@@ -81,6 +98,56 @@ class ChatCanvasContractTest {
         assertFalse(serialized.getBoolean("canRetry"))
         assertTrue(allowed("copy", stream, running = true))
         assertFalse(allowed("retry", stream, latestAssistant = "loop-run"))
+    }
+
+    @Test
+    fun internalSkillActivityDetailsAreScrubbedForLiveAndReopenedEventsWhilePublicSkillDetailsRemain() {
+        val repository = SkillRepository.get(context).also { it.refresh() }
+        val internal = repository.skills.value.first { SkillRepository.isInternalBundledSkill(it) }
+        val public = repository.enabledForRun().first { !SkillRepository.isInternalBundledSkill(it) }
+
+        fun load(skill: com.jarvys.agent.skills.SkillEntry) = LoadSkillTool(
+            listOf(skill), CorePromptBudget.standard().loadedSkillChars,
+        ).execute(mapOf("skill_id" to skill.metadata.id), CancellationToken.uncancellable()).also {
+            assertTrue("A real bundled skill load should succeed: ${it.content}", it.success)
+        }
+
+        val internalLoad = load(internal)
+        val bodyLine = internal.body.lineSequence().map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("> Source:") }
+            .maxByOrNull(String::length) ?: error("The internal skill must contain a non-heading body line")
+        assertTrue(internalLoad.content.contains(internal.metadata.id))
+        assertTrue(internalLoad.content.contains(internal.metadata.name))
+        assertTrue(internalLoad.content.contains(bodyLine))
+
+        val liveActivity = ToolActivity("internal-live", "internal-execution", "internal-call", "read_skill",
+            internal.metadata.name, internal.metadata.id, internal.metadata.name, "tool_result",
+            internalLoad.content, "", "", "workspace", 1)
+        val reopenedActivity = ToolActivity.fromJson(liveActivity.toJson())
+            ?: error("A serialized tool activity should reopen")
+        listOf(liveActivity, reopenedActivity).forEachIndexed { index, activity ->
+            val event = AgentRunUiEvent.activityEvent(index.toLong() + 1, activity)
+            val serialized = ChatCanvasEventSerializer.page(context, listOf(event), running = false)
+            val json = serialized.toString()
+            listOf(internal.metadata.id, internal.metadata.name, bodyLine).forEach { value ->
+                assertFalse("Internal skill data appeared in canvas JSON: $value", json.contains(value))
+            }
+            val projected = serialized.getJSONArray("events").getJSONObject(0)
+            assertEquals(context.getString(R.string.activity_skill_loaded_generic), projected.getString("text"))
+            assertEquals(context.getString(R.string.activity_skill_name_generic), projected.getString("label"))
+            assertFalse(projected.has("detail"))
+        }
+
+        val publicLoad = load(public)
+        val publicActivity = ToolActivity("public", "public-execution", "public-call", "read_skill",
+            public.metadata.name, public.metadata.id, public.metadata.name, "tool_result",
+            publicLoad.content, "", "", "workspace", 1)
+        val publicEvent = ChatCanvasEventSerializer.page(context,
+            listOf(AgentRunUiEvent.activityEvent(3, publicActivity)), running = false)
+            .getJSONArray("events").getJSONObject(0)
+        assertTrue(publicEvent.getString("detail").contains(public.metadata.id))
+        assertTrue(publicEvent.getString("detail").contains(public.metadata.name))
+        assertEquals(publicLoad.content, publicEvent.getString("detail"))
     }
 
     @Test

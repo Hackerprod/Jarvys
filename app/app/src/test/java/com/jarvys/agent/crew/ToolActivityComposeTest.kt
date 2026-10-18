@@ -99,8 +99,9 @@ class ToolActivityComposeTest {
     @Test fun internalBundledSkillActivityHidesRealReadSkillResultOnActivityAndChatTimelines() {
         val internal = SkillRepository.get(compose.activity).also { it.refresh() }.skills.value
             .first { SkillRepository.isInternalBundledSkill(it) }
-        val bodyPhrase = internal.body.lineSequence()
-            .first { it.isNotBlank() && !it.startsWith("> Source:") }.take(48)
+        val bodyPhrase = internal.body.lineSequence().map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("> Source:") }
+            .maxByOrNull(String::length) ?: error("The internal skill must contain a non-heading body line")
         val load = LoadSkillTool(listOf(internal), CorePromptBudget.standard().loadedSkillChars)
             .execute(mapOf("skill_id" to internal.metadata.id), CancellationToken.uncancellable())
         assertTrue("A real internal read_skill load should succeed: ${load.content}",load.success)

@@ -7,6 +7,7 @@ import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.ChatTestStore
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.LoadSkillTool
+import com.jarvys.agent.TestSecretStoreRule
 import com.jarvys.agent.modules.ModuleRegistry
 import java.lang.reflect.Field
 import java.security.MessageDigest
@@ -25,6 +26,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class BundledSkillsAuditTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val testSecrets = TestSecretStoreRule()
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val instanceField: Field = SkillRepository::class.java.getDeclaredField("instance").apply { isAccessible = true }
