@@ -33,12 +33,14 @@ class WorkspaceResultDeliveryTest {
     private lateinit var delivery: WorkspaceResultDelivery
     private lateinit var scope: WorkspaceRecord
     private lateinit var target: WorkspaceAssignment
+    private val wakeRequests = mutableListOf<String>()
     private val noAdmission = Runnable {}
     @Before fun setup() {
         app = RuntimeEnvironment.getApplication()
         app.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
         registry = WorkspaceRegistry(app); ledger = LocalRunStore(app)
-        delivery = WorkspaceResultDelivery(app, ledger) { _, _ -> }
+        wakeRequests.clear()
+        delivery = WorkspaceResultDelivery(app, ledger) { _, referenceId -> wakeRequests += referenceId }
         assertTrue(ChatDatabaseBridge.getInstance(app)
             .ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
         scope = registry.createWorkspace("scope", "Synthetic scope")
@@ -74,6 +76,22 @@ class WorkspaceResultDeliveryTest {
         reconcile()
         assertEquals(1, references().size)
         assertEquals(1, notices().size)
+        assertEquals(notices().single().referenceId, wakeRequests.single())
+    }
+
+    @Test fun reconciliationDoesNotWakeForANoticeThatPredatesWakeMarkers() {
+        bind()
+        val saved = evidence()
+        val reference = WorkspaceResultReference.create(saved, scope.ownerCentralSessionId, scope.workspaceId,
+            target.assignmentId, target.requestId, target.revision)
+        ledger.appendWorkspaceResultReferenceIfAbsent(reference, noAdmission)
+        ledger.appendWorkspaceResultNoticeIfAbsent(reference, noAdmission)
+
+        reconcile()
+
+        assertEquals(1, notices().size)
+        assertTrue(wakeRequests.isEmpty())
+        assertFalse(ledger.isWorkspaceResultWakePending(reference.referenceId))
     }
 
     @Test fun receiptNeverEntersMessagesModelContextOrReflectionInput() {
@@ -129,6 +147,8 @@ class WorkspaceResultDeliveryTest {
             .none { it.optString("role") == "user" })
         assertEquals(0, reopened.conversationMessageCount(WorkspaceIdentity.CENTRAL_SESSION))
         assertNull(reopened.readFirstUserMessage(WorkspaceIdentity.CENTRAL_SESSION))
+        reconcile()
+        assertEquals(1, wakeRequests.size)
     }
 
     @Test fun failedTerminalEvidencePersistsAndWakesCentralForInspection() {
@@ -145,7 +165,7 @@ class WorkspaceResultDeliveryTest {
         assertFalse(systemEvent.content.contains("worker-reported failure details"))
     }
 
-    @Test fun pendingSystemEventIsLastAfterLaterConversationAndToolTranscriptRows() {
+    @Test fun pendingSystemEventKeepsItsPositionBeforeLaterConversationAndToolRows() {
         bind(); evidence(); reconcile()
         val referenceId = notices().single().referenceId
         val ownerMessageId = ledger.appendConversationMessage(
@@ -164,10 +184,29 @@ class WorkspaceResultDeliveryTest {
                 .put("timestamp", 2).put("output", "Workspace metadata"))
 
         val context = ledger.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
-        assertEquals(ConversationTurn.Kind.SYSTEM_EVENT, context.last().kind)
-        assertEquals("system", context.last().role)
-        assertEquals(referenceId, context.last().systemEventReferenceId)
-        assertTrue(context.dropLast(1).any { it.kind == ConversationTurn.Kind.TOOL_RESULT })
+        val eventIndex = context.indexOfFirst { it.kind == ConversationTurn.Kind.SYSTEM_EVENT }
+        val laterUserIndex = context.indexOfFirst { it.kind == ConversationTurn.Kind.MESSAGE && it.content == "Later ordinary message" }
+        val toolResultIndex = context.indexOfFirst { it.kind == ConversationTurn.Kind.TOOL_RESULT }
+        assertTrue(eventIndex >= 0)
+        assertEquals("system", context[eventIndex].role)
+        assertEquals(referenceId, context[eventIndex].systemEventReferenceId)
+        assertTrue("Wake stays at its durable journal position", eventIndex < laterUserIndex)
+        assertTrue("Later tool rows remain after their later user turn", laterUserIndex < toolResultIndex)
+    }
+
+    @Test fun stoppedWakeIsDiscardedAndCannotBeRescheduledByReconciliation() {
+        bind(); evidence(); reconcile()
+        val referenceId = notices().single().referenceId
+        assertTrue(ledger.isWorkspaceResultWakePending(referenceId))
+        assertTrue(ledger.discardWorkspaceResultWake(referenceId))
+
+        reconcile()
+
+        assertFalse(ledger.isWorkspaceResultWakePending(referenceId))
+        assertFalse(ledger.claimWorkspaceResultWake(referenceId))
+        assertEquals("The original queue request only", listOf(referenceId), wakeRequests)
+        assertTrue(ledger.loadConversationContext(WorkspaceIdentity.CENTRAL_SESSION)
+            .none { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
     }
 
     @Test fun intermediateCrewStateCannotBecomeAResultWake() {
@@ -215,6 +254,8 @@ class WorkspaceResultDeliveryTest {
         assertEquals(7999, page.getInt("next_offset"))
         val next = delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, page.getInt("next_offset"), CancellationToken.uncancellable(), noAdmission)
         assertEquals(text, page.getString("result_text") + next.getString("result_text")); assertTrue(next.isNull("next_offset"))
+        assertEquals("Reading an already delivered result does not dispatch a nested wake", 1,
+            wakeRequests.count { it == r.referenceId })
         assertNotNull(runCatching { delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, 8000, CancellationToken.uncancellable(), noAdmission) }.exceptionOrNull())
     }
 

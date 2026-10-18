@@ -52,6 +52,37 @@ class CoreAgentLoopTest {
         assertTrue(checkpoints.last().transcript.none { it.role == "user" })
     }
 
+    @Test fun pendingWakeAfterStoredUserMessageDoesNotAppendThatUserMessageAgain() {
+        val referenceId = "workspace-result-" + "e".repeat(64)
+        val userId = "user-message-before-wake"
+        val userText = "Deliver the APK when the workspace finishes."
+        val history = listOf(
+            ConversationTurn("user", userText).withDurableMessageId(userId),
+            ConversationTurn.systemEvent(referenceId,
+                "Workspace result registered: result_reference_id=$referenceId"),
+        )
+        val observed = AtomicReference<List<ConversationTurn>>()
+        val prompt = AtomicReference<String>()
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, promptText: String,
+                tools: List<ToolSpec>, token: CancellationToken): ModelReply {
+                observed.set(transcript.toList())
+                prompt.set(promptText)
+                return ModelReply("I will inspect and deliver the result.", emptyList())
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "instructions", "central")
+
+        loop.run(userText, history, emptyList(), CancellationToken.uncancellable(), null, userId)
+
+        val transcript = observed.get()
+        assertEquals("The stored user turn remains before the event", listOf("user", "system"),
+            transcript.map { it.role })
+        assertEquals(1, transcript.count { it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" })
+        assertEquals(referenceId, transcript.last().systemEventReferenceId)
+        assertEquals("", prompt.get())
+    }
+
     @Test
     fun toolResultReturnsIntoTranscriptBeforeTheModelWritesItsFinalAnswer() {
         val declaration = ToolSpec("lookup", "test", "lookup a fact", "test",

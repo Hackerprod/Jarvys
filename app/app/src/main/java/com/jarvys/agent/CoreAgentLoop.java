@@ -607,10 +607,15 @@ public final class CoreAgentLoop {
     }
 
     public Result run(String request, List<ConversationTurn> previousTranscript, CancellationToken token, ProgressListener listener) {
-        return run(request, previousTranscript, Collections.emptyList(), token, listener);
+        return run(request, previousTranscript, Collections.emptyList(), token, listener, null);
     }
 
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener) {
+        return run(request, previousTranscript, attachments, token, listener, null);
+    }
+
+    public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments,
+                      CancellationToken token, ProgressListener listener, String currentUserMessageId) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
         boolean transcriptHasPendingInput = ConversationTurn.hasCurrentUserMessage(previousTranscript)
                 || ConversationTurn.endsWithToolResult(previousTranscript)
@@ -625,9 +630,14 @@ public final class CoreAgentLoop {
         List<ConversationTurn> transcript = new ArrayList<>(previousTranscript == null ? Collections.emptyList() : previousTranscript);
         boolean hasRunRequest = !request.trim().isEmpty() || !currentAttachments.isEmpty();
         boolean systemEventInput = containsSystemEvent(transcript);
-        boolean requestInTranscript = systemEventInput || !currentAttachments.isEmpty()
+        boolean currentRequestAlreadyInTranscript = currentUserMessageId != null && !currentUserMessageId.isEmpty()
+                && transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.MESSAGE
+                        && "user".equals(turn.role) && currentUserMessageId.equals(turn.durableMessageId));
+        boolean requestInTranscript = currentRequestAlreadyInTranscript || systemEventInput || !currentAttachments.isEmpty()
                 || (turnContextProvider != null && !request.trim().isEmpty());
-        if (requestInTranscript && hasRunRequest) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
+        if (requestInTranscript && hasRunRequest && !currentRequestAlreadyInTranscript)
+            transcript.add(ConversationTurn.messageWithAttachments("user", request,
+                    compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
         updateTranscriptSnapshot(transcript);
         String prompt = requestInTranscript ? "" : request.trim();
         boolean modelHasInput = hasRunRequest || ConversationTurn.hasCurrentUserMessage(transcript)

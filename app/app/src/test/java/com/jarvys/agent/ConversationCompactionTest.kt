@@ -99,6 +99,29 @@ class ConversationCompactionTest {
     }
 
     @Test
+    fun systemEventKeepsItsChronologicalSuffixProtectedUnderCurrentSinglePrefixSummary() {
+        val referenceId = "workspace-result-" + "f".repeat(64)
+        val beforeWake = messages(6, 2_000)
+        val event = ConversationTurn.systemEvent(referenceId,
+            "Workspace result registered: result_reference_id=$referenceId")
+        val wakeWork = messages(6, 2_000).mapIndexed { index, turn ->
+            if (index % 2 == 0) turn else ConversationTurn("assistant", "wake-$index " + "y".repeat(2_000), 6 + index)
+        }
+        val transcript = beforeWake + event + wakeWork
+
+        val all = ConversationCompactionPolicy.planAll(transcript)
+        assertTrue(all.summarize.all { it !== event })
+        assertEquals("A single prefix summary keeps the system event and its later work together",
+            transcript.drop(beforeWake.size), all.keep)
+
+        val sliding = ConversationCompactionPolicy.planSliding(transcript, 20_000, 0.3)
+        assertTrue(sliding.summarize.all { it !== event })
+        assertTrue(sliding.keep.any { it.kind == ConversationTurn.Kind.SYSTEM_EVENT && it.systemEventReferenceId == referenceId })
+        assertTrue("Later wake work stays in the protected chronological suffix",
+            sliding.keep.lastIndex > sliding.keep.indexOfFirst { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
+    }
+
+    @Test
     fun summaryPromptsKeepContinuationContextLimitsAndTrustInstructions() {
         assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("current work"))
         assertTrue(ConversationCompactionPolicy.ALL_PROMPT.contains("latest request"))

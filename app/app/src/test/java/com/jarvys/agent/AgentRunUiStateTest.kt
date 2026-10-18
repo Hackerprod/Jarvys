@@ -32,6 +32,25 @@ class AgentRunUiStateTest {
         }
     }
 
+    @Test fun failedSystemOriginRunFinishesWithoutAnAssistantFailureBubble() {
+        val session = "system-wake-failure-ui-${System.nanoTime()}"
+        val generation = 7_001L
+        AgentRunUiState.resetSession(session)
+        try {
+            AgentRunUiState.beginSystemServiceRun(session, generation)
+            AgentRunUiState.bindGeneration(session, generation)
+
+            AgentRunUiState.completeGeneration(session, generation, "failed-wake", "FAILED", "", "", 0L)
+
+            val snapshot = AgentRunUiState.snapshotForSession(session)
+            assertFalse(snapshot.running)
+            assertEquals("FAILED", snapshot.outcome)
+            assertTrue(snapshot.events.none { it.kind == "user" || it.kind == "assistant" })
+        } finally {
+            AgentRunUiState.resetSession(session)
+        }
+    }
+
     @Test
     fun codexAssistantStreamUsesStableTransientRowAndIsReplacedByDurableCompletion() {
         val session = "codex-stream-${System.nanoTime()}"

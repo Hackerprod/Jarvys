@@ -607,7 +607,7 @@ internal fun AssistantReplyView(
                             context.getString(R.string.chat_footer_clip_label), event.text))
                         Toast.makeText(context, R.string.chat_footer_copied, Toast.LENGTH_SHORT).show()
                     }
-                    if (isLastAssistant) ReplyAction(LucideIcons.RefreshCw, stringResource(R.string.chat_footer_regenerate)) {
+                    if (isLastAssistant && event.canRegenerate) ReplyAction(LucideIcons.RefreshCw, stringResource(R.string.chat_footer_regenerate)) {
                         confirmRegenerate = true
                     }
                     ReplyAction(if (speaking) LucideIcons.CircleStop else LucideIcons.Volume2,

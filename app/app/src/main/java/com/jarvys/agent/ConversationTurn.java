@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 
 public final class ConversationTurn {
+  private static final String WORKSPACE_WAKE_OWNER_PREFIX = "workspace-wake:";
   public final List<ChatAttachment> attachments;
   public final String content;
   public final int imageCount;
@@ -26,6 +27,8 @@ public final class ConversationTurn {
   public final String modelErrorCode;
   /** Reference carried by a durable system-origin event; empty for all other turns. */
   public final String systemEventReferenceId;
+  /** Durable source message id when this MESSAGE came from the conversation store. */
+  public final String durableMessageId;
 
   public enum Kind {
     MESSAGE,
@@ -152,6 +155,7 @@ public final class ConversationTurn {
     this.imageCount = Math.max(Math.max(0, imageCount), attachedImages);
     this.modelContent = this.content;
     this.images = Collections.emptyList();
+    this.durableMessageId = "";
   }
 
   private ConversationTurn(
@@ -221,9 +225,14 @@ public final class ConversationTurn {
     this.modelContent = this.content;
     this.incomingMetadata = null;
     this.images = Collections.emptyList();
+    this.durableMessageId = "";
   }
 
   private ConversationTurn(ConversationTurn raw, String modelContent, List<Image> images) {
+    this(raw, modelContent, images, raw.durableMessageId);
+  }
+
+  private ConversationTurn(ConversationTurn raw, String modelContent, List<Image> images, String durableMessageId) {
     this.kind = raw.kind;
     this.role = raw.role;
     this.content = raw.content;
@@ -241,6 +250,7 @@ public final class ConversationTurn {
     this.incomingMetadata = raw.incomingMetadata;
     this.images = immutable(images);
     this.imageCount = Math.max(raw.imageCount, this.images.size());
+    this.durableMessageId = durableMessageId == null ? "" : durableMessageId;
   }
 
   private static <T> List<T> immutable(List<T> parts) {
@@ -344,6 +354,30 @@ public final class ConversationTurn {
     return new ConversationTurn(this, modelContent, images);
   }
 
+  public ConversationTurn withDurableMessageId(String messageId) {
+    if (kind != Kind.MESSAGE || messageId == null || messageId.isEmpty()) {
+      throw new IllegalArgumentException("A durable message identity is required");
+    }
+    return new ConversationTurn(this, this.modelContent, this.images, messageId);
+  }
+
+  /** Encodes the source-result event as the owner of a system-origin model turn. */
+  public static String workspaceWakeOwnerId(String referenceId) {
+    com.jarvys.agent.workspaces.WorkspaceResultReference.requireReferenceId(referenceId);
+    return WORKSPACE_WAKE_OWNER_PREFIX + referenceId;
+  }
+
+  public static String workspaceWakeReferenceId(String ownerId) {
+    if (ownerId == null || !ownerId.startsWith(WORKSPACE_WAKE_OWNER_PREFIX)) return null;
+    String referenceId = ownerId.substring(WORKSPACE_WAKE_OWNER_PREFIX.length());
+    com.jarvys.agent.workspaces.WorkspaceResultReference.requireReferenceId(referenceId);
+    return referenceId;
+  }
+
+  public static boolean isWorkspaceWakeOwner(String ownerId) {
+    return workspaceWakeReferenceId(ownerId) != null;
+  }
+
   /** Provider-specific representation keeps the actual message as user content with provenance delimiters. */
   public String renderedModelContent(String adapter) {
     return incomingMetadata == null || !incomingMetadata.untrusted
@@ -375,6 +409,10 @@ public final class ConversationTurn {
             this.thinking,
             0,
             Collections.emptyList(),
-            this.incomingMetadata);
+            this.incomingMetadata).withDurableMessageIdIfPresent(this.durableMessageId);
+  }
+
+  private ConversationTurn withDurableMessageIdIfPresent(String messageId) {
+    return messageId == null || messageId.isEmpty() ? this : withDurableMessageId(messageId);
   }
 }

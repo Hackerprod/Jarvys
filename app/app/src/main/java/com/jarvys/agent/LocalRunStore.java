@@ -383,19 +383,12 @@ public final class LocalRunStore {
                 reference, beforeWrite::run), "append workspace result notice");
     }
 
-    public WorkspaceResultReference appendWorkspaceResultNoticeAndWake(
+    public boolean appendWorkspaceResultNoticeAndWake(
             WorkspaceResultReference reference, Runnable beforeWrite) {
         requireResultReference(reference, beforeWrite);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeAndWakeSync(
                 reference, beforeWrite::run), "append workspace result notice and wake");
-    }
-
-    public synchronized boolean ensureWorkspaceResultWakePending(String referenceId) {
-        WorkspaceResultReference.requireReferenceId(referenceId);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.ensureWorkspaceResultWakePendingSync(referenceId),
-                "ensure workspace result wake");
     }
 
     public synchronized boolean claimWorkspaceResultWake(String referenceId) {
@@ -410,6 +403,13 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.acknowledgeWorkspaceResultWakeSync(referenceId),
                 "acknowledge workspace result wake");
+    }
+
+    public synchronized boolean discardWorkspaceResultWake(String referenceId) {
+        WorkspaceResultReference.requireReferenceId(referenceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.discardWorkspaceResultWakeSync(referenceId),
+                "discard workspace result wake");
     }
 
     public synchronized boolean isWorkspaceResultWakePending(String referenceId) {
@@ -1558,6 +1558,11 @@ public final class LocalRunStore {
     public List<ConversationTurn> loadConversationContext(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return chatDatabaseBridge.loadConversationContextSync(sessionId);
+    }
+
+    public List<ConversationTurn> loadConversationContext(String sessionId, String workspaceWakeReferenceId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.loadConversationContextSync(sessionId, workspaceWakeReferenceId);
     }
 
     public int latestUserMessageIndex(String sessionId) {

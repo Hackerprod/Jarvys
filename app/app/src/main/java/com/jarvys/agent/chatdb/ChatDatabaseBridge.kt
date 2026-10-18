@@ -550,6 +550,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun loadConversationContextSync(conversationId: String): List<ConversationTurn> =
         execute { it.reader.loadConversationContext(conversationId) }
 
+    fun loadConversationContextSync(conversationId: String, workspaceWakeReferenceId: String): List<ConversationTurn> =
+        execute { it.reader.loadConversationContext(conversationId, workspaceWakeReferenceId) }
+
     fun readConversationContextSync(conversationId: String): String =
         execute { it.reader.readConversationContext(conversationId) }
 
@@ -762,12 +765,8 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun appendWorkspaceResultNoticeAndWakeSync(
         reference: WorkspaceResultReference,
         beforeWrite: BeforeChatWrite? = null,
-    ): ChatDbResult<WorkspaceResultReference> = execute {
+    ): ChatDbResult<Boolean> = execute {
         it.strictJournals.appendWorkspaceResultNoticeAndWake(reference) { beforeWrite?.check() }
-    }
-
-    fun ensureWorkspaceResultWakePendingSync(referenceId: String): ChatDbResult<Boolean> = execute {
-        it.strictJournals.ensureWorkspaceResultWakePending(referenceId)
     }
 
     fun claimWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
@@ -776,6 +775,10 @@ class ChatDatabaseBridge private constructor(context: Context) {
 
     fun acknowledgeWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
         it.strictJournals.acknowledgeWorkspaceResultWake(referenceId)
+    }
+
+    fun discardWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
+        it.strictJournals.discardWorkspaceResultWake(referenceId)
     }
 
     fun isWorkspaceResultWakePendingSync(referenceId: String): ChatDbResult<Boolean> = execute {

@@ -64,6 +64,14 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
 
     protected fun ownerMessageSeq(conversationId: String, ownerMessageId: String?): Long? {
         if (ownerMessageId.isNullOrEmpty()) return null
+        val wakeReferenceId = com.jarvys.agent.ConversationTurn.workspaceWakeReferenceId(ownerMessageId)
+        if (wakeReferenceId != null) {
+            if (conversationId != WorkspaceIdentity.CENTRAL_SESSION) return null
+            return sql.query(
+                "SELECT seq FROM conversation_items WHERE conversation_id=? AND item_kind=? AND item_key=? ORDER BY seq LIMIT 1",
+                arrayOf(conversationId, "workspace_result_wake_pending", wakeReferenceId),
+            ).use { if (it.moveToFirst()) it.getLong(0) else null }
+        }
         return sql.query(
             "SELECT seq FROM messages WHERE conversation_id=? AND message_id=? AND role='user' LIMIT 1",
             arrayOf(conversationId, ownerMessageId),

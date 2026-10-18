@@ -85,6 +85,8 @@ data class AgentRunUiEvent(
     val timelineKey: Long? = null,
     /** User row that owns this transient stream, when the conversation has one. */
     val streamUserEventId: Long? = null,
+    /** System-origin workspace wake replies have no user prompt to regenerate. */
+    val canRegenerate: Boolean = true,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
@@ -96,6 +98,7 @@ data class AgentRunUiEvent(
         copy(toolIdentity = identity?.takeIf(String::isNotBlank),
             toolTurnMessageId = userMessageId?.takeIf(String::isNotBlank))
     fun copyStage(stage: String?): AgentRunUiEvent = copy(stage = stage)
+    fun copyCanRegenerate(value: Boolean): AgentRunUiEvent = copy(canRegenerate = value)
     fun copyAttachments(attachments: List<ChatAttachment>): AgentRunUiEvent =
         copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
 
@@ -1609,7 +1612,7 @@ object AgentRunUiState {
         val completion = ownership.stoppedCompletion
         ownership.stoppedCompletion = null
         val terminalOutcome = completion?.outcome ?: "STOPPED"
-        val events = completion?.let {
+        val events = completion?.takeIf { it.text.isNotEmpty() || it.messageId.isNotEmpty() }?.let {
             val assistant = event("assistant", it.text).copy(
                 stage = AgentRunUiEvent.assistantStageForOutcome(it.outcome),
                 messageId = it.messageId, durationMs = it.durationMs)
@@ -1672,10 +1675,8 @@ object AgentRunUiState {
                     timelineKey = promotedStream?.timelineKey ?: promotedStream?.id,
                     streamUserEventId = null,
                 )
-                val events = append(
-                    interruptActivities(current.events.filterNot { it.id in streamIds }),
-                    assistant,
-                )
+                val baseEvents = interruptActivities(current.events.filterNot { it.id in streamIds })
+                val events = if (text.isEmpty() && messageId.isEmpty()) baseEvents else append(baseEvents, assistant)
                 _state.value = current.copy(
                     runId = runId,
                     running = false,
