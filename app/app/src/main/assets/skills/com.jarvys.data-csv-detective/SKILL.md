@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, data]
 # 🕵️ CSV Detective
 > Profile, clean, and analyze messy CSV/JSON datasets in seconds.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Data |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

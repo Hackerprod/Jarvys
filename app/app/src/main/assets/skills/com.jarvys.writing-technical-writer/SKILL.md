@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, writing]
 # 📝 Technical Writer
 > Write clear, structured technical documentation, ADRs, and design docs.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Writing |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~400 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

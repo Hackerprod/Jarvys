@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, security]
 # 🛡️ Threat Modeler
 > STRIDE-based threat modeling for any system architecture — find vulnerabilities before attackers do.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Security |
+| **Difficulty** | ⭐⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~600 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

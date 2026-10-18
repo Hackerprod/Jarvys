@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, developer]
 # ✍️ Git Commit Crafter
 > Generate perfect conventional commits from diffs — never write a bad commit message again.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Developer |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~400 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, developer]
 # 🏗️ API Designer
 > Design clean, consistent RESTful APIs following OpenAPI best practices.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Developer |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~500 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -146,6 +157,7 @@ Replace REST references with: `"Design a GraphQL schema with queries, mutations,
 Add: `"Output the complete OpenAPI 3.1 YAML specification ready to paste into Swagger Editor."`
 
 ### ⚠️ Known Limitations
+- Cannot validate against actual backend — designs are theoretical
 - Complex authorization patterns (ABAC, multi-tenant) need additional context
 
 ---

@@ -102,4 +102,4 @@ This skill builds hallucination detection and mitigation into your AI pipeline a
 - prompt-injection-defense skill (`com.jarvys.prompt-injection-defense`)
 - ai-output-validation skill (`com.jarvys.ai-output-validation`)
 - rag-and-memory skill (`com.jarvys.rag-and-memory`)
-- OWASP LLM09: Overreliance
+- [OWASP LLM09: Overreliance](https://owasp.org/www-project-top-10-for-large-language-model-applications/)

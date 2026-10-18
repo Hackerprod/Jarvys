@@ -80,4 +80,4 @@ For every significant architectural decision:
 ## References
 
 - git-workflow skill (`com.jarvys.git-workflow`)
-- Michael Nygard's ADR template
+- [Michael Nygard's ADR template](https://github.com/joelparkerhenderson/architecture-decision-record)

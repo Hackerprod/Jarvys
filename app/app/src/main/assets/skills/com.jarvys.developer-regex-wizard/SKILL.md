@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, developer]
 # 🧙 Regex Wizard
 > Build, explain, and test regular expressions in any flavor — from simple patterns to complex parsers.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Developer |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -109,6 +120,7 @@ Remove the building goal, keep only: `"Your sole job is to explain existing rege
 Add: `"When the user provides match/don't-match lists, find the SHORTEST regex that correctly classifies all examples. Treat it as a regex golf challenge."`
 
 ### ⚠️ Known Limitations
+- Cannot execute regex — test results are analytical, not runtime-verified
 - Lookahead/lookbehind support varies wildly by flavor
 
 ---

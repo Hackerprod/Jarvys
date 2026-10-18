@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, productivity]
 # 💌 Email Diplomat
 > Craft professional emails for sensitive or high-stakes situations.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Productivity |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

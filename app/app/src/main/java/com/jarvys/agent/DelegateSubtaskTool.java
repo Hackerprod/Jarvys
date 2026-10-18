@@ -111,7 +111,7 @@ public final class DelegateSubtaskTool implements CoreTool {
       return CoreToolResult.failure(
           "Subtask requested a tool outside this agent's capability scope");
     }
-    if (!this.availableSkills.containsAll(requestedSkills)) {
+    if (requestedSkills.stream().anyMatch(skillId -> !canDelegateSkill(skillId))) {
       return CoreToolResult.failure(
           "Subtask requested a skill outside this agent's enabled skill scope");
     }
@@ -181,6 +181,17 @@ public final class DelegateSubtaskTool implements CoreTool {
     return this.scopedRunner != null
         ? new DelegateSubtaskTool(this.scopedRunner, handlers, selectedSkills, recursive)
         : new DelegateSubtaskTool(this.runner, names(handlers, recursive), selectedSkills);
+  }
+
+  private boolean canDelegateSkill(String skillId) {
+    if (this.availableSkills.contains(skillId)) return true;
+    for (SkillEntry skill : this.skillEntries) {
+      if (skillId.equals(skill.getMetadata().getId())
+          && SkillRepository.isInternalBundledSkill(skill)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<String> strings(Object value, String field) {

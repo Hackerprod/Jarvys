@@ -112,5 +112,5 @@ Security vulnerabilities are almost always cheaper to prevent than to remediate.
 
 ## References
 
-- OWASP Top 10
+- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - prompt-injection-defense skill (`com.jarvys.prompt-injection-defense`)

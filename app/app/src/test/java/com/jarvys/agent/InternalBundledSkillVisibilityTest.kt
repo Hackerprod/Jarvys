@@ -46,14 +46,19 @@ class InternalBundledSkillVisibilityTest {
             SkillSource.BUNDLED, listOf(SkillRepository.INTERNAL_SKILL_VISIBILITY_TAG))
         val selectable = skill("user.skill", "User Skill", "User authored guidance.", SkillSource.IMPORTED)
         val parentSkillTool = LoadSkillTool(listOf(internal, selectable), 16_384)
+        var delegatedSkills: List<String>? = null
         val delegate = DelegateSubtaskTool(
-            DelegateSubtaskTool.Runner { _, _, _, _ -> "done" },
+            DelegateSubtaskTool.Runner { _, _, skills, _ -> delegatedSkills = skills; "done" },
             listOf("read_skill"), listOf(internal, selectable))
 
         assertTrue(parentSkillTool.declaration().description.contains(internal.metadata.id))
         assertEquals("", parentSkillTool.activitySkillName(mapOf<String, Any>("skill_id" to internal.metadata.id)))
         assertTrue(delegate.declaration().description.contains(selectable.metadata.id))
         assertFalse(delegate.declaration().description.contains(internal.metadata.id))
+        val acceptedInternalSkill = delegate.execute(mapOf("objective" to "Use the skill",
+            "skills" to listOf(internal.metadata.id)), CancellationToken.uncancellable())
+        assertEquals(listOf(internal.metadata.id), delegatedSkills)
+        assertFalse(acceptedInternalSkill.content.contains("outside this agent's enabled skill scope"))
 
         val child = CoreAgentRuntime.childCapabilityScope(
             CoreToolRegistry(listOf(parentSkillTool)), listOf("read_skill"), listOf(selectable.metadata.id),

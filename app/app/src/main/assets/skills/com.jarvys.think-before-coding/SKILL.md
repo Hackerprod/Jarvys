@@ -94,6 +94,6 @@ Before leaving this phase, confirm:
 
 ## References
 
-- Andrej Karpathy on LLM coding pitfalls
+- [Andrej Karpathy on LLM coding pitfalls](https://x.com/karpathy/status/2015883857489522876)
 - goal-driven-execution skill (`com.jarvys.goal-driven-execution`)
 - idea-to-spec skill (`com.jarvys.idea-to-spec`)

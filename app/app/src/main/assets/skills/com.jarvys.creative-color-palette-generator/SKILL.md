@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, creative]
 # 🎨 Color Palette Generator
 > Generate accessible, harmonious color palettes from any inspiration.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Creative |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, productivity]
 # 🗺️ Learning Path Generator
 > Create personalized, structured learning roadmaps for any topic.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Productivity |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~400 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

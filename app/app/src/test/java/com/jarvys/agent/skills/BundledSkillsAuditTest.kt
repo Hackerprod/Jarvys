@@ -9,6 +9,7 @@ import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.LoadSkillTool
 import com.jarvys.agent.modules.ModuleRegistry
 import java.lang.reflect.Field
+import java.security.MessageDigest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,6 +38,24 @@ class BundledSkillsAuditTest {
 
     @After fun restoreRepository() {
         instanceField.set(null, previousRepository)
+    }
+
+    @Test fun everyInternalBundledAssetBodyMatchesUpstreamFingerprint() {
+        val internalAssets = bundledSkillDirectoryNames(context.assets.list("skills").orEmpty().toList())
+            .map { directory ->
+                val markdown = context.assets.open("skills/$directory/SKILL.md")
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }
+                SkillMarkdownParser.parse(markdown)
+            }
+            .filter { SkillRepository.INTERNAL_SKILL_VISIBILITY_TAG in it.metadata.tags }
+        val expectedBodies = expectedUpstreamBodyFingerprints()
+        assertEquals("Fingerprint manifest must cover each imported upstream skill exactly once",
+            expectedBodies.keys, internalAssets.map { it.metadata.id }.toSet())
+        internalAssets.forEach { parsed ->
+            val expected = expectedBodies.getValue(parsed.metadata.id)
+            assertEquals("Imported body differs from upstream ${expected.upstreamPath}",
+                expected.sha256, sha256(parsed.body))
+        }
     }
 
     @Test fun everyBundledSkillParsesMatchesItsAssetLocationAndRemainsRuntimeReadable() {
@@ -114,6 +133,37 @@ class BundledSkillsAuditTest {
 
         assertTrue("Presentation skill must fit the real read_skill payload budget: ${result.content}", result.success)
         assertTrue(result.content.length <= budget)
+    }
+
+    private data class UpstreamBodyFingerprint(val upstreamPath: String, val sha256: String)
+
+    private fun expectedUpstreamBodyFingerprints(): Map<String, UpstreamBodyFingerprint> {
+        val stream = requireNotNull(javaClass.getResourceAsStream("/ai-agent-skills-body-sha256.tsv")) {
+            "Missing audited upstream body fingerprints"
+        }
+        return stream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            val fingerprints = linkedMapOf<String, UpstreamBodyFingerprint>()
+            lines.filter { it.isNotBlank() && !it.startsWith("#") }.forEach { line ->
+                val fields = line.split('\t')
+                require(fields.size == 3 && fields.all(String::isNotBlank)) { "Invalid upstream fingerprint row: $line" }
+                require(fingerprints.put(fields[0], UpstreamBodyFingerprint(fields[1], fields[2])) == null) {
+                    "Duplicate upstream fingerprint for ${fields[0]}"
+                }
+            }
+            fingerprints
+        }
+    }
+
+    private fun sha256(value: String): String {
+        val digits = "0123456789abcdef"
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return buildString(digest.size * 2) {
+            digest.forEach { byte ->
+                val unsigned = byte.toInt() and 0xff
+                append(digits[unsigned ushr 4])
+                append(digits[unsigned and 0x0f])
+            }
+        }
     }
 
 }

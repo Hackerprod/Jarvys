@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, creative]
 # 💡 Naming Consultant
 > Generate memorable names for projects, products, companies, and features.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Creative |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

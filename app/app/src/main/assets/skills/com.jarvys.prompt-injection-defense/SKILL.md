@@ -119,7 +119,7 @@ This skill is mandatory for any application where an AI agent reads external dat
 
 ## References
 
-- OWASP LLM Top 10 - LLM01: Prompt Injection
+- [OWASP LLM Top 10 - LLM01: Prompt Injection](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
 - security-hardening skill (`com.jarvys.security-hardening`)
 - hallucination-prevention skill (`com.jarvys.hallucination-prevention`)
 - ai-output-validation skill (`com.jarvys.ai-output-validation`)

@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, developer]
 # 🐛 Bug Hunter
 > Systematic debugging agent that traces root causes using structured reasoning.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Developer |
+| **Difficulty** | ⭐⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~550 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -135,6 +146,7 @@ Add: `"Specialize in browser/frontend debugging. Consider DOM state, event loop 
 Add: `"Focus on performance bugs — memory leaks, CPU spikes, slow queries, and network waterfall bottlenecks. Request profiler output when available."`
 
 ### ⚠️ Known Limitations
+- Cannot execute code or access runtime — relies on provided logs and code snippets
 - Concurrency bugs (race conditions, deadlocks) are hard to diagnose without runtime traces
 
 ---

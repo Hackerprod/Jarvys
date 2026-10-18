@@ -726,6 +726,9 @@ private fun ConnectorActivityLine(
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
+    val internalSkill = remember(event.toolActivity) {
+        event.toolActivity?.isInternalSkillActivity(context) == true
+    }
     val searchQuery = WebSearchTools.searchLabelQuery(event.toolDisplayName)
     val connectorOperation = registry.definitions.value.asSequence().flatMap { it.operations.asSequence() }
         .firstOrNull { it.displayLabel == event.toolDisplayName }
@@ -733,7 +736,7 @@ private fun ConnectorActivityLine(
         if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId) else operation.displayLabel
     }
     val localizedToolStatus = when {
-        event.toolActivity?.skill() == true -> com.jarvys.agent.toolActivityLabel(event.toolActivity)
+        event.toolActivity?.skill() == true -> com.jarvys.agent.toolActivityLabel(event.toolActivity, internalSkill)
         event.stage == "tool_progress" && event.toolActivity != null -> context.getString(R.string.connector_tool_using,localizedToolName ?: event.toolDisplayName ?: event.text)
         event.stage == "tool_progress" -> event.toolDisplayName ?: event.text
         event.stage == "tool_interrupted" -> context.getString(R.string.connector_tool_unconfirmed,
@@ -758,8 +761,9 @@ private fun ConnectorActivityLine(
         event.stage == "tool_error" && event.toolDisplayName?.contains("linux", ignoreCase = true) == true
             && it.contains("phase=")
     }?.removePrefix("Tool error: ")
-    val hasExpandableContent = !event.toolAuditDetail.isNullOrBlank() || !event.detail.isNullOrBlank() ||
+    val hasExpandableContent = !internalSkill && (!event.toolAuditDetail.isNullOrBlank() || !event.detail.isNullOrBlank() ||
         event.toolActivity?.historyDetail?.isNotBlank() == true || !event.previewId.isNullOrBlank()
+    )
     val failed = event.stage == "tool_error"
     var expanded by remember(event.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().testTag("conversation-activity-${event.id}")

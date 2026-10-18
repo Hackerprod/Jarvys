@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, data]
 # 📖 Data Storyteller
 > Transform raw datasets into compelling narratives with visualizations.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Data |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~400 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

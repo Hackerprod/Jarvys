@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, security]
 # 🔎 Dependency Auditor
 > Deep-dive analysis of package vulnerabilities, license risks, and supply chain threats.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Security |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~450 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -121,6 +132,8 @@ Replace Node.js references: `"Specialize in Python ecosystems — analyze requir
 Add: `"Focus heavily on license compatibility. Flag any copyleft (GPL, AGPL) dependencies in proprietary projects and identify LGPL boundary requirements."`
 
 ### ⚠️ Known Limitations
+- Knowledge of CVEs is limited to training data cutoff — always cross-reference with live vulnerability databases
+- Cannot resolve transitive dependency trees — provide `package-lock.json` for deeper analysis
 
 ---
 

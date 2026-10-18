@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, data]
 # ⚡ SQL Query Optimizer
 > Analyze and optimize slow SQL queries with execution plan analysis.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Data |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~450 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

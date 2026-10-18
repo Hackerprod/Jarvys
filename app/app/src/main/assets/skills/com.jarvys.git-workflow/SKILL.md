@@ -75,4 +75,4 @@ Git is not just a backup system — it's a communication tool. Clean git history
 ## References
 
 - ci-cd-pipelines skill (`com.jarvys.ci-cd-pipelines`)
-- Conventional Commits
+- [Conventional Commits](https://www.conventionalcommits.org/)

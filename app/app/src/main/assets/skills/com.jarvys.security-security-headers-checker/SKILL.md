@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, security]
 # 🔒 Security Headers Checker
 > Analyze and fix HTTP security headers for web applications.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Security |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~400 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -107,6 +118,7 @@ Add: `"Focus exclusively on building Content-Security-Policy headers. Guide a st
 Add: `"Map each header to specific compliance requirements (PCI DSS, OWASP, SOC 2) and generate a compliance-ready audit report."`
 
 ### ⚠️ Known Limitations
+- Cannot make live HTTP requests to test headers — analysis is based on provided header values
 - CSP effectiveness depends heavily on the actual page content and inline scripts
 
 ---

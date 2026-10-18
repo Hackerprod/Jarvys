@@ -15,7 +15,12 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun toolActivityLabel(activity: ToolActivity): String {
     val context = LocalContext.current
-    val internalSkill = activity.isInternalSkillActivity(context)
+    val internalSkill = remember(activity) { activity.isInternalSkillActivity(context) }
+    return toolActivityLabel(activity, internalSkill)
+}
+
+@Composable
+internal fun toolActivityLabel(activity: ToolActivity, internalSkill: Boolean): String {
     val name = if (internalSkill) stringResource(R.string.activity_skill_name_generic)
         else if (activity.skill()) activity.skillName.ifBlank { activity.skillId } else activity.displayName
     val resource = when (activity.stage) {
@@ -48,10 +53,13 @@ internal fun ToolActivity.isInternalSkillActivity(context: android.content.Conte
 @Composable
 fun ToolActivityLine(activity: ToolActivity, modifier: Modifier = Modifier, onOpenPreview: ((String) -> Unit)? = null) {
     var expanded by rememberSaveable(activity.executionId) { mutableStateOf(false) }
-    val label = toolActivityLabel(activity)
+    val context = LocalContext.current
+    val internalSkill = remember(activity) { activity.isInternalSkillActivity(context) }
+    val label = toolActivityLabel(activity, internalSkill)
     val failed = activity.stage == "tool_error"
-    val hasExpandableContent = activity.allDetail().isNotBlank() || activity.auditDetail.isNotBlank() ||
+    val hasExpandableContent = !internalSkill && (activity.allDetail().isNotBlank() || activity.auditDetail.isNotBlank() ||
         activity.stage == "tool_interrupted" || (activity.previewId.isNotBlank() && onOpenPreview != null)
+    )
     Column(modifier.fillMaxWidth().testTag("activity-${activity.executionId}")) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label, Modifier.weight(1f).semantics { stateDescription = label; liveRegion = LiveRegionMode.Polite },
@@ -63,7 +71,7 @@ fun ToolActivityLine(activity: ToolActivity, modifier: Modifier = Modifier, onOp
                     stringResource(if(expanded) R.string.tool_output_collapse else R.string.tool_output_expand),Modifier.size(18.dp), tint=MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (expanded) SelectionContainer {
+        if (expanded && !internalSkill) SelectionContainer {
             Column {
                 if(activity.auditDetail.isNotBlank()) Text(activity.auditDetail,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(activity.allDetail().isNotBlank()) Text(activity.allDetail(),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)

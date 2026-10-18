@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, productivity]
 # 📋 Meeting Summarizer
 > Extract action items, decisions, and key points from meeting transcripts.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Productivity |
+| **Difficulty** | ⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~350 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml

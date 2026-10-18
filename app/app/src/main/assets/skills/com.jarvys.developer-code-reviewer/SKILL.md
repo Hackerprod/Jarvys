@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, developer]
 # 🔍 Code Reviewer
 > Production-grade code review that catches bugs, security flaws, and maintainability issues before they ship.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Developer |
+| **Difficulty** | ⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~650 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
@@ -166,6 +177,7 @@ Add to the system prompt: `"Focus specifically on idiomatic {language} patterns 
 Add: `"Explain every issue as if teaching a junior developer. Include links to relevant documentation or articles."`
 
 ### ⚠️ Known Limitations
+- Cannot run or test the code — analysis is static only
 - May not know project-specific conventions without additional context
 - Very large files (500+ lines) should be reviewed in chunks
 

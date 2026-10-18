@@ -11,6 +11,17 @@ tags: [internal, ai-agent-skills, architecture]
 # 🏛️ System Design Coach
 > Interactive system design interview prep and real-world architecture review.
 
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Category** | Architecture |
+| **Difficulty** | ⭐⭐⭐ |
+| **Works With** | Claude.ai, Claude Code, API |
+| **Estimated Tokens** | ~550 system prompt tokens |
+| **Author** | @DhanushNehru |
+| **Version** | 1.0.0 |
+
 ## System Prompt
 
 ```xml
