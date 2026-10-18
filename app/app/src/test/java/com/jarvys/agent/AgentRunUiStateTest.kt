@@ -74,6 +74,31 @@ class AgentRunUiStateTest {
         }
     }
 
+    @Test fun stoppedSystemOriginCompletionCannotRegenerateAnEarlierUserRequest() {
+        val session = "system-wake-stopped-ui-${System.nanoTime()}"
+        val generation = 7_003L
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.restoreSession(session, listOf(
+            AgentRunUiEvent.messageEvent(1L, "user", "Earlier request", 1L)
+                .copyMetadata("earlier-user", 0L),
+        ))
+        try {
+            AgentRunUiState.beginSystemServiceRun(session, generation)
+            AgentRunUiState.bindGeneration(session, generation)
+            AgentRunUiState.stopPendingGeneration(session, generation)
+
+            AgentRunUiState.completeGeneration(session, generation, "stopped-wake", "STOPPED",
+                "Wake stopped", "wake-stopped-answer", 1L)
+            AgentRunUiState.finishPendingGeneration(session, generation)
+
+            val events = AgentRunUiState.snapshotForSession(session).events
+            assertTrue(events.single { it.messageId == "earlier-user" }.canRegenerate)
+            assertFalse(events.single { it.messageId == "wake-stopped-answer" }.canRegenerate)
+        } finally {
+            AgentRunUiState.resetSession(session)
+        }
+    }
+
     @Test
     fun codexAssistantStreamUsesStableTransientRowAndIsReplacedByDurableCompletion() {
         val session = "codex-stream-${System.nanoTime()}"

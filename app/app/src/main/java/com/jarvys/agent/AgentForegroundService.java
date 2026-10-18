@@ -50,12 +50,8 @@ public final class AgentForegroundService extends Service {
   private static final int NOTIFICATION_ID = 31001;
   private static final Map<String, Object> INTERRUPT_ADMISSION_LOCKS = new ConcurrentHashMap<>();
   private static final Map<String, Set<String>> FOLLOW_UP_CLAIMS = new ConcurrentHashMap<>();
-  /** A multi-session pending-input scan keeps its durable session order while lanes drain. */
-  private static final Object ORDERED_RECOVERY_LOCK = new Object();
-  private static final ArrayDeque<String> ORDERED_RECOVERY_SESSIONS = new ArrayDeque<>();
-  private static final Set<String> ORDERED_RECOVERY_SESSION_SET = ConcurrentHashMap.newKeySet();
   private static final Set<String> WORKSPACE_RESULT_WAKE_REQUESTS = ConcurrentHashMap.newKeySet();
-  /** One provider attempt per process; durable pending wakes can retry after a process restart. */
+  /** One wake attempt per process; durable pending wakes can retry after a process restart. */
   private static final Set<String> WORKSPACE_RESULT_WAKE_ATTEMPTED = ConcurrentHashMap.newKeySet();
   private static final int TEST_STEPS = 120;
   private static volatile String lastRunReport = "Etapa B: sin ejecuciones todavía.";
@@ -273,7 +269,6 @@ public final class AgentForegroundService extends Service {
         break;
       }
       if (skipResolvedFollowUp) {
-        completeOrderedRecoverySession(sessionId);
         continue;
       }
       if (controllerRejected) {
@@ -285,13 +280,10 @@ public final class AgentForegroundService extends Service {
             failPendingInput(sessionId, request.followUpClaimId);
         } finally {
           releaseFollowUpClaim(sessionId, request.followUpClaimId);
-          completeOrderedRecoverySession(sessionId);
         }
         continue;
       }
       refreshForegroundNotification();
-      boolean orderedRecovery = !request.followUpClaimId.isEmpty()
-          && awaitOrderedRecoveryTurn(sessionId, active.token);
       try {
         future.run();
       } finally {
@@ -323,7 +315,6 @@ public final class AgentForegroundService extends Service {
         AgentRunUiState.finishPendingGeneration(sessionId, active.generation);
         refreshForegroundNotification();
         stopServiceIfIdle();
-        if (orderedRecovery) completeOrderedRecoverySession(sessionId);
       }
     }
     stopServiceIfIdle();
@@ -386,7 +377,6 @@ public final class AgentForegroundService extends Service {
             reportStopPersistenceFailure(failure);
           } finally {
             releaseFollowUpClaim(sessionId, request.followUpClaimId);
-            completeOrderedRecoverySession(sessionId);
           }
         }
         try {
@@ -449,7 +439,6 @@ public final class AgentForegroundService extends Service {
           reportStopPersistenceFailure(failure);
         } finally {
           releaseFollowUpClaim(sessionId, request.followUpClaimId);
-          completeOrderedRecoverySession(sessionId);
         }
       }
     }
@@ -873,10 +862,6 @@ public final class AgentForegroundService extends Service {
   }
 
   private void recoverPendingInputs(String onlySessionId) {
-    recoverPendingInputs(onlySessionId, false);
-  }
-
-  private void recoverPendingInputs(String onlySessionId, boolean orderedAcrossSessions) {
     LocalRunStore store = new LocalRunStore(this);
     if (onlySessionId == null) {
       Set<String> pendingSessions = new java.util.LinkedHashSet<>();
@@ -886,7 +871,7 @@ public final class AgentForegroundService extends Service {
       }
       Runnable hook = afterPendingInputRecoveryScanForTesting;
       if (hook != null) hook.run();
-      for (String session : pendingSessions) recoverPendingInputs(session, true);
+      for (String session : pendingSessions) recoverPendingInputs(session);
       return;
     }
     String sessionId = onlySessionId;
@@ -903,7 +888,6 @@ public final class AgentForegroundService extends Service {
         else if (request.optBoolean("alreadyDispatched")) latest = request;
       }
       if (latest == null || !claimFollowUp(sessionId, latest.optString("requestId", ""))) return;
-      if (orderedAcrossSessions) enqueueOrderedRecoverySession(sessionId);
     }
     ArrayList<String> skills = new ArrayList<>();
     org.json.JSONArray savedSkills = latest.optJSONArray("skills");
@@ -918,47 +902,13 @@ public final class AgentForegroundService extends Service {
           latest.optBoolean("memoryDisabled", false), false, messageId, messageId);
     } catch (CancellationException cancelled) {
       releaseFollowUpClaim(sessionId, messageId);
-      if (orderedAcrossSessions) completeOrderedRecoverySession(sessionId);
       throw cancelled;
     } catch (RuntimeException startFailure) {
       try { failPendingInputRecovery(sessionId); }
       catch (RuntimeException persistenceFailure) { reportStopPersistenceFailure(persistenceFailure); }
       finally {
         releaseFollowUpClaim(sessionId, messageId);
-        if (orderedAcrossSessions) completeOrderedRecoverySession(sessionId);
       }
-    }
-  }
-
-  private static void enqueueOrderedRecoverySession(String sessionId) {
-    synchronized (ORDERED_RECOVERY_LOCK) {
-      if (ORDERED_RECOVERY_SESSION_SET.add(sessionId)) ORDERED_RECOVERY_SESSIONS.addLast(sessionId);
-      ORDERED_RECOVERY_LOCK.notifyAll();
-    }
-  }
-
-  private static boolean awaitOrderedRecoveryTurn(String sessionId, CancellationToken token) {
-    synchronized (ORDERED_RECOVERY_LOCK) {
-      if (!ORDERED_RECOVERY_SESSION_SET.contains(sessionId)) return false;
-      while (ORDERED_RECOVERY_SESSION_SET.contains(sessionId)
-          && !sessionId.equals(ORDERED_RECOVERY_SESSIONS.peekFirst())) {
-        if (token.isCancellationRequested()) return true;
-        try {
-          ORDERED_RECOVERY_LOCK.wait();
-        } catch (InterruptedException interrupted) {
-          Thread.currentThread().interrupt();
-          return true;
-        }
-      }
-      return ORDERED_RECOVERY_SESSION_SET.contains(sessionId);
-    }
-  }
-
-  private static void completeOrderedRecoverySession(String sessionId) {
-    synchronized (ORDERED_RECOVERY_LOCK) {
-      if (!ORDERED_RECOVERY_SESSION_SET.remove(sessionId)) return;
-      ORDERED_RECOVERY_SESSIONS.remove(sessionId);
-      ORDERED_RECOVERY_LOCK.notifyAll();
     }
   }
 
