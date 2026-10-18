@@ -18,6 +18,10 @@ import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
 import com.jarvys.agent.workspaces.WorkspaceChanges
 import com.jarvys.agent.workspaces.WorkspaceControlType
+import com.jarvys.agent.workspaces.WorkspaceAssignmentUi
+import com.jarvys.agent.workspaces.WorkspaceUiStatus
+import com.jarvys.agent.workspaces.workspaceChatCorrectionDisabledHintResource
+import com.jarvys.agent.workspaces.workspaceChatSelectedAssignment
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import java.io.ByteArrayInputStream
@@ -59,6 +63,26 @@ class MainActivityWorkspaceRoutingTest {
     private val bytes = "Exact independent attachment bytes".toByteArray()
     private lateinit var attachment: ChatAttachment
     private val activity: MainActivity get() = requireNotNull(controller).get()
+
+    @Test fun selectedPauseOnlyBotKeepsItsPauseAndGetsAnAccurateCorrectionHint() {
+        val correctable = WorkspaceAssignmentUi("correctable", 4L, "Writer", "Write",
+            WorkspaceUiStatus.ACTIVE, canCorrect = true)
+        val pauseOnly = WorkspaceAssignmentUi("pause-only", 7L, "Scout", "Inspect",
+            WorkspaceUiStatus.ACTIVE, canPause = true)
+        val assignments = listOf(correctable, pauseOnly)
+
+        val selected = workspaceChatSelectedAssignment(assignments, pauseOnly.id)
+        assertEquals(pauseOnly, selected)
+        assertFalse(requireNotNull(selected).canCorrect)
+        assertTrue(selected.canPause)
+        assertEquals(R.string.workspace_chat_selected_assignment_cannot_correct_hint,
+            workspaceChatCorrectionDisabledHintResource(assignments, selected))
+        assertNull(workspaceChatCorrectionDisabledHintResource(assignments, correctable))
+        assertEquals(R.string.workspace_chat_input_hint,
+            workspaceChatCorrectionDisabledHintResource(listOf(pauseOnly), pauseOnly))
+        assertNotEquals(context.getString(R.string.workspace_chat_selected_assignment_cannot_correct_hint),
+            context.getString(R.string.workspace_chat_input_hint))
+    }
 
     @Before fun setUp() {
         compose.mainClock.autoAdvance = false

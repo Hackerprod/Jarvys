@@ -256,7 +256,7 @@ fun ChatComposer(
                 }
                 if (separateStopAction) IconButton(
                     onClick = onStop,
-                    enabled = inputEnabled && stopActionEnabled,
+                    enabled = stopActionEnabled && (inputEnabled || separateStopAction),
                     modifier = Modifier.size(48.dp).testTag("chat-separate-stop-button").semantics {
                         contentDescription = stopActionLabel ?: stopDescription
                     },

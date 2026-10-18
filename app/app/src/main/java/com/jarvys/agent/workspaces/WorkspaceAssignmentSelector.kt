@@ -21,6 +21,25 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.R
 
+/** Keep a pause-capable selected destination even while it cannot accept a correction. */
+internal fun workspaceChatSelectedAssignment(
+    assignments: List<WorkspaceAssignmentUi>,
+    selectedAssignmentId: String?,
+): WorkspaceAssignmentUi? = assignments.firstOrNull {
+    it.id == selectedAssignmentId && (it.canCorrect || it.canPause)
+} ?: assignments.firstOrNull { it.canCorrect }
+    ?: assignments.firstOrNull { it.canPause }
+
+/** Select a truthful localized hint when the current workspace destination cannot be corrected. */
+internal fun workspaceChatCorrectionDisabledHintResource(
+    assignments: List<WorkspaceAssignmentUi>,
+    selectedAssignment: WorkspaceAssignmentUi?,
+): Int? = when {
+    selectedAssignment?.canCorrect == true -> null
+    assignments.any { it.canCorrect } -> R.string.workspace_chat_selected_assignment_cannot_correct_hint
+    else -> R.string.workspace_chat_input_hint
+}
+
 /** Destination selector for native workspace corrections and pause controls. */
 @Composable
 fun WorkspaceAssignmentSelector(

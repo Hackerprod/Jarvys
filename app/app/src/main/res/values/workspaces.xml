@@ -14,6 +14,7 @@
     <string name="workspace_chat_empty">No conversation has been recorded for this workspace yet.</string>
     <string name="workspace_chat_load_error">The workspace conversation could not be loaded.</string>
     <string name="workspace_chat_input_hint">No assigned bot can receive a correction right now.</string>
+    <string name="workspace_chat_selected_assignment_cannot_correct_hint">This bot cannot receive a correction right now. Choose another bot to send a correction.</string>
     <string name="workspace_loading">Loading recorded workspace…</string>
     <string name="workspace_load_error">Workspace data could not be loaded. Actions are unavailable.</string>
     <string name="workspace_empty">No assignments recorded in this workspace.</string>

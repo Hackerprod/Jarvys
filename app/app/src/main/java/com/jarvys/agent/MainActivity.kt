@@ -1859,10 +1859,7 @@ private fun JarvysApp(
     var workspaceComposerText by rememberSaveable(routeWorkspaceId) { mutableStateOf("") }
     var workspaceSelectedAssignmentId by rememberSaveable(routeWorkspaceId) { mutableStateOf<String?>(null) }
     val workspaceAssignments = workspaceChatState.value?.assignments.orEmpty()
-    val workspaceSelectedAssignment = workspaceAssignments.firstOrNull {
-        it.id == workspaceSelectedAssignmentId && (it.canCorrect || it.canPause)
-    } ?: workspaceAssignments.firstOrNull { it.canCorrect }
-        ?: workspaceAssignments.firstOrNull { it.canPause }
+    val workspaceSelectedAssignment = workspaceChatSelectedAssignment(workspaceAssignments, workspaceSelectedAssignmentId)
     val workspaceLatestMission = workspaceChatState.value?.events?.lastOrNull { it.kind == "crew_mission" }
         ?.crewMissionSnapshot
     val workspaceHasActiveWork = workspaceChatState.value?.let { workspace ->
@@ -2143,8 +2140,10 @@ private fun JarvysApp(
                         }
                     },
                     inputEnabled = !workspaceChatActive || workspaceSelectedAssignment?.canCorrect == true,
-                    disabledHint = if (workspaceChatActive && workspaceSelectedAssignment?.canCorrect != true)
-                        stringResource(R.string.workspace_chat_input_hint) else null,
+                    disabledHint = if (workspaceChatActive) {
+                        workspaceChatCorrectionDisabledHintResource(workspaceAssignments, workspaceSelectedAssignment)
+                            ?.let { stringResource(it) }
+                    } else null,
                     recipientContent = if (workspaceChatActive) ({
                         com.jarvys.agent.workspaces.WorkspaceAssignmentSelector(
                             assignments = workspaceAssignments,

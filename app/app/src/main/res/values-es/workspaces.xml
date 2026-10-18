@@ -14,6 +14,7 @@
     <string name="workspace_chat_empty">Todavía no hay conversación registrada para este espacio.</string>
     <string name="workspace_chat_load_error">No se pudo cargar la conversación del espacio.</string>
     <string name="workspace_chat_input_hint">Ningún bot asignado puede recibir una corrección en este momento.</string>
+    <string name="workspace_chat_selected_assignment_cannot_correct_hint">Este bot no puede recibir una corrección ahora mismo. Elige otro bot para enviar una corrección.</string>
     <string name="workspace_loading">Cargando el espacio registrado…</string>
     <string name="workspace_load_error">No se pudieron cargar los datos del espacio. Las acciones no están disponibles.</string>
     <string name="workspace_empty">No hay trabajos registrados en este espacio.</string>
