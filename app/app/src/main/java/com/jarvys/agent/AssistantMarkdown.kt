@@ -59,6 +59,18 @@ internal interface AssistantMarkdownRenderObserver {
     fun onBlockMounted(language: String)
 }
 
+/** Successful parse trees retained for the lifetime of one ChatMessageList conversation. */
+internal class AssistantMarkdownSuccessCache {
+    private val statesByMarkdown = mutableMapOf<String, State.Success>()
+
+    fun get(normalizedMarkdown: String): State.Success? = statesByMarkdown[normalizedMarkdown]
+
+    fun put(normalizedMarkdown: String, state: State.Success) {
+        statesByMarkdown[normalizedMarkdown] = state
+    }
+}
+
+internal val LocalAssistantMarkdownSuccessCache = compositionLocalOf<AssistantMarkdownSuccessCache?> { null }
 internal val LocalAssistantMarkdownRenderObserver = compositionLocalOf<AssistantMarkdownRenderObserver?> { null }
 private val LocalAssistantMarkdownStreaming = compositionLocalOf { false }
 
@@ -147,19 +159,7 @@ internal fun AssistantMarkdown(
         } else {
             // Renderer 0.37.0 parses content-keyed states on Dispatchers.Default; immediate=true would block composition.
             // Keep the last successful tree mounted while a replacement parse runs.
-            val markdownState = rememberMarkdownState(normalizedMarkdown)
-            val parsedState by markdownState.state.collectAsState()
-            // This retained value is only read as a fallback while parsing; keeping it outside snapshot state avoids
-            // a second recomposition for every successfully parsed delta.
-            val lastSuccessState = remember { arrayOfNulls<State.Success>(1) }
-            val successState = parsedState as? State.Success
-            val displayState = successState
-                ?: if (parsedState is State.Error) parsedState else lastSuccessState[0] ?: parsedState
             val observer = LocalAssistantMarkdownRenderObserver.current
-            SideEffect {
-                successState?.let { lastSuccessState[0] = it }
-                (displayState as? State.Success)?.let { observer?.onMarkdownContentRendered(it.content) }
-            }
             // Read streaming inside the callback so promotion does not replace the MarkdownComponents instance.
             val components = remember {
                 markdownComponents(codeFence = { model ->
@@ -167,7 +167,37 @@ internal fun AssistantMarkdown(
                         LocalAssistantMarkdownStreaming.current)
                 })
             }
+            val successCache = if (streaming) null else LocalAssistantMarkdownSuccessCache.current
+            val cachedSuccess = successCache?.get(normalizedMarkdown)
             CompositionLocalProvider(LocalAssistantMarkdownStreaming provides streaming) {
+                val markdownState = rememberMarkdownState(normalizedMarkdown)
+                val parsedState by markdownState.state.collectAsState()
+                // This retained value is only read as a fallback while parsing; keeping it outside snapshot state avoids
+                // a second recomposition for every successfully parsed delta. It also carries a cache hit forward if this
+                // row's text changes while the row remains composed.
+                val lastSuccessState = remember { arrayOfNulls<State.Success>(1) }
+                val parsedSuccess = parsedState as? State.Success
+                val parsedError = parsedState as? State.Error
+                val preferredDisplayState = parsedSuccess
+                    ?: parsedError
+                    ?: cachedSuccess
+                    ?: lastSuccessState[0]
+                    ?: parsedState
+                // Preserve the required parsed Success/Error > cache > last Success > parser-state choice. Once a
+                // Success wins, reuse an already displayed equivalent tree so its Compose subtree keeps its identity.
+                val displayState = (preferredDisplayState as? State.Success)?.let { preferredSuccess ->
+                    val priorEquivalentSuccess = cachedSuccess?.takeIf { it.content == preferredSuccess.content }
+                        ?: lastSuccessState[0]?.takeIf { it.content == preferredSuccess.content }
+                    priorEquivalentSuccess ?: preferredSuccess
+                } ?: preferredDisplayState
+                SideEffect {
+                    val displayedSuccess = displayState as? State.Success
+                    displayedSuccess?.let { lastSuccessState[0] = it }
+                    if (parsedSuccess != null && cachedSuccess == null) {
+                        displayedSuccess?.let { successCache?.put(normalizedMarkdown, it) }
+                    }
+                    displayedSuccess?.let { observer?.onMarkdownContentRendered(it.content) }
+                }
                 Markdown(
                     state = displayState,
                     modifier = modifier,
@@ -179,7 +209,8 @@ internal fun AssistantMarkdown(
                         SideEffect { loadingObserver?.onLoadingComposed() }
                         Box(loadingModifier)
                     },
-                    error = { errorModifier -> Text(normalizedMarkdown, modifier = errorModifier, color = textColor, style = body) },
+                    error = { errorModifier -> Text(normalizedMarkdown, modifier = errorModifier,
+                        color = textColor, style = body) },
                 )
             }
         }

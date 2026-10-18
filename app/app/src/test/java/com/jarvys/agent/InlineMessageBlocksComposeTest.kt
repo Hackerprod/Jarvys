@@ -55,6 +55,282 @@ import org.robolectric.annotation.Config
 class InlineMessageBlocksComposeTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun staticAssistantMarkdownReentryDoesNotShowLoadingOrChangeRowHeight() {
+        val svg = """```svg
+            |<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Scroll re-entry diagram</title><circle cx="25" cy="25" r="15" fill="currentColor"/></svg>
+            |```""".trimMargin()
+        val chart = """```chart
+            |{"type":"bar","title":"Scroll re-entry totals","labels":["Jan","Feb","Mar"],"series":[{"name":"Total","values":[3,5,4]}]}
+            |```""".trimMargin()
+        val longMarkdown = buildString {
+            append("# Long answer\n\n")
+            repeat(36) { index ->
+                append("Paragraph ${index + 1}: This is a detailed explanation with enough repeated text to occupy several lines in the conversation viewport and represent a long persisted assistant response.\n\n")
+            }
+            append("## Summary list\n\n- First point with supporting detail\n- Second point with supporting detail\n- Third point with supporting detail\n\n")
+            append("The diagram and chart follow the explanation.\n\n")
+            append(svg)
+            append("\n\n")
+            append(chart)
+        }
+        val longMessageId = 100
+        // The newest message is LazyColumn index zero in ChatMessageList's reversed timeline.
+        val messages = (0 until 24).map { ScrollReentryMessage(it, "Earlier conversation message ${it + 1}.") } +
+            ScrollReentryMessage(longMessageId, longMarkdown)
+        val targetLazyIndex = 0
+        val awayLazyIndex = messages.size - 1
+        val requestedScrollOffsetPx = 180
+        val listState = androidx.compose.foundation.lazy.LazyListState()
+        val renderedMarkdown = mutableStateOf<String?>(null)
+        val markdownRenderCallbacks = mutableIntStateOf(0)
+        val loadingCompositions = mutableIntStateOf(0)
+        val rowHeight = mutableIntStateOf(0)
+        val reentryHeightSamples = mutableListOf<Int>()
+        val captureReentryHeightSamples = mutableStateOf(false)
+        val longRowMounts = mutableIntStateOf(0)
+        val longRowDisposals = mutableIntStateOf(0)
+        val sourceParsesByLanguage = mutableMapOf<String, Int>()
+        val blockMountsByLanguage = mutableMapOf<String, Int>()
+        val observer = object : AssistantMarkdownRenderObserver {
+            override fun onLoadingComposed() { loadingCompositions.intValue++ }
+            override fun onMarkdownContentRendered(content: String) {
+                renderedMarkdown.value = content
+                markdownRenderCallbacks.intValue++
+            }
+            override fun onPlaceholderComposed(language: String) = Unit
+            override fun onStreamingCodeFallbackComposed(language: String) = Unit
+            override fun onBlockSourceParsed(language: String) {
+                sourceParsesByLanguage[language] = (sourceParsesByLanguage[language] ?: 0) + 1
+            }
+            override fun onBlockMounted(language: String) {
+                blockMountsByLanguage[language] = (blockMountsByLanguage[language] ?: 0) + 1
+            }
+        }
+
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalInspectionMode provides false,
+                LocalAssistantMarkdownRenderObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    ChatMessageList(
+                        conversationKey = "static-scroll-reentry",
+                        messages = messages,
+                        isRunning = false,
+                        messageKey = { it.id },
+                        isUserMessage = { false },
+                        listState = listState,
+                        modifier = Modifier.width(360.dp).height(640.dp),
+                        itemContent = { message ->
+                            if (message.id == longMessageId) {
+                                DisposableEffect(message.id) {
+                                    longRowMounts.intValue++
+                                    onDispose { longRowDisposals.intValue++ }
+                                }
+                                Column(Modifier.fillMaxWidth()
+                                    .testTag("scroll-reentry-long-row")
+                                    .onSizeChanged {
+                                        rowHeight.intValue = it.height
+                                        if (captureReentryHeightSamples.value) reentryHeightSamples += it.height
+                                    }) {
+                                    AssistantMarkdown(message.text, onOpenSkillFile = {}, streaming = false)
+                                }
+                            } else {
+                                androidx.compose.material3.Text(message.text, Modifier.height(64.dp).fillMaxWidth())
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        compose.runOnIdle { listState.requestScrollToItem(targetLazyIndex, requestedScrollOffsetPx) }
+        compose.waitUntil(10_000L) { renderedMarkdown.value == longMarkdown && rowHeight.intValue > 0 }
+        compose.waitForIdle()
+        assertEquals("the requested long reply rendered", longMarkdown, renderedMarkdown.value)
+        assertTrue("the requested row was composed", longRowMounts.intValue > 0)
+        assertTrue("the reply produced a render callback", markdownRenderCallbacks.intValue > 0)
+        assertEquals("one SVG visual is mounted", 1, blockMountsByLanguage["svg"])
+        assertEquals("one chart visual is mounted", 1, blockMountsByLanguage["chart"])
+        repeat(3) {
+            compose.mainClock.advanceTimeBy(16L)
+            compose.waitForIdle()
+        }
+        val settledHeightBeforeScroll = rowHeight.intValue
+        val rowMountsBeforeScroll = longRowMounts.intValue
+        val rowDisposalsBeforeScroll = longRowDisposals.intValue
+        val scrollOnInitialEntry = "${listState.firstVisibleItemIndex}/${listState.firstVisibleItemScrollOffset}"
+        assertEquals("the initial entry uses the requested LazyColumn anchor", targetLazyIndex,
+            listState.firstVisibleItemIndex)
+        assertEquals("the initial entry uses the requested scroll offset", requestedScrollOffsetPx,
+            listState.firstVisibleItemScrollOffset)
+        assertTrue("the long answer starts composed", longRowMounts.intValue > 0)
+        assertTrue("the long answer has a measured height", settledHeightBeforeScroll > 0)
+
+        compose.runOnIdle { listState.requestScrollToItem(awayLazyIndex) }
+        compose.waitForIdle()
+        assertTrue("scrolling into history removes the long row from composition",
+            longRowDisposals.intValue > rowDisposalsBeforeScroll)
+        val loadingWhenOut = loadingCompositions.intValue
+        val renderCallbacksBeforeReturn = markdownRenderCallbacks.intValue
+
+        reentryHeightSamples.clear()
+        compose.runOnIdle { captureReentryHeightSamples.value = true }
+        compose.runOnIdle { listState.requestScrollToItem(targetLazyIndex, requestedScrollOffsetPx) }
+        compose.waitForIdle()
+        assertTrue("scrolling back mounts the long row again", longRowMounts.intValue > rowMountsBeforeScroll)
+        compose.waitUntil(10_000L) {
+            markdownRenderCallbacks.intValue > renderCallbacksBeforeReturn &&
+                renderedMarkdown.value == longMarkdown && rowHeight.intValue > 0
+        }
+        val reentryScrollSamples = mutableListOf<String>()
+        repeat(3) {
+            compose.mainClock.advanceTimeBy(16L)
+            compose.waitForIdle()
+            reentryHeightSamples += rowHeight.intValue
+            reentryScrollSamples += "${listState.firstVisibleItemIndex}/${listState.firstVisibleItemScrollOffset}"
+        }
+        compose.runOnIdle { captureReentryHeightSamples.value = false }
+        val settledHeightAfterScroll = rowHeight.intValue
+        val loadingAfterScroll = loadingCompositions.intValue
+        val scrollAfterSettle = "${listState.firstVisibleItemIndex}/${listState.firstVisibleItemScrollOffset}"
+        val reentryHeightValues = reentryHeightSamples.distinct()
+
+        assertEquals("re-entering a completed reply does not compose the empty loading slot",
+            loadingWhenOut, loadingAfterScroll)
+        assertEquals("the same long answer height is restored", settledHeightBeforeScroll, settledHeightAfterScroll)
+        assertTrue("re-entry keeps the previous row height in every measured sample: $reentryHeightValues",
+            reentryHeightSamples.isNotEmpty() && reentryHeightSamples.all { it == settledHeightBeforeScroll })
+        assertEquals("re-entry preserves the original item anchor", scrollOnInitialEntry.substringBefore('/'),
+            scrollAfterSettle.substringBefore('/'))
+        assertEquals("re-entry preserves the original scroll offset", scrollOnInitialEntry.substringAfter('/'),
+            scrollAfterSettle.substringAfter('/'))
+        assertTrue("all sampled frames preserve the original anchor and offset: $reentryScrollSamples",
+            reentryScrollSamples.all { it == scrollOnInitialEntry })
+    }
+
+    @Test fun cachedMarkdownTextChangeAfterReentryKeepsLastRenderedTree() {
+        val original = "# Original response\n\nThis paragraph stays visible while a replacement is parsed."
+        val translated = "# Respuesta traducida\n\nEste párrafo reemplaza el contenido después de volver a la conversación."
+        val cache = AssistantMarkdownSuccessCache()
+        val visible = mutableStateOf(true)
+        val markdown = mutableStateOf(original)
+        val renderedMarkdown = mutableStateOf<String?>(null)
+        val loadingCompositions = mutableIntStateOf(0)
+        val height = mutableIntStateOf(0)
+        val captureHeights = mutableStateOf(false)
+        val heightSamples = mutableListOf<Int>()
+        val observer = object : AssistantMarkdownRenderObserver {
+            override fun onLoadingComposed() { loadingCompositions.intValue++ }
+            override fun onMarkdownContentRendered(content: String) { renderedMarkdown.value = content }
+            override fun onPlaceholderComposed(language: String) = Unit
+            override fun onStreamingCodeFallbackComposed(language: String) = Unit
+            override fun onBlockSourceParsed(language: String) = Unit
+            override fun onBlockMounted(language: String) = Unit
+        }
+
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalAssistantMarkdownSuccessCache provides cache,
+                LocalAssistantMarkdownRenderObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    if (visible.value) {
+                        Column(Modifier.fillMaxWidth().onSizeChanged {
+                            height.intValue = it.height
+                            if (captureHeights.value) heightSamples += it.height
+                        }) {
+                            AssistantMarkdown(markdown.value, onOpenSkillFile = {})
+                        }
+                    }
+                }
+            }
+        }
+
+        compose.waitUntil(10_000L) { renderedMarkdown.value == original && height.intValue > 0 }
+        compose.waitForIdle()
+        val loadingBeforeReentry = loadingCompositions.intValue
+        compose.runOnIdle { visible.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { visible.value = true }
+        compose.waitForIdle()
+        assertEquals("a cached re-entry does not show the loading slot", loadingBeforeReentry,
+            loadingCompositions.intValue)
+
+        heightSamples.clear()
+        compose.runOnIdle {
+            captureHeights.value = true
+            markdown.value = translated
+        }
+        compose.waitForIdle()
+        val translatedRendered = runCatching {
+            compose.waitUntil(10_000L) { renderedMarkdown.value == translated }
+        }.isSuccess
+        assertTrue(
+            "translated Markdown did not render: actual=${renderedMarkdown.value?.take(80)}, " +
+                "height=${height.intValue}, loading=${loadingCompositions.intValue}",
+            translatedRendered,
+        )
+        assertTrue("the previous or translated tree remains visible", height.intValue > 0)
+        compose.waitForIdle()
+        heightSamples += height.intValue
+        compose.runOnIdle { captureHeights.value = false }
+
+        assertEquals("changing cached text keeps the loading slot hidden", loadingBeforeReentry,
+            loadingCompositions.intValue)
+        assertTrue("the row never collapses to zero while replacement Markdown parses: $heightSamples",
+            heightSamples.isNotEmpty() && heightSamples.none { it == 0 })
+        assertEquals("the translated text eventually renders", translated, renderedMarkdown.value)
+    }
+
+    @Test fun cachedSameTextRecompositionKeepsInlineBlockMounted() {
+        val markdown = """```svg
+            |<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Stable diagram</title><circle cx="25" cy="25" r="15" fill="currentColor"/></svg>
+            |```""".trimMargin()
+        val cache = AssistantMarkdownSuccessCache()
+        val renderedMarkdown = mutableStateOf<String?>(null)
+        val blockMountsByLanguage = mutableMapOf<String, Int>()
+        val observer = object : AssistantMarkdownRenderObserver {
+            override fun onLoadingComposed() = Unit
+            override fun onMarkdownContentRendered(content: String) {
+                if (renderedMarkdown.value != content) renderedMarkdown.value = content
+            }
+            override fun onPlaceholderComposed(language: String) = Unit
+            override fun onStreamingCodeFallbackComposed(language: String) = Unit
+            override fun onBlockSourceParsed(language: String) = Unit
+            override fun onBlockMounted(language: String) {
+                blockMountsByLanguage[language] = (blockMountsByLanguage[language] ?: 0) + 1
+            }
+        }
+
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalAssistantMarkdownSuccessCache provides cache,
+                LocalAssistantMarkdownRenderObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    Column(Modifier.testTag(if (renderedMarkdown.value != null) {
+                        "markdown-rendered"
+                    } else {
+                        "markdown-pending"
+                    })) {
+                        AssistantMarkdown(
+                            markdown,
+                            onOpenSkillFile = {},
+                            textColor = if (renderedMarkdown.value == null) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.waitUntil(10_000L) { renderedMarkdown.value == markdown }
+        compose.waitForIdle()
+        assertEquals("same-text cache promotion does not remount the SVG subtree", 1,
+            blockMountsByLanguage["svg"])
+    }
+
     @Test fun timelineKeepsOpenSvgPlaceholderAfterUserRowRefreshAndSteering() {
         val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
             override fun isConnected(id: String) = false
@@ -360,7 +636,6 @@ class InlineMessageBlocksComposeTest {
         settleContent(reply.value.text)
         assertTrue("the pre-fence message has visible height", height.intValue > 0)
         val loadingAfterInitialParse = loadingCompositions.intValue
-        val firstVisibleHeightSample = heightSamples.size
         val firstVisibleRowBottomSample = rowBottomSamples.size
         var noIntermediateShrink = true
 
@@ -396,17 +671,8 @@ class InlineMessageBlocksComposeTest {
             .fetchSemanticsNodes().isNotEmpty())
         assertTrue(compose.onAllNodesWithContentDescription("Trend diagram").fetchSemanticsNodes().isNotEmpty())
 
-        val visibleHeights = heightSamples.drop(firstVisibleHeightSample)
         val visibleRowBottoms = rowBottomSamples.drop(firstVisibleRowBottomSample)
-        val rowBottomMovement = (visibleRowBottoms.maxOrNull() ?: 0f) - (visibleRowBottoms.minOrNull() ?: 0f)
         val rowBottomReversals = visibleRowBottoms.zipWithNext().count { (before, after) -> after < before }
-        println("STREAM_FLICKER_METRICS loading=$loadingAfterInitialParse->${loadingCompositions.intValue}, " +
-            "placeholders=${placeholderCompositions.intValue}, chartMounts=${blockMountsByLanguage["chart"]}, " +
-            "svgMounts=${blockMountsByLanguage["svg"]}, chartParses=${sourceParsesByLanguage["chart"]}, " +
-            "svgParses=${sourceParsesByLanguage["svg"]}, streamedCodeFallbacks=${streamingCodeFallbackCompositions.intValue}, " +
-            "rowMounts=${rowMounts.intValue}, " +
-            "minVisibleHeight=${visibleHeights.minOrNull()}, rowBottomMovement=$rowBottomMovement, " +
-            "rowBottomReversals=$rowBottomReversals")
 
         assertTrue("no intermediate frame empties or shrinks already shown content", noIntermediateShrink)
         assertEquals("the row position never moves backward between frames", 0, rowBottomReversals)
@@ -464,3 +730,5 @@ private fun streamingFenceNode(content: String): ASTNode {
         else node.children.firstNotNullOfOrNull(::findFence)
     return requireNotNull(findFence(root))
 }
+
+private data class ScrollReentryMessage(val id: Int, val text: String)
