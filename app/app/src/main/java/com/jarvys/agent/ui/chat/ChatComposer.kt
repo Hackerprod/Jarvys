@@ -238,19 +238,27 @@ fun ChatComposer(
                     Icon(LucideIcons.Mic, contentDescription = null, modifier = Modifier.size(22.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 }
+                val sendStopEnabled = inputEnabled && (running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments))
+                val defaultSendStopColors = ButtonDefaults.buttonColors()
+                val sendStopContainerColor = if (sendStopEnabled) defaultSendStopColors.containerColor
+                    else defaultSendStopColors.disabledContainerColor
                 Button(onClick = { if (running || attachmentSending) onStop() else onSend() },
-                    enabled = inputEnabled && (running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments)), shape = CircleShape,
+                    enabled = sendStopEnabled, shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, disabledContainerColor = Color.Transparent),
                     modifier = Modifier.size(48.dp).testTag("chat-send-stop-button"),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-                    AnimatedContent(targetState = running || attachmentSending, transitionSpec = {
-                        if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
-                        else fadeIn(JarvysMotion.feedback()) togetherWith fadeOut(JarvysMotion.feedback())
-                    }, label = "send-stop-control") { isActive ->
-                        if (isActive) Box(Modifier.size(16.dp).clip(RoundedCornerShape(3.dp))
-                            .background(MaterialTheme.colorScheme.onPrimary).testTag("chat-stop-run-glyph")
-                            .semantics { contentDescription = stopDescription })
-                        else Icon(LucideIcons.ArrowUp,
-                            contentDescription = stringResource(R.string.chat_send_message), modifier = Modifier.size(20.dp))
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(sendStopContainerColor).testTag("chat-send-stop-visual"),
+                        contentAlignment = Alignment.Center) {
+                        AnimatedContent(targetState = running || attachmentSending, transitionSpec = {
+                            if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
+                            else fadeIn(JarvysMotion.feedback()) togetherWith fadeOut(JarvysMotion.feedback())
+                        }, label = "send-stop-control") { isActive ->
+                            if (isActive) Box(Modifier.size(16.dp).clip(RoundedCornerShape(3.dp))
+                                .background(MaterialTheme.colorScheme.onPrimary).testTag("chat-stop-run-glyph")
+                                .semantics { contentDescription = stopDescription })
+                            else Icon(LucideIcons.ArrowUp,
+                                contentDescription = stringResource(R.string.chat_send_message), modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
             }

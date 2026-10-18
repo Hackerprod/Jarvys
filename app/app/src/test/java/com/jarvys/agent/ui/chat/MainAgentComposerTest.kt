@@ -118,7 +118,15 @@ class MainAgentComposerTest {
         compose.onNodeWithText(context.getString(R.string.chat_interrupt_pending)).assertIsDisplayed()
         val stop = compose.onNodeWithTag("chat-send-stop-button")
         stop.assertIsDisplayed()
-        assertTrue(stop.fetchSemanticsNode().boundsInRoot.height >= 48f)
+        val stopBounds = stop.fetchSemanticsNode().boundsInRoot
+        val stopVisualBounds = compose.onNodeWithTag("chat-send-stop-visual", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        // Keep the 48dp touch target while the visible circle matches the adjacent 40dp plus control.
+        assertEquals(48f, stopBounds.width, 0.5f)
+        assertEquals(48f, stopBounds.height, 0.5f)
+        assertEquals(40f, stopVisualBounds.width, 0.5f)
+        assertEquals(40f, stopVisualBounds.height, 0.5f)
+        assertEquals(stopBounds.center.y, stopVisualBounds.center.y, 0.5f)
         if (allowed && draft.isNotBlank()) {
             val action = compose.onNodeWithTag("chat-interrupt-send")
             action.assertIsDisplayed()
