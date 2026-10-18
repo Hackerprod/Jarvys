@@ -2,12 +2,15 @@ package com.jarvys.agent.canvas
 
 import android.content.Context
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.R
+import com.jarvys.agent.isInternalSkillActivity
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** One explicit, format-neutral projection of the existing Kotlin event model for the local canvas. */
 internal object ChatCanvasEventSerializer {
     fun page(
+        context: Context,
         events: List<AgentRunUiEvent>,
         running: Boolean,
         allowRetry: Boolean = true,
@@ -17,7 +20,7 @@ internal object ChatCanvasEventSerializer {
         val latestAssistant = events.lastOrNull { it.kind == "assistant" }?.messageId
         val projected = JSONArray()
         events.forEachIndexed { index, event ->
-            projected.put(event(event, index, running, allowRetry, latestAssistant, resourceOrigin))
+            projected.put(event(context, event, index, running, allowRetry, latestAssistant, resourceOrigin))
         }
         return JSONObject().put("events", projected).put("followEnd", running || events.lastOrNull()?.kind == "user")
             .put("loadingOlder", loadingOlder)
@@ -27,6 +30,7 @@ internal object ChatCanvasEventSerializer {
     }
 
     private fun event(
+        context: Context,
         event: AgentRunUiEvent,
         order: Int,
         running: Boolean,
@@ -34,16 +38,20 @@ internal object ChatCanvasEventSerializer {
         latestAssistant: String?,
         origin: String,
     ): JSONObject {
+        val internalSkill = event.toolActivity?.takeIf { it.isInternalSkillActivity(context) }
+        val text = internalSkill?.let { internalSkillStatusLabel(context, it.stage) } ?: event.text
+        val label = if (internalSkill != null) context.getString(R.string.activity_skill_name_generic)
+            else event.toolDisplayName
         val value = JSONObject()
             .put("seq", event.id)
             .put("order", order)
             .put("kind", if (event.kind == "assistant_stream") "assistant" else event.kind)
             .put("stage", event.stage)
-            .put("text", event.text)
-            .put("detail", event.detail)
+            .put("text", text)
+            .put("detail", if (internalSkill == null) event.detail else null)
             .put("messageId", event.messageId)
-            .put("label", event.toolDisplayName)
-            .put("previewId", event.previewId)
+            .put("label", label)
+            .put("previewId", if (internalSkill == null) event.previewId else null)
             .put("decisionId", event.decisionId)
             .put("decisionStatus", event.decisionStatus)
             .put("decisionAllowDismiss", event.decisionAllowDismiss)
@@ -79,6 +87,16 @@ internal object ChatCanvasEventSerializer {
         event.proactiveReplies.forEach { reply -> replies.put(JSONObject().put("label", reply.label)) }
         value.put("replies", replies)
         return value
+    }
+
+    private fun internalSkillStatusLabel(context: Context, stage: String): String = when (stage) {
+        "tool_result" -> context.getString(R.string.activity_skill_loaded_generic)
+        "tool_error" -> context.getString(R.string.activity_skill_failed_generic)
+        "tool_interrupted" -> context.getString(R.string.connector_tool_unconfirmed,
+            context.getString(R.string.activity_skill_name_generic))
+        "tool_not_started" -> context.getString(R.string.connector_tool_not_started,
+            context.getString(R.string.activity_skill_name_generic))
+        else -> context.getString(R.string.activity_skill_loading_generic)
     }
 }
 

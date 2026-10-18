@@ -186,6 +186,7 @@ internal fun BotDefinitionEditor(
     iconCompletedRevision: Int? = null,
     error: String? = null,
     iconError: String? = null,
+    hiddenSkillIds: Set<String> = emptySet(),
 ) {
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     val immutable = immutableCatalogBot(bot)
@@ -233,7 +234,7 @@ internal fun BotDefinitionEditor(
             BotMascotPilotEntry(bot = bot, isNew = isNew, enabled = !blocked && !dirty)
             if (immutable) {
                 Text(stringResource(R.string.bots_read_only), Modifier.testTag("bot-read-only"), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                BotReadOnlyConfiguration(bot.profile)
+                BotReadOnlyConfiguration(bot.profile, hiddenSkillIds)
             } else {
                 if (isNew) Text(stringResource(R.string.bots_review_help), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!isNew) {
@@ -281,7 +282,7 @@ internal fun BotDefinitionEditor(
                     }
                 }
                 Text(stringResource(R.string.bots_skills), style = MaterialTheme.typography.titleSmall)
-                val skillOptions = botOptionsWithMissing(skills, selectedSkills)
+                val skillOptions = botOptionsWithMissing(skills, selectedSkills, hiddenSkillIds)
                 if (skillOptions.isEmpty()) Text(stringResource(R.string.bots_no_skills))
                 skillOptions.forEach { option -> BotChoice(option, option.id in selectedSkills, !saving, "bot-skill-${option.id}") {
                     selectedSkills = toggledBotChoice(selectedSkills, option.id); validation = null
@@ -294,7 +295,8 @@ internal fun BotDefinitionEditor(
                     try {
                         val profile = CrewProfile(bot.id, baseVersion, name, description, instructions,
                             selectedSkills.toList(), selectedTools.toList(), workspace)
-                        profile.validateAvailability(capabilities.filter { it.available }.map { it.id }, skills.filter { it.available }.map { it.id })
+                        profile.validateAvailability(capabilities.filter { it.available }.map { it.id },
+                            skills.filter { it.available }.map { it.id } + hiddenSkillIds)
                         onSave(bot.withProfile(profile))
                     } catch (failure: IllegalArgumentException) { validation = failure.message }
                 }, enabled = !blocked && !profileConflict, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("bot-editor-save")) {
@@ -315,7 +317,7 @@ internal fun BotDefinitionEditor(
 }
 
 @Composable
-private fun BotReadOnlyConfiguration(profile: CrewProfile) {
+private fun BotReadOnlyConfiguration(profile: CrewProfile, hiddenSkillIds: Set<String>) {
     SelectionContainer {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(profile.name, style = MaterialTheme.typography.titleLarge)
@@ -325,7 +327,7 @@ private fun BotReadOnlyConfiguration(profile: CrewProfile) {
             Text(stringResource(R.string.bots_capabilities), style = MaterialTheme.typography.titleSmall)
             Text(profile.capabilities.joinToString("\n").ifEmpty { stringResource(R.string.bots_no_tools) })
             Text(stringResource(R.string.bots_skills), style = MaterialTheme.typography.titleSmall)
-            Text(profile.skillIds.joinToString("\n").ifEmpty { stringResource(R.string.bots_no_skills) })
+            Text(profile.skillIds.filterNot { it in hiddenSkillIds }.joinToString("\n").ifEmpty { stringResource(R.string.bots_no_skills) })
         }
     }
 }
@@ -394,8 +396,8 @@ internal fun BotsError(message: String) {
         style = MaterialTheme.typography.bodyMedium)
 }
 
-private fun botOptionsWithMissing(options: List<CrewProfileOption>, selected: Set<String>): List<CrewProfileOption> =
-    options + (selected - options.map { it.id }.toSet()).map { CrewProfileOption(it, it, false) }
+private fun botOptionsWithMissing(options: List<CrewProfileOption>, selected: Set<String>, hiddenIds: Set<String> = emptySet()): List<CrewProfileOption> =
+    options + (selected - options.map { it.id }.toSet() - hiddenIds).map { CrewProfileOption(it, it, false) }
 private fun toggledBotChoice(selected: Set<String>, id: String) = if (id in selected) selected - id else selected + id
 
 @Composable

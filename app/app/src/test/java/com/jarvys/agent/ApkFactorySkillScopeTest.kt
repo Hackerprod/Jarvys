@@ -40,6 +40,7 @@ class ApkFactorySkillScopeTest {
         previousSkills = skillField.get(null)
         previousSecrets = secretField.get(null)
         skillField.set(null, null)
+        File(context.filesDir, "crew_profiles").deleteRecursively()
         context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit().clear().commit()
         secretField.set(null, SecretStore(context.getSharedPreferences("factory-skill-test-secrets", Context.MODE_PRIVATE)))
     }

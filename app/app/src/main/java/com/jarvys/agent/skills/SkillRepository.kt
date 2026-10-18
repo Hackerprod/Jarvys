@@ -23,6 +23,16 @@ enum class SkillSource(val userConfigurable: Boolean) {
 internal fun userConfigurableSkillEntries(skills: Collection<SkillEntry>): List<SkillEntry> =
     skills.filter { it.source.userConfigurable }
 
+/** Internal bundled skills stay out of picker UI but remain available to every profile runtime. */
+internal fun botPickerSkillEntries(skills: Collection<SkillEntry>): List<SkillEntry> =
+    skills.filterNot { SkillRepository.isInternalBundledSkill(it) }
+
+internal fun botPickerHiddenSkillIds(skills: Collection<SkillEntry>): Set<String> =
+    skills.asSequence()
+        .filter { SkillRepository.isInternalBundledSkill(it) }
+        .map { it.metadata.id }
+        .toSet()
+
 /** Android lists child directories; archive-backed asset providers may list entrypoint paths. */
 internal fun bundledSkillDirectoryNames(listing: Collection<String>): List<String> = listing
     .map { it.removeSuffix("/SKILL.md") }
@@ -68,6 +78,20 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     /** Main chat and custom-profile discovery never include runtime-owned Coding instructions. */
     fun enabledForRun(): List<SkillEntry> = enabledForProfile(null)
+
+    /** Internal bundled skills can be loaded in any profile that is allowed to use their scope. */
+    fun internalSkillsForProfile(profileId: String?): List<SkillEntry> =
+        enabledForProfile(profileId).filter { isInternalBundledSkill(it) }
+
+    /** Profile-selected skills plus internal bundled skills available within the same scope. */
+    fun availableForAgentProfile(selectedIds: Collection<String>, profileId: String?): List<SkillEntry> {
+        val combined = linkedMapOf<String, SkillEntry>()
+        selectedForProfile(selectedIds, profileId).forEach { combined[it.metadata.id] = it }
+        internalSkillsForProfile(profileId).forEach {
+            if (it.metadata.id !in combined) combined[it.metadata.id] = it
+        }
+        return combined.values.toList()
+    }
 
     fun enabledForProfile(profileId: String?): List<SkillEntry> = skills.value.filter {
         (!it.source.userConfigurable || it.enabled) && it.validationError == null
@@ -311,6 +335,12 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
     private fun usageKey(id: String) = "used:$id"
 
     companion object {
+        const val INTERNAL_SKILL_VISIBILITY_TAG = "internal"
+
+        @JvmStatic
+        fun isInternalBundledSkill(skill: SkillEntry): Boolean =
+            skill.source == SkillSource.BUNDLED && INTERNAL_SKILL_VISIBILITY_TAG in skill.metadata.tags
+
         private const val PREFS_NAME = "jarvys_skill_settings"
         private const val SKILLS_DIRECTORY = "skills"
         private const val ASSET_ROOT = "skills"

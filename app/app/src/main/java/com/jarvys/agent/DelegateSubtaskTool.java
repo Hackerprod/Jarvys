@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillRepository;
 import com.jarvys.agent.skills.SkillScopePolicy;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -60,7 +61,9 @@ public final class DelegateSubtaskTool implements CoreTool {
     this.availableTools = Collections.unmodifiableList(transferableTools);
     List<String> ids = new ArrayList<>();
     for (SkillEntry skill : this.skillEntries) {
-      ids.add(skill.getMetadata().getId());
+      if (!SkillRepository.isInternalBundledSkill(skill)) {
+        ids.add(skill.getMetadata().getId());
+      }
     }
     this.availableSkills = Collections.unmodifiableList(ids);
     Map<String, String> properties = new LinkedHashMap<>();
@@ -108,7 +111,7 @@ public final class DelegateSubtaskTool implements CoreTool {
       return CoreToolResult.failure(
           "Subtask requested a tool outside this agent's capability scope");
     }
-    if (!this.availableSkills.containsAll(requestedSkills)) {
+    if (requestedSkills.stream().anyMatch(skillId -> !canDelegateSkill(skillId))) {
       return CoreToolResult.failure(
           "Subtask requested a skill outside this agent's enabled skill scope");
     }
@@ -165,7 +168,8 @@ public final class DelegateSubtaskTool implements CoreTool {
     CoreTool skillTool = handlers.get("read_skill");
     if (skillTool instanceof LoadSkillTool) {
       for (SkillEntry skill : ((LoadSkillTool) skillTool).availableSkills()) {
-        if (this.availableSkills.contains(skill.getMetadata().getId())) {
+        if (this.availableSkills.contains(skill.getMetadata().getId())
+            || SkillRepository.isInternalBundledSkill(skill)) {
           selectedSkills.add(skill);
         }
       }
@@ -177,6 +181,17 @@ public final class DelegateSubtaskTool implements CoreTool {
     return this.scopedRunner != null
         ? new DelegateSubtaskTool(this.scopedRunner, handlers, selectedSkills, recursive)
         : new DelegateSubtaskTool(this.runner, names(handlers, recursive), selectedSkills);
+  }
+
+  private boolean canDelegateSkill(String skillId) {
+    if (this.availableSkills.contains(skillId)) return true;
+    for (SkillEntry skill : this.skillEntries) {
+      if (skillId.equals(skill.getMetadata().getId())
+          && SkillRepository.isInternalBundledSkill(skill)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<String> strings(Object value, String field) {

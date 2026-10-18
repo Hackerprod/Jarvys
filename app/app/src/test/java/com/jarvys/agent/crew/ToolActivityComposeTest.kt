@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -17,6 +18,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.*
 import com.jarvys.agent.R
+import com.jarvys.agent.skills.SkillRepository
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.jarvysColorScheme
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
@@ -34,12 +39,23 @@ import java.io.File
 @Config(sdk=[34],qualifiers="en-rUS-w360dp-h800dp-port-mdpi")
 class ToolActivityComposeTest {
     @get:Rule val compose=createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val testSecrets=TestSecretStoreRule()
     private fun activity(stage:String="tool_call",detail:String="",skill:Boolean=false)=ToolActivity("event-$stage","execution","raw-call",
         if(skill) "read_skill" else "read", "Read",if(skill) "skill.garden" else "",if(skill) "Garden Planning" else "",
         stage,detail,"","","workspace",1)
     private fun bot(state:String="RUNNING")=CrewBotSnapshot("bot","coding","Coding","Coding","coding","Inspect",state,"","","",emptyList(),0,0)
     private fun local(a:ToolActivity,id:String="local")=CrewMessage(id,"chat","bot","bot",CrewMessage.Type.STATUS,"Read",emptyList(),1,a)
     private fun snapshot(state:String="RUNNING",messages:List<CrewMessage>)=CrewMissionSnapshot("mission","chat","process","Inspect source",state,"",0,0,listOf(bot(state)),messages)
+    private fun semanticsSnapshot():String {
+        fun collect(node:SemanticsNode):String=node.config.toString()+node.children.joinToString("") { collect(it) }
+        return collect(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode())
+    }
+    private fun assertInternalSkillNotExposed(id:String,name:String,bodyPhrase:String) {
+        val semantics=semanticsSnapshot()
+        listOf(id,name,bodyPhrase).forEach { value ->
+            assertFalse("Internal skill data appeared in UI semantics: $value",semantics.contains(value))
+        }
+    }
     private val fixtureBoard by lazy {
         val constructor=WorkspaceStore::class.java.getDeclaredConstructor(File::class.java,String::class.java).apply { isAccessible=true }
         CrewBoard(constructor.newInstance(TestCaptureDirectories.create("ux37-board"),WorkspaceStore.projectIdForSession("chat")))
@@ -79,6 +95,56 @@ class ToolActivityComposeTest {
         compose.onNodeWithTag("activity-details-execution").performClick()
         compose.onNodeWithText(explanation).assertIsDisplayed()
         compose.onNodeWithText("Partial execution evidence").assertIsDisplayed()
+    }
+    @Test fun internalBundledSkillActivityHidesRealReadSkillResultOnActivityAndChatTimelines() {
+        val internal = SkillRepository.get(compose.activity).also { it.refresh() }.skills.value
+            .first { SkillRepository.isInternalBundledSkill(it) }
+        val bodyPhrase = internal.body.lineSequence().map(String::trim)
+            .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("> Source:") }
+            .maxByOrNull(String::length) ?: error("The internal skill must contain a non-heading body line")
+        val load = LoadSkillTool(listOf(internal), CorePromptBudget.standard().loadedSkillChars)
+            .execute(mapOf("skill_id" to internal.metadata.id), CancellationToken.uncancellable())
+        assertTrue("A real internal read_skill load should succeed: ${load.content}",load.success)
+        assertTrue(load.content.contains(internal.metadata.id))
+        assertTrue(load.content.contains(internal.metadata.name))
+        assertTrue(load.content.contains("\n$bodyPhrase"))
+        assertTrue(load.content.contains(bodyPhrase))
+        val internalActivity = ToolActivity("event-internal", "execution-internal", "call", "read_skill",
+            "Read Skill", internal.metadata.id, internal.metadata.name, "tool_call", "", "", "", "workspace", 1)
+        var state by mutableStateOf(internalActivity)
+        val connectors=ConnectorRegistry.createForTests(object:ConnectorConnectionPreferences {
+            override fun isConnected(id:String)=false
+            override fun setConnected(id:String,connected:Boolean)=Unit
+        },{true})
+        val loadedActivity=internalActivity.event("tool_result",load.content,"")
+        val reopenedEvent=AgentRunUiEvent.activityEvent(1L,loadedActivity)
+        var surface by mutableStateOf(0)
+        compose.setContent { MaterialTheme {
+            when (surface) {
+                0 -> ToolActivityLine(state)
+                1 -> ConversationTimeline("reopened-internal-skill",events=listOf(reopenedEvent),isRunning=false,
+                    connectorRegistry=connectors,onOpenPreview={},onOpenSkillFile={},chatWithoutMemory=false)
+                else -> CrewMissionScreen(snapshot(messages = listOf(local(loadedActivity, "crew-internal-skill"))),
+                    board(), true, {}, { _, _ -> }, {})
+            }
+        } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loading_generic)).assertIsDisplayed()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+        compose.runOnIdle { state = internalActivity.event("tool_result", load.content, "") }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("activity-details-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle { surface = 1 }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("tool-output-toggle-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle { surface = 2 }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithTag("activity-details-execution-internal").assertDoesNotExist()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
     }
     @Test fun botStatusOnlyChangeMarksPendingOperationUnconfirmed() {
         val messages=listOf(local(activity()));var value by mutableStateOf(snapshot(messages=messages))

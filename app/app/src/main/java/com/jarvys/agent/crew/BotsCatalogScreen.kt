@@ -18,6 +18,8 @@ import com.jarvys.agent.CoreAgentRuntime
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.R
 import com.jarvys.agent.skills.SkillRepository
+import com.jarvys.agent.skills.botPickerHiddenSkillIds
+import com.jarvys.agent.skills.botPickerSkillEntries
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,7 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class BotCatalogConfiguration(val definitions: List<BotDefinition>,
-    val capabilities: List<CrewProfileOption>, val skills: List<CrewProfileOption>, val iconAvailable: Boolean)
+    val capabilities: List<CrewProfileOption>, val skills: List<CrewProfileOption>,
+    val hiddenSkillIds: Set<String>, val iconAvailable: Boolean)
 
 /** Catalog configuration is independent of conversation/mission execution. Opening it starts no run. */
 @Composable
@@ -99,9 +102,13 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
                     .filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
                 val skills = SkillRepository.get(context).also { it.refresh() }
                 val available = skills.enabledForRun().map { it.metadata.id }.toSet()
+                val selectableSkills = skills.skills.value
+                    .filterNot { com.jarvys.agent.skills.SkillScopePolicy.isReserved(it.metadata.id) }
+                val visibleSkills = botPickerSkillEntries(selectableSkills)
                 BotCatalogConfiguration(definitions, capabilities.map { CrewProfileOption(it, CoreToolRegistry.humanizeToolName(it)) },
-                    skills.skills.value.filterNot { com.jarvys.agent.skills.SkillScopePolicy.isReserved(it.metadata.id) }
-                        .map { CrewProfileOption(it.metadata.id, it.metadata.name, it.metadata.id in available) }, icons.getOrNull()?.let { runCatching { it.isAvailable }.getOrDefault(false) } ?: false)
+                    visibleSkills.map { CrewProfileOption(it.metadata.id, it.metadata.name, it.metadata.id in available) },
+                    botPickerHiddenSkillIds(selectableSkills),
+                    icons.getOrNull()?.let { runCatching { it.isAvailable }.getOrDefault(false) } ?: false)
             }
             // Listener deliveries that arrived during the load must win over an older disk snapshot.
             val merged = fresh.definitions.associateBy { it.id }.toMutableMap()
@@ -131,6 +138,7 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
         editing != null -> BotDefinitionEditor(editing, draft != null, loaded.capabilities, loaded.skills,
             saving = operation == "save", changingEnabled = operation == "toggle", iconAvailable = loaded.iconAvailable,
             iconGenerating = operation == "icon", iconCompletedRevision = iconCompletedRevision, error = error, iconError = iconError,
+            hiddenSkillIds = loaded.hiddenSkillIds,
             onClose = ::leaveEditor, onEnabledChange = { toggle(editing, it) },
             onCancelIcon = {
                 val cancelledId = editing.id

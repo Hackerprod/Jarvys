@@ -9,11 +9,11 @@ tags: [presentation, composition]
 
 # Compose the slides yourself
 
-`create_presentation` constructs the elements you specify. It does not place titles, body text, bullets, images, charts, or tables for you. Choose each element's position and size, then use the returned measurements to decide whether to revise the deck.
+`create_presentation` uses only the elements you specify; it does not place content for you. Set every element's position and size, then use its measurements to revise the deck.
 
 ## Canvas and composition
 
-The slide format is PptxGenJS `LAYOUT_WIDE`: 13.333 × 7.5 inches. Coordinates start at the top-left; `x`, `y`, `w`, and `h` are inches. Use the whole canvas deliberately: decide the margins, columns, alignment lines, and visual grouping that serve this slide's content. There is no required grid or layout.
+Slides use PptxGenJS `LAYOUT_WIDE` (13.333 × 7.5 inches), with `x`, `y`, `w`, and `h` in inches from the top-left. Choose margins, columns, alignments, and visual groups for each slide; no grid or layout is required.
 
 For each slide:
 
@@ -138,7 +138,7 @@ The handler returns the editable artifact and a compact JSON measurement report 
 - Review contrast and the reported smallest text size in the actual viewing context; the report gives measurements, while you decide whether the composition reads well.
 - A measured overlap or overflow is feedback, not a generation failure. Regenerate with changed coordinates or content when the evidence calls for it.
 
-The report identifies elements by slide number, zero-based element index, and type; it does not repeat input text. Each element includes measured height and line count for text. A box and overflow flag appear only when a finding needs review; low or unknown contrast, overlaps, and out-of-bounds boxes are listed with the relevant elements. `contrast` is a number when all run ratios agree, an object `{ratio, runs}` when runs have different ratios, or `null` with `contrast_reason` when a ratio cannot be determined. Reports also identify the metrics source (`canvas-font-metrics` in WebView; deterministic width fallback in the Node contract). The browser canvas uses the fonts available to the WebView. A different viewer or font installation can wrap text differently, so inspect the rendered deck as well as the report.
+Each report entry identifies the slide, zero-based element index, and type without repeating input text. Text includes measured height and line count; boxes appear for findings. Contrast is a number, a per-run object, or `null` with a reason. The report identifies WebView canvas metrics or the deterministic Node fallback. Fonts vary by viewer, so inspect the rendered deck too.
 
 ### Accepted element properties
 

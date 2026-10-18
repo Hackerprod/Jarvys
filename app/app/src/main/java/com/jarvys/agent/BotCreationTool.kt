@@ -58,6 +58,13 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
     }
 }
 
+internal fun botCreationSkillIds(skills: Collection<com.jarvys.agent.skills.SkillEntry>): List<String> =
+    skills.asSequence()
+        .filterNot { SkillRepository.isInternalBundledSkill(it) }
+        .map { it.metadata.id }
+        .distinct()
+        .toList()
+
 internal class BotCreationService(
     private val repository: CrewProfileRepository,
     private val sessionId: String,
@@ -70,7 +77,7 @@ internal class BotCreationService(
     constructor(context: Context, sessionId: String) : this(
         CrewProfileRepository(context), sessionId,
         { CoreAgentRuntime.profileCapabilities(context, sessionId) },
-        { SkillRepository.get(context).also { it.refresh() }.enabledForRun().map { it.metadata.id } },
+        { botCreationSkillIds(SkillRepository.get(context).also { it.refresh() }.enabledForRun()) },
         { BotIconService(context, sessionId, ProviderSettings(context)).isAvailable },
         { id, revision, prompt, token -> BotIconService(context, sessionId, ProviderSettings(context)).generateAndAssign(id, revision, prompt, token) },
         { id, revision, request, description, scene, token -> BotMascotService(context, sessionId)

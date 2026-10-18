@@ -41,7 +41,7 @@ class ChatCanvasWebViewInstrumentedTest {
                 actionReceived.countDown()
             }),
         )
-        val page = ChatCanvasEventSerializer.page(listOf(event), running = false)
+        val page = ChatCanvasEventSerializer.page(instrumentation.targetContext, listOf(event), running = false)
         val update = ChatCanvasUpdate(
             bootstrapScript = "window.ChatCanvas.bootstrap(JSON.parse(${org.json.JSONObject.quote(page.toString())}));",
             patchScript = "",
