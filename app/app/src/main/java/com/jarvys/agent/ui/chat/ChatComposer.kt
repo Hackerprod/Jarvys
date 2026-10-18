@@ -48,6 +48,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -245,7 +249,16 @@ fun ChatComposer(
                 Button(onClick = { if (running || attachmentSending) onStop() else onSend() },
                     enabled = sendStopEnabled, shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, disabledContainerColor = Color.Transparent),
-                    modifier = Modifier.size(48.dp).testTag("chat-send-stop-button"),
+                    modifier = Modifier.size(48.dp).drawWithCache {
+                        // Clip only drawing feedback; the Button keeps its full 48dp touch target.
+                        val inset = 4.dp.toPx()
+                        val visualCircle = Path().apply {
+                            addOval(Rect(inset, inset, size.width - inset, size.height - inset))
+                        }
+                        onDrawWithContent {
+                            clipPath(visualCircle) { this@onDrawWithContent.drawContent() }
+                        }
+                    }.testTag("chat-send-stop-button"),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                     Box(Modifier.size(40.dp).clip(CircleShape).background(sendStopContainerColor).testTag("chat-send-stop-visual"),
                         contentAlignment = Alignment.Center) {

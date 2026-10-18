@@ -37,20 +37,21 @@ public class MainAgentContractTest {
         "An acknowledgment or progress message is not task completion"))
       assertTrue(restoredRule, prompt.contains(restoredRule));
     assertTrue(prompt.contains("never put private reasoning there"));
-    assertTrue(prompt.contains("Use one compact figure per idea for structure, flow, spatial relations or magnitude when prose is slower."));
-    assertTrue(prompt.contains("Put it by the sentence; say what it shows."));
-    assertTrue(prompt.contains("If text/table works as well, use text; draw diagrams on request."));
-    assertTrue(prompt.contains("Math: use a `latex` fence."));
-    assertTrue(prompt.contains("Inline blocks are for chat; use modules for files like PPTX or PNG."));
-    assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (bar/line/pie)"));
-    assertTrue(prompt.contains("SVG: `viewBox`, transparent background, `currentColor`"));
-    assertTrue(prompt.contains("fit labels to shapes on portrait phones"));
-    assertTrue(prompt.contains("markerWidth/Height, viewBox, refX/Y"));
-    assertTrue(prompt.contains("markerUnits=strokeWidth scales size with stroke; userSpaceOnUse fixed"));
-    assertTrue(prompt.contains("orient=auto; fill=currentColor or fill=none stroke=currentColor; avoid context-stroke/context-fill, auto-start-reverse."));
+    assertTrue(prompt.contains("Chat renders `svg`, `chart` and `latex` fences inline as part of your answer."));
+    assertTrue(prompt.contains("When a picture explains faster than words (a structure, a flow, a spatial layout, a comparison of magnitudes), include one compact figure for that idea right after the sentence it illustrates, and say in the text what it shows."));
+    assertTrue(prompt.contains("Use prose and tables for everything else."));
+    assertTrue(prompt.contains("Put math in a `latex` fence."));
+    assertTrue(prompt.contains("Inline blocks are for chat; use module tools for files such as PPTX or PNG."));
+    assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (type: bar, line, or pie)"));
+    assertTrue(prompt.contains("Take chart values from the conversation, the user, or tools, and mark estimates as approximate."));
+    assertTrue(prompt.contains("SVG: give a `viewBox`, a transparent background, and `currentColor` for ink so it follows the theme; size text to fit its shapes on a portrait phone."));
+    assertTrue(prompt.contains("Arrowheads scale with the line by default (markerUnits=strokeWidth)"));
+    assertTrue(prompt.contains("their size is markerWidth x stroke-width"));
+    assertTrue(prompt.contains("a 10-unit marker on a 2.5-wide line is 25 units"));
+    assertTrue(prompt.contains("For a fixed head size use markerUnits=\"userSpaceOnUse\" with a marker viewBox and the markerWidth/markerHeight you want, orient=\"auto\", and fill=\"currentColor\"."));
     assertTrue(prompt.contains("`currentColor`"));
     assertTrue(prompt.contains("transparent background"));
-    assertTrue(prompt.contains("Chart data: use conversation, user or tools; mark estimates as approximate."));
+    assertFalse(prompt.contains("draw diagrams on request"));
     assertFalse(prompt.contains("no scripts"));
     assertFalse(prompt.contains("short text within the viewBox"));
   }
