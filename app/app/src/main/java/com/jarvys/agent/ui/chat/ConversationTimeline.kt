@@ -170,10 +170,13 @@ fun ConversationTimeline(
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
+    showAssistantProgress: Boolean = false,
     benchmarkListState: LazyListState? = null,
     modifier: Modifier = Modifier,
 ) {
-    val visibleEvents = remember(events) { ConversationVisibility.project(events) }
+    val visibleEvents = remember(events, showAssistantProgress) {
+        ConversationVisibility.project(events, showAssistantProgress)
+    }
     val context = LocalContext.current
     val canvasEnabled = remember(conversationKey, benchmarkListState) {
         benchmarkListState == null && ChatCanvasPreferences.enabled(context)

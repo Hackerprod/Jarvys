@@ -12,11 +12,11 @@ internal object ConversationVisibility {
         "perception", "operator", "device_use", "validator", "summarizer",
     )
 
-    fun visible(event: AgentRunUiEvent): Boolean {
+    fun visible(event: AgentRunUiEvent, showAssistantProgress: Boolean = false): Boolean {
         if (event.kind == "memory" && event.stage == "SEED") return false
         if (event.kind == "progress" && event.stage in internalStages) return false
-        // A model preamble accompanying tool calls is not the final user-facing answer.
-        if (event.kind == "assistant" && event.stage == "PROGRESS") return false
+        // Only the main chat opts into persisted model preambles; workspace timelines stay unchanged.
+        if (event.kind == "assistant" && event.stage == "PROGRESS" && !showAssistantProgress) return false
         // Typed identity only: workspace coordination rows are projected separately from user work.
         // Failed, interrupted and never-started coordination remains actionable and visible.
         if (event.kind == "tool" && event.toolActivity?.toolName == "workspaces" &&
@@ -25,7 +25,7 @@ internal object ConversationVisibility {
     }
 
     /** Replaces successful structured tool results with their first-class timeline cards. */
-    fun project(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> {
+    fun project(events: List<AgentRunUiEvent>, showAssistantProgress: Boolean = false): List<AgentRunUiEvent> {
         val deliveredArtifactIds = events.asSequence()
             .filter { it.kind == "artifact" }
             .mapNotNull { it.presentationArtifact?.id }
@@ -36,7 +36,7 @@ internal object ConversationVisibility {
             .toSet()
 
         return events.mapNotNull { event ->
-            if (!visible(event)) return@mapNotNull null
+            if (!visible(event, showAssistantProgress)) return@mapNotNull null
             val scheduledTask = scheduledTaskArtifact(event)
             if (scheduledTask != null) {
                 return@mapNotNull event.copy(kind = "scheduled_task", scheduledTaskArtifact = scheduledTask)

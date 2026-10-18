@@ -157,12 +157,15 @@ public class MainAgentContractTest {
     CoreAgentLoop.Result result = loop.run("Inspect", Collections.emptyList(), CancellationToken.uncancellable(),
         new CoreAgentLoop.ProgressListener() {
           public void onProgress(String stage, String text) { if (stage.equals("answer")) order.add("final"); }
-          public void onAssistantProgress(String callId, String text) {
+          public void onAssistantTextStreamStarted(String runId) { order.add("stream-start"); }
+          public void onAssistantProgress(String runId, String callId, String text) {
+            assertNotNull(runId);
             assertNotNull(store.readAssistantProgress(session, callId));
             order.add("progress");
           }
+          public void onAssistantTextStreamEnded(String runId) { order.add("stream-ended"); }
         });
-    assertEquals(Arrays.asList("progress", "tool", "final"), order);
+    assertEquals(Arrays.asList("stream-start", "progress", "stream-ended", "tool", "stream-start", "final"), order);
     assertEquals("COMPLETED", result.outcome);
     List<AgentRunUiEvent> restored = chatTestStore.localRunStore(files).readConversationTimeline(session);
     assertEquals(1, restored.stream().filter(e -> "PROGRESS".equals(e.getStage())).count());

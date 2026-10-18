@@ -62,6 +62,106 @@ class AgentRunUiStateTest {
     }
 
     @Test
+    fun assistantProgressPromotesStreamAndRotatesKeysWhenRunIdIsReusedAcrossToolTurns() {
+        val session = "interim-rotation-${System.nanoTime()}"
+        val generation = 9_103L
+        val runId = "same-model-loop"
+        val owner = "user-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Build an app")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.bindCurrentUserMessage(session, owner)
+
+        fun startInterim(text: String, batchId: String, callId: String): Long? {
+            AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+            AgentRunUiState.assistantTextStreamDelta(session, generation, runId, text)
+            val stream = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+            val progress = AgentRunUiEvent.messageEvent(0L, "assistant", text, stream.timestampMillis + 1)
+                .copyMetadata("progress-$batchId/$callId", 0L).copyStage("PROGRESS")
+                .copyToolTimelineIdentity("progress:$batchId/$callId", owner)
+            AgentRunUiState.assistantProgress(session, generation, runId, progress)
+            AgentRunUiState.assistantTextStreamEnded(session, generation, runId)
+            return stream.timelineKey
+        }
+
+        val firstKey = startInterim("Checking the build plan.", "batch-1", "call-1")
+        AgentRunUiState.onProgress("tool_call", "read project")
+        val secondKey = startInterim("The project structure is clear.", "batch-2", "call-2")
+        AgentRunUiState.onProgress("tool_call", "write files")
+
+        val duringRun = AgentRunUiState.snapshotForSession(session).events
+        val interims = duringRun.filter { it.kind == "assistant" && it.stage == "PROGRESS" }
+        assertEquals(listOf("Checking the build plan.", "The project structure is clear."), interims.map { it.text })
+        assertEquals(listOf(firstKey, secondKey), interims.map { it.timelineKey })
+        assertNotEquals("each promoted turn gets a fresh LazyColumn key", firstKey, secondKey)
+        assertFalse(duringRun.any { it.kind == "assistant_stream" })
+        assertEquals(duringRun.size, duringRun.map { it.id }.toSet().size)
+        assertEquals(duringRun.size, duringRun.map { it.timelineKey ?: it.id }.toSet().size)
+
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "The app is ready.")
+        val finalStream = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+        AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", "The app is ready.",
+            "final-answer", 1L)
+        val completed = AgentRunUiState.snapshotForSession(session).events
+        assertEquals(listOf("Checking the build plan.", "The project structure is clear.", "The app is ready."),
+            completed.filter { it.kind == "assistant" }.map { it.text })
+        assertEquals(finalStream.timelineKey, completed.single { it.messageId == "final-answer" }.timelineKey)
+        assertEquals(3, completed.filter { it.kind == "assistant" }.map { it.timelineKey ?: it.id }.toSet().size)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun persistedInterimRefreshReconcilesPendingStreamAndOwnerDeletionRemovesInterims() {
+        val session = "interim-refresh-${System.nanoTime()}"
+        val generation = 9_104L
+        val runId = "refresh-loop"
+        val owner = "owner-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "First request")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.bindCurrentUserMessage(session, owner)
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "The interim appears once.")
+        val stream = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
+        val user = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "user" }
+        val persistedProgress = AgentRunUiEvent.messageEvent(40L, "assistant", "The persisted citation rendering differs.",
+            stream.timestampMillis + 1).copyMetadata("progress-batch/call", 0L).copyStage("PROGRESS")
+            .copyToolTimelineIdentity("progress:batch/call", owner)
+
+        // Exercise the common refresh path used while a provider turn and its stream are still live.
+        AgentRunUiState.refreshPersistedSession(session, listOf(user, persistedProgress))
+        val refreshed = AgentRunUiState.snapshotForSession(session).events
+        val refreshedInterim = refreshed.single { it.kind == "assistant" && it.stage == "PROGRESS" }
+        assertEquals(stream.timelineKey, refreshedInterim.timelineKey)
+        assertFalse(refreshed.any { it.kind == "assistant_stream" })
+        assertEquals(1, refreshed.count { it.messageId == persistedProgress.messageId })
+
+        // The service callback can arrive after history refresh; it only completes the same promotion.
+        AgentRunUiState.assistantProgress(session, generation, runId, persistedProgress)
+        AgentRunUiState.assistantTextStreamEnded(session, generation, runId)
+        val reconciled = AgentRunUiState.snapshotForSession(session).events
+        assertEquals(1, reconciled.count { it.messageId == persistedProgress.messageId })
+        assertEquals(stream.timelineKey, reconciled.single { it.messageId == persistedProgress.messageId }.timelineKey)
+
+        val otherOwner = "other-${System.nanoTime()}"
+        val otherProgress = AgentRunUiEvent.messageEvent(41L, "assistant", "Earlier interim", 1L)
+            .copyMetadata("progress-earlier/call", 0L).copyStage("PROGRESS")
+            .copyToolTimelineIdentity("progress:earlier/call", otherOwner)
+        val answer = AgentRunUiEvent.messageEvent(42L, "assistant", "Final answer", 2L)
+            .copyMetadata("final-answer", 0L)
+        AgentRunUiState.refreshPersistedSession(session, listOf(user, otherProgress, persistedProgress, answer))
+        AgentRunUiState.assistantMessageDeleted(session, answer.messageId, owner)
+        val afterDelete = AgentRunUiState.snapshotForSession(session).events
+        assertFalse(afterDelete.any { it.messageId == answer.messageId })
+        assertFalse(afterDelete.any { it.messageId == persistedProgress.messageId })
+        assertTrue(afterDelete.any { it.messageId == otherProgress.messageId })
+        AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", "Final answer",
+            "cleanup-answer", 1L)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
     fun regeneratingPromotedAnswerRemovesItFromRefreshedWindowAndKeepsDurableOrderAndKeys() {
         val session = "timeline-regenerate-promoted-${System.nanoTime()}"
         val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())

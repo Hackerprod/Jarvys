@@ -1397,10 +1397,11 @@ public final class AgentForegroundService extends Service {
             }
 
             @Override
-            public void onAssistantProgress(String callId, String message) {
+            public void onAssistantProgress(String runId, String callId, String message) {
               token.runIfActive(() -> {
                 AgentRunUiEvent progress = conversationStore.readAssistantProgress(sessionId, callId);
-                if (progress != null) AgentRunUiState.assistantProgress(sessionId, progress);
+                if (progress != null) AgentRunUiState.assistantProgress(
+                    sessionId, token.generation(), runId, progress);
               });
             }
 

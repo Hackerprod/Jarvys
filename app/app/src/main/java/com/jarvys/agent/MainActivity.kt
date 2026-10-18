@@ -2333,6 +2333,7 @@ private fun JarvysApp(
                             },
                             runSnapshot = agentState,
                             allowMessageEntrance = selectedHistoryRunId == null && !showingNewChat,
+                            showAssistantProgress = MessageReactionTool.isOrdinaryChat(conversationSessionId),
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
                         )
@@ -2637,6 +2638,7 @@ internal fun AgentRunScreen(
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
+    showAssistantProgress: Boolean = false,
 ) {
     ConversationTimeline(
         conversationKey = conversationKey,
@@ -2680,6 +2682,7 @@ internal fun AgentRunScreen(
         onShareGeneratedImage = onShareGeneratedImage,
         runSnapshot = runSnapshot,
         allowMessageEntrance = allowMessageEntrance,
+        showAssistantProgress = showAssistantProgress,
     )
 }
 

@@ -49,13 +49,18 @@ public final class CoreAgentLoop {
         /** User-facing assistant text only, after durable tool intent and before any tool effect. */
         default void onAssistantProgress(String callId, String message) { }
 
+        /** Carries the provider-loop identity so a visible stream can become this durable preamble. */
+        default void onAssistantProgress(String runId, String callId, String message) {
+            onAssistantProgress(callId, message);
+        }
+
         /** Starts or resets this run's transient answer row before an individual provider attempt. */
         default void onAssistantTextStreamStarted(String runId) { }
 
         /** Incremental user-facing text only; tool arguments and reasoning are excluded upstream. */
         default void onAssistantTextDelta(String runId, String delta) { }
 
-        /** Removes a streamed answer when the provider turn is a tool-call turn. */
+        /** Ends the transient stream after a tool-call preamble had a chance to promote it. */
         default void onAssistantTextStreamEnded(String runId) { }
 
         /** A completed assistant turn that precedes a newly incorporated durable user message. */
@@ -723,7 +728,6 @@ public final class CoreAgentLoop {
                 overflowCompactions = 0;
                 token.throwIfCancelled();
                 if (reply == null) throw new IllegalStateException("Provider returned no response");
-                if (!reply.calls.isEmpty() && listener != null) listener.onAssistantTextStreamEnded(runId);
                 if (reply.calls.isEmpty()) {
                     String answer = reply.text == null ? "" : reply.text.trim();
                     if (answer.isEmpty()) {
@@ -763,8 +767,9 @@ public final class CoreAgentLoop {
                 updateTranscriptSnapshot(transcript);
                 if (listener != null && reply.text != null && !reply.text.trim().isEmpty()) {
                     token.throwIfCancelled();
-                    listener.onAssistantProgress(reply.calls.get(0).id, reply.text.trim());
+                    listener.onAssistantProgress(runId, reply.calls.get(0).id, reply.text.trim());
                 }
+                if (listener != null) listener.onAssistantTextStreamEnded(runId);
                 ToolBatchOutcome batch = executeToolBatch(reply.calls, reply, runId, modelTurns, tools,
                         transcript, token, listener, loopDetector, activeActivities);
                 if (batch.noProgress) {

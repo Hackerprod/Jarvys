@@ -15,14 +15,17 @@ class ConversationVisibilityTest {
         "evidence", "", "audit", "", 1L,
     )
 
-    @Test fun internalPhasesAndToolPreamblesAreHiddenWithoutMutatingEvidence() {
+    @Test fun internalPhasesStayHiddenAndAssistantPreamblesAreOptedIntoByMainChat() {
         val phases = listOf("thinking", "model_wait", "model_response", "answer", "compacting",
             "perception", "operator", "device_use", "validator", "summarizer")
-        val evidence = phases.mapIndexed { i, stage -> AgentRunUiEvent(i.toLong(), "progress", stage, "internal") } +
-            AgentRunUiEvent(20L, "assistant", "PROGRESS", "private coordination")
+        val interim = AgentRunUiEvent(20L, "assistant", "PROGRESS", "interim update")
+        val evidence = phases.mapIndexed { i, stage -> AgentRunUiEvent(i.toLong(), "progress", stage, "internal") } + interim
+
+        // Workspace timelines keep the default projection because their runs do not enable interim updates.
         assertTrue(ConversationVisibility.project(evidence).isEmpty())
+        assertEquals(listOf(interim), ConversationVisibility.project(evidence, showAssistantProgress = true))
         assertEquals(11, evidence.size)
-        assertEquals("private coordination", evidence.last().text)
+        assertEquals("interim update", evidence.last().text)
     }
 
     @Test fun onlyMemorySeedIsHiddenWhileExistingMemoryAndOtherSeedKindsRemain() {

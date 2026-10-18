@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.ConversationReader
 import com.jarvys.agent.ConversationTurn
+import com.jarvys.agent.ui.chat.ConversationVisibility
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -221,6 +222,45 @@ class ConversationReaderDatabaseTest {
         assertTrue(older.events.any { it.id == batchSeq })
         assertTrue(older.events.none { it.messageId == nextUser.messageId })
         assertTrue(older.events.all { olderEvent -> newest.events.none { it.id == olderEvent.id } })
+    }
+
+    @Test fun timelineReopensAssistantInterimBeforeItsToolResultAndFinalAnswer() = onDatabaseThread {
+        val id = "reader-interim-order"
+        success(conversations.ensureConversation(id))
+        val user = append(id, ConversationRepository.ROLE_USER, "Build an app")
+        val batchId = "interim-batch"
+        success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = id,
+            batchId = batchId,
+            ownerUserMessageId = user.messageId,
+            messageIndex = 0,
+            assistantText = "The build is underway; I am preparing its screens.",
+            calls = listOf(ModelCallInput("interim-call", "write_file", "{}")),
+        )))
+        success(model.appendToolResult(ModelToolResultInput(
+            id, batchId, "interim-call", "write_file", "RESULT", "The screen files are ready.",
+        )))
+        val final = append(id, ConversationRepository.ROLE_ASSISTANT, "The app is ready.", user.messageId)
+
+        val reopened = reader.readRecentConversationTimeline(id, 10).events
+        val progress = reopened.single { it.kind == "assistant" && it.stage == "PROGRESS" }
+        val toolResult = reopened.single { it.kind == "tool" && it.stage == "tool_result" }
+        assertEquals("The build is underway; I am preparing its screens.", progress.text)
+        assertEquals(user.messageId, progress.toolTurnMessageId)
+        assertEquals("The screen files are ready.", toolResult.detail)
+        assertTrue(reopened.indexOf(progress) < reopened.indexOf(toolResult))
+        assertTrue(reopened.indexOf(toolResult) < reopened.indexOfFirst { it.kind == "assistant" && it.messageId == final.messageId })
+
+        val workspaceProjection = ConversationVisibility.project(reopened)
+        assertFalse(workspaceProjection.any { it.messageId == progress.messageId })
+        val mainChatProjection = ConversationVisibility.project(reopened, showAssistantProgress = true)
+        assertEquals(listOf("PROGRESS", "tool_result", null), mainChatProjection
+            .filter { it.kind == "assistant" || it.kind == "tool" }.map { it.stage })
+
+        val reloaded = ConversationReader(database).readRecentConversationTimeline(id, 10).events
+        assertEquals(reopened.map { Triple(it.kind, it.stage, it.messageId) },
+            reloaded.map { Triple(it.kind, it.stage, it.messageId) })
+        assertEquals(1, reloaded.count { it.kind == "assistant" && it.stage == "PROGRESS" })
     }
 
     @Test fun timelineRestoresDeliveredAndGeneratedArtifactsThroughOneGenericEvent() = onDatabaseThread {

@@ -7,6 +7,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -19,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.junit.Assert.assertEquals
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -55,6 +57,71 @@ class ConversationVisibilityUiTest {
         }
         compose.onNodeWithText("Actionable error sentinel").assertIsDisplayed()
         compose.onNodeWithText("compaction_error").assertDoesNotExist()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun liveAssistantPreambleKeepsItsRowThroughToolsAndFinalAnswer() {
+        val session = "interim-live-${System.nanoTime()}"
+        val generation = System.nanoTime()
+        val runId = "interim-run-$generation"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Build an app")
+        AgentRunUiState.bindGeneration(session, generation)
+        val owner = "user-$generation"
+        AgentRunUiState.bindCurrentUserMessage(session, owner)
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId,
+            "The build is underway; I am preparing its screens.")
+        val streamKey = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }.timelineKey
+
+        val events = mutableStateOf(AgentRunUiState.snapshotForSession(session).events)
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent {
+            MaterialTheme {
+                AgentRunScreen(conversationKey = session, events = events.value, isRunning = true,
+                    emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
+                    onOpenSkillFile = {}, chatWithoutMemory = false, showAssistantProgress = true)
+            }
+        }
+        compose.onNodeWithText("The build is underway; I am preparing its screens.").assertIsDisplayed()
+
+        // CoreAgentLoop publishes durable preamble evidence while the stream row still owns the LazyColumn key.
+        val progress = AgentRunUiEvent.messageEvent(0L, "assistant",
+            "The build is underway; I am preparing its screens.", 1L)
+            .copyMetadata("progress-batch-1/call-1", 0L).copyStage("PROGRESS")
+            .copyToolTimelineIdentity("progress:batch-1/call-1", owner)
+        AgentRunUiState.assistantProgress(session, generation, runId, progress)
+        AgentRunUiState.assistantTextStreamEnded(session, generation, runId)
+        AgentRunUiState.onProgress("tool_call", "build app")
+        compose.runOnIdle { events.value = AgentRunUiState.snapshotForSession(session).events }
+        compose.onNodeWithText("The build is underway; I am preparing its screens.").assertIsDisplayed()
+        assertEquals(1, compose.onAllNodesWithText("The build is underway; I am preparing its screens.")
+            .fetchSemanticsNodes().size)
+        val promoted = AgentRunUiState.snapshotForSession(session).events.single { it.stage == "PROGRESS" }
+        assertEquals(streamKey, promoted.timelineKey)
+        assertEquals(1, AgentRunUiState.snapshotForSession(session).events.count {
+            it.messageId == progress.messageId
+        })
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_footer_copy_description))
+            .assertDoesNotExist()
+
+        AgentRunUiState.assistantTextStreamStarted(session, generation, runId)
+        AgentRunUiState.assistantTextStreamDelta(session, generation, runId, "The app is ready.")
+        val finalStreamKey = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }.timelineKey
+        AgentRunUiState.completeGeneration(session, generation, runId, "COMPLETED", "The app is ready.",
+            "final-answer-$generation", 1L)
+        compose.runOnIdle { events.value = AgentRunUiState.snapshotForSession(session).events }
+        compose.onNodeWithText("The app is ready.").assertIsDisplayed()
+        compose.onNodeWithText("The build is underway; I am preparing its screens.").assertIsDisplayed()
+        assertEquals(1, AgentRunUiState.snapshotForSession(session).events.count { it.stage == "PROGRESS" })
+        assertEquals(1, compose.onAllNodesWithText("The build is underway; I am preparing its screens.")
+            .fetchSemanticsNodes().size)
+        assertEquals(finalStreamKey, AgentRunUiState.snapshotForSession(session).events
+            .single { it.messageId == "final-answer-$generation" }.timelineKey)
+        AgentRunUiState.resetSession(session)
     }
 
     @Test fun toolAuditDetailErrorAndPreviewAreHiddenUntilExpanded() {

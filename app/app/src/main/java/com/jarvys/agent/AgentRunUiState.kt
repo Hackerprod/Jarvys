@@ -812,6 +812,7 @@ object AgentRunUiState {
                 ?: (event.toolCallId != null && liveInFlightToolCallCounts[event.toolCallId] == 1)
             if (uncertainTool && matchedLiveTool) null else event
         }
+        val streamPromotions = assistantProgressPromotions(current, authoritativePersisted)
         val persistedToolIdentities = authoritativePersisted.mapNotNullTo(mutableSetOf()) { event ->
             if (event.kind == "tool") refreshToolIdentity(event) else null
         }
@@ -830,7 +831,7 @@ object AgentRunUiState {
                 }
             } else false
             val isTransient =
-            event.kind !in durableKinds || event.kind == "tool"
+            event.id !in streamPromotions.streamIds && (event.kind !in durableKinds || event.kind == "tool"
                     && !persistedToolMatch
                     || event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
                     || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage == true && persistedEvents.none {
@@ -842,7 +843,7 @@ object AgentRunUiState {
                     }
                     || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage != true && persistedEvents.none {
                         it.kind == "artifact" && it.presentationArtifact?.id == event.presentationArtifact?.id
-                    }
+                    })
             if (isTransient) event else null
         } else emptyList()
         val retainedAssistantTimelineKeys = current.events.asSequence()
@@ -853,7 +854,8 @@ object AgentRunUiState {
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
         }.map { event ->
             if (event.kind != "assistant") event
-            else retainedAssistantTimelineKeys[refreshEventIdentity(event)]
+            else (retainedAssistantTimelineKeys[refreshEventIdentity(event)]
+                ?: streamPromotions.timelineKeys[refreshEventIdentity(event)])
                 ?.let { timelineKey -> event.copy(timelineKey = timelineKey) } ?: event
         }
         val durableEventIdentities = durableEvents.mapNotNullTo(mutableSetOf<String>()) {
@@ -962,6 +964,43 @@ object AgentRunUiState {
             else -> null
         } ?: return null
         return "${event.kind}:$identity"
+    }
+
+    private data class AssistantProgressPromotions(
+        val timelineKeys: Map<String, Long> = emptyMap(),
+        val streamIds: Set<Long> = emptySet(),
+    )
+
+    /** Reconciles a persisted progress row that arrived through refresh before its service callback. */
+    private fun assistantProgressPromotions(
+        current: AgentRunUiSnapshot,
+        persistedEvents: List<AgentRunUiEvent>,
+    ): AssistantProgressPromotions {
+        if (!current.running) return AssistantProgressPromotions()
+        val progressEvents = persistedEvents.filter { it.kind == "assistant" && it.stage == "PROGRESS" }
+        if (progressEvents.isEmpty()) return AssistantProgressPromotions()
+
+        val timelineKeys = mutableMapOf<String, Long>()
+        val promotedStreamIds = mutableSetOf<Long>()
+        val matchedProgressIds = mutableSetOf<String>()
+        current.events.filter { it.kind == "assistant_stream" }.forEach { stream ->
+            val ownerMessageId = stream.streamUserEventId?.let { userEventId ->
+                current.events.firstOrNull { it.kind == "user" && it.id == userEventId }
+                    ?.messageId?.takeIf(String::isNotBlank)
+            } ?: return@forEach
+            val progress = progressEvents.asSequence().filter { event ->
+                event.toolTurnMessageId == ownerMessageId
+                    && event.timestampMillis >= stream.timestampMillis
+                    && event.messageId !in matchedProgressIds
+            }.maxWithOrNull(compareBy<AgentRunUiEvent>({ it.timestampMillis }, { it.id }))
+                ?: return@forEach
+            refreshEventIdentity(progress)?.let { identity ->
+                timelineKeys[identity] = stream.timelineKey ?: stream.id
+            }
+            matchedProgressIds += progress.messageId
+            promotedStreamIds += stream.id
+        }
+        return AssistantProgressPromotions(timelineKeys, promotedStreamIds)
     }
 
     private fun refreshToolIdentity(event: AgentRunUiEvent): String? {
@@ -1318,7 +1357,7 @@ object AgentRunUiState {
             _state.value = current.copy(events = events)
         } }
 
-    /** A provider turn that returned calls is not a user-facing answer; remove its partial row. */
+    /** Removes any stream row that was not promoted into durable assistant progress. */
     @JvmStatic
     fun assistantTextStreamEnded(sessionId: String, generation: Long, runId: String) =
         inSession(sessionId) { synchronized(lock) {
@@ -1688,8 +1727,41 @@ object AgentRunUiState {
     fun assistantProgress(sessionId: String, progress: AgentRunUiEvent) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (!current.running || current.sessionId != sessionId || progress.stage != "PROGRESS"
-            || progress.messageId.isBlank() || current.events.any { it.messageId == progress.messageId }) return@synchronized
+            || progress.messageId.isBlank()) return@synchronized
+        if (current.events.any { it.messageId == progress.messageId }) return@synchronized
         _state.value = current.copy(events = append(current.events, progress.copy(id = nextEventId++)))
+    } }
+
+    /** Promotes this model turn's stream into its durable preamble without changing its timeline key. */
+    @JvmStatic
+    fun assistantProgress(sessionId: String, generation: Long, runId: String, progress: AgentRunUiEvent) =
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            if (!ownsAssistantStreamLocked(sessionId, generation) || progress.stage != "PROGRESS"
+                || progress.messageId.isBlank()) return@synchronized
+
+            val streamKey = assistantTextStreamKey(sessionId, generation, runId)
+            val stream = assistantTextStreams[streamKey]
+            val existingIndex = current.events.indexOfFirst {
+                it.kind == "assistant" && it.messageId == progress.messageId
+            }
+            val streamIndex = stream?.let { candidate -> current.events.indexOfFirst { it.id == candidate.id } } ?: -1
+            if (stream != null) assistantTextStreams.remove(streamKey)
+
+            val events = current.events.toMutableList()
+            if (existingIndex >= 0) {
+                if (stream != null) {
+                    events[existingIndex] = events[existingIndex].copy(timelineKey = stream.timelineKey)
+                    if (streamIndex >= 0 && streamIndex != existingIndex) events.removeAt(streamIndex)
+                    _state.value = current.copy(events = events)
+                }
+                return@synchronized
+            }
+
+            val promoted = progress.copy(id = nextEventId++, timelineKey = stream?.timelineKey)
+            if (streamIndex >= 0) events[streamIndex] = promoted
+            else events += promoted
+            _state.value = current.copy(events = events)
     } }
 
     @JvmStatic
