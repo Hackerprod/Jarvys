@@ -53,7 +53,11 @@ internal object WorkspaceTimelineProjection {
                 ).copy(messageId = message.id, timelineKey = stableId), sourceOrder)
                 isUserFacingBotMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
                     stableId, "assistant", message.text, message.timestampMillis,
-                ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false), sourceOrder)
+                ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false,
+                    workspaceSenderLabel = snapshot.bots.takeIf { it.size > 1 }
+                        ?.firstOrNull { it.id == message.from }
+                        ?.let { it.name.ifBlank { it.roleName } }
+                        ?.takeIf(String::isNotBlank)), sourceOrder)
             }
         }
 

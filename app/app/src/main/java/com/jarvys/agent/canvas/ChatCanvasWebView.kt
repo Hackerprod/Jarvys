@@ -65,6 +65,7 @@ internal fun ChatCanvasTimeline(
     events: List<AgentRunUiEvent>,
     running: Boolean,
     allowRetry: Boolean,
+    allowProactiveReplies: Boolean = true,
     hasOlder: Boolean,
     loadingOlder: Boolean,
     callbacks: ChatCanvasCallbacks,
@@ -74,9 +75,10 @@ internal fun ChatCanvasTimeline(
 ) {
     val context = LocalContext.current
     val snapshot = androidx.compose.runtime.remember { AtomicReference<ChatCanvasSerializedSnapshot?>(null) }
-    val update by produceState<ChatCanvasUpdate?>(null, events, running, allowRetry, loadingOlder, benchmarkMode) {
+    val update by produceState<ChatCanvasUpdate?>(null, events, running, allowRetry, allowProactiveReplies, loadingOlder, benchmarkMode) {
         value = withContext(Dispatchers.Default) {
-            val payload = ChatCanvasEventSerializer.page(context, events, running, allowRetry, loadingOlder = loadingOlder)
+            val payload = ChatCanvasEventSerializer.page(context, events, running, allowRetry,
+                allowProactiveReplies = allowProactiveReplies, loadingOlder = loadingOlder)
                 .put("benchmark", benchmarkMode)
             val orderArray = payload.getJSONArray("order")
             val orderKey = orderArray.toString()
@@ -118,6 +120,7 @@ internal fun ChatCanvasTimeline(
                     currentEvents = { events },
                     running = { running },
                     allowRetry = { allowRetry },
+                    allowProactiveReplies = { allowProactiveReplies },
                     hasOlder = { hasOlder },
                     loadingOlder = { loadingOlder },
                     benchmarkStartedAtNanos = benchmarkStartedAtNanos,
@@ -132,6 +135,7 @@ internal fun ChatCanvasTimeline(
                 currentEvents = { events },
                 running = { running },
                 allowRetry = { allowRetry },
+                allowProactiveReplies = { allowProactiveReplies },
                 hasOlder = { hasOlder },
                 loadingOlder = { loadingOlder },
                 benchmarkStartedAtNanos = benchmarkStartedAtNanos,
@@ -332,6 +336,7 @@ internal class ChatCanvasNativeBridge(
     private val currentEvents: () -> List<AgentRunUiEvent>,
     private val running: () -> Boolean,
     private val allowRetry: () -> Boolean,
+    private val allowProactiveReplies: () -> Boolean = { true },
     private val hasOlder: () -> Boolean,
     private val loadingOlder: () -> Boolean,
     private val benchmarkStartedAtNanos: Long?,
@@ -344,12 +349,14 @@ internal class ChatCanvasNativeBridge(
         val events = currentEvents()
         val event = events.firstOrNull { it.id == seq }
         val latestAssistant = events.lastOrNull { it.kind == "assistant" }?.messageId
-        val decision = ChatCanvasActionPolicy.check(action, event, value, running(), latestAssistant, hasOlder(), allowRetry())
+        val decision = ChatCanvasActionPolicy.check(action, event, value, running(), latestAssistant, hasOlder(),
+            allowRetry(), allowProactiveReplies())
         if (!decision.allowed) return
         main.post {
             val current = currentEvents().firstOrNull { it.id == seq } ?: return@post
             val latest = currentEvents().lastOrNull { it.kind == "assistant" }?.messageId
-            if (!ChatCanvasActionPolicy.check(action, current, value, running(), latest, hasOlder(), allowRetry()).allowed) return@post
+            if (!ChatCanvasActionPolicy.check(action, current, value, running(), latest, hasOlder(),
+                    allowRetry(), allowProactiveReplies()).allowed) return@post
             callbacks.action(action, current, value)
         }
     }

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.runtime.MutableState
 import androidx.navigation.NavHostController
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.workspaces.WORKSPACE_PAGE_SIZE
@@ -15,6 +16,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
+import com.jarvys.agent.workspaces.WorkspaceChanges
+import com.jarvys.agent.workspaces.WorkspaceControlType
+import com.jarvys.agent.crew.CrewBotSnapshot
+import com.jarvys.agent.crew.CrewMissionSnapshot
 import java.io.ByteArrayInputStream
 import java.lang.reflect.InvocationTargetException
 import java.util.UUID
@@ -174,6 +179,32 @@ class MainActivityWorkspaceRoutingTest {
         AgentRunUiState.stopPendingGeneration(legacy, generation)
     }
 
+    @Test fun sendingAndPausingWorkspaceControlsPreservesTheCurrentChatDraftAndSkills() {
+        start()
+        await { selected() == legacy && activityState<String>("conversationSessionId").value == legacy }
+        val draft = "A draft unrelated to the workspace control"
+        val selectedSkills = setOf("selected-skill")
+        compose.runOnIdle {
+            activityState<String>("goalInput").value = draft
+            activityState<Set<String>>("selectedSkillIds").value = selectedSkills
+        }
+        val revision = WorkspaceChanges.revision.value
+        val parameterTypes = arrayOf<Class<*>>(String::class.java, String::class.java, Long::class.javaPrimitiveType!!,
+            WorkspaceControlType::class.java, String::class.java)
+        val workspaceId = UUID.randomUUID().toString()
+        invoke("applyWorkspaceControl", parameterTypes,
+            arrayOf(workspaceId, UUID.randomUUID().toString(), 1L, WorkspaceControlType.CORRECT, "Continue the worker"))
+        invoke("applyWorkspaceControl", parameterTypes,
+            arrayOf(workspaceId, UUID.randomUUID().toString(), 1L, WorkspaceControlType.PAUSE, ""))
+
+        await { WorkspaceChanges.revision.value >= revision + 2 }
+        assertEquals(legacy, selected())
+        assertEquals(legacy, activityState<String>("conversationSessionId").value)
+        assertEquals(draft, activityState<String>("goalInput").value)
+        assertEquals(selectedSkills, activityState<Set<String>>("selectedSkillIds").value)
+        assertFalse(activityState<Boolean>("conversationActionPending").value)
+    }
+
     @Test fun reservedSessionTitleGuardReturnsBeforeSchedulingAnyTitleWork() {
         start()
         val titleExecutor = executor(activity, "sessionTitleExecutor")
@@ -267,16 +298,17 @@ class MainActivityWorkspaceRoutingTest {
         compose.onNodeWithText("Worker transcript answer").assertIsDisplayed()
         compose.onNodeWithTag("conversation-activity-${workerToolEvent.id}").assertIsDisplayed()
         compose.onNodeWithTag("workspace-assignment-selector").assertIsDisplayed()
-        compose.onNodeWithTag("chat-composer-input").assertIsEnabled()
+        compose.onNodeWithTag("chat-composer-input").assertIsNotEnabled()
         compose.onNodeWithTag("chat-send-stop-button").assertIsNotEnabled()
         compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
-        compose.onNodeWithTag("workspace-chat-input-hint").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-chat-input-hint").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.workspace_chat_input_hint)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.workspace_read_only_notice)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.workspace_recovery_unknown)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.workspace_result_unknown)).assertDoesNotExist()
         tapTag("jarvys-topbar-more-options")
         compose.onNodeWithTag("workspace/topbar-action").assertIsDisplayed()
-        compose.onNodeWithTag("workspace/topbar-bots-action").assertIsDisplayed()
+        compose.onNodeWithTag("workspace/topbar-bots-action").assertDoesNotExist()
         compose.onNodeWithTag("topbar-rename-chat").assertDoesNotExist()
         compose.onNodeWithTag("topbar-delete-chat").assertDoesNotExist()
         tapTag("workspace/topbar-action")
@@ -285,6 +317,21 @@ class MainActivityWorkspaceRoutingTest {
         tapTag("jarvys-back")
         awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
         await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId }
+        val mission = CrewMissionSnapshot("workspace-secondary-mission", workspace.executionSessionId,
+            "workspace-test-process", "Secondary menu mission", "RUNNING", "", System.currentTimeMillis(), 0L,
+            listOf(CrewBotSnapshot("workspace-bot", "writer", "Writer", "Writer", "green", "Inspect files",
+                "RUNNING", "", "", "", emptyList(), System.currentTimeMillis(), 0L)), emptyList())
+        db { store.appendCrewMissionSnapshot(mission) }
+        WorkspaceChanges.changed()
+        await { AgentRunUiState.state.value.events.any {
+            it.crewMissionSnapshot?.missionId == mission.missionId
+        } }
+        tapTag("jarvys-topbar-more-options")
+        compose.onNodeWithTag("workspace/topbar-bots-action").assertIsDisplayed()
+        tapTag("workspace/topbar-bots-action")
+        awaitRoute(AppNavigationBackPolicy.CREW)
+        systemBack()
+        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
         systemBack()
         awaitRoute(AppNavigationBackPolicy.WORKSPACES)
         compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
@@ -405,6 +452,10 @@ class MainActivityWorkspaceRoutingTest {
 
     private fun invoke(name: String, types: Array<Class<*>> = emptyArray(), args: Array<Any> = emptyArray()): Any? =
         MainActivity::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }.invoke(activity, *args)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> activityState(name: String): MutableState<T> = MainActivity::class.java
+        .getDeclaredField("${name}\$delegate").apply { isAccessible = true }.get(activity) as MutableState<T>
 
     private fun executor(value: MainActivity, name: String): ExecutorService =
         MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(value) as ExecutorService

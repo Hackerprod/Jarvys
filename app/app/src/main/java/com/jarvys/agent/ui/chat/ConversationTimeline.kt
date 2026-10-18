@@ -203,6 +203,7 @@ fun ConversationTimeline(
             events = visibleEvents,
             running = isRunning,
             allowRetry = allowRegeneration,
+            allowProactiveReplies = assistantReplyCapabilities.proactiveReplies,
             hasOlder = hasOlderHistory,
             loadingOlder = isLoadingOlderHistory || isRefreshingHistory,
             callbacks = ChatCanvasCallbacks(action = { action, event, value ->
@@ -235,7 +236,17 @@ fun ConversationTimeline(
     val latestAnswerId = remember(visibleEvents) {
         visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
     }
-    val latestUserEventId = remember(visibleEvents) { visibleEvents.lastOrNull { it.kind == "user" }?.id }
+    val latestUserEventIndex = remember(visibleEvents) { visibleEvents.indexOfLast { it.kind == "user" } }
+    val latestAssistantEventIndex = remember(visibleEvents) {
+        visibleEvents.indexOfLast { it.kind == "assistant" && it.stage == null }
+    }
+    val latestAssistantEventKey = remember(visibleEvents) {
+        visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }
+            ?.let(ChatMessageArrivalPolicy::key)
+    }
+    val eventPositionByKey = remember(visibleEvents) {
+        visibleEvents.mapIndexed { index, event -> ChatMessageArrivalPolicy.key(event) to index }.toMap()
+    }
     val entryKeys = remember(visibleEvents) { visibleEvents.map(ChatMessageArrivalPolicy::key) }
     val snapshotAllowsArrival = runSnapshot?.let { it.running || it.outcome != null } ?: isRunning
     val canAnimateArrival = allowMessageEntrance && snapshotAllowsArrival
@@ -295,7 +306,11 @@ fun ConversationTimeline(
                             isLastAssistant = event.messageId.isNotEmpty() && event.messageId == latestAnswerId
                                 && !isRunning && allowRegeneration,
                             streamActive = isRunning,
-                            isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning, latestUserEventId),
+                            isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning,
+                                eventIndex = eventPositionByKey[ChatMessageArrivalPolicy.key(event)] ?: -1,
+                                latestUserEventIndex = latestUserEventIndex,
+                                latestAssistantEventIndex = latestAssistantEventIndex,
+                                isLatestAssistantEvent = ChatMessageArrivalPolicy.key(event) == latestAssistantEventKey),
                             onOpenCrewMission = onOpenCrewMission,
                             onOpenScheduledTask = onOpenScheduledTask,
                             onSaveGeneratedImage = onSaveGeneratedImage,
@@ -395,14 +410,18 @@ internal fun resolveCanvasDecision(event: AgentRunUiEvent, optionId: String): Bo
 internal fun assistantReplyIsGenerating(
     event: AgentRunUiEvent,
     isRunning: Boolean,
-    latestUserEventId: Long?,
+    eventIndex: Int,
+    latestUserEventIndex: Int,
+    latestAssistantEventIndex: Int,
+    isLatestAssistantEvent: Boolean,
 ): Boolean {
     if (!isRunning) return false
     return when (event.kind) {
         // A refresh can replace the optimistic user row or steering can append a newer one
         // while this same response stream remains active.
         "assistant_stream" -> event.stage == "STREAMING"
-        "assistant" -> latestUserEventId != null && event.stage == null && event.id > latestUserEventId
+        "assistant" -> event.stage == null && latestUserEventIndex >= 0 &&
+            eventIndex == latestAssistantEventIndex && isLatestAssistantEvent && eventIndex > latestUserEventIndex
         else -> false
     }
 }
@@ -461,7 +480,7 @@ private fun JarvysConversationEvent(
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
                 onCancelTranslation, onDeleteAssistant, activeTranslationMessageId, translationErrorMessageId,
                 translationError, streamActive, onProactiveSuggestedReply, isGeneratingAnswer,
-                assistantReplyCapabilities)
+                assistantReplyCapabilities, workspaceSenderLabel = event.workspaceSenderLabel)
         }
         "assistant_translation" -> TranslationNote(event, onOpenSkillFile, onHideTranslation)
         "progress" -> RunProgressLine(event)
@@ -590,6 +609,7 @@ internal fun AssistantReplyView(
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     isGeneratingAnswer: Boolean = streamActive,
     capabilities: AssistantReplyCapabilities = AssistantReplyCapabilities(),
+    workspaceSenderLabel: String? = null,
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
@@ -602,6 +622,11 @@ internal fun AssistantReplyView(
     val speaking = speakingMessageId == event.messageId
     val replySizeMotion = if (reducedMotion) Modifier else Modifier.animateContentSize(JarvysMotion.expand())
     Column(Modifier.fillMaxWidth().then(replySizeMotion)) {
+        workspaceSenderLabel?.takeIf(String::isNotBlank)?.let { sender ->
+            Text(sender, Modifier.padding(bottom = 2.dp).testTag("workspace-message-sender-${event.messageId}"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall)
+        }
         Row(Modifier.fillMaxWidth().semantics {
             contentDescription = context.getString(
                 if (isError) R.string.chat_assistant_error_accessibility else R.string.chat_assistant_message_accessibility,

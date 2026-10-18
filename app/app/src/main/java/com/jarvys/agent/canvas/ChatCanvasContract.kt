@@ -14,13 +14,15 @@ internal object ChatCanvasEventSerializer {
         events: List<AgentRunUiEvent>,
         running: Boolean,
         allowRetry: Boolean = true,
+        allowProactiveReplies: Boolean = true,
         resourceOrigin: String = ChatCanvasWebView.ORIGIN,
         loadingOlder: Boolean = false,
     ): JSONObject {
         val latestAssistant = events.lastOrNull { it.kind == "assistant" }?.messageId
         val projected = JSONArray()
         events.forEachIndexed { index, event ->
-            projected.put(event(context, event, index, running, allowRetry, latestAssistant, resourceOrigin))
+            projected.put(event(context, event, index, running, allowRetry, allowProactiveReplies,
+                latestAssistant, resourceOrigin))
         }
         return JSONObject().put("events", projected).put("followEnd", running || events.lastOrNull()?.kind == "user")
             .put("loadingOlder", loadingOlder)
@@ -35,6 +37,7 @@ internal object ChatCanvasEventSerializer {
         order: Int,
         running: Boolean,
         allowRetry: Boolean,
+        allowProactiveReplies: Boolean,
         latestAssistant: String?,
         origin: String,
     ): JSONObject {
@@ -50,7 +53,7 @@ internal object ChatCanvasEventSerializer {
             .put("text", text)
             .put("detail", if (internalSkill == null) event.detail else null)
             .put("messageId", event.messageId)
-            .put("label", label)
+            .put("label", event.workspaceSenderLabel ?: label)
             .put("previewId", if (internalSkill == null) event.previewId else null)
             .put("decisionId", event.decisionId)
             .put("decisionStatus", event.decisionStatus)
@@ -84,7 +87,9 @@ internal object ChatCanvasEventSerializer {
         }
         value.put("decisionOptions", options)
         val replies = JSONArray()
-        event.proactiveReplies.forEach { reply -> replies.put(JSONObject().put("label", reply.label)) }
+        if (allowProactiveReplies) event.proactiveReplies.forEach { reply ->
+            replies.put(JSONObject().put("label", reply.label))
+        }
         value.put("replies", replies)
         return value
     }
@@ -126,6 +131,7 @@ internal object ChatCanvasActionPolicy {
         latestAssistantMessageId: String?,
         hasOlderPage: Boolean,
         allowRetry: Boolean = true,
+        allowProactiveReplies: Boolean = true,
     ): ChatCanvasActionDecision {
         if (action == "request_older") return decision(hasOlderPage, "older page unavailable")
         if (event == null) return ChatCanvasActionDecision(false, "event is not in this conversation window")
@@ -139,7 +145,7 @@ internal object ChatCanvasActionPolicy {
                 !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
             "resolve_decision" -> event.kind == "user_decision" && event.decisionStatus == "PENDING" &&
                 (event.decisionOptions.any { it.id == value } || value == "dismiss" && event.decisionAllowDismiss)
-            "respond" -> event.kind == "user" && !event.proactiveRepliesUsed &&
+            "respond" -> allowProactiveReplies && event.kind == "user" && !event.proactiveRepliesUsed &&
                 value.toIntOrNull()?.let { it in event.proactiveReplies.indices } == true
             else -> false
         }

@@ -37,10 +37,11 @@ class WorkspaceCoordinationIndicatorComposeTest {
         var opened = ""
         compose.setContent { MaterialTheme {
             WorkspaceListScreen(workspaces = listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
-                    coordination = summary.value)), onOpenWorkspace = { opened = it })
+                    statusPageLimited = true, coordination = summary.value)), onOpenWorkspace = { opened = it })
         } }
         compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 3)).assertExists()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_status_page_scope)).assertExists()
         compose.onNodeWithTag("workspace-list-row-space").performClick()
         assertEquals("space", opened)
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(uncertain = 1, pageLimited = true) }
@@ -67,7 +68,7 @@ class WorkspaceCoordinationIndicatorComposeTest {
         compose.setContent { MaterialTheme {
             WorkspaceDetailScreen(WorkspaceChatUiState(workspaceId, sessionId, "Project", WorkspaceUiStatus.INTERRUPTED,
                 listOf(event)), AgentRunUiSnapshot(sessionId = sessionId, events = listOf(event)), connectors,
-                showAgentEvents = true, onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
         } }
         compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Conversation evidence", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }

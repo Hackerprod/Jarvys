@@ -53,6 +53,10 @@ class ChatCanvasContractTest {
         assertTrue(allowed("download", transferable))
         assertTrue(allowed("share", transferable))
         assertTrue(allowed("respond", suggested, value = "0"))
+        assertFalse(allowed("respond", suggested, value = "0", allowProactiveReplies = false))
+        val workspaceReply = ChatCanvasEventSerializer.page(context, listOf(suggested), running = false,
+            allowProactiveReplies = false).getJSONArray("events").getJSONObject(0)
+        assertEquals(0, workspaceReply.getJSONArray("replies").length())
         assertFalse(allowed("respond", suggested, value = "1"))
         assertFalse(allowed("respond", suggested.copy(proactiveRepliesUsed = true), value = "0"))
         assertTrue(allowed("retry", latest, latestAssistant = "m-11"))
@@ -194,7 +198,8 @@ class ChatCanvasContractTest {
         latestAssistant: String? = null,
         hasOlder: Boolean = false,
         allowRetry: Boolean = true,
+        allowProactiveReplies: Boolean = true,
     ) = ChatCanvasActionPolicy.check(
-        action, event, value, running, latestAssistant, hasOlder, allowRetry,
+        action, event, value, running, latestAssistant, hasOlder, allowRetry, allowProactiveReplies,
     ).allowed
 }

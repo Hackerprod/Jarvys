@@ -60,18 +60,29 @@ fun WorkspaceListScreen(
             val title = workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256)
             val active = workspace.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
                 WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING)
-            ConversationListRow(
-                title = title,
-                subtitle = stringResource(workspaceStatusResource(workspace.status)),
-                selected = false,
-                active = active,
-                enabled = actionsEnabled && !workspacesLoading && workspaceError == null,
-                onClick = { if (actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
-                actionsEnabled = actionsEnabled && !workspacesLoading && workspaceError == null,
-                menuActions = listOf(ConversationRowMenuAction("open", R.string.workspace_open)),
-                onMenuAction = { if (it == "open" && actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
-                modifier = Modifier.testTag("workspace-list-row-${workspace.id}"),
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                ConversationListRow(
+                    title = title,
+                    subtitle = stringResource(workspaceStatusResource(workspace.status)),
+                    selected = false,
+                    active = active,
+                    enabled = actionsEnabled && !workspacesLoading && workspaceError == null,
+                    onClick = { if (actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
+                    actionsEnabled = actionsEnabled && !workspacesLoading && workspaceError == null,
+                    menuActions = listOf(ConversationRowMenuAction("open", R.string.workspace_open)),
+                    onMenuAction = { if (it == "open" && actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
+                    modifier = Modifier.testTag("workspace-list-row-${workspace.id}"),
+                )
+                if (workspace.statusPageLimited) {
+                    Text(stringResource(R.string.workspace_status_page_scope),
+                        modifier = Modifier.padding(start = 26.dp, end = 12.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Box(Modifier.fillMaxWidth().padding(start = 26.dp, end = 12.dp)) {
+                    WorkspaceCoordinationIndicator(workspace.coordination)
+                }
+            }
         }
         if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {
             WorkspacePageButtons(canPreviousWorkspacePage, canFirstWorkspacePage, canNextWorkspacePage,

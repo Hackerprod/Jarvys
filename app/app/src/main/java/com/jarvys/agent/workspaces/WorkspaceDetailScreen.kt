@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -28,7 +29,6 @@ fun WorkspaceDetailScreen(
     state: WorkspaceChatUiState,
     runSnapshot: AgentRunUiSnapshot,
     connectorRegistry: ConnectorRegistry,
-    showAgentEvents: Boolean,
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
     onOpenCrewMission: (String) -> Unit,
@@ -40,7 +40,9 @@ fun WorkspaceDetailScreen(
 ) {
     val sessionSnapshot = runSnapshot.takeIf { it.sessionId == state.executionSessionId }
     val sourceEvents = sessionSnapshot?.events ?: state.events
-    val events = WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
+    val events = remember(state.workspaceId, sourceEvents) {
+        WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
+    }
     val crewRunning = sourceEvents.any { it.crewMissionSnapshot?.active() == true }
     val workspaceRunning = crewRunning || state.status in setOf(
         WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,

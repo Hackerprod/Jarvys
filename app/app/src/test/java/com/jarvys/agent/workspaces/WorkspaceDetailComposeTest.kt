@@ -53,7 +53,7 @@ class WorkspaceDetailComposeTest {
         compose.setContent { MaterialTheme {
             WorkspaceDetailScreen(state = state,
                 runSnapshot = AgentRunUiSnapshot(sessionId = sessionId, events = events),
-                connectorRegistry = connectors, showAgentEvents = true,
+                connectorRegistry = connectors,
                 onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
         } }
 
@@ -79,7 +79,7 @@ class WorkspaceDetailComposeTest {
         var retries = 0
         compose.setContent { MaterialTheme {
             WorkspaceDetailScreen(state = state.value, runSnapshot = AgentRunUiSnapshot(sessionId = sessionId),
-                connectorRegistry = connectors, showAgentEvents = true,
+                connectorRegistry = connectors,
                 onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {}, onRetry = { retries++ })
         } }
         compose.onNodeWithTag("workspace-chat-loading").assertIsDisplayed()
@@ -115,12 +115,14 @@ class WorkspaceDetailComposeTest {
                 "internal-message", "FINDING", "Private worker finding", emptyList(), 120L))
         val answer = CrewMessage("bot-answer", sessionId, "worker", "user", CrewMessage.Type.ANSWER,
             "The file is ready", emptyList(), 130L)
+        val secondBot = CrewBotSnapshot("writer", "writer", "Writer", "Writer", "green", "private task",
+            "RUNNING", "", "", "", emptyList(), 1L, 0L)
         val activity = ToolActivity("call", "execution", "call", "read", "Read file", "", "",
             "tool_call", "private result JSON", "", "", "", 140L)
         val tool = CrewMessage("tool-row", sessionId, "worker", "worker", CrewMessage.Type.STATUS,
             "Read file", emptyList(), 140L, activity)
         val mission = CrewMissionSnapshot("mission", sessionId, "process", "Inspect files", "RUNNING", "",
-            90L, 0L, listOf(bot), listOf(user, dispatch, internal, answer, tool))
+            90L, 0L, listOf(bot, secondBot), listOf(user, dispatch, internal, answer, tool))
         val rawEvents = listOf(AgentRunUiEvent.crewMissionEvent(1L, mission))
         val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title", WorkspaceUiStatus.ACTIVE, rawEvents)
         val assignment = WorkspaceAssignmentUi("assignment-1", 7L, "Scout", "Inspect files",
@@ -136,7 +138,7 @@ class WorkspaceDetailComposeTest {
             Column(Modifier.fillMaxSize()) {
                 WorkspaceDetailScreen(state = state,
                     runSnapshot = AgentRunUiSnapshot(sessionId = sessionId, events = rawEvents),
-                    connectorRegistry = connectors, showAgentEvents = false,
+                    connectorRegistry = connectors,
                     onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {},
                     modifier = Modifier.weight(1f))
                 com.jarvys.agent.ui.chat.ChatComposer(
@@ -159,8 +161,15 @@ class WorkspaceDetailComposeTest {
             }
         } }
 
+        compose.onNodeWithTag("workspace-chat-timeline").assertIsDisplayed()
+        compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
+        compose.onNodeWithTag("chat-composer-input").assertIsDisplayed()
+        compose.onNodeWithTag("chat-send-stop-button").assertIsDisplayed()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-chat-input-hint").assertDoesNotExist()
         compose.onNodeWithText("Inspect this").assertIsDisplayed()
         compose.onNodeWithText("The file is ready").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-message-sender-bot-answer").assertTextEquals("Scout")
         compose.onNodeWithText("Private task dispatch").assertDoesNotExist()
         compose.onNodeWithText("Private worker finding").assertDoesNotExist()
         compose.onNodeWithText("private result JSON").assertDoesNotExist()
@@ -171,6 +180,36 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithTag("chat-separate-stop-button").performClick()
         assertEquals(listOf(WorkspaceControlType.CORRECT to "Please continue",
             WorkspaceControlType.PAUSE to assignment.id), controls)
-        listOf("Debate", "Board", "Bots").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+    }
+
+    @Test fun runningWorkspaceOnlyStreamsItsLastAnswerAndKeepsEarlierReplyFooters() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val events = listOf(
+            AgentRunUiEvent(-80L, "user", text = "Inspect the repository", timestampMillis = 10L, messageId = "workspace-user"),
+            AgentRunUiEvent(-12L, "assistant", text = "First bot update", timestampMillis = 20L, messageId = "first-answer"),
+            AgentRunUiEvent(-150L, "assistant", text = "Second bot update", timestampMillis = 30L, messageId = "second-answer"),
+            AgentRunUiEvent(-2L, "assistant", text = "Current bot update", timestampMillis = 40L, messageId = "current-answer"),
+        )
+        val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title", WorkspaceUiStatus.ACTIVE, events)
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
+        compose.setContent { MaterialTheme {
+            WorkspaceDetailScreen(state = state,
+                runSnapshot = AgentRunUiSnapshot(sessionId = sessionId, events = events, running = true),
+                connectorRegistry = connectors,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
+        } }
+
+        val copyDescription = compose.activity.getString(R.string.chat_footer_copy_description)
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithContentDescription(copyDescription).fetchSemanticsNodes().size == 2
+        }
+        compose.onAllNodesWithContentDescription(copyDescription).assertCountEquals(2)
+        compose.onNodeWithText("First bot update").assertIsDisplayed()
+        compose.onNodeWithText("Second bot update").assertIsDisplayed()
+        compose.onNodeWithText("Current bot update").assertIsDisplayed()
     }
 }

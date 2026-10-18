@@ -87,6 +87,8 @@ data class AgentRunUiEvent(
     val streamUserEventId: Long? = null,
     /** System-origin workspace wake replies have no user prompt to regenerate. */
     val canRegenerate: Boolean = true,
+    /** Discreet attribution used only for bot messages projected into a multi-bot workspace chat. */
+    val workspaceSenderLabel: String? = null,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)

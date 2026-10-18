@@ -49,7 +49,7 @@ object WorkspaceProjection {
     }
 
     /** Projects chat from the execution session recorded for this workspace, never from central. */
-    fun chat(context: Context, id: String, cached: WorkspaceChatUiState? = null): WorkspaceChatUiState {
+    fun chat(context: Context, id: String): WorkspaceChatUiState {
         // Assignment revisions and control availability are exact input to the workspace composer.
         // Refresh them with the chat projection so stale controls are rejected before submission.
         val detail = detail(context, id)

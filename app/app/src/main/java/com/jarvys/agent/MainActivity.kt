@@ -1166,29 +1166,14 @@ ${event.text}
 
     private fun applyWorkspaceControl(workspaceId: String, assignmentId: String, revision: Long,
                                       type: WorkspaceControlType, text: String) {
-        openCentralWorkspaceChat()
-        conversationActionPending = true
         val owner = java.lang.ref.WeakReference(this)
-        val admissionPending = java.util.concurrent.atomic.AtomicBoolean(true)
         WorkspaceCoordinator(applicationContext).enqueueNativeControl(workspaceId, assignmentId, revision, type, text,
-            onAdmitted = {
-                owner.get()?.let { activity -> activity.runOnUiThread {
-                    if (!activity.isDestroyed) {
-                        if (admissionPending.compareAndSet(true, false)) activity.conversationActionPending = false
-                        if (WorkspaceIdentity.isCentral(activity.conversationSessionId))
-                            activity.restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
-                    }
+            completion = { result ->
+                if (result.isFailure) owner.get()?.let { activity -> activity.runOnUiThread {
+                    if (!activity.isDestroyed)
+                        activity.toast(activity.getString(R.string.workspace_control_failed), Toast.LENGTH_LONG)
                 } }
-            }) { result ->
-            owner.get()?.let { activity -> activity.runOnUiThread {
-                if (!activity.isDestroyed) {
-                    if (admissionPending.compareAndSet(true, false)) activity.conversationActionPending = false
-                    if (WorkspaceIdentity.isCentral(activity.conversationSessionId))
-                        activity.restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
-                    result.exceptionOrNull()?.let { activity.toast(activity.getString(R.string.workspace_control_failed), Toast.LENGTH_LONG) }
-                }
-            } }
-        }
+            })
     }
 
     private fun newChat() {
@@ -1876,7 +1861,10 @@ private fun JarvysApp(
     val workspaceAssignments = workspaceChatState.value?.assignments.orEmpty()
     val workspaceSelectedAssignment = workspaceAssignments.firstOrNull {
         it.id == workspaceSelectedAssignmentId && (it.canCorrect || it.canPause)
-    } ?: workspaceAssignments.firstOrNull { it.canCorrect || it.canPause }
+    } ?: workspaceAssignments.firstOrNull { it.canCorrect }
+        ?: workspaceAssignments.firstOrNull { it.canPause }
+    val workspaceLatestMission = workspaceChatState.value?.events?.lastOrNull { it.kind == "crew_mission" }
+        ?.crewMissionSnapshot
     val workspaceHasActiveWork = workspaceChatState.value?.let { workspace ->
         workspace.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
             WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING) ||
@@ -1910,7 +1898,7 @@ private fun JarvysApp(
             AgentRunUiState.showSession(executionSessionId)
             try {
                 val loaded = withContext(workspaceProjectionDispatcher) {
-                    WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId, previous)
+                    WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId)
                 }
                 workspaceChatState.value = loaded
                 AgentRunUiState.restoreSession(executionSessionId, loaded.events)
@@ -2016,13 +2004,15 @@ private fun JarvysApp(
         onWorkspaceMenuAction = {
             routeWorkspaceId?.let { id -> navController.navigate("workspace/${Uri.encode(id)}/files") { launchSingleTop = true } }
         },
-        workspaceBotsActionTitle = if (workspaceChatActive) stringResource(R.string.workspace_view_bots) else null,
+        workspaceBotsActionTitle = if (workspaceChatActive && workspaceLatestMission != null)
+            stringResource(R.string.workspace_view_bots) else null,
         onWorkspaceBotsAction = {
-            workspaceChatState.value?.let { state ->
-                workspaceCrewSessionId = state.executionSessionId
-                val latestMission = state.events.lastOrNull { it.kind == "crew_mission" }?.crewMissionSnapshot
-                navController.navigate(latestMission?.let { Routes.crew(it.missionId) } ?: Routes.CREW_EMPTY) {
-                    launchSingleTop = true
+            workspaceLatestMission?.let { mission ->
+                workspaceChatState.value?.let { state ->
+                    workspaceCrewSessionId = state.executionSessionId
+                    navController.navigate(Routes.crew(mission.missionId)) {
+                        launchSingleTop = true
+                    }
                 }
             }
         },
@@ -2152,7 +2142,9 @@ private fun JarvysApp(
                             }
                         }
                     },
-                    inputEnabled = true,
+                    inputEnabled = !workspaceChatActive || workspaceSelectedAssignment?.canCorrect == true,
+                    disabledHint = if (workspaceChatActive && workspaceSelectedAssignment?.canCorrect != true)
+                        stringResource(R.string.workspace_chat_input_hint) else null,
                     recipientContent = if (workspaceChatActive) ({
                         com.jarvys.agent.workspaces.WorkspaceAssignmentSelector(
                             assignments = workspaceAssignments,
@@ -2243,7 +2235,6 @@ private fun JarvysApp(
                         state = state,
                         runSnapshot = agentState,
                         connectorRegistry = connectorRegistry,
-                        showAgentEvents = showAgentEvents,
                         onOpenPreview = { projectId ->
                             val sessionId = state.executionSessionId
                             val moduleArtifactId = com.jarvys.agent.modules.ModuleArtifactViewerLaunch

@@ -434,7 +434,9 @@ class InlineMessageBlocksComposeTest {
                 JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                     Column(Modifier.width(360.dp)) {
                         val event = reply.value
-                        val generating = assistantReplyIsGenerating(event, isRunning.value, userId)
+                        val generating = assistantReplyIsGenerating(event, isRunning.value,
+                            eventIndex = 1, latestUserEventIndex = 0, latestAssistantEventIndex = 1,
+                            isLatestAssistantEvent = true)
                         val fenceNode = streamingFenceNode(event.text)
                         key(ConversationTimelineItem.Event(event).key) {
                             DisposableEffect(Unit) {
@@ -465,9 +467,13 @@ class InlineMessageBlocksComposeTest {
         assertEquals("STREAMING", openFenceEvent.stage)
         assertTrue(openFenceEvent.id < 0L)
         assertEquals(userId, openFenceEvent.streamUserEventId)
-        assertTrue(assistantReplyIsGenerating(openFenceEvent, isRunning.value, userId))
+        assertTrue(assistantReplyIsGenerating(openFenceEvent, isRunning.value,
+            eventIndex = 1, latestUserEventIndex = 0, latestAssistantEventIndex = 1,
+            isLatestAssistantEvent = true))
         assertTrue("a user-row refresh or steering row does not close the active stream gate",
-            assistantReplyIsGenerating(openFenceEvent, isRunning.value, userId + 1L))
+            assistantReplyIsGenerating(openFenceEvent, isRunning.value,
+                eventIndex = 2, latestUserEventIndex = 1, latestAssistantEventIndex = 2,
+                isLatestAssistantEvent = true))
         compose.onNodeWithText(compose.activity.getString(R.string.inline_block_rendering, "svg")).assertIsDisplayed()
         assertEquals(1, belowMounts.intValue)
         assertEquals(1, replyMounts.intValue)
@@ -522,7 +528,9 @@ class InlineMessageBlocksComposeTest {
         assertEquals(null, finalEvent.streamUserEventId)
         assertEquals(transientKey, ConversationTimelineItem.Event(finalEvent).key)
         assertEquals(ChatMessageArrivalPolicy.key(streamEvent), ChatMessageArrivalPolicy.key(finalEvent))
-        assertFalse(assistantReplyIsGenerating(finalEvent, isRunning = false, latestUserEventId = userId))
+        assertFalse(assistantReplyIsGenerating(finalEvent, isRunning = false,
+            eventIndex = 1, latestUserEventIndex = 0, latestAssistantEventIndex = 1,
+            isLatestAssistantEvent = true))
         reply.value = finalEvent
         isRunning.value = false
         compose.waitForIdle()

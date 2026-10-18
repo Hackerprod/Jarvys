@@ -13,7 +13,7 @@
     <string name="workspace_chat_loading">Loading workspace chat…</string>
     <string name="workspace_chat_empty">No conversation has been recorded for this workspace yet.</string>
     <string name="workspace_chat_load_error">The workspace conversation could not be loaded.</string>
-    <string name="workspace_chat_input_hint">Messages go to the selected bot in this workspace.</string>
+    <string name="workspace_chat_input_hint">No assigned bot can receive a correction right now.</string>
     <string name="workspace_loading">Loading recorded workspace…</string>
     <string name="workspace_load_error">Workspace data could not be loaded. Actions are unavailable.</string>
     <string name="workspace_empty">No assignments recorded in this workspace.</string>
