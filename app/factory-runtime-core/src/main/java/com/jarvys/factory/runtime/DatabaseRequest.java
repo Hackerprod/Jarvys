@@ -46,12 +46,12 @@ public final class DatabaseRequest {
                         identifier(string(step,"table",path+".table must be a lowercase identifier"),path+".table");
                         if("createTable".equals(kind)) {
                             exactAt(step, request, path, "kind","table","columns");
-                            columns(object(step,"columns",path+".columns must be an object mapping column name to {type, nullable}"),path+".columns");
+                            columns(object(step,"columns",path+".columns must be an object mapping column name to {type, nullable}"),request,path+".columns");
                         } else if("addColumn".equals(kind)) {
                             exactAt(step, request, path, "kind","table","column","definition");
                             identifier(string(step,"column",path+".column must be a lowercase identifier"),path+".column");
                             JSONObject definition=object(step,"definition",path+".definition must be an object with type and nullable");
-                            definition(definition,path+".definition");
+                            definition(definition,request,path+".definition");
                             if(!definition.getBoolean("nullable")) throw invalid(path+".definition.nullable must be true for addColumn");
                         } else throw invalid(path+".kind must be createTable or addColumn");
                     }
@@ -100,22 +100,24 @@ public final class DatabaseRequest {
             }
         } catch(JSONException e) { throw invalid(request+": request fields have invalid JSON types or shapes"); }
     }
-    static void columns(JSONObject columns) throws JSONException,FactoryException { columns(columns,"columns"); }
-    private static void columns(JSONObject columns,String path) throws JSONException,FactoryException {
-        if(columns.length()<1 || columns.length()>HARD_MAX_COLUMNS) throw invalid(path+" must contain 1 to "+HARD_MAX_COLUMNS+" column definitions");
+    static void columns(JSONObject columns) throws JSONException,FactoryException { columns(columns,"database.migrate","columns"); }
+    static void columns(JSONObject columns,String method,String path) throws JSONException,FactoryException {
+        String fieldPath=path.startsWith(method+".")?path:method+"."+path;
+        if(columns.length()<1 || columns.length()>HARD_MAX_COLUMNS) throw invalid(fieldPath+" must contain 1 to "+HARD_MAX_COLUMNS+" column definitions");
         for(Iterator<String> it=columns.keys();it.hasNext();) {
             String key=it.next();
-            try { identifier(key); } catch(FactoryException invalid) { throw invalid(path+" keys must be lowercase column identifiers"); }
-            definition(object(columns,key,path+" values must be {type, nullable} objects"),path+".<column>");
+            try { identifier(key); } catch(FactoryException invalid) { throw invalid(fieldPath+" keys must be lowercase column identifiers"); }
+            definition(object(columns,key,fieldPath+" values must be {type, nullable} objects"),method,fieldPath+".<column>");
         }
     }
     static void definition(JSONObject value) throws JSONException,FactoryException {
-        definition(value,"definition");
+        definition(value,"database.migrate","definition");
     }
-    private static void definition(JSONObject value,String path) throws JSONException,FactoryException {
-        exactAt(value,"database.migrate",path,"type","nullable"); String type=string(value,"type",path+".type must be text, integer, real, or boolean");
-        if(!"text".equals(type)&&!"integer".equals(type)&&!"real".equals(type)&&!"boolean".equals(type)) throw invalid(path+".type must be text, integer, real, or boolean");
-        if(!value.has("nullable") || !(value.get("nullable") instanceof Boolean)) throw invalid(path+".nullable must be a boolean");
+    static void definition(JSONObject value,String method,String path) throws JSONException,FactoryException {
+        String fieldPath=path.startsWith(method+".")?path:method+"."+path;
+        exactAt(value,method,fieldPath,"type","nullable"); String type=string(value,"type",fieldPath+".type must be text, integer, real, or boolean");
+        if(!"text".equals(type)&&!"integer".equals(type)&&!"real".equals(type)&&!"boolean".equals(type)) throw invalid(fieldPath+".type must be text, integer, real, or boolean");
+        if(!value.has("nullable") || !(value.get("nullable") instanceof Boolean)) throw invalid(fieldPath+".nullable must be a boolean");
     }
     static void values(JSONObject values) throws JSONException,FactoryException { values(values,"values"); }
     private static void values(JSONObject values,String path) throws JSONException,FactoryException {
@@ -204,13 +206,16 @@ public final class DatabaseRequest {
         closed(object,method,path,keys);
     }
     static void exact(JSONObject object,String...keys) throws FactoryException {
-        closed(object,"database.backup","args",keys);
+        exact(object,"database.backup","args",keys);
+    }
+    static void exact(JSONObject object,String method,String path,String...keys) throws FactoryException {
+        exactAt(object,method,path,keys);
     }
     private static void closed(JSONObject object,String method,String path,String[] keys) throws FactoryException {
         java.util.HashSet<String> allowed=new java.util.HashSet<>(java.util.Arrays.asList(keys));
         String fieldPath=path.startsWith(method+".") ? path : method+"."+path;
         for(Iterator<String> it=object.keys();it.hasNext();) if(!allowed.contains(it.next()))
-            throw invalid(fieldPath+" may contain only "+(keys.length==0?"no fields":String.join(", ",java.util.Arrays.asList(keys)))+".");
+            throw invalid(keys.length==0?fieldPath+" may contain no fields.":fieldPath+" may contain only "+String.join(", ",java.util.Arrays.asList(keys))+".");
     }
     static FactoryException invalid() { return invalid("database: value, schema, or archive must match the documented types and limits"); }
     static FactoryException invalid(String message) { return new FactoryException("INVALID_ARGUMENT",message); }

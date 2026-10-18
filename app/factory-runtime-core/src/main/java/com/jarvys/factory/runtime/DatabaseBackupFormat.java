@@ -53,7 +53,9 @@ public final class DatabaseBackupFormat {
             for (String table : BackupJson.keys(tables)) {
                 JSONObject content = tables.getJSONObject(table);
                 DatabaseBackupRequest.required(content, "columns", "rows");
-                schema.put(table, content.getJSONObject("columns")); data.put(table, content.getJSONArray("rows"));
+                JSONObject columns=content.getJSONObject("columns");
+                validateColumns(columns,"database.backupImport","archive.tables."+table+".columns");
+                schema.put(table, columns); data.put(table, content.getJSONArray("rows"));
             }
             Archive archive = create(DatabaseRequest.string(envelope, "packageName"), DatabaseRequest.string(envelope, "certificateSha256"),
                     DatabaseRequest.integer(envelope, "databaseVersion", 1, 1000), schema, data);
@@ -73,7 +75,8 @@ public final class DatabaseBackupFormat {
             JSONObject schema = new JSONObject(), data = new JSONObject(), contents = new JSONObject(); int totalRows = 0; long encodedRows = 0;
             for (String table : tables) {
                 DatabaseRequest.identifier(table);
-                JSONObject columns = selectedSchema.getJSONObject(table); validateColumns(columns);
+                JSONObject columns = selectedSchema.getJSONObject(table);
+                validateColumns(columns,"database.backupExport","tables."+table+".columns");
                 JSONObject ownedColumns = (JSONObject) BackupJson.copy(columns); schema.put(table, ownedColumns);
                 JSONArray source = selectedRows.getJSONArray(table);
                 if (source.length() > DatabaseRequest.MAX_ROWS - totalRows) throw invalidArchive();
@@ -96,9 +99,12 @@ public final class DatabaseBackupFormat {
     }
 
     static void validateColumns(JSONObject columns) throws JSONException, FactoryException {
+        validateColumns(columns,"database.backupExport","columns");
+    }
+    private static void validateColumns(JSONObject columns,String method,String path) throws JSONException, FactoryException {
         // V1 archives keep their original schema envelope even when the paged database grows.
         if (columns.length() > DatabaseRequest.MAX_COLUMNS) throw invalidArchive();
-        DatabaseRequest.columns(columns);
+        DatabaseRequest.columns(columns,method,path);
         for (String name : BackupJson.keys(columns)) DatabaseBackupRequest.required(columns.getJSONObject(name), "type", "nullable");
     }
     /** A full persisted row, including explicit null cells. Real columns always use the finite-double form. */

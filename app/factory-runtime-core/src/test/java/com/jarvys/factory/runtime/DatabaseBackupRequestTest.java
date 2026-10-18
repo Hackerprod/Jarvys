@@ -71,4 +71,15 @@ public class DatabaseBackupRequestTest {
             }
         }
     }
+    @Test public void unknownImportFieldsUseTheActualMethodAndClosedFieldGrammar() throws Exception {
+        try {
+            DatabaseBackupRequest.validate("database.backupImport", importing().put("private-field", "private-value"));
+            fail("Expected INVALID_ARGUMENT");
+        } catch (FactoryException failure) {
+            assertEquals("INVALID_ARGUMENT", failure.code);
+            assertEquals("database.backupImport.args may contain only version, handle, tables, mode.", failure.getMessage());
+            assertFalse(failure.getMessage().contains("private-field"));
+            assertFalse(failure.getMessage().contains("private-value"));
+        }
+    }
 }

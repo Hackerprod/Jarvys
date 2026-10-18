@@ -94,8 +94,8 @@ public class F3ManifestContractTest {
             if(ble>0){assertEquals(ble==2?0x10000:null,attr(permission(p,F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION),"usesPermissionFlags"));assertEquals(!location&&ble==2?30:null,attr(permission(p,CapabilityCatalog.FINE_LOCATION_PERMISSION),"maxSdkVersion"));}
             assertEquals((nfc?1:0)+(ble>0?1:0),p.features.size());assertEquals((notify>=2?2:0)+(widgets?2:0)+(jobNetwork==2?1:0),p.privateComponents.size());
             assertEquals(Arrays.asList("android.intent.action.TTS_SERVICE","android.speech.action.RECOGNIZE_SPEECH"),p.queryActions);
-            assertEquals(Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),p.queries);
-            int expectedNodes=7+expected.size()+p.features.size()+7+(incoming==0?0:4*incoming)+(notify<2?0:notify==3?6:5)+(widgets?5:0)+(jobNetwork==2?1:0);
+            assertEquals(incoming == 0 ? Collections.emptyList() : Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),p.queries);
+            int expectedNodes=7+expected.size()+p.features.size()+5+p.queries.size()+(incoming==0?0:4*incoming)+(notify<2?0:notify==3?6:5)+(widgets?5:0)+(jobNetwork==2?1:0);
             assertEquals(expectedNodes,p.nodes.size());ManifestAudit.read(ManifestXml.encode(p)).verify(p);checked++;
         }
         assertEquals(864,checked);

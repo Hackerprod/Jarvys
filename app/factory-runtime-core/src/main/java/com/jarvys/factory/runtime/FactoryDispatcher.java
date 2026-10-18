@@ -114,6 +114,7 @@ public final class FactoryDispatcher {
                         .put("recordingForegroundOnly", true).put("recordingOutput", "documents-read-handle").put("recordingFormat", "wav-pcm16")
                         .put("voiceRecognitionMayUseNetwork", true).put("locationForegroundOnly", true)
                         .put("nativePingProtocol", "icmp").put("platformPingUtilityRequired", true)
+                        .put("nativeOperationsPolicy", "host_allow_ask_deny")
                         .put("nativeOperationsAuthorization", "declared_capability_and_android_permissions").put("speechEngineMayUseNetwork", true)
                         .put("notificationAcceptedMeansDelivered", false).put("browserMayUseExternalNetwork", true)
                         .put("externalRecipientsMayUseNetwork", true)

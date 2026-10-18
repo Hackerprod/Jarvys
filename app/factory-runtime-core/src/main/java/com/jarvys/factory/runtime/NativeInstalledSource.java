@@ -34,8 +34,8 @@ public final class NativeInstalledSource {
 
     /**
      * Call only from a bounded background worker. The caller's current callback must independently
-     * expire its receiver/session. A successful description does not authorize any native effect:
-     * obtain and check a fresh NativeBackgroundAuthorization lease at the actual effect boundary.
+     * expire its receiver/session. A successful description does not authorize any native effect;
+     * the owning foreground or background path must check its current authorization at the effect boundary.
      */
     public static NativeInstalledSource describe(Context context, FactoryConfig config, String capability,
                                                 long receiverDeadlineElapsedMs, BooleanSupplier current) throws FactoryException {

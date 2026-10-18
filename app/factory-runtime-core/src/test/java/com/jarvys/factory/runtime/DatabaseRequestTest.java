@@ -154,7 +154,7 @@ public class DatabaseRequestTest {
         actionable("database.select", selection().put("limit", "private-limit"),
                 "database.select.limit must be an integer from 1 through " + DatabaseRequest.HARD_MAX_SELECT_ROWS, "private-limit");
         actionable("database.info", new JSONObject().put("private-field", "private-value"),
-                "database.info.args may contain only no fields.", "private-value");
+                "database.info.args may contain no fields.", "private-value");
     }
     @Test public void operationGrammarAndBounds() throws Exception {
         JSONObject op = new JSONObject().put("kind", "insert").put("table", "notes").put("id", "one").put("values", new JSONObject().put("title", "hello"));

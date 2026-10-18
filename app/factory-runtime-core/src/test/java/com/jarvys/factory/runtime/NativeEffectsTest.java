@@ -58,9 +58,7 @@ public class NativeEffectsTest {
         fixture = new NativeOperationSessionsTest.Fixture("[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(
                 "[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
+                .put("appId", fixture.config.appId).toString(), fixture.config.appId);
         PackageInfo own = fixture.screen.getPackageManager().getPackageInfo(fixture.config.appId, PackageManager.GET_PERMISSIONS);
         own.requestedPermissions = new String[]{Manifest.permission.POST_NOTIFICATIONS,
                 Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};

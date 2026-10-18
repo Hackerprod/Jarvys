@@ -3,6 +3,7 @@ package com.jarvys.agent.apkfactory
 import com.jarvys.factory.contract.BluetoothPolicy
 import com.jarvys.factory.contract.ManifestPlan
 import com.jarvys.factory.runtime.FactoryConfig
+import com.jarvys.factory.runtime.FactoryException
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -19,7 +20,8 @@ class F3SpecScopeTest {
         for(privacy in listOf("full","neverForLocation")) {
             val spec=FactorySpec.parse(input(listOf("bluetooth")).put("bluetooth",JSONObject().put("version",1).put("scanPrivacy",privacy)))
             val broker=JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256","a".repeat(64))
-            assertEquals(spec.bluetooth,FactoryConfig.parse(String(spec.runtimeConfig(broker)),app).bluetooth)
+            assertEquals(spec.bluetooth,FactoryConfig.parse(String(spec.runtimeConfig()),app).bluetooth)
+            assertThrows(FactoryException::class.java){FactoryConfig.parse(String(spec.runtimeConfig(broker)),app)}
             assertEquals(spec,FactorySpec.parse(spec.toJson()))
             val plan=ManifestPlan(app,"F3",1,"1",0x7f010001,0x7f020001,listOf("bluetooth"),null,null,spec.bluetooth,0)
             val scope=FactorySigningScope.fromPlan(plan)

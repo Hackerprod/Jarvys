@@ -71,6 +71,7 @@ public class NativeServicesBridgeTest {
             assertTrue(info.getBoolean("processInternetPermission")); assertFalse(info.getBoolean("offline"));
             assertEquals("embedded_webview_configuration_not_process_isolation", info.getString("offlineScope"));
             assertEquals("host_allow_ask_deny", info.getString("nativeOperationsPolicy"));
+            assertEquals("declared_capability_and_android_permissions", info.getString("nativeOperationsAuthorization"));
             assertTrue(info.getBoolean("speechEngineMayUseNetwork")); assertFalse(info.getBoolean("notificationAcceptedMeansDelivered"));
             if ("preview".equals(mode)) {
                 assertTrue(strings(info.getJSONArray("unavailableCapabilities")).containsAll(Arrays.asList("network", "notifications", "speech")));

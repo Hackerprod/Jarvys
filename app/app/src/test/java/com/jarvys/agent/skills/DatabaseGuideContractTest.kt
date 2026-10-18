@@ -51,6 +51,7 @@ class DatabaseGuideContractTest {
             fail("An array-form columns definition must be rejected")
         } catch (error: FactoryException) {
             assertEquals("INVALID_ARGUMENT", error.code)
+            assertTrue(error.message?.contains("columns") == true)
         }
     }
 }

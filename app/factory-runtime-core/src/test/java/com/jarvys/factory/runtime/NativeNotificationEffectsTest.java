@@ -31,9 +31,7 @@ public class NativeNotificationEffectsTest {
     @Before public void setup() throws Exception {
         fixture = new NativeOperationSessionsTest.Fixture("[\"notifications\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"notifications\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256))
+                .put("appId", fixture.config.appId)
                 .put("notifications", new JSONObject().put("scheduling", true).put("exactAlarms", true)).toString(), fixture.config.appId);
         effects = new NativeEffects(fixture.screen, config, fixture.sessions, fixture.io, true);
         adapter = new Adapter(); ReflectionHelpers.setField(effects, "notificationEffects", adapter);

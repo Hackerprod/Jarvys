@@ -126,6 +126,8 @@ public final class FactoryConfig {
             }
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
+                if (!CapabilityCatalog.requiresHostBroker(capabilities))
+                    throw new FactoryException("INVALID_CONFIG", "Host broker requires a capability with a native policy or broker operation.");
                 JSONObject metadata = object.getJSONObject("documentBroker");
                 exactKeys(metadata, "packageName", "certificateSha256");
                 String host = string(metadata, "packageName"), certificate = string(metadata, "certificateSha256");

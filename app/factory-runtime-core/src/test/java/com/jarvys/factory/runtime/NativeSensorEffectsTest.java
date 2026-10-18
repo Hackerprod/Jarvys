@@ -42,9 +42,7 @@ public class NativeSensorEffectsTest {
     @Before public void setup() throws Exception {
         fixture = new NativeOperationSessionsTest.Fixture("[\"sensors\",\"steps\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"sensors\",\"steps\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
+                .put("appId", fixture.config.appId).toString(), fixture.config.appId);
         PackageInfo own = fixture.screen.getPackageManager().getPackageInfo(config.appId, PackageManager.GET_PERMISSIONS);
         own.requestedPermissions = new String[]{Manifest.permission.ACTIVITY_RECOGNITION};
         Shadows.shadowOf(fixture.screen.getPackageManager()).installPackage(own);

@@ -37,9 +37,7 @@ public class NativeSecretEffectsTest {
     @Before public void setup() throws Exception {
         fixture = new NativeOperationSessionsTest.Fixture("[\"secrets\",\"network\"]");
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"secrets\",\"network\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
+                .put("appId", fixture.config.appId).toString(), fixture.config.appId);
         effects = new NativeEffects(fixture.screen, config, fixture.sessions, fixture.io, true);
     }
     @After public void finish() throws Exception {
@@ -98,9 +96,7 @@ public class NativeSecretEffectsTest {
     @Test public void approvedCaptureLazilyCreatesAdapterWithDeclaredInputBudget() throws Exception {
         effects.close();
         config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration("[\"secrets\",\"network\"]"))
-                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
-                        .put("packageName", fixture.config.documentBroker.packageName)
-                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256))
+                .put("appId", fixture.config.appId)
                 .put("resourceBudgets", new JSONObject().put("version", 1).put("secrets", new JSONObject()
                         .put("entries", 2).put("valueBytes", 16).put("vaultBytes", 16384))).toString(), fixture.config.appId);
         effects = new NativeEffects(fixture.screen, config, fixture.sessions, fixture.io, true);

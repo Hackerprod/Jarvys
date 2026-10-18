@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
 import com.jarvys.factory.contract.ResourceBudgets;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -62,6 +63,11 @@ public class NativeInstalledSourceTest {
         @Override public int update(Uri u,ContentValues v,String s,String[]a){throw new AssertionError();}
     }
     private static String repeat(char c){char[]v=new char[64];java.util.Arrays.fill(v,c);return new String(v);}
+    private static String sha256(byte[] value)throws Exception{
+        StringBuilder digest=new StringBuilder();
+        for(byte b:MessageDigest.getInstance("SHA-256").digest(value))digest.append(String.format("%02x",b&255));
+        return digest.toString();
+    }
     @Before public void setup()throws Exception{
         context=RuntimeEnvironment.getApplication();current=new AtomicBoolean(true);
         Signature signature=new Signature(new byte[]{1,3,5,7});
@@ -88,11 +94,15 @@ public class NativeInstalledSourceTest {
     }
     @Test public void localSourceUsesInstalledPackageAndPackagedBudgetsWithoutHostCall()throws Exception{
         PackageInfo own=context.getPackageManager().getPackageInfo(context.getPackageName(),0);
-        own.signatures=new Signature[]{new Signature(new byte[]{9,7,5,3})};own.versionCode=42;
+        Signature localSigner=new Signature(new byte[]{9,7,5,3});own.signatures=new Signature[]{localSigner};own.versionCode=42;
         shadowOf(context.getPackageManager()).installPackage(own);
         NativeInstalledSource value=NativeInstalledSource.describeLocal(context,config,"notifications",configText);
         assertEquals(context.getPackageName(),value.appId);assertEquals(42L,value.versionCode);
-        assertTrue(value.certificateSha256.matches("[a-f0-9]{64}"));assertTrue(value.apkSha256.matches("[a-f0-9]{64}"));
+        String localCertificate=sha256(localSigner.toByteArray());
+        String configDigest=sha256(configText.getBytes(StandardCharsets.UTF_8));
+        String expectedIdentity=sha256(("factory-local-app-v1\n"+context.getPackageName()+"\n"+localCertificate+"\n42\n"+configDigest)
+                .getBytes(StandardCharsets.UTF_8));
+        assertEquals(localCertificate,value.certificateSha256);assertEquals(expectedIdentity,value.apkSha256);
         assertTrue(value.recordSha256.matches("[a-f0-9]{64}"));assertEquals(config.resources,value.resources);
         assertEquals(0,provider.calls);
     }

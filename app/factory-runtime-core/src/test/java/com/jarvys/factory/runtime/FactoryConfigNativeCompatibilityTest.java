@@ -38,16 +38,13 @@ public class FactoryConfigNativeCompatibilityTest {
             assertThrows(UnsupportedOperationException.class, () -> config.capabilities.add("network"));
         }
     }
-    @Test public void sensorsMayPinEitherExactHostForNewSubscriptionOperations() throws Exception {
+    @Test public void sensorsCannotAcquireAnUnneededHostPin() throws Exception {
         for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"}) {
             JSONObject json = configuration("sensors").put("documentBroker", broker(host, DIGEST));
-            FactoryConfig config = installed(json);
-            assertEquals(Collections.singleton("sensors"), config.capabilities);
-            assertEquals(host, config.documentBroker.packageName); assertEquals(DIGEST, config.documentBroker.certificateSha256);
-            assertEquals(host, FactoryConfig.parsePreview(json.toString()).documentBroker.packageName);
+            invalidConfig(json);
         }
     }
-    @Test public void generatedAppLocalFamiliesNeedNoHostPin() throws Exception {
+    @Test public void generatedAppLocalFamiliesCannotAcquireAnUnneededHostPin() throws Exception {
         for (String capability : NATIVE) {
             String[] selected = "jobs".equals(capability) ? new String[]{"jobs", "network"} : new String[]{capability};
             JSONObject json = configuration(selected);
@@ -56,12 +53,8 @@ public class FactoryConfigNativeCompatibilityTest {
             assertNull(FactoryConfig.parsePreview(json.toString()).documentBroker);
             assertFalse(CapabilityCatalog.requiresHostBroker(Arrays.asList(selected)));
             assertFalse(CapabilityCatalog.requiresMandatoryHostBroker(Arrays.asList(selected)));
-            for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"}) {
-                FactoryConfig config = installed(new JSONObject(json.toString()).put("documentBroker", broker(host, DIGEST)));
-                assertEquals(new LinkedHashSet<>(Arrays.asList(selected)), config.capabilities);
-                assertEquals(host, config.documentBroker.packageName); assertEquals(DIGEST, config.documentBroker.certificateSha256);
-                assertFalse(config.capabilities.contains("documents"));
-            }
+            for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"})
+                invalidConfig(new JSONObject(json.toString()).put("documentBroker", broker(host, DIGEST)));
         }
     }
     @Test public void allExistingAndNewBrokerFamiliesShareTheExactPinningContract() throws Exception {
@@ -79,13 +72,13 @@ public class FactoryConfigNativeCompatibilityTest {
                     () -> installed(json.put("documentBroker", extra))).code);
         }
     }
-    @Test public void standaloneCapabilitiesCanRetainAnUnusedLegacyBrokerPin() throws Exception {
-        for (String[] capabilities : new String[][]{{}, {"storage"}, {"presentation"}, {"database"}, {"biometrics"}}) {
+    @Test public void standaloneCapabilitiesCannotAcquireUnneededBrokerBindings() throws Exception {
+        for (String[] capabilities : new String[][]{{}, {"storage"}, {"presentation"}, {"database"}, {"biometrics"}, {"sensors"}}) {
             JSONObject json = configuration(capabilities);
             assertNull(installed(json).documentBroker);
             assertFalse(CapabilityCatalog.requiresHostBroker(Arrays.asList(capabilities)));
             assertFalse(CapabilityCatalog.requiresMandatoryHostBroker(Arrays.asList(capabilities)));
-            assertEquals("com.jarvys.agent", installed(json.put("documentBroker", broker("com.jarvys.agent", DIGEST))).documentBroker.packageName);
+            invalidConfig(json.put("documentBroker", broker("com.jarvys.agent", DIGEST)));
         }
     }
     @Test public void wholeSelectionsRejectUnknownAndDuplicateCapabilitiesEvenAfterBrokerMatches() throws Exception {

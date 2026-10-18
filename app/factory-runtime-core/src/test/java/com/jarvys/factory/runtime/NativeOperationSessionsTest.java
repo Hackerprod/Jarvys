@@ -13,14 +13,18 @@ import android.os.Bundle;
 import android.os.Looper;
 import android.os.SystemClock;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.json.JSONArray;
 import org.json.JSONObject;
+import com.jarvys.factory.contract.CapabilityCatalog;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -127,9 +131,15 @@ public class NativeOperationSessionsTest {
             Shadows.shadowOf(screen.getPackageManager()).installPackage(info);
             Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(android.os.Process.myUid(), host);
             provider.attachInfo(screen, entry); ShadowContentResolver.registerProviderInternal(entry.authority, provider);
-            config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(capabilities))
-                    .put("appId", screen.getPackageName()).put("documentBroker", new JSONObject().put("packageName", host)
-                            .put("certificateSha256", DocumentBrokerIdentityTest.digest())).toString(), screen.getPackageName());
+            JSONObject configJson = new JSONObject(FactoryDispatcherTest.configuration(capabilities))
+                    .put("appId", screen.getPackageName());
+            JSONArray requested = new JSONArray(capabilities);
+            Set<String> selected = new LinkedHashSet<>();
+            for (int i = 0; i < requested.length(); i++) selected.add(requested.getString(i));
+            if (CapabilityCatalog.requiresHostBroker(selected))
+                configJson.put("documentBroker", new JSONObject().put("packageName", host)
+                        .put("certificateSha256", DocumentBrokerIdentityTest.digest()));
+            config = FactoryConfig.parse(configJson.toString(), screen.getPackageName());
             sessions = new NativeOperationSessions(screen, config, io, true);
         }
         NativeOperationSessions.Lease authorize(Capture reply) throws Exception {

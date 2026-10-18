@@ -67,9 +67,7 @@ public final class DatabaseBackupRequest {
             throw invalid("database.backupImport.archive." + name + " is required");
     }
     private static void requiredForMethod(JSONObject object, String method, String... names) throws FactoryException {
-        java.util.HashSet<String> allowed = new java.util.HashSet<>(java.util.Arrays.asList(names));
-        for (java.util.Iterator<String> it = object.keys(); it.hasNext();)
-            if (!allowed.contains(it.next())) throw invalid(method + ".args may contain only " + String.join(", ", names));
+        DatabaseRequest.exact(object, method, "args", names);
         for (String name : names) if (!object.has(name)) throw invalid(method + "." + name + " is required");
     }
     static List<String> tables(JSONArray values) throws JSONException, FactoryException {
