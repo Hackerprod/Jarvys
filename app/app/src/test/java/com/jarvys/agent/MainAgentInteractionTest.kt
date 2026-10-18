@@ -125,18 +125,25 @@ class MainAgentInteractionTest {
         }
     }
 
-    @Test fun transientWorkspaceWakeFailureStaysPendingWithoutBubblesOrSameProcessRetry() {
+    @Test fun transientWorkspaceWakeFailureBeforeCheckpointStaysPendingWithoutBubblesOrSameProcessRetry() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = LocalRunStore(context)
         val fixture = recordPendingWorkspaceWake(context, store)
         val service = startManagedService(context)
-        val calls = AtomicInteger()
-        val seenHistory = AtomicReference<List<ConversationTurn>>()
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, history, _, _, _ ->
-            calls.incrementAndGet()
-            seenHistory.set(history)
-            CoreAgentLoop.Result("partial-wake", "", 1, "PARTIAL")
+        val modelCalls = AtomicInteger()
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, history, attachments, token, progress ->
+            val model = object : CoreAgentLoop.Model {
+                override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                    declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+                    modelCalls.incrementAndGet()
+                    throw ProviderHttpException("temporary provider outage", 503, 0L, null)
+                }
+            }
+            val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "", fixture.session)
+            MainChatTranscriptStore(context.filesDir, fixture.session, store).attach(loop, history,
+                ConversationTurn.workspaceWakeOwnerId(fixture.referenceId))
+            loop.run(goal, history, attachments, token, progress, "")
         }
         AgentRunUiState.resetSession(fixture.session)
         try {
@@ -146,8 +153,7 @@ class MainAgentInteractionTest {
             deliverStartedServices(context)
             assertTrue(awaitRunFinished(service, context))
 
-            assertEquals(1, calls.get())
-            assertEquals(1, seenHistory.get().count { it.kind == ConversationTurn.Kind.SYSTEM_EVENT })
+            assertEquals(1, modelCalls.get())
             assertTrue(store.isWorkspaceResultWakePending(fixture.referenceId))
             assertTrue("A provider failure does not write a visible assistant failure bubble",
                 chatTestStore.onDatabaseWorker { store.readConversationMessages(fixture.session) }
@@ -163,9 +169,104 @@ class MainAgentInteractionTest {
             }
             deliverStartedServices(context)
             assertTrue(awaitRunFinished(service, context))
-            assertEquals("A pending failure is attempted at most once in this process", 1, calls.get())
+            assertEquals("A pending failure is attempted at most once in this process", 1, modelCalls.get())
             assertTrue(store.isWorkspaceResultWakePending(fixture.referenceId))
         } finally {
+            fixture.registry.close()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun providerFailureAfterToolCheckpointWritesOneBubbleAndRecoversQueuedUserMessage() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = LocalRunStore(context)
+        val fixture = recordPendingWorkspaceWake(context, store)
+        val service = startManagedService(context)
+        val serviceRuns = AtomicInteger()
+        val modelCalls = AtomicInteger()
+        val toolEffects = AtomicInteger()
+        val followUp = CountDownLatch(1)
+        val queuedUserMessage = "Please summarize the task status."
+        val followUpGoal = AtomicReference("")
+        val effectDeclaration = ToolSpec("workspace_effect", "test", "apply a test effect", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
+        val effectTool = object : CoreTool {
+            override fun declaration() = effectDeclaration
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+                toolEffects.incrementAndGet()
+                return CoreToolResult.success("effect applied")
+            }
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, history, attachments, token, progress ->
+            if (serviceRuns.incrementAndGet() > 1) {
+                followUpGoal.set(goal)
+                progress.onInitialUserMessageIncorporated()
+                followUp.countDown()
+                CoreAgentLoop.Result("queued-user-follow-up", "Follow-up answered", 1, "COMPLETED")
+            } else {
+                val model = object : CoreAgentLoop.Model {
+                    override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                        declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+                        assertEquals(listOf("workspace_effect"), declarations.map { it.name })
+                        return if (modelCalls.incrementAndGet() == 1) {
+                            ModelReply("Applying the saved result action.",
+                                listOf(ModelReply.Call("workspace-effect-1", "workspace_effect", emptyMap())))
+                        } else {
+                            assertTrue("The user message is admitted while the wake is active",
+                                AgentForegroundService.interruptAndSend(context, fixture.session,
+                                    queuedUserMessage, arrayListOf(), false))
+                            throw ProviderHttpException("temporary provider outage", 503, 0L, null)
+                        }
+                    }
+                }
+                val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(effectTool)), "", fixture.session)
+                MainChatTranscriptStore(context.filesDir, fixture.session, store).attach(loop, history,
+                    ConversationTurn.workspaceWakeOwnerId(fixture.referenceId))
+                loop.run(goal, history, attachments, token, progress, "")
+            }
+        }
+        AgentRunUiState.resetSession(fixture.session)
+        try {
+            chatTestStore.onDatabaseWorker {
+                AgentForegroundService.startWorkspaceResultWake(context, fixture.referenceId)
+            }
+            deliverStartedServices(context)
+            assertTrue("The queued user message gets its ordinary follow-up after wake failure",
+                awaitServiceCallback(followUp, 10))
+            assertTrue(awaitRunFinished(service, context))
+
+            assertEquals(2, serviceRuns.get())
+            assertEquals("The queued user input, rather than the old wake, owns the next run",
+                queuedUserMessage, followUpGoal.get())
+            assertEquals(2, modelCalls.get())
+            assertEquals("The acknowledged tool effect is not repeated", 1, toolEffects.get())
+            assertFalse("A tool-call response checkpoint consumes the wake", store.isWorkspaceResultWakePending(fixture.referenceId))
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(fixture.session) }
+            val wakeFailures = messages.filter {
+                it.optString("role") == "assistant"
+                    && it.optString("status") == "PARTIAL"
+                    && it.optString("userMessageId") == ConversationTurn.workspaceWakeOwnerId(fixture.referenceId)
+            }
+            assertEquals("The acknowledged failed wake is visible exactly once", 1, wakeFailures.size)
+            val latestUserMessageId = chatTestStore.onDatabaseWorker {
+                store.latestUserMessageId(fixture.session)
+            }
+            assertTrue(messages.any {
+                it.optString("role") == "assistant"
+                    && it.optString("userMessageId") == latestUserMessageId
+                    && it.optString("content") == "Follow-up answered"
+            })
+
+            chatTestStore.onDatabaseWorker {
+                AgentForegroundService.startWorkspaceResultWake(context, fixture.referenceId)
+            }
+            deliverStartedServices(context)
+            assertTrue(awaitRunFinished(service, context))
+            assertEquals("An acknowledged wake is never retried after its tool effects", 2, serviceRuns.get())
+            assertEquals(1, toolEffects.get())
+        } finally {
+            AgentForegroundService.stopRun(fixture.session)
             fixture.registry.close()
             stopManagedService(context)
         }
@@ -221,6 +322,8 @@ class MainAgentInteractionTest {
         val workspaceId: String,
         val referenceId: String,
         val session: String,
+        val assignmentId: String,
+        val originalUserRequest: String,
     )
 
     private fun recordPendingWorkspaceWake(context: Context, store: LocalRunStore): WorkspaceWakeFixture {
@@ -232,8 +335,9 @@ class MainAgentInteractionTest {
         val registry = com.jarvys.agent.workspaces.WorkspaceRegistry(context)
         try {
             val scope = registry.createWorkspace("pending-wake-${System.nanoTime()}", "Workspace wake test")
+            val originalUserRequest = "Build and report the requested APK."
             val prepared = registry.prepareAssignment(scope.workspaceId, "assignment", "request",
-                "Inspect the build result and deliver the APK requested by the user.", "coding",
+                originalUserRequest, "coding",
                 "Build and report the requested APK.", emptyList(), null,
                 com.jarvys.agent.crew.CrewMissionAccess.STANDARD)
             val started = registry.markStarted(scope.workspaceId, prepared.assignmentId,
@@ -247,10 +351,52 @@ class MainAgentInteractionTest {
                 .reconcile(scope.workspaceId, CancellationToken.uncancellable())
             val referenceId = store.listWorkspaceResultNotices(session, 10, null)
                 .single { it.workspaceId == scope.workspaceId }.referenceId
-            return WorkspaceWakeFixture(registry, scope.workspaceId, referenceId, session)
+            return WorkspaceWakeFixture(registry, scope.workspaceId, referenceId, session,
+                bound.assignmentId, originalUserRequest)
         } catch (failure: RuntimeException) {
             registry.close()
             throw failure
+        }
+    }
+
+    @Test fun workspaceWakeUsesBoundAssignmentRequestAndInjectsItIntoRuntime() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = LocalRunStore(context)
+        val fixture = recordPendingWorkspaceWake(context, store)
+        try {
+            val assignment = fixture.registry.getAssignment(fixture.workspaceId, fixture.assignmentId)
+            assertNotNull(assignment)
+            assertEquals(fixture.originalUserRequest, assignment!!.originalUserRequest)
+            val resolved = chatTestStore.onDatabaseWorker {
+                AgentForegroundService.workspaceWakeOriginalUserRequest(context, store, fixture.referenceId)
+            }
+            assertEquals("The unrelated latest Central message is not used as provenance",
+                fixture.originalUserRequest, resolved)
+
+            val runtime = CoreAgentRuntime(context, fixture.session, emptyList(),
+                CorePromptBudget.standard(), false)
+            runtime.setWorkspaceWakeContext(fixture.referenceId, resolved)
+            assertEquals("The resolved assignment request reaches the workspace tool",
+                fixture.originalUserRequest, runtime.workspaceToolOriginalUserRequest("unrelated user text"))
+            runtime.setWorkspaceWakeContext(fixture.referenceId, null)
+            assertEquals("A wake with no bound assignment provenance cannot borrow the current run request",
+                "", runtime.workspaceToolOriginalUserRequest("unrelated user text"))
+            runtime.setWorkspaceWakeContext(null, null)
+            assertEquals("Ordinary turns continue to use their run request",
+                "ordinary request", runtime.workspaceToolOriginalUserRequest("ordinary request"))
+
+            val registryDb = context.openOrCreateDatabase(
+                com.jarvys.agent.workspaces.WorkspaceRegistry.DATABASE_NAME, Context.MODE_PRIVATE, null)
+            try {
+                registryDb.execSQL("DELETE FROM assignment WHERE workspace_id=? AND assignment_id=?",
+                    arrayOf(fixture.workspaceId, fixture.assignmentId))
+            } finally {
+                registryDb.close()
+            }
+            assertEquals("A missing assignment resolves to empty provenance rather than the latest Central request",
+                "", AgentForegroundService.workspaceWakeOriginalUserRequest(context, store, fixture.referenceId))
+        } finally {
+            fixture.registry.close()
         }
     }
 
@@ -930,7 +1076,7 @@ class MainAgentInteractionTest {
         }
     }
 
-    @Test fun serviceRestartRecoversPendingInputsForMultipleSessions() {
+    @Test fun serviceRestartRecoversPendingInputsAcrossSessionsInSequence() {
         StopController.getInstance().stopRun()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = LocalRunStore(context)
@@ -967,8 +1113,7 @@ class MainAgentInteractionTest {
             }
             assertEquals(0, bothStarted.count)
             assertTrue("Both recovery runs drain", awaitRunFinished(service, context))
-            // Separate session lanes recover concurrently; only per-session input order is defined.
-            assertEquals(expected.toSet(), observed.toSet())
+            assertEquals(expected, observed)
             assertTrue(chatTestStore.onDatabaseWorker { store.readPendingInterruptRequests() }.isEmpty())
             assertEquals("PARTIAL", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionA) }.last().optString("status"))
             assertEquals("PARTIAL", chatTestStore.onDatabaseWorker { store.readConversationMessages(sessionB) }.last().optString("status"))

@@ -350,6 +350,7 @@ object AgentRunUiState {
         var generation: Long = Long.MIN_VALUE,
         var active: Boolean = false,
         var liveSnapshot: AgentRunUiSnapshot? = null,
+        var systemOriginGeneration: Long? = null,
         var stoppingGeneration: Long? = null,
         var stoppedCompletion: StoppedCompletion? = null,
     )
@@ -360,6 +361,7 @@ object AgentRunUiState {
         val text: String,
         val messageId: String,
         val durationMs: Long,
+        val canRegenerate: Boolean,
     )
 
     // A thread carries only its target session. The snapshot itself always lives in
@@ -1250,6 +1252,7 @@ object AgentRunUiState {
     @JvmStatic
     fun beginServiceRun(sessionId: String, goal: String, attachments: List<ChatAttachment>,
         regeneration: Boolean, generation: Long, userMessageId: String? = null) = inSession(sessionId) { synchronized(lock) {
+        owner().systemOriginGeneration = null
         _state.value.headerMascotAnimationRequest?.takeIf { _state.value.sessionId != sessionId }?.let { request ->
             resolveHeaderMascotAnimationLocked(request, "rejected", "The chat session changed.")
         }
@@ -1279,6 +1282,7 @@ object AgentRunUiState {
     /** Starts a system-origin run without appending a synthetic user bubble. */
     @JvmStatic
     fun beginSystemServiceRun(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        owner().systemOriginGeneration = generation
         val current = _state.value
         if (current.sessionId == sessionId || current.sessionId == null) {
             _state.value = current.copy(sessionId = sessionId, goal = "", running = true,
@@ -1611,11 +1615,12 @@ object AgentRunUiState {
         ownership.stoppingGeneration = null
         val completion = ownership.stoppedCompletion
         ownership.stoppedCompletion = null
+        ownership.systemOriginGeneration = null
         val terminalOutcome = completion?.outcome ?: "STOPPED"
         val events = completion?.takeIf { it.text.isNotEmpty() || it.messageId.isNotEmpty() }?.let {
             val assistant = event("assistant", it.text).copy(
                 stage = AgentRunUiEvent.assistantStageForOutcome(it.outcome),
-                messageId = it.messageId, durationMs = it.durationMs)
+                messageId = it.messageId, durationMs = it.durationMs, canRegenerate = it.canRegenerate)
             append(interruptActivities(current.events), assistant)
         } ?: interruptActivities(current.events)
         _state.value = current.copy(
@@ -1640,7 +1645,8 @@ object AgentRunUiState {
         val current = _state.value
         val ownership = owner()
         if (ownership.stoppingGeneration == generation) {
-            ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs)
+            ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs,
+                canRegenerate = ownership.systemOriginGeneration != generation)
             if (current.events.any { it.id in streamIds })
                 _state.value = current.copy(events = current.events.filterNot { it.id in streamIds })
             return@synchronized
@@ -1660,8 +1666,10 @@ object AgentRunUiState {
             }
             ownedRunActive = false
             ownedLiveSnapshot = null
+            val canRegenerate = ownership.systemOriginGeneration != generation
             ownership.stoppingGeneration = null
             ownership.stoppedCompletion = null
+            ownership.systemOriginGeneration = null
             if (current.sessionId == sessionId) {
                 pendingProgress.clear()
                 val currentEventIds = current.events.mapTo(mutableSetOf()) { it.id }
@@ -1674,6 +1682,7 @@ object AgentRunUiState {
                     durationMs = durationMs,
                     timelineKey = promotedStream?.timelineKey ?: promotedStream?.id,
                     streamUserEventId = null,
+                    canRegenerate = canRegenerate,
                 )
                 val baseEvents = interruptActivities(current.events.filterNot { it.id in streamIds })
                 val events = if (text.isEmpty() && messageId.isEmpty()) baseEvents else append(baseEvents, assistant)

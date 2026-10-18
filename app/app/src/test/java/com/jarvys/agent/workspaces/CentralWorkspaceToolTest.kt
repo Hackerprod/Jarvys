@@ -3,7 +3,6 @@ package com.jarvys.agent.workspaces
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
-import com.jarvys.agent.ConversationTurn
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -147,12 +146,8 @@ class CentralWorkspaceToolTest {
             "expectedSha256" to sha, "filename" to null), backend.calls[4].values)
     }
 
-    @Test fun workspaceWakeUsesItsOriginatingUserRequestForMutatingActions() {
+    @Test fun workspaceToolUsesItsInjectedOriginatingUserRequestForMutatingActions() {
         val backend = Backend()
-        val referenceId = "workspace-result-${"c".repeat(64)}"
-        val wake = ConversationTurn.systemEvent(referenceId,
-            "Workspace result registered: result_reference_id=$referenceId")
-        assertEquals(ConversationTurn.Kind.SYSTEM_EVENT, wake.kind)
         val runtime = tool(backend, requestId = "wake-runtime:assignment-1", originalRequest = userText)
         val token = CancellationToken.uncancellable()
         val coordinationId = "workspace-coordination-${"d".repeat(64)}"

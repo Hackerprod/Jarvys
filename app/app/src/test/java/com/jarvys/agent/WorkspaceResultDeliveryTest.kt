@@ -1,6 +1,10 @@
 package com.jarvys.agent
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.ui.chat.ConversationVisibility
@@ -8,6 +12,7 @@ import com.jarvys.agent.crew.CrewMissionAccess
 import com.jarvys.agent.crew.CrewResultEvidence
 import com.jarvys.agent.workspaces.*
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -92,6 +97,44 @@ class WorkspaceResultDeliveryTest {
         assertEquals(1, notices().size)
         assertTrue(wakeRequests.isEmpty())
         assertFalse(ledger.isWorkspaceResultWakePending(reference.referenceId))
+    }
+
+    @Test fun rejectedBackgroundWakeStartRetriesOnCatalogEntryInSameProcessOnce() {
+        bind(); evidence(); reconcile()
+        val referenceId = notices().single().referenceId
+        val serviceStarts = AtomicInteger()
+        val deferredContext = object : ContextWrapper(app) {
+            override fun getApplicationContext(): Context = this
+            override fun startForegroundService(service: Intent): ComponentName? {
+                if (serviceStarts.incrementAndGet() == 1)
+                    throw IllegalStateException("background foreground-service start denied")
+                return ComponentName(app, AgentForegroundService::class.java)
+            }
+        }
+        try {
+            AgentForegroundService.startWorkspaceResultWake(deferredContext, referenceId)
+            assertEquals("The first background start is rejected", 1, serviceStarts.get())
+            assertTrue(ledger.isWorkspaceResultWakePending(referenceId))
+
+            // MainActivity.onResume calls this catalog entry point. It must retry in the same
+            // process after the rejected start cleared its transient request/attempt state.
+            WorkspaceResultDelivery.scheduleCatalog(deferredContext)
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while (serviceStarts.get() < 2 && System.nanoTime() < deadline) Thread.sleep(5)
+            assertEquals("The same-process catalog scan retries the wake once", 2, serviceStarts.get())
+
+            Thread.sleep(100)
+            WorkspaceResultDelivery.scheduleCatalog(deferredContext)
+            Thread.sleep(200)
+            assertEquals("Repeated catalog entry points do not form a start loop", 2, serviceStarts.get())
+            assertTrue(ledger.isWorkspaceResultWakePending(referenceId))
+        } finally {
+            for (fieldName in listOf("WORKSPACE_RESULT_WAKE_REQUESTS", "WORKSPACE_RESULT_WAKE_ATTEMPTED")) {
+                val state = AgentForegroundService::class.java.getDeclaredField(fieldName)
+                    .apply { isAccessible = true }.get(null) as MutableSet<String>
+                state.remove(referenceId)
+            }
+        }
     }
 
     @Test fun receiptNeverEntersMessagesModelContextOrReflectionInput() {

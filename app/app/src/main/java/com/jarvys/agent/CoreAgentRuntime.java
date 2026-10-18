@@ -293,6 +293,11 @@ public final class CoreAgentRuntime {
     workspaceWakeOriginalUserRequest = referenceId == null ? null : originalUserRequest;
   }
 
+  String workspaceToolOriginalUserRequest(String request) {
+    if (workspaceWakeReferenceId.isEmpty()) return request;
+    return workspaceWakeOriginalUserRequest == null ? "" : workspaceWakeOriginalUserRequest;
+  }
+
   MainChatTurnContextProvider mainChatSteeringProvider() {
     return mainChatSteeringProvider;
   }
@@ -323,7 +328,7 @@ public final class CoreAgentRuntime {
         && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
       CoreTool workspace = new com.jarvys.agent.workspaces.CentralWorkspaceTool(context, sessionId,
           com.jarvys.agent.crew.CrewProcessIdentity.ID + ":" + UUID.randomUUID(),
-          workspaceWakeOriginalUserRequest == null ? request : workspaceWakeOriginalUserRequest,
+          workspaceToolOriginalUserRequest(request),
           new com.jarvys.agent.workspaces.WorkspaceCoordinator(context));
       if (allowed(workspace)) toolRegistry = toolRegistry.with(Collections.singletonList(workspace));
       List<String> centralTools = new ArrayList<>(toolRegistry.names());
