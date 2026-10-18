@@ -96,6 +96,7 @@ import com.jarvys.agent.JarvysTag
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.R
+import com.jarvys.agent.isInternalSkillActivity
 import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.skills.SkillFileLink
 import com.jarvys.agent.WebSearchFailurePresentation
@@ -881,7 +882,10 @@ private fun toolGroupDisplayName(
     registry: ConnectorRegistry,
     context: Context,
 ): String {
-    event.toolActivity?.takeIf { it.skill() }?.let { return it.skillName.ifBlank { it.skillId } }
+    event.toolActivity?.takeIf { it.skill() }?.let { activity ->
+        return if (activity.isInternalSkillActivity(context)) context.getString(R.string.activity_skill_name_generic)
+            else activity.skillName.ifBlank { activity.skillId }
+    }
     val operation = registry.definitions.value.asSequence().flatMap { it.operations.asSequence() }
         .firstOrNull { it.displayLabel == event.toolDisplayName }
     return operation?.let { if (it.displayLabelResourceId != 0) context.getString(it.displayLabelResourceId) else it.displayLabel }

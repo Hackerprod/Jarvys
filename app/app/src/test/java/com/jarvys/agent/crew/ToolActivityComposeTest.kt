@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.*
 import com.jarvys.agent.R
+import com.jarvys.agent.skills.SkillRepository
 import com.jarvys.agent.ui.jarvysColorScheme
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
@@ -34,6 +35,7 @@ import java.io.File
 @Config(sdk=[34],qualifiers="en-rUS-w360dp-h800dp-port-mdpi")
 class ToolActivityComposeTest {
     @get:Rule val compose=createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val testSecrets=TestSecretStoreRule()
     private fun activity(stage:String="tool_call",detail:String="",skill:Boolean=false)=ToolActivity("event-$stage","execution","raw-call",
         if(skill) "read_skill" else "read", "Read",if(skill) "skill.garden" else "",if(skill) "Garden Planning" else "",
         stage,detail,"","","workspace",1)
@@ -79,6 +81,21 @@ class ToolActivityComposeTest {
         compose.onNodeWithTag("activity-details-execution").performClick()
         compose.onNodeWithText(explanation).assertIsDisplayed()
         compose.onNodeWithText("Partial execution evidence").assertIsDisplayed()
+    }
+    @Test fun internalBundledSkillActivityUsesGenericName() {
+        val internal = SkillRepository.get(compose.activity).also { it.refresh() }.skills.value
+            .first { SkillRepository.isInternalBundledSkill(it) }
+        val internalActivity = ToolActivity("event-internal", "execution-internal", "call", "read_skill",
+            "Read Skill", internal.metadata.id, internal.metadata.name, "tool_call", "", "", "", "workspace", 1)
+        var state by mutableStateOf(internalActivity)
+        compose.setContent { MaterialTheme { ToolActivityLine(state) } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loading_generic)).assertIsDisplayed()
+        compose.onNodeWithText(internal.metadata.name).assertDoesNotExist()
+        compose.onNodeWithText(internal.metadata.id).assertDoesNotExist()
+        compose.runOnIdle { state = internalActivity.event("tool_result", "Loaded", "") }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
+        compose.onNodeWithText(internal.metadata.name).assertDoesNotExist()
     }
     @Test fun botStatusOnlyChangeMarksPendingOperationUnconfirmed() {
         val messages=listOf(local(activity()));var value by mutableStateOf(snapshot(messages=messages))

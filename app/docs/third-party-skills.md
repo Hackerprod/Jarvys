@@ -11,10 +11,9 @@ Se incluyeron **31 skills `SKILL.md` y 22 Markdown categóricos (53 en total)**.
 ## Cambios de conversión y alcance
 
 - Cada skill usa frontmatter Jarvys permitido: `id`, `name`, `description`, `version: 1` y `tags`; el directorio coincide con `id`. Todos incluyen la etiqueta `internal`, sin añadir claves al parser ni habilitar herramientas inexistentes.
-- Se conservaron los cuerpos. Se sustituyó el frontmatter upstream (incluidos `category`, `applies-to` y `version` upstream); los ficheros categóricos perdieron su tabla de plataformas (`Works With`) y los ejemplos atribuidos a Claude se atribuyeron al asistente. Algunas afirmaciones sobre capacidades se expresaron en función de si hay runtime/herramientas disponibles.
+- Se conservaron los cuerpos. Se sustituyó el frontmatter upstream (incluidos `category`, `applies-to` y `version` upstream); los ficheros categóricos perdieron su tabla de plataformas (`Works With`) y los ejemplos atribuidos a Claude se atribuyeron al asistente.
 - Los enlaces relativos entre skills apuntan a ids Jarvys. No se empaquetaron `agents/` ni `references/`: ningún skill necesita un agente de referencia y los cuatro checklists referenciados son material auxiliar; las instrucciones del skill siguen completas sin ellos. Se retiraron esas referencias a archivos que no se distribuyen.
 - Se quitaron 22 caracteres U+200B en ocho ficheros categóricos; estaban únicamente junto a fences para proteger ejemplos Markdown anidados y no contenían instrucciones. No se detectaron comentarios HTML.
-- `production-deployment` conserva sus pasos, con una nota que exige autorización explícita del usuario y las aprobaciones vigentes antes de ejecutar un deploy o rollback.
 
 ## Auditoría de seguridad por skill
 
@@ -35,11 +34,11 @@ Se leyó cada archivo completo. No se encontraron instrucciones de exfiltración
 | Data Storyteller (`skills/data/data-storyteller.md`) | `com.jarvys.data-data-storyteller` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
 | SQL Query Optimizer (`skills/data/sql-query-optimizer.md`) | `com.jarvys.data-sql-query-optimizer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
 | Debugging Methodology (`skills/debugging-methodology/SKILL.md`) | `com.jarvys.debugging-methodology` | modificado | referencias a skills convertidas a ids Jarvys |
-| API Designer (`skills/developer/api-designer.md`) | `com.jarvys.developer-api-designer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado; límites de herramientas expresados condicionalmente |
-| Bug Hunter (`skills/developer/bug-hunter.md`) | `com.jarvys.developer-bug-hunter` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado; límites de herramientas expresados condicionalmente |
-| Code Reviewer (`skills/developer/code-reviewer.md`) | `com.jarvys.developer-code-reviewer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; límites de herramientas expresados condicionalmente |
+| API Designer (`skills/developer/api-designer.md`) | `com.jarvys.developer-api-designer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
+| Bug Hunter (`skills/developer/bug-hunter.md`) | `com.jarvys.developer-bug-hunter` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
+| Code Reviewer (`skills/developer/code-reviewer.md`) | `com.jarvys.developer-code-reviewer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | Git Commit Crafter (`skills/developer/git-commit-crafter.md`) | `com.jarvys.developer-git-commit-crafter` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
-| Regex Wizard (`skills/developer/regex-wizard.md`) | `com.jarvys.developer-regex-wizard` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; límites de herramientas expresados condicionalmente |
+| Regex Wizard (`skills/developer/regex-wizard.md`) | `com.jarvys.developer-regex-wizard` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | CI/CD Pipeline Builder (`skills/devops/cicd-pipeline-builder.md`) | `com.jarvys.devops-cicd-pipeline-builder` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | Dockerfile Optimizer (`skills/devops/dockerfile-optimizer.md`) | `com.jarvys.devops-dockerfile-optimizer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
 | Documentation (`skills/documentation/SKILL.md`) | `com.jarvys.documentation` | modificado | referencias a skills convertidas a ids Jarvys |
@@ -55,7 +54,7 @@ Se leyó cada archivo completo. No se encontraron instrucciones de exfiltración
 | Multi-Agent Orchestration (`skills/multi-agent-orchestration/SKILL.md`) | `com.jarvys.multi-agent-orchestration` | modificado | referencias a skills convertidas a ids Jarvys |
 | Observability (`skills/observability/SKILL.md`) | `com.jarvys.observability` | modificado | referencias a skills convertidas a ids Jarvys |
 | Performance Optimization (`skills/performance-optimization/SKILL.md`) | `com.jarvys.performance-optimization` | modificado | referencias a skills convertidas a ids Jarvys; enlace a checklist auxiliar no incluida retirado |
-| Production Deployment (`skills/production-deployment/SKILL.md`) | `com.jarvys.production-deployment` | modificado | referencias a skills convertidas a ids Jarvys; enlace a checklist auxiliar no incluida retirado; deploy/rollback requieren autorización explícita y aprobaciones vigentes |
+| Production Deployment (`skills/production-deployment/SKILL.md`) | `com.jarvys.production-deployment` | modificado | referencias a skills convertidas a ids Jarvys; enlace a checklist auxiliar no incluida retirado |
 | Email Diplomat (`skills/productivity/email-diplomat.md`) | `com.jarvys.productivity-email-diplomat` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | Learning Path Generator (`skills/productivity/learning-path-generator.md`) | `com.jarvys.productivity-learning-path-generator` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | Meeting Summarizer (`skills/productivity/meeting-summarizer.md`) | `com.jarvys.productivity-meeting-summarizer` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
@@ -63,8 +62,8 @@ Se leyó cada archivo completo. No se encontraron instrucciones de exfiltración
 | RAG and Memory (`skills/rag-and-memory/SKILL.md`) | `com.jarvys.rag-and-memory` | modificado | referencias a skills convertidas a ids Jarvys |
 | Refactoring (`skills/refactoring/SKILL.md`) | `com.jarvys.refactoring` | modificado | referencias a skills convertidas a ids Jarvys |
 | Research And Summarize (`skills/research-and-summarize/SKILL.md`) | `com.jarvys.research-and-summarize` | modificado | referencias a skills convertidas a ids Jarvys |
-| Dependency Auditor (`skills/security/dependency-auditor.md`) | `com.jarvys.security-dependency-auditor` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; límites de herramientas expresados condicionalmente |
-| Security Headers Checker (`skills/security/security-headers-checker.md`) | `com.jarvys.security-security-headers-checker` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado; límites de herramientas expresados condicionalmente |
+| Dependency Auditor (`skills/security/dependency-auditor.md`) | `com.jarvys.security-dependency-auditor` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
+| Security Headers Checker (`skills/security/security-headers-checker.md`) | `com.jarvys.security-security-headers-checker` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant; U+200B solo junto a fences; retirado |
 | Threat Modeler (`skills/security/threat-modeler.md`) | `com.jarvys.security-threat-modeler` | modificado | metadata de plataforma retirado; ejemplos etiquetados como Assistant |
 | Security Hardening (`skills/security-hardening/SKILL.md`) | `com.jarvys.security-hardening` | modificado | referencias a skills convertidas a ids Jarvys; enlace a checklist auxiliar no incluida retirado |
 | Simplicity First (`skills/simplicity-first/SKILL.md`) | `com.jarvys.simplicity-first` | modificado | referencias a skills convertidas a ids Jarvys |
@@ -78,22 +77,25 @@ Se leyó cada archivo completo. No se encontraron instrucciones de exfiltración
 
 ## Coste de metadata por turno
 
-Medición del catálogo de assets, comparando `HEAD` con esta incorporación y usando el serializador de `CoreAgentRuntime.skillCatalog()` y el presupuesto estándar existente. Se excluye `com.jarvys.apk-factory` del chat principal porque `SkillScopePolicy` lo reserva para Coding. La estimación de tokens es caracteres/4; los tokenizadores de los proveedores pueden variar.
+Medición source-level del texto variable de descripciones y enumeraciones. Los deltas comparan el árbol inicial `5bcad55` con `343d9e2`, y la corrección final con ese mismo baseline. No incluyen el esquema fijo JSON de cada herramienta ni skills importadas del usuario.
 
-| Destino | Antes | Después | Incremento estimado |
-|---|---:|---:|---:|
-| Catálogo del chat principal/captain | 720 caracteres, 726 bytes (4 de 4 entradas) | 7.001 caracteres, 7.011 bytes (40 entradas: las 4 previas y 36 internas) | 6.281 caracteres, 6.285 bytes, ~1.571 tokens |
-| Descripción de `read_skill` del chat principal, con IDs disponibles | 161 caracteres | 1.969 caracteres | 1.808 caracteres, ~452 tokens |
-| `read_skill` en un bot/worker sin lista previa | sin herramienta | 1.877 caracteres en la descripción, 53 IDs internos | 2.116 caracteres contando la instrucción de uso/trust, ~529 tokens |
-| `read_skill` del perfil Coding | 221 caracteres, con APK Factory | 2.029 caracteres en la descripción, con APK Factory y 53 IDs internos | 2.047 caracteres contando la instrucción de uso/trust, ~512 tokens |
+| Componente | `5bcad55` vs. `343d9e2` | Corrección final vs. `343d9e2` |
+|---|---:|---:|
+| Metadata del catálogo del chat principal | +6.285 caracteres | 0 |
+| IDs de `read_skill` en el chat principal | +1.808 caracteres | +1.808 caracteres |
+| IDs de `delegate_subtask` | +1.808 caracteres | 0 |
+| Enum `skill_ids` de `create_bot` | +1.861 caracteres | 0 |
+| Encabezado del catálogo | -13 caracteres | -13 caracteres |
+| **Total chat principal** | **+11.749 caracteres** | **+1.795 caracteres** |
+| IDs de `read_skill` por worker de Crew | +1.808 caracteres | +1.808 caracteres |
 
-Los workers de bots no reciben el catálogo descriptivo de `skillCatalog()`; reciben los IDs del `read_skill` declarado y cargan el cuerpo bajo demanda. El runtime ahora une las skills internas habilitadas por `SkillScopePolicy` a las seleccionadas por el perfil y declara `read_skill` cuando esa lista no está vacía, incluso si el perfil no lo había seleccionado. Las 53 skills quedan disponibles a todos los perfiles compatibles con su scope. El listado del chat principal mantiene su límite existente de 40 entradas y 10 KiB: 17 descripciones internas quedan fuera de ese catálogo, pero sus IDs siguen presentes en `read_skill`.
+La corrección deja las descripciones de las 53 skills internas fuera del catálogo del chat. El catálogo mantiene sus presupuestos existentes de 40 entradas y 10 KiB; `read_skill` conserva los IDs internos en su descripción para que el modelo los pueda cargar. La enumeración de `delegate_subtask` y el enum de `create_bot` omiten esos IDs, y los hijos reciben las skills internas mediante el tag y el scope de ejecución.
 
-En el chat principal, catálogo y descripción de `read_skill` suman **8.089 caracteres adicionales** (~2.023 tokens estimados) por turno; en un worker nuevo, IDs y pauta de confianza suman **2.116 caracteres** (~529 tokens estimados). Son medidas del texto variable, sin la estructura fija del esquema JSON de herramientas.
+Cada worker de Crew recibe los IDs internos en la descripción de `read_skill`; no recibe el catálogo de metadatos del chat principal. Las tareas programadas conservan los IDs en su scope persistido porque el procesador los usa para reconstruir `read_skill` y la búsqueda de skills; no se enumeran en el descriptor de `schedule_task`.
 
-El coste es significativo. Se eligió compactar solo la metadata interna omitiendo el nombre redundante y ordenar primero las entradas ya existentes. Así se conserva la metadata previa y no se añade otro tope ni cambia el contenido de las instrucciones; `read_skill` incluye el nombre completo en el encabezado del cuerpo cargado. Para el ajuste anterior, los 40 elementos habrían sido las primeras coincidencias alfabéticas y habrían desplazado `Skill Workshop`.
+El cambio neto esperado es aproximadamente **+1,8k caracteres por turno del chat principal** y **+1,8k por worker de Crew** frente a `343d9e2`, sin cambiar límites numéricos existentes.
 
-Los 53 `SKILL.md` nuevos pesan **208.144 bytes** (`wc -c`); el aviso MIT añade **1.094 bytes**, para **209.238 bytes de assets añadidos** antes de compresión APK. La comparación `FullDebug` sin firmar desde el mismo commit base da **46.599.460 → 46.712.448 bytes**, un crecimiento de **112.988 bytes** (110,3 KiB; 0,24 %), incluyendo assets comprimidos y los cambios de runtime.
+Los 53 `SKILL.md` nuevos pesan **207.296 bytes** (`wc -c`); el aviso MIT añade **1.094 bytes**, para **208.390 bytes de assets añadidos** antes de compresión APK.
 
 ## Registro de prepublicación
 

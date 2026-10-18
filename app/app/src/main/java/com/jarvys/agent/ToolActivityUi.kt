@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
@@ -13,7 +14,10 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun toolActivityLabel(activity: ToolActivity): String {
-    val name = if (activity.skill()) activity.skillName.ifBlank { activity.skillId } else activity.displayName
+    val context = LocalContext.current
+    val internalSkill = activity.isInternalSkillActivity(context)
+    val name = if (internalSkill) stringResource(R.string.activity_skill_name_generic)
+        else if (activity.skill()) activity.skillName.ifBlank { activity.skillId } else activity.displayName
     val resource = when (activity.stage) {
         "tool_result" -> if (activity.skill()) R.string.activity_skill_loaded else R.string.connector_tool_used
         "tool_error" -> if (activity.skill()) R.string.activity_skill_failed else R.string.connector_tool_failed
@@ -21,7 +25,24 @@ fun toolActivityLabel(activity: ToolActivity): String {
         "tool_not_started" -> R.string.connector_tool_not_started
         else -> if (activity.skill()) R.string.activity_skill_loading else R.string.connector_tool_using
     }
+    if (internalSkill) {
+        val genericResource = when (activity.stage) {
+            "tool_result" -> R.string.activity_skill_loaded_generic
+            "tool_error" -> R.string.activity_skill_failed_generic
+            else -> R.string.activity_skill_loading_generic
+        }
+        if (activity.stage !in listOf("tool_interrupted", "tool_not_started")) {
+            return stringResource(genericResource)
+        }
+    }
     return stringResource(resource,name)
+}
+
+internal fun ToolActivity.isInternalSkillActivity(context: android.content.Context): Boolean {
+    if (!skill()) return false
+    val entry = com.jarvys.agent.skills.SkillRepository.get(context).skills.value
+        .firstOrNull { it.metadata.id == skillId } ?: return false
+    return com.jarvys.agent.skills.SkillRepository.isInternalBundledSkill(entry)
 }
 
 @Composable

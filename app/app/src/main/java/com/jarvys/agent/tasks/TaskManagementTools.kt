@@ -89,6 +89,7 @@ class TaskManagementTools @JvmOverloads constructor(
         val candidate = ScheduledTask(name = name.trim(), instruction = instruction.trim(), schedule = schedule,
             timePrecision = TaskTimePrecision.APPROXIMATE, validUntil = validUntil,
             deleteAfterRun = deleteAfterRun,
+            // Scheduled runs rebuild read_skill and skill search from this saved skill ceiling.
             toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, writes, creatorMemoryAllowed,
                 if ("read_skill" in allowedCreatorTools) creatorSkillIds.distinct().sorted() else emptyList()),
             delivery = delivery,

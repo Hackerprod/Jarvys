@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillRepository;
 import com.jarvys.agent.skills.SkillScopePolicy;
 
 import java.util.Collection;
@@ -69,7 +70,9 @@ public final class LoadSkillTool implements CoreTool {
     }
 
     @Override public String activitySkillName(Map<String, Object> arguments) {
-        return displaySkillName(activitySkillId(arguments));
+        String id = activitySkillId(arguments);
+        SkillEntry skill = skills.get(id);
+        return skill != null && SkillRepository.isInternalBundledSkill(skill) ? "" : displaySkillName(id);
     }
 
     @Override public ToolSpec declaration() { return declaration; }

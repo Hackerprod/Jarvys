@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillRepository;
 import com.jarvys.agent.skills.SkillScopePolicy;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -60,7 +61,9 @@ public final class DelegateSubtaskTool implements CoreTool {
     this.availableTools = Collections.unmodifiableList(transferableTools);
     List<String> ids = new ArrayList<>();
     for (SkillEntry skill : this.skillEntries) {
-      ids.add(skill.getMetadata().getId());
+      if (!SkillRepository.isInternalBundledSkill(skill)) {
+        ids.add(skill.getMetadata().getId());
+      }
     }
     this.availableSkills = Collections.unmodifiableList(ids);
     Map<String, String> properties = new LinkedHashMap<>();
@@ -165,7 +168,8 @@ public final class DelegateSubtaskTool implements CoreTool {
     CoreTool skillTool = handlers.get("read_skill");
     if (skillTool instanceof LoadSkillTool) {
       for (SkillEntry skill : ((LoadSkillTool) skillTool).availableSkills()) {
-        if (this.availableSkills.contains(skill.getMetadata().getId())) {
+        if (this.availableSkills.contains(skill.getMetadata().getId())
+            || SkillRepository.isInternalBundledSkill(skill)) {
           selectedSkills.add(skill);
         }
       }
