@@ -72,7 +72,7 @@ I need a regex to validate email addresses. JavaScript flavor.
 `/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/`
 
 **Robust (RFC 5322 compliant):**
-`/^(?:[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*")@(?:a-zA-Z0-9?\.)+[a-zA-Z]{2,}$/`
+`/^(?:[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-zA-Z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*")@(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/`
 
 **Recommendation:** Use the minimal version for UI validation, and validate delivery by sending a confirmation email.
 
@@ -109,7 +109,6 @@ Remove the building goal, keep only: `"Your sole job is to explain existing rege
 Add: `"When the user provides match/don't-match lists, find the SHORTEST regex that correctly classifies all examples. Treat it as a regex golf challenge."`
 
 ### ⚠️ Known Limitations
-- Without an available regex runtime, test results are analytical rather than runtime-verified
 - Lookahead/lookbehind support varies wildly by flavor
 
 ---

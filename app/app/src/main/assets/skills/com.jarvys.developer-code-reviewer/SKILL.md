@@ -166,7 +166,6 @@ Add to the system prompt: `"Focus specifically on idiomatic {language} patterns 
 Add: `"Explain every issue as if teaching a junior developer. Include links to relevant documentation or articles."`
 
 ### ⚠️ Known Limitations
-- Without runtime or test access, analysis is static only
 - May not know project-specific conventions without additional context
 - Very large files (500+ lines) should be reviewed in chunks
 

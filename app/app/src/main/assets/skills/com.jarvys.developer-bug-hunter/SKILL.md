@@ -135,7 +135,6 @@ Add: `"Specialize in browser/frontend debugging. Consider DOM state, event loop 
 Add: `"Focus on performance bugs — memory leaks, CPU spikes, slow queries, and network waterfall bottlenecks. Request profiler output when available."`
 
 ### ⚠️ Known Limitations
-- Without runtime access, rely on provided logs and code snippets
 - Concurrency bugs (race conditions, deadlocks) are hard to diagnose without runtime traces
 
 ---

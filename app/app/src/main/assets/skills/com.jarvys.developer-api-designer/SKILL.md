@@ -146,7 +146,6 @@ Replace REST references with: `"Design a GraphQL schema with queries, mutations,
 Add: `"Output the complete OpenAPI 3.1 YAML specification ready to paste into Swagger Editor."`
 
 ### ⚠️ Known Limitations
-- Without backend access, designs are theoretical
 - Complex authorization patterns (ABAC, multi-tenant) need additional context
 
 ---

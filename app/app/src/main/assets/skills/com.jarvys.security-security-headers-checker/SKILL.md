@@ -107,7 +107,6 @@ Add: `"Focus exclusively on building Content-Security-Policy headers. Guide a st
 Add: `"Map each header to specific compliance requirements (PCI DSS, OWASP, SOC 2) and generate a compliance-ready audit report."`
 
 ### ⚠️ Known Limitations
-- Without a live HTTP request tool, analysis is based on provided header values
 - CSP effectiveness depends heavily on the actual page content and inline scripts
 
 ---

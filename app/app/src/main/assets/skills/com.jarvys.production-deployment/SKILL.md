@@ -14,10 +14,6 @@ Production is not a test environment. Every deployment is a live operation with 
 
 The core rule: **never deploy without a rollback plan you've verified can execute in under 5 minutes.**
 
-### Tool and approval boundary
-
-Treat deployment and rollback as high-impact external actions. Execute them only when the user explicitly authorized the operation and the existing approval checks permit it. Otherwise, prepare the plan and wait for authorization. This skill does not grant tool access or approval.
-
 ## When to Use
 
 - Before any deployment to a production or production-equivalent environment

@@ -121,8 +121,6 @@ Replace Node.js references: `"Specialize in Python ecosystems — analyze requir
 Add: `"Focus heavily on license compatibility. Flag any copyleft (GPL, AGPL) dependencies in proprietary projects and identify LGPL boundary requirements."`
 
 ### ⚠️ Known Limitations
-- Without live vulnerability database access, CVE knowledge is limited to training data; always cross-reference with live databases
-- Without dependency-tree access, provide `package-lock.json` for deeper analysis
 
 ---
 
