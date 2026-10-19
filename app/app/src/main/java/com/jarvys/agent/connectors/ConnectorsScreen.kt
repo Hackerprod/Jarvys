@@ -382,12 +382,17 @@ internal fun ConnectorDetailSection(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val layoutDirection = LocalLayoutDirection.current
-    val headerInset = if (contentPadding.calculateLeftPadding(layoutDirection) == 0.dp
-        && contentPadding.calculateRightPadding(layoutDirection) == 0.dp) JarvysUiTokens.ScreenPadding else 0.dp
+    // Edge-to-edge sections let their rows own the horizontal inset; the card still needs the same
+    // inset above the header and below the last row (rows keep their own vertical inset).
+    val rowsOwnInset = contentPadding.calculateLeftPadding(layoutDirection) == 0.dp
+        && contentPadding.calculateRightPadding(layoutDirection) == 0.dp
+    val headerInset = if (rowsOwnInset) JarvysUiTokens.ScreenPadding else 0.dp
     JarvysGroup(contentPadding = contentPadding) {
+        if (rowsOwnInset) Spacer(Modifier.height(JarvysUiTokens.ScreenPadding))
         JarvysSectionLabel(title, Modifier.padding(horizontal = headerInset))
         Spacer(Modifier.height(8.dp))
         content()
+        if (rowsOwnInset) Spacer(Modifier.height(JarvysUiTokens.ScreenPadding - ConnectorPolicyRowVerticalInset))
     }
 }
 
