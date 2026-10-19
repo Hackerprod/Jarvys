@@ -448,6 +448,7 @@
     <string name="crew_type_answer">Answer</string>
     <string name="crew_type_result">Result</string>
     <string name="crew_type_status">Status</string>
+    <string name="crew_type_progress">Progress</string>
     <string name="crew_type_user">You</string>
     <string name="crew_empty_title">No crew mission yet</string>
     <string name="crew_empty_body">Set Crew to Auto or Always, then ask Jarvys to coordinate a task.</string>
@@ -1389,6 +1390,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_download_open_failed">The file could not be opened. If it was saved, you can find it in Downloads.</string>
     <string name="chat_download_retry">The download could not be confirmed. Check Downloads before trying again.</string>
     <string name="chat_download_open">Open</string>
+    <string name="chat_dialog_close">Close</string>
     <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
     <string name="chat_download_open_failed_title">Could not open the file</string>
     <string name="github_device_error_client">GitHub rejected this app client ID. The app owner must verify the OAuth App configuration.</string>

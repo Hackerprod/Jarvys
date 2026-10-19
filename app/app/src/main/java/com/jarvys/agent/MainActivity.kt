@@ -1805,6 +1805,7 @@ private fun JarvysApp(
         }
     }
     val workspaceRevision by WorkspaceChanges.revision.collectAsState()
+    val workspaceCatalogRevision by WorkspaceChanges.catalogRevision.collectAsState()
     var workspaceRows by remember { mutableStateOf(emptyList<WorkspaceSidebarRow>()) }
     var workspaceAfter by rememberSaveable { mutableStateOf<String?>(null) }
     var workspacePageHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -1812,7 +1813,7 @@ private fun JarvysApp(
     var workspaceLoading by remember { mutableStateOf(true) }
     var workspaceError by remember { mutableStateOf<String?>(null) }
     var workspaceReload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(workspaceRevision, workspaceAfter, workspaceReload) {
+    LaunchedEffect(workspaceCatalogRevision, workspaceAfter, workspaceReload) {
         workspaceLoading = true; workspaceError = null; workspaceNext = null; workspaceRows = emptyList()
         try {
             val page = withContext(workspaceProjectionDispatcher) {

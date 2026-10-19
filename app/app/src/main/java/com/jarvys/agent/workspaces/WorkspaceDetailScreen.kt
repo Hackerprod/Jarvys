@@ -47,7 +47,7 @@ fun WorkspaceDetailScreen(
     val workspaceRunning = crewRunning || state.status in setOf(
         WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
         WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING,
-    ) || sessionSnapshot?.running == true
+    )
     val timelineSnapshot = (sessionSnapshot ?: AgentRunUiSnapshot(sessionId = state.executionSessionId))
         .copy(events = events, running = workspaceRunning)
     Box(modifier.fillMaxSize().testTag("workspace-chat-timeline")) {
@@ -97,6 +97,7 @@ fun WorkspaceDetailScreen(
                 reflectionStatus = sessionSnapshot?.reflectionStatus,
                 onOpenCrewMission = onOpenCrewMission,
                 runSnapshot = timelineSnapshot,
+                showAssistantProgress = true,
                 assistantReplyCapabilities = AssistantReplyCapabilities.Workspace,
                 allowMessageEntrance = sessionSnapshot != null,
             )

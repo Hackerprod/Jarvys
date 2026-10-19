@@ -30,8 +30,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
@@ -869,11 +869,12 @@ private fun ConnectorActivityLine(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolGroupLine(
+internal fun ToolGroupLine(
     group: ConversationTimelineItem.ToolGroup,
     registry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val context = LocalContext.current
     val summary = when {
@@ -905,6 +906,7 @@ private fun ToolGroupLine(
     }
     if (expanded) ModalBottomSheet(
         onDismissRequest = { expanded = false },
+        modifier = Modifier.testTag("tool-group-sheet-${group.firstEventId}"),
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
@@ -918,7 +920,9 @@ private fun ToolGroupLine(
                 }
             }
             LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                Modifier.fillMaxWidth().heightIn(max = 560.dp)
+                    .testTag("tool-group-list-${group.firstEventId}"),
+                state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
             ) {

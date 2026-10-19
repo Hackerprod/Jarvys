@@ -448,6 +448,7 @@
     <string name="crew_type_answer">Respuesta</string>
     <string name="crew_type_result">Resultado</string>
     <string name="crew_type_status">Estado</string>
+    <string name="crew_type_progress">Progreso</string>
     <string name="crew_type_user">Tú</string>
     <string name="crew_empty_title">Aún no hay misiones de Crew</string>
     <string name="crew_empty_body">Elige Auto o Siempre y pide a Jarvys coordinar una tarea.</string>
@@ -1389,6 +1390,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_download_open_failed">No se pudo abrir el archivo. Si se guardó, puedes encontrarlo en Descargas.</string>
     <string name="chat_download_retry">No se pudo confirmar la descarga. Revisa Descargas antes de volver a intentarlo.</string>
     <string name="chat_download_open">Abrir</string>
+    <string name="chat_dialog_close">Cerrar</string>
     <string name="chat_file_preview_unavailable">Vista previa no disponible. Descarga o comparte el archivo original.</string>
     <string name="chat_download_open_failed_title">No se pudo abrir el archivo</string>
     <string name="github_device_error_client">GitHub rechazó el ID de cliente de esta app. El propietario debe revisar la configuración de la OAuth App.</string>

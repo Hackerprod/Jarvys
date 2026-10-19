@@ -21,6 +21,10 @@ object WorkspaceProjection {
             val assignments = store.listAssignments(scope.workspaceId, WORKSPACE_PAGE_SIZE)
             val hasMore = assignmentNext(store, scope.workspaceId, assignments) != null
             val snapshots = LocalRunStore(context).readCrewMissionSnapshots(scope.executionSessionId)
+            snapshots.forEach { snapshot ->
+                WorkspaceChanges.observeCatalogSignature(scope.executionSessionId, snapshot.missionId,
+                    WorkspaceCatalogStatusSignature.from(snapshot))
+            }
             // Catalog browsing must never instantiate/configure a Crew runtime for each row.
             val manager = CoreAgentRuntime.crewManagerForSession(scope.executionSessionId)
             val projected = assignments.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }

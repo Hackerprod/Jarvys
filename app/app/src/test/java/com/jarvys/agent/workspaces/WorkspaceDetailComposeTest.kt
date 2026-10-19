@@ -68,6 +68,62 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithText("Recorded result").assertDoesNotExist()
     }
 
+    @Test fun completedWorkspaceDoesNotKeepThinkingOrAnActivePauseWhenItsRunSnapshotIsStale() {
+        val activeWorkspaceId = "22222222-2222-2222-2222-222222222222"
+        val activeSessionId = WorkspaceIdentity.executionSessionId(activeWorkspaceId)
+        val inactiveSessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val activeState = WorkspaceChatUiState(activeWorkspaceId, activeSessionId, "Active workspace",
+            WorkspaceUiStatus.ACTIVE)
+        val inactiveState = WorkspaceChatUiState(workspaceId, inactiveSessionId, "Completed workspace",
+            WorkspaceUiStatus.COMPLETED, listOf(AgentRunUiEvent(30L, "assistant", text = "Saved answer")))
+        val selected = mutableStateOf(activeState)
+        val snapshot = mutableStateOf(AgentRunUiSnapshot(sessionId = activeSessionId, running = true))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
+        compose.setContent { MaterialTheme {
+            val state = selected.value
+            val workspaceActive = state.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
+                WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING)
+            Column(Modifier.fillMaxSize()) {
+                WorkspaceDetailScreen(state = state, runSnapshot = snapshot.value,
+                    connectorRegistry = connectors,
+                    onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {},
+                    modifier = Modifier.weight(1f))
+                com.jarvys.agent.ui.chat.ChatComposer(
+                    goal = "", onGoalChange = {}, onSend = {}, onInterruptAndSend = {},
+                    sendAllowed = false, canInterrupt = false, pendingAttachments = emptyList(),
+                    attachmentSessionId = state.executionSessionId, attachmentSending = false,
+                    onRemoveAttachment = {}, onAttachmentCamera = {}, onAttachmentPhotos = {}, onAttachmentFiles = {},
+                    onStop = {}, onSelectModel = {}, modelLabel = "Model", running = workspaceActive,
+                    captureContextRequested = false, onCaptureContext = {}, onImportSkill = {},
+                    availableSkills = emptyList(), selectedSkillIds = emptySet(), onToggleRunSkill = {},
+                    onManageSkills = {}, skillEnabledCount = 0, skillTotalCount = 0,
+                    crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {},
+                    inputEnabled = true, separateStopAction = true, stopActionEnabled = workspaceActive,
+                    stopActionLabel = "Pause", showModelSelector = false,
+                    showContextActions = false, showMicrophoneButton = false,
+                )
+            }
+        } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertIsDisplayed()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsEnabled()
+        compose.runOnIdle {
+            selected.value = inactiveState
+            // Model a lingering session snapshot after the mission's durable terminal status landed.
+            snapshot.value = AgentRunUiSnapshot(sessionId = inactiveSessionId, events = inactiveState.events,
+                running = true)
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Saved answer", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertDoesNotExist()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
+    }
+
     @Test fun loadingErrorAndEmptyStatesRemainDistinctFromAnEmptyConversation() {
         val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
         val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
@@ -208,8 +264,17 @@ class WorkspaceDetailComposeTest {
             compose.onAllNodesWithContentDescription(copyDescription).fetchSemanticsNodes().size == 2
         }
         compose.onAllNodesWithContentDescription(copyDescription).assertCountEquals(2)
+        compose.waitUntil(10_000) {
+            listOf("First bot update", "Second bot update", "Current bot update").all { text ->
+                compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        val timeline = compose.onNodeWithTag("chat-message-list")
+        timeline.performScrollToNode(hasText("First bot update"))
         compose.onNodeWithText("First bot update").assertIsDisplayed()
+        timeline.performScrollToNode(hasText("Second bot update"))
         compose.onNodeWithText("Second bot update").assertIsDisplayed()
+        timeline.performScrollToNode(hasText("Current bot update"))
         compose.onNodeWithText("Current bot update").assertIsDisplayed()
     }
 }
