@@ -197,7 +197,7 @@ class ConnectorsScreenComposeTest {
         compose.onNodeWithText(title, useUnmergedTree = true).performScrollTo().performClick()
         compose.waitForIdle()
         val disconnect = context.getString(R.string.connector_disconnect)
-        compose.onNodeWithText(disconnect).performClick()
+        compose.onNodeWithText(disconnect).performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithText(context.getString(R.string.connector_disconnect_confirm_title, title)).assertIsDisplayed()
         compose.onAllNodesWithText(disconnect).get(1).performClick()
