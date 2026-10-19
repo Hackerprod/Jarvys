@@ -161,7 +161,6 @@ public final class CrewManager implements AutoCloseable {
         private final AtomicInteger incomingDispatches = new AtomicInteger();
         private volatile long completedCycles;
         private volatile CoreToolRegistry workerTools;
-        private volatile CoreToolRegistry preparedToolsForTesting;
         private volatile CoreAgentLoop loop;
         private volatile List<ConversationTurn> transcript = Collections.emptyList();
         private volatile CoreAgentLoop.Checkpoint checkpoint = CoreAgentLoop.Checkpoint.empty();
@@ -456,7 +455,6 @@ public final class CrewManager implements AutoCloseable {
     private volatile Function<String, CrewRole> profileResolver = (id)->null;
     private volatile List<String> profileCapabilityCeiling = Collections.emptyList();
     private volatile boolean profilesConfigured;
-    private volatile boolean prewarmWorkerToolsForTesting;
     private final AtomicReference<Runnable> unregisterProfiles = new AtomicReference<>(() -> { });
     private final CrewMessageBus bus;
     private final Map<String, Bot> bots = new ConcurrentHashMap<>();
@@ -538,11 +536,9 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private static boolean isChiefInputMessage(CrewMessage message) {
-        if (message == null || !"chief".equals(message.to) || message.activity != null) return false;
-        switch (message.type) {
-            case RESULT: case QUESTION: case BLOCKER: case MESSAGE: return true;
-            default: return false;
-        }
+        // Every content-bearing worker message addressed to the captain is conversation input.
+        // Activity rows and shared board notes have their own presentation/storage paths.
+        return message != null && "chief".equals(message.to) && message.activity == null;
     }
 
     /**
@@ -787,7 +783,7 @@ public final class CrewManager implements AutoCloseable {
         boolean completedCycle = request != null && bots.get(bot.id) == bot && bot.token == request.token
                 && bot.cycleId().equals(evidence.cycleId) && bot.status == Status.DONE
                 && !bot.requiresExplicitResume && !bot.stopping && !bot.definitionDisabled
-                && !request.token.isCancellationRequested();
+                && !request.token.isCancellationRequested() && bot.hasDurableCheckpoint();
         return coordinationEvidenceListener != null && request != null && request.valid && request.active && !request.claimed
                 && conversationId.equals(evidence.conversationId) && bot.missionId.equals(evidence.missionId)
                 && bot.id.equals(evidence.botId) && evidence.isReplyableKind()
@@ -1335,8 +1331,6 @@ public final class CrewManager implements AutoCloseable {
     /** Starts a deferred worker after its workspace assignment is durably bound. */
     public void startPreparedForMission(Bot bot) {
         if (bot == null) throw new IllegalArgumentException("Prepared worker is required");
-        if (prewarmWorkerToolsForTesting && bot.preparedToolsForTesting == null)
-            prepareWorkerToolsForTesting(bot);
         synchronized (bot.cycleLock) {
             if (bots.get(bot.id) != bot || !bot.cycleScheduled || bot.status != Status.QUEUED
                     || bot.initialStartSubmitted || bot.thread != null)
@@ -1357,27 +1351,6 @@ public final class CrewManager implements AutoCloseable {
                 publishPresentation(bot.missionId);
             }
             throw admissionFailure;
-        }
-    }
-
-    /** Test seam: build the configured production worker tool registry on Robolectric's test thread. */
-    public void enableWorkerToolPrewarmForTesting() {
-        prewarmWorkerToolsForTesting = true;
-    }
-
-    private void prepareWorkerToolsForTesting(Bot bot) {
-        synchronized (bot.cycleLock) {
-            if (bots.get(bot.id) != bot || !bot.cycleScheduled || bot.status != Status.QUEUED
-                    || bot.initialStartSubmitted || bot.thread != null)
-                throw new IllegalStateException("Worker tools can only be prepared before the initial mission start");
-            if (bot.preparedToolsForTesting != null) return;
-        }
-        CoreToolRegistry prepared = toolFactory.create(bot, this);
-        synchronized (bot.cycleLock) {
-            if (bots.get(bot.id) != bot || !bot.cycleScheduled || bot.status != Status.QUEUED
-                    || bot.initialStartSubmitted || bot.thread != null)
-                throw new IllegalStateException("Worker changed while test tools were being prepared");
-            bot.preparedToolsForTesting = prepared;
         }
     }
 
@@ -1522,9 +1495,7 @@ public final class CrewManager implements AutoCloseable {
             lifecycle.start(bot);
             lifecycleStarted = true;
             if (loop == null) {
-                CoreToolRegistry tools = bot.preparedToolsForTesting;
-                bot.preparedToolsForTesting = null;
-                if (tools == null) tools = toolFactory.create(bot, this);
+                CoreToolRegistry tools = toolFactory.create(bot, this);
                 bot.workerTools = tools;
                 // Restore pending durable messages once when a loop is attached. New admissions
                 // enter this same queue from the bus listener and are also offered directly to
@@ -1889,10 +1860,45 @@ public final class CrewManager implements AutoCloseable {
         if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
         if (sender != null && recipient == null && coordinationEvidenceListener != null && coordinationKind(type))
             return produceCoordination(sender, sender.token, type, text, refs, false);
-        CrewMessage message = dispatch(recipient, from, to, type, text, refs, false);
+        CrewMessage correlatedAnswer = null;
+        if ("chief".equals(from) && recipient != null && type == CrewMessage.Type.ANSWER)
+            correlatedAnswer = correlateChiefAnswer(recipient, text, refs);
+        CrewMessage message = dispatch(recipient, from, to, type, text, refs, false, correlatedAnswer);
         if (sender != null) publishMission(sender.missionId);
         if (recipient != null && (sender == null || !recipient.missionId.equals(sender.missionId))) publishMission(recipient.missionId);
         return message;
+    }
+
+    /** Correlates a captain answer to its exact outstanding question before ordinary admission. */
+    private CrewMessage correlateChiefAnswer(Bot recipient, String text, List<String> refs) {
+        List<String> references = refs == null ? Collections.emptyList() : refs;
+        synchronized (recipient.cycleLock) {
+            CoordinationRequest solePending = null;
+            int pendingCount = 0;
+            for (CoordinationRequest request : recipient.coordinationRequests.values()) {
+                CrewCoordinationEvidence evidence = request.evidence;
+                if (request.valid && request.active && !request.claimed && recipient.token == request.token
+                        && recipient.cycleId().equals(evidence.cycleId)) {
+                    pendingCount++;
+                    solePending = request;
+                    if (references.contains(evidence.messageId)) return claimCorrelatedAnswer(recipient, text, references, request);
+                }
+            }
+            // A direct answer addressed to the sole worker currently blocked in ask_chief is
+            // unambiguous. Attach the same question reference used by the exact workspace route.
+            if (references.isEmpty() && pendingCount == 1)
+                return claimCorrelatedAnswer(recipient, text, references, solePending);
+        }
+        return null;
+    }
+
+    private CrewMessage claimCorrelatedAnswer(Bot recipient, String text, List<String> refs,
+            CoordinationRequest request) {
+        request.claimed = true;
+        request.active = false;
+        CrewMessage answer = new CrewMessage(conversationId, "chief", recipient.id,
+                CrewMessage.Type.ANSWER, text, refs, System.currentTimeMillis());
+        return answer.withCoordination(request.evidence);
     }
 
     public CrewMessage sendFromWorker(Bot bot, CancellationToken expectedToken, String to,
@@ -1966,8 +1972,10 @@ public final class CrewManager implements AutoCloseable {
                 if (alreadyQueued && (bot.status == Status.QUEUED || bot.status == Status.RUNNING
                         || bot.status == Status.WAITING)) {
                     if (finalAdmission != null) finalAdmission.run();
-                    if (!persistCheckpoint(bot))
-                        throw new IllegalStateException("Existing supervisor message is not yet checkpoint-durable");
+                    // The queue entry can only be present on this path after a durable initial
+                    // admission or restoration from a durable checkpoint. Rewriting the live
+                    // worker checkpoint for an exact duplicate races the model loop and can
+                    // block its active tool/model boundary; return the already committed receipt.
                     return existing;
                 }
                 // A crash can leave the durable mailbox row present but the run unstarted. Reuse
@@ -2197,25 +2205,35 @@ public final class CrewManager implements AutoCloseable {
                 synchronized (bot.cycleLock) {
                     if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
                     expectedToken.throwIfCancelled();
+                    if (!liveCoordinationCycle(bot, expectedToken, bot.cycleId())) return false;
                     bot.status = Status.WAITING;
                     bot.waitingReason = "respuesta del capitán";
-                    questionMessage = bus.enqueueFresh(new CrewMessage(conversationId, bot.id, "chief",
-                            CrewMessage.Type.QUESTION, question, Collections.emptyList(), System.currentTimeMillis()));
+                    CrewMessage plainQuestion = new CrewMessage(conversationId, bot.id, "chief",
+                            CrewMessage.Type.QUESTION, question, Collections.emptyList(), System.currentTimeMillis());
+                    CrewCoordinationEvidence evidence = CrewCoordinationEvidence.create(conversationId,
+                            bot.missionId, bot.id, bot.cycleId(), plainQuestion.id, CrewMessage.Type.QUESTION.name(),
+                            plainQuestion.text, plainQuestion.refs, plainQuestion.timestampMillis);
+                    questionMessage = plainQuestion.withCoordination(evidence);
+                    request = new CoordinationRequest(evidence, expectedToken);
+                    request.active = true;
+                    bot.coordinationRequests.put(evidence.evidenceId, request);
+                    bus.enqueueFresh(questionMessage);
                 }
                 publishBotConversationMessage(bot, questionMessage);
+                source = questionMessage;
                 publishMission(bot.missionId);
             }
             final CoordinationRequest pending = request;
-            // Only a chief ANSWER carrying the exact question's durable evidence can satisfy this
-            // wait. Ordinary chief messages and peer messages remain separate incoming evidence.
+            // Only a chief ANSWER carrying this exact question's evidence can satisfy the wait.
+            // Other chief and peer messages remain separate incoming evidence.
             bus.await(bot.id,
-                    message -> exact && isCorrelatedChiefAnswer(bot, pending, message),
-                    () -> exact && !pending.valid, expectedToken);
+                    message -> isCorrelatedChiefAnswer(bot, pending, message),
+                    () -> !pending.valid, expectedToken);
             synchronized (bot.cycleLock) {
-                if (exact && (!pending.valid || !liveCoordinationCycle(bot, expectedToken, pending.evidence.cycleId)))
+                if (!pending.valid || !liveCoordinationCycle(bot, expectedToken, pending.evidence.cycleId))
                     return false;
             }
-            return exact && bus.hasMatching(bot.id,
+            return bus.hasMatching(bot.id,
                     message -> isCorrelatedChiefAnswer(bot, pending, message));
         } finally {
             synchronized (bot.cycleLock) {

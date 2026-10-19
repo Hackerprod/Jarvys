@@ -12,7 +12,7 @@ import org.json.JSONObject;
 public final class ConversationInput {
   public static final String PROVENANCE_PART_KIND = "conversation_input_provenance";
   public enum Origin { USER, AGENT, SYSTEM }
-  public enum Kind { RESULT, BLOCKER, QUESTION, MESSAGE, REPLY, ANSWER, STATUS, FINDING, TASK, CRITIQUE, OTHER }
+  public enum Kind { RESULT, BLOCKER, QUESTION, MESSAGE, REPLY, ANSWER, STATUS, FINDING, TASK, CRITIQUE, PROGRESS, USER, OTHER }
 
   public static final class Provenance {
     /** Runtime-assigned trust principal; message text cannot select or elevate this role. */
@@ -126,7 +126,13 @@ public final class ConversationInput {
   /** Stable across retries and unique to the source session and source message. */
   public String stableId() {
     String source = provenance == null ? conversationId : provenance.sessionId;
-    return "conversation-input-" + sha256(origin.name() + "\u0000" + source + "\u0000" + messageId);
+    return stableId(origin, source, messageId);
+  }
+
+  /** Stable ID for indexed identity lookups when the payload is not otherwise needed. */
+  public static String stableId(Origin origin, String sourceSessionId, String messageId) {
+    return "conversation-input-" + sha256((origin == null ? Origin.USER : origin).name() + "\u0000"
+        + required(sourceSessionId, "source session") + "\u0000" + required(messageId, "message"));
   }
 
   public MessagePartInput provenancePart() {

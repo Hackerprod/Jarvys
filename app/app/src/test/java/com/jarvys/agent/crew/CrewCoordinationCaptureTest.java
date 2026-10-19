@@ -33,6 +33,51 @@ public class CrewCoordinationCaptureTest {
             assertTrue(parked.manager.canReplyToCoordination(seen.get(2)));
         }
     }
+    @Test(timeout=15000) public void everyContentMessageToChiefUsesConversationInputPipeline() throws Exception {
+        try (Parked parked = new Parked()) {
+            CrewManager.Bot sender = parked.manager.spawnForMission("message-types-mission",
+                    "Message type test", "custom", "Send Crew messages", Collections.singletonList("msg_send"),
+                    "Message Sender", CrewMissionAccess.STANDARD, "Message type test");
+            List<CrewMessage> delivered = new ArrayList<>();
+            parked.manager.configureConversationMessageListener((bot, message) -> delivered.add(message));
+            CoreTool msgSend = CrewTools.bot(sender, parked.manager, temporaryBoard()).stream()
+                    .filter(tool -> "msg_send".equals(tool.declaration().name))
+                    .findFirst().orElseThrow(AssertionError::new);
+            for (CrewMessage.Type type : CrewMessage.Type.values()) {
+                int prior = delivered.size();
+                Map<String, Object> arguments = new HashMap<>();
+                arguments.put("to", "chief"); arguments.put("type", type.name());
+                arguments.put("text", "content for " + type);
+                CoreToolResult result = msgSend.execute(arguments, sender.token);
+                assertTrue(result.content, result.success);
+                assertEquals("content for " + type, delivered.get(prior).text);
+                assertEquals(type, delivered.get(prior).type);
+                assertEquals(1, delivered.size() - prior);
+            }
+        }
+    }
+
+    @Test(timeout=15000) public void boardPostWritesSharedNoteWithoutEmittingChiefInput() throws Exception {
+        try (Parked parked = new Parked()) {
+            CrewManager.Bot boardBot = parked.manager.spawnForMission("board-post-mission",
+                    "Board note test", "custom", "Write a board note", Collections.singletonList("board_post"),
+                    "Board Writer", CrewMissionAccess.STANDARD, "Board note test");
+            CrewBoard board = temporaryBoard();
+            List<CrewMessage> delivered = new ArrayList<>();
+            parked.manager.configureConversationMessageListener((bot, message) -> delivered.add(message));
+            CoreTool boardPost = CrewTools.bot(boardBot, parked.manager, board).stream()
+                    .filter(tool -> "board_post".equals(tool.declaration().name))
+                    .findFirst().orElseThrow(AssertionError::new);
+            Map<String, Object> arguments = new HashMap<>();
+            arguments.put("path", "/board/research.md"); arguments.put("content", "A shared note");
+            CoreToolResult result = boardPost.execute(arguments, boardBot.token);
+            assertTrue(result.content, result.success);
+            assertTrue(parked.manager.messageBus().snapshot().stream()
+                    .noneMatch(message -> boardBot.id.equals(message.from) && "chief".equals(message.to)));
+            assertTrue(delivered.isEmpty());
+            assertEquals("A shared note", board.read("/board/research.md"));
+        }
+    }
     @Test(timeout=15000) public void failedPersistencePropagatesWithoutSourceSuccessOrCapability() throws Exception {
         try (Parked parked = new Parked()) {
             AtomicReference<CrewCoordinationEvidence> source = new AtomicReference<>();
@@ -211,7 +256,7 @@ public class CrewCoordinationCaptureTest {
             } finally { release.countDown(); }
         }
     }
-    @Test(timeout=15000) public void legacyBlockingQuestionIgnoresOrdinaryChiefAnswerUntilCancelled() throws Exception {
+    @Test(timeout=15000) public void legacyBlockingQuestionStillAcceptsOrdinaryChiefAnswer() throws Exception {
         try (Parked parked = new Parked()) {
             AtomicReference<Boolean> result = new AtomicReference<>();
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -229,15 +274,17 @@ public class CrewCoordinationCaptureTest {
                         .findFirst().orElseThrow(AssertionError::new);
                 assertEquals("Legacy question", question.text);
                 parked.manager.send("chief", parked.bot.id, CrewMessage.Type.ANSWER,
-                        "ordinary uncorrelated answer", Collections.emptyList());
-                assertFalse("an uncorrelated chief ANSWER cannot finish ask_chief",
-                        answered.await(100, TimeUnit.MILLISECONDS));
-                assertTrue(parked.manager.stop(parked.bot.id));
+                        "ordinary answer", Collections.emptyList());
                 await(answered);
-                assertTrue(failure.get() instanceof java.util.concurrent.CancellationException);
-                assertNull(result.get());
+                if (failure.get() != null) throw new AssertionError(failure.get());
+                assertEquals(Boolean.TRUE, result.get());
+                CrewMessage accepted = parked.manager.messageBus().snapshot().stream()
+                        .filter(message -> "ordinary answer".equals(message.text))
+                        .findFirst().orElseThrow(AssertionError::new);
+                assertNotNull(accepted.coordination);
+                assertEquals(question.id, accepted.coordination.messageId);
                 waiter.join(5000);
-                assertFalse("ask_chief waiter should stop after cancellation", waiter.isAlive());
+                assertFalse("ask_chief waiter should stop after the answer", waiter.isAlive());
             } finally { parked.release.countDown(); }
         }
     }
@@ -354,6 +401,14 @@ public class CrewCoordinationCaptureTest {
     }
     private static CrewMessage answer(CrewManager manager,CrewCoordinationEvidence source,String id,java.util.function.BooleanSupplier admission) {
         return manager.replyToCoordinationExact(source,id,"Generated untrusted guidance",admission);
+    }
+    private static CrewBoard temporaryBoard() throws Exception {
+        java.io.File root = java.nio.file.Files.createTempDirectory("crew-board-note").toFile();
+        java.lang.reflect.Constructor<WorkspaceStore> constructor = WorkspaceStore.class
+                .getDeclaredConstructor(java.io.File.class, String.class);
+        constructor.setAccessible(true);
+        String session = "board-note-" + UUID.randomUUID();
+        return new CrewBoard(constructor.newInstance(root, WorkspaceStore.projectIdForSession(session)));
     }
     private static CrewManager manager(CoreAgentLoop.Model model) {
         return new CrewManager("coordination-chat",EMPTY,(bot,owner)->EMPTY,

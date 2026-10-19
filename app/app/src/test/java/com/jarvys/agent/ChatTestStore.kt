@@ -10,15 +10,18 @@ import org.junit.runner.Description
 import org.junit.runners.model.Statement
 import java.io.File
 import java.util.concurrent.Callable
+import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /** Isolated Room fixture for tests that exercise the LocalRunStore file constructor. */
 class ChatTestStore @JvmOverloads constructor(
     private val runTestOnWorker: Boolean = true,
     private val registerApplicationFilesDirectory: Boolean = false,
+    private val bridgeExecutorFactory: (() -> ExecutorService)? = null,
 ) : TestRule {
     private val temporary = TemporaryFolder()
     private val workerThread = ThreadLocal<Boolean>()
@@ -104,9 +107,39 @@ class ChatTestStore @JvmOverloads constructor(
         val key = files.path
         registeredFilesDirectories.computeIfAbsent(key) {
             val appContext = ApplicationProvider.getApplicationContext<Context>()
-            ChatDatabaseBridge.getInstance(TestFilesContext(appContext, files))
+            val context = TestFilesContext(appContext, files)
+            val bridgeExecutor = bridgeExecutorFactory?.invoke()
+            if (bridgeExecutor == null) ChatDatabaseBridge.getInstance(context)
+            else ChatDatabaseBridge.getInstance(context, bridgeExecutor)
             files
         }
+    }
+
+    companion object {
+        /** Runs Room bridge work inline in tests to avoid a Robolectric background-classloader hop. */
+        @JvmStatic
+        fun directExecutorService(): ExecutorService = object : AbstractExecutorService() {
+            @Volatile private var shutdown = false
+
+            override fun execute(command: Runnable) {
+                check(!shutdown) { "Test database executor is shut down" }
+                command.run()
+            }
+
+            override fun shutdown() { shutdown = true }
+
+            override fun shutdownNow(): MutableList<Runnable> {
+                shutdown = true
+                return mutableListOf()
+            }
+
+            override fun isShutdown(): Boolean = shutdown
+
+            override fun isTerminated(): Boolean = shutdown
+
+            override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = shutdown
+        }
+
     }
 
     private fun closeRegisteredBridges() {

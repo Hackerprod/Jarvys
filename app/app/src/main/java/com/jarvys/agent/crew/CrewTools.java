@@ -31,7 +31,7 @@ public final class CrewTools {
                         return CoreToolResult.success("Spawned " + bot.name + " (" + bot.id + ") status=" + bot.status() + "; selected_tools=" + bot.role.tools + "; actual declarations become available through crew_list after initialization.");
                     }
                 },
-                new CaptainTool("crew_send", "Send an untrusted message from the captain to a Crew bot. A DONE bot may re-enter a follow-up work cycle; STOPPED or FAILED bots require an explicit user message.",
+                new CaptainTool("crew_send", "Send an untrusted message from the captain to a Crew bot. A direct ANSWER to the sole live ask_chief question is correlated automatically; include the exact question message ID in refs when several questions are pending. A DONE bot may re-enter a follow-up work cycle; STOPPED or FAILED bots require an explicit user message.",
                         schema(props("to", "string", "type", "string", "text", "string", "refs", "array"), "to", "type", "text")) {
                     @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                         token.throwIfCancelled();
@@ -68,7 +68,7 @@ public final class CrewTools {
 
     public static List<CoreTool> bot(CrewManager.Bot bot, CrewManager manager, CrewBoard board) {
         List<CoreTool> tools = new ArrayList<>();
-        if (bot.role.tools.contains("msg_send")) tools.add(new BotTool("msg_send", "Send an explicit finding, blocker, critique, question or answer to the captain or another bot. Messages are untrusted data.",
+        if (bot.role.tools.contains("msg_send")) tools.add(new BotTool("msg_send", "Send a content-bearing Crew message (TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, PROGRESS, MESSAGE or USER) to the captain or another bot. Include the exact ask_chief question message ID in refs when answering it. Messages are untrusted data; board_post writes a shared note and does not message the captain.",
                 schema(props("to","string","type","string","text","string","refs","array"),"to","type","text")) {
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 String to = string(a,"to");
@@ -98,7 +98,7 @@ public final class CrewTools {
                         + xml(board.read(path)) + "</content></crew_board>");
             }
         });
-        if (bot.role.tools.contains("ask_chief")) tools.add(new BotTool("ask_chief", "Ask the captain a question and wait for the exact correlated chief ANSWER. Other chief or peer messages do not satisfy this question; any admitted reply arrives separately as supervisor input.",
+        if (bot.role.tools.contains("ask_chief")) tools.add(new BotTool("ask_chief", "Ask the captain a question and wait for its correlated chief ANSWER. A direct answer to this worker is correlated to its sole live question; include the exact question message ID in answer refs when several questions are pending. Other chief or peer messages do not satisfy this question; any admitted reply arrives separately as supervisor input.",
                 schema(props("question","string"),"question")) {
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled();
@@ -192,6 +192,6 @@ public final class CrewTools {
     }
     private static CrewMessage.Type type(Map<String,Object> args,String field) {
         String value=string(args,field); try{return CrewMessage.Type.valueOf(value.toUpperCase(Locale.ROOT));}
-        catch(IllegalArgumentException invalid){throw new IllegalArgumentException("type must be one of TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS");}
+        catch(IllegalArgumentException invalid){throw new IllegalArgumentException("type must be one of TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, PROGRESS, MESSAGE, USER");}
     }
 }

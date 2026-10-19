@@ -2,6 +2,7 @@ package com.jarvys.agent
 
 import android.app.Application
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewManager
@@ -28,6 +29,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -38,10 +40,14 @@ import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
+@LooperMode(LooperMode.Mode.PAUSED)
 class AgentMessagingPipelineTest {
-    @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @get:Rule val chatTestStore = ChatTestStore(
+        runTestOnWorker = false,
+        bridgeExecutorFactory = { ChatTestStore.directExecutorService() })
 
-    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val applicationContext = ApplicationProvider.getApplicationContext<Context>()
+    private lateinit var context: Context
     private var controller: org.robolectric.android.controller.ServiceController<AgentForegroundService>? = null
     private var startId = 0
     private var previousSecretStore: Any? = null
@@ -49,6 +55,15 @@ class AgentMessagingPipelineTest {
     private val managers = mutableListOf<CrewManager>()
 
     @Before fun installTestSecrets() {
+        context = applicationContext
+        chatTestStore.localRunStore(context.filesDir)
+        chatTestStore.onDatabaseWorker {
+            val store = LocalRunStore(context)
+            val staleCentralInputs = store.readPendingInternalConversationInputs(WorkspaceIdentity.CENTRAL_SESSION)
+                .map { it.optString("messageId") }.filter(String::isNotBlank)
+            if (staleCentralInputs.isNotEmpty())
+                store.markConversationMessagesResolved(WorkspaceIdentity.CENTRAL_SESSION, staleCentralInputs)
+        }
         installSecretStore()
     }
 
@@ -135,6 +150,54 @@ class AgentMessagingPipelineTest {
             LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
         }.none { it.optString("role") == "user" })
         releaseWorker.countDown()
+    }
+
+    @Test(timeout = 120_000) fun everyContentMessageTypeToChiefReachesCentralAsAnAttributedInput() {
+        val workerEntered = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        val worker = createBoundWorker(onModel = { _, token ->
+            workerEntered.countDown()
+            awaitRelease(releaseWorker, token)
+            ModelReply("Worker remains available for messages", emptyList())
+        })
+        assertTrue("worker did not start", workerEntered.await(10, TimeUnit.SECONDS))
+
+        val central = startManagedService()
+        val observed = Collections.synchronizedList(mutableListOf<List<ConversationTurn>>())
+        installProvider(central, ProviderDouble { history, token ->
+            observed += history.toList()
+            ModelReply("Central processed worker input", emptyList())
+        })
+
+        val sent = mutableListOf<CrewMessage>()
+        try {
+            for (type in CrewMessage.Type.values()) {
+                val message = worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", type,
+                    "Central intake ${type.name}", emptyList())
+                sent += message
+                deliverStartedServices()
+                assertTrue("Central did not finish the ${message.type} input",
+                    awaitServiceFinished(central, WorkspaceIdentity.CENTRAL_SESSION, 20))
+                val input = observed.flatMap { it }.singleOrNull {
+                    it.incomingMetadata?.id == message.id
+                }
+                val rows = chatTestStore.onDatabaseWorker {
+                    LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
+                        .filter { it.optString("role") == "agent" }
+                }
+                assertNotNull("${message.type} did not reach Jarvys' provider transcript; " +
+                    "observed=${observed.flatMap { it }.map { it.incomingMetadata?.type + ":" + it.durableMessageId }} " +
+                    "rows=${rows.map { it.optJSONObject("provenance")?.optString("kind") + ":" + it.optString("messageId") }} " +
+                    "report=${AgentForegroundService.getLastRunReport()}", input)
+                assertEquals(message.type.name, input!!.incomingMetadata.type)
+                assertEquals(message.text, input.content)
+                assertEquals(ConversationInput.Provenance.PrincipalRole.SUBORDINATE,
+                    input.incomingMetadata.provenance.principalRole)
+            }
+        } finally {
+            releaseWorker.countDown()
+        }
+        assertEquals(CrewMessage.Type.values().size, sent.size)
     }
 
     @Test fun askChiefQuestionEntersCentralAsAnInternalInput() {
@@ -651,12 +714,15 @@ class AgentMessagingPipelineTest {
         assertEquals(1, observed.size)
     }
 
-    @Test fun pendingWorkerInputSurvivesRestartAndIsAcknowledgedAfterAuthorizedResume() {
+    @Test(timeout = 120_000) fun pendingWorkerInputSurvivesRestartAndIsAcknowledgedAfterAuthorizedResume() {
+        useIsolatedChatContext("pending-worker-resume")
         val registry = WorkspaceRegistry(context)
         val key = UUID.randomUUID().toString()
         val scope = registry.createWorkspace("restart-$key", "Worker restart pipeline")
-        assertTrue(ChatDatabaseBridge.getInstance(context)
-            .ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success)
+        assertTrue(chatTestStore.onDatabaseWorker {
+            ChatDatabaseBridge.getInstance(context)
+                .ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success
+        })
         val role = CrewRole("restartable", "Restartable", "restartable", "Inspect and report.",
             emptyList(), null, "Restartable test worker", 1, emptyList(),
             CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)
@@ -685,7 +751,7 @@ class AgentMessagingPipelineTest {
             .get(bot) as? Thread
         assertTrue("worker did not enter after explicit workspace start: status=${bot.status()} error=${bot.error()} " +
             "thread=${workerThread?.name}:${workerThread?.state} stack=${workerThread?.stackTrace?.take(30)}",
-            entered.await(10, TimeUnit.SECONDS))
+            awaitStartedServicesUntil(entered, 10))
         val input = firstManager.send("chief", bot.id, CrewMessage.Type.ANSWER,
             "Resume from the updated manifest entry.", emptyList())
         firstManager.stopExact(bot.id, bot.token)
@@ -807,9 +873,8 @@ class AgentMessagingPipelineTest {
     private fun newManager(sessionId: String,
         onModel: (List<ConversationTurn>, CancellationToken) -> ModelReply): CrewManager {
         val provider = ProviderDouble(onModel)
-        return CoreAgentRuntime(context, sessionId, emptyList(), CorePromptBudget.standard(), true)
-            .also { it.setModelProviderForTesting(provider) }
-            .configureCrewManagerForTesting()
+        val runtime = CoreAgentRuntime(context, sessionId, emptyList(), CorePromptBudget.standard(), true)
+        return runtime.configureCrewManager(runtime.createTools(), CoreAgentModel(context, provider, sessionId), null)
     }
 
     private fun restartableManager(sessionId: String, role: CrewRole,
@@ -872,6 +937,7 @@ class AgentMessagingPipelineTest {
     private fun awaitCondition(timeoutSeconds: Long, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (System.nanoTime() < deadline) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
             if (condition()) return
             Thread.sleep(20)
         }
@@ -890,10 +956,19 @@ class AgentMessagingPipelineTest {
 
     private fun installProvider(service: AgentForegroundService, provider: ModelProviderClient) {
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled).also {
+            CoreAgentRuntime(context, id, skills, CorePromptBudget.standard(), memoryDisabled).also {
                 it.setModelProviderForTesting(provider)
             }
         }
+    }
+
+    private fun useIsolatedChatContext(directoryName: String) {
+        val files = chatTestStore.newFilesDirectory(directoryName)
+        context = object : ContextWrapper(applicationContext) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir() = files
+        }
+        chatTestStore.localRunStore(files)
     }
 
     private fun startStoredMessage(messageId: String) {
@@ -905,7 +980,7 @@ class AgentMessagingPipelineTest {
 
     private fun deliverStartedServices() {
         val service = controller?.get() ?: return
-        val shadow = org.robolectric.Shadows.shadowOf(context.applicationContext as Application)
+        val shadow = org.robolectric.Shadows.shadowOf(applicationContext as Application)
         var intent = shadow.nextStartedService
         while (intent != null) {
             service.onStartCommand(intent, 0, ++startId)
@@ -958,4 +1033,5 @@ class AgentMessagingPipelineTest {
         previousSecretStore = null
         secretStoreInstalled = false
     }
+
 }

@@ -22,6 +22,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
 import java.util.Collections
 import java.io.File
 import java.util.UUID
@@ -32,8 +33,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
+@LooperMode(LooperMode.Mode.PAUSED)
 class WorkspaceSupervisorMessagePipelineTest {
-    @get:Rule val chatTestStore = ChatTestStore()
+    @get:Rule val chatTestStore = ChatTestStore(
+        bridgeExecutorFactory = { ChatTestStore.directExecutorService() })
 
     private val applicationContext = ApplicationProvider.getApplicationContext<Context>()
     private lateinit var context: Context
@@ -70,6 +73,8 @@ class WorkspaceSupervisorMessagePipelineTest {
             .ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success)
         assertTrue(ChatDatabaseBridge.getInstance(context)
             .ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
+        CrewBoard(WorkspaceStore.forCrewBoard(context, scope.executionSessionId))
+            .post("/board/task.md", "Assigned follow-up notes for the worker to inspect.")
 
         val initialTaskRead = AtomicBoolean()
         val workerQuestionSent = AtomicBoolean()
@@ -113,7 +118,8 @@ class WorkspaceSupervisorMessagePipelineTest {
                     mapOf("path" to "/board/task.md"))))
             } else if (history.any { it.incomingMetadata?.type == "TASK" } && workerQuestionSent.compareAndSet(false, true)) {
                 assertTrue("the TASK instruction led to an actual read-only board tool call",
-                    history.any { it.role == "tool" && it.content.contains("<crew_board") })
+                    history.any { it.kind == ConversationTurn.Kind.TOOL_RESULT
+                        && it.toolName == "board_read" && it.content.contains("<crew_board") })
                 ModelReply("", listOf(ModelReply.Call("task-question", "msg_send", mapOf(
                     "to" to "chief", "type" to "QUESTION",
                     "text" to "Which exact board entry should I use for the follow-up?"))))
@@ -127,15 +133,15 @@ class WorkspaceSupervisorMessagePipelineTest {
         }
 
         val runtime = CoreAgentRuntime(context, scope.executionSessionId, emptyList(), CorePromptBudget.standard(), true)
-            .also { it.setModelProviderForTesting(provider) }
-        val manager = runtime.configureCrewManagerForTesting()
+        val manager = runtime.configureCrewManager(runtime.createTools(),
+            CoreAgentModel(context, provider, scope.executionSessionId), null)
         managers += manager
         val requestId = "request-$key"
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment-$key", requestId,
-            "Owner request", "custom", mission, listOf("board_read", "msg_send"), "Reviewer",
+            "Owner request", "coding", mission, listOf("board_read", "msg_send"), "Reviewer",
             CrewMissionAccess.STANDARD)
         val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "process-$key")
-        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "custom", mission,
+        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "coding", mission,
             listOf("board_read", "msg_send"), "Reviewer", CrewMissionAccess.STANDARD, null,
             started)
         val assignment = registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
@@ -200,7 +206,9 @@ class WorkspaceSupervisorMessagePipelineTest {
         assertTrue(receipt.getBoolean("admission_committed"))
 
         val duplicate = tool.execute(messageArgs, CancellationToken.uncancellable())
-        assertTrue(duplicate.content, duplicate.success)
+        assertTrue("${duplicate.content}; worker=${bot.status()} error=${bot.error()} " +
+            "pending=${manager.messageBus().pending(bot.id).map { it.id }}",
+            duplicate.success)
         assertEquals(receipt.getString("worker_input_id"),
             JSONObject(duplicate.content).getJSONObject("data").getString("worker_input_id"))
         val conflict = tool.execute(messageArgs + ("text" to "Changed payload under the same stable key."),
@@ -208,8 +216,21 @@ class WorkspaceSupervisorMessagePipelineTest {
         assertFalse("changed stable-key payload must be rejected", conflict.success)
 
         releaseQuestionBoundary.countDown()
-        assertTrue("the live worker consumes the supervisor input at its next boundary",
-            followupEntered.await(10, TimeUnit.SECONDS))
+        val followupObserved = followupEntered.await(10, TimeUnit.SECONDS)
+        if (!followupObserved) {
+            val pendingMailbox = manager.messageBus().pending(bot.id).map { "${it.type}:${it.id}:${it.text}" }
+            val retainedInputs = bot.checkpoint().appliedIncomingIds
+            val transcript = runCatching {
+                CrewManager.Bot::class.java.getDeclaredField("transcript").apply { isAccessible = true }
+                    .get(bot)
+            }.getOrNull()
+            fail("the live worker consumes the supervisor input at its next boundary; " +
+                "status=${bot.status()} error=${bot.error()} pendingMailbox=$pendingMailbox " +
+                "appliedIncomingIds=$retainedInputs messageTurn=${messageTurn.get()} " +
+                "doneFollowup=${doneFollowupTurn.get()} providerCalls=${prompts.size} " +
+                "transcript=$transcript thread=${workerThread?.name}:${workerThread?.state} " +
+                "stack=${workerThread?.stackTrace?.take(30)}")
+        }
 
         val expectedInput = messageTurn.get()
         assertNotNull(expectedInput)
@@ -238,7 +259,11 @@ class WorkspaceSupervisorMessagePipelineTest {
         assertEquals(CrewManager.Status.DONE, bot.status())
         assertTrue(bot.checkpoint().appliedIncomingIds.contains(expectedInput.durableMessageId))
         val incorporated = chatTestStore.onDatabaseWorker {
-            store.readConversationInputState(scope.executionSessionId, expectedInput.durableMessageId)
+            val stableId = ConversationInput(scope.executionSessionId, expectedInput.durableMessageId,
+                expectedInput.content, ConversationInput.Origin.AGENT,
+                expectedInput.incomingMetadata.provenance).stableId()
+            val row = store.readConversationMessageByStableId(scope.executionSessionId, stableId)!!
+            store.readConversationInputState(scope.executionSessionId, row.getString("messageId"))
         }
         assertEquals("incorporated", incorporated)
 
@@ -255,9 +280,14 @@ class WorkspaceSupervisorMessagePipelineTest {
             doneInput.incomingMetadata.provenance.principalRole)
         assertEquals(bot.id, doneInput.incomingMetadata.provenance.botId)
         assertEquals("", doneInput.incomingMetadata.provenance.referenceId)
-        assertEquals("incorporated", chatTestStore.onDatabaseWorker {
-            store.readConversationInputState(scope.executionSessionId, doneInput.durableMessageId)
-        })
+        val doneInputState = chatTestStore.onDatabaseWorker {
+            val stableId = ConversationInput(scope.executionSessionId, doneInput.durableMessageId,
+                doneInput.content, ConversationInput.Origin.AGENT,
+                doneInput.incomingMetadata.provenance).stableId()
+            val row = store.readConversationMessageByStableId(scope.executionSessionId, stableId)!!
+            store.readConversationInputState(scope.executionSessionId, row.getString("messageId"))
+        }
+        assertEquals("incorporated", doneInputState)
         registry.close()
     }
 
@@ -280,15 +310,16 @@ class WorkspaceSupervisorMessagePipelineTest {
             } else ModelReply("The finding is saved on the shared board.", emptyList())
         }
         val runtime = CoreAgentRuntime(context, scope.executionSessionId, emptyList(),
-            CorePromptBudget.standard(), true).also { it.setModelProviderForTesting(provider) }
-        val manager = runtime.configureCrewManagerForTesting()
+            CorePromptBudget.standard(), true)
+        val manager = runtime.configureCrewManager(runtime.createTools(),
+            CoreAgentModel(context, provider, scope.executionSessionId), null)
         managers += manager
         val requestId = "request-$key"
         val mission = "Record a local finding on the shared board."
         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment-$key", requestId,
-            "Owner request", "custom", mission, listOf("board_post"), "Reporter", CrewMissionAccess.STANDARD)
+            "Owner request", "coding", mission, listOf("board_post"), "Reporter", CrewMissionAccess.STANDARD)
         val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "process-$key")
-        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "custom", mission,
+        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "coding", mission,
             listOf("board_post"), "Reporter", CrewMissionAccess.STANDARD, null, started)
         registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
         manager.startPreparedForMission(bot)
