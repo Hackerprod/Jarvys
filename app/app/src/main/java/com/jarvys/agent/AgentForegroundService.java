@@ -49,6 +49,8 @@ public final class AgentForegroundService extends Service {
   private static final int NOTIFICATION_ID = 31001;
   private static final Map<String, Object> INTERRUPT_ADMISSION_LOCKS = new ConcurrentHashMap<>();
   private static final Map<String, Set<String>> FOLLOW_UP_CLAIMS = new ConcurrentHashMap<>();
+  /** Early AGENT start failures are retried after process restart, not on every recovery scan. */
+  private static final Set<String> EARLY_FAILED_AGENT_INPUT_STARTS = ConcurrentHashMap.newKeySet();
   private final Set<String> queuedInternalInputIds = ConcurrentHashMap.newKeySet();
   private static final int TEST_STEPS = 120;
   private static volatile String lastRunReport = "Etapa B: sin ejecuciones todavía.";
@@ -828,8 +830,8 @@ public final class AgentForegroundService extends Service {
         if (!WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)) continue;
         // One ordered entry owns a fresh turn. That run's durable-input provider drains any
         // later rows in sequence; after a crash, the next scan starts the first still-pending ID.
-        org.json.JSONObject row = store.readPendingInternalConversationInputs(sessionId).stream()
-            .findFirst().orElse(null);
+        org.json.JSONObject row = firstEligiblePendingAgentInput(sessionId,
+            store.readPendingInternalConversationInputs(sessionId));
         if (row == null) continue;
         String messageId = row.optString("messageId", "");
         if (messageId.isEmpty() || !queuedInternalInputIds.add(messageId)) continue;
@@ -841,12 +843,47 @@ public final class AgentForegroundService extends Service {
             if (input == null || input.origin != ConversationInput.Origin.AGENT) return;
             runRealAgent(active.token, "", new ArrayList<>(), sessionId, "", true,
                 false, false, messageId);
+          } catch (RuntimeException earlyFailure) {
+            if (!(earlyFailure instanceof CancellationException) && !active.token.isCancellationRequested()) {
+              recordEarlyFailedAgentInputStart(sessionId, messageId);
+              LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, earlyFailure);
+            }
+            throw earlyFailure;
           } finally { releaseClaim.run(); }
         }, true, releaseClaim, "", releaseClaim));
       }
     } catch (RuntimeException failure) {
       reportStopPersistenceFailure(failure);
     }
+  }
+
+  /**
+   * Pick the earliest input which has not already failed during service startup in this process.
+   * Suppression expires naturally when the durable input is no longer pending; process restart also
+   * clears the in-memory set and makes the entry eligible for recovery again.
+   */
+  static org.json.JSONObject firstEligiblePendingAgentInput(String sessionId,
+      List<org.json.JSONObject> pendingRows) {
+    if (sessionId == null || sessionId.isEmpty() || pendingRows == null) return null;
+    String prefix = sessionId.length() + ":" + sessionId;
+    Set<String> currentlyPending = new java.util.HashSet<>();
+    for (org.json.JSONObject row : pendingRows) {
+      if (row == null) continue;
+      String messageId = row.optString("messageId", "");
+      if (!messageId.isEmpty()) currentlyPending.add(prefix + messageId);
+    }
+    EARLY_FAILED_AGENT_INPUT_STARTS.removeIf(key -> key.startsWith(prefix) && !currentlyPending.contains(key));
+    for (org.json.JSONObject row : pendingRows) {
+      if (row == null) continue;
+      String messageId = row.optString("messageId", "");
+      if (!messageId.isEmpty() && !EARLY_FAILED_AGENT_INPUT_STARTS.contains(prefix + messageId)) return row;
+    }
+    return null;
+  }
+
+  static void recordEarlyFailedAgentInputStart(String sessionId, String messageId) {
+    if (sessionId == null || sessionId.isEmpty() || messageId == null || messageId.isEmpty()) return;
+    EARLY_FAILED_AGENT_INPUT_STARTS.add(sessionId.length() + ":" + sessionId + messageId);
   }
 
   private void failPendingInputRecovery(String onlySessionId) {
@@ -1204,6 +1241,11 @@ public final class AgentForegroundService extends Service {
           if (!isInteractive) throw earlyFailure;
           if (internalInputSubmission) {
             LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, earlyFailure);
+            if (submittedInput != null && submittedInput.origin == ConversationInput.Origin.AGENT
+                && !(earlyFailure instanceof CancellationException)
+                && !active.token.isCancellationRequested()) {
+              recordEarlyFailedAgentInputStart(chatSessionId, internalRunInputId);
+            }
             return;
           }
           String message = getString(R.string.chat_interrupt_start_failed);

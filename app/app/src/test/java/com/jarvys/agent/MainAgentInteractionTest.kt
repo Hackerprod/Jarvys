@@ -2,6 +2,7 @@ package com.jarvys.agent
 
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
+import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -132,6 +133,23 @@ class MainAgentInteractionTest {
         } finally {
             controller.destroy()
         }
+    }
+
+    @Test fun earlyAgentInputStartFailureIsSuppressedPerSessionUntilInputIsResolved() {
+        val session = "agent-start-${System.nanoTime()}"
+        val failed = JSONObject().put("messageId", "failed-input")
+        val next = JSONObject().put("messageId", "next-input")
+
+        AgentForegroundService.recordEarlyFailedAgentInputStart(session, "failed-input")
+
+        assertEquals("next-input", AgentForegroundService.firstEligiblePendingAgentInput(
+            session, listOf(failed, next))?.optString("messageId"))
+        assertEquals("failed-input", AgentForegroundService.firstEligiblePendingAgentInput(
+            "${session}-other", listOf(failed))?.optString("messageId"))
+
+        assertNull(AgentForegroundService.firstEligiblePendingAgentInput(session, emptyList()))
+        assertEquals("failed-input", AgentForegroundService.firstEligiblePendingAgentInput(
+            session, listOf(failed))?.optString("messageId"))
     }
 
     @Test fun steeringDuringAnActiveRunPersistsWithoutStoppingThatRun() {

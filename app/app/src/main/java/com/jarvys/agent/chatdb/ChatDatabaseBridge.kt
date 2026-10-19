@@ -55,12 +55,12 @@ data class ChatTimelineEventPage(
  * re-entry before submitting work. Results retain their typed [ChatDbResult] state; exceptions
  * from database initialization and unexpected repository failures are propagated to Java.
  */
-class ChatDatabaseBridge private constructor(context: Context) {
+class ChatDatabaseBridge private constructor(context: Context, injectedExecutor: ExecutorService? = null) {
     @Volatile
     private var executorThread: Thread? = null
 
     private val applicationContext = context.applicationContext
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
+    private val executor: ExecutorService = injectedExecutor ?: Executors.newSingleThreadExecutor { task ->
         Thread(task, "chatdb-java-bridge").apply {
             isDaemon = true
             this@ChatDatabaseBridge.executorThread = this
@@ -104,6 +104,16 @@ class ChatDatabaseBridge private constructor(context: Context) {
             val key = File(appContext.filesDir, "jarvys").canonicalPath
             return synchronized(instances) {
                 instances.getOrPut(key) { ChatDatabaseBridge(appContext) }
+            }
+        }
+
+        /** Constructs the same bridge with a caller-owned executor for isolated database tests. */
+        @JvmStatic
+        fun getInstance(context: Context, executor: ExecutorService): ChatDatabaseBridge {
+            val appContext = context.applicationContext
+            val key = File(appContext.filesDir, "jarvys").canonicalPath
+            return synchronized(instances) {
+                instances[key] ?: ChatDatabaseBridge(appContext, executor).also { instances[key] = it }
             }
         }
 
@@ -496,6 +506,12 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun readConversationMessagesSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readConversationMessages(conversationId) }
 
+    fun readPendingAgentInputsSync(conversationId: String): List<StoredMessage> =
+        execute { it.reader.readPendingAgentInputs(conversationId) }
+
+    fun countPendingAgentInputsByWorkspaceSync(conversationWorkspaceIds: Map<String, String>): Map<String, Int> =
+        execute { it.reader.countPendingAgentInputsByWorkspace(conversationWorkspaceIds) }
+
     fun readActiveConversationMessagesSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readActiveConversationMessages(conversationId) }
 
@@ -837,6 +853,13 @@ class ChatDatabaseBridge private constructor(context: Context) {
         it.strictJournals.readWorkspaceCoordinationReference(conversationId, referenceId, isNotice)
     }
 
+    fun findWorkspaceCoordinationReferenceBySourceMessageIdSync(
+        conversationId: String,
+        sourceMessageId: String,
+    ): ChatDbResult<WorkspaceCoordinationReference?> = execute {
+        it.strictJournals.findWorkspaceCoordinationReferenceBySourceMessageId(conversationId, sourceMessageId)
+    }
+
     @JvmOverloads
     fun listWorkspaceCoordinationReferencesSync(
         conversationId: String,
@@ -891,6 +914,13 @@ class ChatDatabaseBridge private constructor(context: Context) {
         replyId: String,
     ): ChatDbResult<WorkspaceCoordinationReplyJournal?> = execute {
         it.strictJournals.readWorkspaceCoordinationReplyById(centralSessionId, replyId)
+    }
+
+    fun countStartedQuestionBlockerRepliesByWorkspaceSync(
+        centralSessionId: String,
+        workspaceIds: Set<String>,
+    ): ChatDbResult<Map<String, Int>> = execute {
+        it.strictJournals.countStartedQuestionBlockerRepliesByWorkspace(centralSessionId, workspaceIds)
     }
 
     @JvmOverloads

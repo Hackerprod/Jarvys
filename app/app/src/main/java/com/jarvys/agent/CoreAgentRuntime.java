@@ -464,18 +464,10 @@ public final class CoreAgentRuntime {
         ? new MessageReactionTool(new LocalRunStore(context), sessionId) : null;
   }
 
-  private CrewManager configureCrewManager(
+  CrewManager configureCrewManager(
       CoreToolRegistry baseToolRegistry,
       final CoreAgentModel model,
       final CoreAgentLoop.ProgressListener listener) {
-    return configureCrewManager(baseToolRegistry, model, listener, true);
-  }
-
-  private CrewManager configureCrewManager(
-      CoreToolRegistry baseToolRegistry,
-      final CoreAgentModel model,
-      final CoreAgentLoop.ProgressListener listener,
-      final boolean persistCrewSnapshots) {
     final CoreToolRegistry crewCapabilities = crewBotCapabilityScope(baseToolRegistry);
     final CrewManager manager =
         CREWS.computeIfAbsent(
@@ -542,7 +534,6 @@ public final class CoreAgentRuntime {
 
           @Override // com.jarvys.agent.crew.CrewManager.SnapshotListener
           public final void onChanged(CrewMissionSnapshot crewMissionSnapshot) {
-            if (!persistCrewSnapshots) return;
             CoreAgentRuntime.this.persistCrewSnapshot(crewStore, crewMissionSnapshot);
           }
         });
@@ -634,21 +625,6 @@ public final class CoreAgentRuntime {
       }
     }
     for (BotDefinition definition : profileRepository.definitions()) manager.definitionChanged(definition);
-    return manager;
-  }
-
-  /** Configures the normal workspace crew wiring around the provider installed by a test. */
-  CrewManager configureCrewManagerForTesting() {
-    if (context == null || modelProviderOverride == null
-        || !com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(sessionId)) {
-      throw new IllegalStateException("A workspace runtime with a test provider is required");
-    }
-    // The focused runtime tests exercise the production loop, tools and durable input delivery.
-    // Snapshot persistence has separate Room integration coverage, while Robolectric's Android
-    // SQLite driver can block when the crew executor writes snapshots concurrently.
-    CrewManager manager = configureCrewManager(
-        createTools(), new CoreAgentModel(context, modelProviderOverride, sessionId), null, false);
-    manager.enableWorkerToolPrewarmForTesting();
     return manager;
   }
 
