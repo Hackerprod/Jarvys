@@ -285,6 +285,20 @@ private object Routes {
 
 /** Jarvys launcher: provider setup and the existing on-device run entry points. */
 class MainActivity : ComponentActivity() {
+    /** Single production calculation used by the workspace timeline's thinking/stop state. */
+    internal fun workspaceHasActiveWorkForUi(state: WorkspaceChatUiState?): Boolean =
+        workspaceHasActiveWorkForUi(state, null)
+
+    internal fun workspaceHasActiveWorkForUi(state: WorkspaceChatUiState?, runSnapshot: AgentRunUiSnapshot?): Boolean =
+        workspaceHasActiveWork(state, runSnapshot)
+
+    /** The workspace stop affordance follows the selected assignment's projected pause capability. */
+    internal fun workspacePauseEnabledForUi(state: WorkspaceChatUiState?, assignmentId: String?): Boolean =
+        workspacePauseEnabled(state, assignmentId)
+
+    internal fun workspacePauseEnabledForUi(state: WorkspaceChatUiState?, assignmentId: String?, activeWork: Boolean): Boolean =
+        workspacePauseEnabled(state, assignmentId, activeWork)
+
     private var activeNavController: NavHostController? = null
     internal fun navGraphRoutePatternsForTest(): Set<String> = activeNavController?.graph?.let { graph ->
         buildSet {
@@ -521,6 +535,8 @@ class MainActivity : ComponentActivity() {
                     onGoalChange = { goalInput = it },
                     lastRunReport = lastRunReport,
                     agentState = agentState,
+                    workspaceHasActiveWorkForUi = { state, snapshot -> workspaceHasActiveWorkForUi(state, snapshot) },
+                    workspacePauseEnabledForUi = ::workspacePauseEnabledForUi,
                     runHistory = runHistory,
                     selectedHistoryRunId = selectedHistoryRunId,
                     proactiveTargetMessageId = proactiveTargetMessageId,
@@ -1668,6 +1684,8 @@ private fun JarvysApp(
     onGoalChange: (String) -> Unit,
     lastRunReport: String,
     agentState: AgentRunUiSnapshot,
+    workspaceHasActiveWorkForUi: (WorkspaceChatUiState?, AgentRunUiSnapshot?) -> Boolean,
+    workspacePauseEnabledForUi: (WorkspaceChatUiState?, String?, Boolean) -> Boolean,
     runHistory: List<RunHistoryItem>,
     selectedHistoryRunId: String?,
     proactiveTargetMessageId: String?,
@@ -1805,26 +1823,23 @@ private fun JarvysApp(
         }
     }
     val workspaceRevision by WorkspaceChanges.revision.collectAsState()
-    var workspaceRows by remember { mutableStateOf(emptyList<WorkspaceSidebarRow>()) }
+    val workspaceCatalogRevision by WorkspaceChanges.catalogRevision.collectAsState()
+    var workspaceCatalog by remember { mutableStateOf(WorkspaceCatalogUiState()) }
     var workspaceAfter by rememberSaveable { mutableStateOf<String?>(null) }
     var workspacePageHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    var workspaceNext by remember { mutableStateOf<String?>(null) }
-    var workspaceLoading by remember { mutableStateOf(true) }
-    var workspaceError by remember { mutableStateOf<String?>(null) }
     var workspaceReload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(workspaceRevision, workspaceAfter, workspaceReload) {
-        workspaceLoading = true; workspaceError = null; workspaceNext = null; workspaceRows = emptyList()
+    LaunchedEffect(workspaceCatalogRevision, workspaceAfter, workspaceReload) {
+        workspaceCatalog = workspaceCatalog.beginRefresh()
         try {
             val page = withContext(workspaceProjectionDispatcher) {
                 WorkspaceProjection.sidebarPage(context.applicationContext, workspaceAfter)
             }
-            workspaceRows = page.rows; workspaceNext = page.nextCursor
+            workspaceCatalog = workspaceCatalog.loaded(page)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
-            workspaceError = context.getString(R.string.workspace_catalog_load_error)
+            workspaceCatalog = workspaceCatalog.failed(context.getString(R.string.workspace_catalog_load_error))
         }
-        workspaceLoading = false
     }
     var correctionWorkspace by rememberSaveable { mutableStateOf<String?>(null) }
     var correctionAssignment by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1862,11 +1877,7 @@ private fun JarvysApp(
     val workspaceSelectedAssignment = workspaceChatSelectedAssignment(workspaceAssignments, workspaceSelectedAssignmentId)
     val workspaceLatestMission = workspaceChatState.value?.events?.lastOrNull { it.kind == "crew_mission" }
         ?.crewMissionSnapshot
-    val workspaceHasActiveWork = workspaceChatState.value?.let { workspace ->
-        workspace.status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
-            WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING) ||
-            workspace.events.any { it.crewMissionSnapshot?.active() == true }
-    } == true
+    val workspaceHasActiveWork = workspaceHasActiveWorkForUi(workspaceChatState.value, agentState)
     var workspaceChatReload by remember { mutableIntStateOf(0) }
     var workspaceOlderHistoryLoading by remember(routeWorkspaceId) { mutableStateOf(false) }
     var workspaceOlderHistoryLoadError by remember(routeWorkspaceId) { mutableStateOf(false) }
@@ -2155,7 +2166,8 @@ private fun JarvysApp(
                     showContextActions = !workspaceChatActive,
                     showMicrophoneButton = !workspaceChatActive,
                     separateStopAction = workspaceChatActive,
-                    stopActionEnabled = !workspaceChatActive || workspaceSelectedAssignment?.canPause == true,
+                    stopActionEnabled = !workspaceChatActive ||
+                        workspacePauseEnabledForUi(workspaceChatState.value, workspaceSelectedAssignmentId, workspaceHasActiveWork),
                     stopActionLabel = if (workspaceChatActive) stringResource(R.string.workspace_pause) else null,
             )
         },
@@ -2202,22 +2214,27 @@ private fun JarvysApp(
             ) {
                 composable(Routes.WORKSPACES) {
                     com.jarvys.agent.workspaces.WorkspaceListScreen(
-                        workspaces = workspaceRows,
-                        workspacesLoading = workspaceLoading,
-                        workspaceError = workspaceError,
+                        workspaces = workspaceCatalog.rows,
+                        workspacesLoading = workspaceCatalog.loading,
+                        workspaceError = workspaceCatalog.error,
                         canPreviousWorkspacePage = workspacePageHistory.isNotEmpty(),
                         canFirstWorkspacePage = workspaceAfter != null,
-                        canNextWorkspacePage = workspaceNext != null,
-                        onPreviousWorkspacePage = { if (!workspaceLoading && workspacePageHistory.isNotEmpty()) {
-                            workspaceLoading = true
+                        canNextWorkspacePage = workspaceCatalog.nextCursor != null,
+                        onPreviousWorkspacePage = { if (!workspaceCatalog.loading && workspacePageHistory.isNotEmpty()) {
+                            workspaceCatalog = workspaceCatalog.beginRefresh()
                             workspaceAfter = workspacePageHistory.last().ifEmpty { null }; workspacePageHistory = workspacePageHistory.dropLast(1)
                         } },
-                        onNextWorkspacePage = { if (!workspaceLoading) workspaceNext?.let { next ->
-                            workspaceLoading = true
+                        onNextWorkspacePage = { if (!workspaceCatalog.loading) workspaceCatalog.nextCursor?.let { next ->
+                            workspaceCatalog = workspaceCatalog.beginRefresh()
                             workspacePageHistory = workspacePushCursor(workspacePageHistory, workspaceAfter); workspaceAfter = next
                         } },
-                        onFirstWorkspacePage = { if (!workspaceLoading) { workspaceLoading = true; workspaceAfter = null; workspacePageHistory = emptyList() } },
-                        onRetryWorkspaces = { if (!workspaceLoading) { workspaceLoading = true; workspaceReload++ } },
+                        onFirstWorkspacePage = { if (!workspaceCatalog.loading) {
+                            workspaceCatalog = workspaceCatalog.beginRefresh()
+                            workspaceAfter = null; workspacePageHistory = emptyList()
+                        } },
+                        onRetryWorkspaces = { if (!workspaceCatalog.loading) {
+                            workspaceCatalog = workspaceCatalog.beginRefresh(); workspaceReload++
+                        } },
                         actionsEnabled = !conversationActionPending && !drawerNavigationPending,
                         onOpenWorkspace = { id -> navController.navigate("workspace/$id") { launchSingleTop = true } },
                     )
@@ -2233,6 +2250,7 @@ private fun JarvysApp(
                     } else WorkspaceDetailScreen(
                         state = state,
                         runSnapshot = agentState,
+                        workspaceRunning = workspaceHasActiveWork,
                         connectorRegistry = connectorRegistry,
                         onOpenPreview = { projectId ->
                             val sessionId = state.executionSessionId

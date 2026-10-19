@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.crew.*
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -25,16 +26,17 @@ class CrewModelPhaseTest {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val tools = CoreToolRegistry(emptyList())
+        val sessionId = WorkspaceIdentity.executionSessionId("11111111-1111-1111-1111-111111111111")
         val factory = CrewManager.LoopFactory { _, registry, incoming ->
             CoreAgentLoop(CoreAgentLoop.Model { _, _, _, token ->
                 entered.countDown()
                 try { release.await() } catch (_: InterruptedException) { token.throwIfCancelled() }
                 token.throwIfCancelled()
                 ModelReply("Done", emptyList())
-            }, registry, "", "phase-session", CorePromptBudget.standard(), null,
+            }, registry, "", sessionId, CorePromptBudget.standard(), null,
                 CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }
-        val manager = CrewManager("phase-session", tools, { _, _ -> tools }, factory, null)
+        val manager = CrewManager(sessionId, tools, { _, _ -> tools }, factory, null)
         val leaked = AtomicInteger()
         val parent = CoreAgentLoop.ProgressListener { _, _ -> leaked.incrementAndGet() }
         manager.configure(tools, { _, _ -> tools }, factory, null,
@@ -58,11 +60,27 @@ class CrewModelPhaseTest {
             listener.onProgress("model_wait", "private text")
             assertEquals("model_wait", visible().phase)
             assertEquals(stamp, visible().lastProgressAtMillis)
+            listener.onAssistantProgress("assistant-run", "read-call", "I found the source file and am checking its callers.")
+            val progress = manager.missionSnapshots().single().messages.single {
+                it.type == CrewMessage.Type.PROGRESS
+            }
+            assertEquals(bot.id, progress.from)
+            assertEquals("user", progress.to)
+            assertEquals("I found the source file and am checking its callers.", progress.text)
+            assertFalse(manager.messageBus().pending("user").contains(progress))
+            assertThrows(IllegalArgumentException::class.java) {
+                manager.send("chief", bot.id, CrewMessage.Type.PROGRESS, "Forged progress", emptyList())
+            }
+            listener.onAssistantProgress("assistant-run", "read-call", progress.text)
+            assertEquals(1, manager.missionSnapshots().single().messages.count {
+                it.type == CrewMessage.Type.PROGRESS
+            })
             val row = manager.missionSnapshots().single().toJson()
             assertFalse(row.toString().contains("private"))
             val restored = CrewMissionSnapshot.fromJson(row)!!
             assertEquals("model_wait", restored.bots.single().phase)
             assertEquals(stamp, restored.bots.single().lastProgressAtMillis)
+            assertEquals(progress.id, restored.messages.single { it.type == CrewMessage.Type.PROGRESS }.id)
             val interrupted = restored.interrupted().bots.single()
             assertEquals("", interrupted.phase)
             assertEquals("compacted", interrupted.lastProgress)
@@ -75,7 +93,11 @@ class CrewModelPhaseTest {
             assertEquals("", visible().phase)
             val finalProgress = visible().lastProgressAtMillis
             listener.onProgress("model_wait", "late")
+            listener.onAssistantProgress("late-run", "late-call", "This should not be retained.")
             listener.onCompactionStarted("late")
+            assertEquals(1, manager.missionSnapshots().single().messages.count {
+                it.type == CrewMessage.Type.PROGRESS
+            })
             assertEquals("", visible().phase)
             assertEquals(finalProgress, visible().lastProgressAtMillis)
         } finally {

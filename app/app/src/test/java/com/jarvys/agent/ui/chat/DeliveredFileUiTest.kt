@@ -2,6 +2,8 @@ package com.jarvys.agent
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
@@ -13,9 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import kotlinx.coroutines.test.StandardTestDispatcher
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -28,6 +28,7 @@ import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.chat.ChatFileActions
 import com.jarvys.agent.ui.chat.ChatFileRequest
 import com.jarvys.agent.ui.chat.ChatFileTransfer
+import com.jarvys.agent.ui.chat.ChatFileTransferNotice
 import com.jarvys.agent.ui.chat.DeliveredArtifactEventCard
 import com.jarvys.agent.ui.chat.LocalChatFileActions
 import java.io.File
@@ -132,6 +133,69 @@ class DeliveredFileUiTest {
         compose.onNodeWithTag("chat-preview-share-${attachment.id}").assertIsDisplayed()
         assertEquals(attachment.id, requests.single().artifactId)
         capture("unsupported-image-actions")
+    }
+
+    @Test fun apkDownloadResultUsesGenericCloseAndOpenKeepsTheSystemInstallMimeType() {
+        FakeDownloadsProvider.install()
+        val session = "delivered-apk-${UUID.randomUUID()}"
+        val attachment = deliver(session, "Pulso-Ping.apk", "package bytes")
+        val request = ChatFileRequest.attachment(session, attachment, delivered = true)
+        val event = LocalRunStore(compose.activity).readConversationTimeline(session).single { it.kind == "artifact" }
+        val downloads = mutableListOf<ChatFileRequest>()
+        val shares = mutableListOf<ChatFileRequest>()
+        val transfer = ChatFileTransfer(request, result = savedDownloadResult(attachment.name, attachment.mimeType, attachment.sizeBytes))
+        val opened = mutableListOf<Intent>()
+        var showNotice by mutableStateOf(false)
+        compose.setContent {
+            if (showNotice) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    ChatFileTransferNotice(transfer, onDismissRequest = {}, onOpen = {
+                        opened += DownloadIntents.open(requireNotNull(it.result))
+                    }, onShare = {})
+                }
+            } else {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(
+                        download = downloads::add, share = shares::add,
+                    )) { DeliveredArtifactEventCard(event, session) }
+                }
+            }
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("delivered-file-download-${attachment.id}").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("delivered-file-download-${attachment.id}").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("delivered-file-share-${attachment.id}").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("delivered-file-download-${attachment.id}")
+            .assertContentDescriptionEquals("Download: Pulso-Ping.apk")
+        compose.onNodeWithTag("delivered-file-share-${attachment.id}")
+            .assertContentDescriptionEquals("Share: Pulso-Ping.apk")
+        assertEquals(listOf(request), downloads)
+        assertEquals(listOf(request), shares)
+
+        compose.runOnIdle { showNotice = true }
+        compose.onNodeWithTag("chat-download-result").assertIsDisplayed()
+        compose.onNodeWithText("Close").assertIsDisplayed()
+        compose.onNodeWithText("Close image viewer").assertDoesNotExist()
+        val spanish = android.content.res.Configuration(compose.activity.resources.configuration).apply {
+            setLocale(java.util.Locale("es"))
+        }
+        assertEquals("Cerrar", compose.activity.createConfigurationContext(spanish)
+            .resources.getString(R.string.chat_dialog_close))
+        compose.onNodeWithText("Open").performClick()
+
+        assertEquals(Intent.ACTION_VIEW, opened.single().action)
+        assertEquals("application/vnd.android.package-archive", opened.single().type)
+        assertTrue(opened.single().flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+    }
+
+    private fun savedDownloadResult(name: String, mimeType: String, bytes: Long): DownloadStore.Result {
+        val constructor = DownloadStore.Result::class.java.getDeclaredConstructor(
+            DownloadStore.Status::class.java, Uri::class.java, String::class.java, String::class.java,
+            java.lang.Long.TYPE, String::class.java,
+        ).apply { isAccessible = true }
+        return constructor.newInstance(DownloadStore.Status.SAVED,
+            Uri.parse("content://com.jarvys.agent.downloads/1"), name, mimeType, bytes, null) as DownloadStore.Result
     }
 
     @Test fun missingRestoredFileHasHonestUnavailableStateWithoutEnabledDownload() {

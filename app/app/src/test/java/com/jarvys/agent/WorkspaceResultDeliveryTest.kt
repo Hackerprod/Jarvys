@@ -84,6 +84,26 @@ class WorkspaceResultDeliveryTest {
         assertEquals(notices().single().referenceId, wakeRequests.single())
     }
 
+    @Test fun idempotentReconcileDoesNotInvalidateCatalogOrDetailAgain() {
+        bind(); evidence()
+        val detailBefore = WorkspaceChanges.revision.value
+        val catalogBefore = WorkspaceChanges.catalogRevision.value
+
+        reconcile()
+        assertEquals(detailBefore + 1, WorkspaceChanges.revision.value)
+        assertEquals("result notices do not change a catalog row", catalogBefore,
+            WorkspaceChanges.catalogRevision.value)
+        val detailAfterInsert = WorkspaceChanges.revision.value
+        val catalogAfterInsert = WorkspaceChanges.catalogRevision.value
+
+        reconcile()
+
+        assertEquals("an existing notice is not a detail change", detailAfterInsert,
+            WorkspaceChanges.revision.value)
+        assertEquals("an existing notice is not a catalog change", catalogAfterInsert,
+            WorkspaceChanges.catalogRevision.value)
+    }
+
     @Test fun reconciliationDoesNotWakeForANoticeThatPredatesWakeMarkers() {
         bind()
         val saved = evidence()

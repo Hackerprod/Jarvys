@@ -19,6 +19,7 @@ import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewMode
+import com.jarvys.agent.crew.CrewProcessIdentity
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -66,6 +67,189 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithText("Mission").assertDoesNotExist()
         compose.onNodeWithText("Recovery").assertDoesNotExist()
         compose.onNodeWithText("Recorded result").assertDoesNotExist()
+    }
+
+    @Test fun workspaceTimelineKeepsLiveToolSheetOpenWhenTheGroupAndRunStateChange() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        fun tool(id: Long) = AgentRunUiEvent.toolEvent(id, "tool_result", "Completed tool $id",
+            "Result details for completed tool $id", "workspace-tool-$id", null, id)
+        val events = mutableStateOf(listOf(tool(2L)))
+        val status = mutableStateOf(WorkspaceUiStatus.ACTIVE)
+        val snapshot = mutableStateOf(AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent { MaterialTheme {
+            val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace", status.value, events.value)
+            val currentSnapshot = snapshot.value
+            WorkspaceDetailScreen(state = state, runSnapshot = currentSnapshot,
+                workspaceRunning = workspaceHasActiveWork(state, currentSnapshot), connectorRegistry = connectors,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
+        } }
+
+        // The new event sorts before the already-seen tool. It becomes the group's first event
+        // and is therefore the live arrival key used to animate the new workspace row.
+        compose.runOnIdle {
+            events.value = listOf(tool(1L), tool(2L))
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-group-${tool(1L).id}").performClick()
+        compose.onNodeWithTag("tool-group-sheet-${tool(1L).id}").assertIsDisplayed()
+        val groupId = tool(1L).id
+
+        compose.runOnIdle {
+            events.value = (1L..40L).map(::tool)
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        repeat(40) { compose.onNodeWithTag("tool-group-list-$groupId").performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("conversation-activity-${tool(40L).id}").assertIsDisplayed()
+
+        compose.runOnIdle {
+            events.value = events.value + tool(41L)
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            status.value = WorkspaceUiStatus.COMPLETED
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = false)
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tool-group-sheet-$groupId").assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-list-$groupId").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-activity-${tool(40L).id}").assertIsDisplayed()
+    }
+
+    @Test fun completedWorkspaceDoesNotKeepThinkingOrAnActivePauseWhenItsRunSnapshotIsStale() {
+        val activeWorkspaceId = "22222222-2222-2222-2222-222222222222"
+        val activeSessionId = WorkspaceIdentity.executionSessionId(activeWorkspaceId)
+        val inactiveSessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val assignmentId = "stale-snapshot-assignment"
+        val activeState = WorkspaceChatUiState(activeWorkspaceId, activeSessionId, "Active workspace",
+            WorkspaceUiStatus.ACTIVE, assignments = listOf(WorkspaceAssignmentUi(assignmentId, 1L,
+                "Worker", "Task", WorkspaceUiStatus.ACTIVE, canPause = true)))
+        val inactiveState = WorkspaceChatUiState(workspaceId, inactiveSessionId, "Completed workspace",
+            WorkspaceUiStatus.COMPLETED, listOf(AgentRunUiEvent(30L, "assistant", text = "Saved answer")))
+        val selected = mutableStateOf(activeState)
+        val snapshot = mutableStateOf(AgentRunUiSnapshot(sessionId = activeSessionId, running = true))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
+        compose.setContent { MaterialTheme {
+            val state = selected.value
+            val workspaceActive = workspaceHasActiveWork(state, snapshot.value)
+            Column(Modifier.fillMaxSize()) {
+                WorkspaceDetailScreen(state = state, runSnapshot = snapshot.value,
+                    workspaceRunning = workspaceActive,
+                    connectorRegistry = connectors,
+                    onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {},
+                    modifier = Modifier.weight(1f))
+                com.jarvys.agent.ui.chat.ChatComposer(
+                    goal = "", onGoalChange = {}, onSend = {}, onInterruptAndSend = {},
+                    sendAllowed = false, canInterrupt = false, pendingAttachments = emptyList(),
+                    attachmentSessionId = state.executionSessionId, attachmentSending = false,
+                    onRemoveAttachment = {}, onAttachmentCamera = {}, onAttachmentPhotos = {}, onAttachmentFiles = {},
+                    onStop = {}, onSelectModel = {}, modelLabel = "Model", running = workspaceActive,
+                    captureContextRequested = false, onCaptureContext = {}, onImportSkill = {},
+                    availableSkills = emptyList(), selectedSkillIds = emptySet(), onToggleRunSkill = {},
+                    onManageSkills = {}, skillEnabledCount = 0, skillTotalCount = 0,
+                    crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {},
+                    inputEnabled = true, separateStopAction = true,
+                    stopActionEnabled = workspacePauseEnabled(state, assignmentId, workspaceActive),
+                    stopActionLabel = "Pause", showModelSelector = false,
+                    showContextActions = false, showMicrophoneButton = false,
+                )
+            }
+        } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertIsDisplayed()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsEnabled()
+        compose.runOnIdle {
+            selected.value = inactiveState
+            // Model a lingering session snapshot after the mission's durable terminal status landed.
+            snapshot.value = AgentRunUiSnapshot(sessionId = inactiveSessionId, events = inactiveState.events,
+                running = true)
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Saved answer", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertDoesNotExist()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
+    }
+
+    @Test fun workspaceActivityUsesProjectedStatusAndOnlyCurrentProcessBots() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        fun mission(processId: String, statuses: List<String>) = CrewMissionSnapshot(
+            "mission", sessionId, processId, "Workspace mission", "RUNNING", "", 1L, 0L,
+            statuses.mapIndexed { index, status -> CrewBotSnapshot("bot-$index", "worker", "Worker",
+                "Worker $index", "blue", "Task", status, "", "", "", emptyList(), 1L, 0L) }, emptyList())
+        fun event(id: Long, processId: String, vararg statuses: String) = AgentRunUiEvent.crewMissionEvent(
+            id, mission(processId, statuses.toList()))
+        val assignmentId = "workspace-assignment"
+        val terminal = event(50L, CrewProcessIdentity.ID, "DONE", "FAILED")
+        val selected = mutableStateOf(WorkspaceChatUiState(workspaceId, sessionId, "Workspace",
+            WorkspaceUiStatus.COMPLETED, listOf(terminal), assignments = listOf(
+                WorkspaceAssignmentUi(assignmentId, 1L, "Worker", "Task", WorkspaceUiStatus.COMPLETED,
+                    canPause = true))))
+        val snapshot = mutableStateOf(AgentRunUiSnapshot(sessionId = sessionId, events = listOf(terminal), running = true))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
+        compose.setContent { MaterialTheme {
+            val state = selected.value
+            val current = snapshot.value
+            val active = workspaceHasActiveWork(state, current)
+            Column(Modifier.fillMaxSize()) {
+                WorkspaceDetailScreen(state = state, runSnapshot = current, workspaceRunning = active, connectorRegistry = connectors,
+                    onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {}, modifier = Modifier.weight(1f))
+                com.jarvys.agent.ui.chat.ChatComposer(
+                    goal = "", onGoalChange = {}, onSend = {}, onInterruptAndSend = {},
+                    sendAllowed = false, canInterrupt = false, pendingAttachments = emptyList(),
+                    attachmentSessionId = sessionId, attachmentSending = false,
+                    onRemoveAttachment = {}, onAttachmentCamera = {}, onAttachmentPhotos = {}, onAttachmentFiles = {},
+                    onStop = {}, onSelectModel = {}, modelLabel = "Model", running = active,
+                    captureContextRequested = false, onCaptureContext = {}, onImportSkill = {},
+                    availableSkills = emptyList(), selectedSkillIds = emptySet(), onToggleRunSkill = {},
+                    onManageSkills = {}, skillEnabledCount = 0, skillTotalCount = 0,
+                    crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {},
+                    inputEnabled = true, separateStopAction = true,
+                    stopActionEnabled = workspacePauseEnabled(state, assignmentId, active), stopActionLabel = "Pause",
+                    showModelSelector = false, showContextActions = false, showMicrophoneButton = false)
+            }
+        } }
+
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertDoesNotExist()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
+
+        val previousProcess = event(50L, "previous-app-process", "RUNNING", "WAITING")
+        compose.runOnIdle {
+            selected.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace",
+                WorkspaceUiStatus.INTERRUPTED, listOf(previousProcess), assignments = listOf(
+                    WorkspaceAssignmentUi(assignmentId, 2L, "Worker", "Task", WorkspaceUiStatus.INTERRUPTED,
+                        canPause = true)))
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = listOf(previousProcess), running = true)
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertDoesNotExist()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
+
+        val live = event(50L, CrewProcessIdentity.ID, "RUNNING")
+        compose.runOnIdle {
+            selected.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace",
+                WorkspaceUiStatus.UNKNOWN, listOf(live), assignments = listOf(
+                    WorkspaceAssignmentUi(assignmentId, 3L, "Worker", "Task", WorkspaceUiStatus.ACTIVE,
+                        canPause = true)))
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = listOf(live), running = true)
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.agent_presence_thinking)).assertIsDisplayed()
+        compose.onNodeWithTag("chat-separate-stop-button").assertIsEnabled()
     }
 
     @Test fun loadingErrorAndEmptyStatesRemainDistinctFromAnEmptyConversation() {
@@ -208,8 +392,17 @@ class WorkspaceDetailComposeTest {
             compose.onAllNodesWithContentDescription(copyDescription).fetchSemanticsNodes().size == 2
         }
         compose.onAllNodesWithContentDescription(copyDescription).assertCountEquals(2)
+        compose.waitUntil(10_000) {
+            listOf("First bot update", "Second bot update", "Current bot update").all { text ->
+                compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+        }
+        val timeline = compose.onNodeWithTag("chat-message-list")
+        timeline.performScrollToNode(hasText("First bot update"))
         compose.onNodeWithText("First bot update").assertIsDisplayed()
+        timeline.performScrollToNode(hasText("Second bot update"))
         compose.onNodeWithText("Second bot update").assertIsDisplayed()
+        timeline.performScrollToNode(hasText("Current bot update"))
         compose.onNodeWithText("Current bot update").assertIsDisplayed()
     }
 }

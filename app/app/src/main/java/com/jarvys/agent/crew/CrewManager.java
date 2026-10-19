@@ -1414,6 +1414,8 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public CrewMessage send(String from, String to, CrewMessage.Type type, String text, List<String> refs) {
+        if (type == CrewMessage.Type.PROGRESS)
+            throw new IllegalArgumentException("PROGRESS is runtime-generated presentation only");
         Bot sender = "chief".equals(from) ? null : bots.get(from);
         if (!"chief".equals(from) && sender == null) throw new IllegalArgumentException("Unknown Crew sender");
         if (sender != null && terminal(sender.status)) throw new IllegalArgumentException("A stopped or finished bot cannot send messages");
@@ -1600,6 +1602,25 @@ public final class CrewManager implements AutoCloseable {
     public void recordActivity(Bot bot, String activity) {
         if (activity == null || activity.trim().isEmpty() || terminal(bot.status)) return;
         bus.record(bot.id, "chief", CrewMessage.Type.STATUS, activity.trim(), Collections.emptyList());
+        publishMission(bot.missionId);
+    }
+
+    /** Retains user-facing model text beside a tool call as presentation-only Crew evidence. */
+    public void recordAssistantProgress(Bot bot, String runId, String callId, String text,
+            CancellationToken cycleToken, long cycle) {
+        if (text == null || text.trim().isEmpty() || callId == null || callId.isEmpty()) return;
+        String invocation = runId == null || runId.isEmpty() ? bot.cycleId() : runId;
+        String identity = conversationId + "\u0000" + bot.missionId + "\u0000" + bot.id
+                + "\u0000" + invocation + "\u0000" + callId;
+        String messageId = "assistant-progress:" + UUID.nameUUIDFromBytes(
+                identity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        CrewMessage message = new CrewMessage(messageId, conversationId, bot.id, "user",
+                CrewMessage.Type.PROGRESS, text.trim(), Collections.emptyList(), System.currentTimeMillis());
+        synchronized (bot.cycleLock) {
+            if (bots.get(bot.id) != bot || bot.token != cycleToken || bot.completedCycles != cycle
+                    || terminal(bot.status) || bot.stopping || cycleToken.isCancelled()) return;
+            if (bus.recordPresentationIfAbsent(message) != message) return;
+        }
         publishMission(bot.missionId);
     }
 

@@ -21,6 +21,10 @@ object WorkspaceProjection {
             val assignments = store.listAssignments(scope.workspaceId, WORKSPACE_PAGE_SIZE)
             val hasMore = assignmentNext(store, scope.workspaceId, assignments) != null
             val snapshots = LocalRunStore(context).readCrewMissionSnapshots(scope.executionSessionId)
+            snapshots.forEach { snapshot ->
+                WorkspaceChanges.observeCatalogSignature(scope.executionSessionId, snapshot.missionId,
+                    WorkspaceCatalogStatusSignature.from(snapshot))
+            }
             // Catalog browsing must never instantiate/configure a Crew runtime for each row.
             val manager = CoreAgentRuntime.crewManagerForSession(scope.executionSessionId)
             val projected = assignments.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
@@ -81,11 +85,11 @@ object WorkspaceProjection {
         val issue = WorkspaceChanges.issue(scope.executionSessionId, assignment.missionId)
             ?.let { context.getString(R.string.workspace_snapshot_unavailable) }
         val status = when {
-            unsettled?.type == WorkspaceControlType.PAUSE && !quiescent -> WorkspaceUiStatus.STOPPING
             assignment.needsReconciliation || issue != null -> WorkspaceUiStatus.UNKNOWN
-            recorded?.status == "STOPPED" && quiescent -> WorkspaceUiStatus.PAUSED
+            recorded?.status == "STOPPED" -> workspaceStoppedAssignmentStatus(live != null, quiescent)
+            unsettled?.type == WorkspaceControlType.PAUSE && !quiescent -> WorkspaceUiStatus.STOPPING
             unsettled != null -> WorkspaceUiStatus.UNKNOWN
-            else -> status(recorded?.status)
+            else -> workspaceRecordedStatus(recorded?.status)
         }
         val note = listOfNotNull(issue, com.jarvys.agent.WorkspaceResultDelivery.issue(scope.workspaceId),
             com.jarvys.agent.WorkspaceCoordinationDelivery.issue(scope.workspaceId),
@@ -103,14 +107,15 @@ object WorkspaceProjection {
             pendingControlSaved = pending != null)
     }
 
-    private fun status(value: String?) = when (value) {
-        "QUEUED", "RUNNING" -> WorkspaceUiStatus.ACTIVE
-        "WAITING" -> WorkspaceUiStatus.WAITING
-        "PARTIAL" -> WorkspaceUiStatus.PARTIAL
-        "INTERRUPTED", "FAILED" -> WorkspaceUiStatus.INTERRUPTED
-        "STOPPED" -> WorkspaceUiStatus.STOPPING
-        // DONE remains a worker report; every result keeps its verification disclaimer.
-        "DONE" -> WorkspaceUiStatus.COMPLETED
-        else -> WorkspaceUiStatus.UNKNOWN
-    }
+}
+
+internal fun workspaceRecordedStatus(value: String?): WorkspaceUiStatus = when (value) {
+    "QUEUED", "RUNNING" -> WorkspaceUiStatus.ACTIVE
+    "WAITING" -> WorkspaceUiStatus.WAITING
+    "PARTIAL" -> WorkspaceUiStatus.PARTIAL
+    "INTERRUPTED", "FAILED" -> WorkspaceUiStatus.INTERRUPTED
+    "STOPPED" -> WorkspaceUiStatus.PAUSED
+    // DONE remains a worker report; every result keeps its verification disclaimer.
+    "DONE" -> WorkspaceUiStatus.COMPLETED
+    else -> WorkspaceUiStatus.UNKNOWN
 }

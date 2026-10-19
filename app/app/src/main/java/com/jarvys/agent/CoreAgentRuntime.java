@@ -659,7 +659,8 @@ public final class CoreAgentRuntime {
     AgentRunUiState.crewMissionChanged(this.sessionId, snapshot);
     try {
       crewStore.appendCrewMissionSnapshot(snapshot);
-      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId);
+      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId,
+          com.jarvys.agent.workspaces.WorkspaceCatalogStatusSignature.from(snapshot));
     } catch (RuntimeException e) {
       if (e instanceof java.util.concurrent.CancellationException) {
         Thread.interrupted();
@@ -1265,6 +1266,18 @@ public final class CoreAgentRuntime {
       public void onProgress(String stage, String message) {
         // Only fixed public phase keys are retained; never reasoning or provider text.
         manager.recordPhase(bot, stage, cycleToken, cycle);
+      }
+
+      @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
+      public void onAssistantProgress(String callId, String message) {
+        if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(manager.conversationId()))
+          manager.recordAssistantProgress(bot, legacyEpoch, callId, message, cycleToken, cycle);
+      }
+
+      @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
+      public void onAssistantProgress(String runId, String callId, String message) {
+        if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(manager.conversationId()))
+          manager.recordAssistantProgress(bot, runId, callId, message, cycleToken, cycle);
       }
 
       @Override

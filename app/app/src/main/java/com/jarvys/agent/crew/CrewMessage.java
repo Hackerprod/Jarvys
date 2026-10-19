@@ -7,7 +7,7 @@ import java.util.UUID;
 
 /** Immutable, in-memory Crew bus message. */
 public final class CrewMessage {
-    public enum Type { TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, USER }
+    public enum Type { TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, PROGRESS, USER }
     public final String id;
     public final String conversationId;
     public final String from;

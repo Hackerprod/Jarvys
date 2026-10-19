@@ -51,18 +51,21 @@ internal object WorkspaceTimelineProjection {
                 isUserMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
                     stableId, "user", message.text, message.timestampMillis,
                 ).copy(messageId = message.id, timelineKey = stableId), sourceOrder)
+                isAssistantProgress(message) -> rows += MissionRow(AgentRunUiEvent(
+                    stableId, "assistant", "PROGRESS", message.text, timestampMillis = message.timestampMillis,
+                ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false,
+                    workspaceSenderLabel = senderLabel(snapshot, message.from)), sourceOrder)
                 isUserFacingBotMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
                     stableId, "assistant", message.text, message.timestampMillis,
                 ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false,
-                    workspaceSenderLabel = snapshot.bots.takeIf { it.size > 1 }
-                        ?.firstOrNull { it.id == message.from }
-                        ?.let { it.name.ifBlank { it.roleName } }
-                        ?.takeIf(String::isNotBlank)), sourceOrder)
+                    workspaceSenderLabel = senderLabel(snapshot, message.from)), sourceOrder)
             }
         }
 
         snapshot.synthesis.takeIf(String::isNotBlank)
-            ?.takeUnless { synthesis -> rows.any { it.event.kind == "assistant" && it.event.text == synthesis } }
+            ?.takeUnless { synthesis -> rows.any {
+                it.event.kind == "assistant" && it.event.stage != "PROGRESS" && it.event.text == synthesis
+            } }
             ?.let { synthesis ->
                 val resultTime = snapshot.finishedAtMillis.takeIf { it > 0L }
                     ?: messages.lastOrNull()?.timestampMillis ?: snapshot.startedAtMillis
@@ -77,6 +80,16 @@ internal object WorkspaceTimelineProjection {
 
     private fun isUserMessage(message: CrewMessage): Boolean =
         message.from == "user" && message.type == CrewMessage.Type.USER
+
+    private fun isAssistantProgress(message: CrewMessage): Boolean =
+        message.from != "user" && message.to == "user" && message.coordination == null &&
+            message.type == CrewMessage.Type.PROGRESS && message.text.isNotBlank()
+
+    private fun senderLabel(snapshot: CrewMissionSnapshot, senderId: String): String? =
+        snapshot.bots.takeIf { it.size > 1 }
+            ?.firstOrNull { it.id == senderId }
+            ?.let { it.name.ifBlank { it.roleName } }
+            ?.takeIf(String::isNotBlank)
 
     /** Keep user-facing content and untyped worker findings/results, while filtering causal coordination. */
     private fun isUserFacingBotMessage(message: CrewMessage): Boolean =

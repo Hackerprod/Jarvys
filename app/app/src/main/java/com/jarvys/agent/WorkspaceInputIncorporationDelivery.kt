@@ -57,14 +57,16 @@ internal class WorkspaceInputIncorporationDelivery(
     }
 
     fun reconcile(workspaceId: String, token: CancellationToken, admittedRead: Runnable? = null,
-                  admittedInput: CrewInputBinding? = null) {
+                  admittedInput: CrewInputBinding? = null): Boolean {
         require((admittedRead == null) == (admittedInput == null))
         if (admittedInput != null) require(admittedInput.sourceKind == CrewInputBinding.SourceKind.WORKSPACE_REPLY &&
             admittedInput.workspaceId == workspaceId)
-        token.throwIfCancelled()
-        admittedRead?.run()
-        val owner = scope(workspaceId)
-        if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return
+        var insertedAny = false
+        try {
+            token.throwIfCancelled()
+            admittedRead?.run()
+            val owner = scope(workspaceId)
+            if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return false
             fun admit() {
                 token.throwIfCancelled()
                 admittedRead?.run()
@@ -107,17 +109,23 @@ internal class WorkspaceInputIncorporationDelivery(
                                 token.throwIfCancelled(); admit()
                                 source(input)
                                 check(project.durableIdentity() == identity)
+                                var inserted = false
                                 if (!token.runIfActive {
-                                    ledger.appendWorkspaceInputIncorporationIfAbsent(row, Runnable {
+                                    inserted = ledger.appendWorkspaceInputIncorporationIfAbsentAndReport(row, Runnable {
                                         token.throwIfCancelled(); admit()
                                     })
                                 }) token.throwIfCancelled()
+                                insertedAny = insertedAny || inserted
                             }
                         }
                     }
                 }
                 after = assignments.lastOrNull()?.assignmentId
             } while (assignments.size == PAGE)
+            return insertedAny
+        } finally {
+            if (insertedAny) WorkspaceChanges.detailChanged()
+        }
     }
 
     fun read(input: CrewInputBinding, admission: Runnable): WorkspaceInputIncorporation? {

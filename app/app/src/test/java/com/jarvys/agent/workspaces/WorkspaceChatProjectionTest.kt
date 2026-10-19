@@ -2,12 +2,15 @@ package com.jarvys.agent.workspaces
 
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ToolActivity
+import com.jarvys.agent.ui.chat.ConversationVisibility
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkspaceChatProjectionTest {
@@ -114,5 +117,31 @@ class WorkspaceChatProjectionTest {
         assertEquals("tool_call", activeEvent.stage)
         assertEquals("tool_interrupted", historicalEvent.stage)
         assertEquals(activeEvent.timelineKey, historicalEvent.timelineKey)
+    }
+
+    @Test fun persistedAssistantProgressProjectsAsTheSameWorkspaceMessageAfterReopen() {
+        val workspaceId = "11111111-1111-1111-1111-111111111111"
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val bot = CrewBotSnapshot("worker", "coding", "Coding", "Builder", "blue", "Implement the request",
+            "RUNNING", "", "", "", emptyList(), 1L, 0L)
+        val progress = CrewMessage("progress-message", sessionId, "worker", "user", CrewMessage.Type.PROGRESS,
+            "I found the relevant files and am updating the implementation.", emptyList(), 130L)
+        val snapshot = CrewMissionSnapshot("mission", sessionId, "process", "Workspace task", "RUNNING", "",
+            90L, 0L, listOf(bot), listOf(progress))
+        val reopenedSnapshot = requireNotNull(CrewMissionSnapshot.fromJson(snapshot.toJson()))
+
+        val live = WorkspaceTimelineProjection.project(workspaceId,
+            listOf(AgentRunUiEvent.crewMissionEvent(1L, snapshot)))
+        val reopened = WorkspaceTimelineProjection.project(workspaceId,
+            listOf(AgentRunUiEvent.crewMissionEvent(99L, reopenedSnapshot)))
+
+        assertEquals(listOf("assistant"), live.map { it.kind })
+        assertEquals("PROGRESS", live.single().stage)
+        assertEquals(progress.text, live.single().text)
+        assertEquals(progress.id, live.single().messageId)
+        assertFalse(ConversationVisibility.visible(live.single()))
+        assertTrue(ConversationVisibility.visible(live.single(), showAssistantProgress = true))
+        assertEquals(live.single().timelineKey, reopened.single().timelineKey)
+        assertEquals(live.single().text, reopened.single().text)
     }
 }

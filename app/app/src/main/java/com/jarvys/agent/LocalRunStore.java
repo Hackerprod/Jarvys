@@ -601,6 +601,16 @@ public final class LocalRunStore {
                 proposed, finalAdmission::run), "append workspace input incorporation");
     }
 
+    public synchronized boolean appendWorkspaceInputIncorporationIfAbsentAndReport(
+            WorkspaceInputIncorporation proposed, Runnable finalAdmission) {
+        if (proposed == null || finalAdmission == null)
+            throw new IllegalArgumentException("Incorporation and admission are required");
+        WorkspaceInputIncorporation.fromJsonStrict(proposed.toJson());
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceInputIncorporationIfAbsentSync(
+                proposed, finalAdmission::run), "append workspace input incorporation");
+    }
+
     /** Exact metadata only; current registry ownership and READ policy remain the caller's responsibility. */
     public synchronized WorkspaceInputIncorporation readWorkspaceInputIncorporation(String centralSessionId,
             WorkspaceInputIncorporation.SourceKind sourceKind, String sourceId) {
