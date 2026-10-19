@@ -88,30 +88,43 @@ public final class AgentForegroundService extends Service {
   private final Map<String, ActiveRun> activeRuns = new ConcurrentHashMap<>();
   private final Map<String, MainChatTurnContextProvider> steeringProviders = new ConcurrentHashMap<>();
   private final Map<String, CancellationToken> activeRunTokens = new ConcurrentHashMap<>();
+  private volatile int latestStartId;
   /** Compatibility seam for older service tests; run ownership lives in activeRunTokens. */
   private volatile CancellationToken activeRunToken;
   /** Compatibility alias; production steering ownership is session keyed in steeringProviders. */
   private volatile MainChatTurnContextProvider activeSteeringProvider;
 
   private interface SessionWork { void run(ActiveRun active); }
+  private interface SessionAdmission { boolean admit(SessionRequest request); }
+  private interface SessionAdmissionFailure { void failed(RuntimeException failure); }
   private static final class SessionRequest {
     final SessionWork work;
+    final SessionAdmission admission;
+    final SessionAdmissionFailure onAdmissionFailure;
     final boolean interactive;
     final Runnable onRejected;
     final Runnable onStopped;
     final String followUpClaimId;
+    final AtomicBoolean stopped = new AtomicBoolean();
     SessionRequest(SessionWork work, boolean interactive) {
-      this(work, interactive, null, "", null);
+      this(null, null, work, interactive, null, "", null);
     }
     SessionRequest(SessionWork work, boolean interactive, Runnable onRejected) {
-      this(work, interactive, onRejected, "", null);
+      this(null, null, work, interactive, onRejected, "", null);
     }
     SessionRequest(SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId) {
-      this(work, interactive, onRejected, followUpClaimId, null);
+      this(null, null, work, interactive, onRejected, followUpClaimId, null);
     }
     SessionRequest(SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId,
         Runnable onStopped) {
+      this(null, null, work, interactive, onRejected, followUpClaimId, onStopped);
+    }
+    SessionRequest(SessionAdmission admission, SessionAdmissionFailure onAdmissionFailure,
+        SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId,
+        Runnable onStopped) {
       this.work = work;
+      this.admission = admission;
+      this.onAdmissionFailure = onAdmissionFailure;
       this.interactive = interactive;
       this.onRejected = onRejected;
       this.followUpClaimId = followUpClaimId == null ? "" : followUpClaimId;
@@ -122,6 +135,7 @@ public final class AgentForegroundService extends Service {
     final ArrayDeque<SessionRequest> queued = new ArrayDeque<>();
     final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters = new ArrayList<>();
     boolean draining;
+    SessionRequest preparing;
     ActiveRun active;
   }
   private static final class ActiveRun {
@@ -219,10 +233,12 @@ public final class AgentForegroundService extends Service {
             if (request == null) {
               lane.active = null;
               lane.draining = false;
+              lane.preparing = null;
               sessionLanes.remove(sessionId, lane);
               idleWaiters = new ArrayList<>(lane.idleWaiters);
               lane.idleWaiters.clear();
             } else {
+              lane.preparing = request;
               idleWaiters = java.util.Collections.emptyList();
             }
           }
@@ -235,31 +251,8 @@ public final class AgentForegroundService extends Service {
             releaseFollowUpClaim(sessionId, request.followUpClaimId);
             skipResolvedFollowUp = true;
           }
-          if (!skipResolvedFollowUp) {
-            StopController controller = StopController.forRun();
-            CancellationToken token = controller.beginRun();
-            if (token == null) {
-              controllerRejected = true;
-            } else {
-              active = new ActiveRun(sessionId, controller, token);
-              activeRuns.put(sessionId, active);
-              activeRunTokens.put(sessionId, token);
-              activeRunToken = token;
-              synchronized (lane) { lane.active = active; }
-              if (request.interactive) {
-                com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(active.generation);
-                Runnable hook = beforeGenerationBindForTesting;
-                if (hook != null) hook.run();
-                AgentRunUiState.bindGeneration(sessionId, active.generation);
-              }
-              ActiveRun run = active;
-              future = new FutureTask<>(() -> {
-                AgentRunUiState.withSession(sessionId, () -> request.work.run(run));
-                return null;
-              });
-              active.future = future;
-              controller.attachFuture(token, future);
-            }
+          if (skipResolvedFollowUp) {
+            synchronized (lane) { if (lane.preparing == request) lane.preparing = null; }
           }
         }
       }
@@ -268,6 +261,73 @@ public final class AgentForegroundService extends Service {
         break;
       }
       if (skipResolvedFollowUp) {
+        continue;
+      }
+
+      // Admission can include blocking Room reads. Keep it on this worker, before a run token or
+      // UI generation is created, and outside the lane locks so a new start or STOP stays quick.
+      boolean admitted = !request.stopped.get();
+      if (admitted && request.admission != null) {
+        try {
+          admitted = request.admission.admit(request);
+        } catch (RuntimeException failure) {
+          admitted = false;
+          if (request.onAdmissionFailure != null) {
+            try { request.onAdmissionFailure.failed(failure); }
+            catch (RuntimeException reportingFailure) { reportStopPersistenceFailure(reportingFailure); }
+          } else {
+            reportStopPersistenceFailure(failure);
+          }
+        }
+      }
+      if (!admitted || request.stopped.get()) {
+        synchronized (interruptAdmissionLock(sessionId)) {
+          synchronized (sessionLaneLock) {
+            synchronized (lane) {
+              if (lane.preparing == request) lane.preparing = null;
+            }
+          }
+        }
+        continue;
+      }
+
+      boolean skipStoppedRequest = false;
+      synchronized (interruptAdmissionLock(sessionId)) {
+        synchronized (sessionLaneLock) {
+          synchronized (lane) {
+            if (lane.preparing == request) lane.preparing = null;
+            if (request.stopped.get()) {
+              skipStoppedRequest = true;
+            } else {
+              StopController controller = StopController.forRun();
+              CancellationToken token = controller.beginRun();
+              if (token == null) {
+                controllerRejected = true;
+              } else {
+                active = new ActiveRun(sessionId, controller, token);
+                activeRuns.put(sessionId, active);
+                activeRunTokens.put(sessionId, token);
+                activeRunToken = token;
+                synchronized (lane) { lane.active = active; }
+                if (request.interactive) {
+                  com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(active.generation);
+                  Runnable hook = beforeGenerationBindForTesting;
+                  if (hook != null) hook.run();
+                  AgentRunUiState.bindGeneration(sessionId, active.generation);
+                }
+                ActiveRun run = active;
+                future = new FutureTask<>(() -> {
+                  AgentRunUiState.withSession(sessionId, () -> request.work.run(run));
+                  return null;
+                });
+                active.future = future;
+                controller.attachFuture(token, future);
+              }
+            }
+          }
+        }
+      }
+      if (skipStoppedRequest) {
         continue;
       }
       if (controllerRejected) {
@@ -412,7 +472,16 @@ public final class AgentForegroundService extends Service {
       if (lane != null) {
         synchronized (sessionLaneLock) {
           synchronized (lane) {
-            stoppedRequests = new ArrayList<>(lane.queued);
+            if (lane.preparing != null) {
+              lane.preparing.stopped.set(true);
+              stoppedRequests = new ArrayList<>();
+              stoppedRequests.add(lane.preparing);
+              lane.preparing = null;
+            }
+            if (!lane.queued.isEmpty()) {
+              if (stoppedRequests.isEmpty()) stoppedRequests = new ArrayList<>();
+              stoppedRequests.addAll(lane.queued);
+            }
             lane.queued.clear();
           }
         }
@@ -433,6 +502,7 @@ public final class AgentForegroundService extends Service {
         }
       }
       for (SessionRequest request : stoppedRequests) {
+        request.stopped.set(true);
         try {
           if (request.onStopped != null) {
             request.onStopped.run();
@@ -834,8 +904,9 @@ public final class AgentForegroundService extends Service {
             store.readPendingInternalConversationInputs(sessionId));
         if (row == null) continue;
         String messageId = row.optString("messageId", "");
-        if (messageId.isEmpty() || !queuedInternalInputIds.add(messageId)) continue;
-        Runnable releaseClaim = () -> queuedInternalInputIds.remove(messageId);
+        String claimKey = internalInputClaimKey(sessionId, messageId);
+        if (messageId.isEmpty() || !queuedInternalInputIds.add(claimKey)) continue;
+        Runnable releaseClaim = () -> queuedInternalInputIds.remove(claimKey);
         enqueueSessionRun(sessionId, new SessionRequest(active -> {
           try {
             if (store.readConversationInputState(sessionId, messageId) != null) return;
@@ -855,6 +926,11 @@ public final class AgentForegroundService extends Service {
     } catch (RuntimeException failure) {
       reportStopPersistenceFailure(failure);
     }
+    stopServiceIfIdle();
+  }
+
+  private static String internalInputClaimKey(String sessionId, String messageId) {
+    return sessionId.length() + ":" + sessionId + messageId.length() + ":" + messageId;
   }
 
   /**
@@ -1047,6 +1123,28 @@ public final class AgentForegroundService extends Service {
     AgentRunUiState.fail(sessionId, message);
   }
 
+  private void resolveRejectedStoredSubmission(String sessionId, String displayGoal,
+      boolean userMessageAlreadyRecorded, String userMessageId, String followUpRequestId,
+      boolean stopped, Runnable releaseClaim) {
+    try {
+      if (userMessageAlreadyRecorded && userMessageId != null && !userMessageId.isEmpty()) {
+        ConversationInput input = new LocalRunStore(this).readConversationInput(sessionId, userMessageId);
+        if (input != null && input.origin != ConversationInput.Origin.USER) return;
+      }
+      if (stopped) {
+        stopQueuedInteractiveSubmission(sessionId, displayGoal, userMessageAlreadyRecorded,
+            userMessageId, followUpRequestId);
+      } else {
+        failRejectedInteractiveSubmission(sessionId, displayGoal, userMessageAlreadyRecorded, userMessageId);
+      }
+    } catch (RuntimeException failure) {
+      reportStopPersistenceFailure(failure);
+      if (!stopped) AgentRunUiState.fail(sessionId, getString(R.string.chat_interrupt_start_failed));
+    } finally {
+      if (releaseClaim != null) releaseClaim.run();
+    }
+  }
+
   private void stopQueuedInteractiveSubmission(String sessionId, String displayGoal,
       boolean userMessageAlreadyRecorded, String userMessageId, String followUpRequestId) {
     String message = AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped);
@@ -1132,15 +1230,13 @@ public final class AgentForegroundService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+    latestStartId = Math.max(latestStartId, startId);
     if (intent != null && ACTION_RECOVER_PENDING_INPUTS.equals(intent.getAction())) {
       enqueuePendingInputRecovery(null);
-      enqueuePendingInternalConversationInputs(null);
       return START_NOT_STICKY;
     }
     if (intent == null) {
       enqueuePendingInputRecovery(null);
-      enqueuePendingInternalConversationInputs(null);
-      stopServiceIfIdle();
       return START_NOT_STICKY;
     }
     if (intent != null && ACTION_STOP.equals(intent.getAction())) {
@@ -1193,25 +1289,6 @@ public final class AgentForegroundService extends Service {
         intent == null ? new ArrayList<>() : intent.getStringArrayListExtra("agent_skill_ids");
     if (selectedSkillIds == null) selectedSkillIds = new ArrayList<>();
     final ArrayList<String> runSkillIds = selectedSkillIds;
-    final LocalRunStore submittedInputStore = realAgent ? new LocalRunStore(this) : null;
-    final ConversationInput submittedInput = realAgent && userMessageAlreadyRecorded
-        && !existingUserMessageId.isEmpty()
-        ? submittedInputStore.readConversationInput(chatSessionId, existingUserMessageId) : null;
-    // SYSTEM inputs may become context for a later user or AGENT turn, but never initiate one.
-    if (submittedInput != null && submittedInput.origin == ConversationInput.Origin.SYSTEM) {
-      stopServiceIfIdle();
-      return START_NOT_STICKY;
-    }
-    final boolean internalInputSubmission = submittedInput != null
-        && submittedInput.origin != ConversationInput.Origin.USER;
-    final String internalRunInputId = internalInputSubmission
-        ? nextEligibleInternalInputId(chatSessionId,
-            submittedInputStore.readPendingInternalConversationInputs(chatSessionId))
-        : existingUserMessageId;
-    if (internalInputSubmission && internalRunInputId.isEmpty()) {
-      stopServiceIfIdle();
-      return START_NOT_STICKY;
-    }
     if (manualDeviceTest && ArtemisAccessibilityService.getInstance() == null) {
       lastRunReport = "No se inició: activa Jarvys en Ajustes > Accesibilidad.";
       if (realAgent)
@@ -1225,23 +1302,100 @@ public final class AgentForegroundService extends Service {
     }
     if (realAgent || compactConversation) {
       final boolean isInteractive = realAgent;
-      if (internalInputSubmission
-          && submittedInputStore.readConversationInputState(chatSessionId, existingUserMessageId) != null) {
+      final String submittedClaimKey = realAgent && userMessageAlreadyRecorded
+          && !existingUserMessageId.isEmpty()
+          ? internalInputClaimKey(chatSessionId, existingUserMessageId) : null;
+      final java.util.concurrent.atomic.AtomicReference<ConversationInput> submittedInputRef =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      final java.util.concurrent.atomic.AtomicReference<String> internalRunInputIdRef =
+          new java.util.concurrent.atomic.AtomicReference<>(existingUserMessageId);
+      final java.util.concurrent.atomic.AtomicBoolean internalInputSubmissionRef =
+          new java.util.concurrent.atomic.AtomicBoolean(false);
+      final java.util.concurrent.atomic.AtomicReference<String> selectedClaimKeyRef =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      final Runnable releaseInternalInputClaim = submittedClaimKey == null ? null : () -> {
+        queuedInternalInputIds.remove(submittedClaimKey);
+        String selectedClaimKey = selectedClaimKeyRef.getAndSet(null);
+        if (selectedClaimKey != null && !selectedClaimKey.equals(submittedClaimKey))
+          queuedInternalInputIds.remove(selectedClaimKey);
+      };
+      if (submittedClaimKey != null && !queuedInternalInputIds.add(submittedClaimKey)) {
         stopServiceIfIdle();
         return START_NOT_STICKY;
       }
-      final Runnable releaseInternalInputClaim = internalInputSubmission
-          ? () -> queuedInternalInputIds.remove(internalRunInputId) : null;
-      if (internalInputSubmission && !queuedInternalInputIds.add(internalRunInputId)) {
+      SessionAdmission admission = realAgent ? request -> {
+        LocalRunStore submittedInputStore = new LocalRunStore(this);
+        ConversationInput submittedInput = userMessageAlreadyRecorded
+            && !existingUserMessageId.isEmpty()
+            ? submittedInputStore.readConversationInput(chatSessionId, existingUserMessageId) : null;
+        submittedInputRef.set(submittedInput);
+        // SYSTEM inputs may become context for a later user or AGENT turn, but never initiate one.
+        if (submittedInput != null && submittedInput.origin == ConversationInput.Origin.SYSTEM) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          stopServiceIfIdle();
+          return false;
+        }
+        boolean internalInputSubmission = submittedInput != null
+            && submittedInput.origin != ConversationInput.Origin.USER;
+        internalInputSubmissionRef.set(internalInputSubmission);
+        String internalRunInputId = internalInputSubmission
+            ? nextEligibleInternalInputId(chatSessionId,
+                submittedInputStore.readPendingInternalConversationInputs(chatSessionId))
+            : existingUserMessageId;
+        internalRunInputIdRef.set(internalRunInputId);
+        if (internalInputSubmission && internalRunInputId.isEmpty()) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          stopServiceIfIdle();
+          return false;
+        }
+        if (internalInputSubmission
+            && submittedInputStore.readConversationInputState(chatSessionId, existingUserMessageId) != null) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          stopServiceIfIdle();
+          return false;
+        }
+        if (internalInputSubmission
+            && submittedInputStore.readConversationInputState(chatSessionId, internalRunInputId) != null) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          stopServiceIfIdle();
+          return false;
+        }
+        if (internalInputSubmission) {
+          String selectedClaimKey = internalInputClaimKey(chatSessionId, internalRunInputId);
+          if (!selectedClaimKey.equals(submittedClaimKey)) {
+            if (!queuedInternalInputIds.add(selectedClaimKey)) {
+              if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+              stopServiceIfIdle();
+              return false;
+            }
+            selectedClaimKeyRef.set(selectedClaimKey);
+          }
+        }
+        if (request.stopped.get()) {
+          if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+          stopServiceIfIdle();
+          return false;
+        }
+        return true;
+      } : null;
+      SessionAdmissionFailure admissionFailure = realAgent ? failure -> {
+        if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
+        LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
         stopServiceIfIdle();
-        return START_NOT_STICKY;
-      }
-      enqueueSessionRun(chatSessionId, new SessionRequest(active -> {
+      } : null;
+      Runnable rejectedSubmission = realAgent ? () -> resolveRejectedStoredSubmission(
+          chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId,
+          followUpRequestId, false, releaseInternalInputClaim) : null;
+      Runnable stoppedSubmission = realAgent ? () -> resolveRejectedStoredSubmission(
+          chatSessionId, chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId,
+          followUpRequestId, true, releaseInternalInputClaim) : releaseInternalInputClaim;
+      enqueueSessionRun(chatSessionId, new SessionRequest(admission, admissionFailure, active -> {
+        ConversationInput submittedInput = submittedInputRef.get();
+        boolean internalInputSubmission = internalInputSubmissionRef.get();
+        String internalRunInputId = internalRunInputIdRef.get();
         try {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else {
-            if (internalInputSubmission
-                && submittedInputStore.readConversationInputState(chatSessionId, internalRunInputId) != null) return;
             runRealAgent(active.token, chatAgentGoal, runSkillIds, chatSessionId, chatDisplayGoal,
                 userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration,
                 internalInputSubmission ? internalRunInputId : existingUserMessageId);
@@ -1270,11 +1424,8 @@ public final class AgentForegroundService extends Service {
         } finally {
           if (releaseInternalInputClaim != null) releaseInternalInputClaim.run();
         }
-      }, isInteractive, isInteractive && !internalInputSubmission ? () -> failRejectedInteractiveSubmission(chatSessionId,
-          chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId) : releaseInternalInputClaim,
-          isInteractive && !internalInputSubmission ? followUpRequestId : "",
-          isInteractive && !internalInputSubmission ? () -> stopQueuedInteractiveSubmission(chatSessionId, chatDisplayGoal,
-              userMessageAlreadyRecorded, existingUserMessageId, followUpRequestId) : releaseInternalInputClaim));
+      }, isInteractive, rejectedSubmission,
+          isInteractive ? followUpRequestId : "", stoppedSubmission));
       return START_NOT_STICKY;
     }
 
@@ -1851,7 +2002,9 @@ public final class AgentForegroundService extends Service {
     boolean noCrew = !CoreAgentRuntime.hasActiveCrewBots();
     if (pendingStopTasks.get() == 0 && activeRuns.isEmpty() && sessionLanes.isEmpty() && !StopController.hasActiveRuns()
         && noCrew) {
-      stopSelf();
+      int startId = latestStartId;
+      if (startId > 0) stopSelfResult(startId);
+      else stopSelf();
     }
   }
 

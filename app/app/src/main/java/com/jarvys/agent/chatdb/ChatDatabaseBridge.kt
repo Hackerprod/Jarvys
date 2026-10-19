@@ -94,7 +94,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         @Volatile @JvmField internal var mainThreadGuardDisabledForTests = false
 
         /** Set only by Gradle for JVM unit tests (system property); never present in the app process. */
-        private val UNIT_TEST_MAIN_THREAD_GUARD_OFF: Boolean =
+        private fun unitTestMainThreadGuardDisabled(): Boolean =
             System.getProperty("jarvys.unitTests.mainThreadGuardOff") == "true"
 
         /** Returns the per-filesDir facade. Creating it does not open SQLite. */
@@ -271,7 +271,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         check(Thread.currentThread() !== executorThread) {
             "ChatDatabaseBridge cannot be re-entered from its own executor thread"
         }
-        check(mainThreadGuardDisabledForTests || UNIT_TEST_MAIN_THREAD_GUARD_OFF || Looper.myLooper() != Looper.getMainLooper()) {
+        check(mainThreadGuardDisabledForTests || unitTestMainThreadGuardDisabled()
+            || Looper.myLooper() != Looper.getMainLooper()) {
             "ChatDatabaseBridge blocking methods must not be called from the main thread"
         }
         return try {
