@@ -49,6 +49,12 @@ public class CrewCoordinationCaptureTest {
                 arguments.put("to", "chief"); arguments.put("type", type.name());
                 arguments.put("text", "content for " + type);
                 CoreToolResult result = msgSend.execute(arguments, sender.token);
+                if (type == CrewMessage.Type.PROGRESS) {
+                    assertFalse(result.content, result.success);
+                    assertEquals("runtime-only presentation cannot be authored as a Crew message", prior,
+                            delivered.size());
+                    continue;
+                }
                 assertTrue(result.content, result.success);
                 assertEquals("content for " + type, delivered.get(prior).text);
                 assertEquals(type, delivered.get(prior).type);

@@ -41,4 +41,16 @@ class WorkspaceUiStateTest {
         assertEquals("<b>Raw</b>", workspaceDisplayText("<b>Raw</b>", "Unknown"))
         assertEquals(4097, workspaceDisplayText("a".repeat(10000), "Unknown").length)
     }
+
+    @Test fun stoppedBotWithoutALiveCurrentProcessBotDoesNotProjectAsActive() {
+        val projected = workspaceStoppedAssignmentStatus(liveBotInProcess = false, quiescent = false)
+
+        assertEquals(WorkspaceUiStatus.PAUSED, projected)
+        assertFalse(workspaceHasActiveWork(projected, emptyList()))
+        assertEquals(WorkspaceUiStatus.STOPPING,
+            workspaceStoppedAssignmentStatus(liveBotInProcess = true, quiescent = false))
+        assertEquals(WorkspaceUiStatus.PAUSED,
+            workspaceStoppedAssignmentStatus(liveBotInProcess = true, quiescent = true))
+        assertEquals(WorkspaceUiStatus.PAUSED, workspaceRecordedStatus("STOPPED"))
+    }
 }

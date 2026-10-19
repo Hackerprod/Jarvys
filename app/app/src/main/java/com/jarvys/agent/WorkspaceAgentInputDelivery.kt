@@ -70,6 +70,7 @@ internal object WorkspaceAgentInputDelivery {
             return
         }
         val storedId = store.appendConversationInput(input)
+        com.jarvys.agent.workspaces.WorkspaceChanges.changed()
         AgentForegroundService.startRealAgentFromStoredChatMessage(
             context.applicationContext, WorkspaceIdentity.CENTRAL_SESSION, storedId,
         )

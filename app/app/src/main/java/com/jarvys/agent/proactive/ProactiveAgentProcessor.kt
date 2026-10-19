@@ -130,7 +130,27 @@ object ProactiveReadOnlyToolFactory {
 /** Connector output is also redacted before becoming a model tool-result turn. */
 private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : CoreTool {
     override fun declaration(): ToolSpec = delegate.declaration()
+    override fun canDelegate() = delegate.canDelegate()
+    override fun unattendedAccess() = delegate.unattendedAccess()
+    override fun isConnectorTool() = delegate.isConnectorTool()
+    override fun isMcpTool() = delegate.isMcpTool()
+    override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()
+    override fun accessClassification() = delegate.accessClassification()
+    override fun persistenceEffect() = delegate.persistenceEffect()
     override fun executionMode() = delegate.executionMode()
+    override fun responseCallPolicy() = delegate.responseCallPolicy()
+    override fun additionalCallNotStartedMessage() = delegate.additionalCallNotStartedMessage()
+    override fun preflightErrorMessage(arguments: Map<String, Any>, reason: String) =
+        delegate.preflightErrorMessage(arguments, reason)
+    override fun completeResultIdentity(arguments: Map<String, Any>) = delegate.completeResultIdentity(arguments)
+    override fun isCompleteResult(arguments: Map<String, Any>, content: String) =
+        delegate.isCompleteResult(arguments, content)
+    override fun completeResultAlreadyVisibleMessage() = delegate.completeResultAlreadyVisibleMessage()
+    override fun auditDetail(arguments: Map<String, Any>) = delegate.auditDetail(arguments)
+    override fun hideFromProgress() = delegate.hideFromProgress()
+    override fun activityDisplayName(arguments: Map<String, Any>) = delegate.activityDisplayName(arguments)
+    override fun activitySkillId(arguments: Map<String, Any>) = delegate.activitySkillId(arguments)
+    override fun activitySkillName(arguments: Map<String, Any>) = delegate.activitySkillName(arguments)
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         val result = delegate.execute(arguments, token)

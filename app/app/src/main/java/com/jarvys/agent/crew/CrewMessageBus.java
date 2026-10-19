@@ -67,6 +67,35 @@ public final class CrewMessageBus {
         return message;
     }
 
+    /** Records idempotent presentation evidence without admitting it to a worker mailbox. */
+    CrewMessage recordPresentationIfAbsent(CrewMessage message) {
+        if (message == null || message.type != CrewMessage.Type.PROGRESS || "user".equals(message.from)
+                || !"user".equals(message.to) || message.activity != null || message.coordination != null
+                || message.inputBinding != null || !message.refs.isEmpty())
+            throw new IllegalArgumentException("Presentation messages cannot carry activity or causal authority");
+        synchronized (monitor) {
+            if (!conversationId.equals(message.conversationId)) throw new IllegalArgumentException("Wrong Crew message scope");
+            for (CrewMessage existing : log) if (existing.id.equals(message.id)) {
+                if (!isTextOnlyPresentation(existing)
+                        || existing.type != message.type
+                        || !existing.from.equals(message.from)
+                        || !existing.to.equals(message.to)
+                        || !existing.refs.equals(message.refs))
+                    throw new IllegalStateException("Crew message ID collides with different or authoritative evidence");
+                // Text-only presentation callbacks can be replayed with changed display text.
+                return existing;
+            }
+            log.add(message);
+            return message;
+        }
+    }
+
+    private static boolean isTextOnlyPresentation(CrewMessage message) {
+        return message.type == CrewMessage.Type.PROGRESS && !"user".equals(message.from)
+                && "user".equals(message.to) && message.activity == null
+                && message.coordination == null && message.inputBinding == null && message.refs.isEmpty();
+    }
+
     public CrewMessage recordActivity(String from, com.jarvys.agent.ToolActivity activity) {
         synchronized(monitor) {
             for(CrewMessage existing:log) if(existing.from.equals(from) && existing.activity!=null

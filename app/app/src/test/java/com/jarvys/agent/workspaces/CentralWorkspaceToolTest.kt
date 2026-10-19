@@ -82,6 +82,13 @@ class CentralWorkspaceToolTest {
                 "botId" to botId, "expectedAssignmentRevision" to expectedAssignmentRevision,
                 "key" to key, "text" to text, "correlationMessageId" to correlationMessageId,
                 "requestId" to requestId, "originalUserRequest" to originalUserRequest), admission, token)
+        override fun inbox(workspaceId: String, limit: Int, afterMessageId: String?, admission: Runnable) =
+            invoke("inbox", mapOf("workspaceId" to workspaceId, "limit" to limit,
+                "afterMessageId" to afterMessageId), admission)
+        override fun readMessage(workspaceId: String, messageId: String, expectedSha256: String, offset: Int,
+                                 token: CancellationToken, admission: Runnable) =
+            invoke("read_message", mapOf("workspaceId" to workspaceId, "messageId" to messageId,
+                "expectedSha256" to expectedSha256, "offset" to offset), admission, token)
         override fun results(workspaceId: String, limit: Int, afterResultId: String?, admission: Runnable) =
             invoke("results", mapOf("workspaceId" to workspaceId, "limit" to limit, "afterResultId" to afterResultId), admission)
         override fun readResult(workspaceId: String, resultId: String, expectedSha256: String, offset: Int,
@@ -142,7 +149,7 @@ class CentralWorkspaceToolTest {
             mapOf("action" to "read_message", "workspace_id" to workspace, "message_id" to coordinationId,
                 "expected_sha256" to sha), message)) {
             val result = tool.execute(arguments, token)
-            assertTrue(result.content, result.success)
+            assertTrue("action=${arguments["action"]}: ${result.content}", result.success)
             val output = JSONObject(result.content)
             assertEquals("workspace_data", output.getString("kind"))
             assertEquals(CentralWorkspaceTool.INTERPRETATION, output.getString("interpretation"))

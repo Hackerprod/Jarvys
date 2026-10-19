@@ -931,6 +931,13 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         it.strictJournals.appendWorkspaceInputIncorporation(value) { beforeWrite?.check() }
     }
 
+    fun appendWorkspaceInputIncorporationIfAbsentSync(
+        value: WorkspaceInputIncorporationJournal,
+        beforeWrite: BeforeChatWrite? = null,
+    ): ChatDbResult<Boolean> = execute {
+        it.strictJournals.appendWorkspaceInputIncorporationAndReport(value) { beforeWrite?.check() }
+    }
+
     fun readWorkspaceInputIncorporationSync(
         centralSessionId: String,
         sourceKind: WorkspaceInputIncorporationJournal.SourceKind,

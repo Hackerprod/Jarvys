@@ -174,6 +174,18 @@ class ApkFactorySkillScopeTest {
         assertTrue(repo.selectedForProfile(listOf(id), "coding").any { it.metadata.id == id })
     }
 
+    @Test fun factoryReferenceActivityNameShowsTheReferenceWhileInternalSkillsStayUnnamed() {
+        val factory = factory()
+        val factoryTool = LoadSkillTool(listOf(factory), 16384, { true }, "coding")
+        assertEquals("${factory.metadata.name} · database", factoryTool.activitySkillName(mapOf(
+            "skill_id" to id, "resource" to "database", "resource_version" to FactoryGuidanceBundle.VERSION)))
+
+        val internal = repository().skills.value.first { SkillRepository.isInternalBundledSkill(it) }
+        val internalTool = LoadSkillTool(listOf(internal), 16384)
+        assertEquals("", internalTool.activitySkillName(mapOf("skill_id" to internal.metadata.id,
+            "resource" to "private-reference", "resource_version" to FactoryGuidanceBundle.VERSION)))
+    }
+
     @Test fun realCodingBotToolAssemblyLoadsTheReservedSkill() {
         val repo = repository()
         val session = "factory-skill-scope-${System.nanoTime()}"
@@ -446,6 +458,158 @@ class ApkFactorySkillScopeTest {
         val stillAvailable = LoadSkillTool(listOf(factory()), 16384,
             { repository().enabledForProfile("coding").any { it.metadata.id == id } }, "coding")
         assertTrue(stillAvailable.execute(base, CancellationToken.uncancellable()).success)
+    }
+
+    @Test fun realCoreAgentLoopAdmitsOneSkillReferencePerResponseAndReportsBaselineBurstCost() {
+        data class Measurement(
+            val injectedChars: Int,
+            val bodyChars: Int,
+            val loadedResources: Int,
+            val failures: Int,
+            val notStarted: Int,
+            val executedResources: List<String>,
+            val invalidResult: String?
+        )
+
+        fun measure(enforceProgressivePolicy: Boolean): Measurement {
+            val entry = factory()
+            val delegate = LoadSkillTool(listOf(entry), 16384, { true }, "coding")
+            val skillTool: CoreTool = if (enforceProgressivePolicy) delegate else object : CoreTool by delegate {
+                override fun responseCallPolicy() = CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE
+            }
+            val firstWave = listOf("lifecycle", "basics", "database", "external-actions", "sensors",
+                "native-services", "documents-media")
+            val middleWave = listOf("contacts-calendar", "local-ui", "presentation")
+            val invalidWave = listOf(
+                "contacts-calendar" to "factory-guidance-v89",
+                "made-up-resource" to FactoryGuidanceBundle.VERSION,
+                "presentation" to "factory-guidance-v89")
+            var modelTurn = 0
+            var injectedChars = 0
+            val model = object : CoreAgentLoop.Model {
+                override fun complete(
+                    transcript: List<ConversationTurn>, prompt: String, declarations: List<ToolSpec>,
+                    token: CancellationToken
+                ): ModelReply {
+                    modelTurn++
+                    if (modelTurn == 4) {
+                        injectedChars = transcript.filter {
+                            it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "read_skill" &&
+                                it.content.startsWith("Skill $id — resource ")
+                        }.sumOf { it.content.length }
+                        return ModelReply("The requested guidance was reviewed.", emptyList())
+                    }
+                    val calls = if (modelTurn == 1) {
+                        firstWave.mapIndexed { index, resource ->
+                            ModelReply.Call("wave-one-$index", "read_skill", mapOf(
+                                "skill_id" to id, "resource" to resource,
+                                "resource_version" to FactoryGuidanceBundle.VERSION))
+                        }
+                    } else if (modelTurn == 2) {
+                        middleWave.mapIndexed { index, resource ->
+                            ModelReply.Call("wave-middle-$index", "read_skill", mapOf(
+                                "skill_id" to id, "resource" to resource,
+                                "resource_version" to FactoryGuidanceBundle.VERSION))
+                        }
+                    } else {
+                        listOf(ModelReply.Call("wave-two-valid", "read_skill", mapOf(
+                            "skill_id" to id, "resource" to "durable-native",
+                            "resource_version" to FactoryGuidanceBundle.VERSION))) +
+                            invalidWave.mapIndexed { index, (resource, version) ->
+                                ModelReply.Call("wave-two-invalid-$index", "read_skill", mapOf(
+                                    "skill_id" to id, "resource" to resource,
+                                    "resource_version" to version))
+                            }
+                    }
+                    return ModelReply("", calls)
+                }
+            }
+            val events = mutableListOf<ToolActivity>()
+            val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(skillTool)), "", "skill-burst",
+                CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null)
+            val result = loop.run("Inspect only the guidance needed for this task", emptyList(),
+                CancellationToken.uncancellable(), object : CoreAgentLoop.ProgressListener {
+                    override fun onProgress(stage: String, message: String) = Unit
+                    override fun onToolActivity(activity: ToolActivity) { events += activity }
+                })
+            assertEquals("COMPLETED", result.outcome)
+            assertEquals("the final model request must include only complete skill payloads visible to it",
+                injectedChars, loop.transcriptSnapshot().filter {
+                    it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "read_skill" &&
+                        it.content.startsWith("Skill $id — resource ")
+                }.sumOf { it.content.length })
+            val completeResults = loop.transcriptSnapshot().filter {
+                it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "read_skill" &&
+                    it.content.startsWith("Skill $id — resource ")
+            }
+            val invalidResult = loop.transcriptSnapshot().firstOrNull {
+                it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "read_skill" &&
+                    it.content.startsWith("Tool error:")
+            }?.content
+            return Measurement(injectedChars, completeResults.sumOf { it.content.substringAfter('\n').length },
+                completeResults.size,
+                events.count { it.stage == "tool_error" }, events.count { it.stage == "tool_not_started" },
+                completeResults.map { it.content.substringAfter("resource ").substringBefore(" @") }, invalidResult)
+        }
+
+        val legacy = measure(enforceProgressivePolicy = false)
+        val progressive = measure(enforceProgressivePolicy = true)
+        assertEquals(11, legacy.loadedResources)
+        assertEquals(3, legacy.failures)
+        assertEquals(0, legacy.notStarted)
+        assertEquals(49399, legacy.injectedChars)
+        assertEquals(48568, legacy.bodyChars)
+        assertEquals(3, progressive.loadedResources)
+        assertEquals(0, progressive.failures)
+        assertEquals(11, progressive.notStarted)
+        assertEquals(16676, progressive.injectedChars)
+        assertEquals(16444, progressive.bodyChars)
+        assertEquals(listOf("lifecycle", "contacts-calendar", "durable-native"), progressive.executedResources)
+        assertTrue(legacy.injectedChars > progressive.injectedChars)
+        assertNotNull(legacy.invalidResult)
+        assertTrue(legacy.invalidResult.orEmpty().contains(FactoryGuidanceBundle.VERSION))
+        FactoryGuidanceBundle.NAMES.forEach { name -> assertTrue(legacy.invalidResult.orEmpty().contains(name)) }
+    }
+
+    @Test fun invalidResourceArgumentTypesReceiveTheCurrentCatalogThroughTheRealLoop() {
+        val entry = factory()
+        val tool = LoadSkillTool(listOf(entry), 16384, { true }, "coding")
+        val model = object : CoreAgentLoop.Model {
+            private var turn = 0
+            override fun complete(
+                transcript: List<ConversationTurn>, prompt: String, declarations: List<ToolSpec>,
+                token: CancellationToken
+            ) = if (turn++ == 0) ModelReply("", listOf(ModelReply.Call("invalid-resource-type", "read_skill",
+                mapOf("skill_id" to id, "resource" to 7, "resource_version" to FactoryGuidanceBundle.VERSION))))
+            else ModelReply("I received the current catalog.", emptyList())
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), "", "skill-catalog-error")
+        val result = loop.run("Read a reference", emptyList(), CancellationToken.uncancellable(), null)
+        assertEquals("COMPLETED", result.outcome)
+        val failure = loop.transcriptSnapshot().single { it.kind == ConversationTurn.Kind.TOOL_RESULT }.content
+        assertTrue(failure, failure.contains("Current resource_version: ${FactoryGuidanceBundle.VERSION}"))
+        FactoryGuidanceBundle.NAMES.forEach { assertTrue(failure, failure.contains(it)) }
+    }
+
+    @Test fun unavailableSkillDoesNotLeakItsResourceCatalogInPreflightErrors() {
+        val tool = LoadSkillTool(listOf(factory()), 16384, { false }, "coding")
+        val error = tool.preflightErrorMessage(mapOf(
+            "skill_id" to id,
+            "resource" to 7,
+            "resource_version" to FactoryGuidanceBundle.VERSION,
+        ), "resource must be a string")
+
+        assertEquals("That skill is not available in this agent's scope or is no longer enabled", error)
+        assertFalse(error.contains(FactoryGuidanceBundle.VERSION))
+        FactoryGuidanceBundle.NAMES.forEach { assertFalse(error, error.contains(it)) }
+    }
+
+    @Test fun readSkillDescriptionExplainsThePerResponseAdmissionRule() {
+        val description = LoadSkillTool(listOf(factory()), 16384).declaration().description
+
+        assertTrue(description.contains("one reference per model response"))
+        assertTrue(description.contains("additional requests are marked not started"))
+        assertTrue(description.contains("requested in a later response"))
     }
 
     @Test fun upgradingBundledGuidancePreservesCustomizedFilesUsageAndProfile() {

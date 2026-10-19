@@ -15,6 +15,7 @@ class WorkspaceCoordinationDelivery internal constructor(
 ) {
     constructor(context: Context) : this(context, LocalRunStore(context))
     private val app = context.applicationContext
+    private data class RegisteredReference(val reference: WorkspaceCoordinationReference, val inserted: Boolean)
 
     private fun owner(workspaceId: String): WorkspaceRecord = WorkspaceRegistry(app).use { registry ->
         requireNotNull(registry.getWorkspace(workspaceId)) { "Workspace no longer exists" }.also {
@@ -40,7 +41,7 @@ class WorkspaceCoordinationDelivery internal constructor(
         return evidence
     }
 
-    private fun register(workspaceId: String, evidenceId: String, token: CancellationToken): WorkspaceCoordinationReference? {
+    private fun register(workspaceId: String, evidenceId: String, token: CancellationToken): RegisteredReference? {
         token.throwIfCancelled()
         val scope = owner(workspaceId)
         val evidence = requireNotNull(ledger.readCrewCoordinationEvidence(scope.executionSessionId, evidenceId))
@@ -49,38 +50,52 @@ class WorkspaceCoordinationDelivery internal constructor(
         val proposed = WorkspaceCoordinationReference.create(evidence, scope.ownerCentralSessionId, workspaceId,
             target.assignmentId, target.requestId, target.revision)
         return synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
-            active(token) { ledger.appendWorkspaceCoordinationReferenceIfAbsent(proposed, Runnable { token.throwIfCancelled() }) }
+            active(token) {
+                val inserted = ledger.readWorkspaceCoordinationReference(scope.executionSessionId,
+                    proposed.referenceId) == null
+                RegisteredReference(ledger.appendWorkspaceCoordinationReferenceIfAbsent(proposed,
+                    Runnable { token.throwIfCancelled() }), inserted)
+            }
         }
     }
 
     /** Registers the exact durable central reference before an internal input is exposed to Jarvys. */
     internal fun registerForIncomingInput(workspaceId: String, evidenceId: String): WorkspaceCoordinationReference? =
-        register(workspaceId, evidenceId, CancellationToken.uncancellable())
+        register(workspaceId, evidenceId, CancellationToken.uncancellable())?.reference
 
-    private fun notice(reference: WorkspaceCoordinationReference, token: CancellationToken, admission: Runnable) {
+    private fun notice(reference: WorkspaceCoordinationReference, token: CancellationToken, admission: Runnable): Boolean {
         token.throwIfCancelled(); admission.run(); source(reference)
+        var inserted = false
         synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
             active(token) {
+                inserted = ledger.readWorkspaceCoordinationNotice(reference.ownerCentralSessionId,
+                    reference.referenceId) == null
                 ledger.appendWorkspaceCoordinationNoticeIfAbsent(reference, Runnable { token.throwIfCancelled(); admission.run() })
             }
         }
-        // No timeline event: the native workspace indicator consolidates metadata without chat chatter.
-        WorkspaceChanges.changed()
+        return inserted
     }
 
     internal fun reconcile(workspaceId: String, token: CancellationToken) {
         val scope = owner(workspaceId)
         if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return
+        var visibleChange = false
         var after: String? = null
-        do {
-            token.throwIfCancelled()
-            val ids = ledger.listCrewCoordinationEvidence(scope.executionSessionId, PAGE, after)
-            for (id in ids) {
-                val reference = register(workspaceId, id, token) ?: continue
-                notice(reference, token, Runnable { token.throwIfCancelled() })
-            }
-            after = ids.lastOrNull()
-        } while (ids.size == PAGE)
+        try {
+            do {
+                token.throwIfCancelled()
+                val ids = ledger.listCrewCoordinationEvidence(scope.executionSessionId, PAGE, after)
+                for (id in ids) {
+                    val registered = register(workspaceId, id, token) ?: continue
+                    visibleChange = registered.inserted || visibleChange
+                    visibleChange = notice(registered.reference, token, Runnable { token.throwIfCancelled() }) || visibleChange
+                }
+                after = ids.lastOrNull()
+            } while (ids.size == PAGE)
+        } finally {
+            // One batch of newly visible evidence is one catalog/detail refresh; an idempotent scan is none.
+            if (visibleChange) WorkspaceChanges.changed()
+        }
     }
 
     fun inbox(workspaceId: String, limit: Int, after: String?, admission: Runnable): JSONObject {
@@ -126,7 +141,7 @@ class WorkspaceCoordinationDelivery internal constructor(
         val content = coordinationContent(evidence.text, evidence.refs)
         require(offset <= content.length)
         val end = offset + minOf(TEXT_PAGE, content.length - offset)
-        notice(reference, token, admission)
+        if (notice(reference, token, admission)) WorkspaceChanges.changed()
         val current = assignment(reference)
         admission.run(); token.throwIfCancelled()
         ledger.requireWorkspaceCoordinationDisclosureLive(reference, true)
@@ -220,7 +235,6 @@ class WorkspaceCoordinationDelivery internal constructor(
                         "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
                         else -> "PENDING_INCORPORATION"
                     }
-                    WorkspaceChanges.changed()
                     JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
                         .put("assignment_revision", expectedRevision).put("bot_id", botId)
                         .put("worker_input_id", source.messageId).put("stable_key", key)
@@ -234,7 +248,6 @@ class WorkspaceCoordinationDelivery internal constructor(
                     // The outbox commit is durable, while Crew admission or its receipt may have
                     // failed ambiguously. Report that committed intent as pending instead of
                     // telling Jarvys it was rejected; an exact retry/resume reuses the same ID.
-                    WorkspaceChanges.changed()
                     JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
                         .put("assignment_revision", expectedRevision).put("bot_id", botId)
                         .put("worker_input_id", source.messageId).put("stable_key", key)
@@ -448,10 +461,11 @@ class WorkspaceCoordinationDelivery internal constructor(
             try {
                 WorkspaceCoordinationDelivery(context).reconcile(workspaceId, token)
                 WorkspaceInputIncorporationDelivery(context).reconcile(workspaceId, token)
-                errors.remove(workspaceId)
+                if (errors.remove(workspaceId) != null) WorkspaceChanges.detailChanged()
             } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
             catch (_: Exception) {
-                errors[workspaceId] = "Coordination evidence is pending or unavailable; no worker action was repeated."
+                val message = "Coordination evidence is pending or unavailable; no worker action was repeated."
+                if (errors.put(workspaceId, message) != message) WorkspaceChanges.detailChanged()
             }
         }
         @JvmStatic fun isCanonicalWorkspace(context: Context, session: String): Boolean {

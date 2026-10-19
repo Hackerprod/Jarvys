@@ -1391,6 +1391,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_download_open_failed">The file could not be opened. If it was saved, you can find it in Downloads.</string>
     <string name="chat_download_retry">The download could not be confirmed. Check Downloads before trying again.</string>
     <string name="chat_download_open">Open</string>
+    <string name="chat_dialog_close">Close</string>
     <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
     <string name="chat_download_open_failed_title">Could not open the file</string>
     <string name="github_device_error_client">GitHub rejected this app client ID. The app owner must verify the OAuth App configuration.</string>
@@ -1441,6 +1442,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="activity_skill_loading_generic">Loading skill</string>
     <string name="activity_skill_loaded_generic">Loaded skill</string>
     <string name="activity_skill_failed_generic">Failed to load skill</string>
+    <string name="activity_skill_not_started_generic">Skill read not run</string>
     <string name="activity_unconfirmed_detail">No final result was confirmed. Effects may have occurred; inspect the details before retrying.</string>
     <string name="crew_phase_model_wait">Waiting for model response</string>
     <string name="crew_phase_compacting">Compacting</string>

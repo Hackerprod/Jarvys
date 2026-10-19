@@ -598,6 +598,16 @@ public final class LocalRunStore {
                 proposed, finalAdmission::run), "append workspace input incorporation");
     }
 
+    public synchronized boolean appendWorkspaceInputIncorporationIfAbsentAndReport(
+            WorkspaceInputIncorporation proposed, Runnable finalAdmission) {
+        if (proposed == null || finalAdmission == null)
+            throw new IllegalArgumentException("Incorporation and admission are required");
+        WorkspaceInputIncorporation.fromJsonStrict(proposed.toJson());
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceInputIncorporationIfAbsentSync(
+                proposed, finalAdmission::run), "append workspace input incorporation");
+    }
+
     /** Exact metadata only; current registry ownership and READ policy remain the caller's responsibility. */
     public synchronized WorkspaceInputIncorporation readWorkspaceInputIncorporation(String centralSessionId,
             WorkspaceInputIncorporation.SourceKind sourceKind, String sourceId) {
@@ -1471,10 +1481,10 @@ public final class LocalRunStore {
     }
 
     /** Durable acknowledgement that an existing user row entered a run transcript. */
-    public void markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
-        if (sessionId == null || messageIds == null) return;
+    public List<String> markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
+        if (sessionId == null || messageIds == null) return Collections.emptyList();
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
+        return requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
                 sessionId, copyIds(messageIds), "incorporated"), "acknowledge incorporated chat inputs");
     }
 

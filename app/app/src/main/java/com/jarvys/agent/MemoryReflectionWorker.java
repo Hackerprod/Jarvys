@@ -86,9 +86,39 @@ public final class MemoryReflectionWorker {
             List<CoreTool> guardedTools = new ArrayList<>();
             for (CoreTool original : memoryTools) guardedTools.add(new CoreTool() {
                 @Override public ToolSpec declaration() { return original.declaration(); }
-                @Override public ExecutionMode executionMode() { return original.executionMode(); }
                 @Override public boolean canDelegate() { return original.canDelegate(); }
+                @Override public UnattendedAccess unattendedAccess() { return original.unattendedAccess(); }
+                @Override public boolean isConnectorTool() { return original.isConnectorTool(); }
+                @Override public boolean isMcpTool() { return original.isMcpTool(); }
+                @Override public boolean requiresMemoryScopeForScheduledTask() { return original.requiresMemoryScopeForScheduledTask(); }
+                @Override public AccessClassification accessClassification() { return original.accessClassification(); }
+                @Override public PersistenceEffect persistenceEffect() { return original.persistenceEffect(); }
+                @Override public ExecutionMode executionMode() { return original.executionMode(); }
+                @Override public ResponseCallPolicy responseCallPolicy() { return original.responseCallPolicy(); }
+                @Override public String additionalCallNotStartedMessage() { return original.additionalCallNotStartedMessage(); }
+                @Override public String preflightErrorMessage(java.util.Map<String,Object> args, String reason) {
+                    return original.preflightErrorMessage(args, reason);
+                }
+                @Override public String completeResultIdentity(java.util.Map<String,Object> args) {
+                    return original.completeResultIdentity(args);
+                }
+                @Override public boolean isCompleteResult(java.util.Map<String,Object> args, String content) {
+                    return original.isCompleteResult(args, content);
+                }
+                @Override public String completeResultAlreadyVisibleMessage() {
+                    return original.completeResultAlreadyVisibleMessage();
+                }
                 @Override public String auditDetail(java.util.Map<String,Object> args) { return original.auditDetail(args); }
+                @Override public boolean hideFromProgress() { return original.hideFromProgress(); }
+                @Override public String activityDisplayName(java.util.Map<String,Object> args) {
+                    return original.activityDisplayName(args);
+                }
+                @Override public String activitySkillId(java.util.Map<String,Object> args) {
+                    return original.activitySkillId(args);
+                }
+                @Override public String activitySkillName(java.util.Map<String,Object> args) {
+                    return original.activitySkillName(args);
+                }
                 @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active) {
                     if (authority != null) authority.admit();
                     return original.execute(args, active);

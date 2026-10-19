@@ -34,9 +34,10 @@ internal fun toolActivityLabel(activity: ToolActivity, internalSkill: Boolean): 
         val genericResource = when (activity.stage) {
             "tool_result" -> R.string.activity_skill_loaded_generic
             "tool_error" -> R.string.activity_skill_failed_generic
+            "tool_not_started" -> R.string.activity_skill_not_started_generic
             else -> R.string.activity_skill_loading_generic
         }
-        if (activity.stage !in listOf("tool_interrupted", "tool_not_started")) {
+        if (activity.stage != "tool_interrupted") {
             return stringResource(genericResource)
         }
     }

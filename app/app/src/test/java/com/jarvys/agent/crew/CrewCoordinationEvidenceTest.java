@@ -95,4 +95,33 @@ public class CrewCoordinationEvidenceTest {
         assertTrue(bus.pending("worker").isEmpty());
         assertEquals(1, bus.snapshot().size());
     }
+
+    @Test public void presentationReplayWithReusedIdAndChangedTextIsIgnoredWithoutThrowing() {
+        CrewMessageBus bus = new CrewMessageBus("source");
+        CrewMessage first = new CrewMessage("stable-progress", "source", "worker", "user",
+                CrewMessage.Type.PROGRESS, "first phase", Collections.emptyList(), 1L);
+        CrewMessage replay = new CrewMessage("stable-progress", "source", "worker", "user",
+                CrewMessage.Type.PROGRESS, "first phase", Collections.emptyList(), 2L);
+        CrewMessage changedText = new CrewMessage("stable-progress", "source", "worker", "user",
+                CrewMessage.Type.PROGRESS, "later phase", Collections.emptyList(), 2L);
+
+        assertSame(first, bus.recordPresentationIfAbsent(first));
+        assertSame(first, bus.recordPresentationIfAbsent(replay));
+        assertSame(first, bus.recordPresentationIfAbsent(changedText));
+        assertEquals(1, bus.snapshot().size());
+        assertEquals("first phase", bus.snapshot().get(0).text);
+    }
+
+    @Test public void presentationIdCollisionWithCoordinationEvidenceStillFails() {
+        CrewMessageBus bus = new CrewMessageBus("source");
+        CrewCoordinationEvidence evidence = source("same-id", "QUESTION", "assignment request", Collections.emptyList());
+        CrewMessage coordinated = new CrewMessage("same-id", "source", "worker", "chief",
+                CrewMessage.Type.QUESTION, evidence.text, evidence.refs, 1L).withCoordination(evidence);
+        bus.enqueueFresh(coordinated);
+        CrewMessage presentation = new CrewMessage("same-id", "source", "worker", "user", CrewMessage.Type.PROGRESS,
+                "progress", Collections.emptyList(), 2L);
+
+        assertThrows(IllegalStateException.class, () -> bus.recordPresentationIfAbsent(presentation));
+        assertEquals(1, bus.snapshot().size());
+    }
 }

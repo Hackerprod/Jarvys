@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,8 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
@@ -320,7 +321,10 @@ fun ConversationTimeline(
                         )
                     }
                     is ConversationTimelineItem.ToolGroup -> {
-                        val shouldAnimate = item.events.any { ChatMessageArrivalPolicy.key(it) == newestArrivalKey }
+                        // A tool group is one stable row keyed by its first event. An appended child updates
+                        // that row's contents; it must not move the row into AnimatedVisibility and discard
+                        // state held by its open tool sheet.
+                        val shouldAnimate = item.events.firstOrNull()?.let(ChatMessageArrivalPolicy::key) == newestArrivalKey
                         TimelineArrival(shouldAnimate) {
                             ToolGroupLine(item, connectorRegistry, onOpenPreview, onOpenSkillFile)
                         }
@@ -507,13 +511,15 @@ private fun JarvysConversationEvent(
 }
 
 @Composable
-private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Unit) {
-    if (!animateEntry || LocalReducedMotion.current) {
-        content()
-    } else AnimatedVisibility(
-        visible = true,
-        enter = fadeIn(JarvysMotion.feedback()) +
-            androidx.compose.animation.slideInVertically(JarvysMotion.messageArrival()) { it / 12 },
+internal fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Unit) {
+    val shouldAnimate = animateEntry && !LocalReducedMotion.current
+    val visibility = remember { MutableTransitionState(!shouldAnimate) }
+    visibility.targetState = true
+    AnimatedVisibility(
+        visibleState = visibility,
+        enter = if (shouldAnimate) fadeIn(JarvysMotion.feedback()) +
+            androidx.compose.animation.slideInVertically(JarvysMotion.messageArrival()) { it / 12 }
+            else EnterTransition.None,
         exit = ExitTransition.None,
         label = "new-timeline-entry",
     ) { content() }
@@ -867,11 +873,12 @@ private fun ConnectorActivityLine(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolGroupLine(
+internal fun ToolGroupLine(
     group: ConversationTimelineItem.ToolGroup,
     registry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val context = LocalContext.current
     val summary = when {
@@ -903,6 +910,7 @@ private fun ToolGroupLine(
     }
     if (expanded) ModalBottomSheet(
         onDismissRequest = { expanded = false },
+        modifier = Modifier.testTag("tool-group-sheet-${group.firstEventId}"),
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
@@ -916,7 +924,9 @@ private fun ToolGroupLine(
                 }
             }
             LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                Modifier.fillMaxWidth().heightIn(max = 560.dp)
+                    .testTag("tool-group-list-${group.firstEventId}"),
+                state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
             ) {

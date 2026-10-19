@@ -680,7 +680,8 @@ public final class CoreAgentRuntime {
     AgentRunUiState.crewMissionChanged(this.sessionId, snapshot);
     try {
       crewStore.appendCrewMissionSnapshot(snapshot);
-      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId);
+      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId,
+          com.jarvys.agent.workspaces.WorkspaceCatalogStatusSignature.from(snapshot));
     } catch (RuntimeException e) {
       if (e instanceof java.util.concurrent.CancellationException) {
         Thread.interrupted();
@@ -1139,7 +1140,9 @@ public final class CoreAgentRuntime {
             .append("\nActual declared tools: ")
             .append(withRecovery.names());
     if (withRecovery.names().contains("read_skill")) {
-      sbAppend.append("\n\nUse read_skill with a listed skill_id to load relevant guidance.");
+      sbAppend.append("\n\nSKILLS (MANDATORY WHEN read_skill IS DECLARED)\n")
+          .append("Scan the available skill IDs and descriptions first. If exactly one skill clearly applies, select it and read its SKILL.md through read_skill. If several could apply, select the most specific one. If none clearly applies, do not read a skill. Select before reading; descriptions are a catalog, not a reason to load every skill.\n")
+          .append("Load the selected skill just in time for the current step. For versioned references, inspect the core instructions and current project state, then request only the reference needed now. Make at most one read_skill request in a model response; wait for and inspect its result before requesting another reference in a later response. Never batch distinct references or preload them in case they might be useful.");
     }
     sbAppend.append(factoryGuidanceInstructions(bot.role, tools,
         selectedSkills(bot.role.skillIds, bot.role.profileVersion > 0 ? bot.role.id : null), this.budget.loadedSkillChars));
@@ -1294,6 +1297,18 @@ public final class CoreAgentRuntime {
       public void onProgress(String stage, String message) {
         // Only fixed public phase keys are retained; never reasoning or provider text.
         manager.recordPhase(bot, stage, cycleToken, cycle);
+      }
+
+      @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
+      public void onAssistantProgress(String callId, String message) {
+        if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(manager.conversationId()))
+          manager.recordAssistantProgress(bot, legacyEpoch, callId, message, cycleToken, cycle);
+      }
+
+      @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
+      public void onAssistantProgress(String runId, String callId, String message) {
+        if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(manager.conversationId()))
+          manager.recordAssistantProgress(bot, runId, callId, message, cycleToken, cycle);
       }
 
       @Override
@@ -1738,7 +1753,7 @@ public final class CoreAgentRuntime {
     return result;
   }
 
-  private static final class ScheduledTaskBoundTool implements CoreTool {
+  static final class ScheduledTaskBoundTool implements CoreTool {
     private final CoreTool delegate;
     private final boolean writesAllowed;
     private final boolean approvedPendingAction;
@@ -1753,7 +1768,38 @@ public final class CoreAgentRuntime {
     }
 
     @Override public ToolSpec declaration() { return delegate.declaration(); }
+    @Override public boolean canDelegate() { return delegate.canDelegate(); }
+    @Override public boolean requiresMemoryScopeForScheduledTask() {
+      return delegate.requiresMemoryScopeForScheduledTask();
+    }
+    @Override public AccessClassification accessClassification() { return delegate.accessClassification(); }
+    @Override public PersistenceEffect persistenceEffect() { return delegate.persistenceEffect(); }
     @Override public ExecutionMode executionMode() { return delegate.executionMode(); }
+    @Override public ResponseCallPolicy responseCallPolicy() { return delegate.responseCallPolicy(); }
+    @Override public String additionalCallNotStartedMessage() { return delegate.additionalCallNotStartedMessage(); }
+    @Override public String preflightErrorMessage(Map<String, Object> arguments, String reason) {
+      return delegate.preflightErrorMessage(arguments, reason);
+    }
+    @Override public String completeResultIdentity(Map<String, Object> arguments) {
+      return delegate.completeResultIdentity(arguments);
+    }
+    @Override public boolean isCompleteResult(Map<String, Object> arguments, String content) {
+      return delegate.isCompleteResult(arguments, content);
+    }
+    @Override public String completeResultAlreadyVisibleMessage() {
+      return delegate.completeResultAlreadyVisibleMessage();
+    }
+    @Override public String auditDetail(Map<String, Object> arguments) { return delegate.auditDetail(arguments); }
+    @Override public boolean hideFromProgress() { return delegate.hideFromProgress(); }
+    @Override public String activityDisplayName(Map<String, Object> arguments) {
+      return delegate.activityDisplayName(arguments);
+    }
+    @Override public String activitySkillId(Map<String, Object> arguments) {
+      return delegate.activitySkillId(arguments);
+    }
+    @Override public String activitySkillName(Map<String, Object> arguments) {
+      return delegate.activitySkillName(arguments);
+    }
     @Override public UnattendedAccess unattendedAccess() { return delegate.unattendedAccess(); }
     @Override public boolean isConnectorTool() { return delegate.isConnectorTool(); }
     @Override public boolean isMcpTool() { return delegate.isMcpTool(); }

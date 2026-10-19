@@ -1391,6 +1391,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_download_open_failed">No se pudo abrir el archivo. Si se guardó, puedes encontrarlo en Descargas.</string>
     <string name="chat_download_retry">No se pudo confirmar la descarga. Revisa Descargas antes de volver a intentarlo.</string>
     <string name="chat_download_open">Abrir</string>
+    <string name="chat_dialog_close">Cerrar</string>
     <string name="chat_file_preview_unavailable">Vista previa no disponible. Descarga o comparte el archivo original.</string>
     <string name="chat_download_open_failed_title">No se pudo abrir el archivo</string>
     <string name="github_device_error_client">GitHub rechazó el ID de cliente de esta app. El propietario debe revisar la configuración de la OAuth App.</string>
@@ -1441,6 +1442,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="activity_skill_loading_generic">Cargando skill</string>
     <string name="activity_skill_loaded_generic">Skill cargada</string>
     <string name="activity_skill_failed_generic">No se pudo cargar la skill</string>
+    <string name="activity_skill_not_started_generic">Lectura de skill no ejecutada</string>
     <string name="activity_unconfirmed_detail">No se confirmó un resultado final. Puede haber efectos; revisa los detalles antes de reintentar.</string>
     <string name="crew_phase_model_wait">Esperando respuesta del modelo</string>
     <string name="crew_phase_compacting">Compactando</string>

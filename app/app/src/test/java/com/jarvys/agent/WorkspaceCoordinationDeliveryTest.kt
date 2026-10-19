@@ -9,6 +9,7 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -79,6 +80,11 @@ class WorkspaceCoordinationDeliveryTest {
     private fun references() = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, 50, null)
     private fun notices() = ledger.listWorkspaceCoordinationNotices(central, 50, null)
     private fun reconcile() = delivery.reconcile(scope.workspaceId, freshToken)
+    private fun awaitScheduledReceipts() {
+        val executor = WorkspaceResultDelivery::class.java.getDeclaredField("executor")
+            .apply { isAccessible = true }.get(null) as ExecutorService
+        executor.submit {}.get(10, TimeUnit.SECONDS)
+    }
     private fun read(r: WorkspaceCoordinationReference, token: CancellationToken = freshToken,
                      admission: Runnable = noAdmission) =
         delivery.read(scope.workspaceId, r.referenceId, r.contentSha256, 0, token, admission)
@@ -208,6 +214,40 @@ class WorkspaceCoordinationDeliveryTest {
                 row.optJSONObject("provenance")?.optString("messageId") == receipt.getString("worker_input_id")
             })
         } finally { worker.manager.configureCheckpoints(null) }
+    }
+
+    @Test fun reconciliationInvalidatesOnceForNewVisibleEvidenceAndNeverForAnIdempotentScan() {
+        bind(); evidence()
+        val detailBefore = WorkspaceChanges.revision.value
+        val catalogBefore = WorkspaceChanges.catalogRevision.value
+
+        reconcile()
+        assertEquals(detailBefore + 1, WorkspaceChanges.revision.value)
+        assertEquals(catalogBefore + 1, WorkspaceChanges.catalogRevision.value)
+        val detailAfterInsert = WorkspaceChanges.revision.value
+        val catalogAfterInsert = WorkspaceChanges.catalogRevision.value
+
+        reconcile()
+
+        assertEquals("replaying the same evidence writes no invalidation", detailAfterInsert,
+            WorkspaceChanges.revision.value)
+        assertEquals("replaying the same evidence does not reload the catalog", catalogAfterInsert,
+            WorkspaceChanges.catalogRevision.value)
+    }
+
+    @Test fun checkpointScheduleWithNoVisibleEvidenceDoesNotInvalidateCatalogOrDetail() {
+        bind()
+        val detailBefore = WorkspaceChanges.revision.value
+        val catalogBefore = WorkspaceChanges.catalogRevision.value
+
+        // CoreAgentRuntime's committed-checkpoint listener enters this same scheduling route.
+        WorkspaceCoordinationDelivery.schedule(app, scope.executionSessionId)
+        awaitScheduledReceipts()
+
+        assertEquals("a checkpoint-triggered no-op scan has no detail change", detailBefore,
+            WorkspaceChanges.revision.value)
+        assertEquals("a checkpoint-triggered no-op scan does not reload catalog rows", catalogBefore,
+            WorkspaceChanges.catalogRevision.value)
     }
 
     @Test fun asciiFragmentsReconstructAllUtf16TextAndRefsAcrossEscapeBoundaries() {

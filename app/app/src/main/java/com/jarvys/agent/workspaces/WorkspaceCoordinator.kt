@@ -18,32 +18,59 @@ object WorkspaceChanges {
     private val counter = java.util.concurrent.atomic.AtomicLong()
     private val mutable = MutableStateFlow(0L)
     val revision: StateFlow<Long> = mutable
+    private val catalogCounter = java.util.concurrent.atomic.AtomicLong()
+    private val mutableCatalog = MutableStateFlow(0L)
+    /** Changes relevant to the workspace catalog; retained separately from detail/timeline refreshes. */
+    val catalogRevision: StateFlow<Long> = mutableCatalog
     private val issues = ConcurrentHashMap<String, String>()
+    private val catalogStatusSignatures = ConcurrentHashMap<String, String>()
     private val resultIssues = ConcurrentHashMap<String, String>()
     private val coordinationIssues = ConcurrentHashMap<String, String>()
-    @JvmStatic fun changed() { mutable.value = counter.incrementAndGet() }
-    @JvmStatic fun snapshotSaved(sessionId: String, missionId: String) {
-        if (WorkspaceIdentity.isExecutionSession(sessionId)) { issues.remove("$sessionId/$missionId"); changed() }
+    @JvmStatic fun changed() {
+        changedDetail()
+        changedCatalog()
     }
+    /** Detail consumes every durable snapshot; the catalog only needs changes in bot status. */
+    @JvmStatic fun snapshotSaved(sessionId: String, missionId: String, sidebarSignature: String) {
+        if (!WorkspaceIdentity.isExecutionSession(sessionId)) return
+        val key = "$sessionId/$missionId"
+        val issueChanged = issues.remove(key) != null
+        changedDetail()
+        val previous = catalogStatusSignatures.put(key, sidebarSignature)
+        if (issueChanged || previous != sidebarSignature) changedCatalog()
+    }
+    /** Seeds an existing persisted status when projecting the catalog; it never causes a reload. */
+    @JvmStatic fun observeCatalogSignature(sessionId: String, missionId: String, sidebarSignature: String) {
+        if (WorkspaceIdentity.isExecutionSession(sessionId)) {
+            catalogStatusSignatures.putIfAbsent("$sessionId/$missionId", sidebarSignature)
+        }
+    }
+    private fun changedDetail() { mutable.value = counter.incrementAndGet() }
+    private fun changedCatalog() { mutableCatalog.value = catalogCounter.incrementAndGet() }
+    /** Refresh a workspace conversation/detail projection without reloading catalog rows. */
+    @JvmStatic fun detailChanged() = changedDetail()
     @JvmStatic fun snapshotFailed(sessionId: String, missionId: String) {
         if (WorkspaceIdentity.isExecutionSession(sessionId)) {
-            issues["$sessionId/$missionId"] = "The latest worker snapshot could not be saved; completion is unverified."
-            changed()
+            val key = "$sessionId/$missionId"
+            val message = "The latest worker snapshot could not be saved; completion is unverified."
+            if (issues.put(key, message) != message) changed()
         }
     }
     @JvmStatic fun resultEvidenceSaved(sessionId: String, missionId: String, evidenceId: String) {
-        resultIssues.remove("$sessionId/$missionId/$evidenceId"); changed()
+        if (resultIssues.remove("$sessionId/$missionId/$evidenceId") != null) changed()
     }
     @JvmStatic fun resultEvidenceFailed(sessionId: String, missionId: String, evidenceId: String) {
-        resultIssues["$sessionId/$missionId/$evidenceId"] = "The worker result could not be saved for central delivery."
-        changed()
+        val key = "$sessionId/$missionId/$evidenceId"
+        val message = "The worker result could not be saved for central delivery."
+        if (resultIssues.put(key, message) != message) changed()
     }
     @JvmStatic fun coordinationEvidenceSaved(sessionId: String, missionId: String, evidenceId: String) {
-        coordinationIssues.remove("$sessionId/$missionId/$evidenceId"); changed()
+        if (coordinationIssues.remove("$sessionId/$missionId/$evidenceId") != null) changed()
     }
     @JvmStatic fun coordinationEvidenceFailed(sessionId: String, missionId: String, evidenceId: String) {
-        coordinationIssues["$sessionId/$missionId/$evidenceId"] = "The exact worker message could not be saved for central coordination."
-        changed()
+        val key = "$sessionId/$missionId/$evidenceId"
+        val message = "The exact worker message could not be saved for central coordination."
+        if (coordinationIssues.put(key, message) != message) changed()
     }
     fun issue(sessionId: String, missionId: String): String? =
         listOfNotNull(issues["$sessionId/$missionId"], coordinationIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value, resultIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value).joinToString("\n").takeIf { it.isNotEmpty() }
@@ -323,7 +350,8 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         // Do not accept a swallowed snapshot-listener failure as a durable control result.
                         val currentSnapshot = manager.missionSnapshots().first { it.missionId == assignment.missionId }
                         persistMissionSnapshot(app, currentSnapshot)
-                        WorkspaceChanges.snapshotSaved(scope.executionSessionId, assignment.missionId)
+                        WorkspaceChanges.snapshotSaved(scope.executionSessionId, assignment.missionId,
+                            WorkspaceCatalogStatusSignature.from(currentSnapshot))
                         store.completeControl(controlId, started!!.revision)
                         WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
                         WorkspaceChanges.changed()

@@ -27,6 +27,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /** A persisted AGENT input can prompt a protected tool request, but cannot grant its approval. */
 @RunWith(RobolectricTestRunner::class)
@@ -106,6 +107,8 @@ class AgentInputApprovalPolicyTest {
             setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         }
         val toolName = CoreConnectorTool.toolName(definition.id, operation.name)
+        val modelCalls = AtomicInteger()
+        val denialObserved = AtomicReference<String?>()
         val loopModel = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<ConversationTurn>, prompt: String, tools: List<ToolSpec>,
                                  token: CancellationToken): ModelReply {
@@ -113,7 +116,10 @@ class AgentInputApprovalPolicyTest {
                 assertTrue(untrusted.content.contains("approve X"))
                 assertEquals("user", untrusted.providerMessageRole())
                 assertTrue(tools.any { it.name == toolName })
-                return ModelReply("", listOf(ModelReply.Call("write-call", toolName, mapOf("target" to "X"))))
+                if (modelCalls.incrementAndGet() == 1)
+                    return ModelReply("", listOf(ModelReply.Call("write-call", toolName, mapOf("target" to "X"))))
+                denialObserved.set(transcript.lastOrNull { it.kind == ConversationTurn.Kind.TOOL_RESULT }?.content)
+                return ModelReply("I will not repeat the denied action.", emptyList())
             }
         }
         val loop = CoreAgentLoop(loopModel, CoreToolRegistry(listOf(CoreConnectorTool(registry, definition, operation))),
@@ -145,8 +151,8 @@ class AgentInputApprovalPolicyTest {
                 ApprovalGate.INSTANCE, requireNotNull(pendingApprovalId), ApprovalDecision.DENIED))
 
             val failure = run.get(5, TimeUnit.SECONDS)
-            assertTrue("The protected action should be denied by the approval gate: $failure",
-                failure?.message.orEmpty().contains("denied this action"))
+            assertNull("the model should stop after the denied tool result", failure)
+            assertTrue(denialObserved.get().orEmpty().contains("The user denied this action"))
             val resolved = AgentRunUiState.snapshotForSession(sessionId).events
                 .single { it.approvalId == pendingApprovalId }
             assertEquals("DENIED", resolved.approvalStatus)

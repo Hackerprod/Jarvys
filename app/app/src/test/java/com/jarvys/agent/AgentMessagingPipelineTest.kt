@@ -172,6 +172,15 @@ class AgentMessagingPipelineTest {
         val sent = mutableListOf<CrewMessage>()
         try {
             for (type in CrewMessage.Type.values()) {
+                if (type == CrewMessage.Type.PROGRESS) {
+                    val failure = try {
+                        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", type,
+                            "Central intake ${type.name}", emptyList())
+                        null
+                    } catch (expected: IllegalArgumentException) { expected }
+                    assertEquals("PROGRESS is runtime-generated presentation only", failure?.message)
+                    continue
+                }
                 val message = worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", type,
                     "Central intake ${type.name}", emptyList())
                 sent += message
@@ -197,7 +206,7 @@ class AgentMessagingPipelineTest {
         } finally {
             releaseWorker.countDown()
         }
-        assertEquals(CrewMessage.Type.values().size, sent.size)
+        assertEquals(CrewMessage.Type.values().size - 1, sent.size)
     }
 
     @Test fun askChiefQuestionEntersCentralAsAnInternalInput() {
@@ -243,7 +252,9 @@ class AgentMessagingPipelineTest {
             store.readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION, input.durableMessageId)
         })
         val timeline = chatTestStore.onDatabaseWorker { store.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION) }
-        assertFalse(timeline.any { it.text.contains(question) })
+        val internalQuestion = timeline.single { it.text == question }
+        assertEquals(ConversationInput.Origin.AGENT, internalQuestion.conversationInputOrigin)
+        assertFalse(ConversationVisibility.visible(internalQuestion))
         assertTrue(timeline.any { it.kind == "assistant" && it.text == "I recommend the primary source." })
     }
 

@@ -68,42 +68,61 @@ internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (In
     }
     val notice by transfers.notice.collectAsState()
     notice?.let { current ->
-        val success = current.saved
-        AlertDialog(
+        ChatFileTransferNotice(
+            current = current,
             onDismissRequest = transfers::dismissNotice,
-            modifier = Modifier.testTag("chat-download-result"),
-            title = { Text(stringResource(when {
-                success -> R.string.chat_download_complete
-                current.failure == ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed_title
-                else -> R.string.chat_download_failed
-            })) },
-            text = { ScrollableDialogContent {
-                Text(if (success) context.getString(R.string.chat_download_location, current.result!!.displayName) else
-                    context.getString(when (current.failure) {
-                        ChatFileTransfer.Failure.PERMISSION -> R.string.chat_download_permission_denied
-                        ChatFileTransfer.Failure.UNAVAILABLE -> R.string.chat_attachment_unavailable
-                        ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed
-                        else -> R.string.chat_download_retry
-                    }))
-            } },
-            confirmButton = {
-                if (success) TextButton(onClick = {
-                    transfers.dismissNotice()
-                    runCatching { startIntent(DownloadIntents.open(current.result)) }
-                        .onFailure { transfers.openFailed(current.request) }
-                }, modifier = Modifier.testTag("chat-download-open")) { Text(stringResource(R.string.chat_download_open)) }
-                else if (current.failure == ChatFileTransfer.Failure.PERMISSION) TextButton(onClick = {
-                    transfers.dismissNotice(); transfers.share(current.request)
-                }, modifier = Modifier.testTag("chat-download-share-instead")) { Text(stringResource(R.string.image_action_share)) }
-                else TextButton(onClick = transfers::dismissNotice) { Text(stringResource(R.string.image_viewer_close)) }
+            onOpen = { opened ->
+                transfers.dismissNotice()
+                runCatching { startIntent(DownloadIntents.open(opened.result)) }
+                    .onFailure { transfers.openFailed(opened.request) }
             },
-            dismissButton = {
-                if (success || current.failure == ChatFileTransfer.Failure.PERMISSION) TextButton(onClick = transfers::dismissNotice) {
-                    Text(stringResource(R.string.image_viewer_close))
-                }
+            onShare = { failed ->
+                transfers.dismissNotice()
+                transfers.share(failed.request)
             },
         )
     }
+}
+
+@Composable
+internal fun ChatFileTransferNotice(
+    current: ChatFileTransfer,
+    onDismissRequest: () -> Unit,
+    onOpen: (ChatFileTransfer) -> Unit,
+    onShare: (ChatFileTransfer) -> Unit,
+) {
+    val context = LocalContext.current
+    val success = current.saved
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        modifier = Modifier.testTag("chat-download-result"),
+        title = { Text(stringResource(when {
+            success -> R.string.chat_download_complete
+            current.failure == ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed_title
+            else -> R.string.chat_download_failed
+        })) },
+        text = { ScrollableDialogContent {
+            Text(if (success) context.getString(R.string.chat_download_location, current.result!!.displayName) else
+                context.getString(when (current.failure) {
+                    ChatFileTransfer.Failure.PERMISSION -> R.string.chat_download_permission_denied
+                    ChatFileTransfer.Failure.UNAVAILABLE -> R.string.chat_attachment_unavailable
+                    ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed
+                    else -> R.string.chat_download_retry
+                }))
+        } },
+        confirmButton = {
+            if (success) TextButton(onClick = { onOpen(current) },
+                modifier = Modifier.testTag("chat-download-open")) { Text(stringResource(R.string.chat_download_open)) }
+            else if (current.failure == ChatFileTransfer.Failure.PERMISSION) TextButton(onClick = { onShare(current) },
+                modifier = Modifier.testTag("chat-download-share-instead")) { Text(stringResource(R.string.image_action_share)) }
+            else TextButton(onClick = onDismissRequest) { Text(stringResource(R.string.chat_dialog_close)) }
+        },
+        dismissButton = {
+            if (success || current.failure == ChatFileTransfer.Failure.PERMISSION) TextButton(onClick = onDismissRequest) {
+                Text(stringResource(R.string.chat_dialog_close))
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

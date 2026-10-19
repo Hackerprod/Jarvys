@@ -4,6 +4,7 @@ import android.content.Context
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.workspaces.WorkspaceAssignment
+import com.jarvys.agent.workspaces.WorkspaceChanges
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.nio.charset.StandardCharsets
@@ -31,7 +32,9 @@ internal object WorkspaceConversationInputStore {
             }
             return existing.getString("messageId")
         }
-        return store.appendConversationInput(input)
+        val storedId = store.appendConversationInput(input)
+        WorkspaceChanges.changed()
+        return storedId
     }
 
     /** Resolves the exact durable metadata used by this admitted worker input. */
@@ -84,6 +87,7 @@ internal object WorkspaceConversationInputStore {
             return input
         }
         store.appendConversationInput(input)
+        WorkspaceChanges.changed()
         return input
     }
 
@@ -254,7 +258,8 @@ internal object WorkspaceConversationInputStore {
 
     @JvmStatic
     fun acknowledge(context: Context, executionSessionId: String, messageIds: List<String>) {
-        LocalRunStore(context).markConversationMessagesIncorporated(executionSessionId, messageIds)
+        val changed = LocalRunStore(context).markConversationMessagesIncorporated(executionSessionId, messageIds)
+        if (changed.isNotEmpty()) WorkspaceChanges.changed()
     }
 
     /** Repairs the only crash window: a worker checkpoint committed its input before the Room ack. */
@@ -262,11 +267,17 @@ internal object WorkspaceConversationInputStore {
     fun acknowledgeApplied(context: Context, executionSessionId: String, appliedSourceIds: Set<String>) {
         if (appliedSourceIds.isEmpty()) return
         val store = LocalRunStore(context)
-        val rows = store.readConversationMessages(executionSessionId).filter { row ->
+        val candidates = store.readConversationMessages(executionSessionId).filter { row ->
             if (row.optString("role") != "agent" && row.optString("role") != "system") return@filter false
             val provenance = row.optJSONObject("provenance") ?: return@filter false
             provenance.optString("messageId") in appliedSourceIds && row.optString("inputState").isEmpty()
-        }.mapNotNull { row -> row.optString("messageId").takeIf(String::isNotBlank) }
-        store.markConversationMessagesIncorporated(executionSessionId, rows)
+        }
+        val rows = candidates.mapNotNull { row -> row.optString("messageId").takeIf(String::isNotBlank) }
+        val workspaceAgentIds = candidates.filter { row ->
+            row.optString("role") == "agent" &&
+                row.optJSONObject("provenance")?.optString("workspaceId").orEmpty().isNotBlank()
+        }.mapNotNull { row -> row.optString("messageId").takeIf(String::isNotBlank) }.toSet()
+        val changed = store.markConversationMessagesIncorporated(executionSessionId, rows)
+        if (changed.any(workspaceAgentIds::contains)) WorkspaceChanges.changed()
     }
 }

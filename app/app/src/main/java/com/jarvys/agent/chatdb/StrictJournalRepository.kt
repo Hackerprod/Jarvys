@@ -611,7 +611,29 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     suspend fun appendWorkspaceInputIncorporation(
         proposed: InputIncorporation,
         beforeWrite: () -> Unit = {},
-    ): ChatDbResult<InputIncorporation> = transaction {
+    ): ChatDbResult<InputIncorporation> = when (val result = appendWorkspaceInputIncorporationCore(proposed, beforeWrite)) {
+        is ChatDbResult.Success -> ChatDbResult.Success(result.value.first)
+        is ChatDbResult.Conflict -> result
+        is ChatDbResult.Invalid -> result
+        ChatDbResult.NotFound -> ChatDbResult.NotFound
+        ChatDbResult.Tombstoned -> ChatDbResult.Tombstoned
+    }
+
+    suspend fun appendWorkspaceInputIncorporationAndReport(
+        proposed: InputIncorporation,
+        beforeWrite: () -> Unit = {},
+    ): ChatDbResult<Boolean> = when (val result = appendWorkspaceInputIncorporationCore(proposed, beforeWrite)) {
+        is ChatDbResult.Success -> ChatDbResult.Success(result.value.second)
+        is ChatDbResult.Conflict -> result
+        is ChatDbResult.Invalid -> result
+        ChatDbResult.NotFound -> ChatDbResult.NotFound
+        ChatDbResult.Tombstoned -> ChatDbResult.Tombstoned
+    }
+
+    private suspend fun appendWorkspaceInputIncorporationCore(
+        proposed: InputIncorporation,
+        beforeWrite: () -> Unit,
+    ): ChatDbResult<Pair<InputIncorporation, Boolean>> = transaction {
         InputIncorporation.fromJsonStrict(proposed.toJson())
         requireCentralConversation(proposed.ownerCentralSessionId)
         if (proposed.sourceKind == InputIncorporation.SourceKind.REPLY) {
@@ -622,7 +644,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         val old = findInputIncorporation(proposed.ownerCentralSessionId, proposed.receiptId)
         if (old != null) {
             if (!old.sameBinding(proposed)) return@transaction ChatDbResult.Conflict(INPUT_CONFLICT)
-            return@transaction ChatDbResult.Success(old)
+            return@transaction ChatDbResult.Success(old to false)
         }
         val mailboxClaim = sql.query(
             "SELECT receipt_id FROM workspace_input_incorporations WHERE conversation_id=? AND mailbox_message_id=? LIMIT 1",
@@ -643,7 +665,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
                 proposed.transportKind, proposed.transportSha256, proposed.checkpointPayloadSha256,
                 proposed.checkpointSavedAtMillis, proposed.recordedAtMillis),
         )
-        ChatDbResult.Success(proposed)
+        ChatDbResult.Success(proposed to true)
     }
 
     /**

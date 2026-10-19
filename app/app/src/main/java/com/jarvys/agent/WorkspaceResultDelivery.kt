@@ -56,40 +56,47 @@ class WorkspaceResultDelivery internal constructor(
         }
     }
 
-    private fun notice(reference: WorkspaceResultReference, token: CancellationToken, admission: Runnable) {
+    private fun notice(reference: WorkspaceResultReference, token: CancellationToken, admission: Runnable): Boolean {
         token.throwIfCancelled(); admission.run()
         source(reference) // Registry and source reads stay outside the ledger append lock.
+        var inserted = false
         synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
             // Same lock order as artifact delivery and coordination: delivery → STOP → ledger.
             if (!token.runIfActive {
                     token.throwIfCancelled(); admission.run()
+                    inserted = ledger.readWorkspaceResultNotice(reference.ownerCentralSessionId,
+                        reference.referenceId) == null
                     val beforeWrite = Runnable { token.throwIfCancelled(); admission.run() }
                     ledger.appendWorkspaceResultNoticeIfAbsent(reference, beforeWrite)
                 }) token.throwIfCancelled()
         }
         // This notice is audit metadata only. Content delivery uses the conversation input ledger.
-        WorkspaceChanges.changed()
+        return inserted
     }
 
-    private fun discloseAutomatically(reference: WorkspaceResultReference, token: CancellationToken) {
+    private fun discloseAutomatically(reference: WorkspaceResultReference, token: CancellationToken): Boolean =
         notice(reference, token, Runnable { token.throwIfCancelled() })
-    }
 
     /** Finite scan of durable source evidence. Only idempotent local notice append is retried. */
     internal fun reconcile(workspaceId: String, token: CancellationToken) {
         val scope = owner(workspaceId)
         if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return
+        var visibleChange = false
         var cursor: String? = null
-        do {
-            token.throwIfCancelled()
-            val ids = ledger.listCrewResultEvidence(scope.executionSessionId, PAGE, cursor)
-            for (id in ids) {
+        try {
+            do {
                 token.throwIfCancelled()
-                val reference = register(workspaceId, id, token) ?: continue
-                discloseAutomatically(reference, token)
-            }
-            cursor = ids.lastOrNull()
-        } while (ids.size == PAGE)
+                val ids = ledger.listCrewResultEvidence(scope.executionSessionId, PAGE, cursor)
+                for (id in ids) {
+                    token.throwIfCancelled()
+                    val reference = register(workspaceId, id, token) ?: continue
+                    visibleChange = discloseAutomatically(reference, token) || visibleChange
+                }
+                cursor = ids.lastOrNull()
+            } while (ids.size == PAGE)
+        } finally {
+            if (visibleChange) WorkspaceChanges.detailChanged()
+        }
     }
 
     fun list(workspaceId: String, limit: Int, after: String?, admission: Runnable): JSONObject {
@@ -128,7 +135,7 @@ class WorkspaceResultDelivery internal constructor(
         // Reading the exact evidence can also finish its corresponding local receipt.
         // The current turn is already attending to this evidence; record local disclosure without
         // creating another system-origin request for the same result.
-        notice(reference, token, admission)
+        if (notice(reference, token, admission)) WorkspaceChanges.detailChanged()
         val current = assignment(reference)
         admission.run(); token.throwIfCancelled()
         ledger.requireWorkspaceResultDisclosureLive(reference, true)
@@ -219,11 +226,11 @@ class WorkspaceResultDelivery internal constructor(
                         beginPending(entry)
                         WorkspaceCoordinationDelivery.reconcileScheduled(app, id, token)
                         WorkspaceResultDelivery(app).reconcile(id, token)
-                        errors.remove(id)
+                        if (errors.remove(id) != null) WorkspaceChanges.detailChanged()
                     } catch (_: java.util.concurrent.CancellationException) {
                         // Durable evidence remains pending; STOP does not replay or delete it.
                     } catch (_: Exception) {
-                        errors[id] = "Result delivery is pending or unavailable; no worker action was repeated."
+                        setIssue(id, "Result delivery is pending or unavailable; no worker action was repeated.")
                     } finally {
                         val again = finishPending(executionSessionId, entry)
                         try {
@@ -233,15 +240,18 @@ class WorkspaceResultDelivery internal constructor(
                         } finally {
                             unlink?.run()
                             WorkspaceControlOwners.release(token)
-                            WorkspaceChanges.changed()
                         }
                     }
                 }
             } catch (failure: RuntimeException) {
                 finishPending(executionSessionId, entry)
                 unlink?.run(); WorkspaceControlOwners.release(token)
-                errors[WorkspaceIdentity.workspaceId(executionSessionId)] = "Local result delivery could not be scheduled."
+                setIssue(WorkspaceIdentity.workspaceId(executionSessionId), "Local result delivery could not be scheduled.")
             }
+        }
+
+        private fun setIssue(workspaceId: String, message: String) {
+            if (errors.put(workspaceId, message) != message) WorkspaceChanges.detailChanged()
         }
     }
 }

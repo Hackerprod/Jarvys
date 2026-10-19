@@ -41,14 +41,21 @@ class SkillActivityRuntimeTest {
     @Test fun cancelledSkillShowsInterruptionAndNeverLoaded() {
         val events=run(cancel=true);assertEquals("tool_interrupted",events.last().stage);assertFalse(events.any { it.stage=="tool_result" })
     }
-    @Test fun secondCompleteSkillExceedingRemainingContextBudgetIsNotLoaded() {
-        val events=run(skill=skill("x".repeat(16000)),max=CorePromptBudget.standard().loadedSkillChars,calls=2)
-        assertEquals(listOf("tool_call","tool_result","tool_call","tool_error"),events.map { it.stage })
-        assertTrue(events.last().detail.contains("remaining per-turn context budget"))
+    @Test fun firstSkillFailureStillConsumesTheSingleReadStepForThatResponse() {
+        val events=run(skill=skill("x".repeat(CorePromptBudget.standard().loadedSkillChars)),
+            max=CorePromptBudget.standard().loadedSkillChars,calls=2)
+        assertEquals(listOf("tool_call","tool_error","tool_not_started"),events.map { it.stage })
+        assertTrue(events[1].detail.contains("full-content budget"))
+        assertTrue(events.last().detail.contains("one skill read per model response"))
     }
     @Test fun completeSkillBudgetIsAllocatedInCallOrderAlongsideParallelTools() {
         val budget=CorePromptBudget.standard()
-        val skillTool=LoadSkillTool(listOf(skill("x".repeat(16000))),budget.loadedSkillChars)
+        val skillLoader=LoadSkillTool(listOf(skill("x".repeat(16000))),budget.loadedSkillChars)
+        val skillTool=object:CoreTool by skillLoader {
+            override fun responseCallPolicy()=CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE
+            override fun activitySkillId(arguments:Map<String,Any>?):String=skillLoader.activitySkillId(arguments)
+            override fun activitySkillName(arguments:Map<String,Any>?):String=skillLoader.activitySkillName(arguments)
+        }
         val parallelEntered=CountDownLatch(1)
         val releaseParallel=CountDownLatch(1)
         val firstSkillResultRecorded=CountDownLatch(1)
