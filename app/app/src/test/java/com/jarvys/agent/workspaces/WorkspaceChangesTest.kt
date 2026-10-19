@@ -47,4 +47,20 @@ class WorkspaceChangesTest {
         assertEquals(detailBefore + 1, WorkspaceChanges.revision.value)
         assertEquals(catalogBefore + 1, WorkspaceChanges.catalogRevision.value)
     }
+
+    @Test fun normalEvidenceSavesDoNotInvalidateEitherProjection() {
+        val sessionId = WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString())
+        val detailBefore = WorkspaceChanges.revision.value
+        val catalogBefore = WorkspaceChanges.catalogRevision.value
+
+        repeat(3) {
+            WorkspaceChanges.resultEvidenceSaved(sessionId, "mission", "result-$it")
+            WorkspaceChanges.coordinationEvidenceSaved(sessionId, "mission", "coordination-$it")
+        }
+
+        assertEquals("saving new evidence alone does not change a workspace projection",
+            detailBefore, WorkspaceChanges.revision.value)
+        assertEquals("saving new evidence alone does not reload the catalog",
+            catalogBefore, WorkspaceChanges.catalogRevision.value)
+    }
 }

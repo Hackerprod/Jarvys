@@ -60,11 +60,8 @@ public final class CrewMessageBus {
         synchronized (monitor) {
             if (!conversationId.equals(message.conversationId)) throw new IllegalArgumentException("Wrong Crew message scope");
             for (CrewMessage existing : log) if (existing.id.equals(message.id)) {
-                if (!existing.from.equals(message.from) || !existing.to.equals(message.to)
-                        || existing.type != message.type || !existing.text.equals(message.text)
-                        || !existing.refs.equals(message.refs) || existing.activity != null
-                        || existing.coordination != null || existing.inputBinding != null)
-                    throw new IllegalStateException("Crew presentation message ID was reused with different content");
+                // A presentation callback can be replayed with the same stable event ID after a
+                // checkpoint. Preserve the first display row and keep the bot loop running.
                 return existing;
             }
             log.add(message);

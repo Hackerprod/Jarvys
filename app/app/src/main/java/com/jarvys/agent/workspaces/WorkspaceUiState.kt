@@ -3,6 +3,7 @@ package com.jarvys.agent.workspaces
 import androidx.compose.runtime.Immutable
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.LocalRunStore
+import com.jarvys.agent.crew.CrewProcessIdentity
 import java.util.Collections
 import java.util.LinkedHashSet
 
@@ -11,10 +12,43 @@ enum class WorkspaceUiStatus {
     UNKNOWN, ACTIVE, WAITING, CANCEL_REQUESTED, STOPPING, PAUSED, PARTIAL, INTERRUPTED, COMPLETED,
 }
 
+/**
+ * Workspace activity comes from its projected assignment status, with a live snapshot allowed to
+ * advance the indicator only while its bots belong to this app process. Mission-level RUNNING is
+ * deliberately ignored: it can outlive every worker, and survives a process death in storage.
+ */
+internal fun workspaceHasActiveWork(status: WorkspaceUiStatus, events: List<AgentRunUiEvent>): Boolean =
+    status in setOf(WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
+        WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING) ||
+        events.any { event ->
+            val snapshot = event.crewMissionSnapshot
+            snapshot?.processId == CrewProcessIdentity.ID && snapshot.bots.any { it.active() }
+        }
+
+/** A pause affordance is available only for a selected assignment while the workspace is active. */
+internal fun workspacePauseEnabled(state: WorkspaceChatUiState?, assignmentId: String?): Boolean =
+    state != null && workspaceHasActiveWork(state.status, state.events) &&
+        workspaceChatSelectedAssignment(state.assignments, assignmentId)?.canPause == true
+
 @Immutable
 data class WorkspaceSidebarRow(val id: String, val title: String, val status: WorkspaceUiStatus,
     val statusPageLimited: Boolean = false,
     val coordination: WorkspaceCoordinationSummary = WorkspaceCoordinationSummary())
+
+/** UI state for one workspace catalog page; refreshes retain the last rows until replacement arrives. */
+internal data class WorkspaceCatalogUiState(
+    val rows: List<WorkspaceSidebarRow> = emptyList(),
+    val nextCursor: String? = null,
+    val loading: Boolean = true,
+    val error: String? = null,
+) {
+    fun beginRefresh(): WorkspaceCatalogUiState = copy(loading = true, error = null)
+
+    fun loaded(page: WorkspaceSidebarPage): WorkspaceCatalogUiState =
+        copy(rows = page.rows, nextCursor = page.nextCursor, loading = false, error = null)
+
+    fun failed(message: String): WorkspaceCatalogUiState = copy(loading = false, error = message)
+}
 
 /** One visible catalog page; never retain or eagerly load the whole catalog. */
 class WorkspaceSidebarPage(rows: List<WorkspaceSidebarRow>, val nextCursor: String? = null) {

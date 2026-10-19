@@ -95,4 +95,17 @@ public class CrewCoordinationEvidenceTest {
         assertTrue(bus.pending("worker").isEmpty());
         assertEquals(1, bus.snapshot().size());
     }
+
+    @Test public void presentationReplayWithReusedIdAndChangedTextIsIgnoredWithoutThrowing() {
+        CrewMessageBus bus = new CrewMessageBus("source");
+        CrewMessage first = new CrewMessage("stable-progress", "source", "worker", "user",
+                CrewMessage.Type.PROGRESS, "first phase", Collections.emptyList(), 1L);
+        CrewMessage replay = new CrewMessage("stable-progress", "source", "worker", "user",
+                CrewMessage.Type.PROGRESS, "later phase", Collections.emptyList(), 2L);
+
+        assertSame(first, bus.recordPresentationIfAbsent(first));
+        assertSame(first, bus.recordPresentationIfAbsent(replay));
+        assertEquals(1, bus.snapshot().size());
+        assertEquals("first phase", bus.snapshot().get(0).text);
+    }
 }

@@ -320,7 +320,10 @@ fun ConversationTimeline(
                         )
                     }
                     is ConversationTimelineItem.ToolGroup -> {
-                        val shouldAnimate = item.events.any { ChatMessageArrivalPolicy.key(it) == newestArrivalKey }
+                        // A tool group is one stable row keyed by its first event. An appended child updates
+                        // that row's contents; it must not move the row into AnimatedVisibility and discard
+                        // state held by its open tool sheet.
+                        val shouldAnimate = item.events.firstOrNull()?.let(ChatMessageArrivalPolicy::key) == newestArrivalKey
                         TimelineArrival(shouldAnimate) {
                             ToolGroupLine(item, connectorRegistry, onOpenPreview, onOpenSkillFile)
                         }

@@ -43,11 +43,7 @@ fun WorkspaceDetailScreen(
     val events = remember(state.workspaceId, sourceEvents) {
         WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
     }
-    val crewRunning = sourceEvents.any { it.crewMissionSnapshot?.active() == true }
-    val workspaceRunning = crewRunning || state.status in setOf(
-        WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING,
-        WorkspaceUiStatus.CANCEL_REQUESTED, WorkspaceUiStatus.STOPPING,
-    )
+    val workspaceRunning = workspaceHasActiveWork(state.status, sourceEvents)
     val timelineSnapshot = (sessionSnapshot ?: AgentRunUiSnapshot(sessionId = state.executionSessionId))
         .copy(events = events, running = workspaceRunning)
     Box(modifier.fillMaxSize().testTag("workspace-chat-timeline")) {

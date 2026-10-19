@@ -19,11 +19,13 @@ import com.jarvys.agent.workspaces.WorkspaceRegistry
 import com.jarvys.agent.workspaces.WorkspaceChanges
 import com.jarvys.agent.workspaces.WorkspaceControlType
 import com.jarvys.agent.workspaces.WorkspaceAssignmentUi
+import com.jarvys.agent.workspaces.WorkspaceChatUiState
 import com.jarvys.agent.workspaces.WorkspaceUiStatus
 import com.jarvys.agent.workspaces.workspaceChatCorrectionDisabledHintResource
 import com.jarvys.agent.workspaces.workspaceChatSelectedAssignment
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMissionSnapshot
+import com.jarvys.agent.crew.CrewProcessIdentity
 import java.io.ByteArrayInputStream
 import java.lang.reflect.InvocationTargetException
 import java.util.UUID
@@ -63,6 +65,37 @@ class MainActivityWorkspaceRoutingTest {
     private val bytes = "Exact independent attachment bytes".toByteArray()
     private lateinit var attachment: ChatAttachment
     private val activity: MainActivity get() = requireNotNull(controller).get()
+
+    @Test fun mainActivityWorkspaceThinkingAndPauseButtonUseProjectedCurrentProcessActivity() {
+        start()
+        val assignmentId = "activity-assignment"
+        fun state(status: WorkspaceUiStatus, processId: String, botStatus: String): WorkspaceChatUiState {
+            val bot = CrewBotSnapshot("activity-bot", "worker", "Worker", "Worker", "blue", "Task",
+                botStatus, "", "", "", emptyList(), 1L, 0L)
+            val mission = CrewMissionSnapshot("activity-mission", execution, processId,
+                "Workspace mission", "RUNNING", "", 1L, 0L, listOf(bot), emptyList())
+            val event = AgentRunUiEvent.crewMissionEvent(61L, mission)
+            return WorkspaceChatUiState("11111111-1111-1111-1111-111111111111", execution,
+                "Workspace", status, listOf(event), assignments = listOf(WorkspaceAssignmentUi(
+                    assignmentId, 1L, "Worker", "Task", status, canPause = true)))
+        }
+        fun active(state: WorkspaceChatUiState) = invoke("workspaceHasActiveWorkForUi",
+            arrayOf(WorkspaceChatUiState::class.java), arrayOf(state)) as Boolean
+        fun pauseEnabled(state: WorkspaceChatUiState) = invoke("workspacePauseEnabledForUi",
+            arrayOf(WorkspaceChatUiState::class.java, String::class.java), arrayOf(state, assignmentId)) as Boolean
+
+        val terminal = state(WorkspaceUiStatus.COMPLETED, CrewProcessIdentity.ID, "DONE")
+        assertFalse("mission status RUNNING cannot override terminal bot projections", active(terminal))
+        assertFalse("terminal workspace keeps the wired stop button disabled", pauseEnabled(terminal))
+
+        val previousProcess = state(WorkspaceUiStatus.INTERRUPTED, "previous-install-process", "WAITING")
+        assertFalse("a previous process snapshot is recovered as interrupted", active(previousProcess))
+        assertFalse("the previous process cannot enable the pause button", pauseEnabled(previousProcess))
+
+        val live = state(WorkspaceUiStatus.UNKNOWN, CrewProcessIdentity.ID, "RUNNING")
+        assertTrue("a current-process active bot drives workspace thinking", active(live))
+        assertTrue("the real MainActivity pause-button calculation follows current active work", pauseEnabled(live))
+    }
 
     @Test fun selectedPauseOnlyBotKeepsItsPauseAndGetsAnAccurateCorrectionHint() {
         val correctable = WorkspaceAssignmentUi("correctable", 4L, "Writer", "Write",
@@ -475,7 +508,9 @@ class MainActivityWorkspaceRoutingTest {
     }
 
     private fun invoke(name: String, types: Array<Class<*>> = emptyArray(), args: Array<Any> = emptyArray()): Any? =
-        MainActivity::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }.invoke(activity, *args)
+        MainActivity::class.java.declaredMethods.single {
+            (it.name == name || it.name.startsWith("$name\$")) && it.parameterTypes.contentEquals(types)
+        }.apply { isAccessible = true }.invoke(activity, *args)
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> activityState(name: String): MutableState<T> = MainActivity::class.java

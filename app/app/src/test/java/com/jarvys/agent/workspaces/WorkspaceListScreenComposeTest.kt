@@ -100,6 +100,34 @@ class WorkspaceListScreenComposeTest {
         assertEquals(1, opened)
     }
 
+    @Test fun catalogRefreshKeepsPreviouslyLoadedRowsVisibleUntilReplacementArrives() {
+        val catalog = mutableStateOf(WorkspaceCatalogUiState(
+            rows = rows, nextCursor = "next-page", loading = false))
+        compose.setContent { MaterialTheme {
+            WorkspaceListScreen(catalog.value.rows, workspacesLoading = catalog.value.loading,
+                workspaceError = catalog.value.error, onOpenWorkspace = {})
+        } }
+        settle()
+        compose.onNodeWithTag("workspace-list-row-alpha").assertIsDisplayed()
+        compose.runOnIdle { catalog.value = catalog.value.beginRefresh() }
+        settle()
+
+        compose.onNodeWithTag("workspace-list-loading").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list-row-alpha").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list-row-beta").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list-row-alpha").assertIsNotEnabled()
+        assertEquals(rows, catalog.value.rows)
+        assertEquals("next-page", catalog.value.nextCursor)
+
+        compose.runOnIdle {
+            catalog.value = catalog.value.loaded(WorkspaceSidebarPage(
+                listOf(rows.first().copy(title = "Alpha refreshed")), nextCursor = null))
+        }
+        settle()
+        compose.onNodeWithText("Alpha refreshed").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list-row-beta").assertDoesNotExist()
+    }
+
     @Test fun paginationReturnsOnlyNavigationAndLoadingBlocksEveryPageButton() {
         val loading = mutableStateOf(false)
         val enabled = mutableStateOf(true)

@@ -30,9 +30,6 @@ object WorkspaceChanges {
         changedDetail()
         changedCatalog()
     }
-    @JvmStatic fun snapshotSaved(sessionId: String, missionId: String) {
-        if (WorkspaceIdentity.isExecutionSession(sessionId)) { issues.remove("$sessionId/$missionId"); changed() }
-    }
     /** Detail consumes every durable snapshot; the catalog only needs changes in bot status. */
     @JvmStatic fun snapshotSaved(sessionId: String, missionId: String, sidebarSignature: String) {
         if (!WorkspaceIdentity.isExecutionSession(sessionId)) return
@@ -50,25 +47,30 @@ object WorkspaceChanges {
     }
     private fun changedDetail() { mutable.value = counter.incrementAndGet() }
     private fun changedCatalog() { mutableCatalog.value = catalogCounter.incrementAndGet() }
+    /** Refresh a workspace conversation/detail projection without reloading catalog rows. */
+    @JvmStatic fun detailChanged() = changedDetail()
     @JvmStatic fun snapshotFailed(sessionId: String, missionId: String) {
         if (WorkspaceIdentity.isExecutionSession(sessionId)) {
-            issues["$sessionId/$missionId"] = "The latest worker snapshot could not be saved; completion is unverified."
-            changed()
+            val key = "$sessionId/$missionId"
+            val message = "The latest worker snapshot could not be saved; completion is unverified."
+            if (issues.put(key, message) != message) changed()
         }
     }
     @JvmStatic fun resultEvidenceSaved(sessionId: String, missionId: String, evidenceId: String) {
-        resultIssues.remove("$sessionId/$missionId/$evidenceId"); changed()
+        if (resultIssues.remove("$sessionId/$missionId/$evidenceId") != null) changed()
     }
     @JvmStatic fun resultEvidenceFailed(sessionId: String, missionId: String, evidenceId: String) {
-        resultIssues["$sessionId/$missionId/$evidenceId"] = "The worker result could not be saved for central delivery."
-        changed()
+        val key = "$sessionId/$missionId/$evidenceId"
+        val message = "The worker result could not be saved for central delivery."
+        if (resultIssues.put(key, message) != message) changed()
     }
     @JvmStatic fun coordinationEvidenceSaved(sessionId: String, missionId: String, evidenceId: String) {
-        coordinationIssues.remove("$sessionId/$missionId/$evidenceId"); changed()
+        if (coordinationIssues.remove("$sessionId/$missionId/$evidenceId") != null) changed()
     }
     @JvmStatic fun coordinationEvidenceFailed(sessionId: String, missionId: String, evidenceId: String) {
-        coordinationIssues["$sessionId/$missionId/$evidenceId"] = "The exact worker message could not be saved for central coordination."
-        changed()
+        val key = "$sessionId/$missionId/$evidenceId"
+        val message = "The exact worker message could not be saved for central coordination."
+        if (coordinationIssues.put(key, message) != message) changed()
     }
     fun issue(sessionId: String, missionId: String): String? =
         listOfNotNull(issues["$sessionId/$missionId"], coordinationIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value, resultIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value).joinToString("\n").takeIf { it.isNotEmpty() }
