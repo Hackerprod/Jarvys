@@ -2332,7 +2332,10 @@ private fun JarvysApp(
                     WorkspaceFilesRoute(entry.arguments?.getString("workspaceId").orEmpty())
                 }
                 composable(Routes.CHAT) {
-                    val timelineEventsState by AgentRunUiState.timelineEvents.collectAsState()
+                    val sessionTimelineFlow = remember(conversationSessionId) {
+                        AgentRunUiState.timelineEventsForSession(conversationSessionId)
+                    }
+                    val timelineEventsState by sessionTimelineFlow.collectAsState()
                     val selectedSessionEvents = remember(timelineEventsState, conversationSessionId) {
                         timelineEventsState.events.takeIf { timelineEventsState.sessionId == conversationSessionId }
                             .orEmpty()

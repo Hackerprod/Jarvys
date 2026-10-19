@@ -12,6 +12,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.AgentRunUiTimelineEvents
 import com.jarvys.agent.ToolActivity
 import com.jarvys.agent.R
 import com.jarvys.agent.crew.CrewBotSnapshot
@@ -66,6 +67,31 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithText("Mission").assertDoesNotExist()
         compose.onNodeWithText("Recovery").assertDoesNotExist()
         compose.onNodeWithText("Recorded result").assertDoesNotExist()
+    }
+
+    @Test fun matchingLiveTimelineSnapshotTakesPriorityOverPersistedWorkspaceEvents() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val persistedEvent = AgentRunUiEvent.messageEvent(1L, "user", "Persisted workspace message", 1L)
+        val staleSnapshotEvent = AgentRunUiEvent.messageEvent(2L, "user", "Stale live snapshot message", 2L)
+        val liveEvent = AgentRunUiEvent.messageEvent(3L, "user", "Current live workspace message", 3L)
+        val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title", WorkspaceUiStatus.ACTIVE,
+            listOf(persistedEvent))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
+        compose.setContent { MaterialTheme {
+            WorkspaceDetailScreen(state = state,
+                runSnapshot = AgentRunUiSnapshot(sessionId = sessionId, events = listOf(staleSnapshotEvent)),
+                timelineEvents = AgentRunUiTimelineEvents(sessionId, listOf(liveEvent)),
+                connectorRegistry = connectors,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
+        } }
+
+        compose.onNodeWithText("Current live workspace message").assertIsDisplayed()
+        compose.onNodeWithText("Persisted workspace message", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText("Stale live snapshot message", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun workspaceTimelineKeepsLiveToolSheetOpenWhenTheGroupAndRunStateChange() {

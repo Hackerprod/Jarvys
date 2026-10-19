@@ -2,8 +2,10 @@ package com.jarvys.agent.chatdb
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ConversationReader
 import com.jarvys.agent.ConversationTurn
+import com.jarvys.agent.ToolActivity
 import com.jarvys.agent.ui.chat.ConversationVisibility
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -22,6 +24,42 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import java.util.Collections
+
+private data class ToolActivityValue(
+    val eventId: String,
+    val executionId: String,
+    val callId: String,
+    val toolName: String,
+    val displayName: String,
+    val skillId: String,
+    val skillName: String,
+    val stage: String,
+    val detail: String,
+    val previewId: String,
+    val auditDetail: String,
+    val reflectionSource: String,
+    val timestampMillis: Long,
+    val historyDetail: String,
+    val allDetail: String,
+)
+
+private data class TimelineEventValue(
+    val event: AgentRunUiEvent,
+    val toolActivity: ToolActivityValue?,
+    val toolActivityEvents: List<ToolActivityValue>,
+)
+
+private fun ToolActivity.toValue() = ToolActivityValue(
+    eventId, executionId, callId, toolName, displayName, skillId, skillName, stage, detail, previewId,
+    auditDetail, reflectionSource, timestampMillis, historyDetail, allDetail(),
+)
+
+/** Value equality for every event field, including the Java activity objects nested in the event. */
+private fun AgentRunUiEvent.toValue() = TimelineEventValue(
+    copy(toolActivity = null, toolActivityEvents = emptyList()),
+    toolActivity?.toValue(),
+    toolActivityEvents.map(ToolActivity::toValue),
+)
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -303,6 +341,136 @@ class ConversationReaderDatabaseTest {
         assertFalse("timeline does not read opaque arguments", statements.any { it.contains("arguments_json") })
         assertFalse("timeline does not read provider item payloads", statements.any { it.contains("items_json") || it.contains("provider_output_items_json") })
         assertFalse("timeline does not read unrelated model artifacts", statements.any { it.contains("model_artifacts") })
+    }
+
+    @Test fun timelinePagesKeepCrossWindowToolSuppressionsAndInvalidationsEquivalent() = onDatabaseThread {
+        val id = "reader-page-cross-window-all-tools"
+        success(conversations.ensureConversation(id))
+        val earlierOwner = append(id, ConversationRepository.ROLE_USER, "an earlier turn")
+        append(id, ConversationRepository.ROLE_ASSISTANT, "the earlier answer", earlierOwner.messageId)
+        val owner = append(id, ConversationRepository.ROLE_USER, "run several tools")
+        val invalidatedBatchId = "cross-window-invalidated-batch"
+        success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = id,
+            batchId = invalidatedBatchId,
+            ownerUserMessageId = owner.messageId,
+            messageIndex = 0,
+            assistantText = "obsolete tool intent",
+            calls = listOf(ModelCallInput("invalidated-call", "obsolete", "{}")),
+        )))
+        val superseded = append(id, ConversationRepository.ROLE_ASSISTANT, "superseded answer", owner.messageId)
+        success(conversations.hideAssistant(id, superseded.messageId, "assistant_regenerated"))
+
+        val batchId = "cross-window-tools-batch"
+        val batch = success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = id,
+            batchId = batchId,
+            ownerUserMessageId = owner.messageId,
+            messageIndex = 1,
+            assistantText = "",
+            assistantProgress = false,
+            calls = listOf(
+                ModelCallInput("activity-call", "write_file", "{}"),
+                ModelCallInput("presentation-call", "show_preview", "{}"),
+                ModelCallInput("reflection-call", "record_memory", "{}"),
+                ModelCallInput("result-call", "lookup", "{}"),
+            ),
+        )))
+
+        val nextSeq = database.testChatSql.query(
+            "SELECT next_seq FROM conversations WHERE id=?", arrayOf(id),
+        ).use { c -> c.moveToFirst(); c.getLong(0) }
+        val paddingCount = 500
+        database.withChatWriteTransaction {
+            database.conversationItemDao().insertAll((0 until paddingCount).map { offset ->
+                val seq = nextSeq + offset
+                ConversationItem(
+                    id, seq, "workspace_result_notice", "cross-window-padding-$offset", seq,
+                    turn_anchor_seq = owner.seq, created_at = seq.toDouble(),
+                )
+            })
+            database.chatSql.execSQL(
+                "UPDATE conversations SET next_seq=? WHERE id=?",
+                arrayOf(nextSeq + paddingCount, id),
+            )
+        }
+
+        success(model.appendToolActivity(ToolActivityInput(
+            conversationId = id,
+            eventId = "cross-window-activity",
+            ownerUserMessageId = owner.messageId,
+            executionId = "cross-window-execution",
+            callId = "activity-call",
+            toolName = "write_file",
+            stage = "tool_result",
+            detail = "activity result",
+            timestampMillis = 1L,
+        )))
+        success(model.appendToolPresentation(ToolPresentationInput(
+            conversationId = id,
+            ownerUserMessageId = owner.messageId,
+            batchId = batchId,
+            callId = "presentation-call",
+            toolName = "show_preview",
+            stage = "tool_result",
+            detail = "presentation result",
+        )))
+        success(model.appendReflectionTool(ReflectionToolInput(
+            conversationId = id,
+            ownerUserMessageId = owner.messageId,
+            batchId = batchId,
+            callId = "reflection-call",
+            toolName = "record_memory",
+            source = "test",
+            stage = "tool_result",
+            marker = "reflection result",
+        )))
+        success(model.appendToolResult(ModelToolResultInput(
+            id, batchId, "result-call", "lookup", "RESULT", "durable model result",
+        )))
+        val ownedTurnItemCount = database.testChatSql.query(
+            "SELECT COUNT(*) FROM conversation_items WHERE conversation_id=? AND turn_anchor_seq=?",
+            arrayOf(id, owner.seq),
+        ).use { c -> c.moveToFirst(); c.getInt(0) }
+        assertTrue("fixture has a single turn containing over 500 timeline items", ownedTurnItemCount > 500)
+
+        var page = reader.readRecentConversationTimeline(id, 1)
+        val newestToOldest = mutableListOf(page)
+        while (page.olderCursorSeq != null) {
+            page = reader.readConversationTimelineBefore(id, page.olderCursorSeq!!, 1)
+            newestToOldest += page
+        }
+        assertTrue("fixture must split the batch from its typed rows", newestToOldest.size > 1)
+        val initialWindow = conversations.readTailWindow(id, 1)
+        val firstCursor = initialWindow.olderCursorSeq!!
+        assertFalse("the batch call row is outside the newest window", initialWindow.slots.any { it.item.seq == batch.batch.seq })
+        assertTrue(
+            "the batch call row is on the next older window",
+            conversations.readWindowBefore(id, firstCursor, 1).slots.any { it.item.seq == batch.batch.seq },
+        )
+        assertTrue("typed activity is on the newer page", newestToOldest.first().events.any { it.kind == "tool" && it.toolCallId == "cross-window-execution" })
+        assertTrue("presentation is on the newer page", newestToOldest.first().events.any { it.kind == "tool" && it.toolCallId == "presentation-call" })
+        assertTrue("reflection marker is on the newer page", newestToOldest.first().events.any { it.kind == "tool" && it.toolCallId == "reflection-call" })
+        assertTrue("model result is on the newer page", newestToOldest.first().events.any { it.kind == "tool" && it.toolCallId == "result-call" })
+
+        val concatenatedPages = newestToOldest.asReversed().flatMap { it.events }
+        val completeRead = reader.readConversationTimeline(id, 1)
+        assertEquals(
+            "concatenated upward pages match the full timeline projection",
+            completeRead.map(AgentRunUiEvent::toValue),
+            concatenatedPages.map(AgentRunUiEvent::toValue),
+        )
+        assertEquals("the projection contains no duplicate event ids", concatenatedPages.size, concatenatedPages.map { it.id }.toSet().size)
+        assertFalse("an invalidated batch is not restored", concatenatedPages.any { it.toolCallId?.contains("invalidated-call") == true })
+        assertEquals(
+            "cross-window typed rows replace pending or interrupted batch cards",
+            listOf("cross-window-execution", "presentation-call", "reflection-call", "result-call"),
+            concatenatedPages.filter { it.kind == "tool" }.map { it.toolCallId },
+        )
+        assertFalse(
+            "no false not-started or interrupted card is projected",
+            concatenatedPages.any { it.stage == "tool_not_started" || it.stage == "tool_interrupted" },
+        )
     }
 
     @Test fun timelineReopensAssistantInterimBeforeItsToolResultAndFinalAnswer() = onDatabaseThread {

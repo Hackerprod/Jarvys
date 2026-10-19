@@ -48,7 +48,7 @@ fun WorkspaceDetailScreen(
         WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
     }
     val timelineSnapshot = (sessionSnapshot ?: AgentRunUiSnapshot(sessionId = state.executionSessionId))
-        .copy(events = events, running = activeWork)
+        .copy(events = events, running = activeWork, presenceSummary = null)
     Box(modifier.fillMaxSize().testTag("workspace-chat-timeline")) {
         when {
             state.loading && events.isEmpty() -> JarvysEmptyState(

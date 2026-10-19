@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -472,6 +473,8 @@ object AgentRunUiState {
     private var visibleSessionId: String? = null
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
     private val publishedTimelineEvents = MutableStateFlow(AgentRunUiTimelineEvents())
+    /** Per-session immutable timeline snapshots avoid routing through the currently visible session. */
+    private val publishedTimelineEventsBySession = ConcurrentHashMap<String, MutableStateFlow<AgentRunUiTimelineEvents>>()
     private val publishedRenderState = MutableStateFlow(AgentRunUiRenderState())
     private var summarizedSessionId: String? = null
     private var summarizedEvents: List<AgentRunUiEvent>? = null
@@ -481,9 +484,23 @@ object AgentRunUiState {
     private var summarizedCrewMissionEvents: List<AgentRunUiEvent> = emptyList()
     private var summarizedPresence = AgentRunUiPresenceSummary()
 
+    private fun publishTimelineEventsForSessionLocked(snapshot: AgentRunUiSnapshot) {
+        val sessionId = snapshot.sessionId ?: return
+        val timeline = AgentRunUiTimelineEvents(sessionId, snapshot.events)
+        publishedTimelineEventsBySession.computeIfAbsent(sessionId) {
+            MutableStateFlow(AgentRunUiTimelineEvents(sessionId))
+        }.value = timeline
+    }
+
+    private fun storeSessionSnapshotLocked(sessionId: String, snapshot: AgentRunUiSnapshot) {
+        sessionSnapshots[sessionId] = snapshot
+        if (visibleSessionId != sessionId) publishTimelineEventsForSessionLocked(snapshot)
+    }
+
     private fun publishVisibleSnapshotLocked(snapshot: AgentRunUiSnapshot) {
         publishedState.value = snapshot
         publishedTimelineEvents.value = AgentRunUiTimelineEvents(snapshot.sessionId, snapshot.events)
+        publishTimelineEventsForSessionLocked(snapshot)
         if (summarizedSessionId != snapshot.sessionId || summarizedEvents !== snapshot.events) {
             summarizedSessionId = snapshot.sessionId
             summarizedEvents = snapshot.events
@@ -524,7 +541,7 @@ object AgentRunUiState {
             set(value) {
                 val sessionId = workingSession.get()
                 if (sessionId != null) synchronized(lock) {
-                    sessionSnapshots[sessionId] = value
+                    storeSessionSnapshotLocked(sessionId, value)
                     sessionOwners[sessionId]?.takeIf {
                         it.active && it.sessionId == sessionId && value.running
                     }?.liveSnapshot = value
@@ -533,7 +550,7 @@ object AgentRunUiState {
                 }
                 else {
                     synchronized(lock) {
-                        value.sessionId?.let { sessionSnapshots[it] = value }
+                        value.sessionId?.let { storeSessionSnapshotLocked(it, value) }
                         if (visibleSessionId == null) visibleSessionId = value.sessionId
                         publishVisibleSnapshotLocked(value)
                         refreshVisibleInteractiveOwnerLocked()
@@ -572,6 +589,7 @@ object AgentRunUiState {
                 // Keep legacy behavior where entering a session establishes its empty snapshot,
                 // while always using the latest shared value.
                 val latest = sessionSnapshots.getOrPut(sessionId) { AgentRunUiSnapshot(sessionId = sessionId) }
+                storeSessionSnapshotLocked(sessionId, latest)
                 if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(latest)
             }
         }
@@ -594,7 +612,7 @@ object AgentRunUiState {
         val ownerSessionId = activeInteractiveOwnerSessionIdLocked(visibleSession)
         if (current.interactiveOwnerSessionId == ownerSessionId) return
         val projected = current.copy(interactiveOwnerSessionId = ownerSessionId)
-        sessionSnapshots[visibleSession] = projected
+        storeSessionSnapshotLocked(visibleSession, projected)
         publishVisibleSnapshotLocked(projected)
     }
 
@@ -607,18 +625,18 @@ object AgentRunUiState {
             liveUserWaitId = null,
             liveRunIdentity = null,
         )
-        sessionSnapshots[sessionId] = cleared
+        storeSessionSnapshotLocked(sessionId, cleared)
         if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(cleared)
     }
 
     /** Selects which session the compatibility StateFlow projects for Compose. */
     @JvmStatic
     fun showSession(sessionId: String) = synchronized(lock) {
-        publishedState.value.sessionId?.let { sessionSnapshots[it] = publishedState.value }
+        publishedState.value.sessionId?.let { storeSessionSnapshotLocked(it, publishedState.value) }
         visibleSessionId = sessionId
         val selected = (sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId))
             .copy(interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId))
-        sessionSnapshots[sessionId] = selected
+        storeSessionSnapshotLocked(sessionId, selected)
         publishVisibleSnapshotLocked(selected)
     }
 
@@ -633,6 +651,16 @@ object AgentRunUiState {
     fun eventsForSession(sessionId: String): List<AgentRunUiEvent> = synchronized(lock) {
         snapshotForSession(sessionId).takeIf { it.sessionId == sessionId }?.events.orEmpty()
     }
+
+    /**
+     * Immutable per-session timeline stream for Compose routes. It keeps the requested
+     * conversation available while the compatibility state flow is projecting another session.
+     */
+    @JvmStatic
+    fun timelineEventsForSession(sessionId: String): StateFlow<AgentRunUiTimelineEvents> =
+        publishedTimelineEventsBySession.computeIfAbsent(sessionId) {
+            MutableStateFlow(AgentRunUiTimelineEvents(sessionId))
+        }.asStateFlow()
 
     @JvmStatic
     fun containsEvent(sessionId: String, event: AgentRunUiEvent): Boolean = synchronized(lock) {
@@ -2113,7 +2141,7 @@ object AgentRunUiState {
                 liveModelWaitId = null,
                 liveUserWaitId = if (ownership?.active == true && ownership.sessionId == sessionId) "approval:$id" else null)
             if (workingSession.get() == sessionId) _state.value = updated
-            else sessionSnapshots[sessionId] = updated
+            else storeSessionSnapshotLocked(sessionId, updated)
             if (ownership?.active == true && ownership.sessionId == sessionId) ownership.liveSnapshot = updated
             if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(updated)
         }

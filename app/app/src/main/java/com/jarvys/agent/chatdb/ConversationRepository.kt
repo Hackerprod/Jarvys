@@ -176,9 +176,19 @@ data class InterruptRequestValue(
 /** One authoritative projection of pending interrupt receipts, shared by the repository and timeline. */
 private const val MAX_PENDING_INTERRUPT_SKILL_BIND_PARAMETERS = 500
 
-internal fun readPendingInterruptRows(sql: ChatSqlDatabase, conversationId: String? = null): List<InterruptRequestValue> {
+internal fun readPendingInterruptRows(
+    sql: ChatSqlDatabase,
+    conversationId: String? = null,
+    requestIds: Collection<String>? = null,
+): List<InterruptRequestValue> {
+    val ids = requestIds?.distinct().orEmpty()
+    if (requestIds != null && ids.isEmpty()) return emptyList()
     val scope = if (conversationId == null) "" else "AND r.conversation_id=?"
-    val args = if (conversationId == null) emptyArray() else arrayOf<Any?>(conversationId)
+    val idFilter = if (requestIds == null) "" else "AND r.request_id IN (${ids.joinToString(",") { "?" }})"
+    val args = buildList<Any?> {
+        if (conversationId != null) add(conversationId)
+        if (requestIds != null) addAll(ids)
+    }.toTypedArray()
     val pending = sql.query(
         "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
             "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
@@ -188,7 +198,7 @@ internal fun readPendingInterruptRows(sql: ChatSqlDatabase, conversationId: Stri
             "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
             "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
             "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
-            "WHERE r.seq<=c.next_seq-1 $scope ORDER BY r.conversation_id,r.seq",
+        "WHERE r.seq<=c.next_seq-1 $scope $idFilter ORDER BY r.conversation_id,r.seq",
         args,
     ).use { cursor -> buildList {
         while (cursor.moveToNext()) {

@@ -27,6 +27,7 @@ import com.jarvys.agent.chatdb.StoredMessage
 import com.jarvys.agent.chatdb.TimelineModelProjection
 import com.jarvys.agent.chatdb.chatSql
 import com.jarvys.agent.chatdb.withChatReadTransaction
+import com.jarvys.agent.chatdb.readPendingInterruptRows
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.workspaces.WorkspaceIdentity
@@ -301,20 +302,14 @@ internal class ConversationReader(
                 owner != null && activity.execution_id != null && !isInvalidated(owner, activity.seq, invalidations)
             }
         val activityGroups = rawActivities.groupBy { it.owner_user_message_id!! to it.execution_id!! }
-        val typedCalls = HashSet<String>()
-        val typedReflectionCalls = HashSet<String>()
+        val typedCalls = sideTables.toolPresence.typedCalls
+        val typedReflectionCalls = sideTables.toolPresence.typedReflectionCalls
         val activityEventsByFirstSeq = HashMap<Long, AgentRunUiEvent>()
         for ((ownerAndExecution, rows) in activityGroups) {
             val ordered = rows.sortedBy { it.seq }
             val first = ordered.first()
             val activityValues = ordered.map(::toUiToolActivity)
             val source = first.source_batch_id?.takeIf(String::isNotBlank) ?: ownerAndExecution.first
-            ordered.forEach { activity ->
-                activity.call_id?.takeIf(String::isNotBlank)?.let { callId ->
-                    typedCalls += timelineToolKey(activity.source_batch_id, callId, ownerAndExecution.first)
-                    typedReflectionCalls += "${ownerAndExecution.first}/$callId"
-                }
-            }
             val projected = UiToolActivity.project(activityValues, false)
             var durableResult: Pair<String, String>? = null
             if (!UiToolActivity.definitive(projected.stage)) {
@@ -339,13 +334,10 @@ internal class ConversationReader(
             } ?: activityEvent).copyToolTimelineIdentity("execution:${projected.executionId}", ownerAndExecution.first)
         }
         val presentations = sideTables.presentations
-        val presentationKeys = presentations.mapTo(HashSet()) {
-            timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id)
-        }
+        val presentationKeys = sideTables.toolPresence.presentationKeys
         val presentationsBySeq = presentations.associateBy { it.seq }
         val reflectionTools = sideTables.reflectionTools
-        val reflectionToolsByKey = reflectionTools.groupBy { timelineToolKey(it.batch_id, it.call_id, it.owner_user_message_id) }
-            .mapValues { (_, values) -> values.maxBy { it.seq } }
+        val reflectionToolsByKey = sideTables.toolPresence.reflectionToolsByKey
         val reflectionToolsBySeq = reflectionTools.associateBy { it.seq }
         val compactionsBySeq = sideTables.compactions.associateBy { it.seq }
         val reflectionRows = sideTables.reflections
@@ -516,7 +508,7 @@ internal class ConversationReader(
                     val batch = batchesById[resultEntry.batchId]
                     val owner = batch?.ownerUserMessageId.orEmpty()
                     if (owner.isEmpty() || isInvalidated(owner, seq, invalidations) || key in presentationKeys || key in typedCalls) continue
-                    val tool = reflectionToolsByKey[key]?.tool_name ?: CoreToolRegistry.humanizeToolName(result.tool_name)
+                    val tool = reflectionToolsByKey[key] ?: CoreToolRegistry.humanizeToolName(result.tool_name)
                     val stage = when (result.lifecycle) {
                         "INTERRUPTED_UNCERTAIN" -> "tool_interrupted"
                         "NEVER_LAUNCHED" -> "tool_not_started"
@@ -578,6 +570,16 @@ internal class ConversationReader(
         val generatedImages: List<GeneratedImage>,
         val crewSnapshotsAtSeq: Map<String, Long>,
         val crewSnapshots: List<CrewMissionSnapshot>,
+        val toolPresence: TimelineToolPresence,
+    )
+
+    private data class TimelineToolReference(val scope: String, val callId: String)
+
+    private data class TimelineToolPresence(
+        val typedCalls: Set<String>,
+        val typedReflectionCalls: Set<String>,
+        val presentationKeys: Set<String>,
+        val reflectionToolsByKey: Map<String, String>,
     )
 
     private suspend fun readTimelineSideTables(conversationId: String, window: MessageWindow): TimelineSideTables {
@@ -603,6 +605,20 @@ internal class ConversationReader(
         }).distinct()
         val modelProjection = transcript.readTimelineModelProjection(conversationId, seqs, callRefs)
         onTimelineModelRead?.invoke(modelProjection.rowsRead, modelProjection.bytesRead)
+        val invalidations = readTimelineInvalidations(conversationId)
+        val toolReferences = buildList {
+            modelProjection.batchesBySeq.values.forEach { batch ->
+                batch.calls.forEach { call -> addTimelineToolReference(batch.batchId, call.callId, batch.ownerUserMessageId) }
+            }
+            modelProjection.resultsBySeq.values.forEach { result ->
+                val owner = modelProjection.batchesById[result.batchId]?.ownerUserMessageId
+                addTimelineToolReference(result.batchId, result.callId, owner)
+            }
+            activities.forEach { addTimelineToolReference(it.source_batch_id, it.call_id, it.owner_user_message_id) }
+            presentations.forEach { addTimelineToolReference(it.batch_id, it.call_id, it.owner_user_message_id) }
+            reflectionTools.forEach { addTimelineToolReference(it.batch_id, it.call_id, it.owner_user_message_id) }
+        }.distinct()
+        val toolPresence = readTimelineToolPresence(conversationId, toolReferences, invalidations)
         val crewMissionIds = pageItems.asSequence()
             .filter { it.item_kind == "crew_snapshot" }
             .map { it.item_key }
@@ -613,7 +629,7 @@ internal class ConversationReader(
             reactions = readTimelineReactions(conversationId, pageMessages.map { it.stableId }),
             ordinaryChat = (conversations.readConversationKind(conversationId) ?: "chat") !in setOf("proactive", "tasks"),
             modelProjection = modelProjection,
-            invalidations = readTimelineInvalidations(conversationId),
+            invalidations = invalidations,
             activities = activities,
             presentations = presentations,
             reflectionTools = reflectionTools,
@@ -627,6 +643,89 @@ internal class ConversationReader(
             crewSnapshotsAtSeq = readTimelineLatestCrewSnapshots(conversationId, crewMissionIds),
             crewSnapshots = if (crewMissionIds.isEmpty()) emptyList()
                 else memory.readCrewMissionSnapshots(conversationId, crewMissionIds),
+            toolPresence = toolPresence,
+        )
+    }
+
+    private fun MutableCollection<TimelineToolReference>.addTimelineToolReference(
+        batchId: String?,
+        callId: String?,
+        ownerUserMessageId: String?,
+    ) {
+        val normalizedCallId = callId?.takeIf(String::isNotBlank) ?: return
+        val scope = batchId?.takeIf(String::isNotBlank) ?: ownerUserMessageId?.takeIf(String::isNotBlank) ?: return
+        add(TimelineToolReference(scope, normalizedCallId))
+    }
+
+    /** Looks up only the existence and small display metadata for page-referenced tool identities. */
+    private fun readTimelineToolPresence(
+        conversationId: String,
+        references: Collection<TimelineToolReference>,
+        invalidations: Map<String, Long>,
+    ): TimelineToolPresence {
+        val refs = references.distinct()
+        if (refs.isEmpty()) return TimelineToolPresence(emptySet(), emptySet(), emptySet(), emptyMap())
+        val typedCalls = linkedSetOf<String>()
+        val typedReflectionCalls = linkedSetOf<String>()
+        val presentationKeys = linkedSetOf<String>()
+        val reflectionToolsByKey = linkedMapOf<String, Pair<Long, String>>()
+        val chunks = refs.chunked(MAX_TIMELINE_IN_IDS / 2)
+        chunks.forEach { chunk ->
+            val requested = chunk.joinToString(",") { "(?,?)" }
+            val identityArgs = chunk.flatMap { listOf(it.scope, it.callId) }.toTypedArray()
+            val requestedCte = "WITH requested(scope,call_id) AS (VALUES $requested) "
+
+            database.chatSql.query(
+                requestedCte +
+                    "SELECT a.seq,a.owner_user_message_id,a.source_batch_id,a.call_id " +
+                    "FROM tool_activities a JOIN requested q ON q.scope=COALESCE(NULLIF(TRIM(a.source_batch_id),''),a.owner_user_message_id,'') " +
+                    "AND q.call_id=COALESCE(a.call_id,'') WHERE a.conversation_id=? AND a.owner_user_message_id IS NOT NULL",
+                arrayOf<Any?>(*identityArgs, conversationId),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val owner = c.getString(1)
+                    val seq = c.getLong(0)
+                    if (isInvalidated(owner, seq, invalidations)) continue
+                    val callId = c.getStringOrNull(3) ?: continue
+                    typedCalls += timelineToolKey(c.getStringOrNull(2), callId, owner)
+                    typedReflectionCalls += "$owner/$callId"
+                }
+            }
+
+            database.chatSql.query(
+                requestedCte +
+                    "SELECT DISTINCT p.batch_id,p.call_id,p.owner_user_message_id " +
+                    "FROM tool_presentations p JOIN requested q ON q.scope=COALESCE(NULLIF(TRIM(p.batch_id),''),p.owner_user_message_id,'') " +
+                    "AND q.call_id=COALESCE(p.call_id,'') WHERE p.conversation_id=?",
+                arrayOf<Any?>(*identityArgs, conversationId),
+            ).use { c ->
+                while (c.moveToNext()) presentationKeys += timelineToolKey(
+                    c.getStringOrNull(0), c.getStringOrNull(1), c.getStringOrNull(2),
+                )
+            }
+
+            database.chatSql.query(
+                requestedCte +
+                    "SELECT p.seq,p.batch_id,p.call_id,p.owner_user_message_id,p.tool_name " +
+                    "FROM reflection_tool_markers p JOIN requested q ON q.scope=COALESCE(NULLIF(TRIM(p.batch_id),''),p.owner_user_message_id,'') " +
+                    "AND q.call_id=COALESCE(p.call_id,'') WHERE p.conversation_id=? AND NOT EXISTS (" +
+                    "SELECT 1 FROM reflection_tool_markers later WHERE later.conversation_id=p.conversation_id AND " +
+                    "COALESCE(NULLIF(TRIM(later.batch_id),''),later.owner_user_message_id,'')=" +
+                    "COALESCE(NULLIF(TRIM(p.batch_id),''),p.owner_user_message_id,'') " +
+                    "AND COALESCE(later.call_id,'')=COALESCE(p.call_id,'') AND later.seq>p.seq)",
+                arrayOf<Any?>(*identityArgs, conversationId),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val key = timelineToolKey(c.getStringOrNull(1), c.getStringOrNull(2), c.getStringOrNull(3))
+                    val seq = c.getLong(0)
+                    val name = c.getString(4)
+                    if (seq > (reflectionToolsByKey[key]?.first ?: Long.MIN_VALUE)) reflectionToolsByKey[key] = seq to name
+                }
+            }
+        }
+        return TimelineToolPresence(
+            typedCalls, typedReflectionCalls, presentationKeys,
+            reflectionToolsByKey.mapValues { it.value.second },
         )
     }
 
@@ -680,13 +779,21 @@ internal class ConversationReader(
             arrayOf(conversationId),
         )
         val allRows = LinkedHashMap<Long, StoredToolActivity>()
-        pageRows.forEach { first ->
-            allRows[first.seq] = first
-            val owner = first.owner_user_message_id ?: return@forEach
-            val execution = first.execution_id ?: return@forEach
+        pageRows.forEach { allRows[it.seq] = it }
+        val executions = pageRows.mapNotNull { activity ->
+            val owner = activity.owner_user_message_id ?: return@mapNotNull null
+            val execution = activity.execution_id ?: return@mapNotNull null
+            owner to execution
+        }.distinct()
+        executions.chunked(MAX_TIMELINE_IN_IDS / 2).forEach { chunk ->
+            val requested = chunk.joinToString(",") { "(?,?)" }
+            val values = chunk.flatMap { listOf(it.first, it.second) }.toTypedArray()
             readToolActivityRows(
-                "SELECT * FROM tool_activities WHERE conversation_id=? AND owner_user_message_id=? AND execution_id=? ORDER BY seq",
-                arrayOf(conversationId, owner, execution),
+                "WITH requested(owner_id,execution_id) AS (VALUES $requested) " +
+                    "SELECT a.* FROM tool_activities a JOIN requested r " +
+                    "ON r.owner_id=a.owner_user_message_id AND r.execution_id=a.execution_id " +
+                    "WHERE a.conversation_id=? ORDER BY a.seq",
+                arrayOf<Any?>(*values, conversationId),
             ).forEach { row -> allRows[row.seq] = row }
         }
         return allRows.values.sortedBy { it.seq }
@@ -730,7 +837,7 @@ internal class ConversationReader(
         return database.chatSql.query(
         "SELECT p.* FROM tool_presentations p WHERE p.conversation_id=? AND p.seq IN ($inClause) AND NOT EXISTS (" +
             "SELECT 1 FROM tool_presentations later WHERE later.conversation_id=p.conversation_id AND " +
-            "COALESCE(NULLIF(later.batch_id,''),later.owner_user_message_id,'')=COALESCE(NULLIF(p.batch_id,''),p.owner_user_message_id,'') " +
+            "COALESCE(NULLIF(TRIM(later.batch_id),''),later.owner_user_message_id,'')=COALESCE(NULLIF(TRIM(p.batch_id),''),p.owner_user_message_id,'') " +
             "AND COALESCE(later.call_id,'')=COALESCE(p.call_id,'') AND later.seq>p.seq) ORDER BY p.seq",
         arrayOf(conversationId),
     ).use { c -> buildList {
@@ -757,7 +864,7 @@ internal class ConversationReader(
         "SELECT p.seq,p.owner_user_message_id,p.batch_id,p.call_id,p.tool_name,p.stage FROM reflection_tool_markers p " +
             "WHERE p.conversation_id=? AND p.seq IN ($inClause) AND NOT EXISTS (" +
             "SELECT 1 FROM reflection_tool_markers later WHERE later.conversation_id=p.conversation_id AND " +
-            "COALESCE(NULLIF(later.batch_id,''),later.owner_user_message_id,'')=COALESCE(NULLIF(p.batch_id,''),p.owner_user_message_id,'') " +
+            "COALESCE(NULLIF(TRIM(later.batch_id),''),later.owner_user_message_id,'')=COALESCE(NULLIF(TRIM(p.batch_id),''),p.owner_user_message_id,'') " +
             "AND COALESCE(later.call_id,'')=COALESCE(p.call_id,'') AND later.seq>p.seq) ORDER BY p.seq",
         arrayOf(conversationId),
     ).use { c -> buildList {
@@ -870,8 +977,8 @@ internal class ConversationReader(
                         c.getStringOrNull(5) ?: "UNANSWERED", c.getStringOrNull(6), c.getStringOrNull(7), c.getDouble(8),
                     )
                 }
-                val optionId = c.getStringOrNull(9)
-                val label = c.getStringOrNull(10)
+                val optionId = c.getStringOrNull(9)?.trim()
+                val label = c.getStringOrNull(10)?.trim()
                 if (!optionId.isNullOrEmpty() && !label.isNullOrEmpty()) {
                     val role = runCatching {
                         UserDecisionRole.valueOf(c.getStringOrNull(12).orEmpty().ifBlank { "default" }.uppercase(Locale.ROOT))
@@ -898,48 +1005,7 @@ internal class ConversationReader(
             .filter(String::isNotBlank)
             .distinct()
             .toList()
-        if (requestIds.isEmpty()) return emptyList()
-        val requestRows = linkedMapOf<String, InterruptRequestValue>()
-        requestIds.chunked(MAX_TIMELINE_IN_IDS).forEach { chunk ->
-            val inClause = chunk.joinToString(",") { "?" }
-            database.chatSql.query(
-                "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled, " +
-                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id, " +
-                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq, " +
-                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state, " +
-                    "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state_seq END AS input_state_seq, " +
-                    "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN COALESCE(m.ack_required,0) ELSE 0 END AS ack_required " +
-                    "FROM interrupt_requests r JOIN conversations c ON c.id=r.conversation_id " +
-                    "LEFT JOIN messages m ON m.conversation_id=r.conversation_id AND m.message_id=r.dispatched_message_id " +
-                    "WHERE r.conversation_id=? AND r.request_id IN ($inClause)",
-                arrayOf<Any?>(conversationId, *chunk.toTypedArray()),
-            ).use { c ->
-                while (c.moveToNext()) {
-                    val state = c.getStringOrNull(7)
-                    val dispatchedSeq = c.getLongOrNull(6)
-                    val ackRequired = c.getInt(9) != 0
-                    if (state == ConversationRepository.INPUT_RESOLVED || state == ConversationRepository.INPUT_INCORPORATED) continue
-                    if (dispatchedSeq != null && !ackRequired) continue
-                    val id = c.getString(1)
-                    requestRows[id] = InterruptRequestValue(
-                        conversationId, id, c.getLong(2), c.getString(3), c.getInt(4) != 0, emptyList(),
-                        c.getStringOrNull(5), dispatchedSeq, state, c.getLongOrNull(8),
-                        dispatchedSeq != null, ackRequired,
-                    )
-                }
-            }
-        }
-        if (requestRows.isEmpty()) return emptyList()
-        val skills = linkedMapOf<String, MutableList<String>>()
-        requestRows.keys.toList().chunked(MAX_TIMELINE_IN_IDS).forEach { chunk ->
-            val inClause = chunk.joinToString(",") { "?" }
-            database.chatSql.query(
-                "SELECT request_id,skill_id FROM interrupt_request_skills WHERE conversation_id=? " +
-                    "AND request_id IN ($inClause) ORDER BY request_id,ordinal",
-                arrayOf<Any?>(conversationId, *chunk.toTypedArray()),
-            ).use { c -> while (c.moveToNext()) skills.getOrPut(c.getString(0)) { mutableListOf() }.add(c.getString(1)) }
-        }
-        return requestRows.values.map { request -> request.copy(skills = skills[request.requestId].orEmpty()) }
+        return readPendingInterruptRows(database.chatSql, conversationId, requestIds)
     }
 
     private fun readTimelineArtifacts(conversationId: String, sequences: Collection<Long>): List<ConversationArtifact> {
