@@ -96,7 +96,7 @@ public class CrewCoordinationEvidenceTest {
         assertEquals(1, bus.snapshot().size());
     }
 
-    @Test public void presentationReplayIsIdempotentOnlyForTheSameTextOnlyEvidence() {
+    @Test public void presentationReplayWithReusedIdAndChangedTextIsIgnoredWithoutThrowing() {
         CrewMessageBus bus = new CrewMessageBus("source");
         CrewMessage first = new CrewMessage("stable-progress", "source", "worker", "user",
                 CrewMessage.Type.PROGRESS, "first phase", Collections.emptyList(), 1L);
@@ -107,7 +107,7 @@ public class CrewCoordinationEvidenceTest {
 
         assertSame(first, bus.recordPresentationIfAbsent(first));
         assertSame(first, bus.recordPresentationIfAbsent(replay));
-        assertThrows(IllegalStateException.class, () -> bus.recordPresentationIfAbsent(changedText));
+        assertSame(first, bus.recordPresentationIfAbsent(changedText));
         assertEquals(1, bus.snapshot().size());
         assertEquals("first phase", bus.snapshot().get(0).text);
     }

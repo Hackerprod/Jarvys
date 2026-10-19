@@ -64,10 +64,9 @@ public final class CrewMessageBus {
                         || existing.type != message.type
                         || !existing.from.equals(message.from)
                         || !existing.to.equals(message.to)
-                        || !existing.text.equals(message.text)
                         || !existing.refs.equals(message.refs))
                     throw new IllegalStateException("Crew message ID collides with different or authoritative evidence");
-                // A text-only presentation callback can be replayed with the same stable event ID.
+                // Text-only presentation callbacks can be replayed with changed display text.
                 return existing;
             }
             log.add(message);
