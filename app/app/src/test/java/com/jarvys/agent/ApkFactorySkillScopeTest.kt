@@ -591,6 +591,27 @@ class ApkFactorySkillScopeTest {
         FactoryGuidanceBundle.NAMES.forEach { assertTrue(failure, failure.contains(it)) }
     }
 
+    @Test fun unavailableSkillDoesNotLeakItsResourceCatalogInPreflightErrors() {
+        val tool = LoadSkillTool(listOf(factory()), 16384, { false }, "coding")
+        val error = tool.preflightErrorMessage(mapOf(
+            "skill_id" to id,
+            "resource" to 7,
+            "resource_version" to FactoryGuidanceBundle.VERSION,
+        ), "resource must be a string")
+
+        assertEquals("That skill is not available in this agent's scope or is no longer enabled", error)
+        assertFalse(error.contains(FactoryGuidanceBundle.VERSION))
+        FactoryGuidanceBundle.NAMES.forEach { assertFalse(error, error.contains(it)) }
+    }
+
+    @Test fun readSkillDescriptionExplainsThePerResponseAdmissionRule() {
+        val description = LoadSkillTool(listOf(factory()), 16384).declaration().description
+
+        assertTrue(description.contains("one reference per model response"))
+        assertTrue(description.contains("additional requests are marked not started"))
+        assertTrue(description.contains("requested in a later response"))
+    }
+
     @Test fun upgradingBundledGuidancePreservesCustomizedFilesUsageAndProfile() {
         val repo = repository()
         repo.markUsed(listOf(id))

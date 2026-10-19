@@ -877,10 +877,6 @@ public final class CoreAgentLoop {
             String preflightError = call.invalidArgumentsReason;
             String admissionReason = null;
             Map<String, Object> invokeArguments = call.arguments;
-            if (tool != null && tool.responseCallPolicy() == CoreTool.ResponseCallPolicy.ONE_PER_RESPONSE
-                    && !oneCallPerResponse.add(tool)) {
-                admissionReason = tool.additionalCallNotStartedMessage();
-            }
             if (admissionReason == null && preflightError == null && tool == null) {
                 preflightError = "Tool is not available in this agent scope: " + call.name;
             } else if (admissionReason == null && preflightError == null) {
@@ -889,9 +885,12 @@ public final class CoreAgentLoop {
                 invokeArguments = validation.arguments;
                 preflightError = validation.error == null ? null
                         : tool.preflightErrorMessage(call.arguments, validation.error);
-                if (preflightError == null && tool.responseCallPolicy() == CoreTool.ResponseCallPolicy.ONE_PER_RESPONSE
-                        && completeResultAlreadyVisible(tool, invokeArguments, sentTranscript)) {
-                    admissionReason = tool.completeResultAlreadyVisibleMessage();
+                if (preflightError == null && tool.responseCallPolicy() == CoreTool.ResponseCallPolicy.ONE_PER_RESPONSE) {
+                    if (completeResultAlreadyVisible(tool, invokeArguments, sentTranscript)) {
+                        admissionReason = tool.completeResultAlreadyVisibleMessage();
+                    } else if (!oneCallPerResponse.add(tool)) {
+                        admissionReason = tool.additionalCallNotStartedMessage();
+                    }
                 }
             }
             if (preflightError == null && tool.executionMode() == CoreTool.ExecutionMode.SEQUENTIAL)

@@ -1709,7 +1709,7 @@ public final class CoreAgentRuntime {
     return result;
   }
 
-  private static final class ScheduledTaskBoundTool implements CoreTool {
+  static final class ScheduledTaskBoundTool implements CoreTool {
     private final CoreTool delegate;
     private final boolean writesAllowed;
     private final boolean approvedPendingAction;
@@ -1724,7 +1724,38 @@ public final class CoreAgentRuntime {
     }
 
     @Override public ToolSpec declaration() { return delegate.declaration(); }
+    @Override public boolean canDelegate() { return delegate.canDelegate(); }
+    @Override public boolean requiresMemoryScopeForScheduledTask() {
+      return delegate.requiresMemoryScopeForScheduledTask();
+    }
+    @Override public AccessClassification accessClassification() { return delegate.accessClassification(); }
+    @Override public PersistenceEffect persistenceEffect() { return delegate.persistenceEffect(); }
     @Override public ExecutionMode executionMode() { return delegate.executionMode(); }
+    @Override public ResponseCallPolicy responseCallPolicy() { return delegate.responseCallPolicy(); }
+    @Override public String additionalCallNotStartedMessage() { return delegate.additionalCallNotStartedMessage(); }
+    @Override public String preflightErrorMessage(Map<String, Object> arguments, String reason) {
+      return delegate.preflightErrorMessage(arguments, reason);
+    }
+    @Override public String completeResultIdentity(Map<String, Object> arguments) {
+      return delegate.completeResultIdentity(arguments);
+    }
+    @Override public boolean isCompleteResult(Map<String, Object> arguments, String content) {
+      return delegate.isCompleteResult(arguments, content);
+    }
+    @Override public String completeResultAlreadyVisibleMessage() {
+      return delegate.completeResultAlreadyVisibleMessage();
+    }
+    @Override public String auditDetail(Map<String, Object> arguments) { return delegate.auditDetail(arguments); }
+    @Override public boolean hideFromProgress() { return delegate.hideFromProgress(); }
+    @Override public String activityDisplayName(Map<String, Object> arguments) {
+      return delegate.activityDisplayName(arguments);
+    }
+    @Override public String activitySkillId(Map<String, Object> arguments) {
+      return delegate.activitySkillId(arguments);
+    }
+    @Override public String activitySkillName(Map<String, Object> arguments) {
+      return delegate.activitySkillName(arguments);
+    }
     @Override public UnattendedAccess unattendedAccess() { return delegate.unattendedAccess(); }
     @Override public boolean isConnectorTool() { return delegate.isConnectorTool(); }
     @Override public boolean isMcpTool() { return delegate.isMcpTool(); }

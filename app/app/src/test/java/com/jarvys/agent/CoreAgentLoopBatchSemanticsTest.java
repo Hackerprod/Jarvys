@@ -289,6 +289,61 @@ public class CoreAgentLoopBatchSemanticsTest {
                 && "tool_error".equals(event.stage)));
     }
 
+    @Test public void visibleDuplicateDoesNotConsumeOnePerResponseAdmission() {
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool reusable = new CoreTool() {
+            private final ToolSpec declaration = new ToolSpec("read", "test", "Read", "test",
+                    ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList());
+            @Override public ToolSpec declaration() { return declaration; }
+            @Override public ResponseCallPolicy responseCallPolicy() { return ResponseCallPolicy.ONE_PER_RESPONSE; }
+            @Override public String completeResultIdentity(Map<String, Object> arguments) {
+                return arguments == null ? null : String.valueOf(arguments.get("reference"));
+            }
+            @Override public boolean isCompleteResult(Map<String, Object> arguments, String content) {
+                return "complete reference content".equals(content);
+            }
+            @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+                reads.incrementAndGet();
+                return CoreToolResult.success("complete reference content");
+            }
+        };
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
+            int turn = modelCalls.incrementAndGet();
+            if (turn == 1) return new ModelReply("", Collections.singletonList(new ModelReply.Call(
+                    "read-first", "read", Collections.singletonMap("reference", "database"))));
+            if (turn == 2) return new ModelReply("", Arrays.asList(
+                    new ModelReply.Call("read-repeat", "read", Collections.singletonMap("reference", "database")),
+                    new ModelReply.Call("read-new", "read", Collections.singletonMap("reference", "another-reference"))));
+            return new ModelReply("Both calls are accounted for.", Collections.emptyList());
+        }, new CoreToolRegistry(Collections.singletonList(reusable)), "", "visible-duplicate-admission",
+                CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null);
+        List<ToolActivity> events = new java.util.ArrayList<>();
+
+        CoreAgentLoop.Result result = loop.run("Read the references", Collections.emptyList(),
+                CancellationToken.uncancellable(), new CoreAgentLoop.ProgressListener() {
+                    @Override public void onProgress(String stage, String message) { }
+                    @Override public void onToolActivity(ToolActivity activity) { events.add(activity); }
+                });
+
+        List<String> resultIds = new java.util.ArrayList<>();
+        for (ConversationTurn turn : loop.transcriptSnapshot())
+            if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) resultIds.add(turn.toolCallId);
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(2, reads.get());
+        assertEquals(Arrays.asList("read-first", "read-repeat", "read-new"), resultIds);
+        assertEquals("NEVER_LAUNCHED", loop.checkpointSnapshot().reconciled().toolLifecycle.get("read-repeat"));
+        assertTrue(loop.transcriptSnapshot().stream().anyMatch(item -> item.kind == ConversationTurn.Kind.TOOL_RESULT
+                && "read-repeat".equals(item.toolCallId)
+                && item.content.contains("complete result for this call is already present")));
+        assertTrue(loop.transcriptSnapshot().stream().anyMatch(item -> item.kind == ConversationTurn.Kind.TOOL_RESULT
+                && "read-new".equals(item.toolCallId) && "complete reference content".equals(item.content)));
+        assertTrue(events.stream().anyMatch(event -> "read-repeat".equals(event.callId)
+                && "tool_not_started".equals(event.stage)));
+        assertTrue(events.stream().anyMatch(event -> "read-new".equals(event.callId)
+                && "tool_call".equals(event.stage)));
+    }
+
     @Test public void sequentialToolLocalCancellationIsOnlyThatCallsFailure() {
         AtomicInteger modelCalls = new AtomicInteger();
         AtomicInteger laterEffects = new AtomicInteger();

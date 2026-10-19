@@ -39,7 +39,9 @@ public final class LoadSkillTool implements CoreTool {
             properties.put("resource_version", "string");
         }
         declaration = new ToolSpec("read_skill", "jarvys/core",
-                "Load the complete body of one catalogued skill by id. Available ids: " + skills.keySet()
+                "Load the complete body of one catalogued skill by id. "
+                    + "This tool admits one reference per model response; additional requests are marked not started "
+                    + "and should be requested in a later response. Available ids: " + skills.keySet()
                     + (properties.containsKey("resource") ? ". For Factory details, supply resource and resource_version together, exactly as listed in its core. No paths or external files." : ""),
                 "core", ToolSpec.Status.IMPLEMENTED, properties, Collections.singletonList("skill_id"));
     }
@@ -93,7 +95,10 @@ public final class LoadSkillTool implements CoreTool {
             return reason;
         Object rawId = arguments.get("skill_id");
         SkillEntry skill = rawId instanceof String ? skills.get(rawId) : null;
-        return skill == null ? reason : resourceCatalogError(skill, reason);
+        if (skill == null) return reason;
+        if (!currentlyAvailable.test((String) rawId))
+            return "That skill is not available in this agent's scope or is no longer enabled";
+        return resourceCatalogError(skill, reason);
     }
     @Override public String completeResultIdentity(Map<String, Object> arguments) {
         Object rawId = arguments == null ? null : arguments.get("skill_id");
