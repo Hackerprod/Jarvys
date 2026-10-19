@@ -135,6 +135,41 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun serviceRecoveryIgnoresPendingAgentInputsInWorkerSessions() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspaceId = java.util.UUID.randomUUID().toString()
+        val workerSession = com.jarvys.agent.workspaces.WorkspaceIdentity.executionSessionId(workspaceId)
+        val store = LocalRunStore(context)
+        val sourceId = "pending-worker-input-${System.nanoTime()}"
+        val provenance = ConversationInput.Provenance("sender-session", workspaceId, "assignment-id",
+            "sender-bot", sourceId, ConversationInput.Kind.MESSAGE,
+            ConversationInput.Provenance.PrincipalRole.PEER)
+        val rowId = chatTestStore.onDatabaseWorker {
+            store.appendConversationInput(ConversationInput(workerSession, sourceId, "Pending worker message",
+                ConversationInput.Origin.AGENT, provenance))
+        }
+        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
+        val service = controller.get()
+        val runtimeFactoryCalls = AtomicInteger()
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            runtimeFactoryCalls.incrementAndGet()
+            throw IllegalStateException("Worker execution sessions are resumed by Crew recovery")
+        }
+        try {
+            chatTestStore.onDatabaseWorker { service.runPendingInputRecoverySafely(workerSession) }
+            service.awaitSessionIdleForTesting(workerSession).get(5, TimeUnit.SECONDS)
+            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+
+            assertEquals("service input recovery must leave worker runs to Crew", 0, runtimeFactoryCalls.get())
+            assertNull(chatTestStore.onDatabaseWorker { store.readConversationInputState(workerSession, rowId) })
+            assertFalse(chatTestStore.onDatabaseWorker { store.readConversationMessages(workerSession) }.any {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+            })
+        } finally {
+            controller.destroy()
+        }
+    }
+
     @Test fun earlyAgentInputStartFailureIsSuppressedPerSessionUntilInputIsResolved() {
         val session = "agent-start-${System.nanoTime()}"
         val failed = JSONObject().put("messageId", "failed-input")

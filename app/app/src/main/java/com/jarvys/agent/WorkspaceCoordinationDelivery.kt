@@ -261,8 +261,15 @@ class WorkspaceCoordinationDelivery internal constructor(
                     }
                     return@synchronized receipt("PENDING_DELIVERY", false, false, false, failure,
                         "The durable supervisor intent remains pending because Crew admission or its checkpoint could not be confirmed. An exact retry or authorized resume reuses this input ID.")
-                } catch (failure: Exception) {
-                    when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                } catch (failure: CrewManager.AdmissionRejectedException) {
+                    val state = try {
+                        ledger.readConversationInputState(scope.executionSessionId, rowId)
+                    } catch (stateFailure: Exception) {
+                        stateFailure.addSuppressed(failure)
+                        return@synchronized receipt("PENDING_DELIVERY", false, false, false, stateFailure,
+                            "Crew rejected admission, but the durable intent state could not be read. It remains pending for exact reconciliation.")
+                    }
+                    when (state) {
                         "incorporated" -> return@synchronized receipt("INCORPORATED_IN_CHECKPOINT", true, true,
                             true, semantics = "The exact supervisor input is already present in the worker checkpoint.")
                         "resolved" -> return@synchronized receipt("REJECTED", false, false, false, failure,
@@ -275,10 +282,26 @@ class WorkspaceCoordinationDelivery internal constructor(
                         throw cancelled
                     } catch (settlementFailure: Exception) {
                         return@synchronized receipt("PENDING_DELIVERY", false, false, false, settlementFailure,
-                            "Crew rejected the delivery, but the durable intent could not be settled. It remains pending for exact reconciliation.")
+                            "Crew rejected admission, but the durable intent could not be settled. It remains pending for exact reconciliation.")
                     }
                     return@synchronized receipt("REJECTED", false, false, false, failure,
                         "Crew rejected this exact supervisor intent before mailbox admission; the durable row was resolved and will not be retried automatically.")
+                } catch (failure: Exception) {
+                    val state = try {
+                        ledger.readConversationInputState(scope.executionSessionId, rowId)
+                    } catch (stateFailure: Exception) {
+                        stateFailure.addSuppressed(failure)
+                        return@synchronized receipt("PENDING_DELIVERY", false, false, false, stateFailure,
+                            "Crew admission failed and the durable intent state could not be read. It remains pending for exact reconciliation.")
+                    }
+                    when (state) {
+                        "incorporated" -> return@synchronized receipt("INCORPORATED_IN_CHECKPOINT", true, true,
+                            true, semantics = "The exact supervisor input is already present in the worker checkpoint.")
+                        "resolved" -> return@synchronized receipt("REJECTED", false, false, false, failure,
+                            "The exact supervisor intent was resolved before worker incorporation; it is a final receipt.")
+                    }
+                    return@synchronized receipt("PENDING_DELIVERY", false, false, false, failure,
+                        "Supervisor delivery failed before mailbox admission. The durable intent remains pending for an exact retry or authorized resume.")
                 }
                 check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
                     && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)

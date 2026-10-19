@@ -123,6 +123,11 @@ internal object WorkspaceConversationInputStore {
                 val provenanceJson = row.optJSONObject("provenance") ?: continue
                 val provenance = runCatching { ConversationInput.Provenance.fromJson(provenanceJson) }.getOrNull()
                     ?: continue
+                // This recovery path owns only central supervisor intents. Worker-to-worker
+                // messages share the recipient's execution session, but provenance identifies
+                // the sending bot and must not be judged against the recipient assignment.
+                if (provenance.principalRole != ConversationInput.Provenance.PrincipalRole.SUPERVISOR
+                    || provenance.sessionId != WorkspaceIdentity.CENTRAL_SESSION) continue
                 if (provenance.workspaceId != workspaceId || provenance.assignmentId.isBlank()) continue
 
                 val assigned = if (assignments.containsKey(provenance.assignmentId)) assignments[provenance.assignmentId]
@@ -152,9 +157,7 @@ internal object WorkspaceConversationInputStore {
                     }
                 }
 
-                if (provenance.principalRole != ConversationInput.Provenance.PrincipalRole.SUPERVISOR
-                    || provenance.sessionId != WorkspaceIdentity.CENTRAL_SESSION
-                    || (assignmentId != null && provenance.assignmentId != assignmentId)
+                if ((assignmentId != null && provenance.assignmentId != assignmentId)
                     || provenance.kind != ConversationInput.Kind.MESSAGE) continue
                 pending += ConversationInput(executionSessionId, provenance.messageId, row.optString("content"),
                     ConversationInput.Origin.AGENT, provenance)

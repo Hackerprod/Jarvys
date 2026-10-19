@@ -715,7 +715,7 @@ public final class CoreAgentRuntime {
     CrewProfileRepository profiles = new CrewProfileRepository(this.context);
     for (BotDefinition definition : profiles.definitions()) {
       if (definition.id.equals(roleId)) {
-        if (!definition.enabled) throw new IllegalStateException("Bot definition is disabled: " + roleId);
+        if (!definition.enabled) throw new CrewManager.AdmissionRejectedException("Bot definition is disabled: " + roleId);
         List<String> availableSkills = new ArrayList<>();
         for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(roleId)) {
           availableSkills.add(skill.getMetadata().getId());

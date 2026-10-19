@@ -403,6 +403,12 @@ public final class CrewManager implements AutoCloseable {
         }
     }
 
+    /** A known deterministic rejection before a supervisor input reaches the mailbox. */
+    public static class AdmissionRejectedException extends IllegalStateException {
+        public AdmissionRejectedException(String message) { super(message); }
+        public AdmissionRejectedException(String message, RuntimeException cause) { super(message, cause); }
+    }
+
     /** A durable supervisor intent is waiting for an explicitly resumed worker. */
     public static final class AdmissionDeferredException extends AdmissionUncertainException {
         public AdmissionDeferredException(String message) { super(message, null, false); }
@@ -1230,11 +1236,11 @@ public final class CrewManager implements AutoCloseable {
     private void validateCurrentProfile(CrewRole role) {
         if (role.profileVersion <= 0 || !profilesConfigured) return;
         CrewRole current = profileResolver.apply(role.id);
-        if (current == null) throw new IllegalStateException("Bot definition is missing or disabled");
+        if (current == null) throw new AdmissionRejectedException("Bot definition is missing or disabled");
         if (!current.id.equals(role.id) || current.profileVersion != role.profileVersion
                 || current.workspaceMode != role.workspaceMode || !current.tools.containsAll(role.tools)
                 || !current.skillIds.containsAll(role.skillIds)) {
-            throw new IllegalStateException("Bot configuration changed; review it before continuing");
+            throw new AdmissionRejectedException("Bot configuration changed; review it before continuing");
         }
     }
 
@@ -2005,7 +2011,7 @@ public final class CrewManager implements AutoCloseable {
         Bot bot = bots.get(botId);
         if (bot == null || expectedToken == null || deterministicMessageId == null
                 || deterministicMessageId.trim().isEmpty() || text == null || text.trim().isEmpty())
-            throw new IllegalArgumentException("Exact supervisor message fields are required");
+            throw new AdmissionRejectedException("Exact supervisor message fields are required");
         List<String> copiedRefs = refs == null ? Collections.emptyList() : new ArrayList<>(refs);
         CrewMessage proposed = new CrewMessage(deterministicMessageId, conversationId, "chief", botId,
                 CrewMessage.Type.MESSAGE, text, copiedRefs, System.currentTimeMillis());
@@ -2027,7 +2033,7 @@ public final class CrewManager implements AutoCloseable {
                         || !existing.refs.equals(copiedRefs) || existing.activity != null
                         || existing.inputBinding != null || existing.coordination != null
                         || !sameInputProvenance(existing.inputProvenance, exactProposed.inputProvenance))
-                    throw new IllegalStateException("Supervisor message key conflicts with an existing payload");
+                    throw new AdmissionRejectedException("Supervisor message key conflicts with an existing payload");
                 boolean incorporated = bot.checkpoint != null
                         && bot.checkpoint.appliedIncomingIds.contains(deterministicMessageId);
                 if (incorporated) {

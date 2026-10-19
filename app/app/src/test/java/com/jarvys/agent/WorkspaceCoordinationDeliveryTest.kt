@@ -258,6 +258,74 @@ class WorkspaceCoordinationDeliveryTest {
         } finally { worker.manager.configureCheckpoints(null) }
     }
 
+    @Test fun transientPreAdmissionFailureLeavesSupervisorIntentPendingForExactRetry() {
+        val worker = Parked(profileGuarded = true).also { parked = it }
+        bind(worker.bot.id)
+        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
+        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) { }
+            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                throw AssertionError("A message attempt must not resume a worker")
+        })
+        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
+            "Checkpoint is available", emptyList())
+        assertTrue(worker.bot.hasDurableCheckpoint())
+        val role = worker.bot.role
+        val roomUnavailable = AtomicBoolean(true)
+        worker.manager.configureProfiles({ id ->
+            if (roomUnavailable.get()) throw android.database.sqlite.SQLiteException("Synthetic Room read failure")
+            if (id == role.id) role else null
+        }, emptyList())
+
+        val first = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+            "transient-message-key", "Synthetic supervisor message", null, "central-request",
+            "Synthetic original request", freshToken, noAdmission)
+        assertEquals("PENDING_DELIVERY", first.getString("state"))
+        assertTrue(first.getBoolean("durable_intent_committed"))
+        assertFalse(first.getBoolean("admission_committed"))
+        val inputId = first.getString("worker_input_id")
+        val inputRowId = requireNotNull(ledger.readConversationMessageByStableId(scope.executionSessionId,
+            ConversationInput.stableId(ConversationInput.Origin.AGENT, central, inputId))).getString("messageId")
+        assertNull("transient pre-admission failures must not settle the durable row",
+            ledger.readConversationInputState(scope.executionSessionId, inputRowId))
+        assertTrue(worker.manager.messageBus().snapshot().none { it.id == inputId })
+
+        roomUnavailable.set(false)
+        val retried = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+            "transient-message-key", "Synthetic supervisor message", null, "central-request",
+            "Synthetic original request", freshToken, noAdmission)
+        assertEquals("PENDING_INCORPORATION", retried.getString("state"))
+        assertEquals(inputId, retried.getString("worker_input_id"))
+        assertTrue(retried.getBoolean("admission_committed"))
+        assertTrue(retried.getBoolean("delivery_confirmed"))
+        assertEquals(1, worker.manager.messageBus().pending(worker.bot.id).count { it.id == inputId })
+
+        val checkpointAvailable = worker.bot.javaClass.getDeclaredField("checkpointAvailable").apply { isAccessible = true }
+        val admissions = AtomicInteger()
+        val loseCheckpointAfterPreflight = Runnable {
+            if (admissions.incrementAndGet() == 2) checkpointAvailable.setBoolean(worker.bot, false)
+        }
+        val noCheckpoint = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+            "no-checkpoint-message-key", "Message waits for a durable checkpoint", null, "central-request",
+            "Synthetic original request", freshToken, loseCheckpointAfterPreflight)
+        assertEquals("PENDING_DELIVERY", noCheckpoint.getString("state"))
+        assertFalse(noCheckpoint.getBoolean("admission_committed"))
+        val noCheckpointId = noCheckpoint.getString("worker_input_id")
+        val noCheckpointRowId = requireNotNull(ledger.readConversationMessageByStableId(scope.executionSessionId,
+            ConversationInput.stableId(ConversationInput.Origin.AGENT, central, noCheckpointId)))
+            .getString("messageId")
+        assertNull("a missing checkpoint is retryable, not a final rejection",
+            ledger.readConversationInputState(scope.executionSessionId, noCheckpointRowId))
+
+        checkpointAvailable.setBoolean(worker.bot, true)
+        val resumed = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+            "no-checkpoint-message-key", "Message waits for a durable checkpoint", null, "central-request",
+            "Synthetic original request", freshToken, noAdmission)
+        assertEquals("PENDING_INCORPORATION", resumed.getString("state"))
+        assertEquals(noCheckpointId, resumed.getString("worker_input_id"))
+        assertTrue(resumed.getBoolean("admission_committed"))
+    }
+
     @Test fun deterministicCrewRejectionSettlesTheOutboxAndReturnsFinalReceipt() {
         val worker = Parked(profileGuarded = true).also { parked = it }
         bind(worker.bot.id)

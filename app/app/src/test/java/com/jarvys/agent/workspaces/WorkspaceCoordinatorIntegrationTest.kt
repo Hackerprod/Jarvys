@@ -619,6 +619,61 @@ class WorkspaceCoordinatorIntegrationTest {
             scope.executionSessionId).isEmpty())
     }
 
+    @Test fun supervisorRecoveryLeavesPeerAndSubordinateWorkerInputsPending() {
+        val scope = workspace("worker-input-recovery-scope")
+        val prepared = WorkspaceRegistry(context).use { prepare(it, scope) }
+        val started = WorkspaceRegistry(context).use {
+            it.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "worker-input-filter")
+        }
+        val botId = "recipient-${UUID.randomUUID()}"
+        val assignment = WorkspaceRegistry(context).use {
+            it.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, botId)
+        }
+        val store = LocalRunStore(context)
+        val workerRows = listOf(
+            ConversationInput.Provenance.PrincipalRole.PEER,
+            ConversationInput.Provenance.PrincipalRole.SUBORDINATE,
+        ).mapIndexed { index, principal ->
+            val messageId = "worker-input-${UUID.randomUUID()}"
+            val provenance = ConversationInput.Provenance(scope.executionSessionId, scope.workspaceId,
+                assignment.assignmentId, "sender-$index", messageId, ConversationInput.Kind.MESSAGE, principal,
+                "", "", "", assignment.revision, assignment.requestId, assignment.missionId, "")
+            val rowId = store.appendConversationInput(ConversationInput(scope.executionSessionId, messageId,
+                "Worker message $index", ConversationInput.Origin.AGENT, provenance))
+            messageId to rowId
+        }
+        val staleSupervisorId = appendSupervisorInput(scope, assignment, botId,
+            "stale-supervisor-${UUID.randomUUID()}", ConversationInput.Kind.MESSAGE,
+            "Obsolete central supervisor message", assignmentId = UUID.randomUUID().toString())
+
+        for ((messageId, rowId) in workerRows) {
+            assertNull("$messageId starts pending in the worker transcript",
+                store.readConversationInputState(scope.executionSessionId, rowId))
+        }
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+            scope.executionSessionId).isEmpty())
+        for ((messageId, rowId) in workerRows) {
+            assertNull("$messageId must remain pending after the supervisor filter",
+                store.readConversationInputState(scope.executionSessionId, rowId))
+        }
+        val staleRowId = requireNotNull(store.readConversationMessageByStableId(scope.executionSessionId,
+            ConversationInput.stableId(ConversationInput.Origin.AGENT, WorkspaceIdentity.CENTRAL_SESSION,
+                staleSupervisorId))).getString("messageId")
+        assertEquals("resolved", store.readConversationInputState(scope.executionSessionId, staleRowId))
+
+        val crewManager = managers.computeIfAbsent(scope.executionSessionId) {
+            manager(it, CoreAgentLoop.Model { _, _, _, _ -> done() })
+        }
+        WorkspaceConversationInputStore.recoverCompletedSupervisorIntents(context,
+            scope.executionSessionId, crewManager)
+        for ((messageId, rowId) in workerRows) {
+            assertNull("$messageId must remain pending after completed-intent recovery",
+                store.readConversationInputState(scope.executionSessionId, rowId))
+        }
+        assertEquals("the obsolete Central supervisor intent remains terminally resolved", "resolved",
+            store.readConversationInputState(scope.executionSessionId, staleRowId))
+    }
+
     @Test fun lateCentralStopCannotCancelNativeCorrectionCycleWhileOriginalCleanupRegistrationStillExists() {
         val firstCleanup = CountDownLatch(1)
         val releaseCleanup = gate()
