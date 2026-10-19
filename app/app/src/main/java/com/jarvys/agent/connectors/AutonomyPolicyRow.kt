@@ -31,6 +31,9 @@ import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.R
 import java.util.Locale
 
+/** Vertical inset each policy row keeps; the enclosing card adds the rest of its edge margin. */
+internal val ConnectorPolicyRowVerticalInset = 4.dp
+
 /** Shared per-operation autonomy control used by Developer settings across connector families. */
 @Composable
 internal fun AutonomyPolicyRow(
@@ -75,7 +78,8 @@ internal fun AutonomyPolicyRow(
         )
     }
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 4.dp)) {
+    Column(Modifier.fillMaxWidth().padding(
+        horizontal = JarvysUiTokens.ScreenPadding, vertical = ConnectorPolicyRowVerticalInset)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val fontScale = LocalDensity.current.fontScale
             // ConnectorPermissionRow gives the selector at most half of a narrow row. At large

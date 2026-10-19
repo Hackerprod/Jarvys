@@ -70,7 +70,11 @@ internal class AssistantMarkdownSuccessCache {
     }
 }
 
-internal val LocalAssistantMarkdownSuccessCache = compositionLocalOf<AssistantMarkdownSuccessCache?> { null }
+/** Assistant prose size; block formulas derive their size from it so both stay in proportion. */
+internal val AssistantBodyFontSize = 14.sp
+internal const val AssistantMathFontScale = 1.15f
+
+internal val LocalAssistantMarkdownSuccessCache =compositionLocalOf<AssistantMarkdownSuccessCache?> { null }
 internal val LocalAssistantMarkdownRenderObserver = compositionLocalOf<AssistantMarkdownRenderObserver?> { null }
 private val LocalAssistantMarkdownStreaming = compositionLocalOf { false }
 
@@ -91,7 +95,7 @@ internal fun AssistantMarkdown(
     val uriHandler = remember(platformUriHandler, userMessage) {
         messageMarkdownUriHandler(platformUriHandler, userMessage) { openSkillFile(it) }
     }
-    val body = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp)
+    val body = MaterialTheme.typography.bodyMedium.copy(fontSize = AssistantBodyFontSize, lineHeight = 20.sp)
     val typography = markdownTypography(
         h1 = MaterialTheme.typography.titleLarge,
         h2 = MaterialTheme.typography.titleMedium,

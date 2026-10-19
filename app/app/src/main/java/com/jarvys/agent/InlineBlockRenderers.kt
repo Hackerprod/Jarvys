@@ -437,7 +437,7 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
                 latex = source,
                 modifier = modifier.fillMaxWidth().copySourceAction(source),
                 config = LatexConfig(
-                    fontSize = 20.sp,
+                    fontSize = AssistantBodyFontSize * AssistantMathFontScale,
                     theme = LatexTheme.material3(MaterialTheme.colorScheme.copy(surface = Color.Transparent)),
                     accessibilityEnabled = true,
                 ),
