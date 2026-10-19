@@ -111,6 +111,18 @@ class WorkspaceInputIncorporationDeliveryTest {
         assertNotNull(receipt(binding))
     }
 
+    @Test fun reconciliationInvalidatesDetailOnlyWhenItInsertsAnIncorporation() {
+        val (_, binding) = correction(); save(binding)
+        val beforeInsert = WorkspaceChanges.revision.value
+
+        assertTrue(reconcile())
+        assertEquals(beforeInsert + 1, WorkspaceChanges.revision.value)
+
+        assertFalse(reconcile())
+        assertEquals(beforeInsert + 1, WorkspaceChanges.revision.value)
+        assertNotNull(receipt(binding))
+    }
+
     @Test fun exactReplyReconciliationSelectsOnlyItsMatchingInputProof() {
         val (_, native) = correction()
         fun reply(key: String): CrewInputBinding {

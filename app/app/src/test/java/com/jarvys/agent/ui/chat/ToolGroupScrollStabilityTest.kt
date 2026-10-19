@@ -43,6 +43,82 @@ class ToolGroupScrollStabilityTest {
         detail = "Result details for completed tool $id", callId = "tool-call-$id", previewId = null,
         timestampMillis = id)
 
+    @Test fun appendingToolEventsAndEndingTheRunKeepsTheOpenSheetAndScroll() {
+        val session = "tool-sheet-born-live"
+        val events = mutableStateOf(listOf(completedTool(2L)))
+        val running = mutableStateOf(true)
+        val connectors = registry()
+        compose.setContent { MaterialTheme {
+            ConversationTimeline(conversationKey = session, events = events.value, isRunning = running.value,
+                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
+                chatWithoutMemory = false,
+                runSnapshot = AgentRunUiSnapshot(sessionId = session, events = events.value, running = running.value))
+        } }
+
+        // Insert a new, earlier tool event beside an already-seen event. Its key becomes the new
+        // group's first key, so the live group is born with animateEntry=true.
+        compose.runOnIdle { events.value = listOf(completedTool(1L), completedTool(2L)) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-group-1").performClick()
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+
+        compose.runOnIdle { events.value = (1L..40L).map(::completedTool) }
+        compose.waitForIdle()
+        repeat(40) { compose.onNodeWithTag("tool-group-list-1").performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("conversation-activity-40").assertIsDisplayed()
+
+        compose.runOnIdle { events.value = events.value + completedTool(41L) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("conversation-activity-40").assertIsDisplayed()
+        compose.runOnIdle { running.value = false }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-list-1").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-activity-40").assertIsDisplayed()
+    }
+
+    @Test fun togglingAnimateEntryBothWaysKeepsTheOpenSheetAndItsScrollPosition() {
+        val groupEvents = mutableStateOf((1L..40L).map(::completedTool))
+        val animateEntry = mutableStateOf(true)
+        val listState = LazyListState()
+        val connectors = registry()
+        compose.setContent { MaterialTheme {
+            TimelineArrival(animateEntry.value) {
+                val group = ToolGrouping.project(groupEvents.value).single() as ConversationTimelineItem.ToolGroup
+                ToolGroupLine(group, connectors, onOpenPreview = {}, onOpenSkillFile = {}, listState = listState)
+            }
+        } }
+
+        compose.onNodeWithTag("tool-group-1").performClick()
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+        repeat(40) {
+            if (compose.runOnIdle { listState.canScrollForward }) {
+                compose.onNodeWithTag("tool-group-list-1").performTouchInput { swipeUp() }
+            }
+        }
+        compose.waitForIdle()
+        val initialScroll = compose.runOnIdle { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+
+        compose.runOnIdle {
+            groupEvents.value = groupEvents.value + completedTool(41L)
+            animateEntry.value = false
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+        assertEquals(initialScroll, compose.runOnIdle { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset })
+        compose.runOnIdle { animateEntry.value = true }
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+        compose.runOnIdle { animateEntry.value = false }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tool-group-sheet-1").assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-list-1").assertIsDisplayed()
+        assertEquals(initialScroll, compose.runOnIdle { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset })
+    }
+
     @Test fun appendingLiveEventsKeepsAnOpenSheetAttachedToItsStableTimelineRow() {
         val session = "tool-sheet-live-events"
         val events = mutableStateOf(listOf(completedTool(1L), completedTool(2L)))

@@ -2,6 +2,7 @@ package com.jarvys.agent.workspaces
 
 import androidx.compose.runtime.Immutable
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.LocalRunStore
 import com.jarvys.agent.crew.CrewProcessIdentity
 import java.util.Collections
@@ -25,9 +26,26 @@ internal fun workspaceHasActiveWork(status: WorkspaceUiStatus, events: List<Agen
             snapshot?.processId == CrewProcessIdentity.ID && snapshot.bots.any { it.active() }
         }
 
+/** Resolve one execution-session event source for both the timeline and its activity controls. */
+internal fun workspaceActivityEvents(
+    state: WorkspaceChatUiState,
+    runSnapshot: AgentRunUiSnapshot?,
+): List<AgentRunUiEvent> = runSnapshot?.takeIf { it.sessionId == state.executionSessionId }?.events ?: state.events
+
+internal fun workspaceHasActiveWork(
+    state: WorkspaceChatUiState?,
+    runSnapshot: AgentRunUiSnapshot?,
+): Boolean = state?.let { workspaceHasActiveWork(it.status, workspaceActivityEvents(it, runSnapshot)) } == true
+
+internal fun workspaceStoppedAssignmentStatus(liveBotInProcess: Boolean, quiescent: Boolean): WorkspaceUiStatus =
+    if (!liveBotInProcess || quiescent) WorkspaceUiStatus.PAUSED else WorkspaceUiStatus.STOPPING
+
 /** A pause affordance is available only for a selected assignment while the workspace is active. */
 internal fun workspacePauseEnabled(state: WorkspaceChatUiState?, assignmentId: String?): Boolean =
-    state != null && workspaceHasActiveWork(state.status, state.events) &&
+    state != null && workspacePauseEnabled(state, assignmentId, workspaceHasActiveWork(state.status, state.events))
+
+internal fun workspacePauseEnabled(state: WorkspaceChatUiState?, assignmentId: String?, activeWork: Boolean): Boolean =
+    state != null && activeWork &&
         workspaceChatSelectedAssignment(state.assignments, assignmentId)?.canPause == true
 
 @Immutable

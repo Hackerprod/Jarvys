@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -512,13 +513,15 @@ private fun JarvysConversationEvent(
 }
 
 @Composable
-private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Unit) {
-    if (!animateEntry || LocalReducedMotion.current) {
-        content()
-    } else AnimatedVisibility(
-        visible = true,
-        enter = fadeIn(JarvysMotion.feedback()) +
-            androidx.compose.animation.slideInVertically(JarvysMotion.messageArrival()) { it / 12 },
+internal fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Unit) {
+    val shouldAnimate = animateEntry && !LocalReducedMotion.current
+    val visibility = remember { MutableTransitionState(!shouldAnimate) }
+    visibility.targetState = true
+    AnimatedVisibility(
+        visibleState = visibility,
+        enter = if (shouldAnimate) fadeIn(JarvysMotion.feedback()) +
+            androidx.compose.animation.slideInVertically(JarvysMotion.messageArrival()) { it / 12 }
+            else EnterTransition.None,
         exit = ExitTransition.None,
         label = "new-timeline-entry",
     ) { content() }

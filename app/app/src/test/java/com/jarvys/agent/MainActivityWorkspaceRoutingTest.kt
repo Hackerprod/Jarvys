@@ -97,6 +97,35 @@ class MainActivityWorkspaceRoutingTest {
         assertTrue("the real MainActivity pause-button calculation follows current active work", pauseEnabled(live))
     }
 
+    @Test fun mainActivityUsesTheMatchingLiveSessionSnapshotForThinkingAndPauseTogether() {
+        start()
+        val assignmentId = "live-snapshot-assignment"
+        val terminal = AgentRunUiEvent.crewMissionEvent(61L, CrewMissionSnapshot(
+            "live-snapshot-mission", execution, CrewProcessIdentity.ID, "Workspace mission", "RUNNING", "", 1L, 0L,
+            listOf(CrewBotSnapshot("live-snapshot-bot", "worker", "Worker", "Worker", "blue", "Task",
+                "DONE", "", "", "", emptyList(), 1L, 0L)), emptyList()))
+        val live = AgentRunUiEvent.crewMissionEvent(62L, CrewMissionSnapshot(
+            "live-snapshot-mission", execution, CrewProcessIdentity.ID, "Workspace mission", "RUNNING", "", 2L, 0L,
+            listOf(CrewBotSnapshot("live-snapshot-bot", "worker", "Worker", "Worker", "blue", "Task",
+                "RUNNING", "", "", "", emptyList(), 2L, 0L)), emptyList()))
+        val state = WorkspaceChatUiState("11111111-1111-1111-1111-111111111111", execution,
+            "Workspace", WorkspaceUiStatus.UNKNOWN, listOf(terminal), assignments = listOf(WorkspaceAssignmentUi(
+                assignmentId, 1L, "Worker", "Task", WorkspaceUiStatus.ACTIVE, canPause = true)))
+        val snapshot = AgentRunUiSnapshot(sessionId = execution, events = listOf(live))
+        val active = invoke("workspaceHasActiveWorkForUi",
+            arrayOf(WorkspaceChatUiState::class.java, AgentRunUiSnapshot::class.java), arrayOf(state, snapshot)) as Boolean
+        val pauseEnabled = invoke("workspacePauseEnabledForUi",
+            arrayOf(WorkspaceChatUiState::class.java, String::class.java, Boolean::class.javaPrimitiveType!!),
+            arrayOf(state, assignmentId, active)) as Boolean
+
+        assertTrue("the matching live workspace snapshot controls Thinking", active)
+        assertTrue("the pause button consumes that exact activity result", pauseEnabled)
+        val unrelatedSnapshot = AgentRunUiSnapshot(sessionId = legacy, events = listOf(live))
+        val unrelatedActive = invoke("workspaceHasActiveWorkForUi",
+            arrayOf(WorkspaceChatUiState::class.java, AgentRunUiSnapshot::class.java), arrayOf(state, unrelatedSnapshot)) as Boolean
+        assertFalse("a snapshot from another session cannot override the workspace state", unrelatedActive)
+    }
+
     @Test fun selectedPauseOnlyBotKeepsItsPauseAndGetsAnAccurateCorrectionHint() {
         val correctable = WorkspaceAssignmentUi("correctable", 4L, "Writer", "Write",
             WorkspaceUiStatus.ACTIVE, canCorrect = true)

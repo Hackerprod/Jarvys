@@ -37,15 +37,16 @@ fun WorkspaceDetailScreen(
     olderHistoryLoadError: Boolean = false,
     onLoadOlderHistory: () -> Unit = {},
     modifier: Modifier = Modifier,
+    workspaceRunning: Boolean? = null,
 ) {
     val sessionSnapshot = runSnapshot.takeIf { it.sessionId == state.executionSessionId }
-    val sourceEvents = sessionSnapshot?.events ?: state.events
+    val sourceEvents = workspaceActivityEvents(state, sessionSnapshot)
+    val activeWork = workspaceRunning ?: workspaceHasActiveWork(state, sessionSnapshot)
     val events = remember(state.workspaceId, sourceEvents) {
         WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)
     }
-    val workspaceRunning = workspaceHasActiveWork(state.status, sourceEvents)
     val timelineSnapshot = (sessionSnapshot ?: AgentRunUiSnapshot(sessionId = state.executionSessionId))
-        .copy(events = events, running = workspaceRunning)
+        .copy(events = events, running = activeWork)
     Box(modifier.fillMaxSize().testTag("workspace-chat-timeline")) {
         when {
             state.loading && events.isEmpty() -> JarvysEmptyState(
@@ -66,7 +67,7 @@ fun WorkspaceDetailScreen(
                     }
                 },
             )
-            events.isEmpty() && !workspaceRunning -> JarvysEmptyState(
+            events.isEmpty() && !activeWork -> JarvysEmptyState(
                 icon = LucideIcons.Boxes,
                 title = stringResource(R.string.workspace_chat_empty),
                 body = "",
@@ -80,7 +81,7 @@ fun WorkspaceDetailScreen(
                 isLoadingOlderHistory = isLoadingOlderHistory,
                 olderHistoryLoadError = olderHistoryLoadError,
                 onLoadOlderHistory = onLoadOlderHistory,
-                isRunning = workspaceRunning,
+                isRunning = activeWork,
                 connectorRegistry = connectorRegistry,
                 onOpenPreview = onOpenPreview,
                 onOpenSkillFile = onOpenSkillFile,

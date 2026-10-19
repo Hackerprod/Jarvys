@@ -33,9 +33,10 @@ fun WorkspaceListScreen(
     onRetryWorkspaces: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
+    val initialLoad = workspacesLoading && workspaces.isEmpty()
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("workspace-list"),
         contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (workspacesLoading) item(key = "workspace-loading") {
+        if (initialLoad) item(key = "workspace-loading") {
             Text(stringResource(R.string.workspace_loading), Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                 .testTag("workspace-list-loading"))
         }
@@ -47,7 +48,7 @@ fun WorkspaceListScreen(
                 }
             }
         }
-        if (!workspacesLoading && workspaceError == null && workspaces.isEmpty()) item(key = "workspace-empty") {
+        if (!initialLoad && workspaceError == null && workspaces.isEmpty()) item(key = "workspace-empty") {
             JarvysEmptyState(
                 icon = LucideIcons.Boxes,
                 title = stringResource(if (canFirstWorkspacePage) R.string.workspace_page_empty else R.string.workspace_sidebar_empty),
@@ -66,11 +67,11 @@ fun WorkspaceListScreen(
                     subtitle = stringResource(workspaceStatusResource(workspace.status)),
                     selected = false,
                     active = active,
-                    enabled = actionsEnabled && !workspacesLoading && workspaceError == null,
-                    onClick = { if (actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
-                    actionsEnabled = actionsEnabled && !workspacesLoading && workspaceError == null,
+                    enabled = actionsEnabled && workspaceError == null,
+                    onClick = { if (actionsEnabled && workspaceError == null) onOpenWorkspace(workspace.id) },
+                    actionsEnabled = actionsEnabled && workspaceError == null,
                     menuActions = listOf(ConversationRowMenuAction("open", R.string.workspace_open)),
-                    onMenuAction = { if (it == "open" && actionsEnabled && !workspacesLoading && workspaceError == null) onOpenWorkspace(workspace.id) },
+                    onMenuAction = { if (it == "open" && actionsEnabled && workspaceError == null) onOpenWorkspace(workspace.id) },
                     modifier = Modifier.testTag("workspace-list-row-${workspace.id}"),
                 )
                 if (workspace.statusPageLimited) {

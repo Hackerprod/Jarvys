@@ -69,6 +69,61 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithText("Recorded result").assertDoesNotExist()
     }
 
+    @Test fun workspaceTimelineKeepsLiveToolSheetOpenWhenTheGroupAndRunStateChange() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        fun tool(id: Long) = AgentRunUiEvent.toolEvent(id, "tool_result", "Completed tool $id",
+            "Result details for completed tool $id", "workspace-tool-$id", null, id)
+        val events = mutableStateOf(listOf(tool(2L)))
+        val status = mutableStateOf(WorkspaceUiStatus.ACTIVE)
+        val snapshot = mutableStateOf(AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true))
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent { MaterialTheme {
+            val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace", status.value, events.value)
+            val currentSnapshot = snapshot.value
+            WorkspaceDetailScreen(state = state, runSnapshot = currentSnapshot,
+                workspaceRunning = workspaceHasActiveWork(state, currentSnapshot), connectorRegistry = connectors,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
+        } }
+
+        // The new event sorts before the already-seen tool. It becomes the group's first event
+        // and is therefore the live arrival key used to animate the new workspace row.
+        compose.runOnIdle {
+            events.value = listOf(tool(1L), tool(2L))
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-group-${tool(1L).id}").performClick()
+        compose.onNodeWithTag("tool-group-sheet-${tool(1L).id}").assertIsDisplayed()
+        val groupId = tool(1L).id
+
+        compose.runOnIdle {
+            events.value = (1L..40L).map(::tool)
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        repeat(40) { compose.onNodeWithTag("tool-group-list-$groupId").performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("conversation-activity-${tool(40L).id}").assertIsDisplayed()
+
+        compose.runOnIdle {
+            events.value = events.value + tool(41L)
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = true)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            status.value = WorkspaceUiStatus.COMPLETED
+            snapshot.value = AgentRunUiSnapshot(sessionId = sessionId, events = events.value, running = false)
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tool-group-sheet-$groupId").assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-list-$groupId").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-activity-${tool(40L).id}").assertIsDisplayed()
+    }
+
     @Test fun completedWorkspaceDoesNotKeepThinkingOrAnActivePauseWhenItsRunSnapshotIsStale() {
         val activeWorkspaceId = "22222222-2222-2222-2222-222222222222"
         val activeSessionId = WorkspaceIdentity.executionSessionId(activeWorkspaceId)
@@ -88,9 +143,10 @@ class WorkspaceDetailComposeTest {
 
         compose.setContent { MaterialTheme {
             val state = selected.value
-            val workspaceActive = workspaceHasActiveWork(state.status, snapshot.value.events)
+            val workspaceActive = workspaceHasActiveWork(state, snapshot.value)
             Column(Modifier.fillMaxSize()) {
                 WorkspaceDetailScreen(state = state, runSnapshot = snapshot.value,
+                    workspaceRunning = workspaceActive,
                     connectorRegistry = connectors,
                     onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {},
                     modifier = Modifier.weight(1f))
@@ -105,7 +161,7 @@ class WorkspaceDetailComposeTest {
                     onManageSkills = {}, skillEnabledCount = 0, skillTotalCount = 0,
                     crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {},
                     inputEnabled = true, separateStopAction = true,
-                    stopActionEnabled = workspacePauseEnabled(state, assignmentId),
+                    stopActionEnabled = workspacePauseEnabled(state, assignmentId, workspaceActive),
                     stopActionLabel = "Pause", showModelSelector = false,
                     showContextActions = false, showMicrophoneButton = false,
                 )
@@ -150,9 +206,9 @@ class WorkspaceDetailComposeTest {
         compose.setContent { MaterialTheme {
             val state = selected.value
             val current = snapshot.value
-            val active = workspaceHasActiveWork(state.status, current.events)
+            val active = workspaceHasActiveWork(state, current)
             Column(Modifier.fillMaxSize()) {
-                WorkspaceDetailScreen(state = state, runSnapshot = current, connectorRegistry = connectors,
+                WorkspaceDetailScreen(state = state, runSnapshot = current, workspaceRunning = active, connectorRegistry = connectors,
                     onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {}, modifier = Modifier.weight(1f))
                 com.jarvys.agent.ui.chat.ChatComposer(
                     goal = "", onGoalChange = {}, onSend = {}, onInterruptAndSend = {},
@@ -165,7 +221,7 @@ class WorkspaceDetailComposeTest {
                     onManageSkills = {}, skillEnabledCount = 0, skillTotalCount = 0,
                     crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {},
                     inputEnabled = true, separateStopAction = true,
-                    stopActionEnabled = workspacePauseEnabled(state, assignmentId), stopActionLabel = "Pause",
+                    stopActionEnabled = workspacePauseEnabled(state, assignmentId, active), stopActionLabel = "Pause",
                     showModelSelector = false, showContextActions = false, showMicrophoneButton = false)
             }
         } }

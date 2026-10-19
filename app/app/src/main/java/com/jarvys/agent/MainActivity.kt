@@ -287,11 +287,17 @@ private object Routes {
 class MainActivity : ComponentActivity() {
     /** Single production calculation used by the workspace timeline's thinking/stop state. */
     internal fun workspaceHasActiveWorkForUi(state: WorkspaceChatUiState?): Boolean =
-        state?.let { workspaceHasActiveWork(it.status, it.events) } == true
+        workspaceHasActiveWorkForUi(state, null)
+
+    internal fun workspaceHasActiveWorkForUi(state: WorkspaceChatUiState?, runSnapshot: AgentRunUiSnapshot?): Boolean =
+        workspaceHasActiveWork(state, runSnapshot)
 
     /** The workspace stop affordance follows the selected assignment's projected pause capability. */
     internal fun workspacePauseEnabledForUi(state: WorkspaceChatUiState?, assignmentId: String?): Boolean =
         workspacePauseEnabled(state, assignmentId)
+
+    internal fun workspacePauseEnabledForUi(state: WorkspaceChatUiState?, assignmentId: String?, activeWork: Boolean): Boolean =
+        workspacePauseEnabled(state, assignmentId, activeWork)
 
     private var activeNavController: NavHostController? = null
     internal fun navGraphRoutePatternsForTest(): Set<String> = activeNavController?.graph?.let { graph ->
@@ -529,7 +535,7 @@ class MainActivity : ComponentActivity() {
                     onGoalChange = { goalInput = it },
                     lastRunReport = lastRunReport,
                     agentState = agentState,
-                    workspaceHasActiveWorkForUi = ::workspaceHasActiveWorkForUi,
+                    workspaceHasActiveWorkForUi = { state, snapshot -> workspaceHasActiveWorkForUi(state, snapshot) },
                     workspacePauseEnabledForUi = ::workspacePauseEnabledForUi,
                     runHistory = runHistory,
                     selectedHistoryRunId = selectedHistoryRunId,
@@ -1678,8 +1684,8 @@ private fun JarvysApp(
     onGoalChange: (String) -> Unit,
     lastRunReport: String,
     agentState: AgentRunUiSnapshot,
-    workspaceHasActiveWorkForUi: (WorkspaceChatUiState?) -> Boolean,
-    workspacePauseEnabledForUi: (WorkspaceChatUiState?, String?) -> Boolean,
+    workspaceHasActiveWorkForUi: (WorkspaceChatUiState?, AgentRunUiSnapshot?) -> Boolean,
+    workspacePauseEnabledForUi: (WorkspaceChatUiState?, String?, Boolean) -> Boolean,
     runHistory: List<RunHistoryItem>,
     selectedHistoryRunId: String?,
     proactiveTargetMessageId: String?,
@@ -1871,7 +1877,7 @@ private fun JarvysApp(
     val workspaceSelectedAssignment = workspaceChatSelectedAssignment(workspaceAssignments, workspaceSelectedAssignmentId)
     val workspaceLatestMission = workspaceChatState.value?.events?.lastOrNull { it.kind == "crew_mission" }
         ?.crewMissionSnapshot
-    val workspaceHasActiveWork = workspaceHasActiveWorkForUi(workspaceChatState.value)
+    val workspaceHasActiveWork = workspaceHasActiveWorkForUi(workspaceChatState.value, agentState)
     var workspaceChatReload by remember { mutableIntStateOf(0) }
     var workspaceOlderHistoryLoading by remember(routeWorkspaceId) { mutableStateOf(false) }
     var workspaceOlderHistoryLoadError by remember(routeWorkspaceId) { mutableStateOf(false) }
@@ -2161,7 +2167,7 @@ private fun JarvysApp(
                     showMicrophoneButton = !workspaceChatActive,
                     separateStopAction = workspaceChatActive,
                     stopActionEnabled = !workspaceChatActive ||
-                        workspacePauseEnabledForUi(workspaceChatState.value, workspaceSelectedAssignmentId),
+                        workspacePauseEnabledForUi(workspaceChatState.value, workspaceSelectedAssignmentId, workspaceHasActiveWork),
                     stopActionLabel = if (workspaceChatActive) stringResource(R.string.workspace_pause) else null,
             )
         },
@@ -2244,6 +2250,7 @@ private fun JarvysApp(
                     } else WorkspaceDetailScreen(
                         state = state,
                         runSnapshot = agentState,
+                        workspaceRunning = workspaceHasActiveWork,
                         connectorRegistry = connectorRegistry,
                         onOpenPreview = { projectId ->
                             val sessionId = state.executionSessionId
