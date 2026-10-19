@@ -114,14 +114,8 @@ class ConnectedConnectorPermissionScreensTest {
         assertEquals("policy stays vertically centered", row.center.y, control.center.y, 1f)
         assertTrue("policy touch target remains at least 48 dp tall", control.height >= 48f)
         if (prefix.startsWith("connector-policy-")) {
-            val origin = compose.onNodeWithTag("$prefix-origin").performScrollTo().assertIsDisplayed()
-                .fetchSemanticsNode().boundsInRoot
-            val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
-                .fetchSemanticsNode().boundsInRoot
-            assertTrue("provenance remains below the centered policy row", origin.top >= visibleRow.bottom - 1f)
-            assertEquals("provenance keeps the row's horizontal inset", visibleRow.left, origin.left, 1f)
-            assertEquals("provenance shares the row's padded width", visibleRow.right, origin.right, 1f)
-            assertTrue("provenance is inset from the container edge", origin.left > 0f)
+            // Default, saved and inherited policies are routine: no provenance caption under the row.
+            compose.onNodeWithTag("$prefix-origin").assertDoesNotExist()
         }
     }
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }

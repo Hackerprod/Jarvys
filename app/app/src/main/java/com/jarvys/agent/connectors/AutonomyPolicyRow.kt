@@ -49,12 +49,6 @@ internal fun AutonomyPolicyRow(
     val origin = remember(registry, definition.id, operation.name, revision) {
         registry.configuredAutonomyOrigin(definition, operation)
     }
-    val effective = remember(registry, definition.id, operation.name, revision) {
-        registry.autonomyPolicy(definition, operation)
-    }
-    val unavailable = remember(registry, definition.id, operation.name, revision) {
-        registry.autonomyPolicyUnavailableUiReason(definition, operation)
-    }
     var errorText by remember(definition.id, operation.name) { mutableStateOf<String?>(null) }
 
     val tagPrefix = "connector-policy-${operation.name}"
@@ -107,10 +101,6 @@ internal fun AutonomyPolicyRow(
         }
         ConnectorPolicyOriginCaption(origin,
             Modifier.fillMaxWidth().testTag("$tagPrefix-origin"))
-        if (unavailable != null) Text(
-            context.getString(R.string.connector_active_policy, effective.label(context), unavailable.resolve(context)),
-            color = MaterialTheme.colorScheme.error, fontSize = 11.sp,
-        )
         errorText?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp,
             modifier = Modifier.testTag("$tagPrefix-error")) }
     }
@@ -132,5 +122,3 @@ private fun AutonomyPolicy.labelResource(): Int = when (this) {
     AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
     AutonomyPolicy.DENY -> R.string.connector_policy_deny
 }
-
-private fun AutonomyPolicy.label(context: android.content.Context): String = context.getString(labelResource())

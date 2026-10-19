@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="action_policy_edit_unavailable">Termina la interacción automatizada y vuelve a abrir esta elección. Si no se pudo guardar, revisa el ajuste conservado.</string>
-    <string name="action_policy_origin_default">Predeterminado: Permitir siempre.</string>
-    <string name="action_policy_origin_user">Elección guardada.</string>
     <string name="action_policy_origin_legacy">Se conserva el ajuste anterior; su procedencia original es desconocida. Puedes cambiarlo aquí.</string>
     <string name="action_policy_origin_invalid">La decisión guardada es inválida o no está disponible. No autoriza ejecución automática. Revisa este ajuste.</string>
-    <string name="action_policy_origin_inherited">Política heredada. Una elección explícita aquí reemplaza la decisión heredada.</string>
 </resources>

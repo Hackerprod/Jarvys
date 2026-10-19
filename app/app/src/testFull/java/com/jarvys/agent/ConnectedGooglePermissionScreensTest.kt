@@ -166,11 +166,8 @@ class ConnectedGooglePermissionScreensTest {
         }
         assertTrue("$prefix 48 dp touch target", control.height >= 48f)
         if (prefix.startsWith("connector-policy-")) {
-            val origin = compose.onNodeWithTag("$prefix-origin").performScrollTo().assertIsDisplayed()
-                .fetchSemanticsNode().boundsInRoot
-            val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
-                .fetchSemanticsNode().boundsInRoot
-            assertTrue("$prefix provenance remains below the centered policy row", origin.top >= visibleRow.bottom - 1f)
+            // Default, saved and inherited policies are routine: no provenance caption under the row.
+            compose.onNodeWithTag("$prefix-origin").assertDoesNotExist()
         }
     }
     private fun policy(prefix: String, resource: Int) =

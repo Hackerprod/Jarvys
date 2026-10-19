@@ -385,7 +385,6 @@
     <string name="connector_disconnect_explanation">Desconectar impide que Jarvys use este conector y borra su propia caché. Los permisos de Android se administran en los ajustes del sistema y no se revocan al desconectar.</string>
     <string name="connector_autonomy">Autonomía</string>
     <string name="connector_configured_policy">Configurado: %1$s</string>
-    <string name="connector_active_policy">Activo ahora: %1$s — %2$s</string>
     <string name="connector_policy_ask">Preguntar</string>
     <string name="connector_policy_allow">Permitir</string>
     <string name="connector_policy_deny">Denegar</string>

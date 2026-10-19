@@ -285,15 +285,20 @@ internal fun ConnectorPolicySelector(
     }
 }
 
-/** Keep this outside a permission row when the row must center the actionable button. */
+/**
+ * Provenance is only shown when the user has something to review; default, saved and inherited
+ * policies are routine and would just add noise under every row.
+ * Keep this outside a permission row when the row must center the actionable button.
+ */
 @Composable
 internal fun ConnectorPolicyOriginCaption(origin: ActionPolicyOrigin, modifier: Modifier = Modifier) {
-    Text(stringResource(when (origin) {
-        ActionPolicyOrigin.CATALOG_DEFAULT -> R.string.action_policy_origin_default
-        ActionPolicyOrigin.USER -> R.string.action_policy_origin_user
+    val caption = when (origin) {
         ActionPolicyOrigin.LEGACY_UNKNOWN -> R.string.action_policy_origin_legacy
         ActionPolicyOrigin.INVALID -> R.string.action_policy_origin_invalid
-        ActionPolicyOrigin.INHERITED_SERVER_DEFAULT -> R.string.action_policy_origin_inherited
-    }), modifier = modifier, style = MaterialTheme.typography.bodySmall,
+        ActionPolicyOrigin.CATALOG_DEFAULT,
+        ActionPolicyOrigin.USER,
+        ActionPolicyOrigin.INHERITED_SERVER_DEFAULT -> return
+    }
+    Text(stringResource(caption), modifier = modifier, style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
