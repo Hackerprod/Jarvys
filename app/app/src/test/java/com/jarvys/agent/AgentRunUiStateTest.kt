@@ -19,6 +19,28 @@ import java.util.concurrent.atomic.AtomicReference
 class AgentRunUiStateTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
+    @Test fun timelineAndRenderFlowsPublishSessionEventsWithoutComposeSideLocks() {
+        val session = "published-timeline-${System.nanoTime()}"
+        val events = listOf(
+            AgentRunUiEvent.messageEvent(1L, "user", "question", 1L),
+            AgentRunUiEvent.toolEvent(2L, "tool_result", "lookup", "{\"status\":\"ok\"}", "call", null, 2L),
+            AgentRunUiEvent.messageEvent(3L, "assistant", "answer", 3L),
+        )
+        AgentRunUiState.resetSession(session)
+        try {
+            AgentRunUiState.restoreSession(session, events)
+
+            val timeline = AgentRunUiState.timelineEvents.value
+            assertEquals(session, timeline.sessionId)
+            assertEquals(events, timeline.events)
+            val render = AgentRunUiState.renderState.value
+            assertEquals(2, render.conversationMessageCount)
+            assertTrue(render.snapshot.events.isEmpty())
+        } finally {
+            AgentRunUiState.resetSession(session)
+        }
+    }
+
     @Test fun systemOriginServiceRunDoesNotCreateUserBubble() {
         val session = "system-wake-ui-${System.nanoTime()}"
         AgentRunUiState.resetSession(session)

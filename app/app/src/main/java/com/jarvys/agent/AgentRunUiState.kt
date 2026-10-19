@@ -2,6 +2,7 @@ package com.jarvys.agent
 
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -91,6 +92,11 @@ data class AgentRunUiEvent(
     /** Discreet attribution used only for bot messages projected into a multi-bot workspace chat. */
     val workspaceSenderLabel: String? = null,
  ) {
+    /** Parsed once per immutable event instance; a data-class copy gets a fresh analysis. */
+    internal val visibilityDetailAnalysis: AgentRunUiEventVisibilityDetail by lazy {
+        AgentRunUiEventVisibilityDetail.parse(this)
+    }
+
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
     fun copyReaction(emoji: String): AgentRunUiEvent =
@@ -253,6 +259,65 @@ data class AgentRunUiEvent(
     }
 }
 
+internal data class AgentRunUiEventVisibilityDetail(
+    val deliveredArtifactId: String? = null,
+    val generatedImageId: String? = null,
+    val scheduledTaskArtifact: ScheduledTaskArtifact? = null,
+) {
+    companion object {
+        @Volatile
+        internal var parseObserver: (() -> Unit)? = null
+
+        private val generatedImageReference = Regex("\\bgenerated:([0-9a-fA-F-]{36})\\b")
+
+        fun parse(event: AgentRunUiEvent): AgentRunUiEventVisibilityDetail {
+            if (event.kind != "tool" || event.stage != "tool_result") return AgentRunUiEventVisibilityDetail()
+            parseObserver?.invoke()
+            val detail = event.detail.orEmpty()
+            val startsWithJsonObject = detail.trimStart().startsWith('{')
+            val exactJson = if (startsWithJsonObject) runCatching { JSONObject(detail) }.getOrNull() else null
+            val start = detail.indexOf('{')
+            val end = detail.lastIndexOf('}')
+            val json = exactJson ?: if (start >= 0 && end >= start) {
+                runCatching { JSONObject(detail.substring(start, end + 1)) }.getOrNull()
+            } else null
+
+            val taskArtifact = runCatching {
+                val task = json?.optJSONObject("task") ?: return@runCatching null
+                if (task.optString("kind") != "scheduled_task") return@runCatching null
+                val id = task.optString("id").takeIf(String::isNotBlank) ?: return@runCatching null
+                val name = task.optString("name").takeIf(String::isNotBlank) ?: return@runCatching null
+                val schedule = task.optString("schedule_human").takeIf(String::isNotBlank)
+                    ?: return@runCatching null
+                ScheduledTaskArtifact(id, name, schedule,
+                    task.optString("next_run_local").takeIf { it.isNotBlank() && it != "null" },
+                    task.optString("status", json?.optString("status").orEmpty()))
+            }.getOrNull()
+            val deliveredArtifactId = if (startsWithJsonObject) {
+                exactJson?.optString("artifact_id")?.takeIf { it.startsWith("delivered:") }
+                    ?.removePrefix("delivered:")?.takeIf(String::isNotBlank)
+            } else null
+            val generatedImageId = generatedImageReference.find(detail)?.groupValues?.getOrNull(1)
+                ?.takeIf(String::isNotBlank)
+            return AgentRunUiEventVisibilityDetail(deliveredArtifactId, generatedImageId, taskArtifact)
+        }
+    }
+}
+
+/** Visible timeline events are already published as an immutable snapshot for Compose consumers. */
+data class AgentRunUiTimelineEvents(
+    val sessionId: String? = null,
+    val events: List<AgentRunUiEvent> = emptyList(),
+)
+
+/** Control projection and compact event summaries used outside the conversation timeline. */
+data class AgentRunUiRenderState(
+    val snapshot: AgentRunUiSnapshot = AgentRunUiSnapshot(),
+    val hasUserAttachments: Boolean = false,
+    val conversationMessageCount: Int = 0,
+    val crewMissions: List<CrewMissionSnapshot> = emptyList(),
+)
+
 /** Typed contract projected from successful task management tool results into the chat timeline. */
 data class ScheduledTaskArtifact(
     val taskId: String,
@@ -324,7 +389,39 @@ data class AgentRunUiSnapshot(
     val headerMascotAvailability: HeaderMascotAvailability = HeaderMascotAvailability(),
     val headerMascotAnimationRequest: HeaderMascotAnimationRequest? = null,
     val headerMascotAnimationResult: HeaderMascotAnimationResult? = null,
+    /** Compact event-derived state used by the root UI projection; null on full compatibility snapshots. */
+    val presenceSummary: AgentRunUiPresenceSummary? = null,
 )
+
+data class AgentRunUiPresenceSummary(
+    val hasPendingApproval: Boolean = false,
+    val hasPendingDecision: Boolean = false,
+    val hasFailedOutput: Boolean = false,
+    val hasCompletedOutput: Boolean = false,
+    val lastEventIsToolCall: Boolean = false,
+    val currentToolName: String? = null,
+) {
+    companion object {
+        fun from(events: List<AgentRunUiEvent>): AgentRunUiPresenceSummary {
+            var hasPendingApproval = false
+            var hasPendingDecision = false
+            var latestOutputStage: String? = null
+            var lastEventIsToolCall = false
+            var currentToolName: String? = null
+            events.forEach { event ->
+                if (event.kind == "approval" && event.approvalStatus == "PENDING") hasPendingApproval = true
+                if (event.kind == "user_decision" && event.decisionStatus == "PENDING") hasPendingDecision = true
+                if (event.kind == "assistant" || event.kind == "result") latestOutputStage = event.stage
+                lastEventIsToolCall = event.kind == "tool" && event.stage == "tool_call"
+                currentToolName = if (lastEventIsToolCall) event.toolDisplayName ?: event.text else null
+            }
+            return AgentRunUiPresenceSummary(
+                hasPendingApproval, hasPendingDecision, latestOutputStage == "FAILED",
+                latestOutputStage == "COMPLETED", lastEventIsToolCall, currentToolName,
+            )
+        }
+    }
+}
 
 
 data class RunHistoryItem(
@@ -374,6 +471,48 @@ object AgentRunUiState {
     private var nextAssistantTextStreamId = -1L
     private var visibleSessionId: String? = null
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
+    private val publishedTimelineEvents = MutableStateFlow(AgentRunUiTimelineEvents())
+    private val publishedRenderState = MutableStateFlow(AgentRunUiRenderState())
+    private var summarizedSessionId: String? = null
+    private var summarizedEvents: List<AgentRunUiEvent>? = null
+    private var summarizedHasUserAttachments = false
+    private var summarizedConversationMessageCount = 0
+    private var summarizedCrewMissions: List<CrewMissionSnapshot> = emptyList()
+    private var summarizedCrewMissionEvents: List<AgentRunUiEvent> = emptyList()
+    private var summarizedPresence = AgentRunUiPresenceSummary()
+
+    private fun publishVisibleSnapshotLocked(snapshot: AgentRunUiSnapshot) {
+        publishedState.value = snapshot
+        publishedTimelineEvents.value = AgentRunUiTimelineEvents(snapshot.sessionId, snapshot.events)
+        if (summarizedSessionId != snapshot.sessionId || summarizedEvents !== snapshot.events) {
+            summarizedSessionId = snapshot.sessionId
+            summarizedEvents = snapshot.events
+            var hasUserAttachments = false
+            var conversationMessageCount = 0
+            val crewMissions = mutableListOf<CrewMissionSnapshot>()
+            val crewMissionEvents = mutableListOf<AgentRunUiEvent>()
+            snapshot.events.forEach { event ->
+                if (event.kind == "user" && event.attachments.isNotEmpty()) hasUserAttachments = true
+                if (event.kind == "user" || event.kind == "assistant") conversationMessageCount++
+                event.crewMissionSnapshot?.let {
+                    crewMissions.add(it)
+                    crewMissionEvents.add(event)
+                }
+            }
+            summarizedHasUserAttachments = hasUserAttachments
+            summarizedConversationMessageCount = conversationMessageCount
+            summarizedCrewMissions = crewMissions.toList()
+            summarizedCrewMissionEvents = crewMissionEvents.toList()
+            summarizedPresence = AgentRunUiPresenceSummary.from(snapshot.events)
+        }
+        publishedRenderState.value = AgentRunUiRenderState(
+            snapshot = snapshot.copy(events = summarizedCrewMissionEvents, presenceSummary = summarizedPresence),
+            hasUserAttachments = summarizedHasUserAttachments,
+            conversationMessageCount = summarizedConversationMessageCount,
+            crewMissions = summarizedCrewMissions,
+        )
+    }
+
     private val _state = object {
         var value: AgentRunUiSnapshot
             get() {
@@ -389,14 +528,14 @@ object AgentRunUiState {
                     sessionOwners[sessionId]?.takeIf {
                         it.active && it.sessionId == sessionId && value.running
                     }?.liveSnapshot = value
-                    if (visibleSessionId == sessionId) publishedState.value = value
+                    if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(value)
                     else refreshVisibleInteractiveOwnerLocked()
                 }
                 else {
                     synchronized(lock) {
-                        publishedState.value = value
                         value.sessionId?.let { sessionSnapshots[it] = value }
                         if (visibleSessionId == null) visibleSessionId = value.sessionId
+                        publishVisibleSnapshotLocked(value)
                         refreshVisibleInteractiveOwnerLocked()
                     }
                 }
@@ -433,7 +572,7 @@ object AgentRunUiState {
                 // Keep legacy behavior where entering a session establishes its empty snapshot,
                 // while always using the latest shared value.
                 val latest = sessionSnapshots.getOrPut(sessionId) { AgentRunUiSnapshot(sessionId = sessionId) }
-                if (visibleSessionId == sessionId) publishedState.value = latest
+                if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(latest)
             }
         }
     }
@@ -456,7 +595,7 @@ object AgentRunUiState {
         if (current.interactiveOwnerSessionId == ownerSessionId) return
         val projected = current.copy(interactiveOwnerSessionId = ownerSessionId)
         sessionSnapshots[visibleSession] = projected
-        publishedState.value = projected
+        publishVisibleSnapshotLocked(projected)
     }
 
     private fun clearSupersededOwnershipLocked(sessionId: String) {
@@ -469,7 +608,7 @@ object AgentRunUiState {
             liveRunIdentity = null,
         )
         sessionSnapshots[sessionId] = cleared
-        if (visibleSessionId == sessionId) publishedState.value = cleared
+        if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(cleared)
     }
 
     /** Selects which session the compatibility StateFlow projects for Compose. */
@@ -480,7 +619,7 @@ object AgentRunUiState {
         val selected = (sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId))
             .copy(interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId))
         sessionSnapshots[sessionId] = selected
-        publishedState.value = selected
+        publishVisibleSnapshotLocked(selected)
     }
 
     @JvmStatic
@@ -594,6 +733,10 @@ object AgentRunUiState {
     )
     private val pendingHeaderMascotAnimations = mutableMapOf<String, PendingHeaderMascotAnimation>()
     val state: StateFlow<AgentRunUiSnapshot> = publishedState.asStateFlow()
+    /** Control state for screen chrome; ordinary timeline updates do not recompose the app root. */
+    val renderState: StateFlow<AgentRunUiRenderState> = publishedRenderState.asStateFlow()
+    /** The selected conversation's immutable timeline snapshot for chat-route consumers. */
+    val timelineEvents: StateFlow<AgentRunUiTimelineEvents> = publishedTimelineEvents.asStateFlow()
 
     @JvmStatic
     fun beginRun(sessionId: String, goal: String) { beginRunInternal(sessionId, goal, emptyList(), false, false) }
@@ -1972,7 +2115,7 @@ object AgentRunUiState {
             if (workingSession.get() == sessionId) _state.value = updated
             else sessionSnapshots[sessionId] = updated
             if (ownership?.active == true && ownership.sessionId == sessionId) ownership.liveSnapshot = updated
-            if (visibleSessionId == sessionId) publishedState.value = updated
+            if (visibleSessionId == sessionId) publishVisibleSnapshotLocked(updated)
         }
     }
 

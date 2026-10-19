@@ -297,9 +297,16 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
 
     /** Returns current snapshots in `LinkedHashMap` first-insertion order (`LocalRunStore.java:1056-1094`). */
     suspend fun readCrewMissionSnapshots(conversationId: String): List<CrewMissionSnapshot> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
-        val ids = sql.query("SELECT mission_id FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq",
-            arrayOf(conversationId)).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        readCrewSnapshots(conversationId, ids)
+        readCrewSnapshots(conversationId)
+    } }
+
+    /** Hydrates only missions referenced by one timeline page. */
+    internal suspend fun readCrewMissionSnapshots(
+        conversationId: String,
+        missionIds: Collection<String>,
+    ): List<CrewMissionSnapshot> = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+        val ids = missionIds.distinct()
+        ids.chunked(MAX_MISSION_IDS_PER_QUERY).flatMap { chunk -> readCrewSnapshots(conversationId, chunk) }
     } }
 
     /**
@@ -455,7 +462,16 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
 
     /** Hydrates every mission and child collection with a fixed number of set queries, not per bot/message. */
     private fun readCrewSnapshots(conversationId: String, missionIds: List<String>? = null): List<CrewMissionSnapshot> {
-        val missions = sql.query("SELECT * FROM crew_missions WHERE conversation_id=? ORDER BY first_snapshot_seq", arrayOf(conversationId)).use { c ->
+        if (missionIds != null && missionIds.isEmpty()) return emptyList()
+        val missionClause = missionIds?.let { ids ->
+            " AND mission_id IN (${ids.joinToString(",") { "?" }})"
+        }.orEmpty()
+        val missionArgs = arrayOf<Any?>(conversationId, *(missionIds?.toTypedArray() ?: emptyArray()))
+        val qualifiedMissionClause = missionIds?.let { ids ->
+            " AND m.mission_id IN (${ids.joinToString(",") { "?" }})"
+        }.orEmpty()
+        val qualifiedMissionArgs = missionArgs
+        val missions = sql.query("SELECT * FROM crew_missions WHERE conversation_id=?$missionClause ORDER BY first_snapshot_seq", missionArgs).use { c ->
             buildList {
                 while (c.moveToNext()) add(CrewMission(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4),
                     c.getStringOrNullMemory("process_id"), c.getString(6), c.getString(7), c.getExactUtf16String(c.getColumnIndexOrThrow("original_instructions")), c.getStringOrNullMemory("title_source"),
@@ -465,11 +481,11 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         if (missions.isEmpty()) return emptyList()
         val byMission = missions.associateBy { it.mission_id }
         val tools = mutableMapOf<Pair<String, String>, MutableList<String>>()
-        sql.query("SELECT mission_id,bot_id,tool FROM crew_bot_tools WHERE conversation_id=? ORDER BY mission_id,bot_id,ordinal", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT mission_id,bot_id,tool FROM crew_bot_tools WHERE conversation_id=?$missionClause ORDER BY mission_id,bot_id,ordinal", missionArgs).use { c ->
             while (c.moveToNext()) tools.getOrPut(c.getString(0) to c.getString(1)) { mutableListOf() }.add(c.getString(2))
         }
         val evidence = mutableMapOf<String, com.jarvys.agent.crew.CrewResultEvidence>()
-        sql.query("SELECT * FROM crew_result_evidence WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT * FROM crew_result_evidence WHERE conversation_id=?$missionClause", missionArgs).use { c ->
             while (c.moveToNext()) {
                 val id = c.getString(c.getColumnIndexOrThrow("evidence_id"))
                 val row = JSONObject().put("type", "crew_result_evidence").put("crewResultSchemaVersion", c.getInt(c.getColumnIndexOrThrow("schema_version")))
@@ -483,7 +499,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             }
         }
         val bots = mutableMapOf<String, MutableList<CrewBotSnapshot>>()
-        sql.query("SELECT * FROM crew_bots WHERE conversation_id=? ORDER BY mission_id,ordinal", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT * FROM crew_bots WHERE conversation_id=?$missionClause ORDER BY mission_id,ordinal", missionArgs).use { c ->
             while (c.moveToNext()) {
                 val missionId = c.getString(c.getColumnIndexOrThrow("mission_id"))
                 if (missionId !in byMission) continue
@@ -503,13 +519,13 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             }
         }
         val refs = mutableMapOf<Pair<String, String>, JSONArray>()
-        sql.query("SELECT mission_id,message_id,ref FROM crew_message_refs WHERE conversation_id=? ORDER BY mission_id,message_id,ordinal", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT mission_id,message_id,ref FROM crew_message_refs WHERE conversation_id=?$missionClause ORDER BY mission_id,message_id,ordinal", missionArgs).use { c ->
             while (c.moveToNext()) refs.getOrPut(c.getString(0) to c.getString(1)) { JSONArray() }.put(c.getString(2))
         }
         val coordination = mutableMapOf<Pair<String, String>, JSONObject>()
         sql.query("SELECT m.mission_id,m.message_id,m.coordination_evidence_id,m.reference_message_id,m.evidence_content_sha256,e.bot_id,e.cycle_id " +
             "FROM crew_messages m LEFT JOIN crew_coordination_evidence e ON e.conversation_id=m.conversation_id AND e.evidence_id=m.coordination_evidence_id " +
-            "WHERE m.conversation_id=? AND m.coordination_evidence_id IS NOT NULL", arrayOf(conversationId)).use { c ->
+            "WHERE m.conversation_id=? AND m.coordination_evidence_id IS NOT NULL$qualifiedMissionClause", qualifiedMissionArgs).use { c ->
             while (c.moveToNext()) {
                 val messageId = c.getStringOrNullMemory("reference_message_id") ?: throw IllegalStateException("crew_snapshot_coordination_reference_message_id_null")
                 val digest = c.getStringOrNullMemory("evidence_content_sha256") ?: throw IllegalStateException("crew_snapshot_coordination_reference_digest_null")
@@ -520,11 +536,11 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             }
         }
         val bindings = mutableMapOf<Pair<String, String>, JSONObject>()
-        sql.query("SELECT * FROM crew_message_input_bindings WHERE conversation_id=?", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT * FROM crew_message_input_bindings WHERE conversation_id=?$missionClause", missionArgs).use { c ->
             while (c.moveToNext()) bindings[c.getString(c.getColumnIndexOrThrow("mission_id")) to c.getString(c.getColumnIndexOrThrow("message_id"))] = inputBindingJson(c)
         }
         val activities = mutableMapOf<Pair<String, String>, JSONObject>()
-        sql.query("SELECT * FROM crew_message_activities WHERE conversation_id=?", arrayOf(conversationId)).use { a ->
+        sql.query("SELECT * FROM crew_message_activities WHERE conversation_id=?$missionClause", missionArgs).use { a ->
             while (a.moveToNext()) activities[a.getString(a.getColumnIndexOrThrow("mission_id")) to a.getString(a.getColumnIndexOrThrow("message_id"))] =
                 JSONObject().put("schemaVersion", a.getInt(a.getColumnIndexOrThrow("schema_version")))
                     .put("eventId", a.getString(a.getColumnIndexOrThrow("event_id"))).put("executionId", a.getString(a.getColumnIndexOrThrow("execution_id")))
@@ -536,7 +552,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
                     .put("timestampMillis", a.getLong(a.getColumnIndexOrThrow("timestamp_millis")))
         }
         val messages = mutableMapOf<String, MutableList<CrewMessage>>()
-        sql.query("SELECT * FROM crew_messages WHERE conversation_id=? ORDER BY mission_id,ordinal", arrayOf(conversationId)).use { c ->
+        sql.query("SELECT * FROM crew_messages WHERE conversation_id=?$missionClause ORDER BY mission_id,ordinal", missionArgs).use { c ->
             while (c.moveToNext()) {
                 val missionId = c.getString(c.getColumnIndexOrThrow("mission_id"))
                 if (missionId !in byMission) continue
@@ -698,6 +714,8 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     companion object {
         /** Historic wake markers remain audit-only; new agent content uses typed message rows. */
         private const val RESULT_ONLY_KINDS = "('crew_result_evidence','workspace_result_reference','workspace_result_notice','workspace_result_wake_pending','workspace_result_wake_started','workspace_result_wake_acknowledged','crew_coordination_evidence','crew_coordination_evidence_ref','workspace_coordination_reference','workspace_coordination_notice','workspace_coordination_reply_intent','workspace_coordination_reply_state','workspace_input_incorporation')"
+        /** Leave room for the conversation bind under SQLite's per-statement bind-argument limit. */
+        private const val MAX_MISSION_IDS_PER_QUERY = 900
     }
 }
 

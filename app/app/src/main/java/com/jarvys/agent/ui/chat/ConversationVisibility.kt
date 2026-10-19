@@ -3,8 +3,6 @@ package com.jarvys.agent.ui.chat
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.HtmlPreviewDescriptor
-import com.jarvys.agent.ScheduledTaskArtifact
-import org.json.JSONObject
 
 /** Display-only projection. Original tool/model evidence remains available to recovery and diagnostics. */
 internal object ConversationVisibility {
@@ -44,36 +42,20 @@ internal object ConversationVisibility {
 
         return events.mapNotNull { event ->
             if (!visible(event, showAssistantProgress)) return@mapNotNull null
-            val scheduledTask = scheduledTaskArtifact(event)
+            val detailAnalysis = event.visibilityDetailAnalysis
+            val scheduledTask = detailAnalysis.scheduledTaskArtifact
             if (scheduledTask != null) {
                 return@mapNotNull event.copy(kind = "scheduled_task", scheduledTaskArtifact = scheduledTask)
             }
-            if (hasMatchingArtifactCard(event, deliveredArtifactIds, generatedImageIds)) return@mapNotNull null
+            if (hasMatchingArtifactCard(event, detailAnalysis, deliveredArtifactIds, generatedImageIds))
+                return@mapNotNull null
             event
         }
     }
 
-    private fun scheduledTaskArtifact(event: AgentRunUiEvent): ScheduledTaskArtifact? {
-        if (event.kind != "tool" || event.stage != "tool_result") return null
-        return runCatching {
-            val detail = event.detail.orEmpty()
-            val jsonStart = detail.indexOf('{')
-            val jsonEnd = detail.lastIndexOf('}')
-            if (jsonStart < 0 || jsonEnd < jsonStart) return null
-            val result = JSONObject(detail.substring(jsonStart, jsonEnd + 1))
-            val task = result.optJSONObject("task") ?: return null
-            if (task.optString("kind") != "scheduled_task") return null
-            val id = task.optString("id").takeIf(String::isNotBlank) ?: return null
-            val name = task.optString("name").takeIf(String::isNotBlank) ?: return null
-            val schedule = task.optString("schedule_human").takeIf(String::isNotBlank) ?: return null
-            ScheduledTaskArtifact(id, name, schedule,
-                task.optString("next_run_local").takeIf { it.isNotBlank() && it != "null" },
-                task.optString("status", result.optString("status")))
-        }.getOrNull()
-    }
-
     private fun hasMatchingArtifactCard(
         event: AgentRunUiEvent,
+        detailAnalysis: com.jarvys.agent.AgentRunUiEventVisibilityDetail,
         deliveredArtifactIds: Set<String>,
         generatedImageIds: Set<String>,
     ): Boolean {
@@ -83,15 +65,10 @@ internal object ConversationVisibility {
         if (HtmlPreviewDescriptor.isSnapshotToken(previewId) &&
             previewId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX) in deliveredArtifactIds) return true
 
-        val detail = event.detail.orEmpty()
-        val deliveredArtifactId = runCatching {
-            JSONObject(detail).optString("artifact_id")
-        }.getOrNull()?.takeIf { it.startsWith("delivered:") }?.removePrefix("delivered:")
-        if (!deliveredArtifactId.isNullOrBlank() && deliveredArtifactId in deliveredArtifactIds) return true
+        if (!detailAnalysis.deliveredArtifactId.isNullOrBlank() &&
+            detailAnalysis.deliveredArtifactId in deliveredArtifactIds) return true
 
-        val generatedImageId = generatedImageReference.find(detail)?.groupValues?.getOrNull(1)
-        return !generatedImageId.isNullOrBlank() && generatedImageId in generatedImageIds
+        return !detailAnalysis.generatedImageId.isNullOrBlank() &&
+            detailAnalysis.generatedImageId in generatedImageIds
     }
-
-    private val generatedImageReference = Regex("\\bgenerated:([0-9a-fA-F-]{36})\\b")
 }

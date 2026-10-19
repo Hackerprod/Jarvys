@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,8 +29,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -55,6 +61,8 @@ import com.hrm.latex.renderer.LatexAutoWrap
 import com.hrm.latex.renderer.model.LatexConfig
 import com.hrm.latex.renderer.model.LatexTheme
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownTokenTypes
 import org.json.JSONArray
 import org.json.JSONObject
@@ -213,11 +221,30 @@ private object SvgInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
         val currentColor = MaterialTheme.colorScheme.onSurface
         val observer = LocalAssistantMarkdownRenderObserver.current
-        val result = remember(source, currentColor) {
-            observer?.onBlockSourceParsed(label)
-            runCatching { sanitizeAndParseSvg(source).renderToPicture(currentColor) }
+        val currentObserver by rememberUpdatedState(observer)
+        val cache = LocalAssistantMarkdownSuccessCache.current
+        var result by remember(source, currentColor, cache) {
+            mutableStateOf(cache?.getPreparedSvg(source, currentColor))
         }
-        val prepared = result.getOrNull()
+        LaunchedEffect(source, currentColor, cache) {
+            val cached = cache?.getPreparedSvg(source, currentColor)
+            if (cached != null) {
+                result = cached
+            } else {
+                currentObserver?.onBlockSourceParsed(label)
+                val (preparedResult, preparationThread) = withContext(Dispatchers.Default) {
+                    runCatching { sanitizeAndParseSvg(source).renderToPicture(currentColor) } to Thread.currentThread()
+                }
+                currentObserver?.onBlockPreparationThread(label, preparationThread)
+                cache?.putPreparedSvg(source, currentColor, preparedResult)
+                result = preparedResult
+            }
+        }
+        val prepared = result?.getOrNull()
+        if (result == null) {
+            InlineBlockPreparationPlaceholder(label)
+            return
+        }
         if (prepared == null) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             return
@@ -427,7 +454,31 @@ internal fun isValidLatex(source: String): Boolean = runCatching {
 
 private object LatexInlineBlockRenderer : InlineBlockRenderer {
     @Composable override fun Render(source: String, modifier: Modifier, label: String) {
-        if (!remember(source) { isValidLatex(source) }) {
+        val observer = LocalAssistantMarkdownRenderObserver.current
+        val currentObserver by rememberUpdatedState(observer)
+        val cache = LocalAssistantMarkdownSuccessCache.current
+        var isValid by remember(source, cache) {
+            mutableStateOf(cache?.getLatexValidity(source))
+        }
+        LaunchedEffect(source, cache) {
+            val cached = cache?.getLatexValidity(source)
+            if (cached != null) {
+                isValid = cached
+            } else {
+                currentObserver?.onBlockSourceParsed(label)
+                val (parsedResult, preparationThread) = withContext(Dispatchers.Default) {
+                    isValidLatex(source) to Thread.currentThread()
+                }
+                currentObserver?.onBlockPreparationThread(label, preparationThread)
+                cache?.putLatexValidity(source, parsedResult)
+                isValid = parsedResult
+            }
+        }
+        if (isValid == null) {
+            InlineBlockPreparationPlaceholder(label)
+            return
+        }
+        if (isValid == false) {
             AssistantCodeFallback(source, label, MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             return
         }
@@ -444,6 +495,18 @@ private object LatexInlineBlockRenderer : InlineBlockRenderer {
             )
         }
         if (renderResult.isFailure) AssistantCodeFallback(source, label, monospaceStyle)
+    }
+}
+
+@Composable
+private fun InlineBlockPreparationPlaceholder(label: String) {
+    val renderingLabel = stringResource(R.string.inline_block_rendering, label)
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = 112.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(renderingLabel, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall)
     }
 }
 

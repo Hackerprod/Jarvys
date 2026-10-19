@@ -5,6 +5,7 @@ import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [28])
@@ -220,5 +221,29 @@ class ConversationVisibilityTest {
         assertEquals("scheduled_task", projectedResult.single().kind)
         assertEquals("task-1", projectedResult.single().scheduledTaskArtifact?.taskId)
         assertEquals(listOf(error), ConversationVisibility.project(listOf(error)))
+    }
+
+    @Test fun toolResultDetailIsAnalyzedOncePerEventAcrossProjectionPasses() {
+        val parsedDetails = AtomicInteger()
+        AgentRunUiEventVisibilityDetail.parseObserver = { parsedDetails.incrementAndGet() }
+        try {
+            val events = (1L..120L).map { id ->
+                AgentRunUiEvent.toolEvent(id, "tool_result", "tool-$id", "{\"status\":\"ok\"}",
+                    "call-$id", null, id)
+            }
+
+            ConversationVisibility.project(events)
+            assertEquals(events.size, parsedDetails.get())
+            ConversationVisibility.project(events)
+            assertEquals("reprojecting identical events must reuse their analysis", events.size, parsedDetails.get())
+
+            val changed = events.toMutableList().also { list ->
+                list[57] = list[57].copy(detail = "{\"status\":\"updated\"}")
+            }
+            ConversationVisibility.project(changed)
+            assertEquals("a copied event with changed detail is analyzed once", events.size + 1, parsedDetails.get())
+        } finally {
+            AgentRunUiEventVisibilityDetail.parseObserver = null
+        }
     }
 }

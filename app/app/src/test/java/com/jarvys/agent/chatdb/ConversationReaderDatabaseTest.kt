@@ -19,7 +19,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
+import java.util.Collections
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -239,6 +241,68 @@ class ConversationReaderDatabaseTest {
         assertTrue(older.events.any { it.id == batchSeq })
         assertTrue(older.events.none { it.messageId == nextUser.messageId })
         assertTrue(older.events.all { olderEvent -> newest.events.none { it.id == olderEvent.id } })
+    }
+
+    @Test fun timelinePageResolvesToolResultWhoseBatchIsOutsideTheWindowWithoutReadingOpaqueCallPayloads() = onDatabaseThread {
+        val id = "reader-page-cross-window-tool"
+        success(conversations.ensureConversation(id))
+        val owner = append(id, ConversationRepository.ROLE_USER, "first prompt")
+        val batchId = "cross-window-batch"
+        val batch = success(model.appendToolBatch(ModelToolBatchInput(
+            conversationId = id,
+            batchId = batchId,
+            ownerUserMessageId = owner.messageId,
+            messageIndex = 0,
+            assistantText = "Looking up the answer",
+            calls = listOf(
+                ModelCallInput("older-cross-window-call", "lookup", "{\"query\":\"older\"}"),
+                ModelCallInput("cross-window-call", "lookup", "{\"query\":\"source\"}"),
+            ),
+            providerOutputItemsJson = "opaque-provider-payload-".repeat(200),
+        )))
+        val nextSeq = database.testChatSql.query(
+            "SELECT next_seq FROM conversations WHERE id=?", arrayOf(id),
+        ).use { c -> c.moveToFirst(); c.getLong(0) }
+        val paddingCount = 520
+        database.withChatWriteTransaction {
+            database.conversationItemDao().insertAll((0 until paddingCount).map { offset ->
+                val seq = nextSeq + offset
+                ConversationItem(
+                    id, seq, "workspace_result_notice", "padding-$offset", seq,
+                    turn_anchor_seq = owner.seq, created_at = seq.toDouble(),
+                )
+            })
+            database.chatSql.execSQL(
+                "UPDATE conversations SET next_seq=? WHERE id=?",
+                arrayOf(nextSeq + paddingCount, id),
+            )
+        }
+        val olderOutput = "unrelated-result-".repeat(400)
+        success(model.appendToolResult(ModelToolResultInput(
+            id, batchId, "older-cross-window-call", "lookup", "RESULT", olderOutput,
+        )))
+        append(id, ConversationRepository.ROLE_USER, "second prompt")
+        success(model.appendToolResult(ModelToolResultInput(
+            id, batchId, "cross-window-call", "lookup", "RESULT", "the cross-window result",
+        )))
+
+        val statements = Collections.synchronizedList(mutableListOf<String>())
+        val readStats = AtomicReference<Pair<Int, Long>>()
+        val pageReader = ConversationReader(database) { rows, bytes -> readStats.set(rows to bytes) }
+        val page = ChatSqlInstrumentation.observeStatements({ statements += it }) {
+            pageReader.readRecentConversationTimeline(id, 1)
+        }
+        val result = page.events.single { it.kind == "tool" && it.stage == "tool_result" }
+        assertEquals("the cross-window result", result.detail)
+        assertEquals(owner.messageId, result.toolTurnMessageId)
+        assertTrue("off-page results are not materialized with their batch", readStats.get().second < olderOutput.toByteArray(Charsets.UTF_8).size)
+        assertTrue("the batch row is outside this page", batch.batch.seq < page.events.minOf { it.id })
+        assertTrue("the result page retains an older cursor", page.hasOlder)
+        assertTrue("page projection reads only referenced batch rows", statements.any { it.contains("tool_batches") && it.contains("batch_id IN") })
+        assertTrue("page projection reads only referenced result rows", statements.any { it.contains("tool_results") && it.contains("requested(batch_id,call_id)") })
+        assertFalse("timeline does not read opaque arguments", statements.any { it.contains("arguments_json") })
+        assertFalse("timeline does not read provider item payloads", statements.any { it.contains("items_json") || it.contains("provider_output_items_json") })
+        assertFalse("timeline does not read unrelated model artifacts", statements.any { it.contains("model_artifacts") })
     }
 
     @Test fun timelineReopensAssistantInterimBeforeItsToolResultAndFinalAnswer() = onDatabaseThread {

@@ -1,5 +1,6 @@
 package com.jarvys.agent
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,6 +55,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -115,6 +120,68 @@ class InlineMessageBlocksComposeTest {
                     (0 until layout.lineCount).none(layout::isLineEllipsized))
             }
         }
+    }
+
+    @Test fun assistantTableMeasurementIsCachedAcrossRecompositionAndReentry() {
+        fun table(revision: Int): String = buildString {
+            appendLine((0 until 6).joinToString(prefix = "| ", postfix = " |", separator = " | ") { "Header $it" })
+            appendLine((0 until 6).joinToString(prefix = "| ", postfix = " |", separator = " | ") { "---" })
+            repeat(40) { row ->
+                appendLine((0 until 6).joinToString(prefix = "| ", postfix = " |", separator = " |") { column ->
+                    val changed = if (revision > 0 && row == 0 && column == 0) " changed" else ""
+                    "cell-$row-$column$changed"
+                })
+            }
+        }
+
+        val cache = AssistantMarkdownSuccessCache()
+        val markdown = mutableStateOf(table(0))
+        val forceRecomposition = mutableIntStateOf(0)
+        val visible = mutableStateOf(true)
+        val measuredTables = ConcurrentLinkedQueue<String>()
+        val layoutCallbacks = AtomicInteger()
+        val observer = object : AssistantMarkdownTableLayoutObserver {
+            override fun onCellTextLayout(text: String, result: TextLayoutResult) = Unit
+            override fun onTableLayout(minimumWidth: androidx.compose.ui.unit.Dp,
+                totalWidth: androidx.compose.ui.unit.Dp, horizontallyScrollable: Boolean) {
+                layoutCallbacks.incrementAndGet()
+            }
+            override fun onColumnMeasurement(tableText: String) { measuredTables.add(tableText) }
+        }
+
+        compose.setContent {
+            val force = forceRecomposition.intValue
+            CompositionLocalProvider(
+                LocalAssistantMarkdownSuccessCache provides cache,
+                LocalAssistantMarkdownTableLayoutObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    if (visible.value) {
+                        AssistantMarkdown(markdown.value, Modifier.fillMaxWidth().testTag("table-$force"),
+                            onOpenSkillFile = {})
+                    }
+                }
+            }
+        }
+
+        compose.waitUntil(15_000L) { measuredTables.size == 1 && layoutCallbacks.get() == 1 }
+        compose.waitForIdle()
+        repeat(5) { force ->
+            compose.runOnIdle { forceRecomposition.intValue = force + 1 }
+            compose.waitForIdle()
+        }
+        assertEquals("forced recompositions reuse the intrinsic column measurement", 1, measuredTables.size)
+        assertEquals("an unchanged table layout is reported once across recompositions", 1, layoutCallbacks.get())
+
+        compose.runOnIdle { visible.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { visible.value = true }
+        compose.waitForIdle()
+        assertEquals("scroll re-entry reuses the conversation table measurement", 1, measuredTables.size)
+
+        compose.runOnIdle { markdown.value = table(1) }
+        compose.waitUntil(15_000L) { measuredTables.size == 2 }
+        assertTrue("changed table text produces a distinct measurement", measuredTables.last().contains("changed"))
     }
 
     @Test fun assistantTableScrollsWhenAnUnbreakableCellRunExceedsAvailableWidth() {
@@ -632,8 +699,14 @@ class InlineMessageBlocksComposeTest {
         reply.value = AgentRunUiState.snapshotForSession(session).events.single { it.kind == "assistant_stream" }
         compose.mainClock.advanceTimeBy(16L)
         compose.waitForIdle()
-        compose.waitUntil(5_000L) {
-            compose.onAllNodesWithContentDescription("Streaming diagram").fetchSemanticsNodes().isNotEmpty()
+        val preparationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < preparationDeadline &&
+            compose.onAllNodesWithContentDescription("Streaming diagram").fetchSemanticsNodes().isEmpty()) {
+            // This test pauses the Compose clock to inspect size animation frames. Advance it while
+            // the SVG is prepared off-thread so its completion can return to the Compose dispatcher.
+            compose.mainClock.advanceTimeBy(16L)
+            compose.waitForIdle()
+            Thread.yield()
         }
         compose.onNodeWithContentDescription("Streaming diagram").assertIsDisplayed()
         val blockId = compose.onNodeWithContentDescription("Streaming diagram").fetchSemanticsNode().id
@@ -865,8 +938,66 @@ class InlineMessageBlocksComposeTest {
 
         streamActive.value = false
         compose.waitForIdle()
+        compose.waitUntil(10_000L) {
+            compose.onAllNodesWithText("Copy").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("Copy").assertIsDisplayed()
         compose.onNodeWithText("<svg", substring = true).assertIsDisplayed()
+    }
+
+    @Test fun svgAndLatexPreparationRunsOffMainAndReusesSourceResults() {
+        val markdown = """```svg
+            |<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Cached diagram</title><circle cx="25" cy="25" r="15"/></svg>
+            |```
+            |
+            |```latex
+            |\frac{1}{2} = 0.5
+            |```
+        """.trimMargin()
+        val cache = AssistantMarkdownSuccessCache()
+        val visible = mutableStateOf(true)
+        val parsedByLanguage = ConcurrentHashMap<String, AtomicInteger>()
+        val preparationThreads = ConcurrentLinkedQueue<Pair<String, Thread>>()
+        val observer = object : AssistantMarkdownRenderObserver {
+            override fun onLoadingComposed() = Unit
+            override fun onMarkdownContentRendered(content: String) = Unit
+            override fun onPlaceholderComposed(language: String) = Unit
+            override fun onStreamingCodeFallbackComposed(language: String) = Unit
+            override fun onBlockSourceParsed(language: String) {
+                parsedByLanguage.computeIfAbsent(language) { AtomicInteger() }.incrementAndGet()
+            }
+            override fun onBlockMounted(language: String) = Unit
+            override fun onBlockPreparationThread(language: String, thread: Thread) {
+                preparationThreads.add(language to thread)
+            }
+        }
+
+        compose.setContent {
+            CompositionLocalProvider(
+                LocalAssistantMarkdownSuccessCache provides cache,
+                LocalAssistantMarkdownRenderObserver provides observer,
+            ) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    if (visible.value) AssistantMarkdown(markdown, onOpenSkillFile = {})
+                }
+            }
+        }
+
+        compose.waitUntil(15_000L) { preparationThreads.size == 2 }
+        compose.waitForIdle()
+        val mainThread = Looper.getMainLooper().thread
+        assertTrue("SVG and LaTeX preparation both run away from the UI thread",
+            preparationThreads.all { (_, thread) -> thread !== mainThread })
+
+        compose.runOnIdle { visible.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { visible.value = true }
+        compose.waitForIdle()
+        assertEquals("SVG source is prepared once across composition re-entry", 1,
+            parsedByLanguage["svg"]?.get())
+        assertEquals("LaTeX source is prepared once across composition re-entry", 1,
+            parsedByLanguage["latex"]?.get())
+        assertEquals("re-entry reuses both cached preparation results", 2, preparationThreads.size)
     }
 
     @Test fun recursivelyMaskedSvgFallsBackToCopyableCodeWithoutCrashingComposition() {
@@ -875,6 +1006,9 @@ class InlineMessageBlocksComposeTest {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                 AssistantMarkdown("```svg\n$source\n```", onOpenSkillFile = {})
             }
+        }
+        compose.waitUntil(10_000L) {
+            compose.onAllNodesWithText("Copy").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Copy").assertIsDisplayed()
         compose.onNodeWithText("<svg", substring = true).assertIsDisplayed()

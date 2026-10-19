@@ -37,13 +37,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.LineBreak
@@ -52,15 +57,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.times
 import com.jarvys.agent.skills.SkillFileLink
 import com.jarvys.agent.skills.SkillFileLinkParser
 import com.jarvys.agent.skills.SkillRepository
-import com.mikepenz.markdown.annotator.annotatorSettings
+import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.compose.LocalMarkdownAnnotator
 import com.mikepenz.markdown.compose.LocalMarkdownComponents
 import com.mikepenz.markdown.compose.LocalMarkdownColors
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
+import com.mikepenz.markdown.compose.LocalMarkdownTypography
+import com.mikepenz.markdown.compose.LocalReferenceLinkHandler
 import com.mikepenz.markdown.compose.MarkdownElement
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -73,6 +82,8 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownAnnotatorConfig
+import com.mikepenz.markdown.model.MarkdownAnnotator
+import com.mikepenz.markdown.model.ReferenceLinkHandler
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.rememberMarkdownState
 import java.text.BreakIterator
@@ -93,16 +104,66 @@ internal interface AssistantMarkdownRenderObserver {
     fun onStreamingCodeFallbackComposed(language: String)
     fun onBlockSourceParsed(language: String)
     fun onBlockMounted(language: String)
+    fun onBlockPreparationThread(language: String, thread: Thread) = Unit
 }
 
-/** Successful parse trees retained for the lifetime of one ChatMessageList conversation. */
+internal data class AssistantMarkdownAnnotatorInputs(
+    val linkTextStyle: TextLinkStyles,
+    val codeSpanStyle: SpanStyle,
+    val markdownAnnotator: MarkdownAnnotator,
+    val referenceLinkHandler: ReferenceLinkHandler,
+    val uriHandler: UriHandler,
+)
+
+internal data class AssistantMarkdownTableMeasureKey(
+    val tableText: String,
+    val availableWidth: Dp,
+    val style: TextStyle,
+    val linkTextStyle: TextLinkStyles,
+    val codeSpanStyle: SpanStyle,
+    val cellPadding: Dp,
+    val density: Float,
+    val fontScale: Float,
+    val layoutDirection: LayoutDirection,
+)
+
+private data class PreparedSvgCacheKey(val source: String, val currentColor: Color)
+
+/** Parse and layout results retained only while their ChatMessageList conversation is in memory. */
 internal class AssistantMarkdownSuccessCache {
     private val statesByMarkdown = mutableMapOf<String, State.Success>()
+    private val tableMeasures = mutableMapOf<AssistantMarkdownTableMeasureKey, List<AssistantMarkdownColumnMeasure>>()
+    private val preparedSvgs = mutableMapOf<PreparedSvgCacheKey, Result<PreparedSvg>>()
+    private val latexValidityBySource = mutableMapOf<String, Boolean>()
 
     fun get(normalizedMarkdown: String): State.Success? = statesByMarkdown[normalizedMarkdown]
 
     fun put(normalizedMarkdown: String, state: State.Success) {
         statesByMarkdown[normalizedMarkdown] = state
+    }
+
+    fun getTableMeasures(key: AssistantMarkdownTableMeasureKey): List<AssistantMarkdownColumnMeasure>? =
+        tableMeasures[key]
+
+    fun putTableMeasures(key: AssistantMarkdownTableMeasureKey, measures: List<AssistantMarkdownColumnMeasure>) {
+        tableMeasures[key] = measures
+    }
+
+    @Synchronized
+    fun getPreparedSvg(source: String, currentColor: Color): Result<PreparedSvg>? =
+        preparedSvgs[PreparedSvgCacheKey(source, currentColor)]
+
+    @Synchronized
+    fun putPreparedSvg(source: String, currentColor: Color, result: Result<PreparedSvg>) {
+        preparedSvgs[PreparedSvgCacheKey(source, currentColor)] = result
+    }
+
+    @Synchronized
+    fun getLatexValidity(source: String): Boolean? = latexValidityBySource[source]
+
+    @Synchronized
+    fun putLatexValidity(source: String, isValid: Boolean) {
+        latexValidityBySource[source] = isValid
     }
 }
 
@@ -115,6 +176,7 @@ internal val LocalAssistantMarkdownRenderObserver = compositionLocalOf<Assistant
 internal interface AssistantMarkdownTableLayoutObserver {
     fun onCellTextLayout(text: String, result: TextLayoutResult)
     fun onTableLayout(minimumWidth: Dp, totalWidth: Dp, horizontallyScrollable: Boolean)
+    fun onColumnMeasurement(tableText: String) = Unit
 }
 internal val LocalAssistantMarkdownTableLayoutObserver =
     compositionLocalOf<AssistantMarkdownTableLayoutObserver?> { null }
@@ -285,41 +347,142 @@ private fun AssistantMarkdownTable(model: MarkdownComponentModel) {
     val style = model.typography.table
     val dimens = LocalMarkdownDimens.current
     val colors = LocalMarkdownColors.current
-    val annotator = annotatorSettings()
+    val markdownTypography = LocalMarkdownTypography.current
+    val markdownAnnotator = LocalMarkdownAnnotator.current
+    val referenceLinkHandler = LocalReferenceLinkHandler.current
+    val uriHandler = LocalUriHandler.current
+    val inlineCodeStyle = markdownTypography.inlineCode
+    val codeSpanStyle = SpanStyle(
+        color = inlineCodeStyle.color,
+        fontSize = inlineCodeStyle.fontSize,
+        fontWeight = inlineCodeStyle.fontWeight,
+        fontStyle = inlineCodeStyle.fontStyle,
+        fontSynthesis = inlineCodeStyle.fontSynthesis,
+        fontFamily = inlineCodeStyle.fontFamily,
+        fontFeatureSettings = inlineCodeStyle.fontFeatureSettings,
+        letterSpacing = inlineCodeStyle.letterSpacing,
+        baselineShift = inlineCodeStyle.baselineShift,
+        textGeometricTransform = inlineCodeStyle.textGeometricTransform,
+        localeList = inlineCodeStyle.localeList,
+        background = colors.inlineCodeBackground,
+        textDecoration = inlineCodeStyle.textDecoration,
+        shadow = inlineCodeStyle.shadow,
+        drawStyle = inlineCodeStyle.drawStyle,
+    )
+    val annotatorInputs = remember(
+        markdownTypography.textLink,
+        codeSpanStyle,
+        markdownAnnotator,
+        referenceLinkHandler,
+        uriHandler,
+    ) {
+        AssistantMarkdownAnnotatorInputs(
+            linkTextStyle = markdownTypography.textLink,
+            codeSpanStyle = codeSpanStyle,
+            markdownAnnotator = markdownAnnotator,
+            referenceLinkHandler = referenceLinkHandler,
+            uriHandler = uriHandler,
+        )
+    }
+    val linkInteractionListener = remember(referenceLinkHandler, uriHandler) {
+        LinkInteractionListener { link ->
+            val url = (link as? LinkAnnotation.Url)?.url
+            if (url != null) {
+                val resolvedUrl = referenceLinkHandler.find(url).takeIf { !it.isNullOrBlank() } ?: url
+                runCatching { uriHandler.openUri(resolvedUrl) }
+            }
+        }
+    }
+    val annotator = remember(annotatorInputs, linkInteractionListener) {
+        DefaultAnnotatorSettings(
+            annotatorInputs.linkTextStyle,
+            annotatorInputs.codeSpanStyle,
+            annotatorInputs.markdownAnnotator,
+            annotatorInputs.referenceLinkHandler,
+            linkInteractionListener,
+        )
+    }
     val textMeasurer = rememberTextMeasurer()
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
     val streaming = LocalAssistantMarkdownStreaming.current
     val rows = remember(model.node) { model.node.children.filter { it.type == HEADER || it.type == ROW } }
     val columnsCount = remember(rows) { rows.maxOfOrNull { row -> row.children.count { it.type == CELL } } ?: 0 }
     if (columnsCount == 0) return
-
-    // The parser rebuilds the table AST as streamed content changes. Its cell offsets refer to the
-    // matching source string, so measure once while streaming and refresh when streaming ends.
-    val measurementContentKey = if (streaming) null else model.content
-    val columnMeasures = remember(model.node.startOffset, columnsCount, style, annotator, textMeasurer, density,
-        dimens.tableCellPadding, streaming, measurementContentKey) {
-        measureAssistantMarkdownColumns(
-            rows = rows,
-            columnsCount = columnsCount,
-            content = model.content,
-            style = style,
-            annotator = annotator,
-            textMeasurer = textMeasurer,
-            density = density,
-            cellPadding = dimens.tableCellPadding,
-        )
+    val cellsByRow = remember(rows) { rows.map { row -> row.children.filter { it.type == CELL } } }
+    val cellStyles = remember(rows, style) {
+        rows.map { row ->
+            (if (row.type == HEADER) style.copy(fontWeight = FontWeight.Bold) else style)
+                .copy(lineBreak = LineBreak.Simple)
+        }
     }
+    val tableText = remember(model.node, model.content) {
+        model.content.substring(model.node.startOffset, model.node.endOffset)
+    }
+    val measureCache = LocalAssistantMarkdownSuccessCache.current
+    val measurementObserver = LocalAssistantMarkdownTableLayoutObserver.current
+
     BoxWithConstraints(
         modifier = Modifier
             .widthIn(max = dimens.tableMaxWidth)
             .fillMaxWidth()
             .background(colors.tableBackground, RoundedCornerShape(dimens.tableCornerSize)),
     ) {
+        // Streaming content keeps its first measurement until the fence ends. Persisted tables use
+        // their complete source and available width, so scroll re-entry can reuse this conversation cache.
+        val measurementTextKey = if (streaming) null else tableText
+        val measureKey = remember(tableText, maxWidth, style, markdownTypography.textLink, codeSpanStyle,
+            layoutDirection, density.density, density.fontScale, dimens.tableCellPadding) {
+            AssistantMarkdownTableMeasureKey(
+                tableText = tableText,
+                availableWidth = maxWidth,
+                style = style,
+                linkTextStyle = markdownTypography.textLink,
+                codeSpanStyle = codeSpanStyle,
+                cellPadding = dimens.tableCellPadding,
+                density = density.density,
+                fontScale = density.fontScale,
+                layoutDirection = layoutDirection,
+            )
+        }
+        val columnMeasures = remember(
+            measurementTextKey,
+            model.node.startOffset,
+            columnsCount,
+            maxWidth,
+            style,
+            annotatorInputs,
+            textMeasurer,
+            density.density,
+            density.fontScale,
+            layoutDirection,
+            dimens.tableCellPadding,
+            streaming,
+        ) {
+            val cachedMeasures = if (streaming) null else measureCache?.getTableMeasures(measureKey)
+            cachedMeasures ?: measureAssistantMarkdownColumns(
+                rows = rows,
+                cellsByRow = cellsByRow,
+                cellStyles = cellStyles,
+                columnsCount = columnsCount,
+                content = model.content,
+                style = style,
+                annotator = annotator,
+                textMeasurer = textMeasurer,
+                density = density,
+                cellPadding = dimens.tableCellPadding,
+            ).also { measured ->
+                measurementObserver?.onColumnMeasurement(tableText)
+                if (!streaming) measureCache?.putTableMeasures(measureKey, measured)
+            }
+        }
         val layout = remember(columnMeasures, maxWidth) {
             allocateAssistantMarkdownTableWidth(columnMeasures, maxWidth)
         }
         val layoutObserver = LocalAssistantMarkdownTableLayoutObserver.current
-        SideEffect { layoutObserver?.onTableLayout(layout.minimumWidth, layout.totalWidth, layout.horizontallyScrollable) }
+        LaunchedEffect(layout, layoutObserver) {
+            layoutObserver?.onTableLayout(layout.minimumWidth, layout.totalWidth, layout.horizontallyScrollable)
+        }
         Column(
             modifier = if (layout.horizontallyScrollable) {
                 Modifier.horizontalScroll(rememberScrollState()).requiredWidth(layout.totalWidth)
@@ -394,6 +557,8 @@ private fun AssistantMarkdownTableRow(
 
 private fun measureAssistantMarkdownColumns(
     rows: List<ASTNode>,
+    cellsByRow: List<List<ASTNode>>,
+    cellStyles: List<TextStyle>,
     columnsCount: Int,
     content: String,
     style: TextStyle,
@@ -405,10 +570,9 @@ private fun measureAssistantMarkdownColumns(
     List(columnsCount) { columnIndex ->
         var widestBreakableRunPx = 0
         var widestCellPx = 0
-        rows.forEach { row ->
-            val cell = row.children.filter { it.type == CELL }.getOrNull(columnIndex) ?: return@forEach
-            val cellStyle = (if (row.type == HEADER) style.copy(fontWeight = FontWeight.Bold) else style)
-                .copy(lineBreak = LineBreak.Simple)
+        rows.forEachIndexed { rowIndex, _ ->
+            val cell = cellsByRow[rowIndex].getOrNull(columnIndex) ?: return@forEachIndexed
+            val cellStyle = cellStyles[rowIndex]
             val annotated = content.buildMarkdownAnnotatedString(
                 textNode = cell,
                 style = cellStyle,

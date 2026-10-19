@@ -502,7 +502,8 @@ class MainActivity : ComponentActivity() {
             // Capture the rendered conversation, never the mutable selection after an asynchronous action.
             val fileActionSession = conversationSessionId
             val attachmentSending by attachmentDrafts.sending.collectAsState()
-            val agentState by AgentRunUiState.state.collectAsState()
+            val agentRenderState by AgentRunUiState.renderState.collectAsState()
+            val agentState = agentRenderState.snapshot
             LaunchedEffect(conversationSessionId, agentState.reflecting, agentState.reflectionStatus,
                 agentState.reflectionSessionId) {
                 if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
@@ -535,6 +536,9 @@ class MainActivity : ComponentActivity() {
                     onGoalChange = { goalInput = it },
                     lastRunReport = lastRunReport,
                     agentState = agentState,
+                    agentHasUserAttachments = agentRenderState.hasUserAttachments,
+                    agentConversationMessageCount = agentRenderState.conversationMessageCount,
+                    agentCrewMissions = agentRenderState.crewMissions,
                     workspaceHasActiveWorkForUi = { state, snapshot -> workspaceHasActiveWorkForUi(state, snapshot) },
                     workspacePauseEnabledForUi = ::workspacePauseEnabledForUi,
                     runHistory = runHistory,
@@ -1685,6 +1689,9 @@ private fun JarvysApp(
     onGoalChange: (String) -> Unit,
     lastRunReport: String,
     agentState: AgentRunUiSnapshot,
+    agentHasUserAttachments: Boolean,
+    agentConversationMessageCount: Int,
+    agentCrewMissions: List<com.jarvys.agent.crew.CrewMissionSnapshot>,
     workspaceHasActiveWorkForUi: (WorkspaceChatUiState?, AgentRunUiSnapshot?) -> Boolean,
     workspacePauseEnabledForUi: (WorkspaceChatUiState?, String?, Boolean) -> Boolean,
     runHistory: List<RunHistoryItem>,
@@ -1954,9 +1961,9 @@ private fun JarvysApp(
         Routes.TASK_DETAIL -> routeTaskTitle
         else -> routeMcpServerAlias
     }
-    val routeCrewMission = routeMissionId?.let { missionId -> agentState.events.lastOrNull {
-        it.kind == "crew_mission" && it.crewMissionSnapshot?.missionId == missionId
-    }?.crewMissionSnapshot }
+    val routeCrewMission = routeMissionId?.let { missionId ->
+        agentCrewMissions.lastOrNull { it.missionId == missionId }
+    }
     val routeBotName = routeCrewMission?.bots?.firstOrNull { it.id == routeBotId }?.name
     val crewSessionId = activeWorkspaceCrewSessionId ?: conversationSessionId
     LaunchedEffect(crewSessionId) {
@@ -1972,7 +1979,7 @@ private fun JarvysApp(
     var skillImportEntry by remember { mutableStateOf<SkillImportEntryKind?>(null) }
     var skillFileLink by remember { mutableStateOf<SkillFileLink?>(null) }
     var crewBoardReference by remember { mutableStateOf<String?>(null) }
-    val showActiveConversation = (agentState.goal.isNotBlank() || agentState.events.any { it.kind == "user" && it.attachments.isNotEmpty() })
+    val showActiveConversation = (agentState.goal.isNotBlank() || agentHasUserAttachments)
         && selectedHistoryRunId == null && !showingNewChat
     LaunchedEffect(agentState.runId, agentState.running) {
         if (!agentState.running && agentState.runId != null) onHistoryUpdated()
@@ -2081,7 +2088,7 @@ private fun JarvysApp(
         onAddServer = { navController.navigate(Routes.MCP_NEW) },
         onImportSkill = { showSkillImportOptions = true },
         chatWithoutMemory = chatWithoutMemory,
-        canCompact = agentState.events.count { it.kind == "user" || it.kind == "assistant" } >= 4
+        canCompact = agentConversationMessageCount >= 4
             && !agentState.running && !agentState.compacting,
         compacting = agentState.compacting,
         canReflect = memoryEnabled && !chatWithoutMemory && !agentState.running && !agentState.compacting
@@ -2144,8 +2151,7 @@ private fun JarvysApp(
                     onCrewModeChange = onCrewModeChange,
                     onOpenCrew = {
                         if (!workspaceChatActive) {
-                            val latestMission = agentState.events.lastOrNull { it.kind == "crew_mission" }
-                                ?.crewMissionSnapshot
+                            val latestMission = agentCrewMissions.lastOrNull()
                             navController.navigate(latestMission?.let { Routes.crew(it.missionId) } ?: Routes.CREW_EMPTY) {
                                 launchSingleTop = true
                             }
@@ -2244,6 +2250,12 @@ private fun JarvysApp(
                     arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
                     val id = entry.arguments?.getString("workspaceId").orEmpty()
                     val state = workspaceChatState.value
+                    val workspaceTimelineState by AgentRunUiState.timelineEvents.collectAsState()
+                    val workspaceTimelineEvents = remember(workspaceTimelineState, state?.executionSessionId) {
+                        state?.executionSessionId?.let { sessionId ->
+                            workspaceTimelineState.takeIf { it.sessionId == sessionId }
+                        }
+                    }
                     if (state == null) {
                         JarvysEmptyState(LucideIcons.Boxes,
                             stringResource(R.string.workspace_chat_load_error), "",
@@ -2251,6 +2263,7 @@ private fun JarvysApp(
                     } else WorkspaceDetailScreen(
                         state = state,
                         runSnapshot = agentState,
+                        timelineEvents = workspaceTimelineEvents,
                         workspaceRunning = workspaceHasActiveWork,
                         connectorRegistry = connectorRegistry,
                         onOpenPreview = { projectId ->
@@ -2319,16 +2332,22 @@ private fun JarvysApp(
                     WorkspaceFilesRoute(entry.arguments?.getString("workspaceId").orEmpty())
                 }
                 composable(Routes.CHAT) {
-                    val selectedSessionEvents = AgentRunUiState.eventsForSession(conversationSessionId)
+                    val timelineEventsState by AgentRunUiState.timelineEvents.collectAsState()
+                    val selectedSessionEvents = remember(timelineEventsState, conversationSessionId) {
+                        timelineEventsState.events.takeIf { timelineEventsState.sessionId == conversationSessionId }
+                            .orEmpty()
+                    }
                     val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else conversationSessionId
                     Crossfade(targetState = conversationKey,
                         animationSpec = if (LocalReducedMotion.current) androidx.compose.animation.core.snap()
                             else JarvysMotion.placeChange(),
                         label = "chat-conversation-transition") { visibleConversationKey ->
-                        val displayedEvents = when {
-                            showingNewChat -> emptyList()
-                            else -> selectedSessionEvents.filter {
-                                showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
+                        val displayedEvents = remember(selectedSessionEvents, showingNewChat, showAgentEvents) {
+                            when {
+                                showingNewChat -> emptyList()
+                                else -> selectedSessionEvents.filter {
+                                    showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
+                                }
                             }
                         }
                         AgentRunScreen(
@@ -2478,7 +2497,7 @@ private fun JarvysApp(
                     readOnly = { snapshot -> selectedHistoryRunId != null && activeWorkspaceCrewSessionId == null
                         || CoreAgentRuntime.crewManagerForSession(crewSessionId) == null
                         || snapshot == null },
-                    missions = { agentState.events.mapNotNull { it.crewMissionSnapshot } },
+                    missions = { agentCrewMissions },
                     manager = CoreAgentRuntime.crewManagerForSession(crewSessionId),
                     onStopAll = { com.jarvys.agent.crew.CrewStopActions.stopAll(onStopRun,
                         CoreAgentRuntime.crewManagerForSession(crewSessionId)) },

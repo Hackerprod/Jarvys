@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.AgentRunUiTimelineEvents
 import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
@@ -38,9 +39,10 @@ fun WorkspaceDetailScreen(
     onLoadOlderHistory: () -> Unit = {},
     modifier: Modifier = Modifier,
     workspaceRunning: Boolean? = null,
+    timelineEvents: AgentRunUiTimelineEvents? = null,
 ) {
     val sessionSnapshot = runSnapshot.takeIf { it.sessionId == state.executionSessionId }
-    val sourceEvents = workspaceActivityEvents(state, sessionSnapshot)
+    val sourceEvents = timelineEvents?.takeIf { it.sessionId == state.executionSessionId }?.events ?: state.events
     val activeWork = workspaceRunning ?: workspaceHasActiveWork(state, sessionSnapshot)
     val events = remember(state.workspaceId, sourceEvents) {
         WorkspaceTimelineProjection.project(state.workspaceId, sourceEvents)

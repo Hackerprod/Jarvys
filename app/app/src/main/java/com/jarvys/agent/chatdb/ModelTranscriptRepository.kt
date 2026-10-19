@@ -1,6 +1,7 @@
 package com.jarvys.agent.chatdb
 
 import java.util.UUID
+import java.nio.charset.StandardCharsets
 
 data class ModelCallInput(val callId: String, val toolName: String, val argumentsJson: String)
 
@@ -63,6 +64,42 @@ data class ModelTranscriptSnapshot(
     /** Position of the boundary in the filtered/reordered non-result-only ledger projection. */
     val compactionBoundaryRowIndex: Long?,
     val firstKeptMessageIndex: Long?,
+)
+
+/** Minimal tool transcript rows needed to render one timeline page. Opaque arguments and provider payloads are omitted. */
+internal data class TimelineModelToolCall(
+    val callId: String,
+    val name: String,
+    val lifecycle: String,
+    val hasResult: Boolean,
+)
+
+internal data class TimelineModelToolBatch(
+    val batchId: String,
+    val seq: Long,
+    val ownerUserMessageId: String?,
+    val assistantText: String,
+    val assistantProgress: Boolean,
+    val calls: List<TimelineModelToolCall>,
+)
+
+internal data class TimelineModelToolResultRow(
+    val seq: Long,
+    val batchId: String,
+    val callId: String,
+    val firstResult: ToolResult?,
+)
+
+internal data class TimelineModelProjection(
+    val batchesBySeq: Map<Long, TimelineModelToolBatch>,
+    val batchesById: Map<String, TimelineModelToolBatch>,
+    val resultsBySeq: Map<Long, TimelineModelToolResultRow>,
+    /** Call identities with a durable result, without materializing their potentially large output. */
+    val resultCallKeys: Set<Pair<String, String>>,
+    val resultsByCall: Map<Pair<String, String>, ToolResult>,
+    /** Rows and UTF-8 text bytes materialized by the page-scoped tool queries. */
+    val rowsRead: Int,
+    val bytesRead: Long,
 )
 
 data class ToolActivityInput(
@@ -447,6 +484,174 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             ModelTranscriptSnapshot(conversationId, events, latestProviders, boundary?.seq, boundaryIndex, boundary?.firstKept)
         }
     }
+
+    /**
+     * Loads only tool transcript data needed by [sequences] plus exact batch/call references
+     * supplied by page-local activity rows. The timeline does not render provider payloads,
+     * model artifacts, model errors, or call arguments, so those wide columns never cross this
+     * read path.
+     */
+    internal suspend fun readTimelineModelProjection(
+        conversationId: String,
+        sequences: Collection<Long>,
+        additionalCalls: Collection<Pair<String, String>> = emptyList(),
+    ): TimelineModelProjection = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val pageSeqs = sequences.distinct()
+            if (pageSeqs.isEmpty()) return@withChatReadTransaction TimelineModelProjection(
+                emptyMap(), emptyMap(), emptyMap(), emptySet(), emptyMap(), 0, 0L,
+            )
+
+            val pageRows = linkedMapOf<Long, SpineEntry>()
+            var rowsRead = 0
+            var bytesRead = 0L
+            pageSeqs.chunked(MAX_IN_QUERY_IDS).forEach { seqs ->
+                val inClause = seqs.joinToString(",") { "?" }
+                sql.query(
+                    "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items " +
+                        "WHERE conversation_id=? AND seq IN ($inClause) " +
+                        "AND item_kind IN ('model_tool_calls','model_tool_result')",
+                    arrayOf<Any?>(conversationId, *seqs.map { it as Any? }.toTypedArray()),
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val row = SpineEntry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4))
+                        pageRows[row.seq] = row
+                        rowsRead++
+                        bytesRead += utf8Bytes(row.kind) + utf8Bytes(row.key) + 20L
+                    }
+                }
+            }
+
+            val batchIds = linkedSetOf<String>()
+            val resultItemKeys = linkedMapOf<Long, Pair<String, String>>()
+            pageRows.values.forEach { row ->
+                when (row.kind) {
+                    "model_tool_calls" -> batchIds += row.key
+                    "model_tool_result" -> decodeCallItemKey(row.key)?.let { key ->
+                        batchIds += key.first
+                        resultItemKeys[row.seq] = key
+                    }
+                }
+            }
+            additionalCalls.mapNotNullTo(batchIds) { (batchId, callId) ->
+                batchId.takeIf { it.isNotBlank() && callId.isNotBlank() }
+            }
+
+            val batchHeaders = linkedMapOf<String, Triple<Long, String?, Pair<String, Boolean>>>()
+            batchIds.toList().chunked(MAX_IN_QUERY_IDS).forEach { ids ->
+                val inClause = ids.joinToString(",") { "?" }
+                sql.query(
+                    "SELECT batch_id,seq,owner_user_message_id,assistant_text,assistant_progress FROM tool_batches " +
+                        "WHERE conversation_id=? AND batch_id IN ($inClause)",
+                    arrayOf<Any?>(conversationId, *ids.toTypedArray()),
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val batchId = c.getString(0)
+                        val seq = c.getLong(1)
+                        val owner = c.getStringOrNullM1b("owner_user_message_id")
+                        val assistantText = c.getString(3)
+                        val assistantProgress = c.getInt(4) != 0
+                        batchHeaders[batchId] = Triple(seq, owner, assistantText to assistantProgress)
+                        rowsRead++
+                        bytesRead += utf8Bytes(batchId) + utf8Bytes(owner) + utf8Bytes(assistantText) + 20L
+                    }
+                }
+            }
+
+            val callsByBatch = linkedMapOf<String, MutableList<Pair<String, Pair<String, String>>>>()
+            batchIds.toList().chunked(MAX_IN_QUERY_IDS).forEach { ids ->
+                val inClause = ids.joinToString(",") { "?" }
+                sql.query(
+                    "SELECT batch_id,call_id,name,lifecycle FROM tool_calls " +
+                        "WHERE conversation_id=? AND batch_id IN ($inClause) ORDER BY batch_id,ordinal",
+                    arrayOf<Any?>(conversationId, *ids.toTypedArray()),
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val batchId = c.getString(0)
+                        val callId = c.getString(1)
+                        val name = c.getString(2)
+                        val lifecycle = c.getString(3)
+                        callsByBatch.getOrPut(batchId) { mutableListOf() }.add(callId to (name to lifecycle))
+                        rowsRead++
+                        bytesRead += utf8Bytes(batchId) + utf8Bytes(callId) + utf8Bytes(name) + utf8Bytes(lifecycle) + 8L
+                    }
+                }
+            }
+
+            val resultCallKeys = linkedSetOf<Pair<String, String>>()
+            batchIds.toList().chunked(MAX_IN_QUERY_IDS).forEach { ids ->
+                val inClause = ids.joinToString(",") { "?" }
+                sql.query(
+                    "SELECT batch_id,call_id,seq,tool_name,lifecycle FROM tool_results " +
+                        "WHERE conversation_id=? AND batch_id IN ($inClause)",
+                    arrayOf<Any?>(conversationId, *ids.toTypedArray()),
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val batchId = c.getString(0)
+                        val callId = c.getString(1)
+                        val key = batchId to callId
+                        resultCallKeys += key
+                        val toolName = c.getString(3)
+                        val lifecycle = c.getString(4)
+                        rowsRead++
+                        bytesRead += utf8Bytes(batchId) + utf8Bytes(callId) + utf8Bytes(toolName) +
+                            utf8Bytes(lifecycle) + 16L
+                    }
+                }
+            }
+
+            // Outputs are read only for result rows on this page and for page-local activity
+            // references whose presentation needs durable output text. Other call results need
+            // only their lightweight presence/lifecycle above to suppress an obsolete pending row.
+            val outputKeys = (resultItemKeys.values + additionalCalls)
+                .filter { it.first.isNotBlank() && it.second.isNotBlank() }
+                .distinct()
+            val results = linkedMapOf<Pair<String, String>, ToolResult>()
+            outputKeys.chunked(MAX_IN_QUERY_IDS / 2).forEach { keys ->
+                val requested = keys.joinToString(",") { "(?,?)" }
+                sql.query(
+                    "WITH requested(batch_id,call_id) AS (VALUES $requested) " +
+                        "SELECT r.batch_id,r.call_id,r.seq,r.tool_name,r.lifecycle,r.output,r.created_at,r.file_artifact_id " +
+                        "FROM tool_results r JOIN requested q ON q.batch_id=r.batch_id AND q.call_id=r.call_id " +
+                        "WHERE r.conversation_id=?",
+                    // The CTE values precede the conversation filter in SQL.
+                    arrayOf<Any?>(*keys.flatMap { listOf(it.first, it.second) }.toTypedArray(), conversationId),
+                ).use { c ->
+                    while (c.moveToNext()) {
+                        val batchId = c.getString(0)
+                        val callId = c.getString(1)
+                        val value = ToolResult(
+                            conversationId, batchId, callId, c.getLong(2), c.getString(3), c.getString(4),
+                            c.getString(5), c.getDouble(6), c.getStringOrNullM1b("file_artifact_id"),
+                        )
+                        results[batchId to callId] = value
+                        rowsRead++
+                        bytesRead += utf8Bytes(batchId) + utf8Bytes(callId) + utf8Bytes(value.tool_name) +
+                            utf8Bytes(value.lifecycle) + utf8Bytes(value.output) + utf8Bytes(value.file_artifact_id) + 32L
+                    }
+                }
+            }
+
+            val batchesById = batchHeaders.mapNotNull { (batchId, header) ->
+                val calls = callsByBatch[batchId].orEmpty().map { (callId, metadata) ->
+                    TimelineModelToolCall(callId, metadata.first, metadata.second, (batchId to callId) in resultCallKeys)
+                }
+                TimelineModelToolBatch(
+                    batchId, header.first, header.second, header.third.first, header.third.second, calls,
+                ).let { batchId to it }
+            }.toMap()
+            val batchesBySeq = pageRows.values.asSequence()
+                .filter { it.kind == "model_tool_calls" }
+                .mapNotNull { row -> batchesById[row.key]?.let { row.seq to it } }
+                .toMap()
+            val resultsBySeq = resultItemKeys.mapNotNull { (seq, key) ->
+                if (key !in results) null else seq to TimelineModelToolResultRow(seq, key.first, key.second, results[key])
+            }.toMap()
+            TimelineModelProjection(batchesBySeq, batchesById, resultsBySeq, resultCallKeys, results, rowsRead, bytesRead)
+        }
+    }
+
+    private fun utf8Bytes(value: String?): Long = value?.toByteArray(StandardCharsets.UTF_8)?.size?.toLong() ?: 0L
 
     /**
      * Resolves a `tool_activity` batch by indexed execution/call history or newest matching call,

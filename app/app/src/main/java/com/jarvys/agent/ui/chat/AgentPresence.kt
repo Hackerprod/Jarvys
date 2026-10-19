@@ -12,24 +12,30 @@ data class AgentPresence(val state: State, val toolName: String? = null) {
         @JvmStatic
         fun from(snapshot: AgentRunUiSnapshot): AgentPresence {
             val events = snapshot.events
+            val summary = snapshot.presenceSummary
             if (snapshot.stopping) return AgentPresence(State.STOPPING)
-            if (events.any { it.kind == "approval" && it.approvalStatus == "PENDING" }
-                || events.any { it.kind == "user_decision" && it.decisionStatus == "PENDING" }) {
+            if (summary?.hasPendingApproval == true || summary?.hasPendingDecision == true
+                || summary == null && (events.any { it.kind == "approval" && it.approvalStatus == "PENDING" }
+                    || events.any { it.kind == "user_decision" && it.decisionStatus == "PENDING" })) {
                 return AgentPresence(State.WAITING_USER)
             }
             if (snapshot.outcome == "FAILED" || snapshot.outcome == "PARTIAL"
-                || events.lastOrNull { it.kind == "assistant" || it.kind == "result" }?.stage == "FAILED") {
+                || (summary?.hasFailedOutput ?: (events.lastOrNull { it.kind == "assistant" || it.kind == "result" }?.stage == "FAILED"))) {
                 return AgentPresence(State.ERROR)
             }
             if (snapshot.running || snapshot.compacting) {
-                val last = events.lastOrNull()
-                if (last?.kind == "tool" && last.stage == "tool_call") {
-                    return AgentPresence(State.WORKING, last.toolDisplayName ?: last.text)
+                val isToolCall = summary?.lastEventIsToolCall ?: events.lastOrNull()?.let {
+                    it.kind == "tool" && it.stage == "tool_call"
+                }
+                if (isToolCall == true) {
+                    val toolName = if (summary != null) summary.currentToolName
+                        else events.lastOrNull()?.let { it.toolDisplayName ?: it.text }
+                    return AgentPresence(State.WORKING, toolName)
                 }
                 return AgentPresence(State.THINKING)
             }
             if (snapshot.outcome in setOf("COMPLETED", "STOPPED")
-                || events.lastOrNull { it.kind == "assistant" || it.kind == "result" }?.stage == "COMPLETED") {
+                || (summary?.hasCompletedOutput ?: (events.lastOrNull { it.kind == "assistant" || it.kind == "result" }?.stage == "COMPLETED"))) {
                 return AgentPresence(State.DONE)
             }
             return AgentPresence(State.IDLE)
