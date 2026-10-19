@@ -400,6 +400,108 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun agentStartedRunFailureAfterToolCheckpointRecoversQueuedUserInput() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        val store = LocalRunStore(context)
+        val sourceMessageId = "agent-provider-failure-${System.nanoTime()}"
+        val agentInputId = chatTestStore.onDatabaseWorker {
+            store.appendConversationInput(ConversationInput(
+                session, sourceMessageId, "Inspect the local project and report.",
+                ConversationInput.Origin.AGENT,
+                ConversationInput.Provenance("worker-session", "workspace-1", "assignment-1", "worker-1",
+                    sourceMessageId, ConversationInput.Kind.RESULT,
+                    ConversationInput.Provenance.PrincipalRole.SUBORDINATE),
+            ))
+        }
+        val service = startManagedService(context)
+        val modelCalls = AtomicInteger()
+        val followUpObserved = CountDownLatch(1)
+        val queuedUser = "Summarize after the provider recovers."
+        val provider = object : ModelProviderClient {
+            override fun complete(systemPrompt: String, userPrompt: String, images: List<com.jarvys.agent.device.ScreenData>,
+                tools: List<ToolSpec>, sessionId: String, token: CancellationToken): ModelReply =
+                throw AssertionError("The production conversation path should call completeConversation")
+
+            override fun completeConversation(systemPrompt: String, history: List<ConversationTurn>, userPrompt: String,
+                images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>, sessionId: String,
+                token: CancellationToken): ModelReply {
+                val call = modelCalls.incrementAndGet()
+                assertTrue("the initial execution is owned by the stored AGENT input",
+                    history.any { it.incomingMetadata?.origin == ConversationInput.Origin.AGENT })
+                if (call == 1) {
+                    assertTrue("the real runtime exposes a read-only workspace tool", tools.any { it.name == "ls" })
+                    return ModelReply("I will inspect the project files.",
+                        listOf(ModelReply.Call("agent-failure-list", "ls", emptyMap())))
+                }
+                if (call == 2) {
+                    assertTrue("the tool result was checkpointed before the provider failure",
+                        history.any { it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "ls" })
+                    assertTrue("the owner message is admitted while the AGENT turn is active",
+                        AgentForegroundService.interruptAndSend(context, session, queuedUser,
+                            arrayListOf(), false))
+                    // Avoid exercising CoreAgentLoop's intentional 5xx retry/backoff here; this
+                    // completed provider error is recoverable only at the next durable input.
+                    throw CodexResponseException(CodexResponseException.Kind.ERROR)
+                }
+                followUpObserved.countDown()
+                assertEquals("the queued human request owns the recovery turn", queuedUser,
+                    history.last { it.role == "user" && it.incomingMetadata == null }.content)
+                return ModelReply("Recovered and summarized the task.", emptyList())
+            }
+        }
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled).also {
+                it.setModelProviderForTesting(provider)
+            }
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, agentInputId))
+            val followUpArrived = awaitServiceCallback(followUpObserved, 30)
+            val events = chatTestStore.onDatabaseWorker { store.readConversationTimeline(session) }
+                .joinToString(" | ") { event -> "${event.kind}:${event.stage}:${event.text.take(120)}:${event.detail?.take(160)}" }
+            assertTrue("the admitted user request gets a normal follow-up after provider failure; " +
+                "calls=${modelCalls.get()} active=${AgentForegroundService.hasActiveRun(session)} rows=" +
+                chatTestStore.onDatabaseWorker { store.readConversationMessages(session)
+                    .map { row -> "${row.optString("role")}:${row.optString("status")}:${row.optString("inputState")}:${row.optString("content")}" } } +
+                " events=[$events]",
+                followUpArrived)
+            assertTrue(awaitRunFinished(service, context))
+
+            assertEquals(3, modelCalls.get())
+            val messages = chatTestStore.onDatabaseWorker { store.readConversationMessages(session) }
+            val failedAgentRun = messages.filter {
+                it.optString("role") == "assistant" && it.optString("status") == "PARTIAL"
+                    && it.optString("userMessageId") == agentInputId
+            }
+            assertEquals("one visible failure bubble belongs to the original AGENT input", 1, failedAgentRun.size)
+            val userRow = messages.single { it.optString("role") == "user" && it.optString("content") == queuedUser }
+            val followUp = messages.filter {
+                it.optString("role") == "assistant" && it.optString("userMessageId") == userRow.optString("messageId")
+            }
+            assertEquals(1, followUp.size)
+            assertEquals("Recovered and summarized the task.", followUp.single().optString("content"))
+            assertEquals("incorporated", chatTestStore.onDatabaseWorker {
+                store.readConversationInputState(session, agentInputId)
+            })
+            assertTrue(chatTestStore.onDatabaseWorker {
+                store.incorporatedConversationMessageIds(session).contains(userRow.optString("messageId"))
+            })
+            assertEquals(userRow.optString("messageId"), chatTestStore.onDatabaseWorker {
+                store.latestUserMessageId(session)
+            })
+            val visible = chatTestStore.onDatabaseWorker { store.readConversationTimeline(session) }
+                .filter { com.jarvys.agent.ui.chat.ConversationVisibility.visible(it) }
+            assertFalse(visible.any { it.conversationInputOrigin == ConversationInput.Origin.AGENT })
+            assertTrue(visible.any { it.kind == "assistant" && it.text == "Recovered and summarized the task." })
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
     @Test fun transcriptIncorporatedSteeringIsNotReplayedAfterPartialCompletion() =
         assertIncorporatedSteeringIsNotReplayed("partial")
 

@@ -748,6 +748,13 @@ public final class LocalRunStore {
         return new ConversationInput(sessionId, messageId, message.getText(), origin, provenance);
     }
 
+    /** Indexed lookup used to suppress a retry of an already accepted source message. */
+    public JSONObject readConversationMessageByStableId(String sessionId, String stableId) {
+        if (sessionId == null || stableId == null || chatDatabaseBridge == null) return null;
+        StoredMessage message = chatDatabaseBridge.readMessageByStableIdSync(sessionId, stableId);
+        return message == null ? null : messageJson(message);
+    }
+
     public String readConversationInputState(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || chatDatabaseBridge == null) return null;
         StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
@@ -1591,6 +1598,14 @@ public final class LocalRunStore {
             if ("user".equals(messages.get(index).optString("role"))) return index;
         }
         return -1;
+    }
+
+    /** Returns the persisted model-order index for the exact message, regardless of input role. */
+    public long conversationMessageIndex(String sessionId, String messageId) {
+        if (sessionId == null || sessionId.isEmpty() || messageId == null || messageId.isEmpty()) return -1L;
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+        return message == null ? -1L : message.getMessageIndex();
     }
 
     public String latestUserMessageId(String sessionId) {

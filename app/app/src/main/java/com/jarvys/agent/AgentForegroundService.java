@@ -18,6 +18,7 @@ import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.device.SwipeDirection;
 import com.jarvys.agent.skills.SkillEntry;
 import com.jarvys.agent.skills.SkillRepository;
+import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -814,14 +815,17 @@ public final class AgentForegroundService extends Service {
     }
   }
 
-  /** Schedules each durable AGENT/SYSTEM input through the ordinary stored-message run path. */
+  /** Schedules Central AGENT inputs through the ordinary stored-message run path. */
   private void enqueuePendingInternalConversationInputs(String onlySessionId) {
     if (worker.isShutdown()) return;
+    if (onlySessionId != null && !WorkspaceIdentity.CENTRAL_SESSION.equals(onlySessionId)) return;
     try {
       LocalRunStore store = new LocalRunStore(this);
       List<String> sessions = onlySessionId == null
           ? store.listConversationsWithPendingAgentInputs() : java.util.Collections.singletonList(onlySessionId);
       for (String sessionId : sessions) {
+        // Worker execution sessions are resumed by CrewManager after checkpoint reconciliation.
+        if (!WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)) continue;
         // One ordered entry owns a fresh turn. That run's durable-input provider drains any
         // later rows in sequence; after a crash, the next scan starts the first still-pending ID.
         org.json.JSONObject row = store.readPendingInternalConversationInputs(sessionId).stream()

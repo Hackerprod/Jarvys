@@ -211,20 +211,34 @@ public class CrewCoordinationCaptureTest {
             } finally { release.countDown(); }
         }
     }
-    @Test(timeout=15000) public void legacyBlockingQuestionStillAcceptsOrdinaryChiefAnswer() throws Exception {
-        AtomicReference<CrewManager> owner = new AtomicReference<>();
-        AtomicReference<List<CrewMessage>> result = new AtomicReference<>();
-        CountDownLatch waiting = new CountDownLatch(1), release = new CountDownLatch(1), answered = new CountDownLatch(1);
-        try (CrewManager manager = manager((history,prompt,tools,token) -> {
-            CrewManager current = owner.get(); waiting.countDown();
-            result.set(current.askChief(current.bots().get(0),"Legacy question",token));
-            answered.countDown(); awaitWorker(release,token); return reply();
-        })) {
-            owner.set(manager); CrewManager.Bot bot = spawn(manager);
+    @Test(timeout=15000) public void legacyBlockingQuestionIgnoresOrdinaryChiefAnswerUntilCancelled() throws Exception {
+        try (Parked parked = new Parked()) {
+            AtomicReference<Boolean> result = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            CountDownLatch answered = new CountDownLatch(1);
+            Thread waiter = thread(() -> {
+                try { result.set(parked.manager.askChief(parked.bot, "Legacy question", parked.bot.token)); }
+                catch (Throwable problem) { failure.set(problem); }
+                finally { answered.countDown(); }
+            });
             try {
-                await(waiting); manager.send("chief",bot.id,CrewMessage.Type.ANSWER,"ordinary answer",Collections.emptyList());
-                await(answered); assertEquals(1,result.get().size()); assertNull(result.get().get(0).coordination);
-            } finally { release.countDown(); }
+                parked.manager.messageBus().await("chief", message -> parked.bot.id.equals(message.from)
+                        && message.type == CrewMessage.Type.QUESTION, () -> false, parked.bot.token);
+                CrewMessage question = parked.manager.messageBus().pending("chief").stream()
+                        .filter(message -> parked.bot.id.equals(message.from) && message.type == CrewMessage.Type.QUESTION)
+                        .findFirst().orElseThrow(AssertionError::new);
+                assertEquals("Legacy question", question.text);
+                parked.manager.send("chief", parked.bot.id, CrewMessage.Type.ANSWER,
+                        "ordinary uncorrelated answer", Collections.emptyList());
+                assertFalse("an uncorrelated chief ANSWER cannot finish ask_chief",
+                        answered.await(100, TimeUnit.MILLISECONDS));
+                assertTrue(parked.manager.stop(parked.bot.id));
+                await(answered);
+                assertTrue(failure.get() instanceof java.util.concurrent.CancellationException);
+                assertNull(result.get());
+                waiter.join(5000);
+                assertFalse("ask_chief waiter should stop after cancellation", waiter.isAlive());
+            } finally { parked.release.countDown(); }
         }
     }
     @Test(timeout=15000) public void restoredAndFinishedSourcesNeverCreateLiveReplyCapabilities() throws Exception {
@@ -251,40 +265,48 @@ public class CrewCoordinationCaptureTest {
             assertThrows(IllegalStateException.class, () -> answer(restored, source, "reopen", () -> true));
         }
     }
-    @Test(timeout=15000) public void blockingQuestionIgnoresUnrelatedOldAnswerAndAcceptsOnlyOwnCausalReply() throws Exception {
-        AtomicReference<CrewManager> owner = new AtomicReference<>();
-        AtomicReference<CrewCoordinationEvidence> evidence = new AtomicReference<>();
-        AtomicReference<List<CrewMessage>> result = new AtomicReference<>();
-        CountDownLatch produced = new CountDownLatch(1), release = new CountDownLatch(1), answered = new CountDownLatch(1);
-        try (CrewManager manager = manager((history,prompt,tools,token) -> {
-            CrewManager current = owner.get();
-            result.set(current.askChief(current.bots().get(0), "Which option?", token));
-            answered.countDown(); awaitWorker(release,token); return reply();
-        })) {
-            owner.set(manager);
-            manager.configureCoordinationEvidenceListener(source -> {
+    @Test(timeout=15000) public void blockingQuestionIgnoresUnrelatedChiefAndPeerMessagesUntilExactReply() throws Exception {
+        try (Parked parked = new Parked()) {
+            AtomicReference<CrewCoordinationEvidence> evidence = new AtomicReference<>();
+            AtomicReference<Boolean> result = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            CountDownLatch produced = new CountDownLatch(1), answered = new CountDownLatch(1);
+            parked.manager.configureCoordinationEvidenceListener(source -> {
                 evidence.set(source);
-                manager.send("chief",source.botId,CrewMessage.Type.ANSWER,"old unrelated answer",Collections.emptyList());
+                parked.manager.send("chief", source.botId, CrewMessage.Type.ANSWER,
+                        "old unrelated answer", Collections.emptyList());
                 produced.countDown();
             });
-            CrewManager.Bot bot = spawn(manager);
+            Thread waiter = thread(() -> {
+                try { result.set(parked.manager.askChief(parked.bot, "Which option?", parked.bot.token)); }
+                catch (Throwable problem) { failure.set(problem); }
+                finally { answered.countDown(); }
+            });
+            CrewManager.Bot peer = spawn(parked.manager);
             try {
                 await(produced);
                 // Observe published activation instead of interpreting a notification as activation.
-                awaitReplyable(manager,evidence.get());
-                assertFalse(answered.await(100,TimeUnit.MILLISECONDS));
-                CrewMessage answer = answer(manager,evidence.get(),"exact-answer",() -> true);
+                awaitReplyable(parked.manager, evidence.get());
+                parked.manager.send(peer.id, parked.bot.id, CrewMessage.Type.ANSWER,
+                        "another worker's unrelated message", Collections.emptyList());
+                assertFalse(answered.await(100, TimeUnit.MILLISECONDS));
+                CrewMessage answer = answer(parked.manager, evidence.get(), "exact-answer", () -> true);
                 await(answered);
-                assertEquals(1,result.get().size()); assertEquals(answer.id,result.get().get(0).id);
-                assertFalse(manager.canReplyToCoordination(evidence.get()));
-                assertTrue(manager.messageBus().pending(bot.id).stream().anyMatch(m -> "old unrelated answer".equals(m.text)));
-            } finally { release.countDown(); }
+                if (failure.get() != null) throw new AssertionError(failure.get());
+                assertEquals(Boolean.TRUE, result.get());
+                assertTrue(answer.coordination.matches(evidence.get()));
+                assertFalse(parked.manager.canReplyToCoordination(evidence.get()));
+                assertTrue(parked.manager.messageBus().pending(parked.bot.id).stream()
+                        .anyMatch(message -> "old unrelated answer".equals(message.text)));
+                assertTrue(parked.manager.messageBus().pending(parked.bot.id).stream()
+                        .anyMatch(message -> "another worker's unrelated message".equals(message.text)));
+            } finally { parked.release.countDown(); waiter.join(5000); }
         }
     }
     @Test(timeout=15000) public void userGuidanceEndsBlockingRequestAndLateAnswerCannotReturnIt() throws Exception {
         AtomicReference<CrewManager> owner = new AtomicReference<>();
         AtomicReference<CrewCoordinationEvidence> evidence = new AtomicReference<>();
-        AtomicReference<List<CrewMessage>> result = new AtomicReference<>();
+        AtomicReference<Boolean> result = new AtomicReference<>();
         CountDownLatch produced = new CountDownLatch(1), release = new CountDownLatch(1), answered = new CountDownLatch(1);
         try (CrewManager manager = manager((history,prompt,tools,token) -> {
             CrewManager current = owner.get(); result.set(current.askChief(current.bots().get(0),"Question",token));
@@ -295,7 +317,7 @@ public class CrewCoordinationCaptureTest {
             try {
                 await(produced); awaitReplyable(manager,evidence.get());
                 manager.sendUserMessage(bot.id,"New user instruction"); await(answered);
-                assertTrue(result.get().isEmpty()); assertFalse(manager.canReplyToCoordination(evidence.get()));
+                assertEquals(Boolean.FALSE, result.get()); assertFalse(manager.canReplyToCoordination(evidence.get()));
                 assertThrows(IllegalStateException.class, () -> answer(manager,evidence.get(),"late",() -> true));
             } finally { release.countDown(); }
         }

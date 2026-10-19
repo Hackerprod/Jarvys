@@ -79,6 +79,7 @@ fun WorkspaceListScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                WorkspaceCoordinationIndicator(workspace.coordination)
             }
         }
         if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {

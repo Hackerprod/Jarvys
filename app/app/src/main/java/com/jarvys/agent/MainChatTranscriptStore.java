@@ -84,7 +84,8 @@ final class MainChatTranscriptStore {
             for (ModelReply.Call call : turn.toolCalls) callIds.add(call.id);
         String userMessageId = turnOwnerId == null || turnOwnerId.isEmpty()
                 ? store.latestUserMessageId(sessionId) : turnOwnerId;
-        int messageIndex = store.latestUserMessageIndex(sessionId);
+        long messageIndex = turnOwnerId == null || turnOwnerId.isEmpty()
+                ? store.latestUserMessageIndex(sessionId) : store.conversationMessageIndex(sessionId, turnOwnerId);
         loop.setCheckpointListener(checkpoint -> {
             try {
                 List<JSONObject> checkpointRows = new ArrayList<>();

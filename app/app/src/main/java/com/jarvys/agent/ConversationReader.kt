@@ -197,6 +197,9 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     suspend fun readMessage(conversationId: String, messageId: String): StoredMessage? =
         readProjection { conversations.getMessage(conversationId, messageId) }
 
+    suspend fun readMessageByStableId(conversationId: String, stableId: String): StoredMessage? =
+        readProjection { conversations.getMessageByStableId(conversationId, stableId) }
+
     suspend fun readMessageAttachments(conversationId: String, messageId: String): List<ChatAttachment> =
         readProjection { conversations.getMessage(conversationId, messageId)?.attachments.orEmpty().map(::toChatAttachment) }
 
@@ -249,8 +252,21 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             .filter { it.item.item_kind == "assistant_translation" }
             .map { it.item.item_key }
             .toList()
-        val translationTargets = if (translationMessageIds.isEmpty()) emptyMap() else
-            conversations.getMessagesByIds(conversationId, translationMessageIds).associateBy { it.messageId }
+        val messagesByIdInWindow = messages.associateBy { it.messageId }
+        val assistantOwnerIdsOutsideWindow = messages.asSequence()
+            .filter { it.role == "assistant" }
+            .mapNotNull { it.ownerUserMessageId?.takeIf(String::isNotBlank) }
+            .filterNot(messagesByIdInWindow::containsKey)
+            .distinct()
+            .toList()
+        val relatedMessageIds = (translationMessageIds + assistantOwnerIdsOutsideWindow).distinct()
+        val relatedMessages = if (relatedMessageIds.isEmpty()) emptyList() else
+            conversations.getMessagesByIds(conversationId, relatedMessageIds)
+        val translationMessageIdSet = translationMessageIds.toSet()
+        val translationTargets = relatedMessages.asSequence()
+            .filter { it.messageId in translationMessageIdSet }
+            .associateBy { it.messageId }
+        val assistantOwnersById = (messages + relatedMessages).associateBy { it.messageId }
         val messagesById = (messages + translationTargets.values).associateBy { it.messageId }
         val reactions = sideTables.reactions
         val ordinaryChat = sideTables.ordinaryChat
@@ -333,8 +349,15 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             if (message != null) {
                 val role = message.role
                 if (role == "assistant" && message.hiddenKind in HIDDEN_ASSISTANT_KINDS) continue
-                if (role != "user" && role != "assistant") continue
                 val timestamp = (message.createdAtSeconds * 1_000.0).toLong()
+                val inputOrigin = conversationInputOrigin(message)
+                if (inputOrigin != null) {
+                    events += AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
+                        .copyMetadata(message.messageId, 0L)
+                        .copy(conversationInputOrigin = inputOrigin)
+                    continue
+                }
+                if (role != "user" && role != "assistant") continue
                 val threadKey = message.proactiveThreadKey.orEmpty()
                 val proactive = message.proactiveDecisionId != null
                 if (role == "user") {
@@ -362,7 +385,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                         AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
                             .copyMetadata(message.messageId, duration)
                             .copyStage(stage)
-                            .copyCanRegenerate(canRegenerateAssistant(conversationId, message))
+                            .copyCanRegenerate(canRegenerateAssistant(message, assistantOwnersById))
                     }
                 }
                 continue
@@ -568,6 +591,24 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
 
     private fun isInvalidated(owner: String, seq: Long, invalidations: Map<String, Long>): Boolean =
         invalidations[owner]?.let { seq < it } == true
+
+    /** Internal message roles are fail-closed; the typed tag carries the canonical input origin. */
+    private fun conversationInputOrigin(message: StoredMessage): ConversationInput.Origin? {
+        val roleOrigin = when (message.role) {
+            "agent" -> ConversationInput.Origin.AGENT
+            "system" -> ConversationInput.Origin.SYSTEM
+            else -> return null
+        }
+        val taggedOrigin = message.parts.asSequence()
+            .filter { it.kind == ConversationInput.PROVENANCE_PART_KIND }
+            .mapNotNull { part ->
+                runCatching {
+                    ConversationInput.parseOrigin(JSONObject(part.payload).optString("origin", ""))
+                }.getOrNull()
+            }
+            .firstOrNull()
+        return taggedOrigin?.takeIf { it == roleOrigin } ?: roleOrigin
+    }
 
     private fun readTimelineToolActivities(conversationId: String): List<StoredToolActivity> = database.chatSql.query(
         "SELECT * FROM tool_activities WHERE conversation_id=? ORDER BY seq",
@@ -985,9 +1026,12 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         return ConversationTurn.internalInput(message.text, index, metadata, message.messageId)
     }
 
-    private suspend fun canRegenerateAssistant(conversationId: String, message: StoredMessage): Boolean {
+    private fun canRegenerateAssistant(
+        message: StoredMessage,
+        assistantOwnersById: Map<String, StoredMessage>,
+    ): Boolean {
         val ownerId = message.ownerUserMessageId
-        return ownerId.isNullOrBlank() || conversations.getMessage(conversationId, ownerId)?.role == "user"
+        return ownerId.isNullOrBlank() || assistantOwnersById[ownerId]?.role == "user"
     }
 
     private fun isAssistantRunStatus(status: String?): Boolean = when (status.orEmpty().trim().uppercase()) {

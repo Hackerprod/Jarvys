@@ -74,6 +74,14 @@ class CentralWorkspaceToolTest {
                 "expectedSha256" to expectedSha256, "key" to key, "text" to text,
                 "expectedAssignmentRevision" to expectedAssignmentRevision,
                 "requestId" to requestId, "originalUserRequest" to originalUserRequest), admission, token)
+        override fun message(workspaceId: String, assignmentId: String, botId: String,
+                             expectedAssignmentRevision: Long, key: String, text: String,
+                             correlationMessageId: String?, requestId: String, originalUserRequest: String,
+                             token: CancellationToken, admission: Runnable) =
+            invoke("message", mapOf("workspaceId" to workspaceId, "assignmentId" to assignmentId,
+                "botId" to botId, "expectedAssignmentRevision" to expectedAssignmentRevision,
+                "key" to key, "text" to text, "correlationMessageId" to correlationMessageId,
+                "requestId" to requestId, "originalUserRequest" to originalUserRequest), admission, token)
         override fun results(workspaceId: String, limit: Int, afterResultId: String?, admission: Runnable) =
             invoke("results", mapOf("workspaceId" to workspaceId, "limit" to limit, "afterResultId" to afterResultId), admission)
         override fun readResult(workspaceId: String, resultId: String, expectedSha256: String, offset: Int,
@@ -125,7 +133,14 @@ class CentralWorkspaceToolTest {
         val backend = Backend()
         val tool = tool(backend)
         val token = CancellationToken.cancellable()
-        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult)) {
+        val coordinationId = "workspace-coordination-${"d".repeat(64)}"
+        val message = mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+            "bot_id" to "bot-123", "expected_assignment_revision" to 4L, "key" to "message-stable",
+            "text" to "Continue the exact assigned task.", "correlation_message_id" to coordinationId)
+        for (arguments in listOf(create, list, delegate, read, deliver, inspect, results, readResult,
+            mapOf("action" to "inbox", "workspace_id" to workspace),
+            mapOf("action" to "read_message", "workspace_id" to workspace, "message_id" to coordinationId,
+                "expected_sha256" to sha), message)) {
             val result = tool.execute(arguments, token)
             assertTrue(result.content, result.success)
             val output = JSONObject(result.content)
@@ -133,7 +148,8 @@ class CentralWorkspaceToolTest {
             assertEquals(CentralWorkspaceTool.INTERPRETATION, output.getString("interpretation"))
             assertEquals("recorded", output.getJSONObject("data").getString("status"))
         }
-        assertEquals(listOf("create", "list", "delegate", "read", "deliver", "inspect_file", "results", "read_result"), backend.calls.map { it.action })
+        assertEquals(listOf("create", "list", "delegate", "read", "deliver", "inspect_file", "results", "read_result",
+            "inbox", "read_message", "message"), backend.calls.map { it.action })
         assertEquals(20, backend.calls[1].values["limit"])
         assertEquals(20, backend.calls[3].values["limit"])
         assertEquals("standard", backend.calls[2].values["missionAccess"])
@@ -158,15 +174,23 @@ class CentralWorkspaceToolTest {
             mapOf("action" to "reply", "workspace_id" to workspace, "message_id" to coordinationId,
                 "expected_sha256" to sha, "key" to "reply-stable", "text" to "The requested APK is ready.",
                 "expected_assignment_revision" to 4L),
+            mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+                "bot_id" to "bot-123", "expected_assignment_revision" to 4L, "key" to "message-stable",
+                "text" to "Continue the exact assigned task.", "correlation_message_id" to coordinationId),
         )
         actions.forEach { arguments ->
             val result = runtime.execute(arguments, token)
             assertTrue(result.content, result.success)
         }
 
-        assertEquals(listOf("deliver", "delegate", "reply"), backend.calls.map { it.action })
+        assertEquals(listOf("deliver", "delegate", "reply", "message"), backend.calls.map { it.action })
         assertEquals(userText, backend.calls[1].values["originalUserRequest"])
         assertEquals(userText, backend.calls[2].values["originalUserRequest"])
+        assertEquals(userText, backend.calls[3].values["originalUserRequest"])
+        assertEquals(assignment, backend.calls[3].values["assignmentId"])
+        assertEquals("bot-123", backend.calls[3].values["botId"])
+        assertEquals(4L, backend.calls[3].values["expectedAssignmentRevision"])
+        assertEquals(coordinationId, backend.calls[3].values["correlationMessageId"])
         val emptyProvenance = tool(Backend(), originalRequest = "")
         actions.forEach { arguments ->
             assertFalse("Mutation without the originating user request must fail: $arguments",
@@ -224,7 +248,7 @@ class CentralWorkspaceToolTest {
         assertFalse(schema.getBoolean("additionalProperties"))
         val properties = schema.getJSONObject("properties")
         val actions = properties.getJSONObject("action").getJSONArray("enum")
-        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply"), (0 until actions.length()).map { actions.getString(it) })
+        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message"), (0 until actions.length()).map { actions.getString(it) })
         for (field in listOf("pause", "resume", "correct", "control", "user_text", "origin", "session_id",
             "request_id", "requestId", "original_user_request", "originalUserRequest", "admission", "token",
             "destination", "destination_session_id", "source_session_id", "project_id")) {
@@ -261,6 +285,18 @@ class CentralWorkspaceToolTest {
             delegate + ("mission_access" to true), delegate + ("name" to 12),
             read - "workspace_id", read + ("key" to "wrong-action"), list + ("workspace_id" to workspace),
             list + ("after_assignment_id" to assignment), read + ("after_workspace_id" to workspace),
+            mapOf("action" to "message", "workspace_id" to workspace, "bot_id" to "bot-123",
+                "expected_assignment_revision" to 4L, "key" to "message-stable", "text" to "Continue."),
+            mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+                "expected_assignment_revision" to 4L, "key" to "message-stable", "text" to "Continue."),
+            mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+                "bot_id" to "bot-123", "key" to "message-stable", "text" to "Continue."),
+            mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+                "bot_id" to "bot-123", "expected_assignment_revision" to 4L, "key" to "message-stable",
+                "text" to "Continue.", "from" to "user"),
+            mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
+                "bot_id" to "bot-123", "expected_assignment_revision" to 4L, "key" to "message-stable",
+                "text" to "Continue.", "correlation_message_id" to "not-a-reference"),
         )
         assertFalse(tool.execute(null, CancellationToken.uncancellable()).success)
         invalid.forEach { assertFalse(it.toString(), tool.execute(it, CancellationToken.uncancellable()).success) }

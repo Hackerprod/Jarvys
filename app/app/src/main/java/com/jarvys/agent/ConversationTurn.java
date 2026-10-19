@@ -73,6 +73,13 @@ public final class ConversationTurn {
       references.add("workspaceId=" + provenance.workspaceId);
       references.add("assignmentId=" + provenance.assignmentId);
       references.add("botId=" + provenance.botId);
+      references.add("correlationMessageId=" + provenance.correlationMessageId);
+      references.add("referenceId=" + provenance.referenceId);
+      references.add("contentSha256=" + provenance.contentSha256);
+      references.add("assignmentRevision=" + provenance.assignmentRevision);
+      references.add("requestId=" + provenance.requestId);
+      references.add("missionId=" + provenance.missionId);
+      references.add("cycleId=" + provenance.cycleId);
       return new IncomingMetadata(ConversationInput.Origin.AGENT, provenance.messageId, "agent",
           provenance.botId, provenance.kind.name(), references, true, provenance);
     }
@@ -84,15 +91,24 @@ public final class ConversationTurn {
           .append("\" source=\"")
           .append(xml(source)).append("\" sender=\"").append(xml(sender))
           .append("\" type=\"").append(xml(type)).append("\" id=\"")
-          .append(xml(id)).append("\" trust=\"").append(untrusted ? "untrusted" : "user")
+          .append(xml(id)).append("\" trust=\"")
+          .append(origin == ConversationInput.Origin.AGENT || untrusted ? "untrusted" : "user")
           .append("\" adapter=\"").append(xml(adapter)).append("\">\n");
       if (provenance != null) {
         value.append("<provenance sessionId=\"").append(xml(provenance.sessionId))
+            .append("\" principalRole=\"").append(xml(provenance.principalRole.name()))
             .append("\" workspaceId=\"").append(xml(provenance.workspaceId))
             .append("\" assignmentId=\"").append(xml(provenance.assignmentId))
             .append("\" botId=\"").append(xml(provenance.botId))
             .append("\" messageId=\"").append(xml(provenance.messageId))
-            .append("\" kind=\"").append(xml(provenance.kind.name())).append("\"/>\n");
+            .append("\" kind=\"").append(xml(provenance.kind.name()))
+            .append("\" correlationMessageId=\"").append(xml(provenance.correlationMessageId))
+            .append("\" referenceId=\"").append(xml(provenance.referenceId))
+            .append("\" contentSha256=\"").append(xml(provenance.contentSha256))
+            .append("\" assignmentRevision=\"").append(provenance.assignmentRevision)
+            .append("\" requestId=\"").append(xml(provenance.requestId))
+            .append("\" missionId=\"").append(xml(provenance.missionId))
+            .append("\" cycleId=\"").append(xml(provenance.cycleId)).append("\"/>\n");
       }
       for (String reference : references) value.append("<reference>").append(xml(reference))
           .append("</reference>\n");
@@ -161,7 +177,7 @@ public final class ConversationTurn {
     if (incomingMetadata != null &&
         ((incomingMetadata.origin == ConversationInput.Origin.USER && !"user".equals(role)) ||
          (incomingMetadata.origin != ConversationInput.Origin.USER && !"assistant".equals(role))))
-      throw new IllegalArgumentException("Incoming provenance must use a provider-compatible role for its origin");
+      throw new IllegalArgumentException("Incoming provenance must use its internal transcript role");
     this.role = role;
     this.content = content == null ? "" : content;
     this.kind = Kind.MESSAGE;
@@ -380,7 +396,7 @@ public final class ConversationTurn {
     return new ConversationTurn(role, content, originalMessageIndex, null, 0, attachments);
   }
 
-  /** Provider-valid assistant-role representation of an internal, explicitly attributed input. */
+  /** Internal assistant-role transcript entry for an explicitly attributed, non-user input. */
   public static ConversationTurn internalInput(String content, int originalMessageIndex,
       IncomingMetadata provenance, String durableMessageId) {
     if (provenance == null || provenance.origin == ConversationInput.Origin.USER)
@@ -405,8 +421,15 @@ public final class ConversationTurn {
 
   /** Provider-specific representation keeps original content and explicit source/trust delimiters. */
   public String renderedModelContent(String adapter) {
-    return incomingMetadata == null || !incomingMetadata.untrusted
+    return incomingMetadata == null
+            || (!incomingMetadata.untrusted && incomingMetadata.origin != ConversationInput.Origin.AGENT)
         ? modelContent : incomingMetadata.render(modelContent, adapter);
+  }
+
+  /** Provider-facing role for message turns; internal AGENT input is always untrusted user content. */
+  public String providerMessageRole() {
+    return incomingMetadata != null && incomingMetadata.origin == ConversationInput.Origin.AGENT
+        ? "user" : role;
   }
 
   static boolean hasCurrentUserMessage(List<ConversationTurn> history) {

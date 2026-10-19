@@ -502,6 +502,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun readMessageSync(conversationId: String, messageId: String): StoredMessage? =
         execute { it.reader.readMessage(conversationId, messageId) }
 
+    fun readMessageByStableIdSync(conversationId: String, stableId: String): StoredMessage? =
+        execute { it.reader.readMessageByStableId(conversationId, stableId) }
+
     fun readConversationMessageSync(conversationId: String, messageId: String): String? =
         execute { it.reader.readConversationMessage(conversationId, messageId) }
 

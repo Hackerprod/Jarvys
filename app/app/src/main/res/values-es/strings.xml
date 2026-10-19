@@ -448,6 +448,8 @@
     <string name="crew_type_answer">Respuesta</string>
     <string name="crew_type_result">Resultado</string>
     <string name="crew_type_status">Estado</string>
+    <string name="crew_type_progress">Progreso</string>
+    <string name="crew_type_message">Mensaje</string>
     <string name="crew_type_user">Tú</string>
     <string name="crew_empty_title">Aún no hay misiones de Crew</string>
     <string name="crew_empty_body">Elige Auto o Siempre y pide a Jarvys coordinar una tarea.</string>
@@ -1497,6 +1499,11 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
         <item quantity="one">%1$d intento de respuesta tiene resultado incierto. No reenviar automáticamente.</item>
         <item quantity="many">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
         <item quantity="other">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
+    </plurals>
+    <plurals name="workspace_coordination_pending">
+        <item quantity="one">%1$d entrada de coordinación espera confirmación.</item>
+        <item quantity="many">%1$d entradas de coordinación esperan confirmación.</item>
+        <item quantity="other">%1$d entradas de coordinación esperan confirmación.</item>
     </plurals>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d solicitud histórica o sustituida. Reabrir no reanuda el trabajo.</item>

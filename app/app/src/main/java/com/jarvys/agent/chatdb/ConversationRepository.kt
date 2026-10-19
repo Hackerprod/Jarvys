@@ -1000,6 +1000,18 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     /** Reads `role=user`/`role=assistant` rows and normalized children, replacing `LocalRunStore.java:readConversationMessage`, `LocalRunStore.java:readConversationMessages`, `LocalRunStore.java:readConversationAttachments`, and `LocalRunStore.java:appendAssistantTranslation` projections. */
     suspend fun getMessage(conversationId: String, messageId: String): StoredMessage? = getMessagesByIds(conversationId, listOf(messageId)).firstOrNull()
 
+    /** Indexed idempotency lookup for source-derived internal input identities. */
+    suspend fun getMessageByStableId(conversationId: String, stableId: String): StoredMessage? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            if (stableId.isBlank()) return@withChatReadTransaction null
+            val id = sql.query(
+                "SELECT message_id FROM messages WHERE conversation_id=? AND stable_id=? LIMIT 1",
+                arrayOf(conversationId, stableId),
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?: return@withChatReadTransaction null
+            hydrateMessages(conversationId, listOf(id)).singleOrNull()
+        } }
+
     /**
      * Hydrates requested `role=user`/`role=assistant` identities in caller order. Body parts,
      * attachments, translations, and proactive replies are fetched in one UNION query, replacing

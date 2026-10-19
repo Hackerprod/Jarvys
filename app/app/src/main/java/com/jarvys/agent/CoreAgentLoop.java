@@ -234,7 +234,9 @@ public final class CoreAgentLoop {
                     ? com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION : message.conversationId;
             ConversationInput.Provenance provenance = binding == null ? null : new ConversationInput.Provenance(
                     sourceSession, binding.workspaceId, binding.assignmentId, binding.botId,
-                    message.id, kindFor(message.type));
+                    message.id, kindFor(message.type), binding.sourceKind == CrewInputBinding.SourceKind.WORKSPACE_REPLY
+                        ? ConversationInput.Provenance.PrincipalRole.SUPERVISOR
+                        : ConversationInput.Provenance.PrincipalRole.PEER);
             return new IncomingMessage(message.id, message.from, message.text, user, binding,
                     message.type.name(), message.refs, "crew",
                     user ? ConversationInput.Origin.USER : ConversationInput.Origin.AGENT, provenance);
@@ -1235,14 +1237,7 @@ public final class CoreAgentLoop {
         String rawContent = result.content;
         RuntimeException invalidCompletedIds = null;
         List<String> completedIds = Collections.emptyList();
-        if (result.success && result.incomingBatch != null) {
-            if (!result.incomingBatch.matches(item.call.name, rawContent))
-                throw new IllegalStateException("Tool result does not match its exact incoming batch");
-            for (String id : result.incomingBatch.messageIds) {
-                if (appliedIncomingIds.add(id)) recordIncorporation(result.incomingBatch.bindings.get(id),
-                        CrewInputIncorporation.TransportKind.ASK_CHIEF, rawContent);
-            }
-        } else if (turnContextProvider != null && result.success) {
+        if (turnContextProvider != null && result.success) {
             List<String> reportedIds = turnContextProvider.completedToolIncomingIds(item.call.name);
             if (reportedIds != null) {
                 completedIds = reportedIds;

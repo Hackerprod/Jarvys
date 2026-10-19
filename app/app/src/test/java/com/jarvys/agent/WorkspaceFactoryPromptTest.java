@@ -48,6 +48,8 @@ public class WorkspaceFactoryPromptTest {
     assertTrue(central.contains("results/read_result"));
     assertTrue(central.contains("inbox/read_message"));
     assertTrue(central.contains("reply only to an eligible live request"));
+    assertTrue(central.contains("use workspaces action=message"));
+    assertTrue(central.contains("do not read the inbox first"));
     assertFalse(central.contains("There is no automatic background delivery"));
     String ordinary = runtime.instructions(new CoreToolRegistry(Collections.emptyList()), true);
     assertFalse(ordinary.contains("Local metadata notices do not launch model turns"));

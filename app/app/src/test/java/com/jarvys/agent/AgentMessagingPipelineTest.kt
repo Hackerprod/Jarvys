@@ -8,8 +8,6 @@ import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionAccess
 import com.jarvys.agent.crew.CrewCoordinationEvidence
-import com.jarvys.agent.crew.CrewBoard
-import com.jarvys.agent.crew.CrewTools
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewRole
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
@@ -17,9 +15,12 @@ import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.device.ScreenData
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
+import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
+import com.jarvys.agent.ui.chat.ConversationVisibility
 import com.jarvys.agent.coding.ProjectScopeStore
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -44,7 +45,12 @@ class AgentMessagingPipelineTest {
     private var controller: org.robolectric.android.controller.ServiceController<AgentForegroundService>? = null
     private var startId = 0
     private var previousSecretStore: Any? = null
+    private var secretStoreInstalled = false
     private val managers = mutableListOf<CrewManager>()
+
+    @Before fun installTestSecrets() {
+        installSecretStore()
+    }
 
     @After fun cleanup() {
         managers.forEach { runCatching { it.close() } }
@@ -87,8 +93,16 @@ class AgentMessagingPipelineTest {
         })
         val store = LocalRunStore(context)
         val timeline = chatTestStore.onDatabaseWorker { store.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION) }
-        assertFalse(timeline.any { it.text.contains("APK built") || it.conversationInputOrigin == ConversationInput.Origin.AGENT })
-        assertTrue(timeline.any { it.kind == "assistant" && it.text == "Jarvys processed the result" })
+        val deliveredTimelineEvent = timeline.single {
+            it.conversationInputOrigin == ConversationInput.Origin.AGENT &&
+                it.messageId == input.durableMessageId
+        }
+        assertTrue(deliveredTimelineEvent.text.contains("APK built"))
+        val mainProjection = ConversationVisibility.project(timeline)
+        val workspaceProjection = WorkspaceTimelineProjection.project(worker.scope.workspaceId, timeline)
+        assertFalse(mainProjection.any { it.messageId == deliveredTimelineEvent.messageId })
+        assertFalse(workspaceProjection.any { it.messageId == deliveredTimelineEvent.messageId })
+        assertTrue(mainProjection.any { it.kind == "assistant" && it.text == "Jarvys processed the result" })
         assertEquals("", chatTestStore.onDatabaseWorker { store.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) })
         assertEquals("RESULT", input.incomingMetadata.type)
     }
@@ -127,8 +141,6 @@ class AgentMessagingPipelineTest {
         val question = "Should I use the primary source for this comparison?"
         val workerCalls = AtomicInteger()
         val centralHistory = AtomicReference<List<ConversationTurn>>()
-        val workerRoot = java.nio.file.Files.createTempDirectory("agent-ask-chief").toFile()
-        val board = CrewBoard(WorkspaceStore(workerRoot, "0123456789abcdef01234567"))
         val service = startManagedService()
         installProvider(service, ProviderDouble { history, _ ->
             centralHistory.set(history.toList())
@@ -136,7 +148,6 @@ class AgentMessagingPipelineTest {
         })
         val worker = createBoundWorker(
             requestedTools = listOf("ask_chief"),
-            botToolFactory = { bot, manager -> CoreToolRegistry(CrewTools.bot(bot, manager, board)) },
             configureBeforeStart = { manager ->
                 manager.configureCoordinationEvidenceListener(object : CrewManager.CoordinationEvidenceListener {
                     override fun onCoordinationEvidence(evidence: CrewCoordinationEvidence) {
@@ -217,20 +228,23 @@ class AgentMessagingPipelineTest {
         assertTrue(stored.any { it.optString("role") == "assistant" && it.optString("content") == "The blocker is addressed" })
     }
 
-    @Test fun stoppedCentralRunDoesNotDiscardResultArrivingOneSecondLater() {
+    @Test fun resultArrivingWhileStoppedCentralRunIsStillInFlightStartsAfterStopCleanup() {
         val userId = chatTestStore.onDatabaseWorker {
             LocalRunStore(context).appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "user", "Build the app")
         }
         val centralEntered = CountDownLatch(1)
+        val releaseStoppedProvider = CountDownLatch(1)
+        val centralCalls = Collections.synchronizedList(mutableListOf<List<ConversationTurn>>())
         val firstCall = AtomicInteger()
-        val deliveredHistory = AtomicReference<List<ConversationTurn>>()
         val centralProvider = ProviderDouble { history, token ->
+            centralCalls += history.toList()
             if (firstCall.incrementAndGet() == 1) {
                 centralEntered.countDown()
-                awaitRelease(CountDownLatch(1), token)
+                // Hold the real service/loop inside its provider call after STOP interrupts it.
+                // This makes the worker result race the still-running generation's cleanup.
+                awaitReleaseIgnoringInterrupt(releaseStoppedProvider)
             }
-            deliveredHistory.set(history.toList())
-            ModelReply("The worker result survived STOP", emptyList())
+            ModelReply("The worker result survived the STOP race", emptyList())
         }
         val service = startManagedService()
         installProvider(service, centralProvider)
@@ -247,23 +261,30 @@ class AgentMessagingPipelineTest {
         assertTrue(workerEntered.await(10, TimeUnit.SECONDS))
         AgentForegroundService.stopRun(WorkspaceIdentity.CENTRAL_SESSION)
         service.awaitStopTasksForTesting().get(10, TimeUnit.SECONDS)
-        assertTrue(awaitServiceFinished(service, WorkspaceIdentity.CENTRAL_SESSION, 10))
-        Thread.sleep(1_000L)
+        assertFalse("the stopped run remains physically in flight", service
+            .awaitSessionIdleForTesting(WorkspaceIdentity.CENTRAL_SESSION).isDone)
 
-        worker.manager.reportDone(worker.bot, "The APK task completed after the user stopped the active run.", emptyList())
+        worker.manager.reportDone(worker.bot, "The APK result arrived during STOP cleanup.", emptyList())
         deliverStartedServices()
+        val pendingId = awaitPendingAgentInput(WorkspaceIdentity.CENTRAL_SESSION)
+        assertEquals(null, chatTestStore.onDatabaseWorker {
+            LocalRunStore(context).readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION, pendingId)
+        })
+        releaseStoppedProvider.countDown()
         assertTrue(awaitServiceFinished(service, WorkspaceIdentity.CENTRAL_SESSION, 15))
 
-        val input = deliveredHistory.get().single { it.incomingMetadata?.origin == ConversationInput.Origin.AGENT }
-        assertTrue(input.content.contains("completed after the user stopped"))
+        assertTrue("the post-STOP turn received the worker input", centralCalls.any { history ->
+            history.any { it.incomingMetadata?.origin == ConversationInput.Origin.AGENT &&
+                it.content.contains("arrived during STOP cleanup") }
+        })
         val rows = chatTestStore.onDatabaseWorker {
             LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
         }
-        assertTrue(rows.any { it.optString("role") == "assistant" && it.optString("content") == "The worker result survived STOP" })
+        assertTrue(rows.any { it.optString("role") == "assistant" && it.optString("content") == "The worker result survived the STOP race" })
         assertEquals("the internal result does not replace the latest human input", userId,
             chatTestStore.onDatabaseWorker { LocalRunStore(context).latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) })
         assertEquals("incorporated", chatTestStore.onDatabaseWorker {
-            LocalRunStore(context).readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION, input.durableMessageId)
+            LocalRunStore(context).readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION, pendingId)
         })
     }
 
@@ -271,16 +292,16 @@ class AgentMessagingPipelineTest {
         val firstEntered = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val calls = Collections.synchronizedList(mutableListOf<List<ConversationTurn>>())
-        val manager = newManager("worker-inbound-${UUID.randomUUID()}") { history, token ->
+        val worker = createBoundWorker(onModel = { history, token ->
             calls += history.toList()
             when (calls.size) {
                 1 -> { firstEntered.countDown(); awaitRelease(releaseFirst, token); ModelReply("first step", emptyList()) }
                 2 -> ModelReply("worker finished first cycle", emptyList())
                 else -> ModelReply("worker finished correction", emptyList())
             }
-        }
-        managers += manager
-        val bot = manager.spawn("custom", "Inspect the project", emptyList(), "Worker")
+        })
+        val manager = worker.manager
+        val bot = worker.bot
         assertTrue(firstEntered.await(10, TimeUnit.SECONDS))
         val activeInput = manager.send("chief", bot.id, CrewMessage.Type.ANSWER, "Use the new manifest path.", emptyList())
         releaseFirst.countDown()
@@ -305,16 +326,16 @@ class AgentMessagingPipelineTest {
         val centralRoute = Collections.synchronizedList(mutableListOf<CrewMessage>())
         val workersEnteredModel = CountDownLatch(2)
         val releaseWorkers = CountDownLatch(1)
-        val manager = newManager("peer-route-${UUID.randomUUID()}") { history, _ ->
+        val worker = createBoundWorker(centralDelivery = false, onModel = { history, _ ->
             calls += history.toList()
             workersEnteredModel.countDown()
             awaitRelease(releaseWorkers, CancellationToken.uncancellable())
             ModelReply("Worker step complete", emptyList())
-        }
-        managers += manager
+        })
+        val manager = worker.manager
         manager.configureConversationMessageListener { _, message -> centralRoute += message }
         val sender = manager.spawn("custom", "Inspect the source", emptyList(), "Sender")
-        val recipient = manager.spawn("custom", "Inspect the tests", emptyList(), "Recipient")
+        val recipient = worker.bot
         assertTrue(workersEnteredModel.await(10, TimeUnit.SECONDS))
 
         val peerMessage = manager.send(sender.id, recipient.id, CrewMessage.Type.ANSWER,
@@ -344,11 +365,13 @@ class AgentMessagingPipelineTest {
         assertEquals("assistant", task.role)
         assertEquals(ConversationInput.Origin.AGENT, task.incomingMetadata.origin)
         assertTrue(task.incomingMetadata.untrusted)
+        assertEquals(ConversationInput.Provenance.PrincipalRole.SUPERVISOR,
+            task.incomingMetadata.provenance.principalRole)
         assertEquals("Inspect the current project and report the result.", task.content)
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, task.incomingMetadata.provenance.sessionId)
         assertEquals(worker.scope.workspaceId, task.incomingMetadata.provenance.workspaceId)
         assertEquals(worker.assignment.assignmentId, task.incomingMetadata.provenance.assignmentId)
-        assertEquals("", task.incomingMetadata.provenance.botId)
+        assertEquals(worker.bot.id, task.incomingMetadata.provenance.botId)
         assertEquals(task.durableMessageId, task.incomingMetadata.provenance.messageId)
         assertFalse(observed.get().any { it.role == "user" && it.content == task.content })
         val stored = chatTestStore.onDatabaseWorker {
@@ -655,10 +678,14 @@ class AgentMessagingPipelineTest {
             { _, ids -> WorkspaceConversationInputStore.acknowledge(context, scope.executionSessionId, ids) },
         )
         val bot = firstManager.spawnForMissionDeferred(prepared.missionId, "Owner request", role.id, mission,
-            emptyList(), "Restartable", CrewMissionAccess.STANDARD, null, prepared.assignmentId)
+            emptyList(), "Restartable", CrewMissionAccess.STANDARD, null, started)
         registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
         firstManager.startPreparedForMission(bot)
-        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        val workerThread = CrewManager.Bot::class.java.getDeclaredField("thread").apply { isAccessible = true }
+            .get(bot) as? Thread
+        assertTrue("worker did not enter after explicit workspace start: status=${bot.status()} error=${bot.error()} " +
+            "thread=${workerThread?.name}:${workerThread?.state} stack=${workerThread?.stackTrace?.take(30)}",
+            entered.await(10, TimeUnit.SECONDS))
         val input = firstManager.send("chief", bot.id, CrewMessage.Type.ANSWER,
             "Resume from the updated manifest entry.", emptyList())
         firstManager.stopExact(bot.id, bot.token)
@@ -670,6 +697,24 @@ class AgentMessagingPipelineTest {
         assertTrue(pendingStored.optString("inputState").isEmpty())
         val priorMissions = firstManager.missionSnapshots()
         firstManager.close()
+
+        val service = startManagedService()
+        repeat(3) {
+            service.runPendingInputRecoverySafely(null)
+            service.awaitSessionIdleForTesting(scope.executionSessionId).get(10, TimeUnit.SECONDS)
+        }
+        val workerRowsAfterServiceRecovery = chatTestStore.onDatabaseWorker {
+            LocalRunStore(context).readConversationMessages(scope.executionSessionId)
+        }
+        assertTrue("service recovery must not create FAILED assistant rows in a worker session",
+            workerRowsAfterServiceRecovery.none {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+            })
+        val workerInputAfterServiceRecovery = workerRowsAfterServiceRecovery.single {
+            it.optString("role") == "agent" && it.optString("messageId") == pendingStored.getString("messageId")
+        }
+        assertTrue("worker input stays pending until Crew resumes the checkpoint",
+            workerInputAfterServiceRecovery.optString("inputState").isEmpty())
 
         val resumedCalls = Collections.synchronizedList(mutableListOf<List<ConversationTurn>>())
         val secondManager = restartableManager(scope.executionSessionId, role) { history, _ ->
@@ -714,7 +759,6 @@ class AgentMessagingPipelineTest {
         checkpointSupport: Boolean = false,
         centralDelivery: Boolean = true,
         requestedTools: List<String> = emptyList(),
-        botToolFactory: (CrewManager.Bot, CrewManager) -> CoreToolRegistry = { _, _ -> CoreToolRegistry(emptyList()) },
         configureBeforeStart: (CrewManager) -> Unit = {},
     ): BoundWorker {
         val registry = WorkspaceRegistry(context)
@@ -722,7 +766,7 @@ class AgentMessagingPipelineTest {
         val scope = registry.createWorkspace("message-$key", "Message pipeline test")
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success)
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
-        val manager = newManager(scope.executionSessionId, botToolFactory, onModel)
+        val manager = newManager(scope.executionSessionId, onModel)
         managers += manager
         val requestId = "request-$key"
         val mission = "Inspect the current project and report the result."
@@ -753,7 +797,7 @@ class AgentMessagingPipelineTest {
         }
         configureBeforeStart(manager)
         val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "custom", mission,
-            requestedTools, "Worker", CrewMissionAccess.STANDARD, null, prepared.assignmentId)
+            requestedTools, "Worker", CrewMissionAccess.STANDARD, null, started)
         val bound = registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
         manager.startPreparedForMission(bot)
         registry.close()
@@ -761,20 +805,11 @@ class AgentMessagingPipelineTest {
     }
 
     private fun newManager(sessionId: String,
-        botToolFactory: (CrewManager.Bot, CrewManager) -> CoreToolRegistry = { _, _ -> CoreToolRegistry(emptyList()) },
         onModel: (List<ConversationTurn>, CancellationToken) -> ModelReply): CrewManager {
-        val empty = CoreToolRegistry(emptyList())
         val provider = ProviderDouble(onModel)
-        return CrewManager(sessionId, empty, { bot, manager -> botToolFactory(bot, manager) }, { _, tools, incoming ->
-            val model = object : CoreAgentLoop.Model {
-                override fun complete(transcript: List<ConversationTurn>, prompt: String,
-                    declarations: List<ToolSpec>, token: CancellationToken): ModelReply =
-                    provider.completeConversation("Worker instructions", transcript, prompt,
-                        emptyList(), declarations, sessionId, token)
-            }
-            CoreAgentLoop(model, tools, "Worker instructions", sessionId, CorePromptBudget.standard(), null,
-                CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
-        }, null)
+        return CoreAgentRuntime(context, sessionId, emptyList(), CorePromptBudget.standard(), true)
+            .also { it.setModelProviderForTesting(provider) }
+            .configureCrewManagerForTesting()
     }
 
     private fun restartableManager(sessionId: String, role: CrewRole,
@@ -806,6 +841,31 @@ class AgentMessagingPipelineTest {
             Thread.currentThread().interrupt()
             token.throwIfCancelled()
             throw IllegalStateException("Unexpected test provider interruption", interrupted)
+        }
+    }
+
+    private fun awaitReleaseIgnoringInterrupt(release: CountDownLatch) {
+        var interrupted = false
+        try {
+            while (release.count > 0) try {
+                release.await()
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun awaitPendingAgentInput(sessionId: String): String {
+        val store = LocalRunStore(context)
+        awaitCondition(10) {
+            chatTestStore.onDatabaseWorker {
+                store.readPendingInternalConversationInputs(sessionId).isNotEmpty()
+            }
+        }
+        return chatTestStore.onDatabaseWorker {
+            store.readPendingInternalConversationInputs(sessionId).first().getString("messageId")
         }
     }
 
@@ -884,14 +944,18 @@ class AgentMessagingPipelineTest {
             .get(service) as ExecutorService
 
     private fun installSecretStore() {
+        if (secretStoreInstalled) return
         val field = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
         previousSecretStore = field.get(null)
         field.set(null, SecretStore(context.getSharedPreferences("agent-messaging-test-secrets", Context.MODE_PRIVATE)))
+        secretStoreInstalled = true
     }
 
     private fun restoreSecretStore() {
-        val previous = previousSecretStore ?: return
-        SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }.set(null, previous)
+        if (!secretStoreInstalled) return
+        SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
+            .set(null, previousSecretStore)
         previousSecretStore = null
+        secretStoreInstalled = false
     }
 }

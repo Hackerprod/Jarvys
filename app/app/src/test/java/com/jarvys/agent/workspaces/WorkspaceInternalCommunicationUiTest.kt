@@ -27,16 +27,27 @@ class WorkspaceInternalCommunicationUiTest {
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
-    @Test fun workspaceListDoesNotProjectCoordinationDeliveryOrAcknowledgementState() {
+    @Test fun workspaceListShowsCoordinationCountsWithoutMessageBodiesOrPayloads() {
+        val body = "PRIVATE worker message body"
+        val inboxPayload = "PRIVATE inbox JSON payload"
+        val replyPayload = "PRIVATE reply payload"
         compose.setContent { MaterialTheme {
             WorkspaceListScreen(listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
-                statusPageLimited = true)), onOpenWorkspace = {})
+                statusPageLimited = true,
+                coordination = WorkspaceCoordinationSummary(pendingInputs = 2, uncertainReplies = 1,
+                    pageLimited = true))), onOpenWorkspace = {})
         } }
 
         compose.onNodeWithTag("workspace-list-row-space").assertIsDisplayed()
-        compose.onAllNodesWithText("Live coordination", substring = true).assertCountEquals(0)
-        compose.onAllNodesWithText("Reply uncertain", substring = true).assertCountEquals(0)
-        compose.onAllNodesWithText("First coordination page", substring = true).assertCountEquals(0)
+        compose.onNodeWithText(compose.activity.resources.getQuantityString(
+            com.jarvys.agent.R.plurals.workspace_coordination_pending, 2, 2)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.resources.getQuantityString(
+            com.jarvys.agent.R.plurals.workspace_coordination_uncertain, 1, 1)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(com.jarvys.agent.R.string.workspace_coordination_page_scope))
+            .assertIsDisplayed()
+        listOf(body, inboxPayload, replyPayload).forEach { payload ->
+            compose.onAllNodesWithText(payload, useUnmergedTree = true).assertCountEquals(0)
+        }
     }
 
     @Test fun workspaceChatHidesAgentMessagesAndKeepsTheOwnerMessageVisible() {

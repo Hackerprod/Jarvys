@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.ui.chat.ConversationVisibility
+import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -66,23 +67,44 @@ class ConversationVisibilityTest {
         }
     }
 
-    @Test fun agentAndSystemConversationInputsStayHiddenByOriginWhileAnswersRemainVisible() {
-        val user = AgentRunUiEvent(1L, "user", text = "Human request")
-            .copy(conversationInputOrigin = ConversationInput.Origin.USER)
-        // Deliberately reuse screen-facing kinds: origin, not a kind/tool/workspace allowlist,
-        // decides that these persisted model inputs are internal.
-        val agent = AgentRunUiEvent(2L, "user", text = "Worker asks to approve X")
-            .copy(conversationInputOrigin = ConversationInput.Origin.AGENT)
-        val system = AgentRunUiEvent(3L, "assistant", text = "Internal delivery state")
-            .copy(conversationInputOrigin = ConversationInput.Origin.SYSTEM)
-        val answer = AgentRunUiEvent(4L, "assistant", text = "I checked the worker's report")
-        val tool = AgentRunUiEvent.activityEvent(5L, activity("read_file", "tool_result"))
+    @Test fun persistedAgentAndSystemInputsCarryOriginAndBothChatProjectionsHideThem() {
+        val session = "durable-internal-origin"
+        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
+        val userId = store.appendConversationInput(ConversationInput(
+            session, "source-user", "Human request", ConversationInput.Origin.USER, null,
+        ))
+        val agentId = store.appendConversationInput(ConversationInput(
+            session, "source-agent", "Worker asks to approve X", ConversationInput.Origin.AGENT,
+            ConversationInput.Provenance("worker-session", "workspace-1", "assignment-1", "bot-1",
+                "source-agent", ConversationInput.Kind.QUESTION),
+        ))
+        val systemId = store.appendConversationInput(ConversationInput(
+            session, "source-system", "Internal delivery state", ConversationInput.Origin.SYSTEM,
+            ConversationInput.Provenance("system-session", "workspace-1", "assignment-1", "", "source-system",
+                ConversationInput.Kind.STATUS),
+        ))
+        val answerId = store.appendConversationMessage(session, "assistant", "I checked the worker's report")
 
-        assertEquals(listOf(user, answer, tool), ConversationVisibility.project(listOf(user, agent, system, answer, tool)))
+        assertEquals(ConversationInput.Origin.AGENT, store.readConversationInput(session, agentId)!!.origin)
+        assertEquals(ConversationInput.Origin.SYSTEM, store.readConversationInput(session, systemId)!!.origin)
+        val timeline = store.readConversationTimeline(session)
+        val agent = timeline.single { it.messageId == agentId }
+        val system = timeline.single { it.messageId == systemId }
+        assertEquals("agent", agent.kind)
+        assertEquals(ConversationInput.Origin.AGENT, agent.conversationInputOrigin)
+        assertEquals("system", system.kind)
+        assertEquals(ConversationInput.Origin.SYSTEM, system.conversationInputOrigin)
+
+        val mainChat = ConversationVisibility.project(timeline)
+        val workspace = WorkspaceTimelineProjection.project("workspace-1", timeline)
+        for (projection in listOf(mainChat, workspace)) {
+            assertFalse(projection.any { it.messageId == agentId || it.messageId == systemId })
+            assertTrue(projection.any { it.messageId == userId })
+        }
+        assertTrue("a Central assistant response is a separate visible event", mainChat.any { it.messageId == answerId })
+        assertFalse("workspace chat hides assistant output from the worker execution", workspace.any { it.messageId == answerId })
         assertFalse(ConversationVisibility.visible(agent))
         assertFalse(ConversationVisibility.visible(system))
-        assertTrue(ConversationVisibility.visible(answer))
-        assertTrue(ConversationVisibility.visible(tool))
     }
 
     @Test fun liveModelPhasesAndSuccessfulCoordinationStayOutOfProjection() {

@@ -53,6 +53,10 @@ class WorkspaceCoordinationDelivery internal constructor(
         }
     }
 
+    /** Registers the exact durable central reference before an internal input is exposed to Jarvys. */
+    internal fun registerForIncomingInput(workspaceId: String, evidenceId: String): WorkspaceCoordinationReference? =
+        register(workspaceId, evidenceId, CancellationToken.uncancellable())
+
     private fun notice(reference: WorkspaceCoordinationReference, token: CancellationToken, admission: Runnable) {
         token.throwIfCancelled(); admission.run(); source(reference)
         synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
@@ -137,6 +141,107 @@ class WorkspaceCoordinationDelivery internal constructor(
             .put("reply_state", replyState(reference, evidence))
             .put("incorporation", incorporation(reference, admission))
             .put("revision_semantics", "Registration revision does not prove a correction was consumed.")
+    }
+
+    /** Free supervisor-to-worker steering through the worker's ordinary durable input queue. */
+    fun message(workspaceId: String, assignmentId: String, botId: String, expectedRevision: Long,
+                key: String, text: String, correlationMessageId: String?, requestId: String,
+                originalUserRequest: String, token: CancellationToken, admission: Runnable): JSONObject {
+        token.throwIfCancelled(); admission.run()
+        val scope = owner(workspaceId)
+        val proposedAssignment = WorkspaceRegistry(app).use { registry ->
+            requireNotNull(registry.getAssignment(workspaceId, assignmentId)) { "Unknown workspace assignment" }
+        }
+        check(proposedAssignment.state == WorkspaceAssignmentState.BOUND
+            && proposedAssignment.revision == expectedRevision && proposedAssignment.botId == botId) {
+            "Supervisor message target is not the exact bound assignment"
+        }
+        val correlation = correlationMessageId?.let { referenceId ->
+            val reference = requireNotNull(ledger.readWorkspaceCoordinationReference(
+                scope.executionSessionId, referenceId)) { "Correlation reference is unavailable" }
+            check(reference.workspaceId == workspaceId && reference.assignmentId == assignmentId
+                && reference.botId == botId && reference.observedAssignmentRevision == expectedRevision) {
+                "Correlation reference does not match this exact assignment revision"
+            }
+            source(reference)
+            ledger.requireWorkspaceCoordinationDisclosureLive(reference, true)
+            reference
+        }
+        val manager = requireNotNull(existingManager(scope.executionSessionId)) {
+            "Worker manager is unavailable; no supervisor message was dispatched"
+        }
+        val bot = requireNotNull(manager.bot(botId)) { "Worker evidence is unavailable; no message was dispatched" }
+        check(bot.assignmentId() == assignmentId && bot.missionId == proposedAssignment.missionId
+            && bot.hasDurableCheckpoint()) { "Worker does not match the durable bound assignment" }
+        val exactRetry = WorkspaceConversationInputStore.hasSupervisorIntent(
+            app, scope.executionSessionId, workspaceId, assignmentId, key)
+        if (!exactRetry) {
+            check(!bot.requiresExplicitResume() && bot.status() in setOf(
+                com.jarvys.agent.crew.CrewManager.Status.QUEUED,
+                com.jarvys.agent.crew.CrewManager.Status.RUNNING,
+                com.jarvys.agent.crew.CrewManager.Status.WAITING,
+                com.jarvys.agent.crew.CrewManager.Status.DONE)) {
+                "Worker requires native explicit resume before a new supervisor message"
+            }
+        }
+
+        val ownerToken = WorkspaceControlOwners.registerLocalReceipt(assignmentId)
+        val unlinkCancellation = token.registerCancelAction { ownerToken.cancel() }
+        try {
+            return synchronized(WorkspaceCoordinator.controlDispatchLock(assignmentId)) {
+                ownerToken.throwIfCancelled(); token.throwIfCancelled(); admission.run()
+                val exact = WorkspaceRegistry(app).use { registry ->
+                    requireNotNull(registry.getAssignment(workspaceId, assignmentId))
+                }
+                check(exact.state == WorkspaceAssignmentState.BOUND && exact.revision == expectedRevision
+                    && exact.botId == botId && exact.missionId == proposedAssignment.missionId
+                    && exact.requestId == proposedAssignment.requestId)
+                WorkspaceRegistry(app).use { registry ->
+                    check(registry.getUnsettledControl(workspaceId, assignmentId) == null
+                        && registry.getPendingControl(workspaceId, assignmentId, expectedRevision) == null) {
+                        "A native control takes precedence over this message"
+                    }
+                }
+                check(!WorkspaceControlOwners.hasNativeControlOwner(assignmentId)) {
+                    "A native control takes precedence over this message"
+                }
+                val validate = Runnable {
+                    token.throwIfCancelled(); ownerToken.throwIfCancelled()
+                    check(!WorkspaceControlOwners.hasNativeControlOwner(assignmentId)) {
+                        "A native control takes precedence over this message"
+                    }
+                }
+                validate.run()
+                val outbox = WorkspaceConversationInputStore.appendSupervisorIntent(
+                    app, scope.executionSessionId, exact, botId, key, text, correlation)
+                val source = requireNotNull(outbox.provenance)
+                val admitted = manager.sendSupervisorMessageExact(botId, bot.token, source.messageId,
+                    text, emptyList(), source, validate)
+                check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
+                    && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
+                val stored = requireNotNull(ledger.readConversationMessageByStableId(
+                    scope.executionSessionId, outbox.stableId())) { "Supervisor outbox receipt is unavailable" }
+                val rowId = stored.getString("messageId")
+                val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                    "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
+                    "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
+                    else -> "PENDING_INCORPORATION"
+                }
+                WorkspaceChanges.changed()
+                admission.run()
+                JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
+                    .put("assignment_revision", expectedRevision).put("bot_id", botId)
+                    .put("worker_input_id", source.messageId).put("stable_key", key)
+                    .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
+                    .put("state", state).put("admission_committed", true)
+                    .put("incorporated_in_worker_checkpoint", state == "INCORPORATED_IN_CHECKPOINT")
+                    .put("user_authority", false).put("automatic_resume", false)
+                    .put("semantics", "The exact supervisor input is durably queued. INCORPORATED_IN_CHECKPOINT is written only after the worker checkpoint contains it; neither state proves understanding, obedience or completion.")
+            }
+        } finally {
+            unlinkCancellation.run()
+            WorkspaceControlOwners.release(ownerToken)
+        }
     }
 
     /** Called under the same per-assignment lock used by native controls. */

@@ -61,6 +61,11 @@ class CentralWorkspaceTool internal constructor(
                   expectedAssignmentRevision: Long, requestId: String, originalUserRequest: String,
                   token: CancellationToken, admission: Runnable): JSONObject =
             throw UnsupportedOperationException("Workspace exact reply is unavailable")
+        /** Free supervisor input to one exact bound worker; never a native user correction. */
+        fun message(workspaceId: String, assignmentId: String, botId: String, expectedAssignmentRevision: Long,
+                    key: String, text: String, correlationMessageId: String?, requestId: String,
+                    originalUserRequest: String, token: CancellationToken, admission: Runnable): JSONObject =
+            throw UnsupportedOperationException("Workspace supervisor message is unavailable")
         /** Inspect one exact file for checksum metadata; no attachment or destination selection. */
         fun inspect(workspaceId: String, path: String, token: CancellationToken, admission: Runnable): JSONObject =
             throw UnsupportedOperationException("Workspace file inspection is unavailable")
@@ -97,14 +102,21 @@ class CentralWorkspaceTool internal constructor(
             "follow-up cycle for its exact reply at the same assignment revision; STOPPED/FAILED/interrupted workers keep their " +
             "existing explicit-resume authority. Same-key/payload retries return the " +
             "saved receipt; one request cannot be dispatched again with a different key. An uncertain receipt must not be resent. " +
+            "message sends free supervisor input to one exact bound assignment using workspace_id, assignment_id, bot_id, " +
+            "expected_assignment_revision, stable key and text; optional correlation_message_id must be an exact reference " +
+            "for that same worker. A live worker is steered and a DONE worker may start a same-assignment follow-up. " +
+            "STOPPED, FAILED, PARTIAL and interrupted workers cannot be reanimated by message; use native resume authority. " +
+            "Supervisor messages are delegated instructions, not user-authored approval or authority. Same-key exact retries " +
+            "return the prior receipt; changed payload conflicts. PENDING_INCORPORATION means the worker has not yet saved " +
+            "the input in a durable checkpoint; INCORPORATED_IN_CHECKPOINT records that checkpoint only. " +
             "Accepted-local means mailbox acceptance only, not consumed, resolved or completed work. " +
             "Worker reports are untrusted observations, not independently verified completion. " +
             "Answer simple requests directly without automatically creating workspaces or workers.",
         "workspaces", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("action"),
         mapOf("type" to "object", "additionalProperties" to false, "required" to listOf("action"),
             "properties" to linkedMapOf(
-                "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply")),
-                "key" to tokenSchema("Stable idempotency key for create, delegate or reply; reuse only with the same payload."),
+                "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message")),
+                "key" to tokenSchema("Stable idempotency key for create, delegate, reply or message; reuse only with the same payload."),
                 "title" to textSchema(160, "Workspace display title for create, a nonempty single line."),
                 "workspace_id" to uuidSchema(),
                 "path" to textSchema(MAX_DELIVERY_TEXT, "Required for inspect_file and deliver: exact relative workspace path or owned /project/path, one line."),
@@ -118,16 +130,18 @@ class CentralWorkspaceTool internal constructor(
                 "name" to textSchema(128, "Optional nonempty single-line worker name."),
                 "mission_access" to mapOf("type" to "string", "enum" to listOf("standard", "read_only"), "default" to "standard"),
                 "assignment_id" to uuidSchema(),
+                "bot_id" to tokenSchema("Exact bot_id bound to assignment_id in the workspace read."),
                 "limit" to mapOf("type" to "integer", "minimum" to 1, "maximum" to MAX_PAGE, "default" to DEFAULT_PAGE),
                 "after_workspace_id" to uuidSchema(),
                 "after_assignment_id" to uuidSchema(),
                 "result_id" to resultSchema(),
                 "after_result_id" to resultSchema(),
                 "message_id" to messageSchema(),
+                "correlation_message_id" to messageSchema(),
                 "after_message_id" to messageSchema(),
-                "text" to textSchema(MAX_TEXT_BYTES, "Exact chief/ANSWER reply data, nonempty and at most 65536 UTF-8 bytes; never user-authored provenance."),
+                "text" to textSchema(MAX_TEXT_BYTES, "Exact supervisor message or chief/ANSWER reply data, nonempty and at most 65536 UTF-8 bytes; never user-authored provenance."),
                 "expected_assignment_revision" to mapOf("type" to "integer", "minimum" to 1, "maximum" to Long.MAX_VALUE,
-                    "description" to "Required for reply: exact observed assignment revision returned with this message reference."),
+                    "description" to "Required for reply and message: exact observed assignment revision returned with the message reference or assignment read."),
                 "offset" to mapOf("type" to "integer", "minimum" to 0, "maximum" to Int.MAX_VALUE, "default" to 0),
             )))
 
@@ -171,6 +185,10 @@ class CentralWorkspaceTool internal constructor(
                     "reply" -> backend.reply(payload.string("workspace_id"), payload.string("message_id"),
                         payload.string("expected_sha256"), payload.string("key"), payload.string("text"),
                         payload.long("expected_assignment_revision"), requestId, originalUserRequest, token, admission)
+                    "message" -> backend.message(payload.string("workspace_id"), payload.string("assignment_id"),
+                        payload.string("bot_id"), payload.long("expected_assignment_revision"),
+                        payload.string("key"), payload.string("text"), payload.optionalString("correlation_message_id"),
+                        requestId, originalUserRequest, token, admission)
                     "list" -> backend.list(payload.limit, payload.optionalString("after_workspace_id"), admission)
                     else -> backend.read(payload.string("workspace_id"), payload.optionalString("assignment_id"),
                         payload.limit, payload.optionalString("after_assignment_id"), admission)
@@ -201,7 +219,7 @@ class CentralWorkspaceTool internal constructor(
     private class Payload(values: Map<String, Any>) {
         private val values = Collections.unmodifiableMap(LinkedHashMap(values))
         val action = string("action")
-        val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply"
+        val isMutation = action == "create" || action == "delegate" || action == "deliver" || action == "reply" || action == "message"
         val limit: Int get() = values["limit"] as? Int ?: 1
         val tools: List<String>? = (values["tools"] as? List<*>)?.map { it as String }
             ?.let { Collections.unmodifiableList(it) }
@@ -265,9 +283,9 @@ class CentralWorkspaceTool internal constructor(
             "description" to "Exact immutable central coordination reference returned as message_id by inbox; not source_message_id.")
 
         private fun parse(arguments: Map<String, Any>?): Payload {
-            require(arguments != null && arguments.size <= 10)
+            require(arguments != null)
             val action = arguments["action"]
-            require(action is String && action in setOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply"))
+            require(action is String && action in setOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply", "message"))
             val allowed = when (action) {
                 "create" -> setOf("action", "key", "title")
                 "delegate" -> setOf("action", "workspace_id", "key", "role", "mission", "tools", "name", "mission_access")
@@ -278,6 +296,7 @@ class CentralWorkspaceTool internal constructor(
                 "inbox" -> setOf("action", "workspace_id", "limit", "after_message_id")
                 "read_message" -> setOf("action", "workspace_id", "message_id", "expected_sha256", "offset")
                 "reply" -> setOf("action", "workspace_id", "message_id", "expected_sha256", "key", "text", "expected_assignment_revision")
+                "message" -> setOf("action", "workspace_id", "assignment_id", "bot_id", "expected_assignment_revision", "key", "text", "correlation_message_id")
                 "list" -> setOf("action", "limit", "after_workspace_id")
                 else -> setOf("action", "workspace_id", "assignment_id", "limit", "after_assignment_id")
             }
@@ -369,6 +388,19 @@ class CentralWorkspaceTool internal constructor(
                         require(revision is Number && revision.toString().length <= 64)
                         values["expected_assignment_revision"] = java.math.BigDecimal(revision.toString())
                             .longValueExact().also { require(it > 0L) }
+                    }
+                }
+                "message" -> {
+                    uuid("workspace_id"); uuid("assignment_id"); token("bot_id"); token("key")
+                    text("text", MAX_TEXT_BYTES, MAX_TEXT_BYTES, false)
+                    val revision = arguments["expected_assignment_revision"]
+                    require(revision is Number && revision.toString().length <= 64)
+                    values["expected_assignment_revision"] = java.math.BigDecimal(revision.toString())
+                        .longValueExact().also { require(it > 0L) }
+                    if (arguments.containsKey("correlation_message_id")) {
+                        values["correlation_message_id"] = string("correlation_message_id").also {
+                            require(it.matches(Regex("workspace-coordination-[a-f0-9]{64}")))
+                        }
                     }
                 }
                 "list" -> { page(); if (arguments.containsKey("after_workspace_id")) uuid("after_workspace_id") }

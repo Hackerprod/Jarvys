@@ -98,6 +98,7 @@ fun WorkspaceDetailScreen(
                 onOpenCrewMission = onOpenCrewMission,
                 runSnapshot = timelineSnapshot,
                 assistantReplyCapabilities = AssistantReplyCapabilities.Workspace,
+                showAssistantProgress = true,
                 allowMessageEntrance = sessionSnapshot != null,
             )
         }

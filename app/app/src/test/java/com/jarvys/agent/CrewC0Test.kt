@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.crew.CrewBoard
+import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMessageBus
@@ -133,6 +134,7 @@ class CrewC0Test {
         val root = Files.createTempDirectory("crew-board").toFile()
         val board = CrewBoard(WorkspaceStore(root, "0123456789abcdef01234567"))
         lateinit var manager: CrewManager
+        val questionEvidence = AtomicReference<CrewCoordinationEvidence>()
         val secondTranscript = AtomicReference<List<ConversationTurn>>()
         manager = CrewManager("ask-session", emptyTools,
             { bot, crew -> CoreToolRegistry(CrewTools.bot(bot, crew, board)) },
@@ -153,23 +155,34 @@ class CrewC0Test {
                     }
                 })
             }, null)
+        manager.configureCoordinationEvidenceListener { questionEvidence.set(it) }
         try {
             val bot = manager.spawn("custom", "Compare sources", listOf("ask_chief", "report_done"), "Analyst")
             val waiter = CancellationToken.cancellable()
             manager.messageBus().await("chief", { it.from == bot.id && it.type == CrewMessage.Type.QUESTION }, { false }, waiter)
             val question = manager.messageBus().drainMatching("chief") { it.from == bot.id && it.type == CrewMessage.Type.QUESTION }.single()
             assertEquals("Which source is preferred?", question.text)
-            manager.send("chief", bot.id, CrewMessage.Type.ANSWER, "Prefer the primary source", emptyList())
+            val admittedAnswer = manager.replyToCoordinationExact(questionEvidence.get(), "exact-chief-answer",
+                "Prefer the primary source") { true }
+            assertTrue(admittedAnswer.coordination.matches(questionEvidence.get()))
             bot.awaitTermination()
             assertEquals(CrewManager.Status.DONE, bot.status())
-            val answer = incomingTurns(secondTranscript.get()).single {
+            val supervisorInput = incomingTurns(secondTranscript.get()).single {
                 it.content.contains("Prefer the primary source")
             }
-            assertEquals(ConversationInput.Origin.AGENT, answer.incomingMetadata.origin)
-            assertEquals("jarvys-central", answer.incomingMetadata.provenance.sessionId)
-            assertEquals("", answer.incomingMetadata.provenance.botId)
-            assertEquals("ANSWER", answer.incomingMetadata.type)
-            assertTrue(answer.incomingMetadata.untrusted)
+            assertEquals(ConversationInput.Origin.AGENT, supervisorInput.incomingMetadata.origin)
+            assertEquals("jarvys-central", supervisorInput.incomingMetadata.provenance.sessionId)
+            assertEquals("", supervisorInput.incomingMetadata.provenance.botId)
+            assertEquals("ANSWER", supervisorInput.incomingMetadata.type)
+            assertTrue(supervisorInput.incomingMetadata.untrusted)
+            assertEquals(ConversationInput.Provenance.PrincipalRole.SUPERVISOR,
+                supervisorInput.incomingMetadata.provenance.principalRole)
+            val askResult = secondTranscript.get().single {
+                it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "ask_chief"
+            }
+            assertEquals("Question sent; the correlated chief reply was admitted as supervisor input for the next worker step.",
+                askResult.content)
+            assertFalse(askResult.content.contains("Prefer the primary source"))
             assertEquals("Use source A", bot.result())
             assertTrue(manager.messageBus().snapshot().any { it.from == bot.id && it.to == "chief" && it.type == CrewMessage.Type.RESULT })
         } finally { manager.close() }
@@ -652,6 +665,27 @@ class CrewC0Test {
             assertFalse(result.success)
             manager.stop(bot.id)
             bot.awaitTermination()
+        } finally { manager.close() }
+    }
+
+    @Test
+    fun boardPostWritesSharedNoteWithoutMessagingCaptain() {
+        val board = CrewBoard(WorkspaceStore(Files.createTempDirectory("board-post").toFile(),
+            "abcdef0123456789abcdef01"))
+        val manager = CrewManager("board-post", emptyTools, { _, _ -> emptyTools },
+            { _, tools, incoming -> loop(tools, incoming, { _, _, _, _ -> ModelReply("done", emptyList()) }) }, null)
+        try {
+            val bot = manager.spawn("custom", "Record a finding", listOf("board_post"), "Writer")
+            bot.awaitTermination()
+            val result = CoreToolRegistry(CrewTools.bot(bot, manager, board)).invoke("board_post",
+                mapOf("path" to "/board/finding.md", "content" to "A note for the shared board."),
+                CancellationToken.uncancellable())
+
+            assertTrue(result.success)
+            assertEquals("A note for the shared board.", board.read("/board/finding.md"))
+            assertFalse(manager.messageBus().snapshot().any {
+                it.from == bot.id && it.to == "chief" && it.type == CrewMessage.Type.FINDING
+            })
         } finally { manager.close() }
     }
 

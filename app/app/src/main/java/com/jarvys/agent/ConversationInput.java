@@ -15,28 +15,68 @@ public final class ConversationInput {
   public enum Kind { RESULT, BLOCKER, QUESTION, MESSAGE, REPLY, ANSWER, STATUS, FINDING, TASK, CRITIQUE, OTHER }
 
   public static final class Provenance {
+    /** Runtime-assigned trust principal; message text cannot select or elevate this role. */
+    public enum PrincipalRole { SUPERVISOR, SUBORDINATE, PEER }
+
     public final String sessionId;
     public final String workspaceId;
     public final String assignmentId;
     public final String botId;
     public final String messageId;
     public final Kind kind;
+    public final PrincipalRole principalRole;
+    public final String correlationMessageId;
+    public final String referenceId;
+    public final String contentSha256;
+    public final long assignmentRevision;
+    public final String requestId;
+    public final String missionId;
+    public final String cycleId;
 
     public Provenance(String sessionId, String workspaceId, String assignmentId, String botId,
         String messageId, Kind kind) {
+      this(sessionId, workspaceId, assignmentId, botId, messageId, kind, PrincipalRole.PEER);
+    }
+
+    public Provenance(String sessionId, String workspaceId, String assignmentId, String botId,
+        String messageId, Kind kind, PrincipalRole principalRole) {
+      this(sessionId, workspaceId, assignmentId, botId, messageId, kind, principalRole,
+          "", "", "", 0L, "", "", "");
+    }
+
+    public Provenance(String sessionId, String workspaceId, String assignmentId, String botId,
+        String messageId, Kind kind, PrincipalRole principalRole, String correlationMessageId,
+        String referenceId, String contentSha256, long assignmentRevision, String requestId,
+        String missionId, String cycleId) {
       this.sessionId = required(sessionId, "source session");
       this.workspaceId = optional(workspaceId);
       this.assignmentId = optional(assignmentId);
       this.botId = optional(botId);
       this.messageId = required(messageId, "source message");
       this.kind = kind == null ? Kind.MESSAGE : kind;
+      // Old or malformed provenance must never acquire supervisor authority by default.
+      this.principalRole = principalRole == null ? PrincipalRole.PEER : principalRole;
+      this.correlationMessageId = optional(correlationMessageId);
+      this.referenceId = optional(referenceId);
+      this.contentSha256 = optional(contentSha256);
+      this.assignmentRevision = assignmentRevision;
+      this.requestId = optional(requestId);
+      this.missionId = optional(missionId);
+      this.cycleId = optional(cycleId);
+      if (assignmentRevision < 0L || (!this.referenceId.isEmpty() &&
+          (!this.referenceId.matches("workspace-coordination-[a-f0-9]{64}")
+              || !this.contentSha256.matches("[a-f0-9]{64}") || assignmentRevision < 1L)))
+        throw new IllegalArgumentException("Conversation input coordination reference is invalid");
     }
 
     public JSONObject toJson() {
       try {
         return new JSONObject().put("sessionId", sessionId).put("workspaceId", workspaceId)
             .put("assignmentId", assignmentId).put("botId", botId).put("messageId", messageId)
-            .put("kind", kind.name());
+            .put("kind", kind.name()).put("principalRole", principalRole.name())
+            .put("correlationMessageId", correlationMessageId).put("referenceId", referenceId)
+            .put("contentSha256", contentSha256).put("assignmentRevision", assignmentRevision)
+            .put("requestId", requestId).put("missionId", missionId).put("cycleId", cycleId);
       } catch (JSONException impossible) { throw new IllegalStateException(impossible); }
     }
 
@@ -44,12 +84,21 @@ public final class ConversationInput {
       if (json == null) throw new IllegalArgumentException("Conversation input provenance is required");
       return new Provenance(json.optString("sessionId", ""), json.optString("workspaceId", ""),
           json.optString("assignmentId", ""), json.optString("botId", ""),
-          json.optString("messageId", ""), parseKind(json.optString("kind", "MESSAGE")));
+          json.optString("messageId", ""), parseKind(json.optString("kind", "MESSAGE")),
+          parsePrincipalRole(json.optString("principalRole", "PEER")),
+          json.optString("correlationMessageId", ""), json.optString("referenceId", ""),
+          json.optString("contentSha256", ""), json.optLong("assignmentRevision", 0L),
+          json.optString("requestId", ""), json.optString("missionId", ""), json.optString("cycleId", ""));
     }
 
     private static Kind parseKind(String raw) {
       try { return Kind.valueOf(raw); }
       catch (RuntimeException invalid) { return Kind.OTHER; }
+    }
+
+    private static PrincipalRole parsePrincipalRole(String raw) {
+      try { return PrincipalRole.valueOf(raw); }
+      catch (RuntimeException invalid) { return PrincipalRole.PEER; }
     }
   }
 

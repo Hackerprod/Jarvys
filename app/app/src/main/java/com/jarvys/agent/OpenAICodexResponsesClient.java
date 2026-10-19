@@ -245,7 +245,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
             }
             parts = content;
           }
-          input.put(new JSONObject().put("role", turn.role).put("content", parts));
+          input.put(new JSONObject().put("role", turn.providerMessageRole()).put("content", parts));
         }
       }
     }

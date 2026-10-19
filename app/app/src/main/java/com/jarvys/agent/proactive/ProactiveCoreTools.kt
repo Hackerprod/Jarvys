@@ -100,11 +100,15 @@ class ProactiveStatusCoreTool @JvmOverloads constructor(
     private val context: Context,
     private val includeRawTimes: Boolean = true,
 ) : CoreTool {
+    private val description = context.getString(
+        if (includeRawTimes) com.jarvys.agent.R.string.proactive_tool_status_description
+        else com.jarvys.agent.R.string.proactive_tool_status_model_description,
+    )
+
     override fun declaration() = ToolSpec(
         NAME,
         "jarvys/proactive",
-        context.getString(if (includeRawTimes) com.jarvys.agent.R.string.proactive_tool_status_description
-            else com.jarvys.agent.R.string.proactive_tool_status_model_description),
+        description,
         "proactive",
         ToolSpec.Status.IMPLEMENTED,
         emptyMap(),

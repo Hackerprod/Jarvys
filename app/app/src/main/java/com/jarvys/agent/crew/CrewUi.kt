@@ -1037,6 +1037,8 @@ private fun crewMessageType(type: CrewMessage.Type): String = stringResource(whe
     CrewMessage.Type.ANSWER -> R.string.crew_type_answer
     CrewMessage.Type.RESULT -> R.string.crew_type_result
     CrewMessage.Type.STATUS -> R.string.crew_type_status
+    CrewMessage.Type.PROGRESS -> R.string.crew_type_progress
+    CrewMessage.Type.MESSAGE -> R.string.crew_type_message
     CrewMessage.Type.USER -> R.string.crew_type_user
 })
 

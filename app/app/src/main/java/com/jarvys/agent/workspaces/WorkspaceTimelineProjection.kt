@@ -54,6 +54,10 @@ internal object WorkspaceTimelineProjection {
                 isUserMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
                     stableId, "user", message.text, message.timestampMillis,
                 ).copy(messageId = message.id, timelineKey = stableId), sourceOrder)
+                isAssistantProgress(message) -> rows += MissionRow(AgentRunUiEvent(
+                    stableId, "assistant", "PROGRESS", message.text, timestampMillis = message.timestampMillis,
+                ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false,
+                    workspaceSenderLabel = senderLabel(snapshot, message.from)), sourceOrder)
             }
         }
 
@@ -63,6 +67,15 @@ internal object WorkspaceTimelineProjection {
 
     private fun isUserMessage(message: CrewMessage): Boolean =
         message.from == "user" && message.type == CrewMessage.Type.USER
+
+    private fun isAssistantProgress(message: CrewMessage): Boolean =
+        message.from != "user" && message.to == "user" && message.coordination == null &&
+            message.type == CrewMessage.Type.PROGRESS && message.text.isNotBlank()
+
+    private fun senderLabel(snapshot: CrewMissionSnapshot, senderId: String): String? =
+        snapshot.bots.firstOrNull { it.id == senderId }
+            ?.let { it.name.ifBlank { it.roleName } }
+            ?.takeIf(String::isNotBlank)
 
     private fun stableId(workspaceId: String, missionId: String, rowId: String): Long {
         val identity = "$workspaceId\u0000$missionId\u0000$rowId"

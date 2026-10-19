@@ -103,6 +103,23 @@ class ConversationReaderDatabaseTest {
         assertFalse(reader.readRecentConversationTimeline(id, 10).events.any { it.kind == "assistant_translation" })
     }
 
+    @Test fun assistantRegenerationOwnerLookupPreservesUserMissingAndNonUserRules() = onDatabaseThread {
+        val id = "reader-regeneration-owners"
+        success(conversations.ensureConversation(id))
+        val userOwner = append(id, ConversationRepository.ROLE_USER, "the user request")
+        val agentOwner = append(id, "agent", "an internal worker result")
+        val userOwnedAssistant = append(id, ConversationRepository.ROLE_ASSISTANT, "answer to user", userOwner.messageId)
+        val agentOwnedAssistant = append(id, ConversationRepository.ROLE_ASSISTANT, "answer to worker", agentOwner.messageId)
+        val missingOwnerAssistant = append(id, ConversationRepository.ROLE_ASSISTANT, "answer with missing owner", "missing-owner")
+        val unownedAssistant = append(id, ConversationRepository.ROLE_ASSISTANT, "unowned answer")
+
+        val events = reader.readRecentConversationTimeline(id, 20).events
+        assertTrue(events.single { it.messageId == userOwnedAssistant.messageId }.canRegenerate)
+        assertFalse(events.single { it.messageId == agentOwnedAssistant.messageId }.canRegenerate)
+        assertFalse(events.single { it.messageId == missingOwnerAssistant.messageId }.canRegenerate)
+        assertTrue(events.single { it.messageId == unownedAssistant.messageId }.canRegenerate)
+    }
+
     @Test fun readerProjectsProactiveRepliesDecisionsInterruptAcknowledgementsAndFirstResultWins() = onDatabaseThread {
         val proactiveId = "reader-proactive"
         success(conversations.ensureConversation(proactiveId, "proactive"))

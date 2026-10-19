@@ -188,8 +188,10 @@ public class CodexReasoningPersistenceTest {
         assertEquals(answerRaw, answer.providerOutputItems.get(0).value);
 
         List<AgentRunUiEvent> timeline = reopened.readConversationTimeline(session);
-        assertFalse("Internal agent input is absent from the chat projection",
-                timeline.stream().anyMatch(event -> event.getText().contains("Worker final text")));
+        AgentRunUiEvent agentInputEvent = timeline.stream()
+                .filter(event -> agentMessageId.equals(event.getMessageId()))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals(ConversationInput.Origin.AGENT, agentInputEvent.getConversationInputOrigin());
         AgentRunUiEvent tool = timeline.stream().filter(event -> "agent-inspect-call".equals(event.getToolCallId()))
                 .findFirst().orElseThrow(AssertionError::new);
         assertEquals(agentMessageId, tool.getToolTurnMessageId());
@@ -212,6 +214,40 @@ public class CodexReasoningPersistenceTest {
         assertEquals(1, reopened.readConversationMessages(session).stream()
                 .filter(row -> "user".equals(row.optString("role"))).count());
     }
+
+    @Test public void agentOnlyTurnPersistsToolCheckpointAtExactOwnerMessageIndex() throws Exception {
+        File files = chatTestStore.newFilesDirectory();
+        String session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION;
+        LocalRunStore store = chatTestStore.localRunStore(files);
+        String agentMessageId = store.appendConversationInput(new ConversationInput(session, "source-agent-only",
+                "Inspect this worker result", ConversationInput.Origin.AGENT,
+                new ConversationInput.Provenance("workspace-execution-2", "workspace-2", "assignment-2",
+                        "bot-2", "source-agent-only", ConversationInput.Kind.RESULT)));
+        List<ConversationTurn> history = store.loadConversationContext(session);
+        assertEquals("There is no user-row fallback for this turn", -1, store.latestUserMessageIndex(session));
+        assertEquals(0L, store.conversationMessageIndex(session, agentMessageId));
+
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger toolEffects = new AtomicInteger();
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
+            if (calls.getAndIncrement() == 0) return new ModelReply("Checking the result",
+                    Collections.singletonList(new ModelReply.Call("agent-only-tool-call", "lookup", Collections.emptyMap())));
+            return new ModelReply("The result checks out", Collections.emptyList());
+        }, new CoreToolRegistry(Collections.singletonList(lookupTool(toolEffects))), "", session);
+        new MainChatTranscriptStore(files, session, store).attach(loop, history, agentMessageId);
+
+        CoreAgentLoop.Result result = loop.run("", history, CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(2, calls.get());
+        assertEquals(1, toolEffects.get());
+        JSONObject batch = store.readModelTranscriptRows(session).stream()
+                .filter(row -> "model_tool_calls".equals(row.optString("type")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals(agentMessageId, batch.getString("userMessageId"));
+        assertEquals(0L, batch.getLong("messageIndex"));
+    }
+
     @Test public void chatCompletionsAdapterIgnoresCodexReasoningItems() throws Exception {
         String raw = new JSONObject().put("type", "reasoning").put("id", "rs_private")
                 .put("encrypted_content", ENCRYPTED).toString();

@@ -92,6 +92,14 @@ class WorkspaceCoordinator internal constructor(context: Context,
         WorkspaceCoordinationDelivery(app).reply(workspaceId, messageId, expectedSha256, key, text,
             expectedAssignmentRevision, requestId, originalUserRequest, token, admission)
 
+    override fun message(workspaceId: String, assignmentId: String, botId: String,
+                         expectedAssignmentRevision: Long, key: String, text: String,
+                         correlationMessageId: String?, requestId: String, originalUserRequest: String,
+                         token: CancellationToken, admission: Runnable): JSONObject =
+        WorkspaceCoordinationDelivery(app, LocalRunStore(app), managerFor).message(
+            workspaceId, assignmentId, botId, expectedAssignmentRevision, key, text,
+            correlationMessageId, requestId, originalUserRequest, token, admission)
+
     override fun inspect(workspaceId: String, path: String, token: CancellationToken, admission: Runnable): JSONObject =
         WorkspaceArtifactDelivery(app).inspect(workspaceId, path, token, admission)
 
@@ -141,7 +149,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         admission.run()
                         bot = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
                             started.role, started.missionText, started.tools, started.name, started.missionAccess,
-                            scope.title, started.assignmentId)
+                            scope.title, started)
                         admittedBot.set(bot to bot.token)
                     }) throw java.util.concurrent.CancellationException("Workspace delegation stopped before spawning")
                 if (token.isCancellationRequested) manager.stopExact(bot.id, admittedBot.get()!!.second)
@@ -205,7 +213,9 @@ class WorkspaceCoordinator internal constructor(context: Context,
                              onAdmitted: () -> Unit = {},
                              completion: (Result<String>) -> Unit) {
         // Register synchronously: STOP must own this request even before its executor starts it.
-        val token = WorkspaceControlOwners.register(type)
+        val token = synchronized(controlDispatchLock(assignmentId)) {
+            WorkspaceControlOwners.register(type, assignmentId)
+        }
         try {
             cleanup.execute {
                 val result = try {
@@ -273,6 +283,9 @@ class WorkspaceCoordinator internal constructor(context: Context,
                                     }
                                     manager.sendUserMessageExact(bot.id, expectedToken, control.userText)
                                 }
+                                WorkspaceConversationInputStore.deliverPendingSupervisorIntentsAfterExplicitResume(
+                                    app, scope.executionSessionId, manager, bot.id, token,
+                                    Runnable { token.throwIfCancelled() })
                                 keepalive()
                             }
                             WorkspaceControlType.CORRECT -> {
@@ -289,6 +302,12 @@ class WorkspaceCoordinator internal constructor(context: Context,
                                     else manager.resumeExact(bot.id, expectedToken, control.userText, input)
                                 } else if (input == null) manager.sendUserMessageExact(bot.id, expectedToken, control.userText)
                                 else manager.sendUserMessageExact(bot.id, expectedToken, control.userText, input)
+                                if (bot.status() == CrewManager.Status.QUEUED || bot.status() == CrewManager.Status.RUNNING
+                                    || bot.status() == CrewManager.Status.WAITING) {
+                                    WorkspaceConversationInputStore.deliverPendingSupervisorIntentsAfterExplicitResume(
+                                        app, scope.executionSessionId, manager, bot.id, token,
+                                        Runnable { token.throwIfCancelled() })
+                                }
                                 keepalive()
                             }
                         }

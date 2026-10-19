@@ -113,6 +113,8 @@ class WorkspaceDetailComposeTest {
             "Private worker finding", emptyList(), 120L).withCoordination(CrewCoordinationEvidence.create(
                 sessionId, "mission", "worker", "00000000-0000-0000-0000-000000000001",
                 "internal-message", "FINDING", "Private worker finding", emptyList(), 120L))
+        val progress = CrewMessage("progress-message", sessionId, "worker", "user", CrewMessage.Type.PROGRESS,
+            "Checking the project files", emptyList(), 125L)
         val answer = CrewMessage("bot-answer", sessionId, "worker", "user", CrewMessage.Type.ANSWER,
             "The file is ready", emptyList(), 130L)
         val secondBot = CrewBotSnapshot("writer", "writer", "Writer", "Writer", "green", "private task",
@@ -122,7 +124,7 @@ class WorkspaceDetailComposeTest {
         val tool = CrewMessage("tool-row", sessionId, "worker", "worker", CrewMessage.Type.STATUS,
             "Read file", emptyList(), 140L, activity)
         val mission = CrewMissionSnapshot("mission", sessionId, "process", "Inspect files", "RUNNING", "",
-            90L, 0L, listOf(bot, secondBot), listOf(user, dispatch, internal, answer, tool))
+            90L, 0L, listOf(bot, secondBot), listOf(user, dispatch, internal, progress, answer, tool))
         val rawEvents = listOf(AgentRunUiEvent.crewMissionEvent(1L, mission))
         val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title", WorkspaceUiStatus.ACTIVE, rawEvents)
         val assignment = WorkspaceAssignmentUi("assignment-1", 7L, "Scout", "Inspect files",
@@ -168,8 +170,8 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithTag("chat-separate-stop-button").assertIsDisplayed()
         compose.onNodeWithTag("workspace-chat-input-hint").assertDoesNotExist()
         compose.onNodeWithText("Inspect this").assertIsDisplayed()
-        compose.onNodeWithText("The file is ready").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-message-sender-bot-answer").assertTextEquals("Scout")
+        compose.onNodeWithText("Checking the project files").assertIsDisplayed()
+        compose.onNodeWithText("The file is ready").assertDoesNotExist()
         compose.onNodeWithText("Private task dispatch").assertDoesNotExist()
         compose.onNodeWithText("Private worker finding").assertDoesNotExist()
         compose.onNodeWithText("private result JSON").assertDoesNotExist()

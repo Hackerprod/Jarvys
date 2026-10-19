@@ -5,6 +5,7 @@ import com.jarvys.agent.CoreAgentRuntime
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.R
 import com.jarvys.agent.LocalRunStore
+import com.jarvys.agent.WorkspaceCoordinationDelivery
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewProcessIdentity
@@ -17,6 +18,7 @@ object WorkspaceProjection {
     fun sidebarPage(context: Context, afterWorkspaceId: String? = null): WorkspaceSidebarPage = WorkspaceRegistry(context).use { store ->
         val localized = AppLanguageRuntime.localizedContext(context)
         val workspaces = store.listWorkspaces(WORKSPACE_PAGE_SIZE, afterWorkspaceId)
+        val coordinationByWorkspace = coordinationSummaries(context, workspaces)
         val rows = workspaces.map { scope ->
             val assignments = store.listAssignments(scope.workspaceId, WORKSPACE_PAGE_SIZE)
             val hasMore = assignmentNext(store, scope.workspaceId, assignments) != null
@@ -25,7 +27,8 @@ object WorkspaceProjection {
             val manager = CoreAgentRuntime.crewManagerForSession(scope.executionSessionId)
             val projected = assignments.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
             WorkspaceSidebarRow(scope.workspaceId, scope.title,
-                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore)
+                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore,
+                coordinationByWorkspace[scope.workspaceId] ?: WorkspaceCoordinationSummary(unavailable = true))
         }
         val next = workspaces.lastOrNull()?.workspaceId?.takeIf {
             workspaces.size == WORKSPACE_PAGE_SIZE && store.listWorkspaces(1, it).isNotEmpty()
@@ -61,6 +64,54 @@ object WorkspaceProjection {
         records.lastOrNull()?.assignmentId?.takeIf {
             records.size == WORKSPACE_PAGE_SIZE && store.listAssignments(id, 1, it).isNotEmpty()
         }
+
+    /** Only scalar counts/status enter the sidebar model; message bodies stay in the input ledger. */
+    private fun coordinationSummaries(context: Context, scopes: List<WorkspaceRecord>): Map<String, WorkspaceCoordinationSummary> {
+        if (scopes.isEmpty()) return emptyMap()
+        val workspaceIds = scopes.map { it.workspaceId }.toSet()
+        val pending = workspaceIds.associateWith { 0 }.toMutableMap()
+        val unavailable = workspaceIds.associateWith { false }.toMutableMap()
+        val ledger = LocalRunStore(context)
+        val executionSessions = scopes.associate { it.executionSessionId to it.workspaceId }
+        val sessions = listOf(WorkspaceIdentity.CENTRAL_SESSION) + executionSessions.keys
+        for (session in sessions.distinct()) {
+            val relatedWorkspace = executionSessions[session]
+            try {
+                ledger.readPendingInternalConversationInputs(session).forEach { row ->
+                    val workspaceId = row.optJSONObject("provenance")?.optString("workspaceId")
+                        ?.takeIf { it in workspaceIds }
+                        ?: relatedWorkspace
+                        ?: return@forEach
+                    pending[workspaceId] = (pending[workspaceId] ?: 0) + 1
+                }
+            } catch (_: Exception) {
+                if (relatedWorkspace != null) unavailable[relatedWorkspace] = true
+                else workspaceIds.forEach { unavailable[it] = true }
+            }
+        }
+        return scopes.associate { scope ->
+            try {
+                val references = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, COORDINATION_PAGE, null)
+                val uncertain = references.count { reference ->
+                    reference.kind in setOf("QUESTION", "BLOCKER") &&
+                        ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
+                            ?.state == com.jarvys.agent.workspaces.WorkspaceCoordinationReply.State.STARTED
+                }
+                scope.workspaceId to WorkspaceCoordinationSummary(
+                    pendingInputs = pending[scope.workspaceId] ?: 0,
+                    uncertainReplies = uncertain,
+                    pageLimited = references.size == COORDINATION_PAGE,
+                    unavailable = unavailable[scope.workspaceId] == true ||
+                        WorkspaceCoordinationDelivery.issue(scope.workspaceId) != null,
+                )
+            } catch (_: Exception) {
+                scope.workspaceId to WorkspaceCoordinationSummary(
+                    pendingInputs = pending[scope.workspaceId] ?: 0,
+                    unavailable = true,
+                )
+            }
+        }
+    }
 
     private fun projectAssignment(context: Context, store: WorkspaceRegistry, scope: WorkspaceRecord, assignment: WorkspaceAssignment,
                            snapshots: List<CrewMissionSnapshot>, manager: CrewManager?): WorkspaceAssignmentUi {
@@ -110,4 +161,6 @@ object WorkspaceProjection {
         "DONE" -> WorkspaceUiStatus.COMPLETED
         else -> WorkspaceUiStatus.UNKNOWN
     }
+
+    private const val COORDINATION_PAGE = WORKSPACE_PAGE_SIZE
 }

@@ -448,6 +448,8 @@
     <string name="crew_type_answer">Answer</string>
     <string name="crew_type_result">Result</string>
     <string name="crew_type_status">Status</string>
+    <string name="crew_type_progress">Progress</string>
+    <string name="crew_type_message">Message</string>
     <string name="crew_type_user">You</string>
     <string name="crew_empty_title">No crew mission yet</string>
     <string name="crew_empty_body">Set Crew to Auto or Always, then ask Jarvys to coordinate a task.</string>
@@ -1495,6 +1497,10 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <plurals name="workspace_coordination_uncertain">
         <item quantity="one">%1$d reply attempt has an uncertain outcome. Do not resend automatically.</item>
         <item quantity="other">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</item>
+    </plurals>
+    <plurals name="workspace_coordination_pending">
+        <item quantity="one">%1$d coordination input is awaiting acknowledgement.</item>
+        <item quantity="other">%1$d coordination inputs are awaiting acknowledgement.</item>
     </plurals>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d historical or superseded request. Reopening does not resume work.</item>

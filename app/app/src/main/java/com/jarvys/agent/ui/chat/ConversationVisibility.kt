@@ -22,7 +22,7 @@ internal object ConversationVisibility {
         if (event.kind == "workspace_result") return false
         if (event.kind == "memory" && event.stage == "SEED") return false
         if (event.kind == "progress" && event.stage in internalStages) return false
-        // Only the main chat opts into persisted model preambles; workspace timelines stay unchanged.
+        // Callers opt in when their timeline is meant to show persisted assistant progress preambles.
         if (event.kind == "assistant" && event.stage == "PROGRESS" && !showAssistantProgress) return false
         // Typed identity only: workspace coordination rows are projected separately from user work.
         // Failed, interrupted and never-started coordination remains actionable and visible.

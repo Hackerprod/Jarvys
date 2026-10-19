@@ -46,6 +46,8 @@ class WorkspaceChatProjectionTest {
             CrewMessage("private", sessionId, "worker", "chief", CrewMessage.Type.QUESTION, "Worker coordination", emptyList(), 120L)
                 .withCoordination(CrewCoordinationEvidence.create(sessionId, "mission", "worker",
                     "00000000-0000-0000-0000-000000000001", "private", "QUESTION", "Worker coordination", emptyList(), 120L)),
+            CrewMessage("progress", sessionId, "worker", "user", CrewMessage.Type.PROGRESS,
+                "Checking the source documents", emptyList(), 125L),
             CrewMessage("visible-bot", sessionId, "worker", "user", CrewMessage.Type.ANSWER, "Here is the update", emptyList(), 130L),
             CrewMessage("visible-finding-z", sessionId, "worker", "chief", CrewMessage.Type.FINDING, "Useful finding", emptyList(), 135L),
             CrewMessage("visible-finding-a", sessionId, "worker", "chief", CrewMessage.Type.FINDING, "Next finding", emptyList(), 135L),
@@ -69,15 +71,19 @@ class WorkspaceChatProjectionTest {
 
         val projected = WorkspaceTimelineProjection.project(workspaceId, raw)
 
-        assertEquals(listOf("user", "tool", "artifact"),
+        assertEquals(listOf("user", "assistant", "tool", "artifact"),
             projected.map { it.kind })
-        assertEquals(listOf("Please inspect this", "Read file", "Deliverable"),
+        assertEquals(listOf("Please inspect this", "Checking the source documents", "Read file", "Deliverable"),
             projected.map { it.text })
-        assertEquals("tool_result", projected[1].stage)
-        assertEquals("execution", projected[1].toolCallId)
-        assertEquals("{\"ok\":true}", projected[1].detail)
+        assertEquals("PROGRESS", projected[1].stage)
+        assertEquals(false, projected[1].canRegenerate)
+        assertEquals("Scout", projected[1].workspaceSenderLabel)
+        assertEquals("tool_result", projected[2].stage)
+        assertEquals("execution", projected[2].toolCallId)
+        assertEquals("{\"ok\":true}", projected[2].detail)
         assertEquals("user-1", projected[0].messageId)
-        assertEquals("call-row", projected[1].messageId)
+        assertEquals("progress", projected[1].messageId)
+        assertEquals("call-row", projected[2].messageId)
         assertEquals(false, projected.any { it.kind == "crew_mission" || it.kind == "workspace_result" })
         assertEquals(false, projected.any { it.text in setOf(
             "Private dispatch", "Worker coordination", "Here is the update", "Useful finding", "Next finding",

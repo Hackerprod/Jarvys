@@ -26,6 +26,9 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
+    private static final int CONVERSATION_DELIVERY_VERSION = 1;
+    private static final String CONVERSATION_DELIVERY_VERSION_FIELD = "conversationMessageDeliveryVersion";
+    private static final String CONVERSATION_DELIVERY_RECEIPTS_FIELD = "processedConversationMessageIds";
     private final Context context;
     private final String conversation;
     private final Function<CrewManager.Bot, CrewRole> currentRole;
@@ -53,7 +56,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (bot.scopeIdentity().isEmpty()) {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
-            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("assignmentId", bot.assignmentId()).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
+            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("assignmentId", bot.assignmentId()).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id))
+                    .put(CONVERSATION_DELIVERY_VERSION_FIELD, CONVERSATION_DELIVERY_VERSION)
+                    .put(CONVERSATION_DELIVERY_RECEIPTS_FIELD, new JSONArray(bot.processedConversationMessageIds()));
             if (!bot.cycleId().isEmpty()) metadata.put("cycleId", bot.cycleId());
             CrewMissionTitle title = bot.missionTitle();
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
@@ -114,13 +119,16 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         CrewManager.Status.valueOf(state);
                         CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", visible.lastProgress, visible.lastProgressAtMillis, historicalCycleId(data), null);
                         CrewMissionSnapshot presentation = withCheckpointPresentation(mission, recoveredMission(data, precise, saved.savedAtMs));
+                        List<CrewMessage> restoredMessages = decodeMessages(data.getJSONArray("messages"), visible.id, mission.missionId, false);
+                        List<String> processedConversationMessageIds = conversationDeliveryReceipts(data, restoredMessages);
+                        boolean deliveryStateVersioned = data.has(CONVERSATION_DELIVERY_VERSION_FIELD);
                         String assignmentId = resolveAssignmentId(mission.missionId, visible.id,
                                 data.optString("assignmentId", ""));
                         manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership,
                                 saved.scopeIdentity, owners, data.getLong("completedCycles"),
-                                decodeMessages(data.getJSONArray("messages"), visible.id, mission.missionId, false),
+                                restoredMessages,
                                 decodeMessages(data.getJSONArray("pending"), visible.id, mission.missionId, true),
-                                "", assignmentId);
+                                "", assignmentId, processedConversationMessageIds, deliveryStateVersioned);
                         continue;
                     }
                 } catch (Exception invalid) {
@@ -144,6 +152,30 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                     com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversation), missionId, botId);
             return assignment == null ? "" : assignment.getAssignmentId();
         } finally { registry.close(); }
+    }
+
+    /** Missing delivery metadata means every source message in this checkpoint predates the outbox protocol. */
+    private List<String> conversationDeliveryReceipts(JSONObject data, List<CrewMessage> messages) throws JSONException {
+        if (!data.has(CONVERSATION_DELIVERY_VERSION_FIELD)) return Collections.emptyList();
+        Object rawVersion = data.opt(CONVERSATION_DELIVERY_VERSION_FIELD);
+        if (!(rawVersion instanceof Number)
+                || ((Number) rawVersion).doubleValue() != CONVERSATION_DELIVERY_VERSION)
+            throw new IllegalStateException("Unsupported worker conversation delivery checkpoint");
+        JSONArray rows = data.optJSONArray(CONVERSATION_DELIVERY_RECEIPTS_FIELD);
+        if (rows == null) throw new IllegalStateException("Worker conversation delivery receipts are missing");
+        Set<String> validSourceIds = new HashSet<>();
+        for (CrewMessage message : messages)
+            if (message.activity == null && "chief".equals(message.to)) validSourceIds.add(message.id);
+        Set<String> unique = new HashSet<>();
+        List<String> result = new ArrayList<>();
+        for (int index = 0; index < rows.length(); index++) {
+            Object value = rows.get(index);
+            if (!(value instanceof String) || ((String) value).isEmpty()
+                    || !unique.add((String) value) || !validSourceIds.contains((String) value))
+                throw new IllegalStateException("Invalid worker conversation delivery receipt");
+            result.add((String) value);
+        }
+        return result;
     }
 
     private CrewMissionSnapshot recoveredMission(JSONObject data, CrewBotSnapshot bot, long savedAtMillis) throws JSONException {

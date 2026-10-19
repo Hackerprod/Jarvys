@@ -7,7 +7,7 @@ import java.util.UUID;
 
 /** Immutable, in-memory Crew bus message. */
 public final class CrewMessage {
-    public enum Type { TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, USER }
+    public enum Type { TASK, FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS, PROGRESS, MESSAGE, USER }
     public final String id;
     public final String conversationId;
     public final String from;
@@ -20,6 +20,8 @@ public final class CrewMessage {
     /** Exact source reference; text/refs in snapshots may be sanitized historical copies. */
     public final CrewCoordinationEvidence.Reference coordination;
     public final CrewInputBinding inputBinding;
+    /** Runtime-authored typed provenance for supervisor input; model arguments cannot select it. */
+    public final com.jarvys.agent.ConversationInput.Provenance inputProvenance;
 
     /** Actual text plus its structured references for an attributed model input. */
     public String conversationContent() {
@@ -39,14 +41,16 @@ public final class CrewMessage {
     }
     public CrewMessage(String id, String conversationId, String from, String to, Type type,
                        String text, List<String> refs, long timestampMillis, com.jarvys.agent.ToolActivity activity) {
-        this(id, conversationId, from, to, type, text, refs, timestampMillis, activity, null, null);
+        this(id, conversationId, from, to, type, text, refs, timestampMillis, activity, null, null, null);
     }
     private CrewMessage(String id, String conversationId, String from, String to, Type type,
                        String text, List<String> refs, long timestampMillis,
-                       com.jarvys.agent.ToolActivity activity, CrewCoordinationEvidence.Reference coordination, CrewInputBinding inputBinding) {
+                       com.jarvys.agent.ToolActivity activity, CrewCoordinationEvidence.Reference coordination,
+                       CrewInputBinding inputBinding, com.jarvys.agent.ConversationInput.Provenance inputProvenance) {
         this.activity = activity;
         this.coordination = coordination;
         this.inputBinding = inputBinding;
+        this.inputProvenance = inputProvenance;
         this.id = require(id, "id");
         this.conversationId = require(conversationId, "conversationId");
         this.from = require(from, "from");
@@ -68,6 +72,22 @@ public final class CrewMessage {
             if (activity != null || !conversationId.equals(coordination.conversationId) || (!source && !answer))
                 throw new IllegalArgumentException("Crew causal reference does not match message routing");
         }
+        com.jarvys.agent.ConversationInput.Kind expectedInputKind = inputKindForCrewType(type);
+        if (inputProvenance != null && (!"chief".equals(from)
+                || !com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(conversationId)
+                || !com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversationId).equals(inputProvenance.workspaceId)
+                || !inputProvenance.botId.equals(to) || inputProvenance.assignmentId.isEmpty()
+                || !com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION.equals(inputProvenance.sessionId)
+                || inputProvenance.principalRole != com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUPERVISOR
+                || expectedInputKind == null || inputProvenance.kind != expectedInputKind
+                || inputProvenance.assignmentRevision < 1 || inputProvenance.requestId.isEmpty()
+                || inputProvenance.missionId.isEmpty() || !inputProvenance.messageId.equals(id)))
+            throw new IllegalArgumentException("Supervisor input provenance does not match message routing");
+    }
+
+    private static com.jarvys.agent.ConversationInput.Kind inputKindForCrewType(Type type) {
+        try { return com.jarvys.agent.ConversationInput.Kind.valueOf(type.name()); }
+        catch (IllegalArgumentException unsupported) { return null; }
     }
     public org.json.JSONObject toJson() {
         try { org.json.JSONObject row = new org.json.JSONObject().put("id",id).put("conversationId",conversationId)
@@ -75,12 +95,13 @@ public final class CrewMessage {
                 .put("refs",new org.json.JSONArray(refs)).put("timestampMillis",timestampMillis);
             if (coordination != null) row.put("coordination", coordination.toJson());
             if (inputBinding != null) row.put("inputBinding", inputBinding.toJson());
+            if (inputProvenance != null) row.put("inputProvenance", inputProvenance.toJson());
             if (activity != null) row.put("origin","local_activity").put("activity",activity.toJson());
             return row;
         } catch(Exception failure) { throw new IllegalStateException(failure); }
     }
     public static CrewMessage fromJson(org.json.JSONObject row) {
-        if (row.has("coordination") || row.has("inputBinding")) validateCausalCopy(row);
+        if (row.has("coordination") || row.has("inputBinding") || row.has("inputProvenance")) validateCausalCopy(row);
         List<String> refs=new ArrayList<>(); org.json.JSONArray items=row.optJSONArray("refs");
         if(items!=null) for(int i=0;i<items.length();i++) refs.add(items.optString(i));
         com.jarvys.agent.ToolActivity activity="local_activity".equals(row.optString("origin"))
@@ -93,7 +114,8 @@ public final class CrewMessage {
         return new CrewMessage(row.optString("id"),row.optString("conversationId"),row.optString("from"),
                 row.optString("to"),Type.valueOf(row.optString("type")),row.optString("text"),refs,row.optLong("timestampMillis"),activity,
                 row.has("coordination") ? CrewCoordinationEvidence.Reference.fromJsonStrict(row.optJSONObject("coordination")) : null,
-                row.has("inputBinding") ? CrewInputBinding.fromJsonStrict(row.optJSONObject("inputBinding")) : null);
+                row.has("inputBinding") ? CrewInputBinding.fromJsonStrict(row.optJSONObject("inputBinding")) : null,
+                row.has("inputProvenance") ? com.jarvys.agent.ConversationInput.Provenance.fromJson(row.optJSONObject("inputProvenance")) : null);
     }
     /** New causal copies are strict structurally, but copied text/refs are never rehashed as source. */
     private static void validateCausalCopy(org.json.JSONObject row) {
@@ -101,6 +123,7 @@ public final class CrewMessage {
                 "id", "conversationId", "from", "to", "type", "text", "refs", "timestampMillis"));
         if (row.has("coordination")) fields.add("coordination");
         if (row.has("inputBinding")) fields.add("inputBinding");
+        if (row.has("inputProvenance")) fields.add("inputProvenance");
         if (row.length() != fields.size()) throw new IllegalArgumentException("Invalid causal message fields");
         java.util.Iterator<String> keys = row.keys();
         while (keys.hasNext()) if (!fields.contains(keys.next()))
@@ -118,15 +141,20 @@ public final class CrewMessage {
             throw new IllegalArgumentException("Invalid causal message ref");
     }
     public CrewMessage withActivity(com.jarvys.agent.ToolActivity value) {
-        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,value,coordination,inputBinding);
+        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,value,coordination,inputBinding,inputProvenance);
     }
     public CrewMessage withCoordination(CrewCoordinationEvidence evidence) {
-        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,activity,evidence.reference(),inputBinding);
+        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,activity,evidence.reference(),inputBinding,inputProvenance);
     }
     public CrewMessage withInputBinding(CrewInputBinding binding) {
         if (binding == null || !binding.matchesDelivery(this))
             throw new IllegalArgumentException("Input binding does not match exact delivery");
-        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,activity,coordination,binding);
+        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,activity,coordination,binding,inputProvenance);
+    }
+    public CrewMessage withInputProvenance(com.jarvys.agent.ConversationInput.Provenance provenance) {
+        if (provenance == null) throw new IllegalArgumentException("Typed supervisor provenance is required");
+        return new CrewMessage(id,conversationId,from,to,type,text,refs,timestampMillis,
+                activity,coordination,inputBinding,provenance);
     }
     private static String require(String value, String field) {
         if (value == null || value.trim().isEmpty()) throw new IllegalArgumentException(field + " is required");

@@ -228,7 +228,7 @@ public final class OpenRouterClient implements ModelProviderClient {
             }
             parts = content;
           }
-          JSONObject message = new JSONObject().put("role", turn.role).put("content", parts);
+          JSONObject message = new JSONObject().put("role", turn.providerMessageRole()).put("content", parts);
           if (turn.incomingMetadata != null && turn.incomingMetadata.untrusted)
             message.put("name", turn.incomingMetadata.chatMessageName());
           messages.put(message);

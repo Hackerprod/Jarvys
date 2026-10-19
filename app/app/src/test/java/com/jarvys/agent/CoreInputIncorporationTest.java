@@ -3,13 +3,14 @@ package com.jarvys.agent;
 import static org.junit.Assert.*;
 import com.jarvys.agent.crew.CrewInputBinding;
 import com.jarvys.agent.crew.CrewInputIncorporation;
-import com.jarvys.agent.crew.CrewManager;
 import com.jarvys.agent.crew.CrewMessage;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -89,46 +90,48 @@ public class CoreInputIncorporationTest {
         assertTrue(withoutScope.checkpointSnapshot().incorporations.isEmpty());
     }
 
-    @Test public void exactAskChiefBatchIgnoresGlobalIdsAndUserWakeCannotAttributeOldAnswers() {
-        CrewMessage first = bound("first", "answer one", false);
-        CrewMessage second = bound("second", "answer two", false);
-        AtomicInteger calls = new AtomicInteger();
-        CoreTool tool = tool("ask_chief", () -> calls.incrementAndGet() == 1
-                ? CoreToolResult.crewAnswers(Arrays.asList(first, second))
-                : CoreToolResult.crewAnswers(Collections.emptyList()));
+    @Test public void askChiefAcknowledgementLeavesCorrelatedReplyAsSeparateSupervisorInboxInput() {
+        CrewMessage reply = bound("correlated-reply", "<untrusted & supervisor reply>", false);
+        AtomicBoolean admitReplyAfterAsk = new AtomicBoolean();
+        CoreTool tool = tool("ask_chief", () -> {
+            admitReplyAfterAsk.set(true);
+            return CoreToolResult.success("Question sent; the correlated chief reply was admitted as supervisor input for the next worker step.");
+        });
         AtomicInteger turns = new AtomicInteger();
+        AtomicReference<List<ConversationTurn>> afterAsk = new AtomicReference<>();
         CoreAgentLoop loop = new CoreAgentLoop((CoreAgentLoop.Model) (transcript, prompt, tools, token) -> {
             int turn = turns.incrementAndGet();
-            return turn < 3 ? new ModelReply("", Collections.singletonList(new ModelReply.Call("ask-" + turn,
-                    "ask_chief", Collections.emptyMap()))) : new ModelReply("done", Collections.emptyList());
+            if (turn == 1) return new ModelReply("", Collections.singletonList(new ModelReply.Call("ask",
+                    "ask_chief", Collections.emptyMap())));
+            afterAsk.set(new java.util.ArrayList<>(transcript));
+            return new ModelReply("done", Collections.emptyList());
         }, new CoreToolRegistry(Collections.singletonList(tool)), "", "chat", CorePromptBudget.standard(), null,
                 CoreAgentLoop.ToolResultBudget.UNBOUNDED, new CoreAgentLoop.TurnContextProvider() {
-                    @Override public String takeUntrustedContext() { return ""; }
-                    @Override public List<String> completedToolIncomingIds(String name) { return Collections.singletonList("unrelated-global-id"); }
+                    @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessages() {
+                        if (!admitReplyAfterAsk.getAndSet(false)) return Collections.emptyList();
+                        return Collections.singletonList(CoreAgentLoop.IncomingMessage.fromCrewMessage(reply));
+                    }
                 }, null);
         loop.setCheckpointScope(FIRST);
         loop.run("mission", Collections.emptyList(), CancellationToken.uncancellable(), null);
-        assertEquals(2, loop.checkpointSnapshot().appliedIncomingIds.size());
-        assertFalse(loop.checkpointSnapshot().appliedIncomingIds.contains("unrelated-global-id"));
-        String transport = CrewInputIncorporation.transportSha256(CrewManager.formatMessages(Arrays.asList(first, second)));
-        for (CrewInputIncorporation proof : loop.checkpointSnapshot().incorporations.values()) {
-            assertEquals(CrewInputIncorporation.TransportKind.ASK_CHIEF, proof.transportKind);
-            assertEquals(transport, proof.transportSha256);
-        }
-        CoreToolResult actual = CoreToolResult.crewAnswers(Collections.singletonList(first));
-        assertFalse(actual.incomingBatch.matches("ask_chief", actual.content + " changed"));
-        assertFalse(actual.incomingBatch.matches("different_tool", actual.content));
-        assertNull(CoreToolResult.success(actual.content).incomingBatch);
-    }
-
-    @Test public void wrongToolCannotUseAnswerSidecar() {
-        CoreTool wrong = tool("other", () -> CoreToolResult.crewAnswers(Collections.singletonList(bound("answer", "text", false))));
-        CoreAgentLoop loop = new CoreAgentLoop((CoreAgentLoop.Model) (transcript, prompt, tools, token) ->
-                new ModelReply("", Collections.singletonList(new ModelReply.Call("call", "other", Collections.emptyMap()))),
-                new CoreToolRegistry(Collections.singletonList(wrong)), "", "chat");
-        loop.setCheckpointScope(FIRST);
-        assertThrows(IllegalStateException.class, () -> loop.run("mission", Collections.emptyList(), CancellationToken.uncancellable(), null));
-        assertTrue(loop.checkpointSnapshot().incorporations.isEmpty());
+        List<ConversationTurn> transcript = afterAsk.get();
+        assertNotNull(transcript);
+        ConversationTurn toolResult = transcript.stream().filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
+                && "ask_chief".equals(turn.toolName)).findFirst().get();
+        assertEquals("Question sent; the correlated chief reply was admitted as supervisor input for the next worker step.",
+                toolResult.content);
+        assertFalse(toolResult.content.contains(reply.text));
+        ConversationTurn separateReply = transcript.stream().filter(turn -> turn.incomingMetadata != null
+                && reply.id.equals(turn.incomingMetadata.id)).findFirst().get();
+        assertEquals(ConversationInput.Origin.AGENT, separateReply.incomingMetadata.origin);
+        assertEquals(ConversationInput.Provenance.PrincipalRole.SUPERVISOR,
+                separateReply.incomingMetadata.provenance.principalRole);
+        assertEquals(reply.text, separateReply.content);
+        assertTrue(loop.checkpointSnapshot().appliedIncomingIds.contains(reply.id));
+        CrewInputIncorporation proof = loop.checkpointSnapshot().incorporations.get(reply.id);
+        assertEquals(CrewInputIncorporation.TransportKind.INBOX, proof.transportKind);
+        assertEquals(CrewInputIncorporation.transportSha256(reply.text), proof.transportSha256);
+        assertTrue("the reply is incorporated as its own later supervisor input", transcript.indexOf(toolResult) < transcript.indexOf(separateReply));
     }
 
     @Test public void compactedHistoricalProofSurvivesWithoutClaimingCurrentText() {
