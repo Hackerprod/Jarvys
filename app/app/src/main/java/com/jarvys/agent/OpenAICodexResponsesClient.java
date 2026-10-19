@@ -111,7 +111,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       CancellationToken token,
       TextDeltaListener listener) {
     JSONObject request =
-        buildRequest(systemPrompt, userPrompt, images, tools, history, false, null);
+        buildRequest(systemPrompt, userPrompt, images, tools, history, false);
     return execute(request, sessionId, token, AttachmentModelContext.hasImages(history), listener);
   }
 
@@ -166,7 +166,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
 
   private JSONObject buildRequest(
       String instructions, String userText, List<ScreenData> images, List<ToolSpec> tools) {
-    return buildRequest(instructions, userText, images, tools, null, true, null);
+    return buildRequest(instructions, userText, images, tools, null, true);
   }
 
   private JSONObject buildRequest(
@@ -175,8 +175,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       List<ScreenData> images,
       List<ToolSpec> tools,
       List<ConversationTurn> history,
-      boolean includeAndroidAgentInstructions,
-      ModelVariant variantOverride) {
+      boolean includeAndroidAgentInstructions) {
     try {
       JSONObject request = new JSONObject();
       String model = settings.getModel();
@@ -189,8 +188,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
               ? AgentPrompts.CODEX_INSTRUCTIONS + "\n\n" + instructions
               : instructions);
       request.put("input", userInput(userText, images, history, model));
-      ModelVariant variant =
-          variantOverride == null ? settings.getSelectedCodexVariant() : variantOverride;
+      ModelVariant variant = settings.getSelectedCodexVariant();
       request.put(
           "reasoning",
           new JSONObject()

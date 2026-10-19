@@ -61,6 +61,25 @@ public class LocalDiagnosticsTest {
     private JSONObject onDisk(File file) throws Exception {
         return new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
     }
+    private JSONObject requestWithEffort(String effort) throws Exception {
+        return new JSONObject().put("model", "gpt-6-astra")
+                .put("reasoning", new JSONObject().put("effort", effort).put("summary", "detailed"))
+                .put("text", new JSONObject().put("verbosity", "medium"))
+                .put("tools", new JSONArray().put(new JSONObject()).put(new JSONObject()));
+    }
+    private List<ToolSpec> requestDeclarations() {
+        return Arrays.asList(
+                new ToolSpec("search", "test", "", "web", ToolSpec.Status.IMPLEMENTED,
+                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()),
+                new ToolSpec("local", "test", "", "workspace", ToolSpec.Status.IMPLEMENTED,
+                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()));
+    }
+    private JSONObject[] records() throws Exception {
+        JSONArray rows = store.snapshot(null, LocalDiagnostics.MAX_RESULTS, true).getJSONArray("records");
+        JSONObject[] result = new JSONObject[rows.length()];
+        for (int index = 0; index < rows.length(); index++) result[index] = rows.getJSONObject(index);
+        return result;
+    }
 
     @Test public void capturesActualStructureAndReopensWithoutMessageFilenameOrSuppressedContent() throws Exception {
         RuntimeException failure = failure();
@@ -132,15 +151,8 @@ public class LocalDiagnosticsTest {
     }
 
     @Test public void modelRequestStoresOnlyEffectiveParametersAndRoundTripsThroughDiagnostics() throws Exception {
-        JSONObject request = new JSONObject().put("model", "gpt-6-astra")
-                .put("reasoning", new JSONObject().put("effort", "max").put("summary", "detailed"))
-                .put("text", new JSONObject().put("verbosity", "medium"))
-                .put("tools", new JSONArray().put(new JSONObject()).put(new JSONObject()));
-        List<ToolSpec> declarations = Arrays.asList(
-                new ToolSpec("search", "test", "", "web", ToolSpec.Status.IMPLEMENTED,
-                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()),
-                new ToolSpec("local", "test", "", "workspace", ToolSpec.Status.IMPLEMENTED,
-                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()));
+        JSONObject request = requestWithEffort("max");
+        List<ToolSpec> declarations = requestDeclarations();
 
         assertTrue(store.modelRequestRecord(request, declarations));
 
@@ -158,6 +170,57 @@ public class LocalDiagnosticsTest {
         LocalDiagnostics reopened = new LocalDiagnostics(base, time::get);
         assertEquals(row.toString(), reopened.snapshot(row.getString("id"), 1, true)
                 .getJSONArray("records").getJSONObject(0).toString());
+    }
+
+    @Test public void stableRequestsPersistOneParameterEventAndKeepEarlierFailure() throws Exception {
+        assertTrue(store.record(LocalDiagnostics.Origin.PROVIDER, failure(), false));
+        time.incrementAndGet();
+        JSONObject request = requestWithEffort("max");
+        List<ToolSpec> declarations = requestDeclarations();
+        assertTrue(store.modelRequestRecord(request, declarations));
+        for (int index = 0; index < LocalDiagnostics.SLOT_COUNT * 2; index++) {
+            assertFalse("stable effective parameters do not write duplicate records",
+                    store.modelRequestRecord(request, declarations));
+        }
+
+        JSONObject[] rows = records();
+        assertEquals(2, rows.length);
+        int modelRequests = 0;
+        boolean earlierFailureRemains = false;
+        for (JSONObject row : rows) {
+            if ("model_request".equals(row.getString("kind"))) modelRequests++;
+            if ("exception".equals(row.getString("kind"))) earlierFailureRemains = true;
+        }
+        assertEquals(1, modelRequests);
+        assertTrue("recording request parameters does not evict the previous provider failure", earlierFailureRemains);
+    }
+
+    @Test public void changedEffortPersistsANewEffectiveParameterEvent() throws Exception {
+        List<ToolSpec> declarations = requestDeclarations();
+        assertTrue(store.modelRequestRecord(requestWithEffort("max"), declarations));
+        time.incrementAndGet();
+        assertTrue(store.modelRequestRecord(requestWithEffort("high"), declarations));
+
+        assertEquals(2, records().length);
+        JSONObject changed = newest(true);
+        assertEquals("model_request", changed.getString("kind"));
+        assertEquals("high", changed.getJSONObject("model_request").getString("reasoning_effort"));
+    }
+
+    @Test public void failureWrittenAfterManyStableRequestsRemainsVisibleWithParameterEvent() throws Exception {
+        JSONObject request = requestWithEffort("max");
+        List<ToolSpec> declarations = requestDeclarations();
+        assertTrue(store.modelRequestRecord(request, declarations));
+        for (int index = 0; index < LocalDiagnostics.SLOT_COUNT * 2; index++) {
+            assertFalse(store.modelRequestRecord(request, declarations));
+        }
+        time.incrementAndGet();
+        assertTrue(store.record(LocalDiagnostics.Origin.PROVIDER, failure(), false));
+
+        JSONObject[] rows = records();
+        assertEquals(2, rows.length);
+        assertEquals("exception", newest(true).getString("kind"));
+        assertEquals("model_request", rows[1].getString("kind"));
     }
 
     @Test public void responseShapeValidatorRejectsOutOfRangeAndPrivateFields() throws Exception {

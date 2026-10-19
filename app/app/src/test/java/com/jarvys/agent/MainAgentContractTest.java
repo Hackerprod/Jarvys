@@ -27,6 +27,7 @@ public class MainAgentContractTest {
         "not task completion", "permission denial", "not instructions or permission", "physical-device acceptance"))
       assertTrue(fact, prompt.contains(fact));
     for (String restoredRule : Arrays.asList(
+        "Answer in the user's language unless asked otherwise;",
         "Follow the user's latest request and explicit limits",
         "Do not narrate every tool call",
         "Resolve references such as “that file”",
@@ -48,14 +49,14 @@ public class MainAgentContractTest {
     assertTrue(prompt.contains("Put math in a `latex` fence."));
     assertTrue(prompt.contains("Inline blocks serve chat; use module tools for files such as PPTX or PNG."));
     assertTrue(prompt.contains("{\"type\":\"bar\",\"title\":\"...\",\"labels\":[\"...\"],\"series\":[{\"name\":\"...\",\"values\":[...]}]} (type: bar, line, or pie)"));
-    assertTrue(prompt.contains("chat/user/tools"));
-    assertTrue(prompt.contains("well-known refs (approx.)"));
+    assertTrue(prompt.contains("Use chat, tools, or widely known reference figures; mark estimates as approximate;"));
     assertTrue(prompt.contains("chart useful numeric comparison/trend inline"));
     assertTrue(prompt.contains("brief for casual chat"));
     assertTrue(prompt.contains("complete, structured explanations, comparisons, and technical answers"));
     assertTrue(prompt.contains("unless brevity is requested"));
     assertTrue(prompt.contains("Use headings, tables, and inline charts when useful."));
     assertTrue(prompt.contains("search declared web tools before answering; never rely on memory."));
+    assertTrue(prompt.contains("For facts that may have changed or that the user needs exact"));
     assertTrue(prompt.contains("Tool evidence outranks memory"));
     assertTrue(prompt.contains("cite supported claims with returned IDs"));
     assertTrue(prompt.contains("Without web tools, say current facts cannot be verified"));
@@ -90,6 +91,9 @@ public class MainAgentContractTest {
     assertTrue(dateLine.matches("Runtime date: \\d{4}-\\d{2}-\\d{2}; device time zone: .+\\."));
     assertTrue(dateLine.endsWith("device time zone: " + zone.getId() + "."));
     assertTrue(prompt.contains("Runtime response locale:"));
+    String child = CoreAgentRuntime.withRuntimeDate("Delegated child instructions");
+    assertTrue(child.startsWith("Delegated child instructions\n\nRuntime date: "));
+    assertTrue(child.endsWith("device time zone: " + zone.getId() + "."));
   }
 
   @Test public void actualRegistryGatesDeliveryAndSkills() {

@@ -71,6 +71,7 @@ public final class LocalDiagnostics {
     private final String expectedBase;
     private final String expectedDirectory;
     private final LongSupplier clock;
+    private String lastModelRequestFingerprint;
 
     public static LocalDiagnostics get(Context context) {
         LocalDiagnostics current = instance;
@@ -142,7 +143,7 @@ public final class LocalDiagnostics {
         } catch (Throwable ignored) { }
     }
 
-    boolean modelRequestRecord(JSONObject request, List<ToolSpec> declaredTools) {
+    synchronized boolean modelRequestRecord(JSONObject request, List<ToolSpec> declaredTools) {
         if (request == null || Boolean.TRUE.equals(CAPTURING.get())) return false;
         try {
             JSONObject reasoning = request.optJSONObject("reasoning");
@@ -159,11 +160,15 @@ public final class LocalDiagnostics {
                     .put("declared_tool_count", toolCount)
                     .put("web_available", webAvailable);
             if (validateModelRequest(value) == null) return false;
+            String fingerprint = value.toString();
+            if (fingerprint.equals(lastModelRequestFingerprint)) return false;
             CAPTURING.set(true);
             long now = clock.getAsLong();
             JSONObject row = header(Origin.PROVIDER, "recoverable", "model_request", now, null);
             row.put("model_request", value);
-            return persist(row, now);
+            if (!persist(row, now)) return false;
+            lastModelRequestFingerprint = fingerprint;
+            return true;
         } catch (Throwable ignored) { return false; }
         finally { CAPTURING.remove(); }
     }

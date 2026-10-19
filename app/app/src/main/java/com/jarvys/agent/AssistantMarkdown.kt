@@ -75,6 +75,7 @@ import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownAnnotatorConfig
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.rememberMarkdownState
+import java.text.BreakIterator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownElementTypes
@@ -261,9 +262,9 @@ internal fun AssistantMarkdown(
     }
 }
 
-private data class AssistantMarkdownColumnMeasure(val minimum: Dp, val preferred: Dp)
+internal data class AssistantMarkdownColumnMeasure(val minimum: Dp, val preferred: Dp)
 
-private data class AssistantMarkdownTableLayout(
+internal data class AssistantMarkdownTableLayout(
     val columnWidths: List<Dp>,
     val minimumWidth: Dp,
     val totalWidth: Dp,
@@ -283,12 +284,16 @@ private fun AssistantMarkdownTable(model: MarkdownComponentModel) {
     val annotator = annotatorSettings()
     val textMeasurer = rememberTextMeasurer()
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val streaming = LocalAssistantMarkdownStreaming.current
     val rows = remember(model.node) { model.node.children.filter { it.type == HEADER || it.type == ROW } }
     val columnsCount = remember(rows) { rows.maxOfOrNull { row -> row.children.count { it.type == CELL } } ?: 0 }
     if (columnsCount == 0) return
 
-    val columnMeasures = remember(model.node, model.content, style, annotator, textMeasurer, density,
-        dimens.tableCellPadding) {
+    // The parser rebuilds the table AST as streamed content changes. Its cell offsets refer to the
+    // matching source string, so measure once while streaming and refresh when streaming ends.
+    val measurementContentKey = if (streaming) null else model.content
+    val columnMeasures = remember(model.node.startOffset, columnsCount, style, annotator, textMeasurer, density,
+        dimens.tableCellPadding, streaming, measurementContentKey) {
         measureAssistantMarkdownColumns(
             rows = rows,
             columnsCount = columnsCount,
@@ -406,21 +411,7 @@ private fun measureAssistantMarkdownColumns(
                 annotatorSettings = annotator,
             )
             widestCellPx = maxOf(widestCellPx, measureAssistantMarkdownTextPx(textMeasurer, annotated, cellStyle))
-            var runStart = 0
-            annotated.text.forEachIndexed { index, character ->
-                if (character.isWhitespace()) {
-                    if (index > runStart) {
-                        val run = annotated.text.substring(runStart, index)
-                        widestBreakableRunPx = maxOf(
-                            widestBreakableRunPx,
-                            measureAssistantMarkdownTextPx(textMeasurer, AnnotatedString(run), cellStyle),
-                        )
-                    }
-                    runStart = index + 1
-                }
-            }
-            if (runStart < annotated.text.length) {
-                val run = annotated.text.substring(runStart)
+            assistantMarkdownBreakableRuns(annotated.text).forEach { run ->
                 widestBreakableRunPx = maxOf(
                     widestBreakableRunPx,
                     measureAssistantMarkdownTextPx(textMeasurer, AnnotatedString(run), cellStyle),
@@ -435,6 +426,48 @@ private fun measureAssistantMarkdownColumns(
     }
 }
 
+private fun assistantMarkdownBreakableRuns(text: String): List<String> {
+    val breaks = BreakIterator.getLineInstance()
+    breaks.setText(text)
+    val urlLike = text.contains('/') && text.contains('.')
+    val result = ArrayList<String>()
+    var segmentStart = breaks.first()
+    var segmentEnd = breaks.next()
+    while (segmentEnd != BreakIterator.DONE) {
+        val segment = text.substring(segmentStart, segmentEnd)
+        var runStart = 0
+        var index = 0
+        while (index < segment.length) {
+            val codePoint = segment.codePointAt(index)
+            val codePointLength = Character.charCount(codePoint)
+            if (isAssistantMarkdownCjk(codePoint)) {
+                segment.substring(runStart, index).trim().takeIf { it.isNotEmpty() }?.let(result::add)
+                result.add(segment.substring(index, index + codePointLength))
+                runStart = index + codePointLength
+            } else if (urlLike && codePoint in URL_BREAK_AFTER) {
+                segment.substring(runStart, index + codePointLength).trim()
+                    .takeIf { it.isNotEmpty() }?.let(result::add)
+                runStart = index + codePointLength
+            }
+            index += codePointLength
+        }
+        segment.substring(runStart).trim().takeIf { it.isNotEmpty() }?.let(result::add)
+        segmentStart = segmentEnd
+        segmentEnd = breaks.next()
+    }
+    return result
+}
+
+private fun isAssistantMarkdownCjk(codePoint: Int): Boolean = when (Character.UnicodeScript.of(codePoint)) {
+    Character.UnicodeScript.HAN,
+    Character.UnicodeScript.HIRAGANA,
+    Character.UnicodeScript.KATAKANA,
+    Character.UnicodeScript.HANGUL -> true
+    else -> false
+}
+
+private val URL_BREAK_AFTER = setOf('/'.code, '?'.code, '&'.code, '='.code, '#'.code)
+
 private fun measureAssistantMarkdownTextPx(
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
     text: AnnotatedString,
@@ -448,11 +481,16 @@ private fun measureAssistantMarkdownTextPx(
     constraints = Constraints(maxWidth = Constraints.Infinity),
 ).size.width
 
-private fun allocateAssistantMarkdownTableWidth(
+internal fun allocateAssistantMarkdownTableWidth(
     measures: List<AssistantMarkdownColumnMeasure>,
     availableWidth: Dp,
 ): AssistantMarkdownTableLayout {
     val minimumWidth = measures.sumOf { it.minimum.value.toDouble() }.dp
+    if (!availableWidth.value.isFinite()) {
+        val widths = measures.map { maxOf(it.minimum, it.preferred) }
+        val totalWidth = widths.sumOf { it.value.toDouble() }.dp
+        return AssistantMarkdownTableLayout(widths, minimumWidth, totalWidth, horizontallyScrollable = false)
+    }
     if (minimumWidth > availableWidth) {
         return AssistantMarkdownTableLayout(
             columnWidths = measures.map { it.minimum },

@@ -152,6 +152,53 @@ class InlineMessageBlocksComposeTest {
         compose.onNodeWithText(unbreakable, useUnmergedTree = true).fetchSemanticsNode()
     }
 
+    @Test fun assistantTableUsesUnicodeLineBreaksForUnspacedText() {
+        val cjk = "日本語の表に長い説明があります".repeat(8)
+        val url = "https://example.com/" + "segment/".repeat(20)
+        var tableMeasurement: Triple<Dp, Dp, Boolean>? = null
+        val cellLayouts = mutableMapOf<String, TextLayoutResult>()
+        val markdown = "| Item | 説明 |\n|---|---|\n| 1 | $cjk |\n| 2 | $url |"
+        compose.setContent {
+            CompositionLocalProvider(LocalAssistantMarkdownTableLayoutObserver provides object : AssistantMarkdownTableLayoutObserver {
+                override fun onCellTextLayout(text: String, result: TextLayoutResult) {
+                    if (text.contains(cjk)) cellLayouts[cjk] = result
+                    if (text.contains(url)) cellLayouts[url] = result
+                }
+                override fun onTableLayout(minimumWidth: Dp, totalWidth: Dp, horizontallyScrollable: Boolean) {
+                    tableMeasurement = Triple(minimumWidth, totalWidth, horizontallyScrollable)
+                }
+            }) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    AssistantMarkdown(markdown, Modifier.width(360.dp), onOpenSkillFile = {})
+                }
+            }
+        }
+
+        compose.waitUntil(5_000L) { tableMeasurement != null && cellLayouts.size == 2 }
+        val (minimumWidth, _, isScrollable) = requireNotNull(tableMeasurement)
+        assertFalse("CJK line-break opportunities fit the available table width", isScrollable)
+        assertTrue("minimum width is based on breakable CJK runs: $minimumWidth", minimumWidth < 360.dp)
+        listOf(cjk, url).forEach { text ->
+            val layout = requireNotNull(cellLayouts[text])
+            assertTrue("unspaced text wraps at Unicode line-break opportunities", layout.lineCount > 1)
+            assertFalse("wrapped text has no visual overflow", layout.hasVisualOverflow)
+        }
+    }
+
+    @Test fun assistantTableUsesMeasuredWidthsForUnboundedConstraints() {
+        val measures = listOf(
+            AssistantMarkdownColumnMeasure(24.dp, 60.dp),
+            AssistantMarkdownColumnMeasure(30.dp, 50.dp),
+        )
+        listOf(Float.POSITIVE_INFINITY.dp, Dp.Unspecified).forEach { availableWidth ->
+            val layout = allocateAssistantMarkdownTableWidth(measures, availableWidth)
+            assertEquals(listOf(60.dp, 50.dp), layout.columnWidths)
+            assertEquals(110f, layout.totalWidth.value, 0.01f)
+            assertTrue("unbounded allocation stays finite", layout.totalWidth.value.isFinite())
+            assertFalse(layout.horizontallyScrollable)
+        }
+    }
+
     @Test fun staticAssistantMarkdownReentryDoesNotShowLoadingOrChangeRowHeight() {
         val svg = """```svg
             |<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Scroll re-entry diagram</title><circle cx="25" cy="25" r="15" fill="currentColor"/></svg>
