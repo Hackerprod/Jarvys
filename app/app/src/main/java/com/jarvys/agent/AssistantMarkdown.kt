@@ -1,8 +1,20 @@
 package com.jarvys.agent
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -28,16 +40,34 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.times
 import com.jarvys.agent.skills.SkillFileLink
 import com.jarvys.agent.skills.SkillFileLinkParser
 import com.jarvys.agent.skills.SkillRepository
+import com.mikepenz.markdown.annotator.annotatorSettings
+import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.LocalMarkdownComponents
+import com.mikepenz.markdown.compose.LocalMarkdownColors
+import com.mikepenz.markdown.compose.LocalMarkdownDimens
 import com.mikepenz.markdown.compose.MarkdownElement
+import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
+import com.mikepenz.markdown.compose.elements.MarkdownDivider
 import com.mikepenz.markdown.compose.elements.MarkdownText
+import com.mikepenz.markdown.compose.elements.material.MarkdownBasicText
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -49,6 +79,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes.HEADER
+import org.intellij.markdown.flavours.gfm.GFMElementTypes.ROW
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes.CELL
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes.TABLE_SEPARATOR
 
 internal interface AssistantMarkdownRenderObserver {
     fun onLoadingComposed()
@@ -72,6 +107,12 @@ internal class AssistantMarkdownSuccessCache {
 
 internal val LocalAssistantMarkdownSuccessCache = compositionLocalOf<AssistantMarkdownSuccessCache?> { null }
 internal val LocalAssistantMarkdownRenderObserver = compositionLocalOf<AssistantMarkdownRenderObserver?> { null }
+internal interface AssistantMarkdownTableLayoutObserver {
+    fun onCellTextLayout(text: String, result: TextLayoutResult)
+    fun onTableLayout(minimumWidth: Dp, totalWidth: Dp, horizontallyScrollable: Boolean)
+}
+internal val LocalAssistantMarkdownTableLayoutObserver =
+    compositionLocalOf<AssistantMarkdownTableLayoutObserver?> { null }
 private val LocalAssistantMarkdownStreaming = compositionLocalOf { false }
 
 @Composable
@@ -162,10 +203,13 @@ internal fun AssistantMarkdown(
             val observer = LocalAssistantMarkdownRenderObserver.current
             // Read streaming inside the callback so promotion does not replace the MarkdownComponents instance.
             val components = remember {
-                markdownComponents(codeFence = { model ->
-                    RenderAssistantCodeFence(model.content, model.node, model.typography.code,
-                        LocalAssistantMarkdownStreaming.current)
-                })
+                markdownComponents(
+                    codeFence = { model ->
+                        RenderAssistantCodeFence(model.content, model.node, model.typography.code,
+                            LocalAssistantMarkdownStreaming.current)
+                    },
+                    table = { model -> AssistantMarkdownTable(model) },
+                )
             }
             val successCache = if (streaming) null else LocalAssistantMarkdownSuccessCache.current
             val cachedSuccess = successCache?.get(normalizedMarkdown)
@@ -215,6 +259,221 @@ internal fun AssistantMarkdown(
             }
         }
     }
+}
+
+private data class AssistantMarkdownColumnMeasure(val minimum: Dp, val preferred: Dp)
+
+private data class AssistantMarkdownTableLayout(
+    val columnWidths: List<Dp>,
+    val minimumWidth: Dp,
+    val totalWidth: Dp,
+    val horizontallyScrollable: Boolean,
+)
+
+/**
+ * The upstream table renderer limits every cell to one line. Assistant tables instead wrap normally,
+ * allocate available width by the columns' measured content, and scroll only when an unbreakable run
+ * cannot fit in the available width.
+ */
+@Composable
+private fun AssistantMarkdownTable(model: MarkdownComponentModel) {
+    val style = model.typography.table
+    val dimens = LocalMarkdownDimens.current
+    val colors = LocalMarkdownColors.current
+    val annotator = annotatorSettings()
+    val textMeasurer = rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val rows = remember(model.node) { model.node.children.filter { it.type == HEADER || it.type == ROW } }
+    val columnsCount = remember(rows) { rows.maxOfOrNull { row -> row.children.count { it.type == CELL } } ?: 0 }
+    if (columnsCount == 0) return
+
+    val columnMeasures = remember(model.node, model.content, style, annotator, textMeasurer, density,
+        dimens.tableCellPadding) {
+        measureAssistantMarkdownColumns(
+            rows = rows,
+            columnsCount = columnsCount,
+            content = model.content,
+            style = style,
+            annotator = annotator,
+            textMeasurer = textMeasurer,
+            density = density,
+            cellPadding = dimens.tableCellPadding,
+        )
+    }
+    BoxWithConstraints(
+        modifier = Modifier
+            .widthIn(max = dimens.tableMaxWidth)
+            .fillMaxWidth()
+            .background(colors.tableBackground, RoundedCornerShape(dimens.tableCornerSize)),
+    ) {
+        val layout = remember(columnMeasures, maxWidth) {
+            allocateAssistantMarkdownTableWidth(columnMeasures, maxWidth)
+        }
+        val layoutObserver = LocalAssistantMarkdownTableLayoutObserver.current
+        SideEffect { layoutObserver?.onTableLayout(layout.minimumWidth, layout.totalWidth, layout.horizontallyScrollable) }
+        Column(
+            modifier = if (layout.horizontallyScrollable) {
+                Modifier.horizontalScroll(rememberScrollState()).requiredWidth(layout.totalWidth)
+            } else {
+                Modifier.width(layout.totalWidth)
+            },
+        ) {
+            model.node.children.forEach { child ->
+                when (child.type) {
+                    HEADER, ROW -> AssistantMarkdownTableRow(
+                        content = model.content,
+                        row = child,
+                        columnWidths = layout.columnWidths,
+                        totalWidth = layout.totalWidth,
+                        style = style,
+                        header = child.type == HEADER,
+                        annotator = annotator,
+                    )
+                    TABLE_SEPARATOR -> MarkdownDivider()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantMarkdownTableRow(
+    content: String,
+    row: ASTNode,
+    columnWidths: List<Dp>,
+    totalWidth: Dp,
+    style: TextStyle,
+    header: Boolean,
+    annotator: com.mikepenz.markdown.annotator.AnnotatorSettings,
+) {
+    val components = LocalMarkdownComponents.current
+    val padding = LocalMarkdownDimens.current.tableCellPadding
+    val layoutObserver = LocalAssistantMarkdownTableLayoutObserver.current
+    val cellStyle = (if (header) style.copy(fontWeight = FontWeight.Bold) else style)
+        .copy(lineBreak = LineBreak.Simple)
+    val cells = remember(row) { row.children.filter { it.type == CELL } }
+    Row(modifier = Modifier.width(totalWidth), verticalAlignment = Alignment.CenterVertically) {
+        columnWidths.forEachIndexed { index, columnWidth ->
+            val cell = cells.getOrNull(index)
+            if (cell == null) {
+                Spacer(Modifier.width(columnWidth))
+            } else {
+                Column(modifier = Modifier.width(columnWidth).padding(padding)) {
+                    if (cell.children.any { it.type == MarkdownElementTypes.IMAGE }) {
+                        MarkdownElement(node = cell, components = components, content = content, includeSpacer = false)
+                    } else {
+                        val annotatedText = remember(cell, content, cellStyle, annotator) {
+                            content.buildMarkdownAnnotatedString(
+                                textNode = cell,
+                                style = cellStyle,
+                                annotatorSettings = annotator,
+                            )
+                        }
+                        MarkdownBasicText(
+                            text = annotatedText,
+                            style = cellStyle,
+                            overflow = TextOverflow.Clip,
+                            softWrap = true,
+                            onTextLayout = { result -> layoutObserver?.onCellTextLayout(annotatedText.text, result) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun measureAssistantMarkdownColumns(
+    rows: List<ASTNode>,
+    columnsCount: Int,
+    content: String,
+    style: TextStyle,
+    annotator: com.mikepenz.markdown.annotator.AnnotatorSettings,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    density: Density,
+    cellPadding: Dp,
+): List<AssistantMarkdownColumnMeasure> = with(density) {
+    List(columnsCount) { columnIndex ->
+        var widestBreakableRunPx = 0
+        var widestCellPx = 0
+        rows.forEach { row ->
+            val cell = row.children.filter { it.type == CELL }.getOrNull(columnIndex) ?: return@forEach
+            val cellStyle = (if (row.type == HEADER) style.copy(fontWeight = FontWeight.Bold) else style)
+                .copy(lineBreak = LineBreak.Simple)
+            val annotated = content.buildMarkdownAnnotatedString(
+                textNode = cell,
+                style = cellStyle,
+                annotatorSettings = annotator,
+            )
+            widestCellPx = maxOf(widestCellPx, measureAssistantMarkdownTextPx(textMeasurer, annotated, cellStyle))
+            var runStart = 0
+            annotated.text.forEachIndexed { index, character ->
+                if (character.isWhitespace()) {
+                    if (index > runStart) {
+                        val run = annotated.text.substring(runStart, index)
+                        widestBreakableRunPx = maxOf(
+                            widestBreakableRunPx,
+                            measureAssistantMarkdownTextPx(textMeasurer, AnnotatedString(run), cellStyle),
+                        )
+                    }
+                    runStart = index + 1
+                }
+            }
+            if (runStart < annotated.text.length) {
+                val run = annotated.text.substring(runStart)
+                widestBreakableRunPx = maxOf(
+                    widestBreakableRunPx,
+                    measureAssistantMarkdownTextPx(textMeasurer, AnnotatedString(run), cellStyle),
+                )
+            }
+        }
+        val horizontalPadding = cellPadding * 2
+        AssistantMarkdownColumnMeasure(
+            minimum = widestBreakableRunPx.toDp() + horizontalPadding,
+            preferred = widestCellPx.toDp() + horizontalPadding,
+        )
+    }
+}
+
+private fun measureAssistantMarkdownTextPx(
+    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    text: AnnotatedString,
+    style: TextStyle,
+): Int = textMeasurer.measure(
+    text = text,
+    style = style,
+    overflow = TextOverflow.Clip,
+    softWrap = false,
+    maxLines = 1,
+    constraints = Constraints(maxWidth = Constraints.Infinity),
+).size.width
+
+private fun allocateAssistantMarkdownTableWidth(
+    measures: List<AssistantMarkdownColumnMeasure>,
+    availableWidth: Dp,
+): AssistantMarkdownTableLayout {
+    val minimumWidth = measures.sumOf { it.minimum.value.toDouble() }.dp
+    if (minimumWidth > availableWidth) {
+        return AssistantMarkdownTableLayout(
+            columnWidths = measures.map { it.minimum },
+            minimumWidth = minimumWidth,
+            totalWidth = minimumWidth,
+            horizontallyScrollable = true,
+        )
+    }
+
+    val extraWidth = availableWidth - minimumWidth
+    val weights = measures.map { (it.preferred - it.minimum).coerceAtLeast(0.dp).value.toDouble() }
+    val weightTotal = weights.sum()
+    val widths = measures.mapIndexed { index, measure ->
+        val extra = if (weightTotal > 0.0) {
+            extraWidth * (weights[index] / weightTotal).toFloat()
+        } else {
+            extraWidth / measures.size
+        }
+        measure.minimum + extra
+    }
+    return AssistantMarkdownTableLayout(widths, minimumWidth, availableWidth, horizontallyScrollable = false)
 }
 
 internal fun messageMarkdownUriHandler(

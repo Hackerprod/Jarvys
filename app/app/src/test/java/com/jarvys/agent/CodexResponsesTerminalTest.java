@@ -6,20 +6,25 @@ import androidx.test.core.app.ApplicationProvider;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 /** Protocol regression fixtures only. No network, account access, or provider replay. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 34)
+@Config(sdk = 34, application = android.app.Application.class,
+        shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class CodexResponsesTerminalTest {
+    @Rule public final TemporaryFolder diagnosticsFolder = new TemporaryFolder();
     private ProviderSettings settings;
     private SecretStore secrets;
     @Before public void setup() {
@@ -59,6 +64,46 @@ public class CodexResponsesTerminalTest {
         assertEquals(1, reply.calls.size());
         assertEquals("fixture_write", reply.calls.get(0).name);
         fixture.assertClosedOnce();
+    }
+
+    @Test public void selectedMaximumEffortIsUsedByThePreparedResponsesRequest() throws Exception {
+        settings.setCodexModelAndVariant("gpt-6-astra", "max");
+        Context context = ApplicationProvider.getApplicationContext();
+        Field singleton = LocalDiagnostics.class.getDeclaredField("instance");
+        singleton.setAccessible(true);
+        Object previousDiagnostics = singleton.get(null);
+        LocalDiagnostics diagnostics = new LocalDiagnostics(diagnosticsFolder.newFolder("no-backup"), System::currentTimeMillis);
+        singleton.set(null, diagnostics);
+        List<ToolSpec> declarations = Collections.singletonList(new ToolSpec("search", "test", "", "web",
+                ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList()));
+        Fixture fixture = fixture(sse(completed("Done")), true, 5);
+        fixture.diagnosticsContext = context;
+        try {
+            assertEquals("Done", fixture.completeWithTools(declarations).text);
+
+            JSONObject request = new JSONObject(fixture.connection.requestBody.toString(StandardCharsets.UTF_8.name()));
+            assertEquals("gpt-6-astra", request.getString("model"));
+            assertEquals("max", request.getJSONObject("reasoning").getString("effort"));
+            assertEquals("detailed", request.getJSONObject("reasoning").getString("summary"));
+            assertEquals("medium", request.getJSONObject("text").getString("verbosity"));
+            assertEquals(1, request.getJSONArray("tools").length());
+
+            JSONObject snapshot = diagnostics.snapshot(null, 10, false);
+            assertEquals("ok", snapshot.getString("status"));
+            JSONArray records = snapshot.getJSONArray("records");
+            assertEquals(1, records.length());
+            JSONObject event = records.getJSONObject(0);
+            assertEquals("model_request", event.getString("kind"));
+            JSONObject parameters = event.getJSONObject("model_request");
+            assertEquals("gpt-6-astra", parameters.getString("model"));
+            assertEquals("max", parameters.getString("reasoning_effort"));
+            assertEquals("detailed", parameters.getString("reasoning_summary"));
+            assertEquals("medium", parameters.getString("text_verbosity"));
+            assertEquals(1, parameters.getInt("declared_tool_count"));
+            assertTrue(parameters.getBoolean("web_available"));
+        } finally {
+            singleton.set(null, previousDiagnostics);
+        }
     }
 
     @Test public void completedCodexReplyRetainsOrderedReasoningItemsThroughTheAdapter() throws Exception {
@@ -365,6 +410,7 @@ public class CodexResponsesTerminalTest {
     private final class Fixture implements ProviderHttp.ConnectionFactory {
         final FakeConnection connection;
         final CancellationToken token = CancellationToken.cancellable();
+        Context diagnosticsContext;
         int opens;
         int credentialRequests;
         Fixture(FakeConnection connection) { this.connection = connection; }
@@ -377,13 +423,21 @@ public class CodexResponsesTerminalTest {
             return complete(null);
         }
         ModelReply complete(ModelProviderClient.TextDeltaListener listener) {
-            OpenAICodexResponsesClient client = new OpenAICodexResponsesClient(settings, (refresh, ignored) -> {
+            return completeWithTools(listener, Collections.emptyList());
+        }
+        ModelReply completeWithTools(List<ToolSpec> tools) {
+            return completeWithTools(null, tools);
+        }
+        private ModelReply completeWithTools(ModelProviderClient.TextDeltaListener listener, List<ToolSpec> tools) {
+            CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider = (refresh, ignored) -> {
                 credentialRequests++;
                 assertFalse("No refresh/replay for stream failures", refresh);
                 return secrets.getCodexCredentials();
-            }, this);
+            };
+            OpenAICodexResponsesClient client = new OpenAICodexResponsesClient(
+                    diagnosticsContext, settings, credentialProvider, this);
             return client.completeConversation("synthetic system", Collections.emptyList(), "synthetic user",
-                    Collections.emptyList(), Collections.emptyList(), "synthetic-terminal", token, listener);
+                    Collections.emptyList(), tools, "synthetic-terminal", token, listener);
         }
         void assertClosedOnce() {
             assertEquals(1, opens);
@@ -399,6 +453,7 @@ public class CodexResponsesTerminalTest {
         final byte[] payload;
         final boolean failPastPayload;
         final int chunk;
+        final ByteArrayOutputStream requestBody = new ByteArrayOutputStream();
         int offset, readsPastPayload, status = 200;
         boolean disconnected, streamClosed;
         EndAction atEnd;
@@ -410,7 +465,7 @@ public class CodexResponsesTerminalTest {
         @Override public void connect() { }
         @Override public void disconnect() { disconnected = true; }
         @Override public boolean usingProxy() { return false; }
-        @Override public OutputStream getOutputStream() { return new ByteArrayOutputStream(); }
+        @Override public OutputStream getOutputStream() { return requestBody; }
         @Override public int getResponseCode() { return status; }
         @Override public InputStream getErrorStream() { return getInputStream(); }
         @Override public InputStream getInputStream() {

@@ -1,6 +1,6 @@
 # Inline chat blocks
 
-Assistant Markdown fences are dispatched by the language-to-renderer registry in `InlineBlockRenderers.kt`. SVG, chart, and LaTeX blocks draw natively in Compose. Ordinary Markdown remains on the existing renderer path, which includes GFM tables and applies horizontal scrolling when a table is wider than its measured message area. Invalid or unfinished final special fences fall back to copyable code.
+Assistant Markdown fences are dispatched by the language-to-renderer registry in `InlineBlockRenderers.kt`. SVG, chart, and LaTeX blocks draw natively in Compose. Assistant GFM tables wrap full cell text, divide the available width in proportion to measured column content, and scroll horizontally only when an unbreakable cell run needs more width than the message area. User-message tables and Markdown rendered outside assistant replies keep the library renderer. Invalid or unfinished final special fences fall back to copyable code.
 
 ## Scroll re-entry
 

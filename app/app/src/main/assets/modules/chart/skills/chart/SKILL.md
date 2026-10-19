@@ -1,13 +1,13 @@
 ---
 id: jarvys-chart
 name: Crear gráficas
-description: Crea gráficas interactivas con el módulo de gráficas.
+description: Crea y guarda con create_chart una gráfica interactiva para el visor cuando el usuario pide un archivo; para ilustrar una respuesta, usa el bloque chart inline.
 version: 1
 allowed-tools: [create_chart]
 tags: [chart, visualization]
 ---
 
-Cuando necesites mostrar datos como gráfica, usa la herramienta `create_chart`.
+Usa esta skill cuando el usuario pida crear o guardar un artefacto de gráfica interactiva para abrir en el visor. Para ilustrar una respuesta, usa el bloque `chart` inline de Markdown; en ese caso no crees un artefacto.
 
 Indica un título, un `chartType` admitido (`bar`, `bubble`, `doughnut`, `line`, `pie`, `polarArea`, `radar` o `scatter`), una lista `labels` y una lista `datasets`. Cada serie incluye `label` y `data`, con un valor por etiqueta. Puedes añadir colores y opciones JSON de Chart.js cuando ayuden a leer los datos. La herramienta devuelve el id real del artefacto guardado en esta conversación.
 

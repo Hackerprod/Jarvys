@@ -108,6 +108,15 @@ class PersonalAgentBehaviorTest {
         assertTrue(prompt.contains("<user_profile"))
     }
 
+    @Test fun bundledDefaultSoulMatchesAnswerDepthToTheQuestion() {
+        val soul = bridge.personalAgentPromptContext("fresh-session", false).soul
+
+        assertTrue(soul.contains("Be calm, direct, curious, and useful."))
+        assertTrue(soul.contains("brief in casual chat or when requested"))
+        assertTrue(soul.contains("explanations, comparisons, and technical answers complete and well structured"))
+        assertTrue(soul.contains("Follow the user's current request and language."))
+    }
+
     @Test fun scenario04_profileRemainsInPromptAfterCompactionStateAdvances() {
         val session = "compacted-session"
         bridge.personalAgentSetDirective("profession", "The user is a developer.", "m1", "explicit")

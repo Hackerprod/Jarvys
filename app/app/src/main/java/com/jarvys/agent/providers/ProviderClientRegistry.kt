@@ -15,12 +15,15 @@ import com.jarvys.agent.SecretStore
 object ProviderClientRegistry {
     class Descriptor internal constructor(
         val provider: ProviderSettings.Provider,
-        private val clientFactory: (SecretStore, ProviderSettings) -> ModelProviderClient,
+        private val clientFactory: (Context?, SecretStore, ProviderSettings) -> ModelProviderClient,
         private val configured: (SecretStore, ProviderSettings) -> Boolean,
         private val contextWindowResolver: (Context, String, CancellationToken) -> Int?,
     ) {
+        fun createClient(context: Context?, secrets: SecretStore, settings: ProviderSettings): ModelProviderClient =
+            clientFactory(context, secrets, settings)
+
         fun createClient(secrets: SecretStore, settings: ProviderSettings): ModelProviderClient =
-            clientFactory(secrets, settings)
+            createClient(null, secrets, settings)
 
         fun isConfigured(secrets: SecretStore, settings: ProviderSettings): Boolean = configured(secrets, settings)
 
@@ -33,14 +36,14 @@ object ProviderClientRegistry {
 
     private val openAiCodex = Descriptor(
         provider = ProviderSettings.Provider.OPENAI_CODEX,
-        clientFactory = { secrets, settings -> OpenAICodexResponsesClient(CodexOAuthManager(secrets), settings) },
+        clientFactory = { context, secrets, settings -> OpenAICodexResponsesClient(context, CodexOAuthManager(secrets), settings) },
         configured = { secrets, _ -> secrets.codexCredentials != null },
         contextWindowResolver = { context, model, token -> CodexModelCatalog.contextLimitForRun(context, model, token) },
     )
 
     private val openAiApi = Descriptor(
         provider = ProviderSettings.Provider.OPENAI_API,
-        clientFactory = { secrets, settings ->
+        clientFactory = { _, secrets, settings ->
             OpenRouterClient(secrets, settings, ChatCompletionsConfig.openAiApiDefault())
         },
         configured = { secrets, _ -> !secrets.openAiApiKey.isNullOrBlank() },
@@ -51,7 +54,7 @@ object ProviderClientRegistry {
 
     private val custom = Descriptor(
         provider = ProviderSettings.Provider.CUSTOM,
-        clientFactory = { secrets, settings ->
+        clientFactory = { _, secrets, settings ->
             CustomEndpointCompatibilityRegistry.descriptor(
                 CustomEndpointCompatibilityRegistry.parse(settings.customCompatibility)
                     ?: throw IllegalStateException("Custom endpoint compatibility is unavailable"),
@@ -67,7 +70,7 @@ object ProviderClientRegistry {
 
     private val openRouter = Descriptor(
         provider = ProviderSettings.Provider.OPENROUTER,
-        clientFactory = { secrets, settings -> OpenRouterClient(secrets, settings) },
+        clientFactory = { _, secrets, settings -> OpenRouterClient(secrets, settings) },
         configured = { secrets, _ -> !secrets.openRouterKey.isNullOrBlank() },
         contextWindowResolver = { context, model, token ->
             ProviderContextWindowResolver.openRouterContextWindow(context, model, token)
@@ -88,6 +91,14 @@ object ProviderClientRegistry {
         secrets: SecretStore,
         settings: ProviderSettings,
     ): ModelProviderClient = descriptor(provider).createClient(secrets, settings)
+
+    @JvmStatic
+    fun createClient(
+        provider: ProviderSettings.Provider,
+        secrets: SecretStore,
+        settings: ProviderSettings,
+        context: Context?,
+    ): ModelProviderClient = descriptor(provider).createClient(context, secrets, settings)
 
     @JvmStatic
     fun isConfigured(provider: ProviderSettings.Provider, secrets: SecretStore, settings: ProviderSettings): Boolean =

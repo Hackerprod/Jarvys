@@ -8,6 +8,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -128,6 +129,35 @@ public class LocalDiagnosticsTest {
         } finally {
             singleton.set(null, previous);
         }
+    }
+
+    @Test public void modelRequestStoresOnlyEffectiveParametersAndRoundTripsThroughDiagnostics() throws Exception {
+        JSONObject request = new JSONObject().put("model", "gpt-6-astra")
+                .put("reasoning", new JSONObject().put("effort", "max").put("summary", "detailed"))
+                .put("text", new JSONObject().put("verbosity", "medium"))
+                .put("tools", new JSONArray().put(new JSONObject()).put(new JSONObject()));
+        List<ToolSpec> declarations = Arrays.asList(
+                new ToolSpec("search", "test", "", "web", ToolSpec.Status.IMPLEMENTED,
+                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()),
+                new ToolSpec("local", "test", "", "workspace", ToolSpec.Status.IMPLEMENTED,
+                        java.util.Collections.emptyMap(), java.util.Collections.emptyList()));
+
+        assertTrue(store.modelRequestRecord(request, declarations));
+
+        JSONObject row = newest(true);
+        assertEquals("model_request", row.getString("kind"));
+        JSONObject parameters = row.getJSONObject("model_request");
+        assertEquals("gpt-6-astra", parameters.getString("model"));
+        assertEquals("max", parameters.getString("reasoning_effort"));
+        assertEquals("detailed", parameters.getString("reasoning_summary"));
+        assertEquals("medium", parameters.getString("text_verbosity"));
+        assertEquals(2, parameters.getInt("declared_tool_count"));
+        assertTrue(parameters.getBoolean("web_available"));
+        assertFalse("Request content and tool names are excluded", row.toString().contains("search"));
+
+        LocalDiagnostics reopened = new LocalDiagnostics(base, time::get);
+        assertEquals(row.toString(), reopened.snapshot(row.getString("id"), 1, true)
+                .getJSONArray("records").getJSONObject(0).toString());
     }
 
     @Test public void responseShapeValidatorRejectsOutOfRangeAndPrivateFields() throws Exception {

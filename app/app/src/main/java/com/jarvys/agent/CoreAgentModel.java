@@ -16,7 +16,7 @@ public final class CoreAgentModel {
     this.settings = context == null ? null : new ProviderSettings(context);
     SecretStore secrets = SecretStore.get(context);
     provider =
-        ProviderClientRegistry.createClient(this.settings.getProvider(), secrets, this.settings);
+        ProviderClientRegistry.createClient(this.settings.getProvider(), secrets, this.settings, this.context);
     this.sessionId = sessionId;
   }
 

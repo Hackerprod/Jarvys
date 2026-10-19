@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import android.os.Build;
+import android.content.Context;
 import android.util.Log;
 import com.jarvys.agent.device.ScreenData;
 import java.io.InputStream;
@@ -25,18 +26,30 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   static final String OUTPUT_API = "responses";
   private static final String TAG = "JarvysCodex";
   private static final String OPENAI_BETA = "responses=experimental";
+  private final Context diagnosticsContext;
   private final ProviderSettings settings;
   private final CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider;
   private final ProviderHttp.ConnectionFactory connectionFactory;
 
   public OpenAICodexResponsesClient(CodexOAuthManager oauth, ProviderSettings settings) {
-    this(settings, (forceRefresh, token) -> oauth.getValidCredentials(forceRefresh, token),
+    this(null, oauth, settings);
+  }
+
+  public OpenAICodexResponsesClient(Context context, CodexOAuthManager oauth, ProviderSettings settings) {
+    this(context, settings, (forceRefresh, token) -> oauth.getValidCredentials(forceRefresh, token),
         ProviderHttp.DEFAULT_CONNECTION_FACTORY);
   }
 
   OpenAICodexResponsesClient(ProviderSettings settings,
       CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider,
       ProviderHttp.ConnectionFactory connectionFactory) {
+    this(null, settings, credentialProvider, connectionFactory);
+  }
+
+  OpenAICodexResponsesClient(Context context, ProviderSettings settings,
+      CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider,
+      ProviderHttp.ConnectionFactory connectionFactory) {
+    this.diagnosticsContext = context == null ? null : context.getApplicationContext();
     this.settings = settings;
     this.credentialProvider = java.util.Objects.requireNonNull(credentialProvider);
     this.connectionFactory = java.util.Objects.requireNonNull(connectionFactory);
@@ -190,6 +203,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         request.put("tool_choice", "auto");
         request.put("parallel_tool_calls", true);
       }
+      LocalDiagnostics.modelRequest(diagnosticsContext, request, tools);
       return request;
     } catch (Exception e) {
       throw new IllegalStateException("Could not prepare Codex Responses request", e);

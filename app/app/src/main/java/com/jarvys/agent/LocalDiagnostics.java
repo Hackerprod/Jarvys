@@ -133,6 +133,41 @@ public final class LocalDiagnostics {
         } catch (Throwable ignored) { }
     }
 
+    /** Stores only the effective, content-free parameters of one prepared Codex Responses request. */
+    static void modelRequest(Context context, JSONObject request, List<ToolSpec> declaredTools) {
+        try {
+            if (context == null || request == null) return;
+            Context app = context.getApplicationContext();
+            if (app != null) get(app).modelRequestRecord(request, declaredTools);
+        } catch (Throwable ignored) { }
+    }
+
+    boolean modelRequestRecord(JSONObject request, List<ToolSpec> declaredTools) {
+        if (request == null || Boolean.TRUE.equals(CAPTURING.get())) return false;
+        try {
+            JSONObject reasoning = request.optJSONObject("reasoning");
+            JSONObject text = request.optJSONObject("text");
+            JSONArray tools = request.optJSONArray("tools");
+            int toolCount = tools == null ? 0 : tools.length();
+            boolean webAvailable = declaredTools != null && declaredTools.stream()
+                    .anyMatch(tool -> tool != null && "web".equals(tool.category));
+            JSONObject value = new JSONObject()
+                    .put("model", request.optString("model", ""))
+                    .put("reasoning_effort", reasoning == null ? "" : reasoning.optString("effort", ""))
+                    .put("reasoning_summary", reasoning == null ? "" : reasoning.optString("summary", ""))
+                    .put("text_verbosity", text == null ? "" : text.optString("verbosity", ""))
+                    .put("declared_tool_count", toolCount)
+                    .put("web_available", webAvailable);
+            if (validateModelRequest(value) == null) return false;
+            CAPTURING.set(true);
+            long now = clock.getAsLong();
+            JSONObject row = header(Origin.PROVIDER, "recoverable", "model_request", now, null);
+            row.put("model_request", value);
+            return persist(row, now);
+        } catch (Throwable ignored) { return false; }
+        finally { CAPTURING.remove(); }
+    }
+
     boolean responseShapeRecord(ResponseDiagnostics.CodexShape shape, int textLength) {
         if (shape == null || textLength < 0 || textLength > ResponseDiagnosticsParser.MAX_BODY_CHARACTERS
                 || Boolean.TRUE.equals(CAPTURING.get())) return false;
@@ -412,9 +447,13 @@ public final class LocalDiagnostics {
             // Animation observations are no longer retained. Ignore old slots as well as new writes.
             if ("animation".equals(raw.opt("kind"))) return null;
             boolean responseShape = "response_shape".equals(raw.opt("kind"));
+            boolean modelRequest = "model_request".equals(raw.opt("kind"));
             if (responseShape) {
                 if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                         "severity", "kind", "http_status", "causes", "truncated", "response_shape")) return null;
+            } else if (modelRequest) {
+                if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
+                        "severity", "kind", "http_status", "causes", "truncated", "model_request")) return null;
             } else if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                     "severity", "kind", "http_status", "causes", "truncated")) return null;
             if (integer(raw.opt("schema"), 1, 1, -1) != 1 || !(raw.opt("id") instanceof String)
@@ -426,7 +465,7 @@ public final class LocalDiagnostics {
             String flavor = fixed(raw.opt("flavor"), "play", "full");
             String severity = fixed(raw.opt("severity"), "recoverable", "fatal");
             if (responseShape) severity = fixed(raw.opt("severity"), "recoverable");
-            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "response_shape");
+            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "response_shape", "model_request");
             String origin = raw.opt("origin") instanceof String ? (String) raw.opt("origin") : "";
             try { Origin.valueOf(origin); } catch (IllegalArgumentException invalid) { return null; }
             if (flavor == null || severity == null || kind == null || !(raw.opt("truncated") instanceof Boolean)) return null;
@@ -440,8 +479,11 @@ public final class LocalDiagnostics {
             boolean invalidResponseShape = "response_shape".equals(kind)
                     && (inputCauses.length() != 0 || !"PROVIDER".equals(origin)
                     || !"recoverable".equals(severity));
+            boolean invalidModelRequest = "model_request".equals(kind)
+                    && (inputCauses.length() != 0 || !"PROVIDER".equals(origin)
+                    || !"recoverable".equals(severity));
             if (inputCauses.length() > MAX_CAUSES || ("exception".equals(kind) && inputCauses.length() == 0)
-                    || invalidCompatibility || invalidResponseShape) return null;
+                    || invalidCompatibility || invalidResponseShape || invalidModelRequest) return null;
             JSONObject cleanResponseShape = null;
             if (responseShape) {
                 if (!"PROVIDER".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
@@ -449,12 +491,20 @@ public final class LocalDiagnostics {
                 cleanResponseShape = validateResponseShape(raw.optJSONObject("response_shape"));
                 if (cleanResponseShape == null) return null;
             }
+            JSONObject cleanModelRequest = null;
+            if (modelRequest) {
+                if (!"PROVIDER".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
+                        || raw.getBoolean("truncated")) return null;
+                cleanModelRequest = validateModelRequest(raw.optJSONObject("model_request"));
+                if (cleanModelRequest == null) return null;
+            }
             JSONObject result = new JSONObject();
             result.put("schema", 1); result.put("id", raw.getString("id")); result.put("time_ms", time);
             result.put("version_code", version); result.put("flavor", flavor); result.put("sdk", sdk);
             result.put("origin", origin); result.put("severity", severity); result.put("kind", kind);
             result.put("http_status", status); result.put("truncated", raw.getBoolean("truncated"));
             if (responseShape) result.put("response_shape", cleanResponseShape);
+            if (modelRequest) result.put("model_request", cleanModelRequest);
             JSONArray causes = new JSONArray(); Symbols symbols = new Symbols();
             for (int index = 0; index < inputCauses.length(); index++) {
                 Object object = inputCauses.opt(index);
@@ -549,6 +599,30 @@ public final class LocalDiagnostics {
                 .put("incomplete_reason", incompleteReason == null ? JSONObject.NULL : incompleteReason)
                 .put("text_length", textLength)
                 .put("completed_output_count", outputCount);
+    }
+
+    private static JSONObject validateModelRequest(JSONObject input) throws JSONException {
+        if (input == null || !keys(input, "model", "reasoning_effort", "reasoning_summary",
+                "text_verbosity", "declared_tool_count", "web_available")) return null;
+        String model = diagnosticLabel(input.opt("model"));
+        String effort = diagnosticLabel(input.opt("reasoning_effort"));
+        String summary = diagnosticLabel(input.opt("reasoning_summary"));
+        String verbosity = diagnosticLabel(input.opt("text_verbosity"));
+        long toolCount = integer(input.opt("declared_tool_count"), 0, Integer.MAX_VALUE, -1);
+        Object web = input.opt("web_available");
+        if (model == null || effort == null || summary == null || verbosity == null || toolCount < 0
+                || !(web instanceof Boolean)) return null;
+        return new JSONObject().put("model", model).put("reasoning_effort", effort)
+                .put("reasoning_summary", summary).put("text_verbosity", verbosity)
+                .put("declared_tool_count", toolCount).put("web_available", web);
+    }
+
+    private static String diagnosticLabel(Object value) {
+        if (!(value instanceof String)) return null;
+        String text = (String) value;
+        if (text.isEmpty()) return null;
+        for (int index = 0; index < text.length(); index++) if (Character.isISOControl(text.charAt(index))) return null;
+        return text;
     }
 
     private static String fixedEventType(String value) {

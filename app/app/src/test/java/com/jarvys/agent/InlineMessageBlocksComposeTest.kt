@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -18,6 +20,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -28,6 +31,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import com.jarvys.agent.ui.chat.assistantReplyIsGenerating
 import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatMessageArrivalPolicy
@@ -49,11 +53,104 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class InlineMessageBlocksComposeTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun assistantTablesWrapCompleteCellsForTwoAndThreeColumns() {
+        val cases = listOf(
+            listOf(
+                "A modern PCIe solid state drive uses several lanes and protocol overhead, so its sustained transfer rate depends on the controller, workload, and drive temperature.",
+                "Main memory moves data at a much higher rate because the processor accesses it directly through a dedicated memory controller and wide memory channels.",
+            ),
+            listOf(
+                "A current generation NVMe drive communicates over PCI Express and has a transfer rate that varies by generation, lane count, and workload.",
+                "A desktop DDR memory channel transfers data continuously while the processor works, with throughput determined by the memory generation and channel configuration.",
+                "These representative figures describe sustained bandwidth rather than application response time, which also depends on latency and access patterns.",
+            ),
+        )
+        val markdowns = cases.map { cells ->
+            val headers = cells.indices.joinToString(" | ") { "Column ${it + 1}" }
+            val row = cells.joinToString(" | ")
+            val separator = cells.indices.joinToString("|", transform = { "---" })
+            "| $headers |\n|$separator|\n| $row |"
+        }
+        val layouts = mutableListOf<Pair<String, TextLayoutResult>>()
+        val observer = object : AssistantMarkdownTableLayoutObserver {
+            override fun onCellTextLayout(text: String, result: TextLayoutResult) {
+                layouts += text to result
+            }
+            override fun onTableLayout(minimumWidth: Dp, totalWidth: Dp, horizontallyScrollable: Boolean) = Unit
+        }
+        compose.setContent {
+            CompositionLocalProvider(LocalAssistantMarkdownTableLayoutObserver provides observer) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    Column(Modifier.width(360.dp).verticalScroll(rememberScrollState())) {
+                        markdowns.forEach { markdown ->
+                            AssistantMarkdown(markdown, Modifier.fillMaxWidth(), onOpenSkillFile = {})
+                        }
+                    }
+                }
+            }
+        }
+
+        compose.waitUntil(5_000L) { layouts.size >= cases.sumOf { it.size * 2 } }
+        compose.waitForIdle()
+        cases.forEachIndexed { caseIndex, cells ->
+            cells.forEach { cell ->
+                val layout = requireNotNull(layouts.lastOrNull { (text, _) -> text.contains(cell) }?.second) {
+                    "rendered cell text was not complete: ${layouts.map { it.first }}"
+                }
+                assertTrue("cell layout retains every character (case $caseIndex)",
+                    layout.layoutInput.text.text.contains(cell))
+                assertEquals("cell text is not constrained to one line (case $caseIndex)",
+                    Int.MAX_VALUE, layout.layoutInput.maxLines)
+                assertTrue("long cell wraps onto multiple lines (case $caseIndex)", layout.lineCount > 1)
+                assertFalse("long cell has no visual overflow (case $caseIndex)", layout.hasVisualOverflow)
+                assertTrue("long cell has no ellipsized lines (case $caseIndex)",
+                    (0 until layout.lineCount).none(layout::isLineEllipsized))
+            }
+        }
+    }
+
+    @Test fun assistantTableScrollsWhenAnUnbreakableCellRunExceedsAvailableWidth() {
+        val unbreakable = "PCIeGen5Transfer".repeat(64)
+        var tableMeasurement: Triple<Dp, Dp, Boolean>? = null
+        val markdown = """
+            |Short | Description | Value
+            |---|---|---
+            |SSD|$unbreakable|High
+        """.trimMargin()
+        compose.setContent {
+            CompositionLocalProvider(LocalAssistantMarkdownTableLayoutObserver provides object : AssistantMarkdownTableLayoutObserver {
+                override fun onCellTextLayout(text: String, result: TextLayoutResult) = Unit
+                override fun onTableLayout(minimumWidth: Dp, totalWidth: Dp, horizontallyScrollable: Boolean) {
+                    tableMeasurement = Triple(minimumWidth, totalWidth, horizontallyScrollable)
+                }
+            }) {
+                JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                    AssistantMarkdown(markdown, Modifier.width(360.dp), onOpenSkillFile = {})
+                }
+            }
+        }
+
+        compose.waitUntil(5_000L) { tableMeasurement != null }
+        val (minimumWidth, totalWidth, isScrollable) = requireNotNull(tableMeasurement)
+        assertTrue("wide unbreakable content needs horizontal scrolling: minimum=$minimumWidth, total=$totalWidth",
+            isScrollable)
+        val scroller = compose.onNode(
+            androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(
+                androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange),
+            useUnmergedTree = true,
+        )
+        assertTrue(scroller.fetchSemanticsNode().config[
+            androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange].maxValue() > 0f)
+        compose.onNodeWithText(unbreakable, useUnmergedTree = true).fetchSemanticsNode()
+    }
 
     @Test fun staticAssistantMarkdownReentryDoesNotShowLoadingOrChangeRowHeight() {
         val svg = """```svg

@@ -133,6 +133,11 @@ class ModuleBundleIntegrationTest {
         val discoveredSkills = SkillRepository.get(context).enabledForRun().associateBy { it.metadata.id }
         assertEquals(listOf("create_chart"), discoveredSkills.getValue("jarvys-chart").metadata.allowedTools)
         assertEquals(listOf("create_presentation"), discoveredSkills.getValue("jarvys-presentation").metadata.allowedTools)
+        val chartSkill = discoveredSkills.getValue("jarvys-chart")
+        assertTrue(chartSkill.metadata.description.contains("create_chart"))
+        assertTrue(chartSkill.metadata.description.contains("inline"))
+        assertTrue(chartSkill.body.contains("visor"))
+        assertTrue(chartSkill.body.contains("no crees un artefacto"))
     }
 
     @Test

@@ -56,7 +56,7 @@ public final class ProviderAgentModel implements AgentModel {
         this.sessionId = sessionId;
         this.conversationContext = conversationContext == null ? "" : conversationContext;
         SecretStore secrets = SecretStore.get(context);
-        provider = ProviderClientRegistry.createClient(settings.getProvider(), secrets, settings);
+        provider = ProviderClientRegistry.createClient(settings.getProvider(), secrets, settings, context.getApplicationContext());
         targetResolver = new MultimodalTargetResolver(this);
         McpServerRepository mcpRepository = McpServerRepository.Companion.get(context);
         mcpConnections = McpConnectionManager.Companion.get(context);

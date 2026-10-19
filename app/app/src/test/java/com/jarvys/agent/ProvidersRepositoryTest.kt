@@ -85,6 +85,15 @@ class ProvidersRepositoryTest {
         assertEquals("medium", repository.state.value.openAiReasoningVariant)
     }
 
+    @Test fun selectedAstraMaximumEffortPersistsAsTheProviderVariant() {
+        repository.selectQuickModel(ProviderSettings.Provider.OPENAI_CODEX, "gpt-6-astra", "max")
+
+        assertEquals("max", repository.state.value.openAiReasoningVariant)
+        assertEquals("max", ProviderSettings(context).selectedCodexVariant.id)
+        assertEquals("max", context.getSharedPreferences("jarvys_provider_settings", Context.MODE_PRIVATE)
+            .getString("reasoning_variant_openai", null))
+    }
+
     @Test fun unknownOpenRouterModelPersistsAcrossRepositoryRecreation() {
         repository.selectOpenRouterModel("vendor/custom-model")
         assertEquals("vendor/custom-model", repository.state.value.openRouterModel)

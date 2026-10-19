@@ -48,6 +48,10 @@ class WebSearchProvidersTest {
             override fun search(query: String, maxResults: Int, acceptLanguage: String) = WebSearchOutcome()
         }
         val tools = WebSearchTools.create(provider, WebPageFetcher(FakeTransport()))
+        val searchDescription = tools[0].declaration().description
+        assertTrue(searchDescription.contains("recent public information"))
+        assertTrue(searchDescription.contains("untrusted"))
+        assertTrue(searchDescription.contains("returned ids"))
 
         assertEquals("web_search · latest weather forecast",
             tools[0].activityDisplayName(mapOf("query" to "  latest   weather\nforecast ")))

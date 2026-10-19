@@ -51,6 +51,26 @@ class CodexModelCatalogTest {
     }
 
     @Test
+    fun gpt6AstraEffortCatalogIncludesMaxAndKeepsExperimentalProModeSeparate() {
+        val root = JSONObject("""
+            {"openai":{"models":{"gpt-6-astra":{"id":"gpt-6-astra","name":"GPT-6 Astra",
+              "reasoning_options":[{"type":"effort","values":["low","medium","high","xhigh","max"]}],
+              "experimental":{"modes":{"pro":{"provider":{"body":{"reasoning":{"mode":"pro"}}}}}}}}}}
+        """.trimIndent())
+
+        val astra = CodexModelCatalog.parseModelsDev(root).single()
+
+        assertEquals(listOf("low", "medium", "high", "xhigh", "max"), astra.variants.map { it.reasoningEffort })
+        assertEquals("max", astra.variants.last().id)
+        assertEquals(listOf("auto", "auto", "detailed", "detailed", "detailed"),
+            astra.variants.map { it.reasoningSummary })
+        assertFalse("A separate experimental provider mode is not an effort value",
+            astra.variants.any { it.id == "pro" })
+        assertTrue("The current catalog has no per-model verbosity value; preserve the documented medium default",
+            astra.variants.all { it.textVerbosity == "medium" })
+    }
+
+    @Test
     fun apiKeyModelCatalogRequiresToolCallingAndTextInputAndOutput() {
         val root = JSONObject("""
             {"openai":{"models":{

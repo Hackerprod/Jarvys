@@ -45,6 +45,8 @@ import com.jarvys.agent.tasks.TaskManagementTools;
 import com.jarvys.agent.tasks.ScheduledTask;
 import com.jarvys.agent.tasks.ScheduledTaskWriteDeferrer;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -2386,6 +2388,10 @@ public final class CoreAgentRuntime {
     }
     if (declared.contains("read_conversation_artifact")) prompt.append("\nConversation continuity: read_conversation_artifact accepts only returned IDs for this chat. Follow pagination; a historical receipt does not establish current state. Never guess another chat's IDs.");
     if (declared.contains("delegate_subtask")) prompt.append("\nBounded delegation: give a self-contained objective, minimum tools and relevant skill IDs. Inspect run_outcome and text; COMPLETED means the child turn ended, not independently verified task success. PARTIAL, STOPPED, FAILED and UNKNOWN remain incomplete. Own verification and delivery yourself.");
+    // Keep day-scoped context at the tail so its daily change preserves the longer prompt prefix.
+    ZoneId deviceZone = ZoneId.systemDefault();
+    prompt.append("\n\nRuntime date: ").append(LocalDate.now(deviceZone))
+        .append("; device time zone: ").append(deviceZone.getId()).append('.');
     return prompt.toString();
   }
 
