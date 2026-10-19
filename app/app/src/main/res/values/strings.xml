@@ -1439,6 +1439,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="activity_skill_loading_generic">Loading skill</string>
     <string name="activity_skill_loaded_generic">Loaded skill</string>
     <string name="activity_skill_failed_generic">Failed to load skill</string>
+    <string name="activity_skill_not_started_generic">Skill read not run</string>
     <string name="activity_unconfirmed_detail">No final result was confirmed. Effects may have occurred; inspect the details before retrying.</string>
     <string name="crew_phase_model_wait">Waiting for model response</string>
     <string name="crew_phase_compacting">Compacting</string>

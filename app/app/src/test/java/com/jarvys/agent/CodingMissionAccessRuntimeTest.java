@@ -402,6 +402,9 @@ public class CodingMissionAccessRuntimeTest {
             assertEquals(CodingAgentInstructions.PROMPT, role.missionPrompt);
             assertTrue("Runtime-owned prompt character ceiling", CodingAgentInstructions.PROMPT.length() <= 16000);
             assertTrue("Retain the complete engineering contract", instructions.contains(CodingAgentInstructions.PROMPT));
+            assertTrue(CodingAgentInstructions.PROMPT.contains("SKILLS (MANDATORY WHEN read_skill IS DECLARED)"));
+            assertTrue(CodingAgentInstructions.PROMPT.contains("Scan the available skill IDs and descriptions first"));
+            assertTrue(CodingAgentInstructions.PROMPT.contains("Make at most one read_skill request in a model response"));
             assertTrue(instructions.indexOf("Mission: ") < instructions.indexOf(CodingAgentInstructions.PROMPT));
             assertTrue(instructions.contains("Runtime mission access: read_only"));
             assertTrue(instructions.contains("A follow-up or resume cannot elevate this mission"));
@@ -411,6 +414,45 @@ public class CodingMissionAccessRuntimeTest {
             assertFalse(catalog.contains(CodingAgentInstructions.PROMPT));
             assertFalse(catalog.contains("CHANGE FILES WITH CURRENT EVIDENCE"));
             assertFalse(runtime.instructions().contains("IMPLEMENT THE COMPLETE BEHAVIOR"));
+        }
+    }
+
+    @Test public void configuredCrewInstructionsSelectSkillsAndLoadReferencesOneAtATime() throws Exception {
+        String session = session("skills-prompt");
+        CoreAgentRuntime runtime = runtime(session);
+        CrewRole role = new CrewRole("ordinary-reader", "Reader", "coding", "Read selected guidance",
+                Collections.singletonList("read_skill"), null, "Read only the needed guidance", 0,
+                Collections.emptyList(), CrewProfile.WorkspaceMode.LEGACY_CHAT);
+        CoreTool readSkill = new CoreTool() {
+            private final ToolSpec declaration = new ToolSpec("read_skill", "test", "Read skill", "test",
+                    ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList());
+            @Override public ToolSpec declaration() { return declaration; }
+            @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+                return CoreToolResult.failure("No fixture skill is loaded");
+            }
+        };
+        ModelProviderClient provider = new ModelProviderClient() {
+            @Override public ModelReply complete(String systemPrompt, String userPrompt,
+                    List<com.jarvys.agent.device.ScreenData> images, List<ToolSpec> tools,
+                    String sessionId, CancellationToken token) { return done(); }
+            @Override public ModelReply completeConversation(String systemPrompt,
+                    List<ConversationTurn> history, String userPrompt,
+                    List<com.jarvys.agent.device.ScreenData> images, List<ToolSpec> tools,
+                    String sessionId, CancellationToken token) { return done(); }
+        };
+        try (CrewManager manager = manager(session, runtime, neverRun())) {
+            CrewManager.Bot bot = historical(manager, role);
+            CoreAgentLoop loop = runtime.createConfiguredCrewLoop(new CoreAgentModel(context, provider, session),
+                    manager, bot, new CoreToolRegistry(Collections.singletonList(readSkill)), null);
+            Field instructions = CoreAgentLoop.class.getDeclaredField("instructions");
+            instructions.setAccessible(true);
+            String assembled = (String) instructions.get(loop);
+            assertTrue(assembled.contains("SKILLS (MANDATORY WHEN read_skill IS DECLARED)"));
+            assertTrue(assembled.contains("If none clearly applies, do not read a skill"));
+            assertTrue(assembled.contains("Make at most one read_skill request in a model response"));
+            assertTrue(assembled.contains("Never batch distinct references or preload them"));
+            assertFalse("The runtime-only rule belongs in the dynamic Crew prompt, not MainAgentPrompt core",
+                    runtime.instructions().contains("Never batch distinct references or preload them"));
         }
     }
 

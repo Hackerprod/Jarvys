@@ -145,6 +145,21 @@ class ToolActivityComposeTest {
         compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded_generic)).assertIsDisplayed()
         compose.onNodeWithTag("activity-details-execution-internal").assertDoesNotExist()
         assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+
+        compose.runOnIdle {
+            surface = 0
+            state = internalActivity.event("tool_not_started", "Reference database was not loaded", "")
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_not_started_generic)).assertIsDisplayed()
+        assertInternalSkillNotExposed(internal.metadata.id,internal.metadata.name,bodyPhrase)
+    }
+
+    @Test fun visibleSkillActivityNamesTheRequestedReference() {
+        val reference = ToolActivity("event-reference", "execution-reference", "call-reference", "read_skill",
+            "Read Skill", "external.factory", "APK Factory · database", "tool_result", "", "", "", "workspace", 1)
+        compose.setContent { MaterialTheme { ToolActivityLine(reference) } }
+        compose.onNodeWithText(compose.activity.getString(R.string.activity_skill_loaded, "APK Factory · database"))
+            .assertIsDisplayed()
     }
     @Test fun botStatusOnlyChangeMarksPendingOperationUnconfirmed() {
         val messages=listOf(local(activity()));var value by mutableStateOf(snapshot(messages=messages))

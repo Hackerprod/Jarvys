@@ -1118,7 +1118,9 @@ public final class CoreAgentRuntime {
             .append("\nActual declared tools: ")
             .append(withRecovery.names());
     if (withRecovery.names().contains("read_skill")) {
-      sbAppend.append("\n\nUse read_skill with a listed skill_id to load relevant guidance.");
+      sbAppend.append("\n\nSKILLS (MANDATORY WHEN read_skill IS DECLARED)\n")
+          .append("Scan the available skill IDs and descriptions first. If exactly one skill clearly applies, select it and read its SKILL.md through read_skill. If several could apply, select the most specific one. If none clearly applies, do not read a skill. Select before reading; descriptions are a catalog, not a reason to load every skill.\n")
+          .append("Load the selected skill just in time for the current step. For versioned references, inspect the core instructions and current project state, then request only the reference needed now. Make at most one read_skill request in a model response; wait for and inspect its result before requesting another reference in a later response. Never batch distinct references or preload them in case they might be useful.");
     }
     sbAppend.append(factoryGuidanceInstructions(bot.role, tools,
         selectedSkills(bot.role.skillIds, bot.role.profileVersion > 0 ? bot.role.id : null), this.budget.loadedSkillChars));
