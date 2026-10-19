@@ -117,7 +117,7 @@ public final class ConversationCompactionPolicy {
     }
 
     private static boolean isAssistantBoundary(ConversationTurn turn) {
-        return turn != null && "assistant".equals(turn.role) && turn.kind == ConversationTurn.Kind.MESSAGE;
+        return turn != null && turn.isAssistantAuthoredMessage();
     }
 
     private static boolean hasPendingToolCall(ConversationTurn turn) {
@@ -149,6 +149,9 @@ public final class ConversationCompactionPolicy {
         StringBuilder out = new StringBuilder(" \n");
         if (turns != null) for (ConversationTurn turn : turns) {
             if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
+            boolean agentInput = turn.kind == ConversationTurn.Kind.MESSAGE
+                    && turn.incomingMetadata != null
+                    && turn.incomingMetadata.origin == ConversationInput.Origin.AGENT;
             String role = turn.kind == ConversationTurn.Kind.TOOL_RESULT ? "tool" : turn.role;
             String text = turn.content == null ? "" : turn.content;
             if (!turn.thinking.isEmpty()) text += (text.isEmpty() ? "" : "\n\n") + "[thinking] " + turn.thinking;
@@ -158,7 +161,24 @@ public final class ConversationCompactionPolicy {
                 text = text.substring(0, toolResultLimit) + "... [truncated " + (text.length() - toolResultLimit) + " chars]";
             }
             if (turn.kind == ConversationTurn.Kind.COMPACTION_SUMMARY) text = "[Previous conversation summary]\n" + text;
-            if (!text.isEmpty()) out.append('[').append(role).append("] ").append(text);
+            if (!text.isEmpty()) {
+                if (agentInput) {
+                    ConversationTurn.IncomingMetadata metadata = turn.incomingMetadata;
+                    ConversationInput.Provenance provenance = metadata.provenance;
+                    out.append("[agent_input from=\"").append(header(metadata.source))
+                            .append("\" sender=\"").append(header(metadata.sender))
+                            .append("\" type=\"").append(header(metadata.type))
+                            .append("\" trust=\"").append(header(metadata.trustLabel())).append('"');
+                    if (provenance != null) {
+                        out.append(" principalRole=\"").append(provenance.principalRole.name())
+                                .append("\" correlationMessageId=\"")
+                                .append(header(provenance.correlationMessageId)).append('"');
+                    }
+                    out.append("] ").append(text);
+                } else {
+                    out.append('[').append(role).append("] ").append(text);
+                }
+            }
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 if (!text.isEmpty()) out.append(' ');
                 out.append("-> ");
@@ -174,6 +194,12 @@ public final class ConversationCompactionPolicy {
         }
         out.append(" \n. Generate the summary.");
         return out.toString();
+    }
+
+    private static String header(String value) {
+        if (value == null) return "";
+        return value.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\r", "\\r").replace("\n", "\\n");
     }
 
     public static String middleTruncate(String transcript, int maxChars) {

@@ -157,6 +157,39 @@ class ConversationCompactionTest {
     }
 
     @Test
+    fun agentInputCompactionPreservesOriginAndDoesNotCreateAssistantBoundary() {
+        val provenance = ConversationInput.Provenance("worker-session", "workspace-1", "assignment-1",
+            "Scout", "agent-message", ConversationInput.Kind.MESSAGE,
+            ConversationInput.Provenance.PrincipalRole.SUBORDINATE, "chief-question", "", "", 0,
+            "", "", "")
+        val agentInput = ConversationTurn.internalInput(
+            "Worker text must remain attributed.", 1,
+            ConversationTurn.IncomingMetadata.forInternalInput(provenance), "agent-message")
+        val transcript = listOf(
+            ConversationTurn("user", "request-0 " + "x".repeat(2_800), 0),
+            agentInput,
+            ConversationTurn("user", "request-2 " + "x".repeat(2_800), 2),
+            ConversationTurn("assistant", "assistant boundary " + "y".repeat(2_800), 3),
+            agentInput,
+            ConversationTurn("user", "request-5 " + "x".repeat(2_800), 5),
+            ConversationTurn("assistant", "later assistant " + "y".repeat(2_800), 6),
+            ConversationTurn("user", "request-7 " + "x".repeat(2_800), 7),
+            ConversationTurn("assistant", "latest assistant " + "y".repeat(2_800), 8),
+            ConversationTurn("user", "latest request " + "x".repeat(2_800), 9),
+        )
+
+        val formatted = ConversationCompactionPolicy.formatTranscript(listOf(agentInput), 2_000)
+        assertTrue(formatted.contains("[agent_input from=\"agent\" sender=\"Scout\" type=\"MESSAGE\" trust=\"untrusted_report\" principalRole=\"SUBORDINATE\" correlationMessageId=\"chief-question\"]"))
+        assertTrue(formatted.contains("Worker text must remain attributed."))
+        assertFalse(formatted.contains("[assistant] Worker text must remain attributed."))
+
+        val plan = ConversationCompactionPolicy.planSliding(transcript, 20_000, 0.3)
+        assertEquals(3, plan.cutoffIndex)
+        assertTrue(plan.summarize.contains(agentInput))
+        assertTrue(plan.keep.any { it === agentInput })
+    }
+
+    @Test
     fun originalHistoryIsAppendOnlyAndLatestOfTwoCompactionsReconstructsContext() {
         val files = chatTestStore.newFilesDirectory("conversation-files")
         val store = chatTestStore.localRunStore(files)

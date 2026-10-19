@@ -23,6 +23,8 @@ public class AgentProviderSerializationTest {
 
     assertProviderTurns(chatCompletions, true, "user");
     assertProviderTurns(responses, false, "user");
+    assertTrue(chatCompletions.getJSONObject(1).getString("content").contains("trust=\"untrusted_report\""));
+    assertTrue(responses.getJSONObject(0).getString("content").contains("trust=\"untrusted_report\""));
     assertEquals("assistant", result.role); // AGENT identity remains internal metadata, not provider role.
     assertEquals(ConversationInput.Origin.AGENT, result.incomingMetadata.origin);
     assertEscapedAgentEnvelope(chatCompletions.getJSONObject(1).getString("content"));
@@ -41,6 +43,8 @@ public class AgentProviderSerializationTest {
     assertProviderTurns(responses, false, "user");
     assertTrue(chatCompletions.getJSONObject(1).getString("content").contains("kind=\"TASK\""));
     assertTrue(responses.getJSONObject(0).getString("content").contains("kind=\"TASK\""));
+    assertTrue(chatCompletions.getJSONObject(1).getString("content").contains("trust=\"supervisor_instruction\""));
+    assertTrue(responses.getJSONObject(0).getString("content").contains("trust=\"supervisor_instruction\""));
   }
 
   @Test public void agentSteeringBetweenAssistantStepsSerializesAsUserForBothProviders() throws Exception {

@@ -92,7 +92,7 @@ public final class ConversationTurn {
           .append(xml(source)).append("\" sender=\"").append(xml(sender))
           .append("\" type=\"").append(xml(type)).append("\" id=\"")
           .append(xml(id)).append("\" trust=\"")
-          .append(origin == ConversationInput.Origin.AGENT || untrusted ? "untrusted" : "user")
+          .append(trustLabel())
           .append("\" adapter=\"").append(xml(adapter)).append("\">\n");
       if (provenance != null) {
         value.append("<provenance sessionId=\"").append(xml(provenance.sessionId))
@@ -114,6 +114,18 @@ public final class ConversationTurn {
           .append("</reference>\n");
       return value.append("<content>").append(xml(content)).append("</content>\n")
           .append("</jarvys_incoming>").toString();
+    }
+
+    /** Runtime provenance controls the label; body text cannot elevate an agent's trust. */
+    public String trustLabel() {
+      if (origin == ConversationInput.Origin.AGENT) {
+        if (provenance != null && provenance.principalRole
+            == ConversationInput.Provenance.PrincipalRole.SUPERVISOR) {
+          return "supervisor_instruction";
+        }
+        return "untrusted_report";
+      }
+      return untrusted || origin == ConversationInput.Origin.SYSTEM ? "untrusted" : "user";
     }
 
     private static String xml(String text) {
@@ -430,6 +442,12 @@ public final class ConversationTurn {
   public String providerMessageRole() {
     return incomingMetadata != null && incomingMetadata.origin == ConversationInput.Origin.AGENT
         ? "user" : role;
+  }
+
+  /** True only for a message authored by the assistant, not an internal input using its role. */
+  public boolean isAssistantAuthoredMessage() {
+    return kind == Kind.MESSAGE && "assistant".equals(role)
+        && (incomingMetadata == null || incomingMetadata.origin == ConversationInput.Origin.USER);
   }
 
   static boolean hasCurrentUserMessage(List<ConversationTurn> history) {

@@ -98,7 +98,7 @@ final class MainChatTranscriptStore {
                                 .put("errorCode", turn.modelErrorCode).put("userMessageId", userMessageId)
                                 .put("messageIndex", messageIndex));
                         batch = null;
-                    } else if (turn.kind == ConversationTurn.Kind.MESSAGE && "assistant".equals(turn.role)
+                    } else if (turn.isAssistantAuthoredMessage()
                             && !turn.providerOutputItems.isEmpty()) {
                         if (!historical.contains(turn) && providerOutputRecorded.add(turn))
                             append(new JSONObject().put("type", "model_provider_output_items")

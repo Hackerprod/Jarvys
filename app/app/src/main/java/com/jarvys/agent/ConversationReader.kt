@@ -136,6 +136,17 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
     suspend fun readConversationMessages(conversationId: String): List<StoredMessage> =
         readProjection { conversations.readConversationMessages(conversationId) }
 
+    /** Pending AGENT evidence only; callers that need input state must not hydrate full history. */
+    suspend fun readPendingAgentInputs(conversationId: String): List<StoredMessage> =
+        readProjection { conversations.readPendingAgentInputs(conversationId) }
+
+    /** Counts workspace-linked pending inputs from one bounded pending-state query. */
+    suspend fun countPendingAgentInputsByWorkspace(
+        conversationWorkspaceIds: Map<String, String>,
+    ): Map<String, Int> = readProjection {
+        conversations.countPendingAgentInputsByWorkspace(conversationWorkspaceIds)
+    }
+
     /** Active-message view hides regenerated/deleted assistant rows but keeps terminal status rows. */
     suspend fun readActiveConversationMessages(conversationId: String): List<StoredMessage> =
         readProjection {

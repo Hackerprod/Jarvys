@@ -207,7 +207,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (history != null) {
       for (ConversationTurn turn : history) {
         if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
-        if (turn.kind == ConversationTurn.Kind.MESSAGE && "assistant".equals(turn.role)
+        if (turn.isAssistantAuthoredMessage()
             && turn.modelContent.trim().isEmpty() && turn.images.isEmpty()) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
           if (!turn.providerOutputItems.isEmpty()) {
