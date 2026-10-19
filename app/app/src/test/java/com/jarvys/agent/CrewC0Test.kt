@@ -19,12 +19,12 @@ import java.util.concurrent.atomic.AtomicReference
 
 class CrewC0Test {
     private fun incomingTurns(transcript: List<ConversationTurn>) = transcript.filter {
-        it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" && it.incomingMetadata != null
+        it.kind == ConversationTurn.Kind.MESSAGE && it.incomingMetadata != null
     }
 
     private fun inboxEvidence(transcript: List<ConversationTurn>) =
         incomingTurns(transcript).joinToString("\n") {
-            it.incomingMetadata.source + "/" + it.incomingMetadata.sender + "/" + it.incomingMetadata.type + ": " + it.content
+            it.incomingMetadata.origin.name + "/" + it.incomingMetadata.sender + "/" + it.incomingMetadata.type + ": " + it.content
         }
 
     private fun hasUntrustedInbox(transcript: List<ConversationTurn>) =
@@ -133,7 +133,7 @@ class CrewC0Test {
         val root = Files.createTempDirectory("crew-board").toFile()
         val board = CrewBoard(WorkspaceStore(root, "0123456789abcdef01234567"))
         lateinit var manager: CrewManager
-        val secondPrompt = AtomicReference<String>()
+        val secondTranscript = AtomicReference<List<ConversationTurn>>()
         manager = CrewManager("ask-session", emptyTools,
             { bot, crew -> CoreToolRegistry(CrewTools.bot(bot, crew, board)) },
             { _, tools, incoming ->
@@ -146,7 +146,7 @@ class CrewC0Test {
                             ModelReply("", listOf(ModelReply.Call("ask", "ask_chief", mapOf("question" to "Which source is preferred?"))))
                         }
                         else -> {
-                            secondPrompt.set(transcript.last { it.kind == ConversationTurn.Kind.TOOL_RESULT }.content)
+                            secondTranscript.set(transcript)
                             assertEquals("", prompt)
                             ModelReply("", listOf(ModelReply.Call("finish", "report_done", mapOf("result" to "Use source A", "refs" to listOf("/board/source.md")))))
                         }
@@ -162,8 +162,14 @@ class CrewC0Test {
             manager.send("chief", bot.id, CrewMessage.Type.ANSWER, "Prefer the primary source", emptyList())
             bot.awaitTermination()
             assertEquals(CrewManager.Status.DONE, bot.status())
-            assertTrue(secondPrompt.get().contains("Prefer the primary source"))
-            assertTrue(secondPrompt.get().contains("trust=\"untrusted\""))
+            val answer = incomingTurns(secondTranscript.get()).single {
+                it.content.contains("Prefer the primary source")
+            }
+            assertEquals(ConversationInput.Origin.AGENT, answer.incomingMetadata.origin)
+            assertEquals("jarvys-central", answer.incomingMetadata.provenance.sessionId)
+            assertEquals("", answer.incomingMetadata.provenance.botId)
+            assertEquals("ANSWER", answer.incomingMetadata.type)
+            assertTrue(answer.incomingMetadata.untrusted)
             assertEquals("Use source A", bot.result())
             assertTrue(manager.messageBus().snapshot().any { it.from == bot.id && it.to == "chief" && it.type == CrewMessage.Type.RESULT })
         } finally { manager.close() }
@@ -327,6 +333,88 @@ class CrewC0Test {
             assertEquals("", reanimatedPrompt.get())
             assertTrue(reanimatedTranscript.get().any { it.role == "user" && it.content == "Also verify the table" })
         } finally { releaseReanimation.countDown(); manager.close() }
+    }
+
+    @Test
+    fun chiefMessageIsOfferedIntoRunningLoopAtNextModelBoundaryAndAcknowledged() {
+        val firstCallEntered = CountDownLatch(1)
+        val releaseFirstCall = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val observedInput = AtomicReference<ConversationTurn>()
+        val boundaryTool = testTool("boundary")
+        val workerTools = CoreToolRegistry(listOf(boundaryTool))
+        val manager = CrewManager("direct-worker-running", emptyTools, { _, _ -> workerTools },
+            { _, tools, incoming -> loop(tools, incoming, { transcript, _, _, token ->
+                if (calls.incrementAndGet() == 1) {
+                    firstCallEntered.countDown()
+                    try { releaseFirstCall.await() } catch (_: InterruptedException) { token.throwIfCancelled() }
+                    ModelReply("", listOf(ModelReply.Call("boundary-call", "boundary", emptyMap())))
+                } else {
+                    observedInput.set(transcript.single {
+                        it.incomingMetadata?.origin == ConversationInput.Origin.AGENT
+                            && it.incomingMetadata.type == "BLOCKER"
+                    })
+                    ModelReply("handled the blocker", emptyList())
+                }
+            }) }, null)
+        try {
+            val bot = manager.spawn("custom", "Inspect the failing build", emptyList(), "Builder")
+            assertTrue(firstCallEntered.await(10, TimeUnit.SECONDS))
+            val admitted = manager.send("chief", bot.id, CrewMessage.Type.BLOCKER,
+                "The compiler reports a missing symbol in Module.kt", emptyList())
+            releaseFirstCall.countDown()
+            bot.awaitTermination()
+
+            val incorporated = observedInput.get()
+            assertNotNull(incorporated)
+            assertEquals("The compiler reports a missing symbol in Module.kt", incorporated.content)
+            assertEquals("assistant", incorporated.role)
+            assertEquals(admitted.id, incorporated.durableMessageId)
+            assertEquals(ConversationInput.Origin.AGENT, incorporated.incomingMetadata.origin)
+            assertEquals("BLOCKER", incorporated.incomingMetadata.type)
+            assertEquals(admitted.id, incorporated.incomingMetadata.provenance.messageId)
+            assertTrue(bot.checkpoint().appliedIncomingIds.contains(admitted.id))
+            assertTrue("incorporation acknowledgement drains the durable pending row", manager.messageBus().pending(bot.id).isEmpty())
+            assertEquals("DONE", bot.status().name)
+        } finally { releaseFirstCall.countDown(); manager.close() }
+    }
+
+    @Test
+    fun chiefMessageToQuiescentDoneBotStartsTurnAndIsAcknowledged() {
+        val calls = AtomicInteger()
+        val observedInput = AtomicReference<ConversationTurn>()
+        val manager = CrewManager("direct-worker-quiescent", emptyTools, { _, _ -> emptyTools },
+            { _, tools, incoming -> loop(tools, incoming, { transcript, _, _, _ ->
+                if (calls.incrementAndGet() == 1) ModelReply("initial result", emptyList())
+                else {
+                    observedInput.set(transcript.single {
+                        it.incomingMetadata?.origin == ConversationInput.Origin.AGENT
+                            && it.incomingMetadata.type == "ANSWER"
+                    })
+                    ModelReply("follow-up result", emptyList())
+                }
+            }) }, null)
+        try {
+            val bot = manager.spawn("custom", "Review the current result", emptyList(), "Reviewer")
+            bot.awaitTermination()
+            assertEquals(CrewManager.Status.DONE, bot.status())
+
+            val admitted = manager.send("chief", bot.id, CrewMessage.Type.ANSWER,
+                "Keep the original scope and verify the quoted line", emptyList())
+            bot.awaitTermination()
+
+            val incorporated = observedInput.get()
+            assertNotNull(incorporated)
+            assertEquals("Keep the original scope and verify the quoted line", incorporated.content)
+            assertEquals("assistant", incorporated.role)
+            assertEquals(admitted.id, incorporated.durableMessageId)
+            assertEquals(ConversationInput.Origin.AGENT, incorporated.incomingMetadata.origin)
+            assertTrue(bot.checkpoint().appliedIncomingIds.contains(admitted.id))
+            assertTrue(manager.messageBus().pending(bot.id).isEmpty())
+            assertEquals(2, calls.get())
+            assertEquals(2, bot.completedCycles())
+            assertEquals(CrewManager.Status.DONE, bot.status())
+        } finally { manager.close() }
     }
 
     @Test

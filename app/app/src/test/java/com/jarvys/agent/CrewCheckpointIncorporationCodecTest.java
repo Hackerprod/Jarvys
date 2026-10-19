@@ -68,9 +68,7 @@ public class CrewCheckpointIncorporationCodecTest {
         File root = newRegisteredFilesDirectory();
         CrewCheckpointStore store = new CrewCheckpointStore(root);
         CrewInputIncorporation proof = proof();
-        ConversationTurn incoming = new ConversationTurn("user", "Bot evidence", -1,
-                new ConversationTurn.IncomingMetadata("mailbox-one", "crew", "bot-two", "FINDING",
-                        Collections.singletonList("/board/source.md"), true));
+        ConversationTurn incoming = workerEvidence();
         CoreAgentLoop.Checkpoint checkpoint = new CoreAgentLoop.Checkpoint(
                 Collections.singletonList(incoming), Collections.singleton("mailbox-one"),
                 Collections.emptyMap(), -1, Collections.singletonMap("mailbox-one", proof));
@@ -80,7 +78,8 @@ public class CrewCheckpointIncorporationCodecTest {
         CoreAgentLoop.Checkpoint restored = store.confirmDurable("chat-one", "bot-one", "scope-one").loop.reconciled();
         ConversationTurn message = restored.transcript.get(0);
         assertEquals(ConversationTurn.Kind.MESSAGE, message.kind);
-        assertEquals("user", message.role);
+        assertEquals("assistant", message.role);
+        assertEquals(ConversationInput.Origin.AGENT, message.incomingMetadata.origin);
         assertEquals("Bot evidence", message.content);
         assertEquals("mailbox-one", message.incomingMetadata.id);
         assertEquals("crew", message.incomingMetadata.source);
@@ -95,9 +94,7 @@ public class CrewCheckpointIncorporationCodecTest {
 
     @Test public void codecRoundTripRetainsIncomingProvenanceAndProofInMemory() throws Exception {
         CrewInputIncorporation proof = proof();
-        ConversationTurn incoming = new ConversationTurn("user", "Bot evidence", -1,
-                new ConversationTurn.IncomingMetadata("mailbox-one", "crew", "bot-two", "FINDING",
-                        Collections.singletonList("/board/source.md"), true));
+        ConversationTurn incoming = workerEvidence();
         CoreAgentLoop.Checkpoint checkpoint = new CoreAgentLoop.Checkpoint(
                 Collections.singletonList(incoming), Collections.singleton("mailbox-one"),
                 Collections.emptyMap(), -1, Collections.singletonMap("mailbox-one", proof));
@@ -113,6 +110,22 @@ public class CrewCheckpointIncorporationCodecTest {
         assertEquals(Collections.singletonList("/board/source.md"), message.incomingMetadata.references);
         assertTrue(message.incomingMetadata.untrusted);
         assertTrue(proof.samePayload(restored.incorporations.get("mailbox-one")));
+    }
+
+    @Test public void legacyCrewInboxTurnIsRestoredAsAttributedAssistantInput() throws Exception {
+        JSONObject encoded = CrewCheckpointStore.encodeLoop(new CoreAgentLoop.Checkpoint(
+                Collections.singletonList(workerEvidence()), Collections.singleton("mailbox-one"),
+                Collections.emptyMap(), -1));
+        JSONObject row = encoded.getJSONArray("transcript").getJSONObject(0);
+        row.put("role", "user");
+        row.getJSONObject("incomingMetadata").remove("origin");
+        row.getJSONObject("incomingMetadata").remove("provenance");
+
+        ConversationTurn restored = CrewCheckpointStore.decodeLoop(encoded).transcript.get(0);
+        assertEquals("assistant", restored.role);
+        assertEquals(ConversationInput.Origin.AGENT, restored.incomingMetadata.origin);
+        assertTrue(restored.incomingMetadata.untrusted);
+        assertEquals("Bot evidence", restored.content);
     }
 
     @Test public void duplicatesAndProofsWithoutAppliedMailboxIdsFailClosed() throws Exception {
@@ -187,6 +200,16 @@ public class CrewCheckpointIncorporationCodecTest {
         long serializedCost = CrewCheckpointStore.estimatedSize(proof.toJson(), Long.MAX_VALUE);
         assertTrue(serializedCost > shallowCost);
         assertThrows(IOException.class, () -> CrewCheckpointStore.estimatedSize(proof.toJson(), shallowCost));
+    }
+
+    private static ConversationTurn workerEvidence() {
+        ConversationInput.Provenance provenance = new ConversationInput.Provenance(
+                "workspace-execution", "workspace", "assignment", "bot-two", "mailbox-one",
+                ConversationInput.Kind.FINDING);
+        ConversationTurn.IncomingMetadata metadata = new ConversationTurn.IncomingMetadata(
+                ConversationInput.Origin.AGENT, "mailbox-one", "crew", "bot-two", "FINDING",
+                Collections.singletonList("/board/source.md"), true, provenance);
+        return ConversationTurn.internalInput("Bot evidence", -1, metadata, "mailbox-one");
     }
 
     private static CrewInputIncorporation proof() {

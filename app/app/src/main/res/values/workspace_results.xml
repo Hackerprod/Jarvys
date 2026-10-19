@@ -1,6 +1,0 @@
-<resources>
-    <string name="workspace_result_notice_title">Workspace result recorded</string>
-    <string name="workspace_result_notice_identity">Workspace: %1$s\nAssignment: %2$s</string>
-    <string name="workspace_result_notice_status">Worker-reported state: %1$s</string>
-    <string name="workspace_result_notice_disclaimer">Unverified historical evidence. Open the workspace or ask Jarvys to inspect its saved result. This notice does not confirm a later correction was applied.</string>
-</resources>

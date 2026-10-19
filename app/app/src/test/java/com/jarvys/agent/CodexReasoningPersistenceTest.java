@@ -121,7 +121,7 @@ public class CodexReasoningPersistenceTest {
 
     }
 
-    @Test public void workspaceWakeHasIndependentProviderAndToolOwnershipAndCannotRegeneratePriorPrompt() throws Exception {
+    @Test public void agentInputHasIndependentProviderAndToolOwnershipAndCannotRegeneratePriorPrompt() throws Exception {
         File files = chatTestStore.newFilesDirectory();
         String session = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION;
         LocalRunStore store = chatTestStore.localRunStore(files);
@@ -140,80 +140,78 @@ public class CodexReasoningPersistenceTest {
         String priorAssistantId = store.appendConversationMessage(session, "assistant", priorResult.text,
                 priorResult.durationMs, priorResult.runId, userMessageId, priorResult.outcome);
 
-        com.jarvys.agent.workspaces.WorkspaceResultReference reference = appendPendingWakeNotice(store);
-        String wakeOwnerId = ConversationTurn.workspaceWakeOwnerId(reference.referenceId);
-        List<ConversationTurn> wakeHistory = store.loadConversationContext(session, reference.referenceId);
-        assertEquals(1, wakeHistory.stream().filter(turn -> turn.kind == ConversationTurn.Kind.SYSTEM_EVENT).count());
+        String agentMessageId = store.appendConversationInput(new ConversationInput(session, "source-result-1",
+                "Worker final text", ConversationInput.Origin.AGENT,
+                new ConversationInput.Provenance("workspace-execution-1", "workspace-1", "assignment-1",
+                        "bot-1", "source-result-1", ConversationInput.Kind.RESULT)));
+        List<ConversationTurn> agentHistory = store.loadConversationContext(session);
+        ConversationTurn internal = agentHistory.stream()
+                .filter(turn -> agentMessageId.equals(turn.durableMessageId)).findFirst().orElseThrow(AssertionError::new);
+        assertEquals(ConversationInput.Origin.AGENT, internal.incomingMetadata.origin);
+        assertEquals("Worker final text", internal.content);
+        assertEquals("AGENT input uses an explicit untrusted assistant-role envelope", "AGENT",
+                internal.incomingMetadata.origin.name());
 
-        String toolRaw = new JSONObject().put("type", "reasoning").put("id", "rs_wake_tool")
-                .put("encrypted_content", "wake-tool-state").toString();
-        String wakeRaw = new JSONObject().put("type", "reasoning").put("id", "rs_wake_answer")
-                .put("encrypted_content", "wake-answer-state").toString();
+        String toolRaw = new JSONObject().put("type", "reasoning").put("id", "rs_agent_tool")
+                .put("encrypted_content", "agent-tool-state").toString();
+        String answerRaw = new JSONObject().put("type", "reasoning").put("id", "rs_agent_answer")
+                .put("encrypted_content", "agent-answer-state").toString();
         ModelReply.ProviderOutputItem toolOutput = ModelReply.ProviderOutputItem.reasoning(toolRaw,
                 OpenAICodexResponsesClient.OUTPUT_PROVIDER, OpenAICodexResponsesClient.OUTPUT_API, CODEX_MODEL);
-        ModelReply.ProviderOutputItem wakeOutput = ModelReply.ProviderOutputItem.reasoning(wakeRaw,
+        ModelReply.ProviderOutputItem answerOutput = ModelReply.ProviderOutputItem.reasoning(answerRaw,
                 OpenAICodexResponsesClient.OUTPUT_PROVIDER, OpenAICodexResponsesClient.OUTPUT_API, CODEX_MODEL);
-        AtomicInteger wakeProviderCalls = new AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
         AtomicInteger toolEffects = new AtomicInteger();
-        CoreAgentLoop wakeLoop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
-            if (wakeProviderCalls.getAndIncrement() == 0) {
-                return new ModelReply("Inspecting the registered result",
-                        Collections.singletonList(new ModelReply.Call("wake-inspect-call", "lookup", Collections.emptyMap())),
-                        "", null, CODEX_MODEL, null, ResponseDiagnostics.unknown(), Collections.singletonList(toolOutput));
-            }
-            return new ModelReply("Workspace result inspected", Collections.emptyList(), "", null, CODEX_MODEL, null,
-                    ResponseDiagnostics.unknown(), Collections.singletonList(wakeOutput));
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
+            if (calls.getAndIncrement() == 0) return new ModelReply("Inspecting worker evidence",
+                    Collections.singletonList(new ModelReply.Call("agent-inspect-call", "lookup", Collections.emptyMap())),
+                    "", null, CODEX_MODEL, null, ResponseDiagnostics.unknown(), Collections.singletonList(toolOutput));
+            assertTrue(transcript.stream().anyMatch(turn -> agentMessageId.equals(turn.durableMessageId)));
+            return new ModelReply("I checked the worker report", Collections.emptyList(), "", null, CODEX_MODEL, null,
+                    ResponseDiagnostics.unknown(), Collections.singletonList(answerOutput));
         }, new CoreToolRegistry(Collections.singletonList(lookupTool(toolEffects))), "", session);
-        new MainChatTranscriptStore(files, session, store).attach(wakeLoop, wakeHistory, wakeOwnerId);
-
-        CoreAgentLoop.Result wakeResult = wakeLoop.run("", wakeHistory, CancellationToken.uncancellable(), null);
-        String wakeAssistantId = store.appendConversationMessage(session, "assistant", wakeResult.text,
-                wakeResult.durationMs, wakeResult.runId, wakeOwnerId, wakeResult.outcome);
-        assertEquals("COMPLETED", wakeResult.outcome);
+        new MainChatTranscriptStore(files, session, store).attach(loop, agentHistory, agentMessageId);
+        CoreAgentLoop.Result result = loop.run("", agentHistory, CancellationToken.uncancellable(), null);
+        String assistantId = store.appendConversationMessage(session, "assistant", result.text,
+                result.durationMs, result.runId, agentMessageId, result.outcome);
+        assertEquals("COMPLETED", result.outcome);
         assertEquals(1, toolEffects.get());
-        assertEquals(2, wakeProviderCalls.get());
-        assertFalse("The successful checkpoint consumes its exact durable event", store.isWorkspaceResultWakePending(reference.referenceId));
+        assertEquals(2, calls.get());
 
         LocalRunStore reopened = chatTestStore.localRunStore(files);
         List<ConversationTurn> restored = reopened.loadConversationContext(session);
         ConversationTurn priorAnswer = restored.stream().filter(turn -> "Earlier answer".equals(turn.content))
                 .findFirst().orElseThrow(AssertionError::new);
-        ConversationTurn wakeAnswer = restored.stream().filter(turn -> "Workspace result inspected".equals(turn.content))
+        ConversationTurn answer = restored.stream().filter(turn -> "I checked the worker report".equals(turn.content))
                 .findFirst().orElseThrow(AssertionError::new);
-        assertEquals("A wake checkpoint must not replace the prior user's Codex output items",
-                priorRaw, priorAnswer.providerOutputItems.get(0).value);
-        assertEquals("The wake answer must restore its own Codex output items",
-                wakeRaw, wakeAnswer.providerOutputItems.get(0).value);
+        assertEquals(priorRaw, priorAnswer.providerOutputItems.get(0).value);
+        assertEquals(answerRaw, answer.providerOutputItems.get(0).value);
 
         List<AgentRunUiEvent> timeline = reopened.readConversationTimeline(session);
-        AgentRunUiEvent wakeTool = timeline.stream().filter(event -> "wake-inspect-call".equals(event.getToolCallId()))
+        assertFalse("Internal agent input is absent from the chat projection",
+                timeline.stream().anyMatch(event -> event.getText().contains("Worker final text")));
+        AgentRunUiEvent tool = timeline.stream().filter(event -> "agent-inspect-call".equals(event.getToolCallId()))
                 .findFirst().orElseThrow(AssertionError::new);
-        assertEquals("The persisted tool result belongs to this wake's durable owner", wakeOwnerId,
-                wakeTool.getToolTurnMessageId());
+        assertEquals(agentMessageId, tool.getToolTurnMessageId());
+        AgentRunUiEvent answerEvent = timeline.stream().filter(event -> assistantId.equals(event.getMessageId()))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertFalse("An answer to an agent input cannot regenerate the preceding user request", answerEvent.getCanRegenerate());
 
         reopened.hideAssistantWithOwner(session, priorAssistantId, "assistant_regenerated");
         timeline = reopened.readConversationTimeline(session);
-        assertTrue("Invalidating the preceding user-owned answer must leave the wake-owned tool row visible",
-                timeline.stream().anyMatch(event -> "wake-inspect-call".equals(event.getToolCallId())
-                        && wakeOwnerId.equals(event.getToolTurnMessageId())));
-        AgentRunUiEvent wakeReplyEvent = timeline.stream().filter(event -> wakeAssistantId.equals(event.getMessageId()))
-                .findFirst().orElseThrow(AssertionError::new);
-        assertFalse("The UI must not offer regeneration for a system-origin wake reply", wakeReplyEvent.getCanRegenerate());
-
-        int providerCallsBeforeRejectedRegeneration = wakeProviderCalls.get();
+        assertTrue(timeline.stream().anyMatch(event -> "agent-inspect-call".equals(event.getToolCallId())
+                && agentMessageId.equals(event.getToolTurnMessageId())));
+        int callsBefore = calls.get();
         try {
-            reopened.regenerateAssistantIfLatest(session, wakeAssistantId);
-            fail("A workspace wake reply must not fall back to the preceding user's prompt");
+            reopened.regenerateAssistantIfLatest(session, assistantId);
+            fail("Agent-origin answer must not fall back to the preceding user's prompt");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage().contains("regenerat"));
         }
-        assertEquals("Rejected wake regeneration must not launch the model again",
-                providerCallsBeforeRejectedRegeneration, wakeProviderCalls.get());
-        assertEquals("No synthetic user message is created for a wake or rejected regeneration",
-                1, reopened.readConversationMessages(session).stream()
-                        .filter(row -> "user".equals(row.optString("role"))).count());
+        assertEquals(callsBefore, calls.get());
+        assertEquals(1, reopened.readConversationMessages(session).stream()
+                .filter(row -> "user".equals(row.optString("role"))).count());
     }
-
     @Test public void chatCompletionsAdapterIgnoresCodexReasoningItems() throws Exception {
         String raw = new JSONObject().put("type", "reasoning").put("id", "rs_private")
                 .put("encrypted_content", ENCRYPTED).toString();
@@ -339,23 +337,4 @@ public class CodexReasoningPersistenceTest {
         };
     }
 
-    private static com.jarvys.agent.workspaces.WorkspaceResultReference appendPendingWakeNotice(LocalRunStore store) {
-        String workspaceId = "62a92262-977e-4c43-8e6a-5640a0c193c3";
-        String sourceSession = com.jarvys.agent.workspaces.WorkspaceIdentity.executionSessionId(workspaceId);
-        String requestId = "codex-wake-request";
-        String missionId = UUID.nameUUIDFromBytes(("jarvys-workspace-mission-v1\u0000" + workspaceId + "\u0000" + requestId)
-                .getBytes(StandardCharsets.UTF_8)).toString();
-        CrewResultEvidence evidence = CrewResultEvidence.create(sourceSession, missionId, "codex-test-bot",
-                UUID.nameUUIDFromBytes("codex-wake-cycle".getBytes(StandardCharsets.UTF_8)).toString(),
-                "DONE", "Unverified workspace result evidence", 1_234L);
-        store.appendConversationMessage(sourceSession, "user", "Synthetic source conversation setup");
-        store.appendCrewResultEvidence(evidence);
-        com.jarvys.agent.workspaces.WorkspaceResultReference reference =
-                com.jarvys.agent.workspaces.WorkspaceResultReference.create(evidence,
-                        com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION, workspaceId,
-                        "0a941f8e-e144-4c2d-b1be-2ae33d31b1bd", requestId, 1L);
-        store.appendWorkspaceResultReferenceIfAbsent(reference, () -> { });
-        store.appendWorkspaceResultNoticeAndWake(reference, () -> { });
-        return reference;
-    }
 }

@@ -62,7 +62,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
 
     /** Latest persisted message that the loop has not confirmed in its transcript. */
     synchronized String latestUnincorporatedSteeringMessageId() {
-        List<JSONObject> rows = store.readUserMessagesAfter(sessionId, initialCursorMessageId);
+        List<JSONObject> rows = store.readConversationInputsAfter(sessionId, initialCursorMessageId);
         Set<String> handled = store.handledConversationMessageIds(sessionId, messageIds(rows));
         String latest = "";
         for (JSONObject row : rows) {
@@ -77,7 +77,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
     }
 
     private List<CoreAgentLoop.IncomingMessage> readAfterCursor() {
-        List<JSONObject> rows = store.readUserMessagesAfter(sessionId, cursorMessageId);
+        List<JSONObject> rows = store.readConversationInputsAfter(sessionId, cursorMessageId);
         if (rows.isEmpty()) return Collections.emptyList();
         Set<String> handled = store.handledConversationMessageIds(sessionId, messageIds(rows));
         List<CoreAgentLoop.IncomingMessage> messages = new ArrayList<>();
@@ -86,7 +86,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
             if (id.isEmpty()) continue;
             cursorMessageId = id;
             if (handled.contains(id)) continue;
-            messages.add(CoreAgentLoop.IncomingMessage.mainChat(id, row.optString("content", "")));
+            messages.add(CoreAgentLoop.IncomingMessage.mainChat(conversationInput(row, id)));
             collectedMessageIds.add(id);
         }
         return Collections.unmodifiableList(messages);
@@ -99,6 +99,15 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
             if (!id.isEmpty()) ids.add(id);
         }
         return ids;
+    }
+
+    private ConversationInput conversationInput(JSONObject row, String messageId) {
+        String rawOrigin = row.optString("inputOrigin", row.optString("role", "user").toUpperCase(java.util.Locale.ROOT));
+        ConversationInput.Origin origin = ConversationInput.parseOrigin(rawOrigin);
+        if (origin == null) throw new IllegalStateException("Stored conversation input has invalid origin");
+        ConversationInput.Provenance provenance = origin == ConversationInput.Origin.USER ? null
+                : ConversationInput.Provenance.fromJson(row.optJSONObject("provenance"));
+        return new ConversationInput(sessionId, messageId, row.optString("content", ""), origin, provenance);
     }
 
     @Override public String takeUntrustedContext() { return ""; }

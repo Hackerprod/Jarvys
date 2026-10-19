@@ -17,7 +17,6 @@ class WorkspaceUiStateTest {
         assertFalse(assignment.canCorrect)
         assertFalse(assignment.canPause)
         assertFalse(assignment.canResume)
-        assertFalse(assignment.resultVerified)
     }
 
     @Test fun duplicateIdsAndInvalidTargetsCannotBecomeLazyRows() {

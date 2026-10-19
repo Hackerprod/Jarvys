@@ -43,6 +43,8 @@ data class AgentRunUiEvent(
     val memoryAfter: String? = null,
     val compactionMessageCount: Int = 0,
     val messageId: String = "",
+    /** Source identity for durable conversation inputs; null for assistant/tool presentation events. */
+    val conversationInputOrigin: ConversationInput.Origin? = null,
     val durationMs: Long = 0,
     val memoryReflectionGroupId: String? = null,
     val memoryRevisionIds: List<Long> = emptyList(),
@@ -69,7 +71,6 @@ data class AgentRunUiEvent(
     val presentationArtifact: PresentationArtifact? = null,
     /** Compatibility projection used by the existing download/share controls. */
     val deliveredArtifact: ChatAttachment? = null,
-    val workspaceResultReference: com.jarvys.agent.workspaces.WorkspaceResultReference? = null,
     val toolAuditDetail: String? = null,
     val reactionEmoji: String = "",
     val previewIsCurrent: Boolean = false,
@@ -156,12 +157,6 @@ data class AgentRunUiEvent(
         fun crewMissionEvent(id: Long, snapshot: CrewMissionSnapshot): AgentRunUiEvent =
             AgentRunUiEvent(id, "crew_mission", snapshot.status, snapshot.title,
                 timestampMillis = snapshot.startedAtMillis, crewMissionSnapshot = snapshot)
-
-        @JvmStatic
-        fun workspaceResultEvent(id: Long, reference: com.jarvys.agent.workspaces.WorkspaceResultReference,
-                                 timestampMillis: Long): AgentRunUiEvent = AgentRunUiEvent(
-            id = id, kind = "workspace_result", text = reference.reportedStatus,
-            workspaceResultReference = reference, timestampMillis = timestampMillis)
 
         @JvmStatic
         fun artifactEvent(id: Long, artifact: PresentationArtifact, timestampMillis: Long,
@@ -353,6 +348,7 @@ object AgentRunUiState {
         var active: Boolean = false,
         var liveSnapshot: AgentRunUiSnapshot? = null,
         var systemOriginGeneration: Long? = null,
+        var internalInputGeneration: Long? = null,
         var stoppingGeneration: Long? = null,
         var stoppedCompletion: StoppedCompletion? = null,
     )
@@ -800,7 +796,7 @@ object AgentRunUiState {
     fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
-        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "artifact", "workspace_result")
+        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "artifact")
         val liveInFlightTools = if (current.running) current.events.mapNotNull { event ->
             if (event.kind == "tool" && event.stage in setOf("tool_call", "tool_progress", "approval_waiting"))
                 event.toolCallId?.let { event to refreshToolIdentity(event) }
@@ -844,9 +840,6 @@ object AgentRunUiState {
                     || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage == true && persistedEvents.none {
                         it.kind == "artifact" && it.presentationArtifact?.isGeneratedImage == true &&
                             it.generatedImagePath == event.generatedImagePath
-                    }
-                    || event.kind == "workspace_result" && persistedEvents.none {
-                        it.kind == "workspace_result" && it.workspaceResultReference?.referenceId == event.workspaceResultReference?.referenceId
                     }
                     || event.kind == "artifact" && event.presentationArtifact?.isGeneratedImage != true && persistedEvents.none {
                         it.kind == "artifact" && it.presentationArtifact?.id == event.presentationArtifact?.id
@@ -963,7 +956,6 @@ object AgentRunUiState {
             "assistant_translation" -> event.detail?.takeIf(String::isNotBlank)
             "tool" -> event.toolIdentity?.takeIf(String::isNotBlank)
             "user_decision" -> event.decisionId?.takeIf(String::isNotBlank)
-            "workspace_result" -> event.workspaceResultReference?.referenceId?.takeIf(String::isNotBlank)
             "artifact" -> event.presentationArtifact?.id?.takeIf(String::isNotBlank)
             "crew_mission" -> event.crewMissionSnapshot?.missionId?.takeIf(String::isNotBlank)
             "memory" -> event.memoryRevisionId?.toString()
@@ -1066,7 +1058,7 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error",
-            "memory", "crew_mission", "tool", "user_decision", "artifact", "workspace_result")
+            "memory", "crew_mission", "tool", "user_decision", "artifact")
         val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
         val retainedAssistantTimelineKeys = current.events.asSequence()
             .filter { it.kind == "assistant" && it.timelineKey != null }
@@ -1101,16 +1093,6 @@ object AgentRunUiState {
         } else {
             _state.value = current.copy(events = append(events, updated))
         }
-        }
-    }
-
-    @JvmStatic
-    fun workspaceResultAdded(reference: com.jarvys.agent.workspaces.WorkspaceResultReference) = inSession(reference.ownerCentralSessionId) { synchronized(lock) {
-        val current = _state.value
-        if (current.sessionId != reference.ownerCentralSessionId) return@synchronized
-        if (current.events.any { it.kind == "workspace_result" && it.workspaceResultReference?.referenceId == reference.referenceId }) return@synchronized
-        _state.value = current.copy(events = append(current.events,
-            AgentRunUiEvent.workspaceResultEvent(nextEventId++, reference, System.currentTimeMillis())))
         }
     }
 
@@ -1294,6 +1276,7 @@ object AgentRunUiState {
     fun beginServiceRun(sessionId: String, goal: String, attachments: List<ChatAttachment>,
         regeneration: Boolean, generation: Long, userMessageId: String? = null) = inSession(sessionId) { synchronized(lock) {
         owner().systemOriginGeneration = null
+        owner().internalInputGeneration = null
         _state.value.headerMascotAnimationRequest?.takeIf { _state.value.sessionId != sessionId }?.let { request ->
             resolveHeaderMascotAnimationLocked(request, "rejected", "The chat session changed.")
         }
@@ -1324,6 +1307,7 @@ object AgentRunUiState {
     @JvmStatic
     fun beginSystemServiceRun(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
         owner().systemOriginGeneration = generation
+        owner().internalInputGeneration = generation
         val current = _state.value
         if (current.sessionId == sessionId || current.sessionId == null) {
             _state.value = current.copy(sessionId = sessionId, goal = "", running = true,
@@ -1332,6 +1316,12 @@ object AgentRunUiState {
             ownedLiveSnapshot = AgentRunUiSnapshot(sessionId = sessionId, running = true,
                 interactiveOwnerSessionId = sessionId, liveRunIdentity = "$sessionId:$generation")
         }
+    } }
+
+    /** Internal inputs can steer a user run without becoming a user regeneration target. */
+    @JvmStatic
+    fun markInternalConversationInput(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        if (ownsGeneration(sessionId, generation)) owner().internalInputGeneration = generation
     } }
 
     @JvmStatic
@@ -1687,7 +1677,8 @@ object AgentRunUiState {
         val ownership = owner()
         if (ownership.stoppingGeneration == generation) {
             ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs,
-                canRegenerate = ownership.systemOriginGeneration != generation)
+                canRegenerate = ownership.systemOriginGeneration != generation
+                    && ownership.internalInputGeneration != generation)
             if (current.events.any { it.id in streamIds })
                 _state.value = current.copy(events = current.events.filterNot { it.id in streamIds })
             return@synchronized
@@ -1708,9 +1699,11 @@ object AgentRunUiState {
             ownedRunActive = false
             ownedLiveSnapshot = null
             val canRegenerate = ownership.systemOriginGeneration != generation
+                && ownership.internalInputGeneration != generation
             ownership.stoppingGeneration = null
             ownership.stoppedCompletion = null
             ownership.systemOriginGeneration = null
+            ownership.internalInputGeneration = null
             if (current.sessionId == sessionId) {
                 pendingProgress.clear()
                 val currentEventIds = current.events.mapTo(mutableSetOf()) { it.id }
@@ -2195,7 +2188,7 @@ object AgentRunUiState {
 
     private fun append(existing: List<AgentRunUiEvent>, item: AgentRunUiEvent): List<AgentRunUiEvent> {
         val result = existing + item
-        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "artifact", "workspace_result")
+        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "artifact")
         // Pending approvals are live requests with blocked workers behind them; evicting one
         // would orphan the ApprovalGate latch. Keep all pending cards even when history is busy.
         fun evictable(event: AgentRunUiEvent) = event.kind !in durableKinds

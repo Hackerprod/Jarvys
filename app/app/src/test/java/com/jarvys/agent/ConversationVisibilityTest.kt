@@ -66,6 +66,25 @@ class ConversationVisibilityTest {
         }
     }
 
+    @Test fun agentAndSystemConversationInputsStayHiddenByOriginWhileAnswersRemainVisible() {
+        val user = AgentRunUiEvent(1L, "user", text = "Human request")
+            .copy(conversationInputOrigin = ConversationInput.Origin.USER)
+        // Deliberately reuse screen-facing kinds: origin, not a kind/tool/workspace allowlist,
+        // decides that these persisted model inputs are internal.
+        val agent = AgentRunUiEvent(2L, "user", text = "Worker asks to approve X")
+            .copy(conversationInputOrigin = ConversationInput.Origin.AGENT)
+        val system = AgentRunUiEvent(3L, "assistant", text = "Internal delivery state")
+            .copy(conversationInputOrigin = ConversationInput.Origin.SYSTEM)
+        val answer = AgentRunUiEvent(4L, "assistant", text = "I checked the worker's report")
+        val tool = AgentRunUiEvent.activityEvent(5L, activity("read_file", "tool_result"))
+
+        assertEquals(listOf(user, answer, tool), ConversationVisibility.project(listOf(user, agent, system, answer, tool)))
+        assertFalse(ConversationVisibility.visible(agent))
+        assertFalse(ConversationVisibility.visible(system))
+        assertTrue(ConversationVisibility.visible(answer))
+        assertTrue(ConversationVisibility.visible(tool))
+    }
+
     @Test fun liveModelPhasesAndSuccessfulCoordinationStayOutOfProjection() {
         val session = "quiet-live"
         AgentRunUiState.resetSession(session)

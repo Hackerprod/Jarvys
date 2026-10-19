@@ -139,12 +139,14 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 lateinit var bot: CrewManager.Bot
                 if (!token.runIfActive {
                         admission.run()
-                        bot = manager.spawnForMission(started.missionId, started.originalUserRequest,
-                            started.role, started.missionText, started.tools, started.name, started.missionAccess, scope.title)
+                        bot = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
+                            started.role, started.missionText, started.tools, started.name, started.missionAccess,
+                            scope.title, started.assignmentId)
                         admittedBot.set(bot to bot.token)
                     }) throw java.util.concurrent.CancellationException("Workspace delegation stopped before spawning")
                 if (token.isCancellationRequested) manager.stopExact(bot.id, admittedBot.get()!!.second)
                 val bound = store.bindBot(workspaceId, started.assignmentId, started.revision, bot.id)
+                if (!token.isCancellationRequested) manager.startPreparedForMission(bot)
                 WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
                 WorkspaceChanges.changed()
                 keepalive()

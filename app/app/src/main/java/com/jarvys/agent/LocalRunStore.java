@@ -221,6 +221,16 @@ public final class LocalRunStore {
                 row.put("proactiveDecisionId", message.getProactiveDecisionId());
             }
             if (message.getInputState() != null) row.put("inputState", message.getInputState());
+            if ("agent".equals(message.getRole()) || "system".equals(message.getRole())) {
+                row.put("inputOrigin", message.getRole().toUpperCase(java.util.Locale.ROOT));
+                for (MessagePartInput part : message.getParts()) if (ConversationInput.PROVENANCE_PART_KIND.equals(part.getKind())) {
+                    JSONObject encoded = new JSONObject(part.getPayload());
+                    row.put("inputOrigin", encoded.optString("origin", message.getRole().toUpperCase(java.util.Locale.ROOT)));
+                    JSONObject provenance = encoded.optJSONObject("provenance");
+                    if (provenance != null) row.put("provenance", provenance);
+                    break;
+                }
+            }
             if (message.getStatus() != null) row.put("status", message.getStatus());
             if (message.getRunId() != null) row.put("runId", message.getRunId());
             if (message.getOwnerUserMessageId() != null) row.put("userMessageId", message.getOwnerUserMessageId());
@@ -381,42 +391,6 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeSync(
                 reference, beforeWrite::run), "append workspace result notice");
-    }
-
-    public boolean appendWorkspaceResultNoticeAndWake(
-            WorkspaceResultReference reference, Runnable beforeWrite) {
-        requireResultReference(reference, beforeWrite);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.appendWorkspaceResultNoticeAndWakeSync(
-                reference, beforeWrite::run), "append workspace result notice and wake");
-    }
-
-    public synchronized boolean claimWorkspaceResultWake(String referenceId) {
-        WorkspaceResultReference.requireReferenceId(referenceId);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.claimWorkspaceResultWakeSync(referenceId),
-                "claim workspace result wake");
-    }
-
-    public synchronized boolean acknowledgeWorkspaceResultWake(String referenceId) {
-        WorkspaceResultReference.requireReferenceId(referenceId);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.acknowledgeWorkspaceResultWakeSync(referenceId),
-                "acknowledge workspace result wake");
-    }
-
-    public synchronized boolean discardWorkspaceResultWake(String referenceId) {
-        WorkspaceResultReference.requireReferenceId(referenceId);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.discardWorkspaceResultWakeSync(referenceId),
-                "discard workspace result wake");
-    }
-
-    public synchronized boolean isWorkspaceResultWakePending(String referenceId) {
-        WorkspaceResultReference.requireReferenceId(referenceId);
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return requireChatDbSuccess(chatDatabaseBridge.isWorkspaceResultWakePendingSync(referenceId),
-                "read workspace result wake state");
     }
 
     public synchronized WorkspaceResultReference readWorkspaceResultNotice(String centralSessionId, String referenceId) {
@@ -727,6 +701,57 @@ public final class LocalRunStore {
                 System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId))),
                 "append conversation message");
         return saved.getMessageId();
+    }
+
+    /** Persists one content-bearing, attributed input in the existing conversation message ledger. */
+    public synchronized String appendConversationInput(ConversationInput input) {
+        if (input == null) throw new IllegalArgumentException("Conversation input is required");
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        String role = input.origin.name().toLowerCase(java.util.Locale.ROOT);
+        List<MessagePartInput> parts = new ArrayList<>();
+        parts.add(new MessagePartInput("text", input.content));
+        MessagePartInput provenance = input.provenancePart();
+        if (provenance != null) parts.add(provenance);
+        StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendMessageSync(new AppendMessageInput(
+                input.conversationId, role, parts, null, null, null, null, null, null, null, null,
+                null, false, Collections.emptyList(), Collections.emptyList(),
+                System.currentTimeMillis() / 1000.0, conversationKindFor(input.conversationId), input.stableId())),
+                "append attributed conversation input");
+        return saved.getMessageId();
+    }
+
+    /** Restores the typed input metadata stored with an AGENT/SYSTEM message row. */
+    public ConversationInput readConversationInput(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || chatDatabaseBridge == null) return null;
+        StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+        if (message == null) return null;
+        ConversationInput.Origin origin;
+        if ("user".equals(message.getRole())) origin = ConversationInput.Origin.USER;
+        else if ("agent".equals(message.getRole())) origin = ConversationInput.Origin.AGENT;
+        else if ("system".equals(message.getRole())) origin = ConversationInput.Origin.SYSTEM;
+        else return null;
+        ConversationInput.Provenance provenance = null;
+        for (MessagePartInput part : message.getParts()) {
+            if (!ConversationInput.PROVENANCE_PART_KIND.equals(part.getKind())) continue;
+            try {
+                JSONObject encoded = new JSONObject(part.getPayload());
+                ConversationInput.Origin taggedOrigin = ConversationInput.parseOrigin(encoded.optString("origin", ""));
+                if (taggedOrigin != null) origin = taggedOrigin;
+                provenance = ConversationInput.Provenance.fromJson(encoded.optJSONObject("provenance"));
+            } catch (Exception invalid) {
+                throw new IllegalStateException("Stored conversation input provenance is invalid", invalid);
+            }
+            break;
+        }
+        if (origin != ConversationInput.Origin.USER && provenance == null)
+            throw new IllegalStateException("Stored internal input has no typed provenance");
+        return new ConversationInput(sessionId, messageId, message.getText(), origin, provenance);
+    }
+
+    public String readConversationInputState(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || chatDatabaseBridge == null) return null;
+        StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+        return message != null && isConversationInputRole(message.getRole()) ? message.getInputState() : null;
     }
 
     /** Persists a STOP/start-failure result and resolves its queued follow-up in one DB transaction. */
@@ -1476,7 +1501,7 @@ public final class LocalRunStore {
     private Set<String> inputStateMessageIds(String sessionId, String wantedState, Set<String> requestedIds) {
         Set<String> result = new HashSet<>();
         for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId)) {
-            if (!"user".equals(message.getRole())) continue;
+            if (!isConversationInputRole(message.getRole())) continue;
             if (requestedIds != null && !requestedIds.contains(message.getMessageId())) continue;
             if (wantedState == null ? message.getInputState() != null : wantedState.equals(message.getInputState()))
                 result.add(message.getMessageId());
@@ -1560,11 +1585,6 @@ public final class LocalRunStore {
         return chatDatabaseBridge.loadConversationContextSync(sessionId);
     }
 
-    public List<ConversationTurn> loadConversationContext(String sessionId, String workspaceWakeReferenceId) {
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        return chatDatabaseBridge.loadConversationContextSync(sessionId, workspaceWakeReferenceId);
-    }
-
     public int latestUserMessageIndex(String sessionId) {
         List<JSONObject> messages = readConversationMessages(sessionId);
         for (int index = messages.size() - 1; index >= 0; index--) {
@@ -1601,11 +1621,6 @@ public final class LocalRunStore {
     /** Persists one checkpoint and acknowledges its inputs in the same Room transaction. */
     synchronized void appendModelTranscriptCheckpoint(String sessionId, List<JSONObject> rows,
             List<String> incorporatedMessageIds) {
-        appendModelTranscriptCheckpoint(sessionId, rows, incorporatedMessageIds, Collections.emptyList());
-    }
-
-    synchronized void appendModelTranscriptCheckpoint(String sessionId, List<JSONObject> rows,
-            List<String> incorporatedMessageIds, List<String> workspaceResultWakeReferenceIds) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         List<com.jarvys.agent.chatdb.ModelTranscriptWrite> writes = new ArrayList<>();
         for (JSONObject row : rows) writes.add(modelTranscriptWrite(sessionId, row));
@@ -1614,10 +1629,8 @@ public final class LocalRunStore {
         String inputState = messageIds.isEmpty() ? null : "incorporated";
         requireChatDbSuccess(chatDatabaseBridge.appendModelTurnSync(
                 new com.jarvys.agent.chatdb.ConversationModelTurnInput(
-                        sessionId, writes, messageIds, inputState,
-                        workspaceResultWakeReferenceIds == null
-                                ? Collections.emptyList() : new ArrayList<>(workspaceResultWakeReferenceIds))),
-                "persist model checkpoint, inputs, and workspace result wakes");
+                        sessionId, writes, messageIds, inputState)),
+                "persist model checkpoint and input acknowledgements");
     }
 
     private static com.jarvys.agent.chatdb.ModelTranscriptWrite modelTranscriptWrite(
@@ -1762,6 +1775,33 @@ public final class LocalRunStore {
         return Collections.unmodifiableList(later);
     }
 
+    /** All user and internal conversation inputs after a durable cursor, in ledger order. */
+    public List<JSONObject> readConversationInputsAfter(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || messageId.isEmpty()) return Collections.emptyList();
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        StoredMessage cursor = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+        if (cursor == null) return Collections.emptyList();
+        List<JSONObject> later = new ArrayList<>();
+        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
+            if (message.getSeq() > cursor.getSeq() && isConversationInputRole(message.getRole()))
+                later.add(messageJson(message));
+        return Collections.unmodifiableList(later);
+    }
+
+        /** Pending agent messages start turns; SYSTEM context never starts an automatic reply. */
+    public List<JSONObject> readPendingInternalConversationInputs(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        List<JSONObject> pending = new ArrayList<>();
+        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
+            if ("agent".equals(message.getRole()) && message.getInputState() == null)
+                pending.add(messageJson(message));
+        return Collections.unmodifiableList(pending);
+    }
+
+    private static boolean isConversationInputRole(String role) {
+        return "user".equals(role) || "agent".equals(role) || "system".equals(role);
+    }
+
     public synchronized ReflectionPayload buildReflectionPayload(String sessionId) {
         return buildReflectionPayload(sessionId, null, false);
     }
@@ -1788,6 +1828,12 @@ public final class LocalRunStore {
         for (ConversationSummary summary : chatDatabaseBridge.listAllConversationsSync(Collections.emptySet()))
             if (!summary.getDeleted() && !chatDatabaseBridge.isTombstonedSync(summary.getId())) ids.add(summary.getId());
         return ids;
+    }
+
+    /** Internal delivery recovery cannot use the UI conversation projection, which omits agent-only sessions. */
+    public synchronized List<String> listConversationsWithPendingAgentInputs() {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.listConversationsWithPendingAgentInputsSync();
     }
 
     public synchronized void appendReflectionCheckpoint(String sessionId, ReflectionPayload payload,

@@ -739,7 +739,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             return rowIndex.toLongOrNull()?.takeIf { it >= 0L }
         }
 
-        /** Result-only strict-journal rows never contribute to the filtered legacy rowIndex. */
+        /** Keep historic wake marker rows out of timelines; new worker content is a typed message row. */
         private fun eligibleTimelineExclusionSql() = "('crew_result_evidence','workspace_result_reference','workspace_result_notice','workspace_result_wake_pending','workspace_result_wake_started','workspace_result_wake_acknowledged','crew_coordination_evidence','crew_coordination_evidence_ref','workspace_coordination_reference','workspace_coordination_notice','workspace_coordination_reply_intent','workspace_coordination_reply_state','workspace_input_incorporation')"
     }
 }

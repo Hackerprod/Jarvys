@@ -25,8 +25,7 @@ object WorkspaceProjection {
             val manager = CoreAgentRuntime.crewManagerForSession(scope.executionSessionId)
             val projected = assignments.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
             WorkspaceSidebarRow(scope.workspaceId, scope.title,
-                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore,
-                com.jarvys.agent.WorkspaceCoordinationDelivery(context).summary(scope.workspaceId))
+                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore)
         }
         val next = workspaces.lastOrNull()?.workspaceId?.takeIf {
             workspaces.size == WORKSPACE_PAGE_SIZE && store.listWorkspaces(1, it).isNotEmpty()
@@ -44,8 +43,7 @@ object WorkspaceProjection {
         val assignments = records.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
         val pageLimited = afterAssignmentId != null || next != null
         WorkspaceDetailUiState(id, scope.title, workspaceAggregateStatus(assignments.map { it.status }, pageLimited),
-            assignments, canOpenFiles = true, nextCursor = next, statusPageLimited = pageLimited,
-            coordination = com.jarvys.agent.WorkspaceCoordinationDelivery(context).summary(id))
+            assignments, canOpenFiles = true, nextCursor = next, statusPageLimited = pageLimited)
     }
 
     /** Projects chat from the execution session recorded for this workspace, never from central. */
@@ -87,8 +85,7 @@ object WorkspaceProjection {
             unsettled != null -> WorkspaceUiStatus.UNKNOWN
             else -> status(recorded?.status)
         }
-        val note = listOfNotNull(issue, com.jarvys.agent.WorkspaceResultDelivery.issue(scope.workspaceId),
-            com.jarvys.agent.WorkspaceCoordinationDelivery.issue(scope.workspaceId),
+        val note = listOfNotNull(issue,
             if (assignment.needsReconciliation) context.getString(R.string.workspace_admission_uncertain) else null,
             if (unsettled != null) context.getString(R.string.workspace_control_uncertain) else null,
             runCatching { com.jarvys.agent.WorkspaceInputIncorporationDelivery(context)
@@ -97,9 +94,9 @@ object WorkspaceProjection {
             if (live?.requiresExplicitResume() == true && !live.canResume()) context.getString(R.string.workspace_checkpoint_unavailable) else null)
             .joinToString("\n").takeIf { it.isNotBlank() }
         return WorkspaceAssignmentUi(assignment.assignmentId, assignment.revision, live?.name ?: assignment.name ?: assignment.role,
-            assignment.missionText, status, note, recorded?.result?.takeIf { it.isNotBlank() },
+            assignment.missionText, status, note,
             canCorrect = bound && unsettled == null && (!live!!.requiresExplicitResume() || resumable),
-            canPause = bound && (!quiescent || active), canResume = resumable && unsettled == null, resultVerified = false,
+            canPause = bound && (!quiescent || active), canResume = resumable && unsettled == null,
             pendingControlSaved = pending != null)
     }
 

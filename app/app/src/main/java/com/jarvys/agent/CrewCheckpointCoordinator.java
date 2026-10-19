@@ -53,7 +53,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (bot.scopeIdentity().isEmpty()) {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
-            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
+            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("assignmentId", bot.assignmentId()).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
             if (!bot.cycleId().isEmpty()) metadata.put("cycleId", bot.cycleId());
             CrewMissionTitle title = bot.missionTitle();
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
@@ -106,22 +106,44 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         CrewRole role = profile.resolveRole(profile.capabilities, profile.skillIds)
                                 .withMissionAccess(com.jarvys.agent.crew.CrewMissionAccess.parse(
                                         data.has("missionAccess") ? data.getString("missionAccess") : null));
+                        WorkspaceConversationInputStore.acknowledgeApplied(this.context, this.conversation,
+                                saved.loop.appliedIncomingIds);
                         List<String> owners = strings(data.getJSONArray("jobOwners"));
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
                         CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", visible.lastProgress, visible.lastProgressAtMillis, historicalCycleId(data), null);
                         CrewMissionSnapshot presentation = withCheckpointPresentation(mission, recoveredMission(data, precise, saved.savedAtMs));
-                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, mission.missionId, false), decodeMessages(data.getJSONArray("pending"), visible.id, mission.missionId, true), "");
+                        String assignmentId = resolveAssignmentId(mission.missionId, visible.id,
+                                data.optString("assignmentId", ""));
+                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership,
+                                saved.scopeIdentity, owners, data.getLong("completedCycles"),
+                                decodeMessages(data.getJSONArray("messages"), visible.id, mission.missionId, false),
+                                decodeMessages(data.getJSONArray("pending"), visible.id, mission.missionId, true),
+                                "", assignmentId);
                         continue;
                     }
                 } catch (Exception invalid) {
                     issue = "Checkpoint unavailable: " + (invalid.getMessage() == null ? "invalid saved state" : invalid.getMessage()) + ". Original evidence has been preserved.";
                 }
                 CrewRole historical = new CrewRole(visible.roleId, visible.roleName, visible.colorKey, "Historical view only.", Collections.emptyList(), null);
-                manager.restoreBot(mission, visible, historical, null, new JSONObject(), "", Collections.emptyList(), 0L, mission.messages, Collections.emptyList(), issue);
+                String assignmentId = resolveAssignmentId(mission.missionId, visible.id, "");
+                manager.restoreBot(mission, visible, historical, null, new JSONObject(), "",
+                        Collections.emptyList(), 0L, mission.messages, Collections.emptyList(), issue,
+                        assignmentId);
             }
         }
+    }
+
+    private String resolveAssignmentId(String missionId, String botId, String persisted) {
+        if (persisted != null && !persisted.isEmpty()) return persisted;
+        if (!com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(conversation)) return "";
+        com.jarvys.agent.workspaces.WorkspaceRegistry registry = new com.jarvys.agent.workspaces.WorkspaceRegistry(context);
+        try {
+            com.jarvys.agent.workspaces.WorkspaceAssignment assignment = registry.findBoundAssignment(
+                    com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversation), missionId, botId);
+            return assignment == null ? "" : assignment.getAssignmentId();
+        } finally { registry.close(); }
     }
 
     private CrewMissionSnapshot recoveredMission(JSONObject data, CrewBotSnapshot bot, long savedAtMillis) throws JSONException {

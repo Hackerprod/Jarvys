@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -17,6 +18,7 @@ public final class CrewMessageBus {
     private final Object monitor = new Object();
     private final List<CrewMessage> log = new ArrayList<>();
     private final Map<String, List<CrewMessage>> mailboxes = new LinkedHashMap<>();
+    private volatile Consumer<CrewMessage> admissionListener = ignored -> { };
 
     public CrewMessageBus(String conversationId) {
         this.conversationId = conversationId;
@@ -24,7 +26,22 @@ public final class CrewMessageBus {
 
     public CrewMessage send(String from, String to, CrewMessage.Type type, String text, List<String> refs) {
         CrewMessage message = new CrewMessage(conversationId, from, to, type, text, refs, System.currentTimeMillis());
-        return enqueueFresh(message);
+        CrewMessage admitted = enqueueFresh(message);
+        signalWaiters();
+        return admitted;
+    }
+
+    /** Receives committed deliveries directly; pending mail remains the durable recovery record. */
+    public void setAdmissionListener(Consumer<CrewMessage> listener) {
+        admissionListener = listener == null ? ignored -> { } : listener;
+    }
+
+    /** Call only after the containing worker checkpoint has committed the mailbox admission. */
+    public void publishAdmitted(CrewMessage message) {
+        if (message == null) throw new IllegalArgumentException("Crew message is required");
+        if (!conversationId.equals(message.conversationId)) throw new IllegalArgumentException("Wrong Crew message scope");
+        try { admissionListener.accept(message); }
+        finally { signalWaiters(); }
     }
 
     /** Fresh in-process admission only. A previously accepted ID is never replayed after draining. */
@@ -35,7 +52,6 @@ public final class CrewMessageBus {
                 throw new IllegalStateException("Crew message ID has already been admitted");
             log.add(message);
             mailboxes.computeIfAbsent(message.to, (ignored)->new ArrayList<>()).add(message);
-            monitor.notifyAll();
         }
         return message;
     }

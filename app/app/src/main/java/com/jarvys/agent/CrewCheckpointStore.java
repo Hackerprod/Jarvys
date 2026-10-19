@@ -658,7 +658,9 @@ public final class CrewCheckpointStore {
                         .put("sender", sanitizeText(provenance.sender))
                         .put("type", sanitizeText(provenance.type))
                         .put("references", new JSONArray(provenance.references))
-                        .put("untrusted", provenance.untrusted);
+                        .put("untrusted", provenance.untrusted)
+                        .put("origin", provenance.origin.name());
+                if (provenance.provenance != null) encoded.put("provenance", provenance.provenance.toJson());
                 jSONObject2.put("incomingMetadata", encoded);
             }
             if (!turn.providerOutputItems.isEmpty())
@@ -711,8 +713,14 @@ public final class CrewCheckpointStore {
                     transcript.add(ConversationTurn.assistantReply(content,
                             row.getInt("originalMessageIndex"),
                             ProviderOutputItemsCodec.decode(row.optJSONArray("providerOutputItems"))));
-                else transcript.add(new ConversationTurn(role, content, row.getInt("originalMessageIndex"),
-                        decodeIncomingMetadata(row.optJSONObject("incomingMetadata"))));
+                else {
+                    JSONObject incoming = row.optJSONObject("incomingMetadata");
+                    ConversationTurn.IncomingMetadata metadata = decodeIncomingMetadata(incoming, role);
+                    String providerRole = metadata != null && metadata.origin != ConversationInput.Origin.USER
+                            ? "assistant" : role;
+                    transcript.add(new ConversationTurn(providerRole, content,
+                            row.getInt("originalMessageIndex"), metadata));
+                }
             } else if (kind == ConversationTurn.Kind.COMPACTION_SUMMARY) {
                 transcript.add(ConversationTurn.restoredCompactionSummary(content, row.getInt("summarizedMessageCount")));
             } else if (kind == ConversationTurn.Kind.TOOL_RESULT) {
@@ -763,13 +771,21 @@ public final class CrewCheckpointStore {
         return new CoreAgentLoop.Checkpoint(transcript, incoming, states, value.getInt("genuineUserIndex"), incorporations);
     }
 
-    private static ConversationTurn.IncomingMetadata decodeIncomingMetadata(JSONObject row) throws Exception {
+    private static ConversationTurn.IncomingMetadata decodeIncomingMetadata(JSONObject row, String storedRole) throws Exception {
         if (row == null) return null;
         JSONArray references = row.getJSONArray("references");
         List<String> decoded = new ArrayList<>();
         for (int index = 0; index < references.length(); index++) decoded.add(references.getString(index));
-        return new ConversationTurn.IncomingMetadata(required(row, "id"), required(row, "source"),
-                required(row, "sender"), required(row, "type"), decoded, row.getBoolean("untrusted"));
+        String storedOrigin = row.optString("origin", "");
+        ConversationInput.Origin origin = storedOrigin.isEmpty()
+                ? ("user".equals(storedRole) && "crew".equals(row.optString("source")) && row.optBoolean("untrusted")
+                    ? ConversationInput.Origin.AGENT : ConversationInput.Origin.USER)
+                : ConversationInput.parseOrigin(storedOrigin);
+        if (origin == null) throw new IOException("Unknown conversation input origin");
+        ConversationInput.Provenance typed = row.optJSONObject("provenance") == null ? null
+                : ConversationInput.Provenance.fromJson(row.getJSONObject("provenance"));
+        return new ConversationTurn.IncomingMetadata(origin, required(row, "id"), required(row, "source"),
+                required(row, "sender"), required(row, "type"), decoded, row.getBoolean("untrusted"), typed);
     }
 
     private static Map<String, Object> decodeMap(JSONObject object) throws Exception {

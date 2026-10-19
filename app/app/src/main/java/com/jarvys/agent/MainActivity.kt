@@ -648,6 +648,7 @@ class MainActivity : ComponentActivity() {
         if (::providersRepository.isInitialized) providersRepository.refresh()
         refreshUi()
         WorkspaceResultDelivery.scheduleCatalog(applicationContext)
+        AgentForegroundService.recoverPendingConversationInputs(applicationContext)
         if (::connectorRegistry.isInitialized) connectorRegistry.refreshStates()
         if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
         if (::proactivePreferences.isInitialized) refreshProactiveStatus()

@@ -79,9 +79,6 @@ fun WorkspaceListScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Box(Modifier.fillMaxWidth().padding(start = 26.dp, end = 12.dp)) {
-                    WorkspaceCoordinationIndicator(workspace.coordination)
-                }
             }
         }
         if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {

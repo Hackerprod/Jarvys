@@ -222,8 +222,8 @@ class WorkspaceCoordinationDeliveryTest {
         read(r)
         assertTrue(notices().any { it.referenceId == r.referenceId })
         val accepted = reply(r)
-        assertEquals("ACCEPTED_LOCAL", accepted.getString("state"))
-        assertTrue(accepted.getBoolean("dispatch_accepted_locally"))
+        assertEquals("PENDING_INCORPORATION", accepted.getString("state"))
+        assertTrue(accepted.getBoolean("admission_committed"))
         assertFalse(accepted.getBoolean("user_or_model_consumption_verified")); assertFalse(accepted.getBoolean("question_resolved"))
         val answer = worker.answers().single()
         assertEquals("chief", answer.from); assertEquals(CrewMessage.Type.ANSWER, answer.type)
@@ -256,7 +256,7 @@ class WorkspaceCoordinationDeliveryTest {
         failure { reply(finding) }; assertNull(savedReply(finding))
         val blocker = references().single { it.kind == "BLOCKER" }
         assertEquals("LIVE_REPLYABLE", read(blocker).getString("reply_state"))
-        assertEquals("ACCEPTED_LOCAL", reply(blocker).getString("state"))
+        assertEquals("PENDING_INCORPORATION", reply(blocker).getString("state"))
         assertEquals(blocker.messageId, worker.answers().single().coordination.messageId)
     }
 
@@ -279,9 +279,9 @@ class WorkspaceCoordinationDeliveryTest {
         val reopened = WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { throw AssertionError("STARTED must not look up a manager") }
         val receipt = reply(r, backend = reopened)
         assertEquals("UNCERTAIN_NO_REPLAY", receipt.getString("state"))
-        assertFalse(receipt.getBoolean("dispatch_accepted_locally")); assertTrue(worker.answers().isEmpty())
+        assertFalse(receipt.getBoolean("admission_committed")); assertTrue(worker.answers().isEmpty())
         failure { reply(r, key = "bypass-key", backend = reopened) }
-        assertEquals(1, delivery.summary(scope.workspaceId).uncertain)
+        assertEquals("UNCERTAIN_NO_REPLAY", read(r).getString("reply_state"))
     }
 
     @Test fun postEnqueuePersistenceFailureRetainsUncertaintyAndNeverReplays() {
@@ -305,12 +305,11 @@ class WorkspaceCoordinationDeliveryTest {
     @Test fun preparedReplyRemainsUnsentAndStopOrReopenNeverDispatchesIt() {
         val (worker, r) = liveQuestion(); prepared(r)
         assertEquals("PREPARED_NOT_DISPATCHED", read(r).getString("reply_state"))
-        assertEquals(1, delivery.summary(scope.workspaceId).live)
         worker.manager.stop(worker.bot.id)
         assertEquals("HISTORICAL_OR_INTERRUPTED", read(r).getString("reply_state"))
-        assertEquals(0, delivery.summary(scope.workspaceId).live)
         val reopened = WorkspaceCoordinationDelivery(app, LocalRunStore(app)) { null }
-        assertEquals(0, reopened.summary(scope.workspaceId).live)
+        assertEquals("HISTORICAL_OR_INTERRUPTED", reopened.read(scope.workspaceId, r.referenceId,
+            r.contentSha256, 0, CancellationToken.uncancellable(), Runnable {}).getString("reply_state"))
         failure { reply(r, backend = reopened) }
         assertEquals(WorkspaceCoordinationReply.State.PREPARED, savedReply(r).state); assertTrue(worker.answers().isEmpty())
     }
@@ -319,7 +318,7 @@ class WorkspaceCoordinationDeliveryTest {
         val (worker, r) = liveQuestion(); prepared(r)
         val control = registry.nativeControls().submit(UUID.randomUUID().toString(), scope.workspaceId,
             target.assignmentId, worker.bot.id, target.revision, WorkspaceControlType.CORRECT, "Synthetic native correction")
-        assertEquals("NATIVE_CONTROL_PENDING", read(r).getString("reply_state")); assertEquals(0, delivery.summary(scope.workspaceId).live)
+        assertEquals("NATIVE_CONTROL_PENDING", read(r).getString("reply_state"))
         failure { reply(r) }; assertTrue(worker.answers().isEmpty())
         val started = registry.markControlStarted(control.requestId, control.revision, "synthetic-process")
         val cycle = worker.bot.cycleId()
@@ -331,7 +330,6 @@ class WorkspaceCoordinationDeliveryTest {
         assertEquals("HISTORICAL_OR_SUPERSEDED", read(r).getString("reply_state"))
         failure { reply(r) }; assertTrue(worker.answers().isEmpty())
         assertEquals(WorkspaceCoordinationReply.State.PREPARED, savedReply(r).state)
-        assertEquals(0, delivery.summary(scope.workspaceId).live)
     }
 
     @Test fun concurrentReadAndReplySharingStopControllerComplete() {

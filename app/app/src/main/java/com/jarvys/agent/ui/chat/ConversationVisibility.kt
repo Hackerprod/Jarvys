@@ -1,6 +1,7 @@
 package com.jarvys.agent.ui.chat
 
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.HtmlPreviewDescriptor
 import com.jarvys.agent.ScheduledTaskArtifact
 import org.json.JSONObject
@@ -13,6 +14,10 @@ internal object ConversationVisibility {
     )
 
     fun visible(event: AgentRunUiEvent, showAssistantProgress: Boolean = false): Boolean {
+        // Origin is independent of the row's presentation kind and is the generic boundary for
+        // internal agent/system inputs. Their resulting assistant answer remains a separate event.
+        if (event.conversationInputOrigin == ConversationInput.Origin.AGENT ||
+            event.conversationInputOrigin == ConversationInput.Origin.SYSTEM) return false
         // The strict journal row is durable model/recovery evidence, not a chat card for its owner.
         if (event.kind == "workspace_result") return false
         if (event.kind == "memory" && event.stage == "SEED") return false

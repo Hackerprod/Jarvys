@@ -21,6 +21,14 @@ public final class CrewMessage {
     public final CrewCoordinationEvidence.Reference coordination;
     public final CrewInputBinding inputBinding;
 
+    /** Actual text plus its structured references for an attributed model input. */
+    public String conversationContent() {
+        if (refs.isEmpty()) return text;
+        StringBuilder content = new StringBuilder(text).append("\n\nReferences:\n");
+        for (String ref : refs) content.append("- ").append(ref).append('\n');
+        return content.toString();
+    }
+
     public CrewMessage(String conversationId, String from, String to, Type type,
                        String text, List<String> refs, long timestampMillis) {
         this(UUID.randomUUID().toString(), conversationId, from, to, type, text, refs, timestampMillis);

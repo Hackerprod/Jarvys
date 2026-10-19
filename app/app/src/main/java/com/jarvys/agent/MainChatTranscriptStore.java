@@ -159,8 +159,7 @@ final class MainChatTranscriptStore {
                     }
                 }
                 store.appendModelTranscriptCheckpoint(sessionId, checkpointRows,
-                        new java.util.ArrayList<>(checkpoint.appliedIncomingIds),
-                        checkpoint.workspaceResultWakeReferenceIds);
+                        new java.util.ArrayList<>(checkpoint.appliedIncomingIds));
                 } finally {
                     pendingCheckpointRows.remove();
                 }

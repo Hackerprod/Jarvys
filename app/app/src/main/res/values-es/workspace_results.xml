@@ -1,6 +1,0 @@
-<resources>
-    <string name="workspace_result_notice_title">Resultado de espacio registrado</string>
-    <string name="workspace_result_notice_identity">Espacio: %1$s\nAsignación: %2$s</string>
-    <string name="workspace_result_notice_status">Estado informado por el trabajador: %1$s</string>
-    <string name="workspace_result_notice_disclaimer">Evidencia histórica sin verificar. Abre el espacio o pide a Jarvys que inspeccione su resultado guardado. Este aviso no confirma que se haya aplicado una corrección posterior.</string>
-</resources>

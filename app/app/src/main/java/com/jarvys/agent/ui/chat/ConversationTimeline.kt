@@ -497,9 +497,7 @@ private fun JarvysConversationEvent(
                 ScheduledTaskArtifactCard(artifact, onOpen = { onOpenScheduledTask(artifact) })
             }
         }
-        "workspace_result" -> TimelineArrival(animateEntry) {
-            event.workspaceResultReference?.let { com.jarvys.agent.workspaces.WorkspaceResultNotice(it) }
-        }
+        "workspace_result" -> Unit // Legacy event kind is never a chat card.
         "artifact" -> TimelineArrival(animateEntry) {
             PresentationArtifactCard(event, generatedImageSessionId, onOpenPreview,
                 onSaveGeneratedImage, onShareGeneratedImage)

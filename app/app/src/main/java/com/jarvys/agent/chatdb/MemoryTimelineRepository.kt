@@ -696,7 +696,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     private data class ReflectionMessage(val id: String, val role: String, val text: String, val status: String, val ownerUserMessageId: String, val rowIndex: Int)
 
     companion object {
-        /** Mirrors `LocalRunStore.isResultOnlyRow` over the persisted row types (`LocalRunStore.java:3002-3010`). */
+        /** Historic wake markers remain audit-only; new agent content uses typed message rows. */
         private const val RESULT_ONLY_KINDS = "('crew_result_evidence','workspace_result_reference','workspace_result_notice','workspace_result_wake_pending','workspace_result_wake_started','workspace_result_wake_acknowledged','crew_coordination_evidence','crew_coordination_evidence_ref','workspace_coordination_reference','workspace_coordination_notice','workspace_coordination_reply_intent','workspace_coordination_reply_state','workspace_input_incorporation')"
     }
 }

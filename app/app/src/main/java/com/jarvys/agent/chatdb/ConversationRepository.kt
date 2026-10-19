@@ -5,7 +5,6 @@ import android.database.Cursor
 import android.os.Looper
 import com.jarvys.agent.ConversationMetadataAccess
 import com.jarvys.agent.ConversationTitle
-import com.jarvys.agent.ConversationTurn
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionRole
@@ -39,7 +38,7 @@ data class MessageAttachmentInput(
 
 data class SuggestedReplyInput(val label: String, val text: String)
 
-data class AppendMessageInput(
+data class AppendMessageInput @JvmOverloads constructor(
     val conversationId: String,
     val role: String,
     val parts: List<MessagePartInput>,
@@ -58,6 +57,8 @@ data class AppendMessageInput(
     val createdAtSeconds: Double? = null,
     /** Kind used when this first message creates a new conversation in the same transaction. */
     val conversationKind: String = "chat",
+    /** Optional stable source identity for idempotent delivery of an external conversation input. */
+    val stableId: String? = null,
 )
 
 data class StoredMessage(
@@ -451,8 +452,9 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     /**
-     * Appends one `role=user` or `role=assistant` row and its body/attachment references. The
-     * generated UUID is also `stable_id`, replacing `role=user`/`role=assistant` in
+     * Appends one conversation row and its body/attachment references. The
+     * generated UUID is the default `stable_id`; internal inputs may supply a source-derived id,
+     * replacing `role=user`/`role=assistant` in
      * `LocalRunStore.java:appendConversationMessage`.
      */
     suspend fun appendMessage(input: AppendMessageInput): ChatDbResult<StoredMessage> = transactionResult {
@@ -471,6 +473,20 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         }
         conversation = conversation ?: return@transactionResult missingConversation(input.conversationId)
         if (isTombstonedRaw(input.conversationId)) return@transactionResult ChatDbResult.Tombstoned
+        val suppliedStableId = input.stableId?.takeIf { it.isNotBlank() }
+        if (suppliedStableId != null) {
+            val identity = findMessageByStableId(input.conversationId, suppliedStableId)
+            if (identity != null) {
+                val existing = hydrateMessages(input.conversationId, listOf(identity.messageId)).singleOrNull()
+                    ?: return@transactionResult ChatDbResult.Conflict("stable input row could not be hydrated")
+                val expectedParts = partsWithAttachmentReferences(input.parts, input.attachments)
+                val roleMatches = existing.role == input.role
+                val partsMatch = existing.parts == expectedParts
+                val attachmentsMatch = existing.attachments == input.attachments
+                if (roleMatches && partsMatch && attachmentsMatch) return@transactionResult ChatDbResult.Success(existing)
+                return@transactionResult ChatDbResult.Conflict("stable input identity was already used with different content")
+            }
+        }
         if (input.attachments.isNotEmpty() && (!isOrdinaryChat(conversation.kind) || !input.proactiveThreadKey.isNullOrEmpty())) {
             return@transactionResult ChatDbResult.Invalid("attachments are supported only in ordinary user messages")
         }
@@ -479,7 +495,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (existing != null) return@transactionResult ChatDbResult.Success(hydrateMessages(input.conversationId, listOf(existing.messageId)).single())
         }
         val id = UUID.randomUUID().toString()
-        val stableId = id
+        val stableId = suppliedStableId ?: id
         val now = input.createdAtSeconds ?: epochSeconds()
         val updatedAt = now
         val seq = allocateSequence(input.conversationId)
@@ -675,8 +691,11 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val target = findMessage(conversationId, messageId) ?: return@transactionResult ChatDbResult.NotFound
         if (target.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("regeneration target must be an assistant message")
         if (target.hiddenKind != null) return@transactionResult ChatDbResult.Success(null)
-        if (ConversationTurn.isWorkspaceWakeOwner(target.ownerUserMessageId))
-            return@transactionResult ChatDbResult.Invalid("system-origin workspace replies cannot be regenerated")
+        val explicitOwnerId = target.ownerUserMessageId
+        val explicitOwner = explicitOwnerId?.takeIf { it.isNotBlank() }
+            ?.let { findMessage(conversationId, it) }
+        if (!explicitOwnerId.isNullOrBlank() && explicitOwner?.role != ROLE_USER)
+            return@transactionResult ChatDbResult.Invalid("assistant replies owned by internal inputs cannot be regenerated")
 
         val latestActiveAssistantId = sql.query(
             "SELECT m.message_id FROM messages m " +
@@ -694,9 +713,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (cursor.moveToFirst()) SortPosition(cursor.getLong(0), cursor.getInt(1), cursor.getLong(2)) else null
         } ?: return@transactionResult ChatDbResult.NotFound
 
-        val owner = target.ownerUserMessageId?.let { ownerId ->
-            findMessage(conversationId, ownerId)?.takeIf { it.role == ROLE_USER }
-        } ?: sql.query(
+        val owner = explicitOwner?.takeIf { it.role == ROLE_USER } ?: if (explicitOwnerId.isNullOrBlank()) sql.query(
             "SELECT m.message_id FROM messages m " +
                 "JOIN conversation_items i ON i.conversation_id=m.conversation_id AND i.seq=m.seq " +
                 "WHERE m.conversation_id=? AND m.role='user' AND " +
@@ -707,7 +724,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 targetPosition.sortSeq, targetPosition.sortSub, targetPosition.seq),
         ).use { cursor ->
             if (cursor.moveToFirst()) findMessage(conversationId, cursor.getString(0)) else null
-        }
+        } else null
         if (owner == null) return@transactionResult ChatDbResult.NotFound
         val prompt = hydrateMessages(conversationId, listOf(owner.messageId)).singleOrNull()
             ?: return@transactionResult ChatDbResult.NotFound
@@ -915,8 +932,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 "SELECT input_state FROM interrupt_requests WHERE conversation_id=? AND request_id=?", arrayOf(conversationId, id),
             ).use { c -> if (c.moveToFirst()) c.getStringOrNull(0) else NO_INPUT_STATE_ROW }
             if (message == null && requestState == NO_INPUT_STATE_ROW) continue
-            if (state == INPUT_INCORPORATED && (message == null || message.role != ROLE_USER)) continue
-            if (message != null && (message.role != ROLE_USER || message.inputState != null)) continue
+            if (state == INPUT_INCORPORATED && (message == null || !isConversationInputRole(message.role))) continue
+            if (message != null && (!isConversationInputRole(message.role) || message.inputState != null)) continue
             if (message == null && requestState != null) continue
             if (message != null && requestState != null && requestState != NO_INPUT_STATE_ROW) continue
             val seq = allocateSequence(conversationId)
@@ -1176,6 +1193,14 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         excludedKinds: Set<String> = DEFAULT_EXCLUDED_KINDS,
     ): List<ConversationSummary> = readConversationSummaries(excludedKinds, null)
 
+    /** Internal delivery recovery must include conversations that have no user or assistant rows. */
+    suspend fun listConversationsWithPendingAgentInputs(): List<String> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            sql.query(
+                "SELECT DISTINCT conversation_id FROM messages WHERE role='agent' AND input_state IS NULL ORDER BY conversation_id",
+            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        } }
+
     private suspend fun readConversationSummaries(
         excludedKinds: Set<String>,
         limit: Int?,
@@ -1383,7 +1408,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
 
     private fun validateMessageInput(input: AppendMessageInput): String? {
         if (input.conversationId.isBlank()) return "conversation id is required"
-        if (input.role != ROLE_USER && input.role != ROLE_ASSISTANT) return "role must be user or assistant"
+        if (input.role !in CONVERSATION_MESSAGE_ROLES) return "role must be user, assistant, agent, or system"
+        if (input.stableId != null && input.stableId.isBlank()) return "stable message identity must not be blank"
         if (input.parts.any { it.kind.isBlank() }) return "part kind is required"
         if (input.attachments.isNotEmpty() && input.role != ROLE_USER) return "attachments belong to user messages"
         if (input.attachments.any { it.relativePath.isBlank() || it.attachmentId.isBlank() }) return "attachment identity and relative path are required"
@@ -1393,6 +1419,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (input.interruptRequestId != null && input.role != ROLE_USER) return "interrupt dispatches must be user rows"
         return null
     }
+
+    private fun isConversationInputRole(role: String): Boolean = role in CONVERSATION_INPUT_ROLES
 
     private fun itemKindForInputState(state: String): String = when (state) {
         INPUT_INCORPORATED -> ITEM_INPUT_INCORPORATED
@@ -1712,6 +1740,10 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     companion object {
         const val ROLE_USER = "user"
         const val ROLE_ASSISTANT = "assistant"
+        const val ROLE_AGENT = "agent"
+        const val ROLE_SYSTEM = "system"
+        private val CONVERSATION_MESSAGE_ROLES = setOf(ROLE_USER, ROLE_ASSISTANT, ROLE_AGENT, ROLE_SYSTEM)
+        private val CONVERSATION_INPUT_ROLES = setOf(ROLE_USER, ROLE_AGENT, ROLE_SYSTEM)
         const val INPUT_INCORPORATED = "incorporated"
         const val INPUT_RESOLVED = "resolved"
         const val RUN_PREPARING = "preparing"

@@ -1,6 +1,7 @@
 package com.jarvys.agent.workspaces
 
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.ToolActivity
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewCoordinationEvidence
@@ -57,23 +58,32 @@ class WorkspaceChatProjectionTest {
             "Final synthesis", 90L, 170L, listOf(bot), messages)
         val ledgerArtifact = AgentRunUiEvent(3L, "artifact", text = "Deliverable", timestampMillis = 160L)
         val ledgerEvidence = AgentRunUiEvent(4L, "workspace_result", text = "Workspace result recorded", timestampMillis = 165L)
-        val raw = listOf(AgentRunUiEvent.crewMissionEvent(2L, snapshot), ledgerArtifact, ledgerEvidence)
+        val agentInput = AgentRunUiEvent(5L, "user", text = "Agent input", timestampMillis = 125L)
+            .copy(conversationInputOrigin = ConversationInput.Origin.AGENT)
+        val systemInput = AgentRunUiEvent(6L, "assistant", text = "Internal system input", timestampMillis = 126L)
+            .copy(conversationInputOrigin = ConversationInput.Origin.SYSTEM)
+        val workerAnswer = AgentRunUiEvent(7L, "assistant", text = "Worker final answer", timestampMillis = 127L)
+        val workerStream = AgentRunUiEvent(8L, "assistant_stream", text = "Worker partial answer", timestampMillis = 128L)
+        val raw = listOf(AgentRunUiEvent.crewMissionEvent(2L, snapshot), agentInput, systemInput,
+            workerAnswer, workerStream, ledgerArtifact, ledgerEvidence)
 
         val projected = WorkspaceTimelineProjection.project(workspaceId, raw)
 
-        assertEquals(listOf("user", "assistant", "assistant", "assistant", "tool", "assistant", "assistant", "artifact", "assistant"),
+        assertEquals(listOf("user", "tool", "artifact"),
             projected.map { it.kind })
-        assertEquals(listOf("Please inspect this", "Here is the update", "Useful finding", "Next finding", "Read file",
-            "Worker result", "Chief update", "Deliverable", "Final synthesis"),
+        assertEquals(listOf("Please inspect this", "Read file", "Deliverable"),
             projected.map { it.text })
-        assertEquals("tool_result", projected[4].stage)
-        assertEquals("execution", projected[4].toolCallId)
-        assertEquals("{\"ok\":true}", projected[4].detail)
+        assertEquals("tool_result", projected[1].stage)
+        assertEquals("execution", projected[1].toolCallId)
+        assertEquals("{\"ok\":true}", projected[1].detail)
         assertEquals("user-1", projected[0].messageId)
-        assertEquals("visible-bot", projected[1].messageId)
-        assertEquals(false, projected[1].canRegenerate)
+        assertEquals("call-row", projected[1].messageId)
         assertEquals(false, projected.any { it.kind == "crew_mission" || it.kind == "workspace_result" })
-        assertEquals(false, projected.any { it.text == "Worker coordination" || it.text == "Private dispatch" })
+        assertEquals(false, projected.any { it.text in setOf(
+            "Private dispatch", "Worker coordination", "Here is the update", "Useful finding", "Next finding",
+            "Worker result", "Chief update", "Final synthesis", "Agent input", "Internal system input",
+            "Worker final answer", "Worker partial answer",
+        ) })
 
         val resultMatchesSynthesis = CrewMessage("matching-result", sessionId, "worker", "chief",
             CrewMessage.Type.RESULT, "Final synthesis", emptyList(), 160L)
@@ -81,7 +91,7 @@ class WorkspaceChatProjectionTest {
             "Workspace task", "DONE", "Final synthesis", 90L, 170L, listOf(bot), listOf(resultMatchesSynthesis))
         val deduplicated = WorkspaceTimelineProjection.project(workspaceId,
             listOf(AgentRunUiEvent.crewMissionEvent(1L, duplicateSynthesisSnapshot)))
-        assertEquals(listOf("Final synthesis"), deduplicated.map { it.text })
+        assertEquals(emptyList<AgentRunUiEvent>(), deduplicated)
 
         val refreshed = WorkspaceTimelineProjection.project(workspaceId,
             listOf(AgentRunUiEvent.crewMissionEvent(9L, CrewMissionSnapshot("mission", sessionId, "process",

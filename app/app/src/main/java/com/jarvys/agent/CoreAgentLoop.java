@@ -19,6 +19,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -68,6 +70,9 @@ public final class CoreAgentLoop {
 
         /** Called after the initial run request has entered the transcript. */
         default void onInitialUserMessageIncorporated() { }
+
+        /** Acknowledges durable AGENT/SYSTEM rows restored into this run's initial transcript. */
+        default void onInitialInternalInputsIncorporated(List<IncomingMessage> messages) { }
 
         /** Called after newly collected durable user messages have entered and checkpointed in the transcript. */
         default void onDurableMessagesIncorporated(List<IncomingMessage> messages) { }
@@ -185,6 +190,8 @@ public final class CoreAgentLoop {
         public final boolean genuineUser;
         public final CrewInputBinding inputBinding;
         public final List<String> references;
+        public final ConversationInput.Origin origin;
+        public final ConversationInput.Provenance provenance;
 
         public IncomingMessage(String id, String source, String content, boolean genuineUser) {
             this(id, source, content, genuineUser, null,
@@ -195,6 +202,16 @@ public final class CoreAgentLoop {
         private IncomingMessage(String id, String source, String content, boolean genuineUser,
                                 CrewInputBinding inputBinding, String messageType, List<String> references,
                                 String sourceKind) {
+            this(id, source, content, genuineUser, inputBinding, messageType, references, sourceKind,
+                    genuineUser ? ConversationInput.Origin.USER
+                            : ("legacy".equals(sourceKind) ? ConversationInput.Origin.SYSTEM : ConversationInput.Origin.AGENT),
+                    null);
+        }
+
+        private IncomingMessage(String id, String source, String content, boolean genuineUser,
+                                CrewInputBinding inputBinding, String messageType, List<String> references,
+                                String sourceKind, ConversationInput.Origin origin,
+                                ConversationInput.Provenance provenance) {
             this.inputBinding = inputBinding;
             if (id == null || id.isEmpty()) throw new IllegalArgumentException("Incoming message id is required");
             this.id = id;
@@ -205,23 +222,59 @@ public final class CoreAgentLoop {
                     : Collections.unmodifiableList(new ArrayList<>(references));
             this.content = content == null ? "" : content;
             this.genuineUser = genuineUser;
+            this.origin = origin == null ? ConversationInput.Origin.SYSTEM : origin;
+            this.provenance = provenance;
         }
 
         public static IncomingMessage fromCrewMessage(CrewMessage message) {
             boolean user = "user".equals(message.from) && message.type == CrewMessage.Type.USER;
             CrewInputBinding binding = message.inputBinding != null && message.inputBinding.matchesDelivery(message)
                     ? message.inputBinding : null;
+            String sourceSession = "chief".equals(message.from)
+                    ? com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION : message.conversationId;
+            ConversationInput.Provenance provenance = binding == null ? null : new ConversationInput.Provenance(
+                    sourceSession, binding.workspaceId, binding.assignmentId, binding.botId,
+                    message.id, kindFor(message.type));
             return new IncomingMessage(message.id, message.from, message.text, user, binding,
-                    message.type.name(), message.refs, "crew");
+                    message.type.name(), message.refs, "crew",
+                    user ? ConversationInput.Origin.USER : ConversationInput.Origin.AGENT, provenance);
         }
 
         public static IncomingMessage mainChat(String id, String content) {
             return new IncomingMessage(id, "user", content, true, null, "main_chat_steering",
                     Collections.emptyList(), "main_chat");
         }
+
+        public static IncomingMessage mainChat(ConversationInput input) {
+            if (input == null) throw new IllegalArgumentException("Conversation input is required");
+            String source = input.origin == ConversationInput.Origin.USER ? "user" : "agent";
+            String type = input.provenance == null ? "message" : input.provenance.kind.name();
+            return new IncomingMessage(input.messageId, source, input.content,
+                    input.origin == ConversationInput.Origin.USER, null, type,
+                    Collections.emptyList(), "main_chat", input.origin, input.provenance);
+        }
+
+        /** Content-bearing internal input offered directly to an active worker loop. */
+        public static IncomingMessage agentInput(ConversationInput input) {
+            if (input == null || input.origin == ConversationInput.Origin.USER)
+                throw new IllegalArgumentException("Worker agent input requires AGENT or SYSTEM origin");
+            String source = input.provenance == null ? "system" : input.provenance.sessionId;
+            String kind = input.provenance == null ? "message" : input.provenance.kind.name();
+            return new IncomingMessage(input.messageId, source, input.content, false, null, kind,
+                    Collections.emptyList(), "crew", input.origin, input.provenance);
+        }
+
+        private static ConversationInput.Kind kindFor(CrewMessage.Type type) {
+            if (type == null) return ConversationInput.Kind.MESSAGE;
+            try { return ConversationInput.Kind.valueOf(type.name()); }
+            catch (RuntimeException unknown) { return ConversationInput.Kind.OTHER; }
+        }
     }
 
     public interface TurnContextProvider {
+
+        /** Starts one model turn. Durable recovery sources may drain their pending set once here. */
+        default void onRunStarted() { }
 
         /** Legacy provider data is committed as a real untrusted user message before a model turn. */
         default String takeUntrustedContext() { return ""; }
@@ -341,6 +394,9 @@ public final class CoreAgentLoop {
     private final Map<String, CrewInputIncorporation> incorporations = new LinkedHashMap<>();
     private final List<IncomingMessage> pendingDurableMessages = new ArrayList<>();
     private final Set<String> pendingDurableIds = new HashSet<>();
+    private final ConcurrentLinkedQueue<IncomingMessage> offeredDurableMessages = new ConcurrentLinkedQueue<>();
+    private final Set<String> offeredDurableIds = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean runActive = new AtomicBoolean(false);
     private final List<String> pendingTrustedMessages = new ArrayList<>();
     private final List<String> pendingLegacyMessages = new ArrayList<>();
     private volatile String checkpointCycleId = "";
@@ -366,8 +422,6 @@ public final class CoreAgentLoop {
         public final Map<String, CrewInputIncorporation> incorporations;
         /** Complete tool outputs supplied only to checkpoint persistence before transcript budgeting. */
         public final Map<String, String> completedToolResults;
-        /** System events acknowledged atomically with this successful model response checkpoint. */
-        public final List<String> workspaceResultWakeReferenceIds;
 
         public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle, int genuineUserIndex) {
             this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, Collections.emptyMap());
@@ -381,13 +435,6 @@ public final class CoreAgentLoop {
         Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
                 int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations,
                 Map<String, String> completedToolResults) {
-            this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, incorporations,
-                    completedToolResults, Collections.emptyList());
-        }
-
-        Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
-                int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations,
-                Map<String, String> completedToolResults, List<String> workspaceResultWakeReferenceIds) {
             Map<String, CrewInputIncorporation> copy = new LinkedHashMap<>();
             for (Map.Entry<String, CrewInputIncorporation> entry : incorporations.entrySet()) {
                 if (entry.getValue() == null || !entry.getValue().binding.mailboxMessageId.equals(entry.getKey())
@@ -397,9 +444,6 @@ public final class CoreAgentLoop {
             }
             this.incorporations = Collections.unmodifiableMap(copy);
             this.completedToolResults = Collections.unmodifiableMap(new LinkedHashMap<>(completedToolResults));
-            this.workspaceResultWakeReferenceIds = Collections.unmodifiableList(
-                    new ArrayList<>(workspaceResultWakeReferenceIds == null
-                            ? Collections.emptyList() : workspaceResultWakeReferenceIds));
             this.transcript = Collections.unmodifiableList(new ArrayList<>(transcript));
             this.appliedIncomingIds = Collections.unmodifiableSet(new LinkedHashSet<>(appliedIncomingIds));
             this.toolLifecycle = Collections.unmodifiableMap(new LinkedHashMap<>(toolLifecycle));
@@ -456,7 +500,7 @@ public final class CoreAgentLoop {
                 }
             }
             return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine),
-                    incorporations, completedToolResults, workspaceResultWakeReferenceIds);
+                    incorporations, completedToolResults);
         }
     }
 
@@ -500,15 +544,10 @@ public final class CoreAgentLoop {
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript) {
-        updateTranscriptSnapshot(transcript, Collections.emptyMap(), Collections.emptyList());
+        updateTranscriptSnapshot(transcript, Collections.emptyMap());
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults) {
-        updateTranscriptSnapshot(transcript, completedToolResults, Collections.emptyList());
-    }
-
-    private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults,
-            List<String> workspaceResultWakeReferenceIds) {
         for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 for (ModelReply.Call call : turn.toolCalls) {
@@ -523,14 +562,13 @@ public final class CoreAgentLoop {
         transcriptSnapshot = Collections.unmodifiableList(new ArrayList<>(transcript));
         checkpoint = new Checkpoint(transcriptSnapshot, appliedIncomingIds, toolLifecycle,
                 protectedGenuineUser == null ? -1 : transcript.indexOf(protectedGenuineUser), incorporations,
-                completedToolResults, workspaceResultWakeReferenceIds);
+                completedToolResults);
         CheckpointListener listener = checkpointListener;
         if (listener != null) {
             try {
                 listener.persist(completedToolResults == null || completedToolResults.isEmpty() ? checkpoint
                         : new Checkpoint(checkpoint.transcript, checkpoint.appliedIncomingIds, checkpoint.toolLifecycle,
-                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults,
-                                checkpoint.workspaceResultWakeReferenceIds));
+                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults));
             } catch (CheckpointFailure failure) {
                 throw failure;
             } catch (RuntimeException failure) {
@@ -621,8 +659,33 @@ public final class CoreAgentLoop {
 
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments,
                       CancellationToken token, ProgressListener listener, String currentUserMessageId) {
+        if (!runActive.compareAndSet(false, true))
+            throw new IllegalStateException("This agent loop is already running");
+        try {
+            if (turnContextProvider != null) turnContextProvider.onRunStarted();
+            return runActive(request, previousTranscript, attachments, token, listener, currentUserMessageId);
+        } finally {
+            runActive.set(false);
+        }
+    }
+
+    /**
+     * Offers a durable input directly to this running loop. The caller persists the source first;
+     * acceptance only means this loop can incorporate it at its next model boundary.
+     */
+    public boolean offerIncoming(IncomingMessage message) {
+        if (message == null || message.id == null || message.id.isEmpty() || !runActive.get()) return false;
+        if (!offeredDurableIds.add(message.id)) return true;
+        offeredDurableMessages.add(message);
+        return true;
+    }
+
+    private Result runActive(String request, List<ConversationTurn> previousTranscript,
+            List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener,
+            String currentUserMessageId) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
         boolean transcriptHasPendingInput = ConversationTurn.hasCurrentUserMessage(previousTranscript)
+                || ConversationTurn.hasInternalConversationInput(previousTranscript)
                 || ConversationTurn.endsWithToolResult(previousTranscript)
                 || containsSystemEvent(previousTranscript);
         if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty()
@@ -638,7 +701,8 @@ public final class CoreAgentLoop {
         boolean currentRequestAlreadyInTranscript = currentUserMessageId != null && !currentUserMessageId.isEmpty()
                 && transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.MESSAGE
                         && "user".equals(turn.role) && currentUserMessageId.equals(turn.durableMessageId));
-        boolean requestInTranscript = currentRequestAlreadyInTranscript || systemEventInput || !currentAttachments.isEmpty()
+        boolean internalInput = ConversationTurn.hasInternalConversationInput(transcript);
+        boolean requestInTranscript = currentRequestAlreadyInTranscript || systemEventInput || internalInput || !currentAttachments.isEmpty()
                 || (turnContextProvider != null && !request.trim().isEmpty());
         if (requestInTranscript && hasRunRequest && !currentRequestAlreadyInTranscript)
             transcript.add(ConversationTurn.messageWithAttachments("user", request,
@@ -646,6 +710,7 @@ public final class CoreAgentLoop {
         updateTranscriptSnapshot(transcript);
         String prompt = requestInTranscript ? "" : request.trim();
         boolean modelHasInput = hasRunRequest || ConversationTurn.hasCurrentUserMessage(transcript)
+                || internalInput
                 || ConversationTurn.endsWithToolResult(transcript) || systemEventInput;
         int modelTurns = 0;
         long startedAtMs = System.currentTimeMillis();
@@ -654,6 +719,7 @@ public final class CoreAgentLoop {
         ToolLoopDetector loopDetector = new ToolLoopDetector();
         try {
             boolean initialUserMessageReported = false;
+            boolean initialInternalInputsReported = false;
             while (true) {
                 token.throwIfCancelled();
                 List<ToolSpec> declarations = tools.declarations();
@@ -696,6 +762,11 @@ public final class CoreAgentLoop {
                 }
                 List<ConversationTurn> requestTranscript = truncateToolResultsForProvider
                         ? truncateToolResultsOnly(transcript, budget, toolResultBudget) : transcript;
+                if (!initialInternalInputsReported && listener != null) {
+                    List<IncomingMessage> initialInternal = internalMessagesIn(requestTranscript);
+                    if (!initialInternal.isEmpty()) listener.onInitialInternalInputsIncorporated(initialInternal);
+                    initialInternalInputsReported = true;
+                }
                 String turnPrompt = prompt;
                 ModelReply reply;
                 try {
@@ -768,7 +839,7 @@ public final class CoreAgentLoop {
                             transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
                         }
                         transcript.add(ConversationTurn.assistantReply("", reply.providerOutputItems));
-                        updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
+                        updateTranscriptSnapshot(transcript, Collections.emptyMap());
                         if (drainTurnContext(transcript, true, listener, null, "")) {
                             requestInTranscript = true;
                             modelHasInput = true;
@@ -780,7 +851,7 @@ public final class CoreAgentLoop {
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
                         transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
-                        updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
+                        updateTranscriptSnapshot(transcript, Collections.emptyMap());
                     }
                     if (drainTurnContext(transcript, true, listener, answer, runId)) {
                         requestInTranscript = true;
@@ -796,7 +867,7 @@ public final class CoreAgentLoop {
                     requestInTranscript = true;
                 }
                 transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls, reply.providerOutputItems));
-                updateTranscriptSnapshot(transcript, Collections.emptyMap(), systemEventReferenceIds(requestTranscript));
+                updateTranscriptSnapshot(transcript, Collections.emptyMap());
                 if (listener != null && reply.text != null && !reply.text.trim().isEmpty()) {
                     token.throwIfCancelled();
                     listener.onAssistantProgress(runId, reply.calls.get(0).id, reply.text.trim());
@@ -848,16 +919,6 @@ public final class CoreAgentLoop {
             if (turn != null && turn.kind == ConversationTurn.Kind.SYSTEM_EVENT && "system".equals(turn.role)) return true;
         }
         return false;
-    }
-
-    private static List<String> systemEventReferenceIds(List<ConversationTurn> transcript) {
-        List<String> referenceIds = new ArrayList<>();
-        if (transcript == null) return referenceIds;
-        for (ConversationTurn turn : transcript) {
-            if (turn != null && turn.kind == ConversationTurn.Kind.SYSTEM_EVENT && "system".equals(turn.role)
-                    && !turn.systemEventReferenceId.isEmpty()) referenceIds.add(turn.systemEventReferenceId);
-        }
-        return referenceIds;
     }
 
     private ToolBatchOutcome executeToolBatch(List<ModelReply.Call> calls, ModelReply reply,
@@ -1386,6 +1447,12 @@ public final class CoreAgentLoop {
                 continue;
             }
             if (!appliedIncomingIds.add(message.id)) continue;
+            if (transcriptAlreadyContainsIncoming(transcript, message.id)) {
+                // A durable input can be present in the ledger snapshot and also be returned by
+                // steering after a restart/race. Commit the exact ID without duplicating content.
+                incorporated.add(message);
+                continue;
+            }
             if (message.genuineUser) {
                 ConversationTurn userTurn = new ConversationTurn("user", message.content);
                 transcript.add(userTurn);
@@ -1419,7 +1486,7 @@ public final class CoreAgentLoop {
             appendIncoming(transcript, message);
             appended = true;
         }
-        if (appended) updateTranscriptSnapshot(transcript);
+        if (appended || !incorporated.isEmpty()) updateTranscriptSnapshot(transcript);
         if (!incorporated.isEmpty()) {
             List<IncomingMessage> confirmed = Collections.unmodifiableList(incorporated);
             if (turnContextProvider != null) turnContextProvider.durableMessagesIncorporated(confirmed);
@@ -1430,16 +1497,30 @@ public final class CoreAgentLoop {
         return appended;
     }
 
+    private static boolean transcriptAlreadyContainsIncoming(List<ConversationTurn> transcript, String id) {
+        if (id == null || id.isEmpty() || transcript == null) return false;
+        for (ConversationTurn turn : transcript) {
+            if (turn != null && turn.kind == ConversationTurn.Kind.MESSAGE && id.equals(turn.durableMessageId))
+                return true;
+        }
+        return false;
+    }
+
     /** Pull at a control point but defer transcript insertion until the current tool-call group closes. */
     private boolean collectTurnContext() {
         return collectTurnContext(false);
     }
 
     private boolean collectTurnContext(boolean finalCheckpoint) {
-        if (turnContextProvider == null) return false;
         boolean collected = false;
-        List<IncomingMessage> incoming = finalCheckpoint
-                ? turnContextProvider.takeDurableMessagesAtFinalCheckpoint()
+        IncomingMessage offered;
+        while ((offered = offeredDurableMessages.poll()) != null) {
+            if (appliedIncomingIds.contains(offered.id) || !pendingDurableIds.add(offered.id)) continue;
+            pendingDurableMessages.add(offered);
+            collected = true;
+        }
+        List<IncomingMessage> incoming = turnContextProvider == null ? Collections.emptyList()
+                : finalCheckpoint ? turnContextProvider.takeDurableMessagesAtFinalCheckpoint()
                 : turnContextProvider.takeDurableMessages();
         if (incoming != null) for (IncomingMessage message : incoming) {
             if (message == null || appliedIncomingIds.contains(message.id)
@@ -1447,14 +1528,15 @@ public final class CoreAgentLoop {
             pendingDurableMessages.add(message);
             collected = true;
         }
-        List<String> trusted = turnContextProvider.takeTrustedUserMessages();
+        List<String> trusted = turnContextProvider == null ? Collections.emptyList()
+                : turnContextProvider.takeTrustedUserMessages();
         if (trusted != null) for (String message : trusted) {
             if (message != null && !message.isEmpty()) {
                 pendingTrustedMessages.add(message);
                 collected = true;
             }
         }
-        String legacy = turnContextProvider.takeUntrustedContext();
+        String legacy = turnContextProvider == null ? "" : turnContextProvider.takeUntrustedContext();
         if (legacy != null && !legacy.isEmpty()) {
             pendingLegacyMessages.add(legacy);
             collected = true;
@@ -1475,10 +1557,24 @@ public final class CoreAgentLoop {
 
     private static ConversationTurn appendIncoming(List<ConversationTurn> transcript, IncomingMessage message) {
         ConversationTurn.IncomingMetadata provenance = new ConversationTurn.IncomingMetadata(
-                message.id, message.sourceKind, message.source, message.messageType, message.references, true);
-        ConversationTurn turn = new ConversationTurn("user", message.content, -1, provenance);
+                message.origin, message.id, message.sourceKind, message.source, message.messageType,
+                message.references, true, message.provenance);
+        ConversationTurn turn = message.origin == ConversationInput.Origin.USER
+                ? new ConversationTurn("user", message.content, -1, provenance)
+                : ConversationTurn.internalInput(message.content, -1, provenance, message.id);
         transcript.add(turn);
         return turn;
+    }
+
+    private static List<IncomingMessage> internalMessagesIn(List<ConversationTurn> transcript) {
+        List<IncomingMessage> result = new ArrayList<>();
+        for (ConversationTurn turn : ConversationTurn.internalConversationInputs(transcript)) {
+            ConversationTurn.IncomingMetadata metadata = turn.incomingMetadata;
+            result.add(new IncomingMessage(turn.durableMessageId, metadata.source, turn.content, false,
+                    null, metadata.type, metadata.references, "main_chat", metadata.origin,
+                    metadata.provenance));
+        }
+        return Collections.unmodifiableList(result);
     }
 
     private int estimateContext(List<ConversationTurn> transcript, String prompt, List<ToolSpec> declarations) {

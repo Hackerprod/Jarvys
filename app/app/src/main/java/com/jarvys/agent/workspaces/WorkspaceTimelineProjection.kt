@@ -1,6 +1,7 @@
 package com.jarvys.agent.workspaces
 
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.crew.CrewActivityTimeline
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
@@ -19,8 +20,10 @@ internal object WorkspaceTimelineProjection {
 
         val projected = ArrayList<OrderedEvent>()
         events.forEachIndexed { sourceOrder, event ->
+            if (event.conversationInputOrigin in INTERNAL_INPUT_ORIGINS) return@forEachIndexed
             when (event.kind) {
                 "workspace_result" -> Unit // Internal ledger evidence is deliberately not a chat message.
+                "assistant", "assistant_stream" -> Unit // Worker output is internal to its assignment.
                 "crew_mission" -> {
                     val snapshot = event.crewMissionSnapshot ?: return@forEachIndexed
                     if (latestSnapshots[snapshot.missionId]?.first != sourceOrder) return@forEachIndexed
@@ -51,44 +54,15 @@ internal object WorkspaceTimelineProjection {
                 isUserMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
                     stableId, "user", message.text, message.timestampMillis,
                 ).copy(messageId = message.id, timelineKey = stableId), sourceOrder)
-                isUserFacingBotMessage(message) -> rows += MissionRow(AgentRunUiEvent.messageEvent(
-                    stableId, "assistant", message.text, message.timestampMillis,
-                ).copy(messageId = message.id, timelineKey = stableId, canRegenerate = false,
-                    workspaceSenderLabel = snapshot.bots.takeIf { it.size > 1 }
-                        ?.firstOrNull { it.id == message.from }
-                        ?.let { it.name.ifBlank { it.roleName } }
-                        ?.takeIf(String::isNotBlank)), sourceOrder)
             }
         }
 
-        snapshot.synthesis.takeIf(String::isNotBlank)
-            ?.takeUnless { synthesis -> rows.any { it.event.kind == "assistant" && it.event.text == synthesis } }
-            ?.let { synthesis ->
-                val resultTime = snapshot.finishedAtMillis.takeIf { it > 0L }
-                    ?: messages.lastOrNull()?.timestampMillis ?: snapshot.startedAtMillis
-                val stableId = stableId(workspaceId, snapshot.missionId, "synthesis")
-                rows += MissionRow(AgentRunUiEvent.messageEvent(stableId, "assistant", synthesis, resultTime)
-                    .copy(messageId = "${snapshot.missionId}:synthesis", timelineKey = stableId, canRegenerate = false),
-                    messages.size)
-            }
         return rows.sortedWith(compareBy<MissionRow> { it.event.timestampMillis }.thenBy { it.sourceOrder })
             .map { it.event }
     }
 
     private fun isUserMessage(message: CrewMessage): Boolean =
         message.from == "user" && message.type == CrewMessage.Type.USER
-
-    /** Keep user-facing content and untyped worker findings/results, while filtering causal coordination. */
-    private fun isUserFacingBotMessage(message: CrewMessage): Boolean =
-        message.from != "user" && message.coordination == null && message.text.isNotBlank() &&
-            message.type in setOf(
-                CrewMessage.Type.FINDING,
-                CrewMessage.Type.CRITIQUE,
-                CrewMessage.Type.QUESTION,
-                CrewMessage.Type.BLOCKER,
-                CrewMessage.Type.ANSWER,
-                CrewMessage.Type.RESULT,
-            ) && (message.to == "user" || (message.to == "chief" && message.from != "chief"))
 
     private fun stableId(workspaceId: String, missionId: String, rowId: String): Long {
         val identity = "$workspaceId\u0000$missionId\u0000$rowId"
@@ -98,4 +72,9 @@ internal object WorkspaceTimelineProjection {
         }
         return hash or Long.MIN_VALUE
     }
+
+    private val INTERNAL_INPUT_ORIGINS = setOf(
+        ConversationInput.Origin.AGENT,
+        ConversationInput.Origin.SYSTEM,
+    )
 }

@@ -5,14 +5,13 @@ import java.util.Collections;
 import java.util.List;
 
 public final class ConversationTurn {
-  private static final String WORKSPACE_WAKE_OWNER_PREFIX = "workspace-wake:";
   public final List<ChatAttachment> attachments;
   public final String content;
   public final int imageCount;
   public final List<Image> images;
   public final Kind kind;
   public final String modelContent;
-  /** Structural provenance for a real incoming user message; never a synthetic tool event. */
+  /** Structural provenance for an incoming message; its origin is independent of provider role. */
   public final IncomingMetadata incomingMetadata;
   public final int originalMessageIndex;
   public final String role;
@@ -46,23 +45,55 @@ public final class ConversationTurn {
     public final String source;
     public final String type;
     public final boolean untrusted;
+    public final ConversationInput.Origin origin;
+    public final ConversationInput.Provenance provenance;
 
     public IncomingMetadata(String id, String source, String sender, String type,
                             List<String> references, boolean untrusted) {
+      this(ConversationInput.Origin.USER, id, source, sender, type, references, untrusted, null);
+    }
+
+    public IncomingMetadata(ConversationInput.Origin origin, String id, String source, String sender,
+                           String type, List<String> references, boolean untrusted,
+                           ConversationInput.Provenance provenance) {
+      this.origin = origin == null ? ConversationInput.Origin.USER : origin;
       this.id = id == null ? "" : id;
       this.source = source == null ? "unknown" : source;
       this.sender = sender == null ? "unknown" : sender;
       this.type = type == null ? "message" : type;
       this.references = immutable(references);
       this.untrusted = untrusted;
+      this.provenance = provenance;
+    }
+
+    public static IncomingMetadata forInternalInput(ConversationInput.Provenance provenance) {
+      if (provenance == null) throw new IllegalArgumentException("Internal input provenance is required");
+      List<String> references = new ArrayList<>();
+      references.add("sessionId=" + provenance.sessionId);
+      references.add("workspaceId=" + provenance.workspaceId);
+      references.add("assignmentId=" + provenance.assignmentId);
+      references.add("botId=" + provenance.botId);
+      return new IncomingMetadata(ConversationInput.Origin.AGENT, provenance.messageId, "agent",
+          provenance.botId, provenance.kind.name(), references, true, provenance);
     }
 
     String render(String content, String adapter) {
-      StringBuilder value = new StringBuilder("<jarvys_incoming source=\"")
+      StringBuilder value = new StringBuilder("<jarvys_incoming origin=\"")
+          .append(origin.name()).append("\" isUser=\"")
+          .append(origin == ConversationInput.Origin.USER ? "true" : "false")
+          .append("\" source=\"")
           .append(xml(source)).append("\" sender=\"").append(xml(sender))
           .append("\" type=\"").append(xml(type)).append("\" id=\"")
           .append(xml(id)).append("\" trust=\"").append(untrusted ? "untrusted" : "user")
           .append("\" adapter=\"").append(xml(adapter)).append("\">\n");
+      if (provenance != null) {
+        value.append("<provenance sessionId=\"").append(xml(provenance.sessionId))
+            .append("\" workspaceId=\"").append(xml(provenance.workspaceId))
+            .append("\" assignmentId=\"").append(xml(provenance.assignmentId))
+            .append("\" botId=\"").append(xml(provenance.botId))
+            .append("\" messageId=\"").append(xml(provenance.messageId))
+            .append("\" kind=\"").append(xml(provenance.kind.name())).append("\"/>\n");
+      }
       for (String reference : references) value.append("<reference>").append(xml(reference))
           .append("</reference>\n");
       return value.append("<content>").append(xml(content)).append("</content>\n")
@@ -127,8 +158,10 @@ public final class ConversationTurn {
     if (!"user".equals(role) && attachments != null && !attachments.isEmpty()) {
       throw new IllegalArgumentException("Attachments belong only to user messages");
     }
-    if (incomingMetadata != null && !"user".equals(role))
-      throw new IllegalArgumentException("Incoming provenance belongs only to user messages");
+    if (incomingMetadata != null &&
+        ((incomingMetadata.origin == ConversationInput.Origin.USER && !"user".equals(role)) ||
+         (incomingMetadata.origin != ConversationInput.Origin.USER && !"assistant".equals(role))))
+      throw new IllegalArgumentException("Incoming provenance must use a provider-compatible role for its origin");
     this.role = role;
     this.content = content == null ? "" : content;
     this.kind = Kind.MESSAGE;
@@ -347,6 +380,15 @@ public final class ConversationTurn {
     return new ConversationTurn(role, content, originalMessageIndex, null, 0, attachments);
   }
 
+  /** Provider-valid assistant-role representation of an internal, explicitly attributed input. */
+  public static ConversationTurn internalInput(String content, int originalMessageIndex,
+      IncomingMetadata provenance, String durableMessageId) {
+    if (provenance == null || provenance.origin == ConversationInput.Origin.USER)
+      throw new IllegalArgumentException("Internal conversation input requires AGENT or SYSTEM provenance");
+    return new ConversationTurn("assistant", content, originalMessageIndex, provenance)
+        .withDurableMessageId(durableMessageId);
+  }
+
   public ConversationTurn withModelParts(String modelContent, List<Image> images) {
     if (this.kind != Kind.MESSAGE || !"user".equals(this.role)) {
       throw new IllegalStateException("Only a user message can carry attachment model parts");
@@ -361,24 +403,7 @@ public final class ConversationTurn {
     return new ConversationTurn(this, this.modelContent, this.images, messageId);
   }
 
-  /** Encodes the source-result event as the owner of a system-origin model turn. */
-  public static String workspaceWakeOwnerId(String referenceId) {
-    com.jarvys.agent.workspaces.WorkspaceResultReference.requireReferenceId(referenceId);
-    return WORKSPACE_WAKE_OWNER_PREFIX + referenceId;
-  }
-
-  public static String workspaceWakeReferenceId(String ownerId) {
-    if (ownerId == null || !ownerId.startsWith(WORKSPACE_WAKE_OWNER_PREFIX)) return null;
-    String referenceId = ownerId.substring(WORKSPACE_WAKE_OWNER_PREFIX.length());
-    com.jarvys.agent.workspaces.WorkspaceResultReference.requireReferenceId(referenceId);
-    return referenceId;
-  }
-
-  public static boolean isWorkspaceWakeOwner(String ownerId) {
-    return workspaceWakeReferenceId(ownerId) != null;
-  }
-
-  /** Provider-specific representation keeps the actual message as user content with provenance delimiters. */
+  /** Provider-specific representation keeps original content and explicit source/trust delimiters. */
   public String renderedModelContent(String adapter) {
     return incomingMetadata == null || !incomingMetadata.untrusted
         ? modelContent : incomingMetadata.render(modelContent, adapter);
@@ -390,6 +415,23 @@ public final class ConversationTurn {
     }
     ConversationTurn last = history.get(history.size() - 1);
     return last.kind == Kind.MESSAGE && "user".equals(last.role);
+  }
+
+  static boolean hasInternalConversationInput(List<ConversationTurn> history) {
+    if (history == null) return false;
+    for (ConversationTurn turn : history) if (turn != null && turn.kind == Kind.MESSAGE
+        && turn.incomingMetadata != null && turn.incomingMetadata.origin != ConversationInput.Origin.USER)
+      return true;
+    return false;
+  }
+
+  static List<ConversationTurn> internalConversationInputs(List<ConversationTurn> history) {
+    if (history == null || history.isEmpty()) return Collections.emptyList();
+    List<ConversationTurn> inputs = new ArrayList<>();
+    for (ConversationTurn turn : history) if (turn != null && turn.kind == Kind.MESSAGE
+        && turn.incomingMetadata != null && turn.incomingMetadata.origin != ConversationInput.Origin.USER
+        && turn.durableMessageId != null && !turn.durableMessageId.isEmpty()) inputs.add(turn);
+    return Collections.unmodifiableList(inputs);
   }
 
   static boolean endsWithToolResult(List<ConversationTurn> history) {

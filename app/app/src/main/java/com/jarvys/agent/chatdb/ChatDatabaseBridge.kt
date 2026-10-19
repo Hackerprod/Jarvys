@@ -162,7 +162,7 @@ class ChatDatabaseBridge private constructor(context: Context) {
                     ConversationArtifactsRepository(database),
                     strictJournals,
                     ConversationReader(database),
-                    ConversationModelTurnWriter(database, conversations, transcript, strictJournals),
+                    ConversationModelTurnWriter(database, conversations, transcript),
                     PersonalAgentRepository(database),
                 ).also { repositories = it }
             } catch (failure: Exception) {
@@ -550,9 +550,6 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun loadConversationContextSync(conversationId: String): List<ConversationTurn> =
         execute { it.reader.loadConversationContext(conversationId) }
 
-    fun loadConversationContextSync(conversationId: String, workspaceWakeReferenceId: String): List<ConversationTurn> =
-        execute { it.reader.loadConversationContext(conversationId, workspaceWakeReferenceId) }
-
     fun readConversationContextSync(conversationId: String): String =
         execute { it.reader.readConversationContext(conversationId) }
 
@@ -569,6 +566,9 @@ class ChatDatabaseBridge private constructor(context: Context) {
     fun listAllConversationsSync(
         excludedKinds: Set<String> = setOf("proactive", "tasks"),
     ): List<ConversationSummary> = execute { it.conversations.listAllConversations(excludedKinds) }
+
+    fun listConversationsWithPendingAgentInputsSync(): List<String> =
+        execute { it.conversations.listConversationsWithPendingAgentInputs() }
 
     fun messageCountsSync(conversationId: String): MessageCounts = execute { it.reader.messageCounts(conversationId) }
 
@@ -759,30 +759,6 @@ class ChatDatabaseBridge private constructor(context: Context) {
         beforeWrite: BeforeChatWrite? = null,
     ): ChatDbResult<WorkspaceResultReference> = execute {
         it.strictJournals.appendWorkspaceResultNotice(reference) { beforeWrite?.check() }
-    }
-
-    @JvmOverloads
-    fun appendWorkspaceResultNoticeAndWakeSync(
-        reference: WorkspaceResultReference,
-        beforeWrite: BeforeChatWrite? = null,
-    ): ChatDbResult<Boolean> = execute {
-        it.strictJournals.appendWorkspaceResultNoticeAndWake(reference) { beforeWrite?.check() }
-    }
-
-    fun claimWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
-        it.strictJournals.claimWorkspaceResultWake(referenceId)
-    }
-
-    fun acknowledgeWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
-        it.strictJournals.acknowledgeWorkspaceResultWake(referenceId)
-    }
-
-    fun discardWorkspaceResultWakeSync(referenceId: String): ChatDbResult<Boolean> = execute {
-        it.strictJournals.discardWorkspaceResultWake(referenceId)
-    }
-
-    fun isWorkspaceResultWakePendingSync(referenceId: String): ChatDbResult<Boolean> = execute {
-        it.strictJournals.isWorkspaceResultWakePending(referenceId)
     }
 
     fun readWorkspaceResultReferenceSync(

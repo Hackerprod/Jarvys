@@ -13,8 +13,7 @@ enum class WorkspaceUiStatus {
 
 @Immutable
 data class WorkspaceSidebarRow(val id: String, val title: String, val status: WorkspaceUiStatus,
-    val statusPageLimited: Boolean = false,
-    val coordination: WorkspaceCoordinationSummary = WorkspaceCoordinationSummary())
+    val statusPageLimited: Boolean = false)
 
 /** One visible catalog page; never retain or eagerly load the whole catalog. */
 class WorkspaceSidebarPage(rows: List<WorkspaceSidebarRow>, val nextCursor: String? = null) {
@@ -73,11 +72,9 @@ data class WorkspaceAssignmentUi(
     val mission: String,
     val status: WorkspaceUiStatus,
     val recoveryNote: String? = null,
-    val result: String? = null,
     val canCorrect: Boolean = false,
     val canPause: Boolean = false,
     val canResume: Boolean = false,
-    val resultVerified: Boolean = false,
     val pendingControlSaved: Boolean = false,
 ) {
     init {
@@ -98,7 +95,6 @@ class WorkspaceDetailUiState(
     val canOpenFiles: Boolean = false,
     val nextCursor: String? = null,
     val statusPageLimited: Boolean = false,
-    val coordination: WorkspaceCoordinationSummary = WorkspaceCoordinationSummary(),
 ) {
     val assignments: List<WorkspaceAssignmentUi> = Collections.unmodifiableList(ArrayList(assignments))
 

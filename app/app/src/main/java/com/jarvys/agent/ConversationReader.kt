@@ -20,7 +20,6 @@ import com.jarvys.agent.chatdb.MessageWindow
 import com.jarvys.agent.chatdb.ModelTranscriptEntry
 import com.jarvys.agent.chatdb.ModelTranscriptRepository
 import com.jarvys.agent.chatdb.ModelTranscriptSnapshot
-import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.chatdb.ReflectionPayloadSnapshot
 import com.jarvys.agent.chatdb.StrictJournalRepository
 import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
@@ -62,10 +61,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val hasOlder: Boolean get() = olderCursorSeq != null
     }
 
-    suspend fun loadConversationContext(
-        conversationId: String,
-        workspaceWakeReferenceId: String? = null,
-    ): List<ConversationTurn> = readProjection {
+    suspend fun loadConversationContext(conversationId: String): List<ConversationTurn> = readProjection {
         val compaction = memory.activeCompaction(conversationId)
         val modelSnapshot = transcript.readModelTranscript(conversationId)
         val modelRows = readModelRows(modelSnapshot, conversationId)
@@ -100,24 +96,11 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 emptyList(),
             )
         }
-        val wakeEvents = if (WorkspaceIdentity.isCentral(conversationId)) {
-            (strictJournals.listPendingWorkspaceResultWakes(conversationId) as? ChatDbResult.Success)
-                ?.value.orEmpty()
-                .filter { workspaceWakeReferenceId == null || it.reference.referenceId == workspaceWakeReferenceId }
-                .map { wake ->
-                val reference = wake.reference
-                ContextPart(wake.seq, 0, wake.seq, null, listOf(ConversationTurn.systemEvent(reference.referenceId,
-                    "Workspace result registered: workspace_id=${reference.workspaceId}; " +
-                        "assignment_id=${reference.assignmentId}; reported_state=${reference.reportedStatus}; " +
-                        "result_reference_id=${reference.referenceId}"
-                )))
-            }
-        } else emptyList()
         val context = ArrayList<ConversationTurn>()
         if (compaction != null && compaction.summary.isNotEmpty()) {
             context += ConversationTurn.compactionSummary(compaction.summary, compaction.summarized_messages.toInt())
         }
-        (messageParts + groupsByPosition + wakeEvents).sortedWith(compareBy<ContextPart>({ it.sortSeq }, { it.sortSub }, { it.seq }))
+        (messageParts + groupsByPosition).sortedWith(compareBy<ContextPart>({ it.sortSeq }, { it.sortSub }, { it.seq }))
             .forEach { part ->
                 val message = part.message ?: run {
                     context.addAll(part.turns)
@@ -127,7 +110,9 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                 if (message.role == "assistant" && isAssistantRunStatus(message.status)) return@forEach
                 val index = message.messageIndex.toInt()
                 val assistantItems = if (message.role == "assistant") providerItems[message.ownerUserMessageId] else null
-                if (!assistantItems.isNullOrEmpty()) {
+                if (message.role == "agent" || message.role == "system") {
+                    context += internalConversationTurn(message, index)
+                } else if (!assistantItems.isNullOrEmpty()) {
                     context += ConversationTurn.assistantReply(message.text, index, assistantItems)
                 } else {
                     context += ConversationTurn.messageWithAttachments(
@@ -183,6 +168,11 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
         val messages = readConversationMessages(conversationId)
         val assistantIndex = messages.indexOfFirst { it.role == "assistant" && it.messageId == messageId }
         if (assistantIndex <= 0) return null
+        val ownerId = messages[assistantIndex].ownerUserMessageId
+        if (!ownerId.isNullOrBlank()) {
+            val owner = conversations.getMessage(conversationId, ownerId)
+            if (owner != null && owner.role != "user") return null
+        }
         val user = messages.subList(0, assistantIndex).lastOrNull { it.role == "user" } ?: return null
         return RegenerationPrompt(user.text, user.messageId)
     }
@@ -372,7 +362,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                         AgentRunUiEvent.messageEvent(seq, role, message.text, timestamp)
                             .copyMetadata(message.messageId, duration)
                             .copyStage(stage)
-                            .copyCanRegenerate(!ConversationTurn.isWorkspaceWakeOwner(message.ownerUserMessageId))
+                            .copyCanRegenerate(canRegenerateAssistant(conversationId, message))
                     }
                 }
                 continue
@@ -445,12 +435,7 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
                         ).copy(presentationArtifact = image.toPresentationArtifact(slot.item.item_key))
                     }
                 }
-                "workspace_result_notice" -> {
-                    if (!WorkspaceIdentity.isCentral(conversationId)) continue
-                    val exact = (strictJournals.readWorkspaceResultReference(conversationId, slot.item.item_key, true)
-                        as? com.jarvys.agent.chatdb.ChatDbResult.Success)?.value ?: continue
-                    events += AgentRunUiEvent.workspaceResultEvent(seq, exact, exact.producedAtMillis)
-                }
+                "workspace_result_notice" -> Unit // Internal audit metadata is not a timeline event.
                 "tool_activity" -> activityEventsByFirstSeq[seq]?.let(events::add)
                 "model_tool_calls" -> {
                     val batch = batchesBySeq[seq]?.value ?: continue
@@ -981,6 +966,29 @@ internal class ConversationReader(private val database: JarvysChatDatabase) {
             ChatAttachment.Kind.valueOf(value.kind),
             value.relativePath,
         )
+
+    private fun internalConversationTurn(message: StoredMessage, index: Int): ConversationTurn {
+        val part = message.parts.firstOrNull { it.kind == ConversationInput.PROVENANCE_PART_KIND }
+            ?: throw IllegalStateException("Stored internal conversation input has no provenance part")
+        val encoded = JSONObject(part.payload)
+        val origin = ConversationInput.parseOrigin(encoded.optString("origin", message.role.uppercase()))
+            ?: throw IllegalStateException("Stored internal conversation input has invalid origin")
+        if (origin == ConversationInput.Origin.USER)
+            throw IllegalStateException("Internal message row cannot carry USER origin")
+        val provenance = ConversationInput.Provenance.fromJson(encoded.optJSONObject("provenance"))
+        val references = listOf(
+            "sessionId=${provenance.sessionId}", "workspaceId=${provenance.workspaceId}",
+            "assignmentId=${provenance.assignmentId}", "botId=${provenance.botId}",
+        )
+        val metadata = ConversationTurn.IncomingMetadata(origin, provenance.messageId, "agent",
+            provenance.botId, provenance.kind.name, references, true, provenance)
+        return ConversationTurn.internalInput(message.text, index, metadata, message.messageId)
+    }
+
+    private suspend fun canRegenerateAssistant(conversationId: String, message: StoredMessage): Boolean {
+        val ownerId = message.ownerUserMessageId
+        return ownerId.isNullOrBlank() || conversations.getMessage(conversationId, ownerId)?.role == "user"
+    }
 
     private fun isAssistantRunStatus(status: String?): Boolean = when (status.orEmpty().trim().uppercase()) {
         "STOPPED", "PARTIAL", "FAILED", "ERROR", "MODEL_ERROR", "TIMED_OUT", "TIMEOUT",

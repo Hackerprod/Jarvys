@@ -16,8 +16,8 @@ import java.util.concurrent.atomic.AtomicReference
 class CrewC1cTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
     private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
-        it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" && it.incomingMetadata != null
-    }.joinToString("\n") { it.content }
+        it.kind == ConversationTurn.Kind.MESSAGE && it.incomingMetadata?.origin == ConversationInput.Origin.AGENT
+    }.joinToString("\n") { it.incomingMetadata.type + ": " + it.content }
 
     private val emptyTools get() = CoreToolRegistry(emptyList())
 

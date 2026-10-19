@@ -4,8 +4,10 @@ import com.jarvys.agent.CancellationToken;
 import com.jarvys.agent.CoreAgentLoop;
 import com.jarvys.agent.CoreToolAccessPolicy;
 import com.jarvys.agent.CoreToolRegistry;
+import com.jarvys.agent.ConversationInput;
 import com.jarvys.agent.ConversationTurn;
 import com.jarvys.agent.CrewContextArtifacts;
+import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import java.util.Collection;
 import java.util.Set;
 import java.util.function.Function;
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
 import java.util.function.Predicate;
 import java.util.function.BooleanSupplier;
+import java.util.function.BiConsumer;
 
 /**
  * In-memory, unbounded-concurrency manager for one conversation's Crew workspace.
@@ -145,6 +148,7 @@ public final class CrewManager implements AutoCloseable {
         private volatile java.util.concurrent.CountDownLatch terminated = new java.util.concurrent.CountDownLatch(1);
         private final Object cycleLock = new Object();
         private volatile boolean cycleScheduled;
+        private boolean initialStartSubmitted;
         // In-process capabilities only; never populated from snapshots, checkpoints, or source journals.
         private final Map<String, CoordinationRequest> coordinationRequests = new LinkedHashMap<>();
         // A single immutable reference keeps lock-free snapshot identity/evidence reads coherent.
@@ -158,6 +162,10 @@ public final class CrewManager implements AutoCloseable {
         private volatile CoreAgentLoop loop;
         private volatile List<ConversationTurn> transcript = Collections.emptyList();
         private volatile CoreAgentLoop.Checkpoint checkpoint = CoreAgentLoop.Checkpoint.empty();
+        private volatile String assignmentId = "";
+        private final Object incomingInputsLock = new Object();
+        private final LinkedHashMap<String, CrewMessage> pendingIncomingInputs = new LinkedHashMap<>();
+        private final LinkedHashMap<String, String> pendingConversationRowIds = new LinkedHashMap<>();
         private volatile JSONObject artifactOwnership = new JSONObject();
         private volatile Supplier<JSONObject> artifactProvider;
         private volatile CrewContextArtifacts contextArtifacts;
@@ -188,6 +196,8 @@ public final class CrewManager implements AutoCloseable {
         public CrewMissionTitle missionTitle() { return missionState.title.get(); }
 
         public String originalInstructions() { return missionState.originalInstructions; }
+
+        public String assignmentId() { return assignmentId; }
 
         public Status status() {
             return status;
@@ -297,6 +307,32 @@ public final class CrewManager implements AutoCloseable {
         void statusForTool(Status value) {
             status = value;
         }
+
+        private void retainIncomingInput(CrewMessage message, String conversationRowId) {
+            synchronized (incomingInputsLock) {
+                pendingIncomingInputs.putIfAbsent(message.id, message);
+                if (conversationRowId != null && !conversationRowId.isEmpty())
+                    pendingConversationRowIds.putIfAbsent(message.id, conversationRowId);
+            }
+        }
+
+        private List<CrewMessage> pendingIncomingInputs() {
+            synchronized (incomingInputsLock) {
+                return Collections.unmodifiableList(new ArrayList<>(pendingIncomingInputs.values()));
+            }
+        }
+
+        private List<String> acknowledgeIncomingInputs(Collection<String> ids) {
+            synchronized (incomingInputsLock) {
+                List<String> rows = new ArrayList<>();
+                for (String id : ids) pendingIncomingInputs.remove(id);
+                for (String id : ids) {
+                    String row = pendingConversationRowIds.remove(id);
+                    if (row != null && !row.isEmpty()) rows.add(row);
+                }
+                return Collections.unmodifiableList(rows);
+            }
+        }
     }
 
     private static final class CoordinationRequest {
@@ -372,6 +408,9 @@ public final class CrewManager implements AutoCloseable {
     private volatile SnapshotListener snapshotListener;
     private volatile ResultEvidenceListener resultEvidenceListener;
     private volatile CoordinationEvidenceListener coordinationEvidenceListener;
+    private volatile BiConsumer<Bot, CrewMessage> conversationMessageListener;
+    private volatile java.util.function.BiFunction<Bot, CrewMessage, String> conversationInputAdmission;
+    private volatile BiConsumer<Bot, List<String>> conversationInputAcknowledgement;
     private final Map<String, String> coordinationEvidenceDeliveryFailures = new ConcurrentHashMap<>();
     private final Map<String, String> resultEvidenceDeliveryFailures = new ConcurrentHashMap<>();
     private volatile Function<CoreAgentLoop.Result, CoreAgentLoop.Result> resultPresentation = result -> result;
@@ -400,6 +439,7 @@ public final class CrewManager implements AutoCloseable {
         this.loopFactory = loopFactory;
         this.rateLimitWaiter = rateLimitWaiter;
         this.bus = new CrewMessageBus(conversationId);
+        this.bus.setAdmissionListener(this::onWorkerMessageAdmitted);
         ThreadFactory threads = (task)->{
             Thread thread = new Thread(task, "jarvys-crew-" + UUID.randomUUID());
             thread.setDaemon(true);
@@ -414,6 +454,104 @@ public final class CrewManager implements AutoCloseable {
 
     public CrewMessageBus messageBus() {
         return bus;
+    }
+
+    /** Installs the durable worker-to-captain conversation sink and replays source-journaled messages. */
+    public void configureConversationMessageListener(BiConsumer<Bot, CrewMessage> listener) {
+        synchronized (this) {
+            if (conversationMessageListener == listener) return;
+            conversationMessageListener = listener;
+        }
+        if (listener != null) replayConversationMessages();
+    }
+
+    /** Content-bearing workspace inputs persist before loop admission and ack only after checkpoint. */
+    public void configureConversationInputPipeline(
+            java.util.function.BiFunction<Bot, CrewMessage, String> admission,
+            BiConsumer<Bot, List<String>> acknowledgement) {
+        conversationInputAdmission = admission;
+        conversationInputAcknowledgement = acknowledgement;
+    }
+
+    private String persistIncomingConversationInput(Bot recipient, CrewMessage message) {
+        java.util.function.BiFunction<Bot, CrewMessage, String> admission = conversationInputAdmission;
+        if (admission == null || message == null || "user".equals(message.from) || message.activity != null)
+            return "";
+        return admission.apply(recipient, message);
+    }
+
+    private void replayConversationMessages() {
+        BiConsumer<Bot, CrewMessage> listener = conversationMessageListener;
+        if (listener == null) return;
+        for (CrewMessage message : bus.snapshot()) {
+            if (!"chief".equals(message.to) || message.activity != null) continue;
+            Bot sender = bots.get(message.from);
+            if (sender != null) listener.accept(sender, message);
+        }
+    }
+
+    private void publishBotConversationMessage(Bot sender, CrewMessage message) {
+        if (sender == null || message == null || message.activity != null || !sender.id.equals(message.from))
+            throw new IllegalArgumentException("Worker conversation message does not match its sender");
+        // This listener is the worker-to-chief conversation route. Peer messages are already
+        // delivered to their recipient through the worker admission listener below.
+        if ("chief".equals(message.to) && conversationMessageListener != null) {
+            synchronized (sender.cycleLock) {
+                CheckpointSupport support = checkpointSupport;
+                boolean persisted = persistCheckpoint(sender);
+                if (support != null && !persisted)
+                    throw new IllegalStateException("Worker conversation message could not be durably checkpointed");
+            }
+        }
+        bus.publishAdmitted(message);
+    }
+
+    private CrewMessage sendBotConversationMessage(Bot sender, CrewMessage.Type type, String text,
+            List<String> refs) {
+        CrewMessage message = bus.enqueueFresh(new CrewMessage(conversationId, sender.id, "chief", type,
+                text, refs, System.currentTimeMillis()));
+        publishBotConversationMessage(sender, message);
+        return message;
+    }
+
+    private void onWorkerMessageAdmitted(CrewMessage message) {
+        Bot recipient = bots.get(message.to);
+        if (recipient != null && message.activity == null) {
+            String conversationRowId = persistIncomingConversationInput(recipient, message);
+            recipient.retainIncomingInput(message, conversationRowId);
+            CoreAgentLoop loop = recipient.loop;
+            if (loop != null) loop.offerIncoming(incomingForWorker(recipient, message));
+        }
+        if (message.activity == null) {
+            Bot sender = bots.get(message.from);
+            BiConsumer<Bot, CrewMessage> listener = conversationMessageListener;
+            if (sender != null && listener != null && "chief".equals(message.to)) listener.accept(sender, message);
+        }
+    }
+
+    private CoreAgentLoop.IncomingMessage incomingForWorker(Bot recipient, CrewMessage message) {
+        if (("user".equals(message.from) && message.type == CrewMessage.Type.USER)
+                || message.inputBinding != null)
+            return CoreAgentLoop.IncomingMessage.fromCrewMessage(message);
+        ConversationInput.Origin origin = "recovery".equals(message.from)
+                ? ConversationInput.Origin.SYSTEM : ConversationInput.Origin.AGENT;
+        String sourceSession = "chief".equals(message.from) ? WorkspaceIdentity.CENTRAL_SESSION : conversationId;
+        String workspaceId = WorkspaceIdentity.isExecutionSession(conversationId)
+                ? WorkspaceIdentity.workspaceId(conversationId) : "";
+        String assignmentId = message.inputBinding == null ? recipient.assignmentId : message.inputBinding.assignmentId;
+        String sourceBotId = "chief".equals(message.from) || "user".equals(message.from) ? "" : message.from;
+        ConversationInput.Provenance provenance = new ConversationInput.Provenance(
+                sourceSession, workspaceId, assignmentId, sourceBotId, message.id,
+                conversationKind(message.type));
+        ConversationInput input = new ConversationInput(conversationId, message.id,
+                message.conversationContent(), origin, provenance);
+        return CoreAgentLoop.IncomingMessage.agentInput(input);
+    }
+
+    private static ConversationInput.Kind conversationKind(CrewMessage.Type type) {
+        if (type == null) return ConversationInput.Kind.MESSAGE;
+        try { return ConversationInput.Kind.valueOf(type.name()); }
+        catch (RuntimeException unsupported) { return ConversationInput.Kind.OTHER; }
     }
 
     public CoreAgentLoop.RateLimitWaiter rateLimitWaiter() {
@@ -529,6 +667,7 @@ public final class CrewManager implements AutoCloseable {
                 if (request != null) request.active = true;
                 bus.enqueueFresh(source);
             }
+            publishBotConversationMessage(bot, source);
             publishMission(bot.missionId);
             return source;
         } catch (RuntimeException failure) {
@@ -551,14 +690,21 @@ public final class CrewManager implements AutoCloseable {
 
     private CoordinationRequest replyableCoordinationLocked(Bot bot, CrewCoordinationEvidence evidence) {
         CoordinationRequest request = bot.coordinationRequests.get(evidence.evidenceId);
+        boolean liveCycle = request != null && liveCoordinationCycle(bot, request.token, evidence.cycleId);
+        // A nonblocking QUESTION/BLOCKER may be answered after its worker has completed. The
+        // assignment and original cycle remain exact; dispatch below creates the follow-up cycle.
+        boolean completedCycle = request != null && bots.get(bot.id) == bot && bot.token == request.token
+                && bot.cycleId().equals(evidence.cycleId) && bot.status == Status.DONE
+                && !bot.requiresExplicitResume && !bot.stopping && !bot.definitionDisabled
+                && !request.token.isCancellationRequested();
         return coordinationEvidenceListener != null && request != null && request.valid && request.active && !request.claimed
                 && conversationId.equals(evidence.conversationId) && bot.missionId.equals(evidence.missionId)
                 && bot.id.equals(evidence.botId) && evidence.isReplyableKind()
                 && request.evidence.contentSha256.equals(evidence.contentSha256)
-                && liveCoordinationCycle(bot, request.token, evidence.cycleId) ? request : null;
+                && (liveCycle || completedCycle) ? request : null;
     }
 
-    /** Exact synchronous mailbox admission. Never launches work, recreates a capability, or replays a receipt. */
+    /** Exact synchronous input admission. A DONE bot can reopen only for this exact unclaimed request. */
     public CrewMessage replyToCoordinationExact(CrewCoordinationEvidence evidence, String deterministicReplyMessageId,
             String text, BooleanSupplier finalAdmission) {
         return replyToCoordinationExact(evidence, deterministicReplyMessageId, text, null, finalAdmission);
@@ -590,11 +736,14 @@ public final class CrewManager implements AutoCloseable {
                     // Request-wide claim never rolls back, including ambiguous checkpoint failure after enqueue.
                     request.claimed = true;
                     request.active = false;
-                    return bus.enqueueFresh(message);
+                    return message;
                 }, null);
                 if (answer == null) throw new IllegalStateException("Worker token no longer admits the exact reply");
-                persistCheckpoint(bot);
             }
+            // Use the ordinary recipient admission path after releasing cycleLock. It steers a live
+            // loop and starts a new cycle for DONE, while refusing STOPPED/FAILED/interrupted bots.
+            answer = dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text,
+                    Collections.emptyList(), false, answer);
         } finally {
             if (bot.incomingDispatches.decrementAndGet() == 0) synchronized (bot.cycleLock) { bot.cycleLock.notifyAll(); }
         }
@@ -607,6 +756,16 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public synchronized Bot restoreBot(CrewMissionSnapshot missionSnapshot, CrewBotSnapshot snapshot, CrewRole role, CoreAgentLoop.Checkpoint checkpoint, JSONObject ownership, String scopeIdentity, List<String> jobOwners, long completedCycles, List<CrewMessage> messages, List<CrewMessage> pending, String issue) {
+        return restoreBot(missionSnapshot, snapshot, role, checkpoint, ownership, scopeIdentity,
+                jobOwners, completedCycles, messages, pending, issue, "");
+    }
+
+    /** Restores assignment provenance before replaying pending conversation inputs. */
+    public synchronized Bot restoreBot(CrewMissionSnapshot missionSnapshot, CrewBotSnapshot snapshot,
+            CrewRole role, CoreAgentLoop.Checkpoint checkpoint, JSONObject ownership,
+            String scopeIdentity, List<String> jobOwners, long completedCycles,
+            List<CrewMessage> messages, List<CrewMessage> pending, String issue,
+            String assignmentId) {
         if (!conversationId.equals(missionSnapshot.conversationId)) throw new IllegalArgumentException("Wrong checkpoint conversation");
         if (snapshot.resultEvidence != null && (!conversationId.equals(snapshot.resultEvidence.conversationId)
                 || !missionSnapshot.missionId.equals(snapshot.resultEvidence.missionId)))
@@ -624,6 +783,7 @@ public final class CrewManager implements AutoCloseable {
         // An orphan older checkpoint has no user request. A newer sibling may supply it.
         if (restoredMission.originalInstructions.isEmpty()) restoredMission.originalInstructions = missionSnapshot.originalInstructions;
         Bot bot = new Bot(snapshot.id, snapshot.name, role, snapshot.mission, restoredMission);
+        bot.assignmentId = assignmentId == null ? "" : assignmentId;
         bot.ownerPrefix = conversationId + "/" + bot.id + "/";
         bot.status = snapshot.active() ? Status.INTERRUPTED : Status.valueOf(snapshot.status);
         if (checkpoint != null && bot.status == Status.DONE && pending.stream().anyMatch((message)->!checkpoint.appliedIncomingIds.contains(message.id))) {
@@ -651,8 +811,22 @@ public final class CrewManager implements AutoCloseable {
         bots.put(bot.id, bot);
         bot.checkpointChanged = ()->persistCheckpoint(bot);
         bus.restore(CrewActivityTimeline.interruptUnfinished(messages,bot.id), pending);
+        replayConversationMessages();
         publishPresentation(bot.missionId);
         return bot;
+    }
+
+    /** Rebinds legacy restored checkpoints to the existing workspace assignment row. */
+    public void bindWorkspaceAssignmentId(String botId, String assignmentId) {
+        if (!WorkspaceIdentity.isExecutionSession(conversationId) || assignmentId == null || assignmentId.isBlank())
+            throw new IllegalArgumentException("Workspace assignment identity is required");
+        Bot bot = bots.get(botId);
+        if (bot == null) throw new IllegalArgumentException("Unknown worker");
+        synchronized (bot.cycleLock) {
+            if (!bot.assignmentId.isEmpty() && !bot.assignmentId.equals(assignmentId))
+                throw new IllegalStateException("Workspace assignment identity changed");
+            bot.assignmentId = assignmentId;
+        }
     }
 
     public void setCheckpointCommittedListener(Runnable listener) {
@@ -955,6 +1129,29 @@ public final class CrewManager implements AutoCloseable {
     public Bot spawnForMission(String missionId, String originalInstructions, String roleId,
             String mission, List<String> requestedTools, String requestedName,
             CrewMissionAccess missionAccess, Object taskTitle) {
+        return spawnForMission(missionId, originalInstructions, roleId, mission, requestedTools,
+                requestedName, missionAccess, taskTitle, "");
+    }
+
+    /** Workspace assignments pass their durable owner into the initial attributed TASK input. */
+    public Bot spawnForMission(String missionId, String originalInstructions, String roleId,
+            String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess, Object taskTitle, String assignmentId) {
+        return spawnForMission(missionId, originalInstructions, roleId, mission, requestedTools,
+                requestedName, missionAccess, taskTitle, assignmentId, false);
+    }
+
+    /** Workspace admission binds the bot to its durable assignment before its model loop can run. */
+    public Bot spawnForMissionDeferred(String missionId, String originalInstructions, String roleId,
+            String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess, Object taskTitle, String assignmentId) {
+        return spawnForMission(missionId, originalInstructions, roleId, mission, requestedTools,
+                requestedName, missionAccess, taskTitle, assignmentId, true);
+    }
+
+    private Bot spawnForMission(String missionId, String originalInstructions, String roleId,
+            String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess, Object taskTitle, String assignmentId, boolean deferStart) {
         if (missionId == null || missionId.trim().isEmpty() || originalInstructions == null)
             throw new IllegalArgumentException("Exact mission identity and original request are required");
         synchronized (missionAdmissionLock) {
@@ -969,7 +1166,33 @@ public final class CrewManager implements AutoCloseable {
             state.explicitAdmission = true;
         }
         return spawnAdmitted(roleId, mission, requestedTools, requestedName, missionAccess, taskTitle,
-                missionId, originalInstructions);
+                missionId, originalInstructions, assignmentId, deferStart);
+    }
+
+    /** Starts a deferred worker after its workspace assignment is durably bound. */
+    public void startPreparedForMission(Bot bot) {
+        if (bot == null) throw new IllegalArgumentException("Prepared worker is required");
+        synchronized (bot.cycleLock) {
+            if (bots.get(bot.id) != bot || !bot.cycleScheduled || bot.status != Status.QUEUED
+                    || bot.initialStartSubmitted || bot.thread != null)
+                throw new IllegalStateException("Worker is not awaiting its initial mission start");
+            bot.initialStartSubmitted = true;
+        }
+        try {
+            executor.execute(() -> runBot(bot));
+        } catch (RuntimeException admissionFailure) {
+            synchronized (bot.cycleLock) {
+                bot.cycleScheduled = false;
+                bot.status = Status.FAILED;
+                bot.requiresExplicitResume = true;
+                bot.error = "Worker was not started because its durable checkpoint or submission failed";
+                bot.recoveryNote = bot.error;
+                bot.finishedAtMillis = System.currentTimeMillis();
+                bot.terminated.countDown();
+                publishPresentation(bot.missionId);
+            }
+            throw admissionFailure;
+        }
     }
 
     public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName) {
@@ -983,11 +1206,13 @@ public final class CrewManager implements AutoCloseable {
 
     public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName,
             CrewMissionAccess missionAccess, Object taskTitle) {
-        return spawnAdmitted(roleId, mission, requestedTools, requestedName, missionAccess, taskTitle, null, null);
+        return spawnAdmitted(roleId, mission, requestedTools, requestedName, missionAccess, taskTitle,
+                null, null, "", false);
     }
 
     private Bot spawnAdmitted(String roleId, String mission, List<String> requestedTools, String requestedName,
-            CrewMissionAccess missionAccess, Object taskTitle, String explicitMissionId, String originalInstructions) {
+            CrewMissionAccess missionAccess, Object taskTitle, String explicitMissionId, String originalInstructions,
+            String assignmentId, boolean deferStart) {
         CrewRole role = resolveAdmissionRole(roleId, mission, requestedTools, requestedName, missionAccess);
         String id = "bot-" + UUID.randomUUID();
         String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
@@ -1013,6 +1238,7 @@ public final class CrewManager implements AutoCloseable {
             }
             missionState.acceptTitle(candidate);
             bot = new Bot(id, name, role, mission, missionState);
+            bot.assignmentId = assignmentId == null ? "" : assignmentId;
             bot.ownerPrefix = conversationId + "/" + bot.id + "/";
             bot.cycleScheduled = true;
             bots.put(id, bot);
@@ -1022,7 +1248,7 @@ public final class CrewManager implements AutoCloseable {
         bus.send("chief", id, CrewMessage.Type.TASK, mission, Collections.emptyList());
         try {
             publishMission(missionId);
-            executor.execute(()->runBot(bot));
+            if (!deferStart) startPreparedForMission(bot);
             return bot;
         } catch (RuntimeException admissionFailure) {
             synchronized (bot.cycleLock) {
@@ -1099,15 +1325,42 @@ public final class CrewManager implements AutoCloseable {
             if (loop == null) {
                 CoreToolRegistry tools = toolFactory.create(bot, this);
                 bot.workerTools = tools;
+                // Restore pending durable messages once when a loop is attached. New admissions
+                // enter this same queue from the bus listener and are also offered directly to
+                // an active loop; model checkpoints never act as the delivery mechanism.
+                for (CrewMessage message : bus.pending(bot.id))
+                    bot.retainIncomingInput(message, persistIncomingConversationInput(bot, message));
                 CoreAgentLoop.TurnContextProvider incoming = new CoreAgentLoop.TurnContextProvider(){
+                    private boolean initialPendingInputsRead;
+
+                    @Override
+                    public synchronized void onRunStarted() {
+                        initialPendingInputsRead = false;
+                    }
 
                     @Override
                     public synchronized List<CoreAgentLoop.IncomingMessage> takeDurableMessages() {
+                        // This is restart/quiescent-turn recovery only. Once the model loop is
+                        // active, admissions go through offerIncoming and are consumed at its
+                        // next boundary; checkpoints never poll a worker mailbox for delivery.
+                        if (initialPendingInputsRead) return Collections.emptyList();
+                        initialPendingInputsRead = true;
                         List<CoreAgentLoop.IncomingMessage> incoming = new ArrayList<>();
-                        for (CrewMessage message : bus.pending(bot.id)) {
-                            incoming.add(CoreAgentLoop.IncomingMessage.fromCrewMessage(message));
+                        for (CrewMessage message : bot.pendingIncomingInputs()) {
+                            incoming.add(incomingForWorker(bot, message));
                         }
                         return incoming;
+                    }
+
+                    @Override
+                    public void durableMessagesIncorporated(List<CoreAgentLoop.IncomingMessage> messages) {
+                        List<String> incorporated = new ArrayList<>();
+                        for (CoreAgentLoop.IncomingMessage message : messages) incorporated.add(message.id);
+                        List<String> conversationRows = bot.acknowledgeIncomingInputs(incorporated);
+                        bus.drainMatching(bot.id, message -> incorporated.contains(message.id));
+                        BiConsumer<Bot, List<String>> acknowledgement = conversationInputAcknowledgement;
+                        if (acknowledgement != null && !conversationRows.isEmpty())
+                            acknowledgement.accept(bot, conversationRows);
                     }
 
                     @Override
@@ -1140,7 +1393,9 @@ public final class CrewManager implements AutoCloseable {
                     bot.waitingReason = "";
                     bot.reported = false;
                 }
-                String request = bot.completedCycles == 0 ? bot.mission : "";
+                // The initial TASK is a durable, attributed chief input; never duplicate it as
+                // an unmarked `user` request in the provider transcript.
+                String request = "";
                 CoreAgentLoop.ProgressListener progress = progressFactory == null ? null : progressFactory.create(bot);
                 CoreAgentLoop.Result result = resultPresentation.apply(loop.run(request, bot.transcript, token, progress));
                 bot.transcript = loop.transcriptSnapshot();
@@ -1170,7 +1425,7 @@ public final class CrewManager implements AutoCloseable {
                         terminalReport = new TerminalReport(bot.status, bot.cycleResult, bot.finishedAtMillis);
                     }
                     if (result.turns != 0) {
-                        bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+                        sendBotConversationMessage(bot, CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
                     }
                     bus.signalWaiters();
                     publishMission(bot.missionId);
@@ -1179,20 +1434,25 @@ public final class CrewManager implements AutoCloseable {
                 awaitOwnedWork(bot, token);
                 token.throwIfCancelled();
                 boolean complete;
+                String resultToPublish = null;
                 synchronized (bot.cycleLock) {
                     complete = bot.incomingDispatches.get() == 0 && !bus.hasMessages(bot.id) && !hasPendingOwnedWork(bot);
                     if (complete) {
                         if (didWork && !bot.reported) {
                             bot.result = result.text;
-                            bus.send(bot.id, "chief", CrewMessage.Type.RESULT, result.text, Collections.emptyList());
+                            resultToPublish = result.text;
                         }
-                        invalidateCoordinationLocked(bot);
+                        // Keep exact nonblocking requests for this completed cycle replyable. A
+                        // successful exact reply claims the request and starts a fresh cycle;
+                        // STOP, resume, user controls and any new cycle still invalidate them.
                         bot.status = Status.DONE;
                         bot.waitingReason = "";
                         bot.finishedAtMillis = System.currentTimeMillis();
                         terminalReport = new TerminalReport(Status.DONE, bot.cycleResult, bot.finishedAtMillis);
                     } else bot.status = Status.RUNNING;
                 }
+                if (resultToPublish != null)
+                    sendBotConversationMessage(bot, CrewMessage.Type.RESULT, resultToPublish, Collections.emptyList());
                 bus.signalWaiters();
                 publishMission(bot.missionId);
                 if (complete) return;
@@ -1232,7 +1492,7 @@ public final class CrewManager implements AutoCloseable {
                 if (bus.hasMatching(bot.id, (message)->"user".equals(message.from) && message.type == CrewMessage.Type.USER)) bot.reanimationRequested = true;
                 terminalReport = new TerminalReport(Status.FAILED, failureText, bot.finishedAtMillis);
             }
-            bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+            sendBotConversationMessage(bot, CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
             publishMissionAfterWorker(bot);
         } finally {
             java.util.concurrent.CountDownLatch completedLatch = bot.terminated;
@@ -1244,7 +1504,7 @@ public final class CrewManager implements AutoCloseable {
                 boolean restart = false;
                 CrewResultEvidence evidence = null;
                 synchronized (bot.cycleLock) {
-                    invalidateCoordinationLocked(bot);
+                    if (bot.status != Status.DONE) invalidateCoordinationLocked(bot);
                     // Capture before replacing the generation, but never call persistence/model code here.
                     if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
                         evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
@@ -1417,6 +1677,7 @@ public final class CrewManager implements AutoCloseable {
         Bot sender = "chief".equals(from) ? null : bots.get(from);
         if (!"chief".equals(from) && sender == null) throw new IllegalArgumentException("Unknown Crew sender");
         if (sender != null && terminal(sender.status)) throw new IllegalArgumentException("A stopped or finished bot cannot send messages");
+        if (sender != null && sender.id.equals(to)) throw new IllegalArgumentException("Agents cannot send messages to themselves");
         if (sender != null && sender.role.missionAccess == CrewMissionAccess.READ_ONLY && !"chief".equals(to)) {
             throw new IllegalArgumentException("Read-only missions can message only the captain; they cannot dispatch work to another bot");
         }
@@ -1495,10 +1756,17 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text, List<String> refs, boolean explicitUser, CrewMessage receipt) {
-        if (recipient == null) return bus.send(from, to, type, text, refs);
+        if (recipient == null) {
+            CrewMessage message = bus.enqueueFresh(new CrewMessage(conversationId, from, to, type,
+                    text, refs, System.currentTimeMillis()));
+            Bot sender = bots.get(from);
+            if (sender != null) publishBotConversationMessage(sender, message);
+            return message;
+        }
         validateCurrentProfile(recipient.role);
         boolean launchWorker = false;
         boolean dispatchPersisted = false;
+        CrewMessage admitted = null;
         recipient.incomingDispatches.incrementAndGet();
         try {
             synchronized (recipient.cycleLock) {
@@ -1534,14 +1802,19 @@ public final class CrewManager implements AutoCloseable {
                 }
                 if (explicitUser) invalidateCoordinationLocked(recipient);
                 CrewMessage message = receipt;
-                if (message == null) message = bus.send(from, to, type, text, refs);
+                if (message == null) message = bus.enqueueFresh(new CrewMessage(conversationId, from, to,
+                        type, text, refs, System.currentTimeMillis()));
                 else if (message.inputBinding != null) bus.enqueueFresh(message);
                 else bus.restore(Collections.singletonList(message), Collections.singletonList(message));
                 if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED || recipient.status == Status.PARTIAL) recipient.status = Status.QUEUED;
                 persistCheckpoint(recipient);
                 dispatchPersisted = true;
-                return message;
+                admitted = message;
             }
+            Bot sender = bots.get(from);
+            if (sender != null) publishBotConversationMessage(sender, admitted);
+            else bus.publishAdmitted(admitted);
+            return admitted;
         } finally {
             if (recipient.incomingDispatches.decrementAndGet() == 0) {
                 synchronized (recipient.cycleLock) {
@@ -1617,34 +1890,30 @@ public final class CrewManager implements AutoCloseable {
                 synchronized (bot.cycleLock) { request = bot.coordinationRequests.get(source.coordination.evidenceId); }
                 if (request == null || !request.valid) return Collections.emptyList();
             } else {
+                CrewMessage questionMessage;
                 synchronized (bot.cycleLock) {
                     if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
                     expectedToken.throwIfCancelled();
                     bot.status = Status.WAITING;
                     bot.waitingReason = "respuesta del capitán";
-                    bus.send(bot.id, "chief", CrewMessage.Type.QUESTION, question, Collections.emptyList());
+                    questionMessage = bus.enqueueFresh(new CrewMessage(conversationId, bot.id, "chief",
+                            CrewMessage.Type.QUESTION, question, Collections.emptyList(), System.currentTimeMillis()));
                 }
+                publishBotConversationMessage(bot, questionMessage);
                 publishMission(bot.missionId);
             }
-            final CrewMessage expectedSource = source;
             final CoordinationRequest pending = request;
-            Predicate<CrewMessage> matchingAnswer = message -> "chief".equals(message.from)
-                    && message.type == CrewMessage.Type.ANSWER
-                    && (!exact || (message.coordination != null
-                        && message.coordination.evidenceId.equals(expectedSource.coordination.evidenceId)
-                        && message.coordination.contentSha256.equals(expectedSource.coordination.contentSha256)));
-            bus.await(bot.id, message -> matchingAnswer.test(message)
-                            || ("user".equals(message.from) && message.type == CrewMessage.Type.USER),
+            // Any external message is a new conversation input. Let the active model reach its
+            // next boundary instead of keeping it parked inside ask_chief until a checkpoint.
+            bus.await(bot.id, message -> !bot.id.equals(message.from),
                     () -> exact && !pending.valid, expectedToken);
-            List<CrewMessage> answer = new ArrayList<>();
             synchronized (bot.cycleLock) {
                 if (exact && (!pending.valid || !liveCoordinationCycle(bot, expectedToken, pending.evidence.cycleId)))
                     return Collections.emptyList();
-                for (CrewMessage message : bus.pending(bot.id)) if (matchingAnswer.test(message)) {
-                    answer.add(message); bot.pendingAnswerIds.add(message.id);
-                }
             }
-            return answer;
+            // The admitted answer is already queued as a content-bearing AGENT/USER input.
+            // Returning it here too would present the same input twice to the next model turn.
+            return Collections.emptyList();
         } finally {
             synchronized (bot.cycleLock) {
                 removeCoordinationLocked(bot, request);

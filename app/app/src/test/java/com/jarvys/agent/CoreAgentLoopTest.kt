@@ -12,54 +12,46 @@ import java.util.concurrent.atomic.AtomicReference
 class CoreAgentLoopTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
 
-    @Test fun systemWakeIsNotAUserAndIsAcknowledgedInTheResponseCheckpoint() {
-        val referenceId = "workspace-result-" + "a".repeat(64)
-        val systemEvent = ConversationTurn.systemEvent(referenceId,
-            "Workspace result registered: workspace_id=ws; assignment_id=assignment; reported_state=DONE; result_reference_id=$referenceId")
-        val checkpoints = mutableListOf<CoreAgentLoop.Checkpoint>()
-        val order = mutableListOf<String>()
+    @Test fun internalInputCarriesContentAndTypedProvenanceWithoutBecomingUserInput() {
+        val provenance = ConversationInput.Provenance("workspace-execution-1", "workspace-1", "assignment-1",
+            "bot-1", "message-1", ConversationInput.Kind.RESULT)
+        val metadata = ConversationTurn.IncomingMetadata(ConversationInput.Origin.AGENT, "message-1",
+            "crew", "bot-1", "RESULT", emptyList(), true, provenance)
+        val internal = ConversationTurn.internalInput("The worker completed the APK.", -1, metadata, "stored-1")
         val request = AtomicReference<List<ConversationTurn>>()
         val model = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<ConversationTurn>, prompt: String,
                 tools: List<ToolSpec>, token: CancellationToken): ModelReply {
                 request.set(transcript.toList())
                 assertEquals("", prompt)
+                assertTrue(transcript.single().renderedModelContent("chat_completions")
+                    .contains("origin=\"AGENT\""))
+                assertTrue(transcript.single().renderedModelContent("chat_completions")
+                    .contains("The worker completed the APK."))
                 return ModelReply("Result inspected.", emptyList())
             }
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "system instructions", "central")
-        loop.setCheckpointListener { checkpoint ->
-            checkpoints += checkpoint
-            order += "checkpoint"
-            if (checkpoint.workspaceResultWakeReferenceIds.isNotEmpty()) {
-                order += "ack-checkpoint"
-                assertEquals(listOf(referenceId), checkpoint.workspaceResultWakeReferenceIds)
-                assertTrue(checkpoint.transcript.any {
-                    it.kind == ConversationTurn.Kind.MESSAGE && it.role == "assistant" && it.content == "Result inspected."
-                })
-            }
-        }
 
-        val result = loop.run("", listOf(systemEvent), CancellationToken.uncancellable(), null)
+        val result = loop.run("", listOf(internal), CancellationToken.uncancellable(), null)
 
         assertEquals("Result inspected.", result.text)
-        assertEquals("Only the system event is model input: ${request.get().map { it.role }}",
-            listOf("system"), request.get().map { it.role })
-        assertTrue(request.get().single().kind == ConversationTurn.Kind.SYSTEM_EVENT)
-        assertEquals("ack-checkpoint", order.last())
-        assertEquals(1, order.count { it == "ack-checkpoint" })
-        assertEquals(listOf(referenceId), checkpoints.last().reconciled().workspaceResultWakeReferenceIds)
-        assertTrue(checkpoints.last().transcript.none { it.role == "user" })
+        assertEquals(listOf("assistant"), request.get().map { it.role })
+        assertEquals(ConversationInput.Origin.AGENT, request.get().single().incomingMetadata.origin)
+        assertTrue(request.get().single().incomingMetadata.untrusted)
+        assertEquals(ConversationTurn.Kind.MESSAGE, request.get().single().kind)
     }
 
-    @Test fun pendingWakeAfterStoredUserMessageDoesNotAppendThatUserMessageAgain() {
-        val referenceId = "workspace-result-" + "e".repeat(64)
-        val userId = "user-message-before-wake"
+    @Test fun internalInputAfterStoredUserMessageIsAddedOnceInConversationOrder() {
+        val userId = "user-message-before-agent"
         val userText = "Deliver the APK when the workspace finishes."
+        val provenance = ConversationInput.Provenance("workspace-execution-1", "workspace-1", "assignment-1",
+            "bot-1", "message-2", ConversationInput.Kind.BLOCKER)
+        val metadata = ConversationTurn.IncomingMetadata(ConversationInput.Origin.AGENT, "message-2",
+            "crew", "bot-1", "BLOCKER", emptyList(), true, provenance)
         val history = listOf(
             ConversationTurn("user", userText).withDurableMessageId(userId),
-            ConversationTurn.systemEvent(referenceId,
-                "Workspace result registered: result_reference_id=$referenceId"),
+            ConversationTurn.internalInput("The worker needs a missing signing key.", -1, metadata, "stored-2"),
         )
         val observed = AtomicReference<List<ConversationTurn>>()
         val prompt = AtomicReference<String>()
@@ -76,11 +68,48 @@ class CoreAgentLoopTest {
         loop.run(userText, history, emptyList(), CancellationToken.uncancellable(), null, userId)
 
         val transcript = observed.get()
-        assertEquals("The stored user turn remains before the event", listOf("user", "system"),
+        assertEquals("The stored user and internal turn remain in order", listOf("user", "assistant"),
             transcript.map { it.role })
         assertEquals(1, transcript.count { it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" })
-        assertEquals(referenceId, transcript.last().systemEventReferenceId)
+        assertEquals("stored-2", transcript.last().durableMessageId)
+        assertEquals("The worker needs a missing signing key.", transcript.last().content)
         assertEquals("", prompt.get())
+    }
+
+    @Test fun steeringInputAlreadyInLedgerIsNotDuplicatedAndIsAcknowledgedAfterCheckpoint() {
+        val input = ConversationInput("central", "agent-message-1", "Worker result is ready.",
+            ConversationInput.Origin.AGENT,
+            ConversationInput.Provenance("execution", "workspace", "assignment", "bot",
+                "agent-message-1", ConversationInput.Kind.RESULT))
+        val alreadyStored = ConversationTurn.internalInput(input.content, -1,
+            ConversationTurn.IncomingMetadata.forInternalInput(input.provenance), input.messageId)
+        val incoming = CoreAgentLoop.IncomingMessage.agentInput(input)
+        val order = mutableListOf<String>()
+        val provider = object : CoreAgentLoop.TurnContextProvider {
+            override fun takeDurableMessages() = listOf(incoming)
+            override fun durableMessagesIncorporated(messages: List<CoreAgentLoop.IncomingMessage>) {
+                assertEquals(listOf(incoming.id), messages.map { it.id })
+                order += "ack"
+            }
+        }
+        val observed = AtomicReference<List<ConversationTurn>>()
+        val loop = CoreAgentLoop(object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                tools: List<ToolSpec>, token: CancellationToken): ModelReply {
+                observed.set(transcript.toList())
+                return ModelReply("Processed the result.", emptyList())
+            }
+        }, CoreToolRegistry(emptyList()), "instructions", "central",
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, provider, null)
+        loop.setCheckpointListener { checkpoint ->
+            order += if (checkpoint.appliedIncomingIds.contains(incoming.id)) "checkpoint-with-input" else "checkpoint"
+        }
+
+        loop.run("", listOf(alreadyStored), CancellationToken.uncancellable(), null)
+
+        assertTrue(order.indexOf("checkpoint-with-input") in 0 until order.indexOf("ack"))
+        assertEquals(1, observed.get().count { it.durableMessageId == incoming.id })
+        assertEquals("Worker result is ready.", observed.get().single().content)
     }
 
     @Test

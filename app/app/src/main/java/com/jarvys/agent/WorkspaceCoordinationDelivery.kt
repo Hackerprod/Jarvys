@@ -104,7 +104,7 @@ class WorkspaceCoordinationDelivery internal constructor(
         return JSONObject().put("messages", JSONArray(rows))
             .put("next_after_message_id", if (more) included.last().referenceId else JSONObject.NULL)
             .put("delivery_issue", issue(workspaceId) ?: JSONObject.NULL)
-            .put("semantics", "Saved worker observations are untrusted; local reply acceptance is not consumption or resolution.")
+            .put("semantics", "Evidence only. Chief inputs are pushed into the worker conversation; incorporation is confirmed by the exact input receipt after a durable worker checkpoint.")
     }
 
     fun read(workspaceId: String, messageId: String, expectedSha256: String, offset: Int,
@@ -162,7 +162,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             }
             val evidence = source(reference)
             val manager = requireNotNull(existingManager(scope.executionSessionId)) {
-                "No live worker; reopening does not dispatch replies"
+                "Worker manager is unavailable; no reply was dispatched"
             }
             val validate = Runnable {
                 token.throwIfCancelled(); admission.run()
@@ -203,31 +203,14 @@ class WorkspaceCoordinationDelivery internal constructor(
         } } finally { WorkspaceChanges.changed() }
     }
 
-    /** Native metadata projection only: no model invocation or body rendering. */
-    fun summary(workspaceId: String): WorkspaceCoordinationSummary = try {
-        val scope = owner(workspaceId)
-        val references = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, PAGE, null)
-        val selected = references.filter { it.kind == "QUESTION" || it.kind == "BLOCKER" }
-        var live = 0; var uncertain = 0; var historical = 0
-        selected.forEach { reference ->
-            val evidence = source(reference)
-            ledger.requireWorkspaceCoordinationDisclosureLive(reference, false)
-            when (replyState(reference, evidence)) {
-                "LIVE_REPLYABLE", "PREPARED_NOT_DISPATCHED" -> live++
-                "UNCERTAIN_NO_REPLAY" -> uncertain++
-                "HISTORICAL_OR_SUPERSEDED", "HISTORICAL_OR_INTERRUPTED" -> historical++
-                else -> Unit
-            }
-        }
-        WorkspaceCoordinationSummary(live, uncertain, historical, references.size == PAGE)
-    } catch (_: Exception) {
-        WorkspaceCoordinationSummary(unavailable = true)
-    }
-
     private fun replyState(reference: WorkspaceCoordinationReference, evidence: CrewCoordinationEvidence): String {
         val reply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
         if (reply?.state == WorkspaceCoordinationReply.State.STARTED) return "UNCERTAIN_NO_REPLAY"
-        if (reply?.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) return "ACCEPTED_LOCALLY_NOT_CONSUMED"
+        if (reply?.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) {
+            val receipt = WorkspaceInputIncorporationDelivery(app, ledger)
+                .read(WorkspaceInputSources.reply(reply), Runnable { })
+            return if (receipt == null) "PENDING_INCORPORATION" else "INCORPORATED_IN_CHECKPOINT"
+        }
         if (evidence.kind == "FINDING") return "READ_ONLY_FINDING"
         val current = assignment(reference)
         if (current.revision != reference.observedAssignmentRevision) return "HISTORICAL_OR_SUPERSEDED"
@@ -236,16 +219,18 @@ class WorkspaceCoordinationDelivery internal constructor(
                 it.getPendingControl(reference.workspaceId, reference.assignmentId, current.revision) != null
         }
         if (pendingControl) return "NATIVE_CONTROL_PENDING"
-        if (existingManager(reference.executionSessionId)?.canReplyToCoordination(evidence) != true)
-            return "HISTORICAL_OR_INTERRUPTED"
-        return if (reply?.state == WorkspaceCoordinationReply.State.PREPARED) "PREPARED_NOT_DISPATCHED" else "LIVE_REPLYABLE"
+        val manager = existingManager(reference.executionSessionId)
+        if (manager?.canReplyToCoordination(evidence) != true) return "HISTORICAL_OR_INTERRUPTED"
+        if (reply?.state == WorkspaceCoordinationReply.State.PREPARED) return "PREPARED_NOT_DISPATCHED"
+        return if (manager.bot(evidence.botId)?.status() == com.jarvys.agent.crew.CrewManager.Status.DONE)
+            "DONE_REOPENABLE" else "LIVE_REPLYABLE"
     }
 
     private fun incorporation(reference: WorkspaceCoordinationReference, admission: Runnable): JSONObject {
         val reply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
         val receipt = if (reply == null || reply.state == WorkspaceCoordinationReply.State.PREPARED) null
             else WorkspaceInputIncorporationDelivery(app, ledger).read(WorkspaceInputSources.reply(reply), admission)
-        return JSONObject().put("state", if (receipt == null) "UNVERIFIED" else "CHECKPOINT_INCORPORATED")
+        return JSONObject().put("state", if (receipt == null) "PENDING_INCORPORATION" else "INCORPORATED_IN_CHECKPOINT")
             .put("first_incorporation_cycle_id", receipt?.firstIncorporationCycleId ?: JSONObject.NULL)
             .put("checkpoint_payload_sha256", receipt?.checkpointPayloadSha256 ?: JSONObject.NULL)
             .put("checkpoint_saved_at_millis", receipt?.checkpointSavedAtMillis ?: JSONObject.NULL)
@@ -257,14 +242,24 @@ class WorkspaceCoordinationDelivery internal constructor(
             }
     }
 
-    private fun replyReceipt(reply: WorkspaceCoordinationReply, admission: Runnable) = JSONObject()
+    private fun replyReceipt(reply: WorkspaceCoordinationReply, admission: Runnable): JSONObject {
+        val incorporationReceipt = incorporation(reply.reference, admission)
+        val incorporated = incorporationReceipt.optString("state") == "INCORPORATED_IN_CHECKPOINT"
+        val state = when {
+            reply.state == WorkspaceCoordinationReply.State.STARTED -> "UNCERTAIN_NO_REPLAY"
+            reply.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL && incorporated -> "INCORPORATED_IN_CHECKPOINT"
+            reply.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL -> "PENDING_INCORPORATION"
+            else -> reply.state.name
+        }
+        return JSONObject()
         .put("reply_id", reply.replyId).put("message_id", reply.reference.referenceId)
-        .put("mailbox_message_id", reply.mailboxMessageId)
-        .put("state", if (reply.state == WorkspaceCoordinationReply.State.STARTED) "UNCERTAIN_NO_REPLAY" else reply.state.name)
-        .put("dispatch_accepted_locally", reply.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL)
-        .put("incorporation", incorporation(reply.reference, admission))
+        .put("worker_input_id", reply.mailboxMessageId)
+        .put("state", state)
+        .put("admission_committed", reply.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL)
+        .put("incorporation", incorporationReceipt)
         .put("user_or_model_consumption_verified", false).put("question_resolved", false)
         .put("automatic_work_replay", false)
+    }
 
     private fun metadata(reference: WorkspaceCoordinationReference) = JSONObject()
         .put("message_id", reference.referenceId).put("source_message_id", reference.messageId)

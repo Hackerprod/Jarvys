@@ -267,7 +267,7 @@ public class WorkspaceResultLedgerTest {
         store.setMessageReaction(legacySession, legacyUser2, "\ud83d\udc4d");
 
         List<AgentRunUiEvent> full = store.readConversationTimeline(session);
-        assertTrue(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
+        assertFalse(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
         assertEquals("SELECTED", full.stream().filter(event -> "decision-old".equals(event.getDecisionId()))
                 .findFirst().get().getDecisionStatus());
         assertTrue(full.stream().anyMatch(event -> proactiveId.equals(event.getMessageId())
@@ -319,16 +319,14 @@ public class WorkspaceResultLedgerTest {
         assertThrows(IllegalArgumentException.class, () -> WorkspaceResultReference.fromNoticeJsonStrict(forged));
 
         List<AgentRunUiEvent> complete = store.readConversationTimeline(CENTRAL);
-        assertTrue(complete.stream().anyMatch(event -> "workspace_result".equals(event.getKind())
-                && legitimate.referenceId.equals(event.getWorkspaceResultReference().referenceId)));
+        assertFalse(complete.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
         assertFalse(complete.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())
                 || "legitimate result".equals(event.getText())));
         for (int pageSize : new int[] {1, 2, 3}) {
             List<AgentRunUiEvent> paged = readTimelineByPages(CENTRAL, pageSize);
             assertEquals("same conversation page size " + pageSize,
                     eventSignatures(complete), eventSignatures(paged));
-            assertTrue(paged.stream().anyMatch(event -> "workspace_result".equals(event.getKind())
-                    && legitimate.referenceId.equals(event.getWorkspaceResultReference().referenceId)));
+            assertFalse(paged.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
             assertFalse(paged.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())
                     || "legitimate result".equals(event.getText())));
         }
@@ -340,7 +338,6 @@ public class WorkspaceResultLedgerTest {
             CrewMissionSnapshot mission = event.getCrewMissionSnapshot();
             String missionSignature = mission == null ? "" : mission.missionId + ":" + mission.status
                     + ":" + mission.title + ":" + mission.synthesis;
-            WorkspaceResultReference result = event.getWorkspaceResultReference();
             signatures.add(event.getKind() + "\u0001" + event.getStage() + "\u0001" + event.getText()
                     + "\u0001" + event.getDetail() + "\u0001" + event.getTimestampMillis()
                     + "\u0001" + event.getMessageId() + "\u0001" + event.getReactionEmoji()
@@ -348,7 +345,7 @@ public class WorkspaceResultLedgerTest {
                     + "\u0001" + event.getDecisionOptionId() + "\u0001" + event.getDecisionOptionLabel()
                     + "\u0001" + event.getProactiveThreadKey() + "\u0001" + event.getProactiveRepliesUsed()
                     + "\u0001" + event.getProactiveReplies() + "\u0001" + event.getToolCallId()
-                    + "\u0001" + missionSignature + "\u0001" + (result == null ? "" : result.referenceId));
+                    + "\u0001" + missionSignature);
         }
         return signatures;
     }
