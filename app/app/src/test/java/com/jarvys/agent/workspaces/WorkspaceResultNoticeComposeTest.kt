@@ -26,15 +26,27 @@ class WorkspaceResultNoticeComposeTest {
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
-    @Test fun englishTimelineRendersOnlyTrustedMetadataAndNoWorkerActions() =
-        checkNotice("Workspace result recorded")
+    // The strict-journal notice is durable evidence for recovery and the model, not a chat card: the main
+    // timeline hides it (ConversationVisibility), so the user never sees ids or audit wording.
+    @Test fun englishTimelineHidesTheEvidenceNoticeAndLeaksNoWorkerText() =
+        checkNotice("Workspace result recorded", inTimeline = true)
 
     @Test
     @Config(qualifiers = "es-rES-w360dp-h900dp-port-mdpi")
-    fun spanishTimelineRendersOnlyTrustedMetadataAndNoWorkerActions() =
-        checkNotice("Resultado de espacio registrado")
+    fun spanishTimelineHidesTheEvidenceNoticeAndLeaksNoWorkerText() =
+        checkNotice("Resultado de espacio registrado", inTimeline = true)
 
-    private fun checkNotice(expectedTitle: String) {
+    // The composable keeps its own contract (trusted metadata only, no worker actions) for any surface that
+    // still renders it directly.
+    @Test fun englishNoticeComposableRendersOnlyTrustedMetadataAndNoWorkerActions() =
+        checkNotice("Workspace result recorded", inTimeline = false)
+
+    @Test
+    @Config(qualifiers = "es-rES-w360dp-h900dp-port-mdpi")
+    fun spanishNoticeComposableRendersOnlyTrustedMetadataAndNoWorkerActions() =
+        checkNotice("Resultado de espacio registrado", inTimeline = false)
+
+    private fun checkNotice(expectedTitle: String, inTimeline: Boolean) {
         val workspace = "b46a441e-5994-4352-8fe6-fc8ea5a1cd9b"
         val assignment = "0a941f8e-e144-4c2d-b1be-2ae33d31b1bd"
         val request = "notice-test-request"
@@ -56,12 +68,25 @@ class WorkspaceResultNoticeComposeTest {
             override fun setConnected(id: String, connected: Boolean) = Unit
         }, { true })
         compose.setContent { MaterialTheme {
-            ConversationTimeline(conversationKey = WorkspaceIdentity.CENTRAL_SESSION,
+            if (inTimeline) ConversationTimeline(conversationKey = WorkspaceIdentity.CENTRAL_SESSION,
                 events = events.value, isRunning = false, connectorRegistry = connectors,
                 onOpenPreview = { error("Notice must not open a preview") },
                 onOpenSkillFile = { error("Notice must not open a worker link") },
                 chatWithoutMemory = false, allowMessageEntrance = false)
+            else WorkspaceResultNotice(reference)
         } }
+        fun assertHiddenInTimeline() {
+            compose.onAllNodesWithTag("workspace-result-${reference.referenceId}").assertCountEquals(0)
+            compose.onAllNodesWithText(expectedTitle).assertCountEquals(0)
+            compose.onAllNodesWithText(workspace, substring = true, useUnmergedTree = true).assertCountEquals(0)
+            compose.onAllNodesWithText(assignment, substring = true, useUnmergedTree = true).assertCountEquals(0)
+            compose.onAllNodesWithText("WORKER_TEXT_SENTINEL", substring = true, useUnmergedTree = true)
+                .assertCountEquals(0)
+            compose.onAllNodesWithText("example.invalid", substring = true, useUnmergedTree = true)
+                .assertCountEquals(0)
+            compose.onAllNodes(hasClickAction(), useUnmergedTree = true).assertCountEquals(0)
+            compose.onAllNodes(hasSetTextAction(), useUnmergedTree = true).assertCountEquals(0)
+        }
         fun assertNotice() {
             compose.onNodeWithTag("workspace-result-${reference.referenceId}").assertIsDisplayed()
             compose.onNodeWithText(expectedTitle).assertIsDisplayed()
@@ -79,8 +104,9 @@ class WorkspaceResultNoticeComposeTest {
             compose.onAllNodes(hasSetTextAction(), useUnmergedTree = true).assertCountEquals(0)
             compose.onAllNodesWithTag("workspace-result-${reference.referenceId}").assertCountEquals(1)
         }
-        assertNotice()
+        val check = if (inTimeline) ::assertHiddenInTimeline else ::assertNotice
+        check()
         compose.runOnIdle { events.value = listOf(event.copy(id = 2L)) }
-        assertNotice()
+        check()
     }
 }
