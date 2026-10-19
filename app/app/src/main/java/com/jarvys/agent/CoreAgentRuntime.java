@@ -91,7 +91,7 @@ public final class CoreAgentRuntime {
   private volatile String currentUserMessageId = "";
   private volatile String currentTurnOwnerMessageId = "";
   private volatile MainChatTurnContextProvider mainChatSteeringProvider;
-  private volatile ModelProviderClient modelProviderOverride;
+  private final ModelProviderClient modelProviderOverride;
 
   public static List<CrewMissionSnapshot> crewSnapshots() {
     List<CrewMissionSnapshot> result = new ArrayList<>();
@@ -155,7 +155,23 @@ public final class CoreAgentRuntime {
         0,
         budget,
         memoryDisabledForConversation,
-        true);
+        true,
+        null);
+  }
+
+  /** Package-scoped provider injection for runtime boundary tests. */
+  CoreAgentRuntime(Context context, String sessionId, Collection<SkillEntry> skills,
+      CorePromptBudget budget, boolean memoryDisabledForConversation,
+      ModelProviderClient modelProviderOverride) {
+    this(context, sessionId, new ArrayList(skills), null, discoverMcpTools(context),
+        discoverConnectorTools(context, sessionId), WorkspaceTools.createChat(context, sessionId, false),
+        ConnectorRegistry.Companion.get(context), 0, budget, memoryDisabledForConversation,
+        true, requireModelProvider(modelProviderOverride));
+  }
+
+  private static ModelProviderClient requireModelProvider(ModelProviderClient provider) {
+    if (provider == null) throw new IllegalArgumentException("A test model provider is required");
+    return provider;
   }
 
   CoreAgentRuntime(
@@ -175,7 +191,8 @@ public final class CoreAgentRuntime {
         0,
         CorePromptBudget.standard(),
         false,
-        true);
+        true,
+        null);
   }
 
   CoreAgentRuntime(
@@ -196,7 +213,8 @@ public final class CoreAgentRuntime {
         0,
         CorePromptBudget.standard(),
         false,
-        true);
+        true,
+        null);
   }
 
   private CoreAgentRuntime(
@@ -211,7 +229,8 @@ public final class CoreAgentRuntime {
       int depth,
       CorePromptBudget budget,
       boolean memoryDisabledForConversation,
-      boolean webSearchEnabledForConversation) {
+      boolean webSearchEnabledForConversation,
+      ModelProviderClient modelProviderOverride) {
     List<String> listUnmodifiableList;
     this.context = context == null ? null : context.getApplicationContext();
     this.sessionId = sessionId;
@@ -234,6 +253,7 @@ public final class CoreAgentRuntime {
         .getBoolean(MemoryConstants.ENABLED_KEY, true);
     this.memoryDisabledForConversation = memoryDisabledForConversation || !globalMemoryEnabled;
     this.webSearchEnabledForConversation = webSearchEnabledForConversation;
+    this.modelProviderOverride = modelProviderOverride;
   }
 
   public CoreAgentLoop.Result run(
@@ -291,12 +311,6 @@ public final class CoreAgentRuntime {
 
   void setCurrentTurnOwnerMessageId(String messageId) {
     currentTurnOwnerMessageId = messageId == null ? "" : messageId;
-  }
-
-  /** Test seam at the provider boundary; runtime, loop, tools, transcript and stores remain real. */
-  void setModelProviderForTesting(ModelProviderClient provider) {
-    if (provider == null) throw new IllegalArgumentException("A test model provider is required");
-    modelProviderOverride = provider;
   }
 
   MainChatTurnContextProvider mainChatSteeringProvider() {
@@ -767,7 +781,8 @@ public final class CoreAgentRuntime {
             1,
             CorePromptBudget.standard(),
             true,
-            true);
+            true,
+            null);
     runtime.restoredCrewScope = true;
     return runtime.configureCrewManager(
         runtime.createTools(), new CoreAgentModel(context, sessionId), null);
@@ -1379,7 +1394,8 @@ public final class CoreAgentRuntime {
             1,
             CorePromptBudget.standard(),
             true,
-            true);
+            true,
+            null);
     List<String> ceiling = new ArrayList<>(crewBotCapabilityScope(runtime.createTools()).names());
     ceiling.addAll(CodingProjectTools.names());
     if (ProjectImageTool.available(context, catalogSession)) ceiling.add(ProjectImageTool.NAME);
@@ -1658,7 +1674,7 @@ public final class CoreAgentRuntime {
         discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry, moduleRegistry),
         WorkspaceTools.createScheduledTask(appContext, workspaceSession,
             false, task.getToolScope().getSkillIds()), connectorRegistry, 0,
-        CorePromptBudget.standard(), false, true);
+        CorePromptBudget.standard(), false, true, null);
     return runtime.createScheduledTaskToolRegistry(task, approvedPendingAction, deferrer);
   }
 

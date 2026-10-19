@@ -1512,7 +1512,6 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
         <item quantity="many">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
         <item quantity="other">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
     </plurals>
-    <string name="workspace_coordination_page_scope">Solo primera página de coordinación. Puede haber más registros en la bandeja central.</string>
     <string name="workspace_coordination_unavailable">La evidencia de coordinación no está disponible. No se repitió trabajo.</string>
     <string name="crew_type_blocker">Bloqueo</string>
     <string name="workspace_correction_checkpoint_incorporated">La corrección exacta se incorporó a un punto de control guardado. Esto no verifica comprensión, ejecución ni finalización.</string>

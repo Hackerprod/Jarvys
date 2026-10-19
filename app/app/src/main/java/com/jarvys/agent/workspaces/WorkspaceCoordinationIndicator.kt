@@ -16,7 +16,6 @@ import com.jarvys.agent.R
 data class WorkspaceCoordinationSummary(
     val pendingInputs: Int = 0,
     val uncertainReplies: Int = 0,
-    val pageLimited: Boolean = false,
     val unavailable: Boolean = false,
 ) {
     init {
@@ -26,8 +25,7 @@ data class WorkspaceCoordinationSummary(
 
 @Composable
 fun WorkspaceCoordinationIndicator(summary: WorkspaceCoordinationSummary) {
-    if (summary.pendingInputs == 0 && summary.uncertainReplies == 0 &&
-        !summary.pageLimited && !summary.unavailable) return
+    if (summary.pendingInputs == 0 && summary.uncertainReplies == 0 && !summary.unavailable) return
     Column(Modifier.testTag("workspace-coordination-indicator")) {
         if (summary.pendingInputs > 0) Text(
             pluralStringResource(R.plurals.workspace_coordination_pending, summary.pendingInputs, summary.pendingInputs),
@@ -35,10 +33,6 @@ fun WorkspaceCoordinationIndicator(summary: WorkspaceCoordinationSummary) {
         )
         if (summary.uncertainReplies > 0) Text(
             pluralStringResource(R.plurals.workspace_coordination_uncertain, summary.uncertainReplies, summary.uncertainReplies),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (summary.pageLimited) Text(
-            stringResource(R.string.workspace_coordination_page_scope),
             style = MaterialTheme.typography.bodySmall,
         )
         if (summary.unavailable) Text(

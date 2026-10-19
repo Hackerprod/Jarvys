@@ -376,9 +376,36 @@ public final class CrewManager implements AutoCloseable {
         volatile boolean valid = true;
         boolean active;
         boolean claimed;
+        boolean dispatching;
         CoordinationRequest(CrewCoordinationEvidence evidence, CancellationToken token) {
             this.evidence = evidence; this.token = token;
         }
+    }
+
+    private static final class CorrelatedAnswer {
+        final CrewMessage message;
+        final CrewCoordinationEvidence evidence;
+        CorrelatedAnswer(CrewMessage message, CrewCoordinationEvidence evidence) {
+            this.message = message;
+            this.evidence = evidence;
+        }
+    }
+
+    /** A mailbox insertion happened, but a later checkpoint or admission callback failed. */
+    public static class AdmissionUncertainException extends RuntimeException {
+        public final boolean admissionCommitted;
+        public AdmissionUncertainException(String message, RuntimeException cause) {
+            this(message, cause, false);
+        }
+        public AdmissionUncertainException(String message, RuntimeException cause, boolean admissionCommitted) {
+            super(message, cause);
+            this.admissionCommitted = admissionCommitted;
+        }
+    }
+
+    /** A durable supervisor intent is waiting for an explicitly resumed worker. */
+    public static final class AdmissionDeferredException extends AdmissionUncertainException {
+        public AdmissionDeferredException(String message) { super(message, null, false); }
     }
 
     private static final class CycleMetadata {
@@ -784,7 +811,8 @@ public final class CrewManager implements AutoCloseable {
                 && bot.cycleId().equals(evidence.cycleId) && bot.status == Status.DONE
                 && !bot.requiresExplicitResume && !bot.stopping && !bot.definitionDisabled
                 && !request.token.isCancellationRequested() && bot.hasDurableCheckpoint();
-        return coordinationEvidenceListener != null && request != null && request.valid && request.active && !request.claimed
+        return coordinationEvidenceListener != null && request != null && request.valid && request.active
+                && !request.claimed && !request.dispatching
                 && conversationId.equals(evidence.conversationId) && bot.missionId.equals(evidence.missionId)
                 && bot.id.equals(evidence.botId) && evidence.isReplyableKind()
                 && request.evidence.contentSha256.equals(evidence.contentSha256)
@@ -820,22 +848,43 @@ public final class CrewManager implements AutoCloseable {
                     CrewMessage message = new CrewMessage(deterministicReplyMessageId, conversationId, "chief", bot.id,
                             CrewMessage.Type.ANSWER, text, Collections.emptyList(), System.currentTimeMillis()).withCoordination(evidence);
                     if (inputBinding != null) message = message.withInputBinding(inputBinding);
-                    // Request-wide claim never rolls back, including ambiguous checkpoint failure after enqueue.
-                    request.claimed = true;
-                    request.active = false;
+                    // Reserve this request against a concurrent reply. Confirm the claim only
+                    // after dispatch commits; a pre-admission rejection can then release it.
+                    request.dispatching = true;
                     return message;
                 }, null);
                 if (answer == null) throw new IllegalStateException("Worker token no longer admits the exact reply");
             }
             // Use the ordinary recipient admission path after releasing cycleLock. It steers a live
             // loop and starts a new cycle for DONE, while refusing STOPPED/FAILED/interrupted bots.
-            answer = dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text,
-                    Collections.emptyList(), false, answer);
+            try {
+                answer = dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text,
+                        Collections.emptyList(), false, answer);
+            } catch (AdmissionUncertainException uncertain) {
+                finishCoordinationDispatch(bot, evidence, true);
+                throw uncertain;
+            } catch (RuntimeException rejected) {
+                finishCoordinationDispatch(bot, evidence, false);
+                throw rejected;
+            }
+            finishCoordinationDispatch(bot, evidence, true);
         } finally {
             if (bot.incomingDispatches.decrementAndGet() == 0) synchronized (bot.cycleLock) { bot.cycleLock.notifyAll(); }
         }
         publishPresentation(bot.missionId);
         return answer;
+    }
+
+    private void finishCoordinationDispatch(Bot bot, CrewCoordinationEvidence evidence, boolean admitted) {
+        synchronized (bot.cycleLock) {
+            CoordinationRequest request = bot.coordinationRequests.get(evidence.evidenceId);
+            if (request == null || !request.dispatching) return;
+            request.dispatching = false;
+            if (admitted) {
+                request.claimed = true;
+                request.active = false;
+            }
+        }
     }
 
     public void configureCheckpoints(CheckpointSupport support) {
@@ -1852,6 +1901,11 @@ public final class CrewManager implements AutoCloseable {
             throw new IllegalArgumentException("PROGRESS is runtime-generated presentation only");
         Bot sender = "chief".equals(from) ? null : bots.get(from);
         if (!"chief".equals(from) && sender == null) throw new IllegalArgumentException("Unknown Crew sender");
+        if (sender != null && (type == CrewMessage.Type.USER
+                || ("chief".equals(to) && type == CrewMessage.Type.TASK)))
+            throw new IllegalArgumentException(type == CrewMessage.Type.USER
+                    ? "Workers cannot assert native USER authority"
+                    : "Workers cannot assign TASK work to the captain");
         if (sender != null && terminal(sender.status)) throw new IllegalArgumentException("A stopped or finished bot cannot send messages");
         if (sender != null && sender.id.equals(to)) throw new IllegalArgumentException("Agents cannot send messages to themselves");
         if (sender != null && sender.role.missionAccess == CrewMissionAccess.READ_ONLY && !"chief".equals(to)) {
@@ -1862,24 +1916,39 @@ public final class CrewManager implements AutoCloseable {
         if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
         if (sender != null && recipient == null && coordinationEvidenceListener != null && coordinationKind(type))
             return produceCoordination(sender, sender.token, type, text, refs, false);
-        CrewMessage correlatedAnswer = null;
+        CorrelatedAnswer correlatedAnswer = null;
         if ("chief".equals(from) && recipient != null && type == CrewMessage.Type.ANSWER)
             correlatedAnswer = correlateChiefAnswer(recipient, text, refs);
-        CrewMessage message = dispatch(recipient, from, to, type, text, refs, false, correlatedAnswer);
+        CrewMessage message;
+        if (correlatedAnswer != null) {
+            try {
+                message = dispatch(recipient, from, to, type, text, refs, false, correlatedAnswer.message);
+            } catch (AdmissionUncertainException uncertain) {
+                finishCoordinationDispatch(recipient, correlatedAnswer.evidence, true);
+                throw uncertain;
+            } catch (RuntimeException rejected) {
+                finishCoordinationDispatch(recipient, correlatedAnswer.evidence, false);
+                throw rejected;
+            }
+            finishCoordinationDispatch(recipient, correlatedAnswer.evidence, true);
+        } else {
+            message = dispatch(recipient, from, to, type, text, refs, false, null);
+        }
         if (sender != null) publishMission(sender.missionId);
         if (recipient != null && (sender == null || !recipient.missionId.equals(sender.missionId))) publishMission(recipient.missionId);
         return message;
     }
 
     /** Correlates a captain answer to its exact outstanding question before ordinary admission. */
-    private CrewMessage correlateChiefAnswer(Bot recipient, String text, List<String> refs) {
+    private CorrelatedAnswer correlateChiefAnswer(Bot recipient, String text, List<String> refs) {
         List<String> references = refs == null ? Collections.emptyList() : refs;
         synchronized (recipient.cycleLock) {
             CoordinationRequest solePending = null;
             int pendingCount = 0;
             for (CoordinationRequest request : recipient.coordinationRequests.values()) {
                 CrewCoordinationEvidence evidence = request.evidence;
-                if (request.valid && request.active && !request.claimed && recipient.token == request.token
+                if (request.valid && request.active && !request.claimed && !request.dispatching
+                        && recipient.token == request.token
                         && recipient.cycleId().equals(evidence.cycleId)) {
                     pendingCount++;
                     solePending = request;
@@ -1894,13 +1963,12 @@ public final class CrewManager implements AutoCloseable {
         return null;
     }
 
-    private CrewMessage claimCorrelatedAnswer(Bot recipient, String text, List<String> refs,
+    private CorrelatedAnswer claimCorrelatedAnswer(Bot recipient, String text, List<String> refs,
             CoordinationRequest request) {
-        request.claimed = true;
-        request.active = false;
+        request.dispatching = true;
         CrewMessage answer = new CrewMessage(conversationId, "chief", recipient.id,
                 CrewMessage.Type.ANSWER, text, refs, System.currentTimeMillis());
-        return answer.withCoordination(request.evidence);
+        return new CorrelatedAnswer(answer.withCoordination(request.evidence), request.evidence);
     }
 
     public CrewMessage sendFromWorker(Bot bot, CancellationToken expectedToken, String to,
@@ -1943,6 +2011,10 @@ public final class CrewManager implements AutoCloseable {
                 CrewMessage.Type.MESSAGE, text, copiedRefs, System.currentTimeMillis());
         if (provenance != null) proposed = proposed.withInputProvenance(provenance);
         final CrewMessage exactProposed = proposed;
+        CrewMessage receiptOnly = null;
+        CrewMessage existingQueued = null;
+        boolean queuedRetryNeedsDispatch = false;
+        boolean queuedRetryNeedsCheckpointConfirmation = false;
         synchronized (bot.cycleLock) {
             CrewMessage existing = null;
             for (CrewMessage saved : bus.snapshot()) if (saved.id.equals(deterministicMessageId)) {
@@ -1959,44 +2031,82 @@ public final class CrewManager implements AutoCloseable {
                 boolean incorporated = bot.checkpoint != null
                         && bot.checkpoint.appliedIncomingIds.contains(deterministicMessageId);
                 if (incorporated) {
-                    // An incorporated exact retry is a receipt lookup, never a new delivery.
-                    if (finalAdmission != null) finalAdmission.run();
-                    if (!persistCheckpoint(bot))
-                        throw new IllegalStateException("Existing supervisor message is not yet checkpoint-durable");
-                    return existing;
+                    // Finish the receipt lookup outside cycleLock; checkpoint persistence can
+                    // call Room and must not extend the worker's cycle critical section.
+                    receiptOnly = existing;
+                } else {
+                    boolean alreadyQueued = bus.pending(bot.id).stream()
+                            .anyMatch(message -> deterministicMessageId.equals(message.id));
+                    if (bot.requiresExplicitResume || bot.status == Status.INTERRUPTED || bot.status == Status.STOPPED
+                            || bot.status == Status.FAILED || bot.status == Status.PARTIAL || bot.stopping
+                            || expectedToken.isCancellationRequested())
+                        throw new AdmissionDeferredException("Worker requires explicit resume before pending supervisor input can be delivered");
+                    if (bots.get(botId) != bot || bot.token != expectedToken)
+                        throw new AdmissionDeferredException("Worker generation changed before supervisor message confirmation");
+                    if (alreadyQueued && (bot.status == Status.QUEUED || bot.status == Status.RUNNING
+                            || bot.status == Status.WAITING)) {
+                        // The previous enqueue may have succeeded while checkpoint persistence
+                        // failed. Keep the run behind the incoming-dispatch barrier and confirm
+                        // this exact queue receipt durably before reporting admission.
+                        existingQueued = existing;
+                        queuedRetryNeedsCheckpointConfirmation = true;
+                        bot.incomingDispatches.incrementAndGet();
+                    } else {
+                        if (!bot.checkpointAvailable)
+                            throw new IllegalStateException("Worker has no durable checkpoint for supervisor message delivery");
+                        existingQueued = existing;
+                        queuedRetryNeedsDispatch = true;
+                    }
                 }
-                boolean alreadyQueued = bus.pending(bot.id).stream()
-                        .anyMatch(message -> deterministicMessageId.equals(message.id));
+            } else {
+                if (bots.get(botId) != bot || bot.token != expectedToken)
+                    throw new AdmissionDeferredException("Worker generation changed before supervisor message admission");
+                if (expectedToken.isCancellationRequested())
+                    throw new AdmissionDeferredException("Worker cycle ended before supervisor message admission");
+                if (!bot.checkpointAvailable)
+                    throw new IllegalStateException("Worker has no durable checkpoint for supervisor message delivery");
                 if (bot.requiresExplicitResume || bot.status == Status.INTERRUPTED || bot.status == Status.STOPPED
                         || bot.status == Status.FAILED || bot.status == Status.PARTIAL || bot.stopping
                         || expectedToken.isCancellationRequested())
-                    throw new IllegalStateException("Worker requires explicit resume before pending supervisor input can be delivered");
-                if (alreadyQueued && (bot.status == Status.QUEUED || bot.status == Status.RUNNING
-                        || bot.status == Status.WAITING)) {
-                    if (finalAdmission != null) finalAdmission.run();
-                    // The queue entry can only be present on this path after a durable initial
-                    // admission or restoration from a durable checkpoint. Rewriting the live
-                    // worker checkpoint for an exact duplicate races the model loop and can
-                    // block its active tool/model boundary; return the already committed receipt.
-                    return existing;
-                }
-                // A crash can leave the durable mailbox row present but the run unstarted. Reuse
-                // this exact ID and payload to restore its pending queue and, for DONE, start the
-                // ordinary same-assignment follow-up cycle.
-                if (!bot.checkpointAvailable)
-                    throw new IllegalStateException("Worker has no durable checkpoint for supervisor message delivery");
-                return dispatch(bot, "chief", botId, CrewMessage.Type.MESSAGE, text, copiedRefs, false, existing,
-                        expectedToken, finalAdmission, true);
+                    throw new AdmissionDeferredException("Worker requires explicit resume before supervisor messages");
             }
-            if (bots.get(botId) != bot || bot.token != expectedToken)
-                throw new IllegalStateException("Worker generation changed before supervisor message admission");
-            expectedToken.throwIfCancelled();
-            if (!bot.checkpointAvailable)
-                throw new IllegalStateException("Worker has no durable checkpoint for supervisor message delivery");
-            if (bot.requiresExplicitResume || bot.status == Status.INTERRUPTED || bot.status == Status.STOPPED
-                    || bot.status == Status.FAILED || bot.status == Status.PARTIAL || bot.stopping
-                    || expectedToken.isCancellationRequested())
-                throw new IllegalStateException("Worker requires explicit resume before supervisor messages");
+        }
+        if (receiptOnly != null) {
+            if (finalAdmission != null) finalAdmission.run();
+            final boolean persisted;
+            try { persisted = persistCheckpoint(bot); }
+            catch (RuntimeException failure) {
+                throw new AdmissionUncertainException("Existing supervisor input is incorporated but its receipt checkpoint could not be confirmed", failure);
+            }
+            if (!persisted)
+                throw new AdmissionUncertainException("Existing supervisor input is not yet checkpoint-durable", null);
+            return receiptOnly;
+        }
+        if (existingQueued != null) {
+            if (!queuedRetryNeedsDispatch) {
+                try {
+                    if (finalAdmission != null) finalAdmission.run();
+                    final boolean persisted;
+                    try { persisted = persistCheckpoint(bot); }
+                    catch (RuntimeException failure) {
+                        throw new AdmissionUncertainException(
+                                "Existing supervisor input is queued but its checkpoint could not be confirmed",
+                                failure, false);
+                    }
+                    if (!persisted)
+                        throw new AdmissionUncertainException(
+                                "Existing supervisor input is queued but its checkpoint is not durable yet", null, false);
+                    return existingQueued;
+                } finally {
+                    if (queuedRetryNeedsCheckpointConfirmation && bot.incomingDispatches.decrementAndGet() == 0) {
+                        synchronized (bot.cycleLock) { bot.cycleLock.notifyAll(); }
+                    }
+                }
+            }
+            // A crash can leave the durable mailbox row present while the run is unstarted. Reuse
+            // this exact ID and payload to restore its pending queue through ordinary admission.
+            return dispatch(bot, "chief", botId, CrewMessage.Type.MESSAGE, text, copiedRefs, false, existingQueued,
+                    expectedToken, finalAdmission, true);
         }
         return dispatch(bot, "chief", botId, CrewMessage.Type.MESSAGE, text, copiedRefs, false, exactProposed,
                 expectedToken, finalAdmission, true);
@@ -2073,13 +2183,15 @@ public final class CrewManager implements AutoCloseable {
         validateCurrentProfile(recipient.role);
         boolean launchWorker = false;
         boolean dispatchPersisted = false;
+        boolean messageEnqueued = false;
         CrewMessage admitted = null;
         recipient.incomingDispatches.incrementAndGet();
         try {
             synchronized (recipient.cycleLock) {
                 if (expectedToken != null && recipient.token != expectedToken)
-                    throw new IllegalStateException("Worker generation changed before supervisor message admission");
-                if (expectedToken != null) expectedToken.throwIfCancelled();
+                    throw new AdmissionDeferredException("Worker generation changed before supervisor message admission");
+                if (expectedToken != null && expectedToken.isCancellationRequested())
+                    throw new AdmissionDeferredException("Worker cycle ended before supervisor message admission");
                 Status status = recipient.status;
                 if (recipient.requiresExplicitResume || status == Status.INTERRUPTED) throw new IllegalArgumentException("Interrupted bots cannot be reanimated");
                 if ((status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
@@ -2117,6 +2229,7 @@ public final class CrewManager implements AutoCloseable {
                         type, text, refs, System.currentTimeMillis()));
                 else if (message.inputBinding != null) bus.enqueueFresh(message);
                 else bus.restore(Collections.singletonList(message), Collections.singletonList(message));
+                messageEnqueued = true;
                 if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED || recipient.status == Status.PARTIAL) recipient.status = Status.QUEUED;
                 boolean checkpointSaved = persistCheckpoint(recipient);
                 if (requireDurableAdmission && !checkpointSaved)
@@ -2128,13 +2241,35 @@ public final class CrewManager implements AutoCloseable {
             if (sender != null) publishBotConversationMessage(sender, admitted);
             else bus.publishAdmitted(admitted);
             return admitted;
+        } catch (RuntimeException failure) {
+            if (messageEnqueued)
+                throw new AdmissionUncertainException("Crew message was enqueued but its final admission callback failed",
+                        failure, dispatchPersisted);
+            throw failure;
         } finally {
             if (recipient.incomingDispatches.decrementAndGet() == 0) {
                 synchronized (recipient.cycleLock) {
                     recipient.cycleLock.notifyAll();
                 }
             }
-            if (launchWorker && dispatchPersisted) executor.execute(()->runBot(recipient)); else if (launchWorker) {
+            if (launchWorker && dispatchPersisted) {
+                try {
+                    executor.execute(()->runBot(recipient));
+                } catch (RuntimeException submissionFailure) {
+                    synchronized (recipient.cycleLock) {
+                        recipient.cycleScheduled = false;
+                        recipient.reanimationRequested = false;
+                        recipient.requiresExplicitResume = true;
+                        recipient.status = Status.FAILED;
+                        recipient.error = "Message was admitted, but the worker could not be started";
+                        recipient.recoveryNote = recipient.error;
+                        recipient.terminated.countDown();
+                    }
+                    throw new AdmissionUncertainException(
+                            "Crew message was durably admitted but its follow-up worker could not start",
+                            submissionFailure, true);
+                }
+            } else if (launchWorker) {
                 synchronized (recipient.cycleLock) {
                     recipient.cycleScheduled = false;
                     recipient.reanimationRequested = false;

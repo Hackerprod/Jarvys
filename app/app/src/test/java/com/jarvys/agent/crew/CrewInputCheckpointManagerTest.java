@@ -123,6 +123,35 @@ public class CrewInputCheckpointManagerTest {
         }
     }
 
+    @Test(timeout=15000) public void restoredPendingAnswerIsIncorporatedAndAcknowledgedOnceWithoutCheckpointSupport() throws Exception {
+        AtomicReference<CrewMessage> pending = new AtomicReference<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        List<String> acknowledged = Collections.synchronizedList(new java.util.ArrayList<>());
+        try (CrewManager manager = manager((history, prompt, tools, token) -> {
+            CrewMessage answer = pending.get();
+            assertNotNull(answer);
+            assertEquals("the restored ANSWER is incorporated exactly once",
+                    1L, history.stream().filter(turn -> answer.id.equals(turn.durableMessageId)).count());
+            modelCalls.incrementAndGet();
+            return reply("done");
+        }, new AtomicReference<>(), new AtomicInteger())) {
+            manager.configureCheckpoints(support(false));
+            manager.configureConversationInputPipeline((bot, message) -> message.id,
+                    (bot, ids) -> acknowledged.addAll(ids));
+            CrewManager.Bot bot = restore(manager);
+            CrewMessage answer = manager.messageBus().send("chief", bot.id, CrewMessage.Type.ANSWER,
+                    "A pending answer from the chief", Collections.emptyList());
+            pending.set(answer);
+
+            manager.resume(bot.id);
+            awaitFinished(bot);
+
+            assertEquals(1, modelCalls.get());
+            assertEquals(1L, acknowledged.stream().filter(answer.id::equals).count());
+            assertTrue(bot.checkpoint().appliedIncomingIds.contains(answer.id));
+        }
+    }
+
     @Test(timeout=15000) public void mismatchOrWrongCycleFailsBeforeAdmissionAndDeterministicIdNeverReplays() throws Exception {
         AtomicInteger turns = new AtomicInteger();
         try (CrewManager manager = manager((history, prompt, tools, token) -> { turns.incrementAndGet(); return reply("done"); },

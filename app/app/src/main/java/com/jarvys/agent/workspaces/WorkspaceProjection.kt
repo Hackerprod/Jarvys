@@ -84,31 +84,20 @@ object WorkspaceProjection {
                 if (workspaceId in workspaceIds) pending[workspaceId] = count
             }
         } catch (_: Exception) { workspaceIds.forEach { unavailable[it] = true } }
-        val referencesByWorkspace = mutableMapOf<String, List<WorkspaceCoordinationReference>>()
-        scopes.forEach { scope ->
-            try {
-                referencesByWorkspace[scope.workspaceId] = ledger.listWorkspaceCoordinationReferences(
-                    scope.executionSessionId, COORDINATION_PAGE, null)
-            } catch (_: Exception) { unavailable[scope.workspaceId] = true }
-        }
         val uncertainReplies = workspaceIds.associateWith { 0 }.toMutableMap()
-        val uncertainRepliesAvailable = try {
+        try {
             ledger.countStartedQuestionBlockerRepliesByWorkspace(
                 WorkspaceIdentity.CENTRAL_SESSION, workspaceIds).forEach { (workspaceId, count) ->
                 if (workspaceId in workspaceIds) uncertainReplies[workspaceId] = count
             }
-            true
         } catch (_: Exception) {
             workspaceIds.forEach { unavailable[it] = true }
-            false
         }
         return scopes.associate { scope ->
-            val references = referencesByWorkspace[scope.workspaceId]
             scope.workspaceId to WorkspaceCoordinationSummary(
                 pendingInputs = pending[scope.workspaceId] ?: 0,
                 uncertainReplies = uncertainReplies[scope.workspaceId] ?: 0,
-                pageLimited = uncertainRepliesAvailable && references?.size == COORDINATION_PAGE,
-                unavailable = unavailable[scope.workspaceId] == true || references == null ||
+                unavailable = unavailable[scope.workspaceId] == true ||
                     WorkspaceCoordinationDelivery.issue(scope.workspaceId) != null,
             )
         }
@@ -152,7 +141,6 @@ object WorkspaceProjection {
             pendingControlSaved = pending != null)
     }
 
-    private const val COORDINATION_PAGE = WORKSPACE_PAGE_SIZE
 }
 
 internal fun workspaceRecordedStatus(value: String?): WorkspaceUiStatus = when (value) {

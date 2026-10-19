@@ -54,6 +54,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
@@ -1489,10 +1490,10 @@ public final class LocalRunStore {
     }
 
     /** Resolves durable chat inputs that will not enter a run transcript. */
-    public void markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
-        if (sessionId == null || messageIds == null) return;
+    public List<String> markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
+        if (sessionId == null || messageIds == null) return Collections.emptyList();
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
+        return requireChatDbSuccess(chatDatabaseBridge.markInputStateSync(
                 sessionId, copyIds(messageIds), "resolved"), "resolve chat inputs");
     }
 
@@ -1842,6 +1843,35 @@ public final class LocalRunStore {
         List<JSONObject> pending = new ArrayList<>();
         for (StoredMessage message : chatDatabaseBridge.readPendingAgentInputsSync(sessionId))
             pending.add(messageJson(message));
+        return Collections.unmodifiableList(pending);
+    }
+
+    /** Reads pending internal rows whose typed provenance names one of the supplied source IDs. */
+    public List<JSONObject> readPendingInternalConversationInputsBySourceIds(
+            String sessionId, Iterable<String> sourceMessageIds) {
+        if (sessionId == null || sourceMessageIds == null) return Collections.emptyList();
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        Set<String> sourceIds = new LinkedHashSet<>(nonEmptyIds(sourceMessageIds));
+        if (sourceIds.isEmpty()) return Collections.emptyList();
+
+        Set<String> stableIds = new LinkedHashSet<>();
+        ConversationInput.Origin[] origins = {
+                ConversationInput.Origin.AGENT, ConversationInput.Origin.SYSTEM };
+        for (String sourceId : sourceIds) {
+            for (ConversationInput.Origin origin : origins) {
+                stableIds.add(ConversationInput.stableId(origin, WorkspaceIdentity.CENTRAL_SESSION, sourceId));
+                stableIds.add(ConversationInput.stableId(origin, sessionId, sourceId));
+            }
+        }
+
+        List<JSONObject> pending = new ArrayList<>();
+        for (StoredMessage message : chatDatabaseBridge.readPendingInternalMessagesByStableIdsSync(
+                sessionId, new ArrayList<>(stableIds))) {
+            if (!"agent".equals(message.getRole()) && !"system".equals(message.getRole())) continue;
+            JSONObject row = messageJson(message);
+            JSONObject provenance = row.optJSONObject("provenance");
+            if (provenance != null && sourceIds.contains(provenance.optString("messageId"))) pending.add(row);
+        }
         return Collections.unmodifiableList(pending);
     }
 

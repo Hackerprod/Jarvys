@@ -8,11 +8,17 @@ import com.jarvys.agent.workspaces.*
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
@@ -192,8 +198,10 @@ class WorkspaceCoordinationDeliveryTest {
         worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
             "Checkpoint is available", emptyList())
         assertTrue(worker.bot.hasDurableCheckpoint())
+        val checkpointWrites = AtomicInteger()
         worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
             override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
+                checkpointWrites.incrementAndGet()
                 throw IllegalStateException("Synthetic post-outbox admission failure")
             }
             override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
@@ -213,7 +221,101 @@ class WorkspaceCoordinationDeliveryTest {
             assertTrue(pending.any { row ->
                 row.optJSONObject("provenance")?.optString("messageId") == receipt.getString("worker_input_id")
             })
+
+            worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+                override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
+                    checkpointWrites.incrementAndGet()
+                    throw IllegalStateException("Synthetic retry checkpoint failure")
+                }
+                override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                    throw AssertionError("A message retry must not resume a worker")
+            })
+            val stillPending = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+                "message-key", "Synthetic supervisor message", null, "central-request",
+                "Synthetic original request", freshToken, noAdmission)
+            assertEquals("PENDING_DELIVERY", stillPending.getString("state"))
+            assertFalse(stillPending.getBoolean("admission_committed"))
+            assertFalse(stillPending.getBoolean("delivery_confirmed"))
+            assertEquals(2, checkpointWrites.get())
+
+            worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+                override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
+                    checkpointWrites.incrementAndGet()
+                    assertTrue("retry must persist the exact queued receipt", pending.any { it.id == receipt.getString("worker_input_id") })
+                }
+                override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                    throw AssertionError("A message retry must not resume a worker")
+            })
+            val retried = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+                "message-key", "Synthetic supervisor message", null, "central-request",
+                "Synthetic original request", freshToken, noAdmission)
+            assertEquals("PENDING_INCORPORATION", retried.getString("state"))
+            assertTrue(retried.getBoolean("admission_committed"))
+            assertTrue(retried.getBoolean("delivery_confirmed"))
+            assertEquals(3, checkpointWrites.get())
+            assertEquals("exact retry must not duplicate the mailbox message", 1,
+                worker.manager.messageBus().pending(worker.bot.id).count { it.id == retried.getString("worker_input_id") })
         } finally { worker.manager.configureCheckpoints(null) }
+    }
+
+    @Test fun deterministicCrewRejectionSettlesTheOutboxAndReturnsFinalReceipt() {
+        val worker = Parked(profileGuarded = true).also { parked = it }
+        bind(worker.bot.id)
+        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
+        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) { }
+            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                throw AssertionError("A message attempt must not resume a worker")
+        })
+        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
+            "Checkpoint is available", emptyList())
+        assertTrue(worker.bot.hasDurableCheckpoint())
+        worker.profileEnabled.set(false)
+
+        val receipt = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+            "rejected-message-key", "Synthetic supervisor message", null, "central-request",
+            "Synthetic original request", freshToken, noAdmission)
+        assertEquals("REJECTED", receipt.getString("state"))
+        assertFalse(receipt.getBoolean("admission_committed"))
+        assertFalse(receipt.getBoolean("delivery_confirmed"))
+        val inputId = receipt.getString("worker_input_id")
+        assertEquals("resolved", ledger.readConversationInputState(scope.executionSessionId,
+            requireNotNull(ledger.readConversationMessageByStableId(scope.executionSessionId,
+                ConversationInput.stableId(ConversationInput.Origin.AGENT, central, inputId)).getString("messageId"))))
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(app, scope.executionSessionId,
+            target.assignmentId).none { it.messageId == inputId })
+        assertEquals("REJECTED", delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id,
+            target.revision, "rejected-message-key", "Synthetic supervisor message", null,
+            "central-request", "Synthetic original request", freshToken, noAdmission).getString("state"))
+        assertTrue(worker.manager.messageBus().snapshot().none { it.id == inputId })
+    }
+
+    @Test fun cancellationAfterOutboxCommitPropagatesInsteadOfBecomingPendingReceipt() {
+        val worker = Parked().also { parked = it }
+        bind(worker.bot.id)
+        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
+        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) { }
+            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                throw AssertionError("A message attempt must not resume a worker")
+        })
+        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
+            "Checkpoint is available", emptyList())
+        val token = CancellationToken.cancellable()
+        val priorRevision = WorkspaceChanges.revision.value
+        val cancelAfterOutbox = CoroutineScope(Dispatchers.Unconfined).launch {
+            WorkspaceChanges.revision.collect { revision -> if (revision > priorRevision) token.cancel() }
+        }
+        try {
+            val thrown = failure {
+                delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+                    "cancelled-message-key", "Synthetic supervisor message", null, "central-request",
+                    "Synthetic original request", token, noAdmission)
+            }
+            assertTrue(thrown is CancellationException)
+            assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(app, scope.executionSessionId,
+                target.assignmentId).any { it.content == "Synthetic supervisor message" })
+        } finally { cancelAfterOutbox.cancel() }
     }
 
     @Test fun reconciliationInvalidatesOnceForNewVisibleEvidenceAndNeverForAnIdempotentScan() {
@@ -470,11 +572,12 @@ class WorkspaceCoordinationDeliveryTest {
         }
     }
 
-    private inner class Parked : AutoCloseable {
+    private inner class Parked(profileGuarded: Boolean = false) : AutoCloseable {
         private val started = CountDownLatch(1)
         private val release = CountDownLatch(1)
         private val observed = AtomicReference<CrewCoordinationEvidence>()
         private val modelCalls = AtomicInteger()
+        val profileEnabled = AtomicBoolean(true)
         val manager: CrewManager
         val bot: CrewManager.Bot
         init {
@@ -492,7 +595,13 @@ class WorkspaceCoordinationDeliveryTest {
                 ledger.appendCrewCoordinationEvidence(source, noAdmission)
                 observed.set(source)
             }
-            bot = manager.spawnForMission(target.missionId, target.originalUserRequest, "custom", "Synthetic task",
+            bot = if (profileGuarded) {
+                val role = CrewRole("coordination-profile", "Synthetic worker", "custom", "Synthetic task",
+                    emptyList(), null, "Synthetic profile", 1, emptyList())
+                manager.configureProfiles({ id -> if (profileEnabled.get() && id == role.id) role else null }, emptyList())
+                manager.spawnForMission(target.missionId, target.originalUserRequest, role.id, "Synthetic task",
+                    null, "Synthetic worker", CrewMissionAccess.STANDARD, "Synthetic coordination")
+            } else manager.spawnForMission(target.missionId, target.originalUserRequest, "custom", "Synthetic task",
                 emptyList(), "Synthetic worker", CrewMissionAccess.STANDARD, "Synthetic coordination")
             await(started)
         }

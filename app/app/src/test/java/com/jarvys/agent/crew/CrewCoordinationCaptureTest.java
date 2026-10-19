@@ -49,9 +49,10 @@ public class CrewCoordinationCaptureTest {
                 arguments.put("to", "chief"); arguments.put("type", type.name());
                 arguments.put("text", "content for " + type);
                 CoreToolResult result = msgSend.execute(arguments, sender.token);
-                if (type == CrewMessage.Type.PROGRESS) {
+                if (type == CrewMessage.Type.PROGRESS || type == CrewMessage.Type.USER
+                        || type == CrewMessage.Type.TASK) {
                     assertFalse(result.content, result.success);
-                    assertEquals("runtime-only presentation cannot be authored as a Crew message", prior,
+                    assertEquals("runtime-only presentation and native USER/TASK authority cannot be authored by a worker", prior,
                             delivered.size());
                     continue;
                 }
@@ -60,6 +61,65 @@ public class CrewCoordinationCaptureTest {
                 assertEquals(type, delivered.get(prior).type);
                 assertEquals(1, delivered.size() - prior);
             }
+        }
+    }
+    @Test(timeout=15000) public void rejectedCorrelatedAnswerAdmissionLeavesQuestionReplyable() throws Exception {
+        CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+        AtomicBoolean profileAvailable = new AtomicBoolean(true);
+        CrewRole role = new CrewRole("versioned-worker", "Worker", "custom", "Task",
+                Collections.emptyList(), null, "Worker profile", 1, Collections.emptyList());
+        CrewManager manager = manager((history,prompt,tools,token) -> {
+            started.countDown();
+            try { release.await(); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt(); token.throwIfCancelled();
+            }
+            token.throwIfCancelled(); return reply();
+        });
+        try {
+            manager.configureProfiles(id -> profileAvailable.get() && role.id.equals(id) ? role : null);
+            CrewManager.Bot bot = manager.spawnForMission("claim-mission", "Original instructions", role.id,
+                    "Task", null, "Worker", CrewMissionAccess.STANDARD, "Claim test");
+            await(started);
+            AtomicReference<CrewCoordinationEvidence> captured = new AtomicReference<>();
+            AtomicReference<Boolean> askResult = new AtomicReference<>();
+            AtomicReference<Throwable> askFailure = new AtomicReference<>();
+            CountDownLatch produced = new CountDownLatch(1), answered = new CountDownLatch(1);
+            manager.configureCoordinationEvidenceListener(source -> { captured.set(source); produced.countDown(); });
+            Thread waiter = thread(() -> {
+                try { askResult.set(manager.askChief(bot, "Need a choice", bot.token)); }
+                catch (Throwable failure) { askFailure.set(failure); }
+                finally { answered.countDown(); }
+            });
+            await(produced);
+            CrewCoordinationEvidence source = captured.get();
+            assertNotNull(source);
+            assertTrue(manager.canReplyToCoordination(source));
+
+            profileAvailable.set(false);
+            assertThrows(IllegalStateException.class, () -> manager.send("chief", bot.id,
+                    CrewMessage.Type.ANSWER, "First answer attempt", Collections.emptyList()));
+            assertFalse("ask_chief must remain parked after pre-admission rejection",
+                    answered.await(100, TimeUnit.MILLISECONDS));
+            assertTrue("a pre-admission profile rejection must leave ask_chief answerable",
+                    manager.canReplyToCoordination(source));
+
+            profileAvailable.set(true);
+            CrewMessage answer = manager.send("chief", bot.id, CrewMessage.Type.ANSWER,
+                    "Retry answer", Collections.emptyList());
+            await(answered);
+            join(waiter);
+            if (askFailure.get() != null) throw new AssertionError(askFailure.get());
+            assertEquals(Boolean.TRUE, askResult.get());
+            assertTrue(answer.coordination.matches(source));
+            assertFalse(manager.canReplyToCoordination(source));
+            assertEquals(1, manager.messageBus().snapshot().stream()
+                    .filter(message -> message.type == CrewMessage.Type.ANSWER
+                            && message.coordination != null && message.coordination.matches(source))
+                    .count());
+        } finally {
+            release.countDown();
+            manager.close();
         }
     }
 
@@ -200,7 +260,8 @@ public class CrewCoordinationCaptureTest {
                 @Override public CrewManager.ResumePlan reconcile(CrewManager.Bot bot) { throw new AssertionError(); }
             });
             try {
-                assertThrows(IllegalStateException.class, () -> answer(parked.manager, source, "accepted-uncertain", () -> true));
+                assertThrows(CrewManager.AdmissionUncertainException.class,
+                        () -> answer(parked.manager, source, "accepted-uncertain", () -> true));
                 assertEquals(1, parked.manager.messageBus().pending(parked.bot.id).stream().filter(m -> m.type==CrewMessage.Type.ANSWER).count());
                 assertFalse(parked.manager.canReplyToCoordination(source));
                 assertThrows(IllegalStateException.class, () -> answer(parked.manager, source, "rekey", () -> true));

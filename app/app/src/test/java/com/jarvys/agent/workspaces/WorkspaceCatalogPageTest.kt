@@ -91,7 +91,6 @@ class WorkspaceCatalogPageTest {
             val row = WorkspaceProjection.sidebarPage(context).rows.single { it.id == scope.workspaceId }
             assertEquals(2, row.coordination.pendingInputs)
             assertEquals(1, row.coordination.uncertainReplies)
-            assertFalse(row.coordination.pageLimited)
             assertFalse(row.coordination.unavailable)
             assertFalse(row.toString().contains("PRIVATE"))
         }

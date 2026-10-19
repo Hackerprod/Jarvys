@@ -35,7 +35,7 @@ class WorkspaceInternalCommunicationUiTest {
             WorkspaceListScreen(listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
                 statusPageLimited = true,
                 coordination = WorkspaceCoordinationSummary(pendingInputs = 2, uncertainReplies = 1,
-                    pageLimited = true))), onOpenWorkspace = {})
+                    unavailable = false))), onOpenWorkspace = {})
         } }
 
         compose.onNodeWithTag("workspace-list-row-space").assertIsDisplayed()
@@ -43,8 +43,6 @@ class WorkspaceInternalCommunicationUiTest {
             com.jarvys.agent.R.plurals.workspace_coordination_pending, 2, 2)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.resources.getQuantityString(
             com.jarvys.agent.R.plurals.workspace_coordination_uncertain, 1, 1)).assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(com.jarvys.agent.R.string.workspace_coordination_page_scope))
-            .assertIsDisplayed()
         listOf(body, inboxPayload, replyPayload).forEach { payload ->
             compose.onAllNodesWithText(payload, useUnmergedTree = true).assertCountEquals(0)
         }

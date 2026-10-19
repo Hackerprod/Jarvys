@@ -142,12 +142,18 @@ class MainAgentInteractionTest {
 
         AgentForegroundService.recordEarlyFailedAgentInputStart(session, "failed-input")
 
+        assertEquals("next-input", AgentForegroundService.nextEligibleInternalInputId(
+            session, listOf(failed, next)))
         assertEquals("next-input", AgentForegroundService.firstEligiblePendingAgentInput(
             session, listOf(failed, next))?.optString("messageId"))
         assertEquals("failed-input", AgentForegroundService.firstEligiblePendingAgentInput(
             "${session}-other", listOf(failed))?.optString("messageId"))
 
+        assertNull(AgentForegroundService.firstEligiblePendingAgentInput(session, listOf(failed)))
+        assertEquals("", AgentForegroundService.nextEligibleInternalInputId(session, listOf(failed)))
         assertNull(AgentForegroundService.firstEligiblePendingAgentInput(session, emptyList()))
+        // Once the row is no longer pending, its per-process suppression expires; a later
+        // genuinely new row with the same identity is eligible again.
         assertEquals("failed-input", AgentForegroundService.firstEligiblePendingAgentInput(
             session, listOf(failed))?.optString("messageId"))
     }
@@ -470,9 +476,7 @@ class MainAgentInteractionTest {
             }
         }
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled).also {
-                it.setModelProviderForTesting(provider)
-            }
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled, provider)
         }
         try {
             AgentRunUiState.resetSession(session)

@@ -6,8 +6,10 @@ import com.jarvys.agent.ChatTestStore
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreToolRegistry
+import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.LocalRunStore
 import com.jarvys.agent.ModelReply
+import com.jarvys.agent.WorkspaceConversationInputStore
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewMessage
@@ -16,6 +18,7 @@ import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewMode
 import com.jarvys.agent.crew.CrewProfile
 import java.io.File
+import java.util.UUID
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -40,7 +43,6 @@ import org.robolectric.annotation.SQLiteMode
 /**
  * Coordinator integration only: real registry, Crew scheduling and LocalRunStore; fake local
  * inference and keepalive. Plain Application prevents real providers, services and app startup.
- * Prepared outside the checkout; the build owner must install and run these focused tests.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -479,6 +481,144 @@ class WorkspaceCoordinatorIntegrationTest {
         assertEquals(1, owner.messageBus().snapshot().count { it.from == "user" && it.type == CrewMessage.Type.USER && it.text == correction })
     }
 
+    @Test fun explicitResumeDeliversPendingSupervisorInputAfterAssignmentRevisionAdvances() {
+        val scope = workspace("resume-supervisor-outbox")
+        val inputId = AtomicReference("")
+        val deliveredCounts = CopyOnWriteArrayList<Int>()
+        managerFactory = { session ->
+            manager(session, CoreAgentLoop.Model { history, _, _, _ ->
+                val id = inputId.get()
+                if (id.isNotEmpty()) deliveredCounts += history.count { it.durableMessageId == id }
+                done()
+            }).also { configureWorkspaceInputRecovery(it, session) }
+        }
+        coordinator = freshCoordinator()
+        val assignmentRow = delegate(scope)
+        val worker = bot(scope, assignmentRow)
+        await(worker)
+        val manager = managers.getValue(scope.executionSessionId)
+        val assignment = currentAssignment(scope, assignmentRow)
+        val pending = WorkspaceConversationInputStore.appendSupervisorIntent(context,
+            scope.executionSessionId, assignment, worker.id, "resume-after-revision", "Inspect the updated manifest.", null)
+        inputId.set(pending.messageId)
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+            scope.executionSessionId, assignment.assignmentId).any { it.messageId == pending.messageId })
+
+        val resume = coordinator.submitNativeControl(scope.workspaceId, assignment.assignmentId,
+            assignment.revision, WorkspaceControlType.RESUME, "Continue the existing assignment.")
+        coordinator.executeNativeControl(resume.requestId, CancellationToken.uncancellable())
+        await(worker)
+
+        val afterResume = currentAssignment(scope, assignmentRow)
+        assertEquals(assignment.revision + 1, afterResume.revision)
+        assertEquals("pending supervisor text must appear in exactly one model transcript; counts=$deliveredCounts",
+            1, deliveredCounts.count { it == 1 })
+        assertTrue("one model turn must not duplicate the pending input; counts=$deliveredCounts",
+            deliveredCounts.all { it <= 1 })
+        assertTrue(worker.checkpoint().appliedIncomingIds.contains(pending.messageId))
+        assertEquals("incorporated", durableInputState(scope, pending.messageId))
+        assertEquals(1, manager.messageBus().snapshot().count { it.id == pending.messageId })
+    }
+
+    @Test fun correctionSupersedesOlderSupervisorMessageAndStaleTypedRowsAreResolved() {
+        val scope = workspace("correct-supersedes-supervisor")
+        val seenUserCorrections = CopyOnWriteArrayList<String>()
+        managerFactory = { session ->
+            manager(session, CoreAgentLoop.Model { history, _, _, _ ->
+                history.filter { it.role == "user" }.mapTo(seenUserCorrections) { it.content }
+                done()
+            }).also { configureWorkspaceInputRecovery(it, session) }
+        }
+        coordinator = freshCoordinator()
+        val assignmentRow = delegate(scope)
+        val worker = bot(scope, assignmentRow)
+        await(worker)
+        val assignment = currentAssignment(scope, assignmentRow)
+        val oldMessage = WorkspaceConversationInputStore.appendSupervisorIntent(context,
+            scope.executionSessionId, assignment, worker.id, "before-correction", "Use the prior plan.", null)
+        val staleAnswer = appendSupervisorInput(scope, assignment, worker.id,
+            "stale-answer-${UUID.randomUUID()}", ConversationInput.Kind.ANSWER, "Old answer")
+        val replacedAssignment = WorkspaceRegistry(context).use { registry ->
+            registry.prepareAssignment(scope.workspaceId, UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                "Owner request", "custom", MISSION, emptyList(), "Replacement", CrewMissionAccess.STANDARD)
+        }
+        val missingAssignmentTask = appendSupervisorInput(scope, assignment, worker.id,
+            "replaced-task-${UUID.randomUUID()}", ConversationInput.Kind.TASK, "Replaced task",
+            assignmentId = replacedAssignment.assignmentId)
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+            scope.executionSessionId, assignment.assignmentId).any { it.messageId == oldMessage.messageId })
+
+        val correctionText = "Follow the user's corrected instruction."
+        val correction = coordinator.submitNativeControl(scope.workspaceId, assignment.assignmentId,
+            assignment.revision, WorkspaceControlType.CORRECT, correctionText)
+        coordinator.executeNativeControl(correction.requestId, CancellationToken.uncancellable())
+        await(worker)
+
+        val store = LocalRunStore(context)
+        for (id in listOf(oldMessage.messageId, staleAnswer, missingAssignmentTask))
+            assertEquals("stale input $id must be terminally resolved", "resolved",
+                durableInputState(scope, id))
+        assertTrue("native CORRECT remains in the worker transcript", seenUserCorrections.any { it == correctionText })
+        assertFalse("older supervisor text must not be admitted after CORRECT",
+            managers.getValue(scope.executionSessionId).messageBus().snapshot().any { it.id == oldMessage.messageId })
+
+        val modelCallsBeforeRecovery = modelCalls.get()
+        WorkspaceConversationInputStore.recoverCompletedSupervisorIntents(context,
+            scope.executionSessionId, managers.getValue(scope.executionSessionId))
+        assertEquals(modelCallsBeforeRecovery, modelCalls.get())
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+            scope.executionSessionId).isEmpty())
+    }
+
+    @Test fun completedRecoveryResolvesSupervisorRowsOlderThanAcceptedCorrection() {
+        val scope = workspace("recovery-correction-authority")
+        managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, _ -> done() })
+            .also { configureWorkspaceInputRecovery(it, session) } }
+        coordinator = freshCoordinator()
+        val assignmentRow = delegate(scope)
+        val worker = bot(scope, assignmentRow)
+        await(worker)
+        val assignment = currentAssignment(scope, assignmentRow)
+        val oldMessage = WorkspaceConversationInputStore.appendSupervisorIntent(context,
+            scope.executionSessionId, assignment, worker.id, "before-accepted-correction", "Use the older plan.", null)
+        val oldAnswer = appendSupervisorInput(scope, assignment, worker.id,
+            "old-answer-${UUID.randomUUID()}", ConversationInput.Kind.ANSWER, "Older answer")
+        val oldTask = appendSupervisorInput(scope, assignment, worker.id,
+            "old-task-${UUID.randomUUID()}", ConversationInput.Kind.TASK, "Older task")
+
+        val correction = coordinator.submitNativeControl(scope.workspaceId, assignment.assignmentId,
+            assignment.revision, WorkspaceControlType.CORRECT, "Apply the newer user correction.")
+        val started = WorkspaceRegistry(context).use { registry ->
+            registry.markControlStarted(correction.requestId, correction.revision, "recovery-correction-test")
+        }
+        WorkspaceRegistry(context).use { registry -> registry.completeControl(started.requestId, started.revision) }
+
+        val persistedCorrection = WorkspaceRegistry(context).use {
+            it.getLatestCorrection(scope.workspaceId, assignment.assignmentId)
+        }
+        assertNotNull("accepted native correction must be recorded", persistedCorrection)
+        assertEquals(assignment.revision + 1, persistedCorrection!!.admittedAssignmentRevision)
+        assertTrue("stale inputs must exist in the pending outbox before recovery",
+            LocalRunStore(context).readPendingInternalConversationInputs(scope.executionSessionId)
+                .any { it.optJSONObject("provenance")?.optString("messageId") == oldMessage.messageId })
+        assertFalse("old supervisor messages must be filtered by the accepted correction",
+            WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+                scope.executionSessionId).any { it.messageId == oldMessage.messageId })
+
+        val callsBeforeRecovery = modelCalls.get()
+        WorkspaceConversationInputStore.recoverCompletedSupervisorIntents(context,
+            scope.executionSessionId, managers.getValue(scope.executionSessionId))
+
+        val store = LocalRunStore(context)
+        for (id in listOf(oldMessage.messageId, oldAnswer, oldTask))
+            assertEquals("recovery must resolve supervisor input superseded by CORRECT", "resolved",
+                durableInputState(scope, id))
+        assertEquals("stale recovery must not start another model turn", callsBeforeRecovery, modelCalls.get())
+        assertFalse(managers.getValue(scope.executionSessionId).messageBus().snapshot().any { it.id == oldMessage.messageId })
+        assertTrue(WorkspaceConversationInputStore.pendingSupervisorIntents(context,
+            scope.executionSessionId).isEmpty())
+    }
+
     @Test fun lateCentralStopCannotCancelNativeCorrectionCycleWhileOriginalCleanupRegistrationStillExists() {
         val firstCleanup = CountDownLatch(1)
         val releaseCleanup = gate()
@@ -621,6 +761,38 @@ class WorkspaceCoordinatorIntegrationTest {
             it.configureResultEvidenceListener { evidence -> store.appendCrewResultEvidence(evidence) }
             if (lifecycle != null) it.configure(tools, { _, _ -> tools }, factory, lifecycle)
         }
+    }
+
+    private fun configureWorkspaceInputRecovery(manager: CrewManager, session: String) {
+        manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun canPersist(bot: CrewManager.Bot) = true
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) = Unit
+            override fun reconcile(bot: CrewManager.Bot) = CrewManager.ResumePlan(bot.role, "Robolectric checkpoint reconciliation")
+        })
+        manager.configureConversationInputPipeline(
+            { bot, message -> WorkspaceConversationInputStore.append(context, session, bot, message) },
+            { _, ids -> WorkspaceConversationInputStore.acknowledge(context, session, ids) },
+        )
+    }
+
+    private fun appendSupervisorInput(scope: WorkspaceRecord, assignment: WorkspaceAssignment, botId: String,
+                                      messageId: String, kind: ConversationInput.Kind, text: String,
+                                      assignmentId: String = assignment.assignmentId): String {
+        val provenance = ConversationInput.Provenance(WorkspaceIdentity.CENTRAL_SESSION, scope.workspaceId,
+            assignmentId, botId, messageId, kind,
+            ConversationInput.Provenance.PrincipalRole.SUPERVISOR, "", "", "",
+            assignment.revision, assignment.requestId, assignment.missionId, "")
+        LocalRunStore(context).appendConversationInput(ConversationInput(scope.executionSessionId,
+            messageId, text, ConversationInput.Origin.AGENT, provenance))
+        return messageId
+    }
+
+    private fun durableInputState(scope: WorkspaceRecord, sourceMessageId: String): String? {
+        val store = LocalRunStore(context)
+        val stableId = ConversationInput.stableId(ConversationInput.Origin.AGENT,
+            WorkspaceIdentity.CENTRAL_SESSION, sourceMessageId)
+        val row = requireNotNull(store.readConversationMessageByStableId(scope.executionSessionId, stableId))
+        return store.readConversationInputState(scope.executionSessionId, row.getString("messageId"))
     }
 
     private fun restore(owner: CrewManager, scope: WorkspaceRecord, target: WorkspaceAssignment): CrewManager.Bot {

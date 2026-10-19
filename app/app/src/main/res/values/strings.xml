@@ -1508,7 +1508,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
         <item quantity="one">%1$d historical or superseded request. Reopening does not resume work.</item>
         <item quantity="other">%1$d historical or superseded requests. Reopening does not resume work.</item>
     </plurals>
-    <string name="workspace_coordination_page_scope">First coordination page only. More records may require the central inbox.</string>
     <string name="workspace_coordination_unavailable">Coordination evidence is unavailable. No work was repeated.</string>
     <string name="crew_type_blocker">Blocker</string>
     <string name="workspace_correction_checkpoint_incorporated">The exact correction was incorporated into a saved checkpoint. This does not verify understanding, execution or completion.</string>

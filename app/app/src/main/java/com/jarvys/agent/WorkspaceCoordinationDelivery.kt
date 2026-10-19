@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import android.content.Context
+import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.workspaces.*
 import org.json.JSONArray
@@ -222,43 +223,72 @@ class WorkspaceCoordinationDelivery internal constructor(
                 val outbox = WorkspaceConversationInputStore.appendSupervisorIntent(
                     app, scope.executionSessionId, exact, botId, key, text, correlation)
                 val source = requireNotNull(outbox.provenance)
-                try {
-                    val admitted = manager.sendSupervisorMessageExact(botId, bot.token, source.messageId,
+                val stored = requireNotNull(ledger.readConversationMessageByStableId(
+                    scope.executionSessionId, outbox.stableId())) { "Supervisor outbox receipt is unavailable" }
+                val rowId = stored.getString("messageId")
+                fun receipt(state: String, admissionCommitted: Boolean, deliveryConfirmed: Boolean,
+                            incorporated: Boolean, issue: Throwable? = null, semantics: String) =
+                    JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
+                        .put("assignment_revision", expectedRevision).put("bot_id", botId)
+                        .put("worker_input_id", source.messageId).put("stable_key", key)
+                        .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
+                        .put("state", state).put("admission_committed", admissionCommitted)
+                        .put("durable_intent_committed", true).put("delivery_confirmed", deliveryConfirmed)
+                        .put("incorporated_in_worker_checkpoint", incorporated)
+                        .put("user_authority", false).put("automatic_resume", false)
+                        .put("delivery_issue", issue?.javaClass?.simpleName ?: JSONObject.NULL)
+                        .put("semantics", semantics)
+
+                if (ledger.readConversationInputState(scope.executionSessionId, rowId) == "resolved")
+                    return@synchronized receipt("REJECTED", false, false, false, semantics =
+                        "This exact supervisor intent was already resolved without worker incorporation; it is a final receipt.")
+
+                val admitted = try {
+                    manager.sendSupervisorMessageExact(botId, bot.token, source.messageId,
                         text, emptyList(), source, validate)
-                    check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
-                        && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
-                    val stored = requireNotNull(ledger.readConversationMessageByStableId(
-                        scope.executionSessionId, outbox.stableId())) { "Supervisor outbox receipt is unavailable" }
-                    val rowId = stored.getString("messageId")
-                    val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
-                        "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
-                        "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
-                        else -> "PENDING_INCORPORATION"
+                } catch (failure: java.util.concurrent.CancellationException) {
+                    throw failure
+                } catch (failure: CrewManager.AdmissionUncertainException) {
+                    if (failure.admissionCommitted) {
+                        val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                            "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
+                            "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
+                            else -> "PENDING_INCORPORATION"
+                        }
+                        return@synchronized receipt(state, true, true,
+                            state == "INCORPORATED_IN_CHECKPOINT", failure,
+                            "Crew durably admitted the exact supervisor input, but a later callback or worker start could not be confirmed. The saved mailbox receipt is authoritative; this status does not prove understanding or completion.")
                     }
-                    JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
-                        .put("assignment_revision", expectedRevision).put("bot_id", botId)
-                        .put("worker_input_id", source.messageId).put("stable_key", key)
-                        .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
-                        .put("state", state).put("admission_committed", true)
-                        .put("durable_intent_committed", true).put("delivery_confirmed", true)
-                        .put("incorporated_in_worker_checkpoint", state == "INCORPORATED_IN_CHECKPOINT")
-                        .put("user_authority", false).put("automatic_resume", false)
-                        .put("semantics", "The exact supervisor input is durably queued. INCORPORATED_IN_CHECKPOINT is written only after the worker checkpoint contains it; neither state proves understanding, obedience or completion.")
+                    return@synchronized receipt("PENDING_DELIVERY", false, false, false, failure,
+                        "The durable supervisor intent remains pending because Crew admission or its checkpoint could not be confirmed. An exact retry or authorized resume reuses this input ID.")
                 } catch (failure: Exception) {
-                    // The outbox commit is durable, while Crew admission or its receipt may have
-                    // failed ambiguously. Report that committed intent as pending instead of
-                    // telling Jarvys it was rejected; an exact retry/resume reuses the same ID.
-                    JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
-                        .put("assignment_revision", expectedRevision).put("bot_id", botId)
-                        .put("worker_input_id", source.messageId).put("stable_key", key)
-                        .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
-                        .put("state", "PENDING_DELIVERY").put("admission_committed", false)
-                        .put("durable_intent_committed", true).put("delivery_confirmed", false)
-                        .put("incorporated_in_worker_checkpoint", false)
-                        .put("user_authority", false).put("automatic_resume", false)
-                        .put("delivery_issue", failure.javaClass.simpleName)
-                        .put("semantics", "The supervisor intent is durably stored, but worker delivery could not be confirmed. An exact retry or authorized resume reuses this same input ID; this state does not claim worker admission or incorporation.")
+                    when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                        "incorporated" -> return@synchronized receipt("INCORPORATED_IN_CHECKPOINT", true, true,
+                            true, semantics = "The exact supervisor input is already present in the worker checkpoint.")
+                        "resolved" -> return@synchronized receipt("REJECTED", false, false, false, failure,
+                            "The exact supervisor intent was resolved before worker incorporation; it is a final receipt.")
+                    }
+                    try {
+                        if (ledger.markConversationMessagesResolved(scope.executionSessionId, listOf(rowId)).isNotEmpty())
+                            WorkspaceChanges.changed()
+                    } catch (cancelled: java.util.concurrent.CancellationException) {
+                        throw cancelled
+                    } catch (settlementFailure: Exception) {
+                        return@synchronized receipt("PENDING_DELIVERY", false, false, false, settlementFailure,
+                            "Crew rejected the delivery, but the durable intent could not be settled. It remains pending for exact reconciliation.")
+                    }
+                    return@synchronized receipt("REJECTED", false, false, false, failure,
+                        "Crew rejected this exact supervisor intent before mailbox admission; the durable row was resolved and will not be retried automatically.")
                 }
+                check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
+                    && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
+                val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                    "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
+                    "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
+                    else -> "PENDING_INCORPORATION"
+                }
+                receipt(state, true, true, state == "INCORPORATED_IN_CHECKPOINT", semantics =
+                    "The exact supervisor input is durably queued. INCORPORATED_IN_CHECKPOINT is written only after the worker checkpoint contains it; neither state proves understanding, obedience or completion.")
             }
         } finally {
             unlinkCancellation.run()

@@ -1,5 +1,6 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.ConversationInput
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import android.os.Handler
@@ -929,6 +930,43 @@ class ConversationRepositoryTest {
         assertEquals("message children use one UNION query for the requested batch", 1, childQueryCount.get())
     }
 
+    @Test fun pendingInternalMessagesByStableIdFiltersStateAndChunksRequestedIds() = onDatabaseThread {
+        val conversation = "pending-internal-by-source-id"
+        success(repository.ensureConversation(conversation))
+        val agentStableId = ConversationInput.stableId(
+            ConversationInput.Origin.AGENT, "central-source", "agent-source")
+        val systemStableId = ConversationInput.stableId(
+            ConversationInput.Origin.SYSTEM, conversation, "system-source")
+        val incorporatedStableId = ConversationInput.stableId(
+            ConversationInput.Origin.AGENT, "central-source", "incorporated-source")
+        val unrelatedStableId = ConversationInput.stableId(
+            ConversationInput.Origin.AGENT, conversation, "unrelated-source")
+        val pendingAgent = appendWithStableId(conversation, "agent", "pending agent", agentStableId)
+        val pendingSystem = appendWithStableId(conversation, "system", "pending system", systemStableId)
+        val incorporated = appendWithStableId(conversation, "agent", "already applied", incorporatedStableId)
+        appendWithStableId(conversation, "agent", "not requested", unrelatedStableId)
+        val userStableId = ConversationInput.stableId(
+            ConversationInput.Origin.USER, conversation, "user-source")
+        appendWithStableId(conversation, "user", "user input", userStableId)
+        success(repository.markInputState(
+            conversation, listOf(incorporated.messageId), ConversationRepository.INPUT_INCORPORATED))
+
+        // Put the requested rows beyond the first ID chunk; the match list also includes rows
+        // that must be excluded by role and input_state.
+        val requestedStableIds = (0 until 500).map { "missing-stable-id-$it" } + listOf(
+            agentStableId, systemStableId, incorporatedStableId, userStableId)
+        val targetedQueries = AtomicInteger()
+        val loaded = ChatSqlInstrumentation.observeStatements({ statement ->
+            if (statement.contains("stable_id IN (") && statement.contains("input_state IS NULL"))
+                targetedQueries.incrementAndGet()
+        }) { repository.getPendingInternalMessagesByStableIds(conversation, requestedStableIds) }
+
+        assertEquals(listOf(pendingAgent.messageId, pendingSystem.messageId), loaded.map { it.messageId })
+        assertEquals(listOf("agent", "system"), loaded.map { it.role })
+        assertTrue(loaded.all { it.inputState == null })
+        assertEquals("requested stable IDs use the bounded SQL query in chunks", 2, targetedQueries.get())
+    }
+
     @Test fun inputMarkersUseOneSpineSequencePerReceiptAndAreExclusive() = onDatabaseThread {
         success(repository.ensureConversation("input-state"))
         val first = success(repository.appendInterruptRequest("input-state", "first", listOf("skill-a")))
@@ -1614,6 +1652,18 @@ class ConversationRepositoryTest {
     private suspend fun append(conversationId: String, role: String, text: String): StoredMessage = success(
         repository.appendMessage(AppendMessageInput(conversationId, role, listOf(MessagePartInput(MessagePartKinds.TEXT, text)), status = if (role == "assistant") "COMPLETED" else null)),
     )
+
+    private suspend fun appendWithStableId(
+        conversationId: String,
+        role: String,
+        text: String,
+        stableId: String,
+    ): StoredMessage = success(repository.appendMessage(AppendMessageInput(
+        conversationId = conversationId,
+        role = role,
+        parts = listOf(MessagePartInput(MessagePartKinds.TEXT, text)),
+        stableId = stableId,
+    )))
 
     private fun <T> success(result: ChatDbResult<T>): T {
         assertTrue("Expected success but received $result", result is ChatDbResult.Success)

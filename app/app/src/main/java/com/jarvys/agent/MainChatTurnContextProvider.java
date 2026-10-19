@@ -47,11 +47,14 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
             List<CoreAgentLoop.IncomingMessage> messages) {
         if (messages == null) return;
         List<String> acknowledged = new ArrayList<>();
+        Set<String> agentIds = new HashSet<>();
         for (CoreAgentLoop.IncomingMessage message : messages) {
-            if (message != null && collectedMessageIds.contains(message.id))
+            if (message != null && collectedMessageIds.contains(message.id)) {
                 acknowledged.add(message.id);
+                if (message.origin == ConversationInput.Origin.AGENT) agentIds.add(message.id);
+            }
         }
-        store.markConversationMessagesIncorporated(sessionId, acknowledged);
+        CentralAgentInputCatalog.acknowledge(store, sessionId, acknowledged, agentIds);
     }
 
     /** Dispatch a persisted follow-up only while this run can still consume it. */

@@ -109,7 +109,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
         /** Constructs the same bridge with a caller-owned executor for isolated database tests. */
         @JvmStatic
-        fun getInstance(context: Context, executor: ExecutorService): ChatDatabaseBridge {
+        internal fun getInstance(context: Context, executor: ExecutorService): ChatDatabaseBridge {
             val appContext = context.applicationContext
             val key = File(appContext.filesDir, "jarvys").canonicalPath
             return synchronized(instances) {
@@ -508,6 +508,13 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun readPendingAgentInputsSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readPendingAgentInputs(conversationId) }
+
+    fun readPendingInternalMessagesByStableIdsSync(
+        conversationId: String,
+        stableIds: List<String>,
+    ): List<StoredMessage> = execute {
+        it.conversations.getPendingInternalMessagesByStableIds(conversationId, stableIds)
+    }
 
     fun countPendingAgentInputsByWorkspaceSync(conversationWorkspaceIds: Map<String, String>): Map<String, Int> =
         execute { it.reader.countPendingAgentInputsByWorkspace(conversationWorkspaceIds) }

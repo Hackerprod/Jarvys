@@ -881,6 +881,12 @@ public final class AgentForegroundService extends Service {
     return null;
   }
 
+  static String nextEligibleInternalInputId(String sessionId,
+      List<org.json.JSONObject> pendingRows) {
+    org.json.JSONObject row = firstEligiblePendingAgentInput(sessionId, pendingRows);
+    return row == null ? "" : row.optString("messageId", "");
+  }
+
   static void recordEarlyFailedAgentInputStart(String sessionId, String messageId) {
     if (sessionId == null || sessionId.isEmpty() || messageId == null || messageId.isEmpty()) return;
     EARLY_FAILED_AGENT_INPUT_STARTS.add(sessionId.length() + ":" + sessionId + messageId);
@@ -1199,10 +1205,13 @@ public final class AgentForegroundService extends Service {
     final boolean internalInputSubmission = submittedInput != null
         && submittedInput.origin != ConversationInput.Origin.USER;
     final String internalRunInputId = internalInputSubmission
-        ? submittedInputStore.readPendingInternalConversationInputs(chatSessionId).stream()
-            .findFirst().map(row -> row.optString("messageId", ""))
-            .filter(value -> !value.isEmpty()).orElse(existingUserMessageId)
+        ? nextEligibleInternalInputId(chatSessionId,
+            submittedInputStore.readPendingInternalConversationInputs(chatSessionId))
         : existingUserMessageId;
+    if (internalInputSubmission && internalRunInputId.isEmpty()) {
+      stopServiceIfIdle();
+      return START_NOT_STICKY;
+    }
     if (manualDeviceTest && ArtemisAccessibilityService.getInstance() == null) {
       lastRunReport = "No se inició: activa Jarvys en Ajustes > Accesibilidad.";
       if (realAgent)
@@ -1502,11 +1511,15 @@ public final class AgentForegroundService extends Service {
             @Override
             public void onInitialInternalInputsIncorporated(List<CoreAgentLoop.IncomingMessage> messages) {
               List<String> incorporatedIds = new ArrayList<>();
+              Set<String> agentIds = new java.util.HashSet<>();
               for (CoreAgentLoop.IncomingMessage message : messages)
                 if (message != null && "main_chat".equals(message.sourceKind)
-                    && message.origin != ConversationInput.Origin.USER) incorporatedIds.add(message.id);
+                    && message.origin != ConversationInput.Origin.USER) {
+                  incorporatedIds.add(message.id);
+                  if (message.origin == ConversationInput.Origin.AGENT) agentIds.add(message.id);
+                }
               if (incorporatedIds.isEmpty()) return;
-              conversationStore.markConversationMessagesIncorporated(sessionId, incorporatedIds);
+              CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
               if (internalInput) {
                 assistantOwnerInternal.set(true);
                 AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
@@ -1526,16 +1539,18 @@ public final class AgentForegroundService extends Service {
             @Override
             public void onDurableMessagesIncorporated(List<CoreAgentLoop.IncomingMessage> messages) {
               List<String> incorporatedIds = new ArrayList<>();
+              Set<String> agentIds = new java.util.HashSet<>();
               String latestId = "";
               boolean latestInternal = false;
               for (CoreAgentLoop.IncomingMessage message : messages) {
                 if (message == null || !"main_chat".equals(message.sourceKind)) continue;
                 incorporatedIds.add(message.id);
+                if (message.origin == ConversationInput.Origin.AGENT) agentIds.add(message.id);
                 latestId = message.id;
                 latestInternal = message.origin != ConversationInput.Origin.USER;
               }
               if (incorporatedIds.isEmpty()) return;
-              conversationStore.markConversationMessagesIncorporated(sessionId, incorporatedIds);
+              CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
               assistantOwnerMessageId.set(latestId);
               assistantOwnerInternal.set(latestInternal);
               if (latestInternal) AgentRunUiState.markInternalConversationInput(sessionId, token.generation());

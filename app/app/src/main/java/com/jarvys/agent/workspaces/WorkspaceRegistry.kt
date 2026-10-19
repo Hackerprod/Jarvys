@@ -225,7 +225,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
             requireAssignment(db, workspaceId, assignmentId)
             db.query("user_control", null, "workspace_id=? AND assignment_id=? AND type=?",
                 arrayOf(workspaceId, assignmentId, WorkspaceControlType.CORRECT.name),
-                null, null, "created_at DESC, request_id DESC", "1").use {
+                null, null, "admitted_assignment_revision DESC, created_at DESC, request_id DESC", "1").use {
                 if (it.moveToFirst()) userControl(it) else null
             }
         }

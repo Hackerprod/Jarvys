@@ -1039,6 +1039,38 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         } }
     }
 
+    /** Hydrates only pending AGENT/SYSTEM rows addressed by their source-derived stable IDs. */
+    suspend fun getPendingInternalMessagesByStableIds(
+        conversationId: String,
+        stableIds: List<String>,
+    ): List<StoredMessage> = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val requested = stableIds.filter(String::isNotBlank).distinct()
+            if (requested.isEmpty()) return@withChatReadTransaction emptyList()
+            val highWater = maxSeq(conversationId)
+            val byMessageId = linkedMapOf<String, StoredMessage>()
+            // Leave room for the fixed conversation and snapshot-sequence bind parameters.
+            requested.chunked(MAX_SQL_BIND_PARAMETERS - 2).forEach { ids ->
+                val placeholders = ids.joinToString(",") { "?" }
+                val query = "SELECT * FROM messages WHERE conversation_id=? AND stable_id IN ($placeholders) " +
+                    "AND role IN ('agent','system') AND input_state IS NULL AND seq<=?"
+                val arguments = arrayOf<Any?>(conversationId, *ids.toTypedArray(), highWater)
+                sql.query(query, arguments).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val message = readMessage(cursor)
+                        byMessageId[message.messageId] = message
+                    }
+                }
+            }
+            if (byMessageId.isEmpty()) return@withChatReadTransaction emptyList()
+            val hydrated = hydrateChildren(conversationId, byMessageId, highWater)
+            val byStableId = byMessageId.values.associate { message ->
+                message.stableId to requireNotNull(hydrated[message.messageId])
+            }
+            requested.mapNotNull(byStableId::get)
+        }
+    }
+
     /**
      * Reads all persisted user/assistant messages at or after a model message index, in the
      * conversation's steering-aware sort order. The returned body and attachment children are

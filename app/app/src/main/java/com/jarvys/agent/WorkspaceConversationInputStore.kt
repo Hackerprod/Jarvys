@@ -113,32 +113,56 @@ internal object WorkspaceConversationInputStore {
                                  assignmentId: String? = null): List<ConversationInput> {
         val store = LocalRunStore(context)
         val staleRows = ArrayList<String>()
-        val pending = store.readPendingInternalConversationInputs(executionSessionId).mapNotNull { row ->
-            if (row.optString("role") != "agent" || row.has("inputState")) return@mapNotNull null
-            val provenanceJson = row.optJSONObject("provenance") ?: return@mapNotNull null
-            val provenance = runCatching { ConversationInput.Provenance.fromJson(provenanceJson) }.getOrNull()
-                ?: return@mapNotNull null
-            if (provenance.principalRole != ConversationInput.Provenance.PrincipalRole.SUPERVISOR
-                || provenance.sessionId != WorkspaceIdentity.CENTRAL_SESSION
-                || provenance.workspaceId != WorkspaceIdentity.workspaceId(executionSessionId)
-                || provenance.assignmentId.isBlank()
-                || (assignmentId != null && provenance.assignmentId != assignmentId)
-                || provenance.kind != ConversationInput.Kind.MESSAGE) return@mapNotNull null
-            val assigned = com.jarvys.agent.workspaces.WorkspaceRegistry(context).use {
-                it.getAssignment(provenance.workspaceId, provenance.assignmentId)
+        val pending = ArrayList<ConversationInput>()
+        val workspaceId = WorkspaceIdentity.workspaceId(executionSessionId)
+        val assignments = HashMap<String, com.jarvys.agent.workspaces.WorkspaceAssignment?>()
+        val latestCorrections = HashMap<String, com.jarvys.agent.workspaces.WorkspaceUserControl?>()
+        com.jarvys.agent.workspaces.WorkspaceRegistry(context).use { registry ->
+            for (row in store.readPendingInternalConversationInputs(executionSessionId)) {
+                if (row.optString("role") != "agent" || row.has("inputState")) continue
+                val provenanceJson = row.optJSONObject("provenance") ?: continue
+                val provenance = runCatching { ConversationInput.Provenance.fromJson(provenanceJson) }.getOrNull()
+                    ?: continue
+                if (provenance.workspaceId != workspaceId || provenance.assignmentId.isBlank()) continue
+
+                val assigned = if (assignments.containsKey(provenance.assignmentId)) assignments[provenance.assignmentId]
+                    else registry.getAssignment(workspaceId, provenance.assignmentId).also {
+                        assignments[provenance.assignmentId] = it
+                    }
+                if (assigned == null || assigned.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
+                    || assigned.botId != provenance.botId || assigned.missionId != provenance.missionId) {
+                    // Inputs from an assignment that no longer owns this worker cannot be delivered,
+                    // regardless of whether their original type was TASK, ANSWER, or MESSAGE.
+                    row.optString("messageId").takeIf(String::isNotBlank)?.let(staleRows::add)
+                    continue
+                }
+
+                if (provenance.principalRole == ConversationInput.Provenance.PrincipalRole.SUPERVISOR) {
+                    val correction = if (latestCorrections.containsKey(provenance.assignmentId))
+                        latestCorrections[provenance.assignmentId]
+                    else registry.getLatestCorrection(workspaceId, provenance.assignmentId).also {
+                        latestCorrections[provenance.assignmentId] = it
+                    }
+                    val correctionRevision = correction?.admittedAssignmentRevision
+                    if (correctionRevision != null && provenance.assignmentRevision < correctionRevision) {
+                        // A later native CORRECT supersedes older supervisor instructions. RESUME
+                        // alone may advance the assignment revision without replacing their authority.
+                        row.optString("messageId").takeIf(String::isNotBlank)?.let(staleRows::add)
+                        continue
+                    }
+                }
+
+                if (provenance.principalRole != ConversationInput.Provenance.PrincipalRole.SUPERVISOR
+                    || provenance.sessionId != WorkspaceIdentity.CENTRAL_SESSION
+                    || (assignmentId != null && provenance.assignmentId != assignmentId)
+                    || provenance.kind != ConversationInput.Kind.MESSAGE) continue
+                pending += ConversationInput(executionSessionId, provenance.messageId, row.optString("content"),
+                    ConversationInput.Origin.AGENT, provenance)
             }
-            if (assigned == null || assigned.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
-                || assigned.botId != provenance.botId || assigned.missionId != provenance.missionId) {
-                // An assignment identity that no longer owns this worker input cannot receive it.
-                // Resolve it so stale outbox rows do not remain pending forever. Revision changes
-                // alone are allowed: native resume advances the revision of the same assignment.
-                row.optString("messageId").takeIf(String::isNotBlank)?.let(staleRows::add)
-                return@mapNotNull null
-            }
-            ConversationInput(executionSessionId, provenance.messageId, row.optString("content"),
-                ConversationInput.Origin.AGENT, provenance)
         }
-        if (staleRows.isNotEmpty()) store.markConversationMessagesResolved(executionSessionId, staleRows)
+        if (staleRows.isNotEmpty()
+            && store.markConversationMessagesResolved(executionSessionId, staleRows).isNotEmpty())
+            WorkspaceChanges.changed()
         return pending
     }
 
@@ -146,25 +170,24 @@ internal object WorkspaceConversationInputStore {
     @JvmStatic
     fun recoverCompletedSupervisorIntents(context: Context, executionSessionId: String,
                                           manager: CrewManager) {
-        for (input in pendingSupervisorIntents(context, executionSessionId)) {
-            val provenance = requireNotNull(input.provenance)
-            val assignment = com.jarvys.agent.workspaces.WorkspaceRegistry(context).use {
-                it.getAssignment(provenance.workspaceId, provenance.assignmentId)
-            } ?: continue
-            val bot = manager.bot(provenance.botId) ?: continue
-            if (assignment.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
-                || assignment.botId != bot.id || assignment.missionId != bot.missionId
-                || bot.status() != CrewManager.Status.DONE
-                || bot.requiresExplicitResume() || !bot.hasDurableCheckpoint()) continue
-            val controlPending = com.jarvys.agent.workspaces.WorkspaceRegistry(context).use { registry ->
-                registry.getUnsettledControl(provenance.workspaceId, provenance.assignmentId) != null
+        val pending = pendingSupervisorIntents(context, executionSessionId)
+        com.jarvys.agent.workspaces.WorkspaceRegistry(context).use { registry ->
+            for (input in pending) {
+                val provenance = requireNotNull(input.provenance)
+                val assignment = registry.getAssignment(provenance.workspaceId, provenance.assignmentId) ?: continue
+                val bot = manager.bot(provenance.botId) ?: continue
+                if (assignment.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
+                    || assignment.botId != bot.id || assignment.missionId != bot.missionId
+                    || bot.status() != CrewManager.Status.DONE
+                    || bot.requiresExplicitResume() || !bot.hasDurableCheckpoint()) continue
+                val controlPending = registry.getUnsettledControl(provenance.workspaceId, provenance.assignmentId) != null
                     || registry.getPendingControl(provenance.workspaceId, provenance.assignmentId,
                         assignment.revision) != null
+                if (controlPending || com.jarvys.agent.workspaces.WorkspaceControlOwners
+                        .hasNativeControlOwner(provenance.assignmentId)) continue
+                manager.sendSupervisorMessageExact(bot.id, bot.token, input.messageId, input.content,
+                    emptyList(), provenance, null)
             }
-            if (controlPending || com.jarvys.agent.workspaces.WorkspaceControlOwners
-                    .hasNativeControlOwner(provenance.assignmentId)) continue
-            manager.sendSupervisorMessageExact(bot.id, bot.token, input.messageId, input.content,
-                emptyList(), provenance, null)
         }
     }
 
@@ -176,28 +199,28 @@ internal object WorkspaceConversationInputStore {
                                                            admission: Runnable = Runnable {}) {
         val bot = manager.bot(botId) ?: return
         if (bot.requiresExplicitResume() || bot.status() !in setOf(CrewManager.Status.QUEUED,
-                CrewManager.Status.RUNNING, CrewManager.Status.WAITING)) return
-        for (input in pendingSupervisorIntents(context, executionSessionId, bot.assignmentId())) {
-            val provenance = requireNotNull(input.provenance)
-            val assignment = com.jarvys.agent.workspaces.WorkspaceRegistry(context).use {
-                it.getAssignment(provenance.workspaceId, provenance.assignmentId)
-            } ?: continue
-            if (assignment.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
-                || assignment.botId != bot.id || assignment.missionId != bot.missionId
-                ) continue
-            val validate = Runnable {
-                admission.run()
-                check(!com.jarvys.agent.workspaces.WorkspaceControlOwners.hasNativeControlOwner(
-                    assignment.assignmentId, nativeOwner)) {
-                    "A newer native control takes precedence over the pending supervisor input"
+                CrewManager.Status.RUNNING, CrewManager.Status.WAITING, CrewManager.Status.DONE)) return
+        val pending = pendingSupervisorIntents(context, executionSessionId, bot.assignmentId())
+        com.jarvys.agent.workspaces.WorkspaceRegistry(context).use { registry ->
+            for (input in pending) {
+                val provenance = requireNotNull(input.provenance)
+                val assignment = registry.getAssignment(provenance.workspaceId, provenance.assignmentId) ?: continue
+                if (assignment.state != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
+                    || assignment.botId != bot.id || assignment.missionId != bot.missionId) continue
+                val validate = Runnable {
+                    admission.run()
+                    check(!com.jarvys.agent.workspaces.WorkspaceControlOwners.hasNativeControlOwner(
+                        assignment.assignmentId, nativeOwner)) {
+                        "A newer native control takes precedence over the pending supervisor input"
+                    }
                 }
-            }
-            runCatching {
-                manager.sendSupervisorMessageExact(bot.id, bot.token, input.messageId, input.content,
-                    emptyList(), provenance, validate)
-            }.onFailure { failure ->
-                LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.RUNTIME,
-                    IllegalStateException("Pending supervisor input remains in the durable worker outbox", failure))
+                runCatching {
+                    manager.sendSupervisorMessageExact(bot.id, bot.token, input.messageId, input.content,
+                        emptyList(), provenance, validate)
+                }.onFailure { failure ->
+                    LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.RUNTIME,
+                        IllegalStateException("Pending supervisor input remains in the durable worker outbox", failure))
+                }
             }
         }
     }
@@ -267,10 +290,10 @@ internal object WorkspaceConversationInputStore {
     fun acknowledgeApplied(context: Context, executionSessionId: String, appliedSourceIds: Set<String>) {
         if (appliedSourceIds.isEmpty()) return
         val store = LocalRunStore(context)
-        val candidates = store.readConversationMessages(executionSessionId).filter { row ->
+        val candidates = store.readPendingInternalConversationInputsBySourceIds(executionSessionId, appliedSourceIds).filter { row ->
             if (row.optString("role") != "agent" && row.optString("role") != "system") return@filter false
             val provenance = row.optJSONObject("provenance") ?: return@filter false
-            provenance.optString("messageId") in appliedSourceIds && row.optString("inputState").isEmpty()
+            provenance.optString("messageId") in appliedSourceIds
         }
         val rows = candidates.mapNotNull { row -> row.optString("messageId").takeIf(String::isNotBlank) }
         val workspaceAgentIds = candidates.filter { row ->
