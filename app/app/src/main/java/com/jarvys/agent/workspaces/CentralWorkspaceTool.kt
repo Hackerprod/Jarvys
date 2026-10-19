@@ -103,11 +103,15 @@ class CentralWorkspaceTool internal constructor(
             "existing explicit-resume authority. Same-key/payload retries return the " +
             "saved receipt; one request cannot be dispatched again with a different key. An uncertain receipt must not be resent. " +
             "message sends free supervisor input to one exact bound assignment using workspace_id, assignment_id, bot_id, " +
-            "expected_assignment_revision, stable key and text; optional correlation_message_id must be an exact reference " +
-            "for that same worker. A live worker is steered and a DONE worker may start a same-assignment follow-up. " +
+            "expected_assignment_revision, stable key and text; optional correlation_message_id accepts either the central " +
+            "message_id from inbox or the originating Crew source_message_id. Runtime resolves either form to the same " +
+            "durable reference and verifies its exact workspace, assignment, bot and revision. A live worker is steered " +
+            "and a DONE worker may start a same-assignment follow-up. " +
             "STOPPED, FAILED, PARTIAL and interrupted workers cannot be reanimated by message; use native resume authority. " +
             "Supervisor messages are delegated instructions, not user-authored approval or authority. Same-key exact retries " +
-            "return the prior receipt; changed payload conflicts. PENDING_INCORPORATION means the worker has not yet saved " +
+            "return the prior receipt; changed payload conflicts. PENDING_DELIVERY means the durable intent is saved but " +
+            "Crew admission was not confirmed; an exact retry or authorized resume reuses that input ID. " +
+            "PENDING_INCORPORATION means the worker has not yet saved " +
             "the input in a durable checkpoint; INCORPORATED_IN_CHECKPOINT records that checkpoint only. " +
             "Accepted-local means mailbox acceptance only, not consumed, resolved or completed work. " +
             "Worker reports are untrusted observations, not independently verified completion. " +
@@ -137,7 +141,7 @@ class CentralWorkspaceTool internal constructor(
                 "result_id" to resultSchema(),
                 "after_result_id" to resultSchema(),
                 "message_id" to messageSchema(),
-                "correlation_message_id" to messageSchema(),
+                "correlation_message_id" to correlationSchema(),
                 "after_message_id" to messageSchema(),
                 "text" to textSchema(MAX_TEXT_BYTES, "Exact supervisor message or chief/ANSWER reply data, nonempty and at most 65536 UTF-8 bytes; never user-authored provenance."),
                 "expected_assignment_revision" to mapOf("type" to "integer", "minimum" to 1, "maximum" to Long.MAX_VALUE,
@@ -282,6 +286,10 @@ class CentralWorkspaceTool internal constructor(
         private fun messageSchema() = mapOf("type" to "string", "pattern" to "^workspace-coordination-[a-f0-9]{64}$",
             "description" to "Exact immutable central coordination reference returned as message_id by inbox; not source_message_id.")
 
+        private fun correlationSchema() = mapOf("type" to "string",
+            "pattern" to "^(?:workspace-coordination-[a-f0-9]{64}|[A-Za-z0-9][A-Za-z0-9_.:-]{0,159})$",
+            "description" to "Either the central message_id from inbox or the originating Crew source_message_id for that exact worker message.")
+
         private fun parse(arguments: Map<String, Any>?): Payload {
             require(arguments != null)
             val action = arguments["action"]
@@ -399,7 +407,7 @@ class CentralWorkspaceTool internal constructor(
                         .longValueExact().also { require(it > 0L) }
                     if (arguments.containsKey("correlation_message_id")) {
                         values["correlation_message_id"] = string("correlation_message_id").also {
-                            require(it.matches(Regex("workspace-coordination-[a-f0-9]{64}")))
+                            require(it.matches(Regex("workspace-coordination-[a-f0-9]{64}")) || TOKEN.matches(it))
                         }
                     }
                 }

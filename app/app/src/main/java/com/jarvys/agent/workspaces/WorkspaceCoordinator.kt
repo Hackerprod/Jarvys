@@ -212,14 +212,16 @@ class WorkspaceCoordinator internal constructor(context: Context,
                              type: WorkspaceControlType, userText: String,
                              onAdmitted: () -> Unit = {},
                              completion: (Result<String>) -> Unit) {
-        // Register synchronously: STOP must own this request even before its executor starts it.
-        val token = synchronized(controlDispatchLock(assignmentId)) {
-            WorkspaceControlOwners.register(type, assignmentId)
-        }
+        // Keep the caller off the assignment monitor: a concurrent durable supervisor message
+        // may hold it while Room and the worker checkpoint finish. Register STOP before doing
+        // the native mutation, but on this cleanup executor so the main thread never waits there.
         try {
             cleanup.execute {
-                val result = try {
-                    runCatching {
+                val result = runCatching {
+                    val token = synchronized(controlDispatchLock(assignmentId)) {
+                        WorkspaceControlOwners.register(type, assignmentId)
+                    }
+                    try {
                         lateinit var control: WorkspaceUserControl
                         if (!token.runIfActive {
                                 control = submitNativeControl(workspaceId, assignmentId, revision, type, userText)
@@ -231,14 +233,14 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         val receipt = executeNativeControl(control.requestId, token)
                         ledger.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "assistant", receipt)
                         receipt
+                    } finally {
+                        WorkspaceControlOwners.release(token)
                     }
-                } finally { WorkspaceControlOwners.release(token) }
+                }
                 WorkspaceChanges.changed()
                 completion(result)
             }
         } catch (failure: RuntimeException) {
-            WorkspaceControlOwners.release(token)
-            token.cancel()
             WorkspaceChanges.changed()
             completion(Result.failure(failure))
         }

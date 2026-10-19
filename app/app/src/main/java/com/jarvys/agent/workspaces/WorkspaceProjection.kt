@@ -73,43 +73,40 @@ object WorkspaceProjection {
         val unavailable = workspaceIds.associateWith { false }.toMutableMap()
         val ledger = LocalRunStore(context)
         val executionSessions = scopes.associate { it.executionSessionId to it.workspaceId }
-        val sessions = listOf(WorkspaceIdentity.CENTRAL_SESSION) + executionSessions.keys
-        for (session in sessions.distinct()) {
-            val relatedWorkspace = executionSessions[session]
-            try {
-                ledger.readPendingInternalConversationInputs(session).forEach { row ->
-                    val workspaceId = row.optJSONObject("provenance")?.optString("workspaceId")
-                        ?.takeIf { it in workspaceIds }
-                        ?: relatedWorkspace
-                        ?: return@forEach
-                    pending[workspaceId] = (pending[workspaceId] ?: 0) + 1
-                }
-            } catch (_: Exception) {
-                if (relatedWorkspace != null) unavailable[relatedWorkspace] = true
-                else workspaceIds.forEach { unavailable[it] = true }
+        val conversations = linkedMapOf(WorkspaceIdentity.CENTRAL_SESSION to "")
+        conversations.putAll(executionSessions)
+        try {
+            ledger.countPendingAgentInputsByWorkspace(conversations).forEach { (workspaceId, count) ->
+                if (workspaceId in workspaceIds) pending[workspaceId] = count
             }
+        } catch (_: Exception) { workspaceIds.forEach { unavailable[it] = true } }
+        val referencesByWorkspace = mutableMapOf<String, List<WorkspaceCoordinationReference>>()
+        scopes.forEach { scope ->
+            try {
+                referencesByWorkspace[scope.workspaceId] = ledger.listWorkspaceCoordinationReferences(
+                    scope.executionSessionId, COORDINATION_PAGE, null)
+            } catch (_: Exception) { unavailable[scope.workspaceId] = true }
+        }
+        val uncertainReplies = workspaceIds.associateWith { 0 }.toMutableMap()
+        val uncertainRepliesAvailable = try {
+            ledger.countStartedQuestionBlockerRepliesByWorkspace(
+                WorkspaceIdentity.CENTRAL_SESSION, workspaceIds).forEach { (workspaceId, count) ->
+                if (workspaceId in workspaceIds) uncertainReplies[workspaceId] = count
+            }
+            true
+        } catch (_: Exception) {
+            workspaceIds.forEach { unavailable[it] = true }
+            false
         }
         return scopes.associate { scope ->
-            try {
-                val references = ledger.listWorkspaceCoordinationReferences(scope.executionSessionId, COORDINATION_PAGE, null)
-                val uncertain = references.count { reference ->
-                    reference.kind in setOf("QUESTION", "BLOCKER") &&
-                        ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
-                            ?.state == com.jarvys.agent.workspaces.WorkspaceCoordinationReply.State.STARTED
-                }
-                scope.workspaceId to WorkspaceCoordinationSummary(
-                    pendingInputs = pending[scope.workspaceId] ?: 0,
-                    uncertainReplies = uncertain,
-                    pageLimited = references.size == COORDINATION_PAGE,
-                    unavailable = unavailable[scope.workspaceId] == true ||
-                        WorkspaceCoordinationDelivery.issue(scope.workspaceId) != null,
-                )
-            } catch (_: Exception) {
-                scope.workspaceId to WorkspaceCoordinationSummary(
-                    pendingInputs = pending[scope.workspaceId] ?: 0,
-                    unavailable = true,
-                )
-            }
+            val references = referencesByWorkspace[scope.workspaceId]
+            scope.workspaceId to WorkspaceCoordinationSummary(
+                pendingInputs = pending[scope.workspaceId] ?: 0,
+                uncertainReplies = uncertainReplies[scope.workspaceId] ?: 0,
+                pageLimited = uncertainRepliesAvailable && references?.size == COORDINATION_PAGE,
+                unavailable = unavailable[scope.workspaceId] == true || references == null ||
+                    WorkspaceCoordinationDelivery.issue(scope.workspaceId) != null,
+            )
         }
     }
 

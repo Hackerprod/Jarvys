@@ -5,6 +5,7 @@ import android.database.Cursor
 import android.os.Looper
 import com.jarvys.agent.ConversationMetadataAccess
 import com.jarvys.agent.ConversationTitle
+import com.jarvys.agent.ConversationInput
 import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionRole
@@ -1078,6 +1079,56 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
             hydrateMessages(conversationId, ids, highWater)
         } }
+
+    /** Hydrates only unacknowledged AGENT inputs, using the existing conversation/role index. */
+    suspend fun readPendingAgentInputs(conversationId: String): List<StoredMessage> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            val ids = sql.query(
+                "SELECT message_id FROM messages WHERE conversation_id=? AND role='agent' " +
+                    "AND input_state IS NULL AND seq<=? ORDER BY seq",
+                arrayOf(conversationId, highWater),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            hydrateMessages(conversationId, ids, highWater)
+        } }
+
+    /**
+     * Counts pending inputs for one visible workspace page without loading any conversation
+     * transcript. Existing role/state fields and the conversation/role/sequence index bound the
+     * scan; provenance payloads are the only message-part data read.
+     */
+    suspend fun countPendingAgentInputsByWorkspace(
+        conversationWorkspaceIds: Map<String, String>,
+    ): Map<String, Int> {
+        if (conversationWorkspaceIds.isEmpty()) return emptyMap()
+        val counts = linkedMapOf<String, Int>()
+        val conversationIds = conversationWorkspaceIds.keys.distinct()
+        conversationIds.chunked(MAX_SQL_BIND_PARAMETERS).forEach { chunk ->
+            JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+                val placeholders = chunk.joinToString(",") { "?" }
+                val query = "SELECT m.conversation_id,p.payload FROM messages m " +
+                    "JOIN conversations c ON c.id=m.conversation_id " +
+                    "LEFT JOIN message_parts p ON p.conversation_id=m.conversation_id " +
+                    "AND p.message_id=m.message_id AND p.kind=? " +
+                    "WHERE m.conversation_id IN ($placeholders) AND m.role='agent' " +
+                    "AND m.input_state IS NULL AND m.seq<c.next_seq ORDER BY m.conversation_id,m.seq"
+                val arguments = arrayOf<Any?>(ConversationInput.PROVENANCE_PART_KIND,
+                    *chunk.toTypedArray())
+                sql.query(query, arguments).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val conversationId = cursor.getString(0)
+                        val encoded = cursor.getStringOrNull(1)
+                        val workspaceId = encoded?.let { payload -> runCatching {
+                            JSONObject(payload).optJSONObject("provenance")?.optString("workspaceId")
+                                ?.takeIf(String::isNotBlank)
+                        }.getOrNull() } ?: conversationWorkspaceIds[conversationId].orEmpty()
+                        if (workspaceId.isNotBlank()) counts[workspaceId] = (counts[workspaceId] ?: 0) + 1
+                    }
+                }
+            } }
+        }
+        return counts
+    }
 
     /** Last-wins reaction projection keyed by the persisted stable message ID. */
     suspend fun readMessageReactions(conversationId: String): Map<String, String> =

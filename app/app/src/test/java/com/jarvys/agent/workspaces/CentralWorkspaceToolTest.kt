@@ -162,6 +162,21 @@ class CentralWorkspaceToolTest {
             "expectedSha256" to sha, "filename" to null), backend.calls[4].values)
     }
 
+    @Test fun messageCorrelationAcceptsCentralReferenceOrCrewSourceMessageId() {
+        val backend = Backend()
+        val tool = tool(backend)
+        val centralReference = "workspace-coordination-${"c".repeat(64)}"
+        val sourceMessageId = "crew-source-message-123"
+        for (correlationId in listOf(centralReference, sourceMessageId)) {
+            val result = tool.execute(mapOf("action" to "message", "workspace_id" to workspace,
+                "assignment_id" to assignment, "bot_id" to "bot-123", "expected_assignment_revision" to 4L,
+                "key" to "message-${backend.calls.size}", "text" to "Continue the exact assigned task.",
+                "correlation_message_id" to correlationId), CancellationToken.uncancellable())
+            assertTrue(result.content, result.success)
+            assertEquals(correlationId, backend.calls.last().values["correlationMessageId"])
+        }
+    }
+
     @Test fun workspaceToolUsesItsInjectedOriginatingUserRequestForMutatingActions() {
         val backend = Backend()
         val runtime = tool(backend, requestId = "wake-runtime:assignment-1", originalRequest = userText)
@@ -296,7 +311,7 @@ class CentralWorkspaceToolTest {
                 "text" to "Continue.", "from" to "user"),
             mapOf("action" to "message", "workspace_id" to workspace, "assignment_id" to assignment,
                 "bot_id" to "bot-123", "expected_assignment_revision" to 4L, "key" to "message-stable",
-                "text" to "Continue.", "correlation_message_id" to "not-a-reference"),
+                "text" to "Continue.", "correlation_message_id" to "bad source id"),
         )
         assertFalse(tool.execute(null, CancellationToken.uncancellable()).success)
         invalid.forEach { assertFalse(it.toString(), tool.execute(it, CancellationToken.uncancellable()).success) }

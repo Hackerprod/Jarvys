@@ -157,15 +157,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             "Supervisor message target is not the exact bound assignment"
         }
         val correlation = correlationMessageId?.let { referenceId ->
-            val reference = requireNotNull(ledger.readWorkspaceCoordinationReference(
-                scope.executionSessionId, referenceId)) { "Correlation reference is unavailable" }
-            check(reference.workspaceId == workspaceId && reference.assignmentId == assignmentId
-                && reference.botId == botId && reference.observedAssignmentRevision == expectedRevision) {
-                "Correlation reference does not match this exact assignment revision"
-            }
-            source(reference)
-            ledger.requireWorkspaceCoordinationDisclosureLive(reference, true)
-            reference
+            resolveMessageCorrelation(scope, workspaceId, assignmentId, botId, expectedRevision, referenceId)
         }
         val manager = requireNotNull(existingManager(scope.executionSessionId)) {
             "Worker manager is unavailable; no supervisor message was dispatched"
@@ -215,33 +207,75 @@ class WorkspaceCoordinationDelivery internal constructor(
                 val outbox = WorkspaceConversationInputStore.appendSupervisorIntent(
                     app, scope.executionSessionId, exact, botId, key, text, correlation)
                 val source = requireNotNull(outbox.provenance)
-                val admitted = manager.sendSupervisorMessageExact(botId, bot.token, source.messageId,
-                    text, emptyList(), source, validate)
-                check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
-                    && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
-                val stored = requireNotNull(ledger.readConversationMessageByStableId(
-                    scope.executionSessionId, outbox.stableId())) { "Supervisor outbox receipt is unavailable" }
-                val rowId = stored.getString("messageId")
-                val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
-                    "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
-                    "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
-                    else -> "PENDING_INCORPORATION"
+                try {
+                    val admitted = manager.sendSupervisorMessageExact(botId, bot.token, source.messageId,
+                        text, emptyList(), source, validate)
+                    check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
+                        && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
+                    val stored = requireNotNull(ledger.readConversationMessageByStableId(
+                        scope.executionSessionId, outbox.stableId())) { "Supervisor outbox receipt is unavailable" }
+                    val rowId = stored.getString("messageId")
+                    val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
+                        "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
+                        "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
+                        else -> "PENDING_INCORPORATION"
+                    }
+                    WorkspaceChanges.changed()
+                    JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
+                        .put("assignment_revision", expectedRevision).put("bot_id", botId)
+                        .put("worker_input_id", source.messageId).put("stable_key", key)
+                        .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
+                        .put("state", state).put("admission_committed", true)
+                        .put("durable_intent_committed", true).put("delivery_confirmed", true)
+                        .put("incorporated_in_worker_checkpoint", state == "INCORPORATED_IN_CHECKPOINT")
+                        .put("user_authority", false).put("automatic_resume", false)
+                        .put("semantics", "The exact supervisor input is durably queued. INCORPORATED_IN_CHECKPOINT is written only after the worker checkpoint contains it; neither state proves understanding, obedience or completion.")
+                } catch (failure: Exception) {
+                    // The outbox commit is durable, while Crew admission or its receipt may have
+                    // failed ambiguously. Report that committed intent as pending instead of
+                    // telling Jarvys it was rejected; an exact retry/resume reuses the same ID.
+                    WorkspaceChanges.changed()
+                    JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
+                        .put("assignment_revision", expectedRevision).put("bot_id", botId)
+                        .put("worker_input_id", source.messageId).put("stable_key", key)
+                        .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
+                        .put("state", "PENDING_DELIVERY").put("admission_committed", false)
+                        .put("durable_intent_committed", true).put("delivery_confirmed", false)
+                        .put("incorporated_in_worker_checkpoint", false)
+                        .put("user_authority", false).put("automatic_resume", false)
+                        .put("delivery_issue", failure.javaClass.simpleName)
+                        .put("semantics", "The supervisor intent is durably stored, but worker delivery could not be confirmed. An exact retry or authorized resume reuses this same input ID; this state does not claim worker admission or incorporation.")
                 }
-                WorkspaceChanges.changed()
-                admission.run()
-                JSONObject().put("workspace_id", workspaceId).put("assignment_id", assignmentId)
-                    .put("assignment_revision", expectedRevision).put("bot_id", botId)
-                    .put("worker_input_id", source.messageId).put("stable_key", key)
-                    .put("correlation_message_id", correlationMessageId ?: JSONObject.NULL)
-                    .put("state", state).put("admission_committed", true)
-                    .put("incorporated_in_worker_checkpoint", state == "INCORPORATED_IN_CHECKPOINT")
-                    .put("user_authority", false).put("automatic_resume", false)
-                    .put("semantics", "The exact supervisor input is durably queued. INCORPORATED_IN_CHECKPOINT is written only after the worker checkpoint contains it; neither state proves understanding, obedience or completion.")
             }
         } finally {
             unlinkCancellation.run()
             WorkspaceControlOwners.release(ownerToken)
         }
+    }
+
+    /** Accepts either the central reference ID or its originating Crew message ID. */
+    internal fun resolveMessageCorrelation(workspaceId: String, assignmentId: String, botId: String,
+                                           expectedRevision: Long, correlationMessageId: String)
+        : WorkspaceCoordinationReference = resolveMessageCorrelation(owner(workspaceId), workspaceId,
+            assignmentId, botId, expectedRevision, correlationMessageId)
+
+    private fun resolveMessageCorrelation(scope: WorkspaceRecord, workspaceId: String, assignmentId: String,
+                                          botId: String, expectedRevision: Long, correlationMessageId: String)
+        : WorkspaceCoordinationReference {
+        val referencePattern = Regex("workspace-coordination-[a-f0-9]{64}")
+        val reference = if (referencePattern.matches(correlationMessageId)) {
+            ledger.readWorkspaceCoordinationReference(scope.executionSessionId, correlationMessageId)
+        } else null
+        val resolved = reference ?: ledger.findWorkspaceCoordinationReferenceBySourceMessageId(
+            scope.executionSessionId, correlationMessageId)
+            ?: throw IllegalArgumentException("Correlation message is unavailable")
+        check(resolved.workspaceId == workspaceId && resolved.assignmentId == assignmentId
+            && resolved.botId == botId && resolved.observedAssignmentRevision == expectedRevision) {
+            "Correlation message does not match this exact assignment revision"
+        }
+        source(resolved)
+        ledger.requireWorkspaceCoordinationDisclosureLive(resolved, true)
+        return resolved
     }
 
     /** Called under the same per-assignment lock used by native controls. */

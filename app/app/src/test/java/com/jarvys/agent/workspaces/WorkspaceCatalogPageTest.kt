@@ -96,4 +96,59 @@ class WorkspaceCatalogPageTest {
             assertFalse(row.toString().contains("PRIVATE"))
         }
     }
+
+    @Test fun uncertainReplyCountsAreAggregatedByWorkspaceAndOnlyIncludeStartedQuestionsAndBlockers() {
+        val context = RuntimeEnvironment.getApplication()
+        val ledger = LocalRunStore(context)
+        WorkspaceRegistry(context).use { registry ->
+            val scopes = listOf("aggregate-a", "aggregate-b").map { label ->
+                val scope = registry.createWorkspace("$label-${UUID.randomUUID()}", label)
+                val prepared = registry.prepareAssignment(scope.workspaceId, "$label-assignment", "$label-request",
+                    "Synthetic request", "coding", "Synthetic mission", emptyList(), null, CrewMissionAccess.STANDARD)
+                val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision,
+                    "$label-process")
+                scope to registry.bindBot(scope.workspaceId, started.assignmentId, started.revision, "$label-bot")
+            }
+            for (session in listOf(WorkspaceIdentity.CENTRAL_SESSION) + scopes.map { it.first.executionSessionId }) {
+                assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(session, "chat") is ChatDbResult.Success)
+                ledger.appendConversationMessage(session, "user", "Initialize $session")
+            }
+
+            fun addReply(scope: WorkspaceRecord, assignment: WorkspaceAssignment,
+                         kind: String, state: WorkspaceCoordinationReply.State) {
+                val now = System.currentTimeMillis()
+                val evidence = CrewCoordinationEvidence.create(scope.executionSessionId, assignment.missionId,
+                    requireNotNull(assignment.botId), UUID.randomUUID().toString(), UUID.randomUUID().toString(),
+                    kind, "Private evidence", emptyList(), now)
+                ledger.appendCrewCoordinationEvidence(evidence, Runnable {})
+                val reference = WorkspaceCoordinationReference.create(evidence, scope.ownerCentralSessionId,
+                    scope.workspaceId, assignment.assignmentId, assignment.requestId, assignment.revision)
+                ledger.appendWorkspaceCoordinationReferenceIfAbsent(reference, Runnable {})
+                ledger.appendWorkspaceCoordinationNoticeIfAbsent(reference, Runnable {})
+                var reply = ledger.prepareWorkspaceCoordinationReply(WorkspaceCoordinationReply.create(
+                    reference, "reply-${UUID.randomUUID()}", "Private reply", "central-request", "Synthetic request", now), Runnable {})
+                if (state != WorkspaceCoordinationReply.State.PREPARED) {
+                    reply = ledger.markWorkspaceCoordinationReplyStarted(
+                        reply, Runnable {})
+                }
+                if (state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) {
+                    ledger.markWorkspaceCoordinationReplyAccepted(reply.withState(
+                        WorkspaceCoordinationReply.State.ACCEPTED_LOCAL, now + 2), Runnable {})
+                }
+            }
+
+            val (firstScope, firstAssignment) = scopes[0]
+            val (secondScope, secondAssignment) = scopes[1]
+            addReply(firstScope, firstAssignment, "QUESTION", WorkspaceCoordinationReply.State.STARTED)
+            addReply(firstScope, firstAssignment, "BLOCKER", WorkspaceCoordinationReply.State.STARTED)
+            addReply(firstScope, firstAssignment, "QUESTION", WorkspaceCoordinationReply.State.ACCEPTED_LOCAL)
+            addReply(secondScope, secondAssignment, "QUESTION", WorkspaceCoordinationReply.State.STARTED)
+            addReply(secondScope, secondAssignment, "BLOCKER", WorkspaceCoordinationReply.State.PREPARED)
+
+            val emptyWorkspaceId = UUID.randomUUID().toString()
+            assertEquals(mapOf(firstScope.workspaceId to 2, secondScope.workspaceId to 1, emptyWorkspaceId to 0),
+                ledger.countStartedQuestionBlockerRepliesByWorkspace(WorkspaceIdentity.CENTRAL_SESSION,
+                    setOf(firstScope.workspaceId, secondScope.workspaceId, emptyWorkspaceId)))
+        }
+    }
 }

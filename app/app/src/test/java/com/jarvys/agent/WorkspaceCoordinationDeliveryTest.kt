@@ -95,6 +95,7 @@ class WorkspaceCoordinationDeliveryTest {
     private fun liveQuestion(): Pair<Parked, WorkspaceCoordinationReference> {
         val worker = Parked().also { parked = it }
         bind(worker.bot.id)
+        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
         worker.question()
         reconcile()
         return worker to references().single()
@@ -137,6 +138,76 @@ class WorkspaceCoordinationDeliveryTest {
         val r = references().single()
         val response = read(r)
         assertEquals(r.contentSha256, response.getString("expected_sha256"))
+    }
+
+    @Test fun messageCorrelationResolvesBothIdsAndRejectsAnotherAssignmentsSourceId() {
+        val (worker, reference) = liveQuestion()
+        val byCentralReference = delivery.resolveMessageCorrelation(scope.workspaceId, target.assignmentId,
+            worker.bot.id, target.revision, reference.referenceId)
+        val bySourceMessage = delivery.resolveMessageCorrelation(scope.workspaceId, target.assignmentId,
+            worker.bot.id, target.revision, reference.messageId)
+        assertEquals(reference.referenceId, byCentralReference.referenceId)
+        assertTrue(byCentralReference.samePayload(bySourceMessage))
+
+        val otherPrepared = registry.prepareAssignment(scope.workspaceId, "other-correlation-assignment",
+            "other-correlation-request", "Synthetic source initialization", "coding", "Other assignment",
+            emptyList(), null, CrewMissionAccess.STANDARD)
+        val otherStarted = registry.markStarted(scope.workspaceId, otherPrepared.assignmentId,
+            otherPrepared.revision, "other-correlation-process")
+        val other = registry.bindBot(scope.workspaceId, otherPrepared.assignmentId,
+            otherStarted.revision, "other-correlation-bot")
+        val otherEvidence = CrewCoordinationEvidence.create(scope.executionSessionId, other.missionId,
+            requireNotNull(other.botId), UUID.randomUUID().toString(), "source-message-from-another-assignment",
+            "QUESTION", "Other assignment question", emptyList(), 5678L)
+        ledger.appendCrewCoordinationEvidence(otherEvidence, noAdmission)
+        val otherReference = WorkspaceCoordinationReference.create(otherEvidence, scope.ownerCentralSessionId,
+            scope.workspaceId, other.assignmentId, other.requestId, other.revision)
+        ledger.appendWorkspaceCoordinationReferenceIfAbsent(otherReference, noAdmission)
+
+        assertFalse(otherReference.assignmentId == target.assignmentId)
+        assertEquals(otherReference.referenceId, requireNotNull(
+            ledger.findWorkspaceCoordinationReferenceBySourceMessageId(scope.executionSessionId,
+                otherEvidence.messageId)).referenceId)
+        failure {
+            delivery.resolveMessageCorrelation(scope.workspaceId, target.assignmentId, worker.bot.id,
+                target.revision, otherEvidence.messageId)
+        }
+    }
+
+    @Test fun failedCrewAdmissionReportsTheCommittedOutboxAsPendingDelivery() {
+        val worker = Parked().also { parked = it }
+        bind(worker.bot.id)
+        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
+        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) { }
+            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                throw AssertionError("A message attempt must not resume a worker")
+        })
+        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
+            "Checkpoint is available", emptyList())
+        assertTrue(worker.bot.hasDurableCheckpoint())
+        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
+            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) {
+                throw IllegalStateException("Synthetic post-outbox admission failure")
+            }
+            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
+                throw AssertionError("A message attempt must not resume a worker")
+        })
+        try {
+            val receipt = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
+                "message-key", "Synthetic supervisor message", null, "central-request",
+                "Synthetic original request", freshToken, noAdmission)
+            assertEquals("PENDING_DELIVERY", receipt.getString("state"))
+            assertTrue(receipt.getBoolean("durable_intent_committed"))
+            assertFalse(receipt.getBoolean("delivery_confirmed"))
+            assertFalse(receipt.getBoolean("admission_committed"))
+            assertTrue(WorkspaceConversationInputStore.hasSupervisorIntent(app, scope.executionSessionId,
+                scope.workspaceId, target.assignmentId, "message-key"))
+            val pending = ledger.readPendingInternalConversationInputs(scope.executionSessionId)
+            assertTrue(pending.any { row ->
+                row.optJSONObject("provenance")?.optString("messageId") == receipt.getString("worker_input_id")
+            })
+        } finally { worker.manager.configureCheckpoints(null) }
     }
 
     @Test fun asciiFragmentsReconstructAllUtf16TextAndRefsAcrossEscapeBoundaries() {

@@ -458,6 +458,17 @@ public final class LocalRunStore {
                 sourceSessionId, referenceId, false), "read workspace coordination reference");
     }
 
+    /** Resolves a source Crew message ID to its existing immutable coordination reference. */
+    public synchronized WorkspaceCoordinationReference findWorkspaceCoordinationReferenceBySourceMessageId(
+            String sourceSessionId, String sourceMessageId) {
+        requireExecutionSession(sourceSessionId);
+        if (sourceMessageId == null || !sourceMessageId.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}"))
+            throw new IllegalArgumentException("Invalid Crew source message ID");
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.findWorkspaceCoordinationReferenceBySourceMessageIdSync(
+                sourceSessionId, sourceMessageId), "find workspace coordination reference by source message ID");
+    }
+
     public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationReferences(
             String sourceSessionId, int limit, String afterReferenceId) {
         requireExecutionSession(sourceSessionId);
@@ -549,6 +560,18 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.readWorkspaceCoordinationReplyByIdSync(
                 centralSessionId, replyId), "read workspace coordination reply by ID");
+    }
+
+    /** One indexed Central-ledger aggregate; only STARTED QUESTION/BLOCKER replies are counted. */
+    public synchronized Map<String, Integer> countStartedQuestionBlockerRepliesByWorkspace(
+            String centralSessionId, Set<String> workspaceIds) {
+        requireCentralSession(centralSessionId);
+        if (workspaceIds == null) throw new IllegalArgumentException("Workspace identities are required");
+        for (String workspaceId : workspaceIds) WorkspaceIdentity.requireWorkspaceId(workspaceId);
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return Collections.unmodifiableMap(requireChatDbSuccess(
+                chatDatabaseBridge.countStartedQuestionBlockerRepliesByWorkspaceSync(centralSessionId, workspaceIds),
+                "count started QUESTION/BLOCKER replies by workspace"));
     }
 
     public synchronized void requireWorkspaceCoordinationDisclosureLive(
@@ -1807,10 +1830,15 @@ public final class LocalRunStore {
     public List<JSONObject> readPendingInternalConversationInputs(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         List<JSONObject> pending = new ArrayList<>();
-        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
-            if ("agent".equals(message.getRole()) && message.getInputState() == null)
-                pending.add(messageJson(message));
+        for (StoredMessage message : chatDatabaseBridge.readPendingAgentInputsSync(sessionId))
+            pending.add(messageJson(message));
         return Collections.unmodifiableList(pending);
+    }
+
+    /** One pending-state query for the workspace sidebar; no transcript bodies are hydrated. */
+    public Map<String, Integer> countPendingAgentInputsByWorkspace(Map<String, String> conversationWorkspaceIds) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.countPendingAgentInputsByWorkspaceSync(conversationWorkspaceIds);
     }
 
     private static boolean isConversationInputRole(String role) {

@@ -358,6 +358,22 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         ChatDbResult.Success(findCoordinationRef(conversationId, referenceId, isNotice))
     }
 
+    /** Resolves an originating Crew message ID through the existing message index. */
+    suspend fun findWorkspaceCoordinationReferenceBySourceMessageId(
+        conversationId: String,
+        sourceMessageId: String,
+    ): ChatDbResult<CoordinationReference?> = readTransaction {
+        requireExecutionConversation(conversationId)
+        require(sourceMessageId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")))
+        val ids = sql.query(
+            "SELECT reference_id FROM workspace_coordination_refs WHERE conversation_id=? AND is_notice=0 AND message_id=? ORDER BY reference_id LIMIT 2",
+            arrayOf(conversationId, sourceMessageId),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        if (ids.size > 1) return@readTransaction ChatDbResult.Conflict(
+            "Crew source message ID resolves to multiple coordination references")
+        ChatDbResult.Success(ids.singleOrNull()?.let { findCoordinationRef(conversationId, it, false) })
+    }
+
     /**
      * Lists a lexical page of coordination references/notices, replacing
      * `LocalRunStore.listWorkspaceCoordinationReferences` / `listWorkspaceCoordinationNotices` (`LocalRunStore.java:listWorkspaceCoordinationReferences`, `LocalRunStore.java:listWorkspaceCoordinationNotices`).
@@ -440,6 +456,36 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             emit()
         }
         ChatDbResult.Success(values)
+    }
+
+    /** Counts uncertain QUESTION/BLOCKER replies for requested workspaces in one Central-ledger read. */
+    suspend fun countStartedQuestionBlockerRepliesByWorkspace(
+        centralSessionId: String,
+        workspaceIds: Set<String>,
+    ): ChatDbResult<Map<String, Int>> = readTransaction {
+        requireCentralConversation(centralSessionId)
+        val ids = workspaceIds.map(WorkspaceIdentity::requireWorkspaceId).distinct()
+        if (ids.isEmpty()) return@readTransaction ChatDbResult.Success(emptyMap())
+
+        val counts = linkedMapOf<String, Int>().apply { ids.forEach { put(it, 0) } }
+        val placeholders = ids.joinToString(",") { "?" }
+        val args = mutableListOf<Any?>(centralSessionId, centralSessionId)
+        args.addAll(ids)
+        sql.query(
+            "WITH high_water AS (SELECT COALESCE(next_seq-1,0) AS seq FROM conversations WHERE id=?) " +
+                "SELECT ref.workspace_id,COUNT(*) " +
+                "FROM workspace_coordination_replies AS reply INDEXED BY idx_workspace_replies_state " +
+                "JOIN workspace_coordination_refs AS ref ON ref.conversation_id=reply.conversation_id " +
+                "AND ref.reference_id=reply.reference_id AND ref.is_notice=1 " +
+                "CROSS JOIN high_water hw " +
+                "WHERE reply.conversation_id=? AND reply.state='STARTED' AND reply.seq<=hw.seq " +
+                "AND ref.seq<=hw.seq AND ref.kind IN ('QUESTION','BLOCKER') " +
+                "AND ref.workspace_id IN ($placeholders) GROUP BY ref.workspace_id",
+            args.toTypedArray(),
+        ).use { cursor ->
+            while (cursor.moveToNext()) counts[cursor.getString(0)] = cursor.getInt(1)
+        }
+        ChatDbResult.Success(counts)
     }
 
     /**
