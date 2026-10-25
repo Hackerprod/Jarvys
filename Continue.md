@@ -1,10 +1,10 @@
-# Continue.md — contexto para retomar el trabajo en otro PC
+﻿# Continue.md — contexto para retomar el trabajo en otro PC
 
 Escrito el 2026-10-25 por Claude Code (Sonnet 5.5) a peticion del dueno, que cambia de PC. Idioma de trabajo con el dueno: espanol (estilo telegrafico, sin relleno); codigo, commits y PRs en ingles normal. Lee este archivo ENTERO antes de hacer nada. El dueno es el arquitecto de Jarvys (app Android personal-agent, Kotlin/Compose + Java, repo `Hackerprod/Jarvys`); yo oriento, delego en Codex/agentes, valido y entrego.
 
 ## 0. Como retomar en el otro PC (checklist)
 
-1. Trae el bundle `jarvys-continue-bundle.zip` (ver §9) y el repo con la rama `feat/single-session` (commit de este fichero). El push desde el PC viejo esta DESHABILITADO a proposito (`pushurl DISABLED_push_from_here_until_owner_enables`): el dueno decide como mover la rama (push manual con `gh`, copia del worktree o `git bundle`). NO hagas push sin que lo diga.
+1. La rama YA ESTA EN GITHUB: `git clone https://github.com/Hackerprod/Jarvys.git` y `git checkout feat/single-session` (pushed 2026-10-25 como rama nueva, sin tocar master ni force-push; el push por defecto del clon viejo sigue deshabilitado, se empujo con la URL explicita autorizada por el dueno). Trae ademas el bundle `jarvys-continue-bundle.zip` (ver §9): contiene lo que NO esta en git (memoria, transcripcion, logs, mascota).
 2. Restaura la memoria de Claude (carpeta `memory/` del bundle) en `~/.claude/projects/<proyecto-actual>/memory/` (ajusta la ruta del proyecto del nuevo PC). El indice es `MEMORY.md`.
 3. Ajusta las rutas Windows de este documento al nuevo PC (hoy: repo principal `C:\Projects\Jarvys`, worktrees `C:\Projects\Jarvys-wt\*`, validacion `C:\Projects\Jarvys-wt\single-validate`, mascota `C:\Projects\mascot-lab`, build `C:\Projects\Jarvys-tools\build.ps1`, salida APK `C:\Projects\Jarvys-out`). Los briefs y reportes copiados estan en `docs/continue/single-validate/` (rutas dentro de ellos apuntan al PC viejo: sustituyelas).
 4. Comprueba herramientas: JDK 21 (`JAVA_HOME`), Android SDK (`ANDROID_HOME`), `codex` CLI (modelos `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`), `gh`, Edge/Chrome para la mascota, Python con PIL/numpy.
@@ -129,3 +129,4 @@ Dentro del repo (commit): `Continue.md` y `docs/continue/` con los briefs/inform
 ## 10. Primer mensaje sugerido para retomar
 
 "Lee Continue.md. Estado: pausa. Dime en 5 lineas donde estamos y espera mi aviso." Cuando el dueno diga "continua": reanudar por §3.2.
+
