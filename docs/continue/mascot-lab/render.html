@@ -1,0 +1,10 @@
+﻿<!doctype html><html><body style="margin:0;background:#0c1033"><canvas id="c" width="1254" height="1254" style="display:block"></canvas>
+<script src="jdraw.js"></script>
+<script>
+var q = new URLSearchParams(location.search), pose = {};
+try { pose = JSON.parse(q.get('pose') || '{}'); } catch (e) {}
+var P = Object.assign({}, JARVYS_DEFAULT, pose);
+var c = document.getElementById('c'), x = c.getContext('2d');
+x.fillStyle = '#0c1033'; x.fillRect(0, 0, 1254, 1254);
+drawJarvys(x, P);
+</script></body></html>

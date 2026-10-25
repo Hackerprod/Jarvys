@@ -1,0 +1,107 @@
+VEREDICTO: PASS
+
+No encontré incidencias bloqueantes ni importantes en el código actual. La incidencia importante de la ronda 5 está resuelta: el cursor incorpora una revisión durable de las fuentes, validada junto con la consulta, sin recorrer ni hashear el historial.
+
+Revisión de solo lectura sobre `feat/single-session`, HEAD `5ac859b7`, incluyendo cambios sin commit y archivos nuevos. No ejecuté builds ni tests. `git diff --check` no mostró errores.
+
+Referencias: `J/` = `app/app/src/main/java/com/jarvys/agent/`; `T/` = `app/app/src/test/java/com/jarvys/agent/`.
+
+1. **MENOR — falta cobertura directa de invalidación tras borrado y reapertura.**  
+   [SingleSessionMemoryRetentionTest.kt:343](/C:/Projects/Jarvys-wt/single/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt:343) prueba regeneración y edición; no prueba explícitamente `assistant_deleted` ni reutilizar el cursor después de cerrar y reabrir la base. M0 comprueba la columna, pero no ese comportamiento (`T/chatdb/JarvysChatDatabaseM0Test.kt:901`).  
+   **Corrección:** añadir esos casos al fixture existente. La implementación correspondiente sí está presente y es transaccional; es una carencia de cobertura.
+
+2. **MENOR — la tabla Engram del primer informe está desactualizada.**  
+   [stage-S5-report.md:65](/C:/Projects/Jarvys-wt/single-validate/stage-S5-report.md:65) atribuye a MEMORY/RECALL un comportamiento equivalente al nudge F22; no implementan su mecanismo temporal. En `:73` todavía declara F34 ausente, aunque ya existe en el prompt. F07 y F35 también necesitan distinguir adaptación parcial de cobertura integral.  
+   **Corrección:** consolidar la tabla: F22 pendiente de S7; F34 implementada como instrucción; F07/F35 parciales; F37 pendiente de decisión del dueño.
+
+La revisión de fuentes queda implementada así:
+
+| Comprobación | Evidencia |
+|---|---|
+| Durable y no nula | `J/chatdb/CoreEntities.kt:21`; `3.json:9,75`: `history_revision INTEGER NOT NULL DEFAULT 0` |
+| Editar/reemplazar partes | `ConversationRepository.kt:620-621,647-648`: `replaceParts` y actualización de revisión |
+| Ocultar/borrar | `:692-695,1532-1534` |
+| Regenerar mediante comprobación del último asistente | `:755-758` |
+| Atomicidad | Mutaciones mediante `transactionResult`; transacción IMMEDIATE y rollback en `ChatSqlConnection.kt:449-475` |
+| Todos los productores reales examinados | Los escritores de cuerpos convergen en `replaceParts`: inserciones normal/proactiva/interrupt y actualización/finalización. No encontré otro escritor productivo que omita el incremento |
+| Appends | Las inserciones nuevas no incrementan la revisión |
+| Cursor obsoleto | `MessageHistoryRepository.kt:152-161`: incorpora revisión y rechaza diferencias con `history_cursor_invalid` |
+| Coste de validación | `:131-135`: consultas puntuales por PK de conversación; `:148-150`: hash exclusivo de parámetros |
+| Coherencia durante lecturas concurrentes | `ChatSqlConnection.kt:499-510`: fence `data_version` y repetición bajo transacción si cambia |
+
+No se añadieron triggers de revisión: los incrementos son explícitos en los productores. Añaden una actualización de fila por mutación, sin barrido de mensajes. Editar v3 en sitio está autorizado por `docs/SINGLE_SESSION.md:561` mientras la rama no esté publicada. Entidad y export coinciden; el hash exportado es `e227967aad0ac2a83f3a446f79970255`.
+
+El estado de cada incidencia anterior es:
+
+| Incidencia previa | Estado | Evidencia actual |
+|---|---|---|
+| Cursor aceptado tras editar/borrar/regenerar | **RESUELTA** | Revisión durable y comparación; rutas detalladas arriba |
+| B2 exigía continuar tras mutar fuentes | **RESUELTA** | `T/SingleSessionMemoryRetentionTest.kt:343-358` exige rechazo |
+| Orden BM25 inestable ante appends | **RESUELTA** | `MessageHistoryRepository.kt:32-47`: keyset `seq DESC` en FTS y LIKE |
+| Relectura/hash de todo el historial por página | **RESUELTA** | `:131-150`: cabecera y parámetros |
+| Prueba de checkpoint no reproducía staging→commit | **RESUELTA** | Test `:743-765`; hook productivo en `MainChatTranscriptStore.java:198-201` |
+| Checkpoint restauraba metadatos tras expulsión concurrente | **RESUELTA** | Lock compartido mantenido hasta terminar el commit, `:120-205` |
+| B14 forget no aislado | **RESUELTA** | Test `:614-647`: llamada, artefacto y único episodio referente independientes |
+| Plan SQL ignoraba alias `m` | **RESUELTA** | `T/chatdb/MessageHistoryFts5Test.kt:76-98`: índices representativos; rechaza `SCAN m/p` |
+| Protección limitada a entradas activas | **RESUELTA** | `ArtifactRetentionRepository.kt:26-29`: sin join ni filtro de actividad |
+| Supersedes liberaba artefactos | **RESUELTA** | `PersonalAgentRepository.kt:405-414`; presión posterior en B14 `:604-612` |
+| Forget liberaba artefactos | **RESUELTA** | Repositorio `:721-727`; B14 aislado `:614-647` |
+| Protección de todas las compactaciones posteriores | **RESUELTA** | Retención `:35-39`; prueba con dos compactaciones `:515-529` |
+| Empate con igual `first_kept` | **RESUELTA** | Desempate por mayor `seq`; B14 `:649-668` |
+| Ownership obsoleto entre productores | **RESUELTA** | Transcript `:69-94,235,266-272` |
+| Repetir contenido expulsado bajo presión abortaba | **RESUELTA** | Transcript `:300-309` conserva el estado expulsado |
+| Dedupe/`unchanged` omitía relaciones | **RESUELTA** | Repositorio `:344-347,353-359` |
+| Upsert ignoraba layer/category/importance | **RESUELTA** | Repositorio `:353-364`; B1 `:191-209` |
+| Correct contaba revisiones del id anterior | **RESUELTA** | Repositorio `:782`: `revisionCount(newId)` |
+| Consulta solo puntuación con filtros | **RESUELTA** | Repositorio `:532-540` |
+| LIKE de candidatos empleaba el texto completo | **RESUELTA** | Repositorio `:442-452`: términos y límite de búsqueda existente |
+| Expand duplicaba presupuesto y construía un Store por fila | **RESUELTA para extractos** | Herramientas `:256-276`; transcript `:345-365`; B14 suma output y artefactos |
+| Fingerprint CORE_RULES_V3 de HEAD no reconocido | **RESUELTA** | Repositorio `:894-899,954-956` |
+| F34 ausente | **RESUELTA** | Repositorio `:956`: instrucción para plantear conflictos al usuario, sin umbral ejecutable |
+| History_read no avanzaba con carácter suplementario | **RESUELTA** | Historial `:114-124`; prueba `:793` |
+| B1 evitaba el duplicado exacto | **RESUELTA** | B1 repite contenido y exige relaciones |
+| M1b no cruzaba realmente 16 MiB | **RESUELTA** | `T/chatdb/M1bRepositoriesTest.kt:127-136` |
+
+La migración de `core_rules` compara contenidos empaquetados exactos. Una personalización distinta no coincide; tras migrar, el contenido vigente tampoco vuelve a coincidir con los fingerprints antiguos. Es idempotente por inspección.
+
+**P7:** supersedes y forget conservan las evidencias; correct las mueve al reemplazo. La consulta de protección considera todas las filas persistentes pertinentes, aunque la entrada esté retirada. No encontré un borrado físico productivo de entradas. La FK conserva `ON DELETE CASCADE` (`PersonalAgentEntities.kt:134`): no atribuyo protección después de ejecutar un `DELETE` SQL físico que elimine también la evidencia.
+
+| Apartado S5 | Estado | Resultado |
+|---|---|---|
+| Topic_key, tipos, upsert y revisiones | **IMPLEMENTADO** | Incluye metadatos y recibos corregidos |
+| Relaciones, dedupe y candidatos | **IMPLEMENTADO** | Conservados también en retornos anticipados |
+| Búsqueda con extractos y filtros | **IMPLEMENTADO** | Incluye episodios sin narración |
+| Get, evidencia y expand=source | **IMPLEMENTADO** | Presupuesto compartido de extractos |
+| Correct/forget | **IMPLEMENTADO** | Relaciones y conservación de evidencia |
+| Retirada de memory_entries.scope | **IMPLEMENTADO** | Sin referencias residuales en producción; permanecen los scopes de directivas/jobs |
+| Entidades y 3.json | **IMPLEMENTADO** | Columnas, defaults e índices revisados coherentes |
+| History: registro, READ, sesión y seguridad | **IMPLEMENTADO** | Registro principal, sesión inyectada, SQL parametrizado y resultados marcados como contenido no confiable |
+| FTS5 y fallback LIKE | **IMPLEMENTADO** | Ambos con keyset `seq DESC` |
+| Cursor ligado a consulta y versión | **IMPLEMENTADO** | Appends continúan; mutaciones invalidan explícitamente |
+| Lectura exacta paginada | **IMPLEMENTADO** | Avance sin partir pares sustitutos |
+| Productor real y transcript_artifact_refs | **IMPLEMENTADO** | Argumentos, resultados, lote y compactación; referencias transaccionales |
+| Cierre protegido y compactación cubridora | **IMPLEMENTADO** | Incluye desempate determinista |
+| Cuatro estados y degradación | **IMPLEMENTADO** | Aviso y unavailable sin eliminar episodios/evidencias/mensajes |
+| Retirada de cuota y freno real | **IMPLEMENTADO** | Señal del sistema y ENOSPC |
+| Ajustes > Almacenamiento | **IMPLEMENTADO** | Navegación, aviso, estados, bytes y textos EN/ES |
+| Enlace «Ver en Memoria» de §6.4 | **NO** | Discrepancia ya declarada |
+| Separación S6–S8 | **IMPLEMENTADO** | Sin EpisodeRecorder, recent_episodes ni effectClass; MemoryStore permanece |
+
+`seq DESC` es compatible con la recuperación léxica permitida por §7.3 y `SPEC.md:427`; BM25 no es obligatorio. Ahora se cumple también la invalidación exigida en `SPEC.md:424,427,433`.
+
+Sobre los tests:
+
+- **B2:** comprueba continuación exacta tras append, exclusión del mensaje nuevo y rechazo tras regeneración/edición. La prueba FTS con términos distintos modifica las estadísticas del corpus entre páginas y mantiene el orden esperado.
+- **B14 checkpoint:** pausa después del staging y hace competir a otro productor. Exige que quede bloqueado hasta confirmar; detectaría liberar el lock durante ese intervalo.
+- **B14 forget:** el artefacto tiene un único episodio referente independiente del supersedes previo.
+- **FTS:** la comprobación del plan ya contempla los alias reales.
+- No encontré tests borrados ni aserciones debilitadas para ocultar fallos. Las adaptaciones de navegación, `.archive(...).text`, scope y retirada de cuota son coherentes.
+- Los ocho XML actuales corroboran **152 tests, cero fallos y cero errores**. Son resultados existentes; no los ejecuté yo.
+
+Los seis archivos de tests citados como preexistentes coinciden con el export de HEAD. Sus logs acreditan los mismos **6 + 5 + 21 + 1 + 1 + 1** fallos. Algunos atraviesan código modificado por S5 —especialmente MainAgentInteraction y CrewContextArtifacts—: eso acredita la preexistencia del fallo observado, pero un fallo temprano puede ocultar otra regresión posterior. No usé esas suites fallidas como evidencia positiva de corrección.
+
+La tabla Engram necesita mantener **F22 pendiente de S7** y **F37 pendiente sin etapa**. Para F37, corresponde proponer al dueño export/import como trabajo posterior con alcance propio. F12 ofrece contenido y revisiones, pero no historial paginado; F35 ofrece anotaciones de relaciones, sin el escaneo integral del catálogo.
+
+Permanecen las limitaciones aceptadas/declaradas: referencia textual antigua con `state=retained`, LIKE sin normalización de acentos, aviso leído una vez, recuperación de espacio al escribir, ausencia de «Ver en Memoria» y posible archivo huérfano tras morir entre marcar expulsión y borrar.
+
+**No pude verificar:** compilación ni ejecución nueva de tests, suite completa, Android/ENOSPC real, rendimiento en dispositivo, navegación visual, concurrencia entre procesos ni persistencia del cursor tras reapertura mediante una prueba específica.

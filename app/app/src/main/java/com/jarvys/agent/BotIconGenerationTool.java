@@ -9,6 +9,7 @@ import java.util.Map;
 
 /** Main-chat-only generated icon assignment; never delegated and never grants bot capabilities. */
 public final class BotIconGenerationTool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     public static final String NAME = "generate_bot_icon";
     private final BotIconService service;
     private final ToolSpec declaration;

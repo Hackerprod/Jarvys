@@ -1,0 +1,68 @@
+VEREDICTO: PASS
+
+Leí completo `docs/SINGLE_SESSION.md` y contrasté las correcciones con el código. **No quedan incidencias bloqueantes ni importantes; quedan tres menores.** No modifiqué archivos ni ejecuté builds o pruebas.
+
+**Citas verificadas: 56 correctas / 0 incorrectas / 1 imprecisa.** El muestreo incluye más de 15 citas del texto nuevo o modificado en esta ronda. Cada referencia separada por punto y coma cuenta una cita. `J/` representa `app/app/src/main/java/com/jarvys/agent/`.
+
+| Área | Citas correctas contabilizadas |
+|---|---|
+| Sesión, navegación y Crew — 6 | `J/MainActivity.kt:339`; `J/MainActivity.kt:463-467`; `J/ui/chat/ConversationDrawer.kt:191-226`; `J/chatdb/MemoryCrewEntities.kt:91-132`; `J/CoreAgentRuntime.java:351-353`; `J/AgentForegroundService.java:2041-2068` |
+| Memoria, lecturas completas, auditoría y privacidad — 6 | `J/CoreAgentRuntime.java:252`; `J/chatdb/PersonalAgentRepository.kt:67-77`; `J/PersonalMemoryExtractionWorker.kt:72`; `J/MessageReactionTool.java:36`; `J/connectors/Autonomy.kt:187-195`; `J/AgentErrorReporter.java:13-84` |
+| Consumidores de generación — 10 | `J/ConversationModuleCapabilityAccess.kt:29-37`; `:45-49`; `:56`; `J/ConversationReader.kt:1275-1276`; `:1282-1283`; `J/GeneratedImageIntents.java:18`; `app/app/src/main/res/xml/generated_image_paths.xml:3`; `:4`; `app/app/src/main/AndroidManifest.xml:186-192`; `J/GeneratedImageStore.java:19-27` |
+| Reset, tombstones e inicialización — 10 | `J/DeliveredArtifactStore.java:53-55`; `J/chatdb/JarvysChatDatabase.kt:395-396`; `:417-437`; `:540-560`; `J/chatdb/ConversationRepository.kt:430-455`; `J/ConversationMetadataAccess.java:98-102`; `J/chatdb/PersonalAgentRepository.kt:65`; `:346`; `:494-514`; `J/workspaces/WorkspaceRegistry.kt:24` |
+| Productor y dependencias de artefactos — 12 | `J/chatdb/ProtocolEntities.kt:160`; `:172`; `J/chatdb/ModelTranscriptRepository.kt:242-246`; `J/MainChatTranscriptStore.java:152-155`; `:183-217`; `:205-210`; `J/LocalRunStore.java:1715-1720`; `:1773-1777`; `J/chatdb/ModelTranscriptRepository.kt:250-251`; `J/MainChatTranscriptStore.java:179`; `:124`; `J/ConversationCompactor.java:195-199` |
+| Identidad de interacción — 6 | `J/chatdb/CoreEntities.kt:100`; `J/chatdb/ProtocolEntities.kt:113`; `:195`; `J/chatdb/ExecutionEntities.kt:20-37`; `J/AgentForegroundService.java:1848-1849`; `docs/context/SPEC.md:81` |
+| Comprobaciones adicionales de ronda 4 — 6 | `J/MainChatTranscriptStore.java:311-315`; `J/CoreTool.java:25-45`; `J/WorkspaceTools.java:499-513`; `:566-575`; `:757-807`; `J/MainChatTranscriptStore.java:47` |
+
+**Cita imprecisa:** documento:622 → `MainChatTranscriptStore.java:85-88`. Ese código fija el propietario de los lotes de herramientas; **no demuestra** la pertenencia durable del steering ni de las respuestas posteriores. Corrección detallada en la incidencia 1.
+
+**Estado de las incidencias anteriores**
+
+| Incidencia previa | Estado | Comprobación |
+|---|---|---|
+| R4/R5: aislamiento `g3` incompleto | **RESUELTA** | §8:542 y S1:579 incluyen módulo, recarga de snapshots, FileProvider, Coding y anclas. B9 exige ejercitarlos y comprobar que ningún archivo nuevo aparece en árboles retirables. |
+| R4: escrituras clasificadas READ | **RESUELTA** | §7.5/S6 normalizan efectos, incluyen herramientas nativas y propagación por wrappers. B3 exige una escritura nativa real. |
+| R4: compactación por grupos completos | **RESUELTA** | §4.2 reproduce la condición de conservación de `restore`; B11 incluye lote retenido anterior, lote cruzado y lote antiguo descartable. |
+| R4: `NotPending` e intentos de aprobación | **RESUELTA** | A3/B4 separan acción e intento y conservan la evidencia del intento dueño del efecto ante aprobaciones repetidas. |
+| R4: productor de preview vivo | **RESUELTA** | S4/B13 retiran expresamente la rama sin `path` y su descripción. |
+| R5: retención sin relaciones del productor real | **RESUELTA** | §7.10 prescribe `Retained`, dependencias estructuradas, escritura transaccional y cierre protegido. B14 exige el productor real hasta Room. |
+| R5: guarda de Central y resultado contradictorio del reset | **RESUELTA** | Guarda asignada a S1. B9 define solo Central, memoria vacía antes del primer uso e inicialización posterior perezosa. |
+| R5: interacción por pertenencia y steering | **PARCIAL, menor** | El contrato futuro de B7 ya exige pertenencia durable correcta. Queda imprecisa su justificación mediante el comportamiento actual. |
+
+**D1–D8 y decisiones posteriores**
+
+| Decisión | Resultado |
+|---|---|
+| D1 | Conforme: Central como único hilo visible; sin chats legacy, nuevo chat ni reinicio del hilo. |
+| D2/P1 | Conforme: reset total, incluida memoria personal; sin importador ni copia. |
+| D3/P2 | Conforme: drawer con perfil y Ajustes; Bots y Tareas dentro de Ajustes. |
+| D4/P3 | Conforme: workspaces invisibles; referencias en mensajes y artefactos entregados; sin preview vivo de proyectos no entregados. |
+| D5/P4 | Conforme: retirada completa de privacidad, incluida la cadena de supresión de errores. |
+| D6/P8 | Conforme: conserva bots/Crew y sus pantallas; `delegate_subtask` continúa fuera de Central. |
+| D7/P5–P7 | Conforme en el destino especificado: episodios con evidencia, narración, hechos, búsqueda y protección de artefactos. |
+| D8/P10 | No encontré topes nuevos inventados, validadores lingüísticos ni hardcodeos de frases. Las diez interacciones son decisión expresa del dueño. |
+
+**Incidencias**
+
+1. **S7:622 / B7:494 — menor: la pertenencia actual del steering está sobreafirmada.**  
+   `MainChatTranscriptStore.java:85-88` fija M para herramientas. Sin embargo, `AgentForegroundService.java:1705` cambia el propietario de las respuestas al steering S y `:1827-1834` lo persiste; `ConversationRepository.kt:953-956` solo registra incorporación, sin vínculo S→M.
+
+   **Corrección:** indicar que S7 **añadirá** esa pertenencia durable e incluir sus productores en el alcance. Ampliar B7 para reconstruir desde Room antes de compactar y comprobar M, S, resultado tardío y respuesta final. Es menor porque B7 ya prescribe explícitamente el resultado futuro correcto; no se está validando una implementación existente.
+
+2. **§8:542 / S1:579 — menor: inventario anunciado como enumerado.**  
+   La frase «el resto de los 27 ficheros se enumera en S1» no coincide con la lista nominal de S1. Faltan nombres como `ChatFileProvider.java` y `canvas/ChatCanvasWebView.kt`, aunque el inventario obligatorio y el contrato global sí los abarcan.
+
+   **Corrección:** añadir la lista o cambiar a «debe completarse en S1».
+
+3. **§3:169 — menor: momento de captura desactualizado en el diagrama.**  
+   Dice «al terminar un run con efecto», mientras §7.5/S6/B3 exigen evidencia antes del dispatch y actualización durante cada llamada.
+
+   **Corrección:** actualizar el rótulo del diagrama.
+
+Las etapas **S1–S8 tienen aceptaciones observables y pruebas relacionadas con sus cambios**. La secuencia **S1 crea `transcript_artifact_refs` → S5 incorpora el productor y la retención → S6 captura episodios** es coherente para esta rama no publicada. B14 puede preparar evidencia de prueba sin depender del recorder de S6.
+
+El reset especifica barrera antes de admitir escrituras, conservación de datos antiguos hasta la retirada y exclusión de `g3`. También define degradación cuando no queda nada expulsable. Adjuntos, borradores, skills, notificaciones, servicio en primer plano y ausencia de share intents entrantes están contemplados.
+
+**Lo que NO pude verificar**
+
+La implementación futura del reset y su recuperación material; durabilidad ante cortes eléctricos; cancelación efectiva de PendingIntent; carreras Android; presión real de almacenamiento; rendimiento medido del hilo; OAuth completo de Gmail y comportamiento de modelos reales. Los `[NV]` correspondientes declaran esas limitaciones y son aceptables como tales.

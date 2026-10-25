@@ -11,6 +11,7 @@ import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
+import com.jarvys.agent.PolicyGatedTool
 import com.jarvys.agent.ModuleTool
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderSettings
@@ -92,7 +93,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         val registered = AtomicReference<List<ConnectorRegistry>>(emptyList())
         try {
             token.throwIfCancelled()
-            val scope = buildTools(task, runId, toolCalls)
+            val scope = buildTools(task, runId, occurrenceId, toolCalls)
             if (scope.error != null) return permanentFailure(task, scheduledFor,
                 if (scope.error.startsWith("connector_unavailable:")) TaskRunCause.CONNECTOR_UNAVAILABLE
                 else TaskRunCause.TOOL_SCOPE_UNAVAILABLE,
@@ -202,7 +203,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         val error: String? = null,
     )
 
-    private fun buildTools(task: ScheduledTask, runId: String,
+    private fun buildTools(task: ScheduledTask, runId: String, occurrenceId: String,
                            calls: MutableList<TaskToolCallRecord>): Scope {
         if (task.toolScope.mode !in setOf("READ_ONLY", "LISTED")) return failedScope("invalid_tool_scope")
         moduleRegistry.installAndConnectUnselected(connectorRegistry, WebViewModuleRuntime(app))
@@ -237,7 +238,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             ScheduledTaskWriteDeferrer { toolName, arguments, token ->
                 token.throwIfCancelled()
                 val canonicalArguments = TaskPendingActionStore.canonicalizeArguments(arguments)
-                val pending = pendingActions.enqueue(task, runId, toolName, canonicalArguments)
+                val pending = pendingActions.enqueue(task, runId, toolName, canonicalArguments, occurrenceId)
                 val module = moduleRegistry.moduleForTool(toolName)
                 val moduleToolAccess = moduleRegistry.declaredTool(toolName)?.access
                 val moduleDefinition = module?.let { connectorRegistry.get(it.id) }
@@ -282,10 +283,12 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             tracked += TaskTrackedTool(tool,
                 tool.unattendedAccess() == CoreTool.UnattendedAccess.WRITE,
                 calls,
-                redactOutput = tool.isConnectorTool() || tool.isMcpTool() || isWebRead)
+                redactOutput = tool.isConnectorTool() || tool.isMcpTool() || isWebRead,
+                sourceMessageId = "task:${task.id}:$occurrenceId",
+                context = app)
         }
         val respondent = TaskRespondTool()
-        tracked += TaskTrackedTool(respondent, false, calls, redactOutput = false)
+        tracked += TaskTrackedTool(respondent, false, calls, redactOutput = false, context = app)
         return Scope(CoreToolRegistry(tracked), respondent,
             if (connectorNames.isEmpty()) emptyList() else listOf(connectorRegistry), connectorNames)
     }
@@ -419,10 +422,14 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         private val isWrite: Boolean,
         private val calls: MutableList<TaskToolCallRecord>,
         private val redactOutput: Boolean,
+        private val sourceMessageId: String? = null,
+        private val context: Context,
     ) : CoreTool {
         override fun declaration(): ToolSpec = delegate.declaration()
         override fun canDelegate() = delegate.canDelegate()
         override fun unattendedAccess() = delegate.unattendedAccess()
+        override fun effectClass() = delegate.effectClass()
+        override fun effectClass(arguments: Map<String, Any>) = delegate.effectClass(arguments)
         override fun isConnectorTool() = delegate.isConnectorTool()
         override fun isMcpTool() = delegate.isMcpTool()
         override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()
@@ -446,7 +453,30 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
 
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
             val name = delegate.declaration().name
+            val evidenceCallId = if (recordsEpisode()) java.util.UUID.randomUUID().toString() else null
+            val database = if (evidenceCallId != null) ChatDatabaseBridge.getInstance(context) else null
+            var dispatchStarted = false
+            if (evidenceCallId != null) {
+                database!!.personalAgentRecordEpisodeToolStartedSync(
+                    WorkspaceIdentity.CENTRAL_SESSION,
+                    sourceMessageId!!,
+                    evidenceCallId,
+                    name,
+                    episodeConnector(),
+                    episodeAuthorization(),
+                    episodeFacts(name, evidenceCallId, "intent"),
+                    "intent",
+                )
+            }
             try {
+                token.throwIfCancelled()
+                if (evidenceCallId != null) {
+                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId, "started",
+                        episodeFacts(name, evidenceCallId, "started"),
+                    )
+                }
+                dispatchStarted = true
                 val result = delegate.execute(arguments, token)
                 val resultStatus = runCatching { JSONObject(result.content).optString("status") }.getOrDefault("")
                 val outcome = when {
@@ -454,6 +484,18 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                     resultStatus == "pending_user_approval" -> "PENDING"
                     resultStatus == "deferred_visible_app_required" -> "WAITING_VISIBLE_APP"
                     else -> "OK"
+                }
+                if (evidenceCallId != null) {
+                    val normalizedOutcome = when (outcome) {
+                        "PENDING" -> "not_executed"
+                        "WAITING_VISIBLE_APP" -> "deferred"
+                        "OK" -> "ok"
+                        else -> "error"
+                    }
+                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId, normalizedOutcome,
+                        episodeFacts(name, evidenceCallId, normalizedOutcome),
+                    )
                 }
                 synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, outcome) }
                 val body = if (redactOutput)
@@ -467,13 +509,57 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                     else -> CoreToolResult.failure(body)
                 }
             } catch (cancelled: CancellationException) {
+                evidenceCallId?.let {
+                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, it,
+                        if (dispatchStarted) "uncertain" else "not_executed",
+                        episodeFacts(name, it, if (dispatchStarted) "cancelled" else "cancelled_before_dispatch"),
+                    )
+                }
                 synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, "INTERRUPTED") }
                 throw cancelled
             } catch (failure: RuntimeException) {
+                evidenceCallId?.let {
+                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, it,
+                        if (dispatchStarted) "uncertain" else "not_executed",
+                        episodeFacts(name, it, if (dispatchStarted) "threw" else "failed_before_dispatch"),
+                    )
+                }
                 synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, "ERROR") }
                 throw failure
             }
         }
+
+        private fun recordsEpisode(): Boolean = delegate.effectClass() == CoreTool.EffectClass.WRITE &&
+            delegate.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY
+
+        private fun episodeConnector(): String? {
+            val category = delegate.declaration().category
+            if (category.startsWith("connector:")) return category.removePrefix("connector:")
+            if (delegate.isMcpTool() && delegate is PolicyGatedTool) {
+                return delegate.policyGroupName().removePrefix("mcp_server:").let { "mcp:$it" }
+            }
+            return null
+        }
+
+        private fun episodeAuthorization(): String = when {
+            delegate is PolicyGatedTool -> when (delegate.effectiveAutonomyPolicy()) {
+                AutonomyPolicy.ALLOW -> "allow"
+                AutonomyPolicy.DENY -> "deny"
+                AutonomyPolicy.ASK -> "ask_pending"
+            }
+            else -> "allow"
+        }
+
+        private fun episodeFacts(name: String, callId: String, state: String): String = JSONObject()
+            .put("classification", "WRITE")
+            .put("policy", episodeAuthorization())
+            .put("task_id", sourceMessageId?.substringAfter("task:")?.substringBefore(':'))
+            .put("call_id", callId)
+            .put("tool", name)
+            .put("state", state)
+            .toString()
     }
 
 

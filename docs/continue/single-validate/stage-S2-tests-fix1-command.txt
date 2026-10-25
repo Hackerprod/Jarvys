@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.SingleSessionStartupTest --tests com.jarvys.agent.SingleSessionResetTest --tests com.jarvys.agent.SingleSessionReadBoundariesTest --tests com.jarvys.agent.MainActivityWorkspaceRoutingTest -x :app:prepareApkFactoryTemplate --console=plain

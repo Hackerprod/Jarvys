@@ -1,0 +1,294 @@
+﻿[
+    {
+        "path":  "app/app/src/full/java/com/jarvys/agent/linux/CodingJobManager.kt",
+        "sha256":  "F8F0BB5EAE3CD63DDDC76B3EDA2201F3409737BBF000BD72FD9247D51CB4E0AB"
+    },
+    {
+        "path":  "app/app/src/main/AndroidManifest.xml",
+        "sha256":  "CF7E78B2B8A90ACA59998764DA2190EE837D51DE3F6DF6135BFF0CA1880160B5"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java",
+        "sha256":  "78EC2332AA3270F1847A04E35A69BBF5DC679F6B109B1D398A2A7BDEAB943BDE"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/AttachmentStore.java",
+        "sha256":  "3DA9FC91AF078A421C318C061DEDFDFA638A1763B46C5FBBF66B96D160C287BD"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/ConversationMetadataAccess.java",
+        "sha256":  "9249DBEC6B68EF0CC755E36BB9227CE6E3DDA7CF5D241A5BFA5F1E2F7157F714"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/ConversationModuleCapabilityAccess.kt",
+        "sha256":  "3DBC17DACD4C072F344B779AD0984ADC7F584DD7706652E70E692FB1B5C3E35A"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/ConversationReader.kt",
+        "sha256":  "601616497D6A156B87178D0A5A9E3D13AA8724B043EE246752EC0C7FA28D5F2D"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/CrewCheckpointStore.java",
+        "sha256":  "E5B48098AF17A4372CF492B3AF9AA62F173DD542B3D3FEDD4EE41DE1805627E5"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/CrewContextArtifacts.java",
+        "sha256":  "44FBC6497AC7EE8065D63806A6B6A4B02AEA2B68A258011ADA4DB772E2B9EE5C"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/DeliveredArtifactStore.java",
+        "sha256":  "BA57DBA7EB28166AE7D68A77052A666B845F1E4A7D01713AC2DB63E467A40801"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/DownloadStore.java",
+        "sha256":  "FFF380FF822DB28A0FADC51688124B11B34D07043621378C652CCF86A9227A6E"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/GeneratedImageStore.java",
+        "sha256":  "DF958D004D8C4E4B409BCBE79FC2056AD4583C358205540F58187603A94AC90C"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/HtmlThumbnailStore.java",
+        "sha256":  "4C386982A85D59313FD4DE514C5CAD905309F48A40A56C2DBB8F8DB758484C6B"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/LocalRunStore.java",
+        "sha256":  "096172622CCB38C8804B64EB78BB8AFA63C639CE19DC9437C428825197EB7EB1"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/MainActivity.kt",
+        "sha256":  "F7A0AB721732739FC51AF16C22D5AE65613F03C4D2184B52F5FF11FCC736A768"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/MainChatTranscriptStore.java",
+        "sha256":  "3074992320978A2269B102F403D06AF8A1A8C60D026B59D996888C976ED726B0"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/MemorySearchIndexRuntime.kt",
+        "sha256":  "31DB7A0F551AB8A1DD7E5E08AE51C59776E762821AC13C460C5D3087F4A30490"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/MemoryStore.java",
+        "sha256":  "DA02962B67A1B7704A3B3DA0CAF2845093D2B595FD3FB6D96E34743AEA064635"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/MessageReactionTool.java",
+        "sha256":  "AA3A8161CF0085FEF003DEF1B736A6255B5483AAF3479D0E82AFA5128119B735"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/PersonalMemoryConsolidationWorker.kt",
+        "sha256":  "62FF1E65DA8029CFF9DA8DA8902DBE8C1542677EC6E12E53E4E06CA7786A8FF7"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/PersonalMemoryExtractionWorker.kt",
+        "sha256":  "7C789C799AB54CA5734209122A06A0EECF9AB75CF9A0903ED4098433E948ED78"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/WorkspaceArtifactDelivery.java",
+        "sha256":  "ACAACF7C1D19671B8DEE2DBC896F657F79A39EF04F95716859D75A67DE3F57B5"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/WorkspacePreviewScreen.kt",
+        "sha256":  "B1F82C8BEC3027C2EF0054B60BAE172288AEE67E692FD2FA09D19341B26DDC05"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/WorkspaceStore.java",
+        "sha256":  "CB7BFF278EDD83D9CBC68FAA00994616AE3A212304FDD96258893F7B9550E2E2"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/WorkspaceTools.java",
+        "sha256":  "4C73BB777BDC30EA31B1C2D914C846290C6802BC964A94781934590E89109290"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/apkfactory/FactoryInstallCoordinator.kt",
+        "sha256":  "5D339AB3B817D2837C8B14BB165A6C6F9BC55D2B57DB912BD85EDE0FC4CB8200"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
+        "sha256":  "C5E917D778C4E27E86C4C2EB8B0739E650629F56ABF184ADE5891808D502D493"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt",
+        "sha256":  "D05E85BEED3CBAC6D4138AF92691E0B6FCEE986D82531507F6B7B85ACB161EBE"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/JarvysChatDatabase.kt",
+        "sha256":  "538ADC49299180E55D2EB34347FAC36BB3954678B9F622B6596C350E1C2DB0E1"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/ModelTranscriptRepository.kt",
+        "sha256":  "5E5773FD354D51B3666AB386B9640FBE33D3D4B6A635E90ACCF9DB5552C39CF6"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalAgentEntities.kt",
+        "sha256":  "B0A128604C6DB8E5FC1A2FD8509280EBC19490132E61BBC15F9214527AF0AF4F"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalMemoryFtsSql.kt",
+        "sha256":  "14DA6726E4CE00CDBED7DD43A97358E1A57827B374B6C0CA3682FBFF8D874F5F"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/coding/ProjectScope.java",
+        "sha256":  "08CEF9DE39995544284578EEAE7A0D2BE0799057579698D03606ACF7F28423DB"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/coding/ProjectScopeIdentity.java",
+        "sha256":  "F251366FF62166EF1F8E1A053C8F8D41498411F8BAEFA00A5DD0A0B2702B8AF7"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/coding/ProjectScopeStore.java",
+        "sha256":  "7EB7D1B37364F331EEEA119BB6C942A9C57072A6D1E157C7D3FB2327C3FA2331"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/connectors/ApprovalNotificationCenter.kt",
+        "sha256":  "BB66D37F63BF640C09168CF5F878301A03F021D14A614300F8633399FDD92B86"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/proactive/ProactiveInteractionDispatcher.kt",
+        "sha256":  "FF7E10BD1C8B07E447E83B237435DB81A2A748E6FFEF63ED1A9C44D981977E6D"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/proactive/ProactiveNotifier.kt",
+        "sha256":  "009BDB43B9103B203B7B33BC0EEAB1BCCE4058EF1261477FA4CDAB688A18E65E"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/proactive/ProactiveWorker.kt",
+        "sha256":  "55241E8CC12668972D017CE22B391C3156F71A44517433CB2A77FB3A5951FD5B"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/tasks/TaskManualRunWorker.kt",
+        "sha256":  "6B80B993523DB6854F02E0BDA51940EA87D82300F3628AB007943D43D7295E8A"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/tasks/TaskNotifier.kt",
+        "sha256":  "D0822F62FCD58644920280E80CBD350705D0EEC989C931644FFB7A5EAEB403C8"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/tasks/TaskPendingActionExecution.kt",
+        "sha256":  "18080EB03D4764A11F2F0D2B85E01424B45FA38FDA6E14EAB3008310A45EB0DC"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/tasks/TaskTickWorker.kt",
+        "sha256":  "0E28C7E014629E07F99AC1B8D26A288CB6A5CD22623192D083C49B2D105B5E60"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceIdentity.java",
+        "sha256":  "277031AC7049841A0956813E2910469754794572AEFE9C41038FDF033C4E1434"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceRegistry.kt",
+        "sha256":  "73F2E80AF07D76102520E243C122198B7365FA6620DEC424C650B896313F3EAF"
+    },
+    {
+        "path":  "app/app/src/main/res/values/strings.xml",
+        "sha256":  "E457D11C3DC2E7AF2F94AA8D2171EB5793596A0745D932C4CD12859F5B54EFE3"
+    },
+    {
+        "path":  "app/app/src/main/res/xml/generated_image_paths.xml",
+        "sha256":  "7F74638899BFCA1B3ACF02115F6758613BF5FF6FCA9EEF1489E13A65239E1BED"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/AgentForegroundServiceMainThreadAdmissionTest.kt",
+        "sha256":  "8B6578B9D8D7414A088739E0AD97F28E49D434EA21DDCDD55D39C45E174F9A44"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/AgentRunRestorationComposeTest.kt",
+        "sha256":  "585F3BB530463353A06504FA62ECE0E7352CCD88A4D30808B3B9412465229C09"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/ChatTestStore.kt",
+        "sha256":  "AD7879430D0289B55781C3C2C0672606EC01B0DC006BC6A92674FD7352EA2087"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/CrewCheckpointRecoveryTest.java",
+        "sha256":  "D5853442901936DE6E03FCFD7F8C2FFBE96286AACF71862C56F5E36297AA9EA5"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/CrewContextArtifactsRecoveryTest.java",
+        "sha256":  "A1775E82A6B0A0B9EEF83549113C7F9F9A1BE2D3BC0642A74067A44F32171D42"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/DeliveredArtifactTest.java",
+        "sha256":  "41B71671BB6EEF1E090D5385F6D3D698DBB927531AF893A57235553055FAC912"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/GeneratedImageStoreTest.kt",
+        "sha256":  "05A6FE89F11B73ED899C6430B21D7DEB62C5B822C475DF1B1326D77236C31244"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/HtmlPreviewSnapshotTest.java",
+        "sha256":  "4AC098A398FFDEC852BB1C1ABDC5F011803C1EAC75C895F857B3D770E5ADE3E0"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/HtmlThumbnailStoreTest.java",
+        "sha256":  "8584FA7887776949FCA8319418528C55601437F8E5A85B44E17F6E7EAFE64080"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/MainActivityWorkspaceRoutingTest.kt",
+        "sha256":  "48A41281A6DDEF8E4105C34FFF9CF7B7FFDC79E46EED4F01623E8487F3D548C6"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java",
+        "sha256":  "1410F1B0628D06271B10702948BE25AC74BA33F4EDE7616D0F8376581C14A334"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/chatdb/ConversationRepositoryTest.kt",
+        "sha256":  "D32A64E050D72E185E64E68DD4674479CFD1BDE48ABE19987F69823E67774EC9"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt",
+        "sha256":  "4D0337E3956F7375B5ABF199F340FD49175B9C39052E56C3AA1DF706AC17B71F"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt",
+        "sha256":  "461CF6E718FD8A07FC0EB58A675AA62D8CCC58BBFF749192A37A7516F8CD1192"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/chatdb/PersonalMemoryFts5Test.kt",
+        "sha256":  "D9D034A8C23C63265F9388788174FA640B30B958B9FDA9A8D02595D831EB83DD"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/coding/ProjectScopeExistingTest.java",
+        "sha256":  "EDCCD184EEE2718B2748B3CF939B5E9713417A82CC6C20FC89B6A2340E068705"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/tasks/TaskManualRunWorkerTest.kt",
+        "sha256":  "082A9344E7EE52D11E6ACBA13B029325A9EBD13F092AE9D9F54A89F9D83F4E4D"
+    },
+    {
+        "path":  "app/app/schemas/com.jarvys.agent.chatdb.JarvysChatDatabase/3.json",
+        "sha256":  "AB5F97CB93018BABCE57C828B72FBCF739066B328469E47FFFEBE2D986C0D82C"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/GeneratedImageFileProvider.kt",
+        "sha256":  "B913D9ED4DCF76889D4C79DCDFE4FE891D0803004397CCB5BF4C26F3082AD31C"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/SingleSessionReset.kt",
+        "sha256":  "A6A5B66C62C90A025742B9F77C122BB604862D151CFCFB23D28436716CFEC35E"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/StorageGeneration.java",
+        "sha256":  "C3E0148A014D6D1B4852A8102979642A5D403B681AAE385A9C6E1D6DCC2B3621"
+    },
+    {
+        "path":  "app/app/src/main/java/com/jarvys/agent/chatdb/MessageSearchIndex.kt",
+        "sha256":  "7F400033D80C34730AC974D86B83AA49C3F0730210EA5C375AFC54E324110984"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/FileProviderPathShadow.java",
+        "sha256":  "B59721C9CBADAC088CAD8955CACB5253BEABA5FA58FFBA4C289043684DD9BEE3"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/SingleSessionReadBoundariesTest.kt",
+        "sha256":  "E1270A0C6B74059B1A2510C45DAD615ED0374FF2B1A905AAB0F3A45A770B55BA"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/SingleSessionResetTest.kt",
+        "sha256":  "8F5BC6EF5F8D132CA5969E136F7C81B96EC60E24B8F9C87E5AE0FB9AE30C1D54"
+    },
+    {
+        "path":  "app/app/src/test/java/com/jarvys/agent/SingleSessionStartupTest.kt",
+        "sha256":  "9651C28387DD71A79626ACCEF42B525025594F20C5199646FFDC5434B1C86CBB"
+    }
+]

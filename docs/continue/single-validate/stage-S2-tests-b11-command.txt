@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.workspaces.WorkspaceListScreenComposeTest --tests com.jarvys.agent.JarvysSettingsChoiceDialogTest --tests com.jarvys.agent.ProactiveSettingsComposeTest --tests com.jarvys.agent.ProvidersNavigationTest -x :app:prepareApkFactoryTemplate --console=plain

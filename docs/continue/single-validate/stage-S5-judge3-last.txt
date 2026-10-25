@@ -1,0 +1,118 @@
+VEREDICTO: FAIL
+
+Queda **una incidencia importante**: el cursor ya evita la inestabilidad de BM25, pero ha perdido la invalidación ante cambios de sus fuentes. Las demás correcciones de producción revisadas están presentes.
+
+Revisión de solo lectura sobre HEAD `5ac859b7` y los 33 archivos modificados/nuevos. No ejecuté builds ni suites; hice una comprobación breve con SQLite en memoria. `git diff --check` no presenta errores.
+
+Rutas abreviadas: `J/` = `app/app/src/main/java/com/jarvys/agent/`; `T/` = `app/app/src/test/java/com/jarvys/agent/`.
+
+1. **IMPORTANTE — los cursores siguen aceptándose después de borrar/regenerar fuentes.**
+
+   [MessageHistoryRepository.kt:143](/C:/Projects/Jarvys-wt/single/app/app/src/main/java/com/jarvys/agent/chatdb/MessageHistoryRepository.kt:143) guarda únicamente `highWater` y `beforeSeq`. La huella de `:145-147` incluye conversación, consulta y filtros; **ninguna revisión de las fuentes**. `decode`, en `:151-156`, tampoco comprueba cambios posteriores.
+
+   El keyset evita el desplazamiento que causaba `OFFSET`, y `hidden_kind IS NULL` evita devolver mensajes ocultos. Sin embargo, continúa silenciosamente sobre fuentes modificadas. Una edición de un mensaje pendiente puede devolver su texto nuevo dentro de una búsqueda iniciada antes de esa edición.
+
+   Contradice `docs/context/SPEC.md:424,427,433`, incorporado por `docs/SINGLE_SESSION.md:379`: cursor ligado a consulta/versión e invalidación tras borrado/regeneración.
+
+   **La prueba B2 consolida el incumplimiento:** `T/SingleSessionMemoryRetentionTest.kt:325-340` regenera y borra mensajes, después exige éxito con el cursor anterior. Solo prueba rechazo al cambiar la consulta (`:343-347`).
+
+   **Corrección:** mantener una revisión durable y transaccional para mutaciones de fuentes; incluirla y comprobarla en el cursor, devolviendo error o reinicio explícito. Los append posteriores pueden seguir excluidos mediante `highWater`. No recuperar el cálculo de hash sobre todo el historial.
+
+2. **MENOR — la prueba de checkpoint no reproduce la carrera corregida.**
+
+   [SingleSessionMemoryRetentionTest.kt:678](/C:/Projects/Jarvys-wt/single/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt:678) mantiene el lock antes de iniciar el loop y comprueba que este queda bloqueado. `otherProducer` solo se utiliza para comparar la identidad del lock.
+
+   No intenta expulsar entre staging y commit. Una implementación que liberase el lock después de archivar y antes de confirmar podría seguir pasando.
+
+   **Corrección:** detener el checkpoint después del staging e intentar una expulsión desde el segundo productor mientras la confirmación está pendiente. La corrección de producción sí está presente: `J/MainChatTranscriptStore.java:119-202` mantiene el lock hasta terminar `appendModelTranscriptCheckpoint`.
+
+3. **MENOR — B14 sigue sin aislar la protección tras `memory_forget`.**
+
+   `T/SingleSessionMemoryRetentionTest.kt:597-605` reutiliza el cierre protegido por `ep-1`. Sus evidencias sobreviven al supersedes anterior. Aunque olvidar `ep-forget` eliminase indebidamente sus evidencias, `ep-1` mantendría la protección.
+
+   **Corrección:** utilizar otra llamada cuyo único episodio referente sea el que se olvida, y reaplicar presión. El código de forget conserva correctamente las evidencias; falta una prueba que detecte esa regresión específica.
+
+4. **MENOR — la comprobación del plan SQL puede aceptar un barrido de `messages`.**
+
+   `T/chatdb/MessageHistoryFts5Test.kt:95-96` busca literalmente `SCAN messages`, pero la consulta usa el alias `m`. SQLite puede describir el barrido como `SCAN m`; lo observé con el esquema mínimo en memoria.
+
+   **Corrección:** utilizar índices representativos del esquema real y comprobar también los alias del plan. Esto limita la garantía del test; no demuestra un barrido equivalente en producción.
+
+El estado de **cada incidencia previa** es:
+
+| Incidencia previa | Estado | Evidencia actual |
+|---|---|---|
+| Orden BM25 inestable con mensajes nuevos | **RESUELTA** | `MessageHistoryRepository.kt:32-47,71-98`: keyset `seq DESC` en ambas rutas |
+| Huella que releía/hasheaba todo el historial | **RESUELTA** | `:131-147`: lectura de cabecera y hash de parámetros |
+| Cursor sobrevive a borrado/regeneración | **NO — regresión** | `:143-156`; incidencia 1 |
+| Límite sin freno y overflow de `max+1` | **RESUELTA** | `PersonalMemoryTools.java:301-334`; aritmética `Long` en repositorio `:80,86` |
+| Upsert ignora layer/category/importance | **RESUELTA** | `PersonalAgentRepository.kt:353-364`; B1 `:188-209` |
+| `memory_correct` cuenta revisiones del id anterior | **RESUELTA** | Repositorio `:782`, `revisionCount(newId)`; B1 `:212-222` |
+| Protección limitada a entradas activas | **RESUELTA** | `ArtifactRetentionRepository.kt:26-29`, sin join ni filtro de actividad |
+| Supersedes libera artefactos de episodio | **RESUELTA** | Repositorio `:405-414`; B14 aislado y con presión `:587-595` |
+| Forget libera artefactos | **RESUELTA en código** | Repositorio `:721-727`; cobertura aislada pendiente, incidencia 3 |
+| Protección de todas las compactaciones posteriores | **RESUELTA** | Retención `:35-39`; B14 con dos compactaciones `:498-518` |
+| Empate de compactaciones con igual `first_kept` | **RESUELTA** | Desempate por `seq DESC`, retención `:38-39`; B14 `:607-627` |
+| Checkpoint restaura `retained` tras expulsión concurrente | **RESUELTA por inspección** | `MainChatTranscriptStore.java:119-202`; límite del test en incidencia 2 |
+| Ownership obsoleto entre productores | **RESUELTA** | Transcript `:232,263-269`; prueba `:661-675` |
+| Repetir contenido expulsado bajo presión aborta | **RESUELTA** | Transcript `:299-306`; prueba `:631-658` |
+| Dedupe por texto omite supersedes/related | **RESUELTA** | Repositorio `:344-347`; B1 `:160-172` |
+| Enlaces omitidos en retorno `unchanged` | **RESUELTA** | Repositorio `:353-359`; B1 `:175-185` |
+| Puntuación, `%` y `_` con filtros | **RESUELTA** | Repositorio `:532-540`; B5 `:428-443` |
+| LIKE de candidatos con texto completo | **RESUELTA** | Repositorio `:442-452`: términos individuales, límite existente |
+| `expand=source`: Store por fila y presupuesto duplicado | **RESUELTA para extractos** | Herramientas `:256-277`; transcript `:342-363`; B14 `:563-577` |
+| Migración no reconoce CORE_RULES_V3 real de HEAD | **RESUELTA** | Repositorio `:894-899,954-956`; B1 `:233-265` |
+| F34 ausente | **RESUELTA** | Repositorio `:956`: instrucción de prompt, sin umbral ejecutable |
+| `history_read` no avanza con emoji | **RESUELTA** | Historial `:114-124`; prueba `:732-738` |
+| B1 evitaba el duplicado exacto | **RESUELTA** | B1 `:160-172` repite texto y exige enlaces |
+| M1b no cruzaba los 16 MiB | **RESUELTA** | `M1bRepositoriesTest.kt:127-136`: artefacto de 16 MiB y escritura adicional |
+
+La migración de reglas compara contenidos empaquetados exactos. Preserva personalizaciones distintas y es idempotente tras migrar. Las pruebas cubren las dos variantes anteriores y la segunda inicialización; no siembran una personalización distinta.
+
+**P7 tras retirar o borrar entradas:** supersedes y forget son borrados lógicos y conservan evidencias; correct las mueve al reemplazo. No encontré borrado físico de entradas en producción. La FK sigue siendo `ON DELETE CASCADE` (`PersonalAgentEntities.kt:134`): un `DELETE` SQL físico eliminaría las evidencias y su protección. No atribuyo cobertura a esa operación ajena a las rutas implementadas.
+
+| Apartado S5 | Estado | Resultado |
+|---|---|---|
+| `topic_key`, tipos, revisiones y metadatos | **IMPLEMENTADO** | Upsert y recibos corregidos |
+| Enlaces, dedupe y candidatos | **IMPLEMENTADO** | Retornos anticipados conservan relaciones |
+| Search con extractos y filtros | **IMPLEMENTADO** | Incluye episodios sin narración |
+| Get, evidencia y fuentes | **IMPLEMENTADO** | Extractos con presupuesto compartido |
+| Correct/forget | **IMPLEMENTADO** | Sustitución, revisiones y conservación de evidencia |
+| Retirada de `memory_entries.scope` | **IMPLEMENTADO** | Sin referencias residuales en producción; permanecen scopes de directivas/jobs |
+| Entidades y `3.json` | **IMPLEMENTADO** | Coherentes en columnas e índices revisados; incluye `connector` |
+| `history_*`: registro, READ y aislamiento | **IMPLEMENTADO** | Registro principal, sesión inyectada, SQL parametrizado y contenido no confiable |
+| FTS5 y fallback LIKE | **IMPLEMENTADO** | Ambos ordenan por `seq DESC` |
+| Paginación e invalidación de cursores | **PARCIAL** | Incidencia importante 1 |
+| Lectura exacta paginada | **IMPLEMENTADO** | Incluye avance por pares sustitutos |
+| Productor real y refs transaccionales | **IMPLEMENTADO** | Argumentos, resultados, lote y compactación |
+| Cierre protegido y compactación cubridora | **IMPLEMENTADO** | Todas las evidencias persistentes; desempate estable |
+| Cuatro estados y degradación | **IMPLEMENTADO** | Estados, aviso y continuidad sin eliminar episodios/evidencias/mensajes |
+| Retirada de cuota y freno real | **IMPLEMENTADO** | Señal de almacenamiento/ENOSPC; cuota fija retirada |
+| Ajustes > Almacenamiento | **IMPLEMENTADO** | Navegación, recuentos y textos EN/ES |
+| Separación respecto a S6–S8 | **IMPLEMENTADO** | Sin EpisodeRecorder, `<recent_episodes>` ni effectClass; MemoryStore permanece |
+
+`seq DESC` es compatible con el orden permitido por §7.3 y SPEC:427; BM25 no es obligatorio. La ausencia de invalidación de fuentes sí incumple SPEC:433.
+
+No hay ya un recorrido adicional de todos los cuerpos para validar cada página. Esto **no significa coste constante**: FTS puede agrupar/ordenar todas las coincidencias y LIKE puede recorrer contenido.
+
+Sobre los **tests nuevos, adaptados y borrados**:
+
+- B1, B5 y B14 comprueban resultados persistidos mediante herramientas, repositorios y productor real. Cubren metadatos, revisiones, migración, supersedes aislado, dos compactaciones y empate.
+- Las escrituras entre páginas ejercitan el keyset y la exclusión de mensajes nuevos. **No comprueban la invalidación exigida:** B2 exige continuar después de borrar/regenerar.
+- La prueba FTS usa SQL de producción, pero no ejercita el cursor completo del repositorio; su afirmación sobre ausencia de barridos tiene la debilidad indicada.
+- Las adaptaciones de navegación, `.archive(...).text`, FTS y retirada de cuota son coherentes. **No se borraron tests.**
+- No encontré debilitamientos adicionales para ocultar fallos; la expectativa de continuación de B2 sí debe corregirse.
+
+Los fallos declarados preexistentes son plausibles: los archivos coinciden con HEAD/export y los logs HEAD contienen los mismos **6 + 5 + 21 + 1 + 1 + 1** fallos. MemoryScope/MemorySearch ejercitan principalmente MemoryStore y búsqueda de archivos. Los dos casos de symlink fallan antes de sus aserciones; borrar Central ya estaba prohibido. MainAgentInteraction atraviesa código relacionado con S5, por lo que la coincidencia con HEAD acredita la preexistencia del fallo observado, **no la ausencia de otras regresiones ocultas por ese fallo temprano**.
+
+La tabla Engram necesita conservar estas distinciones:
+
+- **F22:** pendiente explícita de **S7**. MEMORY/RECALL no implementa el nudge temporal.
+- **F37:** export/import sigue pendiente y sin etapa. Propuesta al dueño: incorporarlo como trabajo posterior con alcance propio o descartarlo explícitamente.
+- **F34:** el primer informe está desactualizado; ahora existe como prompt.
+- **F07:** correct/upsert son una adaptación limitada; no equivalen a toda la edición parcial por id.
+- **F12/F35:** lectura con revisiones y anotaciones de enlaces no implica historial paginado ni paridad integral con el catálogo.
+
+Permanecen las limitaciones aceptadas: referencia textual antigua con `state=retained`, LIKE sin normalización de acentos y aviso leído una vez. También siguen la recuperación de espacio solo al escribir, la ausencia de «Ver en Memoria» y el posible archivo huérfano tras morir entre marcar expulsión y borrar.
+
+**No pude verificar:** compilación ni resultados nuevos de tests, ejecución Play, Android/ENOSPC real, rendimiento en dispositivo, navegación visual completa o sincronización entre procesos. La carrera de checkpoint queda corregida por inspección, con la limitación de cobertura descrita.

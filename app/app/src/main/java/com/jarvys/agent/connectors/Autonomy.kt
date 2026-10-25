@@ -152,13 +152,16 @@ class InMemoryConnectorAutonomyStore : ConnectorAutonomyStore {
 class SharedPreferencesConnectorAutonomyStore internal constructor(
     private val preferences: SharedPreferences,
     authorityScope: String,
+    private val auditDatabase: com.jarvys.agent.chatdb.ChatDatabaseBridge? = null,
 ) : ConnectorAutonomyStore {
     constructor(context: Context) : this(
         context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE),
         context.applicationContext.packageName + ":" + ConnectorStateStore.PREFERENCES,
+        com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context.applicationContext),
     )
     private val actionPolicies = PersistedActionPolicies(preferences, authorityScope)
     private val lock = actionPolicies.lock
+    private val fallbackAudit = mutableListOf<AutonomyAuditRecord>()
 
     init {
         ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
@@ -167,7 +170,7 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
             listOf("email", "sms_draft").forEach { connectorId ->
                 runCatching { actionPolicies.clearPolicies(connectorId) }
             }
-            runCatching { removeRetiredConnectorAudit() }
+            runCatching { migrateAuditToRoom() }
         }
     }
 
@@ -185,18 +188,23 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     override fun clearPolicies(connectorId: String) { actionPolicies.clearPolicies(connectorId) }
 
     override fun appendAudit(record: AutonomyAuditRecord) {
-        synchronized(lock) {
-            val allRecords = readAudit() + record.bounded()
-            val saved = preferences.edit()
-                .putString(AUDIT_KEY, JSONArray().apply { allRecords.forEach { put(it.toJson()) } }.toString())
-                .commit()
-            check(saved) { "Could not persist autonomous action audit" }
-        }
+        val bounded = record.bounded()
+        val database = auditDatabase
+        if (database != null) database.appendConnectorAuditSync(bounded)
+        else synchronized(lock) { fallbackAudit.add(bounded) }
     }
 
     override fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord> = synchronized(lock) {
-        readAudit().asReversed().filter { it.connectorId == connectorId }
-            .take(limit.coerceAtLeast(0))
+        val database = auditDatabase
+        if (database != null) database.recentConnectorAuditSync(connectorId, limit.coerceAtLeast(0))
+        else fallbackAudit.asReversed().filter { it.connectorId == connectorId }.take(limit.coerceAtLeast(0))
+    }
+
+    private fun migrateAuditToRoom() {
+        val database = auditDatabase ?: return
+        if (preferences.getBoolean(AUDIT_MIGRATED_KEY, false)) return
+        readAudit().filterNot { it.connectorId in RETIRED_CONNECTOR_IDS }.forEach(database::appendConnectorAuditSync)
+        preferences.edit().remove(AUDIT_KEY).putBoolean(AUDIT_MIGRATED_KEY, true).commit()
     }
 
     private fun readAudit(): List<AutonomyAuditRecord> = runCatching {
@@ -229,6 +237,7 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
 
     companion object {
         private const val AUDIT_KEY = "autonomy_audit"
+        private const val AUDIT_MIGRATED_KEY = "autonomy_audit_room_migrated"
         private val RETIRED_CONNECTOR_IDS = setOf("email", "sms_draft")
     }
 }

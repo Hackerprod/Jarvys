@@ -10,15 +10,25 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 
 public final class CoreToolRegistry {
+  public interface InvocationObserver {
+    void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments);
+    void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure);
+  }
   private final Runnable invocationGuard;
+  private final InvocationObserver invocationObserver;
   private final Map<String, CoreTool> tools;
 
   public CoreToolRegistry(Collection<? extends CoreTool> tools) {
-    this(tools, null);
+    this(tools, null, null);
   }
 
   private CoreToolRegistry(Collection<? extends CoreTool> tools, Runnable invocationGuard) {
+    this(tools, invocationGuard, null);
+  }
+
+  private CoreToolRegistry(Collection<? extends CoreTool> tools, Runnable invocationGuard, InvocationObserver invocationObserver) {
     this.invocationGuard = invocationGuard;
+    this.invocationObserver = invocationObserver;
     Map<String, CoreTool> indexed = new LinkedHashMap<>();
     for (CoreTool tool : tools) {
       String name = tool.declaration().name;
@@ -44,7 +54,7 @@ public final class CoreToolRegistry {
         delegable.add(tool);
       }
     }
-    return new CoreToolRegistry(WorkspaceTools.forDelegatedAgent(delegable), this.invocationGuard)
+    return new CoreToolRegistry(WorkspaceTools.forDelegatedAgent(delegable), this.invocationGuard, this.invocationObserver)
         .rebindDelegation();
   }
 
@@ -54,7 +64,7 @@ public final class CoreToolRegistry {
       scoped.add(
           tool instanceof DelegateSubtaskTool ? ((DelegateSubtaskTool) tool).forScope(this) : tool);
     }
-    return new CoreToolRegistry(scoped, this.invocationGuard);
+    return new CoreToolRegistry(scoped, this.invocationGuard, this.invocationObserver);
   }
 
   CoreToolRegistry withInvocationGuard(final Runnable guard) {
@@ -68,7 +78,11 @@ public final class CoreToolRegistry {
               this.invocationGuard.run();
               guard.run();
             };
-    return new CoreToolRegistry(this.tools.values(), combined).rebindDelegation();
+    return new CoreToolRegistry(this.tools.values(), combined, this.invocationObserver).rebindDelegation();
+  }
+
+  public CoreToolRegistry withInvocationObserver(InvocationObserver observer) {
+    return new CoreToolRegistry(this.tools.values(), this.invocationGuard, observer).rebindDelegation();
   }
 
   void runCombinedGuard(Runnable guard) {
@@ -82,7 +96,7 @@ public final class CoreToolRegistry {
         throw new IllegalArgumentException("Replacement exceeds the selected capability scope");
       }
     }
-    return new CoreToolRegistry(handlers, this.invocationGuard).rebindDelegation();
+    return new CoreToolRegistry(handlers, this.invocationGuard, this.invocationObserver).rebindDelegation();
   }
 
   public List<ToolSpec> declarations() {
@@ -104,7 +118,7 @@ public final class CoreToolRegistry {
   CoreToolRegistry withoutAttachments() {
     return new CoreToolRegistry(
         WorkspaceTools.withoutAttachments(new ArrayList<>(this.tools.values())),
-        this.invocationGuard);
+        this.invocationGuard, this.invocationObserver);
   }
 
   public List<String> connectorToolNames() {
@@ -143,7 +157,7 @@ public final class CoreToolRegistry {
   public CoreToolRegistry with(Collection<? extends CoreTool> additional) {
     List<CoreTool> combined = new ArrayList<>(this.tools.values());
     combined.addAll(additional);
-    return new CoreToolRegistry(combined, this.invocationGuard);
+    return new CoreToolRegistry(combined, this.invocationGuard, this.invocationObserver);
   }
 
   public CoreToolRegistry forRequester(String requester) {
@@ -161,7 +175,7 @@ public final class CoreToolRegistry {
         requested.add(tool);
       }
     }
-    return new CoreToolRegistry(requested, this.invocationGuard).rebindDelegation();
+    return new CoreToolRegistry(requested, this.invocationGuard, this.invocationObserver).rebindDelegation();
   }
 
   public String displayName(String name) {
@@ -224,7 +238,7 @@ public final class CoreToolRegistry {
 
   public CoreToolResult invoke(
       String name, Map<String, Object> arguments, CancellationToken token) {
-    return invoke(name, arguments, token, null);
+    return invoke(name, arguments, token, null, null);
   }
 
   public CoreToolResult invoke(
@@ -232,6 +246,11 @@ public final class CoreToolRegistry {
       Map<String, Object> arguments,
       CancellationToken token,
       CoreTool.ProgressListener progress) {
+    return invoke(name, arguments, token, progress, null);
+  }
+
+  public CoreToolResult invoke(String name, Map<String, Object> arguments, CancellationToken token,
+      CoreTool.ProgressListener progress, String callId) {
     CoreTool tool = this.tools.get(name);
     if (tool == null) {
       return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
@@ -241,13 +260,25 @@ public final class CoreToolRegistry {
       if (this.invocationGuard != null) {
         this.invocationGuard.run();
       }
-      if (progress == null) {
-        return tool.execute(arguments == null ? Collections.emptyMap() : arguments, token);
-      }
-      return tool.execute(arguments == null ? Collections.emptyMap() : arguments, token, progress);
+      Map<String, Object> safeArguments = arguments == null ? Collections.emptyMap() : arguments;
+      if (this.invocationObserver != null && tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
+          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
+        this.invocationObserver.beforeDispatch(tool, callId, safeArguments);
+      CoreToolResult result = progress == null ? tool.execute(safeArguments, token)
+          : tool.execute(safeArguments, token, progress);
+      if (this.invocationObserver != null && tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
+          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
+        this.invocationObserver.afterDispatch(tool, callId, result, null);
+      return result;
     } catch (CancellationException cancelled) {
+      if (this.invocationObserver != null && tool.effectClass(arguments == null ? Collections.emptyMap() : arguments) == CoreTool.EffectClass.WRITE
+          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
+        this.invocationObserver.afterDispatch(tool, callId, null, cancelled);
       throw cancelled;
     } catch (RuntimeException failure) {
+      if (this.invocationObserver != null && tool.effectClass(arguments == null ? Collections.emptyMap() : arguments) == CoreTool.EffectClass.WRITE
+          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
+        this.invocationObserver.afterDispatch(tool, callId, null, failure);
       String detail =
           failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
       return CoreToolResult.failure(detail);
@@ -266,6 +297,6 @@ public final class CoreToolRegistry {
         selected.add(tool);
       }
     }
-    return new CoreToolRegistry(selected, this.invocationGuard);
+    return new CoreToolRegistry(selected, this.invocationGuard, this.invocationObserver);
   }
 }

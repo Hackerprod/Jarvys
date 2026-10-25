@@ -34,6 +34,7 @@ final class PersonalMemoryFlush {
       if (!eligible()) return false;
       ChatDatabaseBridge bridge = ChatDatabaseBridge.getInstance(context);
       if (!bridge.personalAgentNeedsMemoryFlush(conversationId)) return false;
+      if (!new EpisodeNarrator(context, conversationId, model).narratePending(token)) return false;
       return runPass(transcript, token, bridge, true, false);
     } catch (RuntimeException failure) {
       if (token.isCancelled()) throw failure;

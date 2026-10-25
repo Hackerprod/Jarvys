@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests "com.jarvys.agent.ProactiveCentralTest" -x :app:prepareApkFactoryTemplate --console=plain

@@ -13,6 +13,7 @@ import java.util.concurrent.CancellationException
 
 /** Main-chat creation is a local definition, not a running mission. */
 class BotCreationTool internal constructor(private val service: BotCreationService) : CoreTool {
+    override fun effectClass() = CoreTool.EffectClass.WRITE
     constructor(context: Context, sessionId: String) : this(BotCreationService(context, sessionId))
 
     override fun canDelegate() = false

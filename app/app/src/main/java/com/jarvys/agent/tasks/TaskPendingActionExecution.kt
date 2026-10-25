@@ -7,6 +7,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import org.json.JSONObject
 
 enum class TaskPendingActionExecutionStatus {
@@ -29,13 +31,18 @@ class TaskPendingActionExecution(
     ): TaskPendingActionExecutionStatus {
         val pending = store.get(actionId) ?: return TaskPendingActionExecutionStatus.NOT_FOUND
         if (pending.taskId != taskId) return TaskPendingActionExecutionStatus.NOT_FOUND
+        val attemptId = java.util.UUID.randomUUID().toString()
+        recordEvidence(pending, attemptId, "intent", "approval_attempt")
 
-        return when (val claim = store.claim(actionId, currentTask(taskId))) {
+        return when (val claim = store.claim(actionId, currentTask(taskId), attemptId)) {
             is TaskPendingActionClaim.Stale -> {
+                finishEvidence(pending, attemptId, "not_executed", "stale_action")
                 dismissNotification(actionId)
                 TaskPendingActionExecutionStatus.STALE
             }
             is TaskPendingActionClaim.NotPending -> {
+                finishEvidence(pending, attemptId, "not_executed", "duplicate_attempt",
+                    claim.action?.status?.name)
                 if (claim.action?.status != TaskPendingActionStatus.PENDING) dismissNotification(actionId)
                 TaskPendingActionExecutionStatus.NOT_PENDING
             }
@@ -46,14 +53,17 @@ class TaskPendingActionExecution(
                 if (task == null || !action.isCurrentFor(task)) {
                     store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("task_changed_before_dispatch"))
+                    finishEvidence(action, attemptId, "not_executed", "task_changed_before_dispatch")
                     dismissNotification(actionId)
                     return TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
+                finishEvidence(action, attemptId, "started", "approved_dispatch")
                 val result = try {
                     executor.execute(context, task, action)
                 } catch (_: Exception) {
                     store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("tool_execution_interrupted"))
+                    finishEvidence(action, attemptId, "uncertain", "tool_execution_interrupted")
                     dismissNotification(actionId)
                     return TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
@@ -72,6 +82,12 @@ class TaskPendingActionExecution(
                     runCatching { store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("result_receipt_not_durable")) }.getOrNull()?.status
                 }
+                val evidenceOutcome = when (status) {
+                    TaskPendingActionStatus.EXECUTED -> "ok"
+                    TaskPendingActionStatus.WAITING_VISIBLE_APP -> "deferred"
+                    else -> "uncertain"
+                }
+                finishEvidence(action, attemptId, evidenceOutcome, status?.name ?: "receipt_unavailable")
                 dismissNotification(actionId)
                 when (status) {
                     TaskPendingActionStatus.WAITING_VISIBLE_APP -> {
@@ -92,6 +108,46 @@ class TaskPendingActionExecution(
         .put("status", TaskPendingActionStatus.INTERRUPTED_UNCERTAIN.name)
         .put("reason", reason)
         .toString()
+
+    private fun recordEvidence(action: TaskPendingAction, attemptId: String, outcome: String, state: String) {
+        val facts = evidenceFacts(action, attemptId, state)
+        ChatDatabaseBridge.getInstance(context).personalAgentRecordEpisodeToolStartedSync(
+            WorkspaceIdentity.CENTRAL_SESSION,
+            episodeSourceMessageId(action),
+            attemptId,
+            action.toolName,
+            null,
+            "ask_approved",
+            facts,
+            outcome,
+            action.id,
+            attemptId,
+        )
+    }
+
+    private fun finishEvidence(action: TaskPendingAction, attemptId: String, outcome: String,
+                               state: String, actionStatus: String? = null) {
+        ChatDatabaseBridge.getInstance(context).personalAgentFinishEpisodeToolEvidenceSync(
+            WorkspaceIdentity.CENTRAL_SESSION,
+            attemptId,
+            outcome,
+            evidenceFacts(action, attemptId, state, actionStatus),
+        )
+    }
+
+    private fun evidenceFacts(action: TaskPendingAction, attemptId: String, state: String,
+                              actionStatus: String? = null) = JSONObject()
+        .put("classification", "WRITE")
+        .put("action_id", action.id)
+        .put("attempt_id", attemptId)
+        .put("action_binding", action.actionBinding)
+        .put("task_id", action.taskId)
+        .put("occurrence_id", action.occurrenceId)
+        .put("state", state)
+        .put("action_status", actionStatus)
+        .toString()
+
+    private fun episodeSourceMessageId(action: TaskPendingAction) = "task:${action.taskId}:${action.occurrenceId}"
 }
 
 /** Notification and detail approvals are unique WorkManager requests, independent of task runs. */

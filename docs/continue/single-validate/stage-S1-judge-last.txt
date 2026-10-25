@@ -1,0 +1,77 @@
+VEREDICTO: FAIL
+
+1. **Bloqueante — el reset bloquea `Application.onCreate`.**  
+   [FactoryInstallCoordinator.kt:415](C:/Projects/Jarvys-wt/single/app/app/src/main/java/com/jarvys/agent/apkfactory/FactoryInstallCoordinator.kt:415) ejecuta `runBlocking(Dispatchers.IO)` y espera a `ensure()` y `resumeRetirement()`. El hilo principal espera la creación de bases, las cancelaciones de WorkManager mediante `.get()` y, potencialmente, el borrado recursivo antiguo. Cambiar el dispatcher no evita ese bloqueo. Incumple el requisito explícito y puede causar ANR.  
+   **Corrección:** inicialización asíncrona con una barrera que impida admitir consumidores antes de completar el reset; retirada también fuera del arranque bloqueante.
+
+2. **Importante — una base antigua corrupta impide arrancar con los datos nuevos.**  
+   [SingleSessionReset.kt:94](C:/Projects/Jarvys-wt/single/app/app/src/main/java/com/jarvys/agent/SingleSessionReset.kt:94) exige abrir la base antigua y consultar `conversations`. Si falla, no alcanza `invalidated`/`done`; la excepción llega actualmente a `Application.onCreate`, provocando otro fallo en cada arranque. La base nueva queda condicionada a poder leer datos que se ha decidido descartar.  
+   **Corrección:** preservar la base antigua y completar la invalidación sin depender de su legibilidad. La cancelación por etiqueta ya cubre los trabajos antiguos de extracción, y existen guardas de generación; cualquier enumeración adicional debe tener una recuperación independiente de esa base.
+
+Referencias siguientes: `J/` = `app/app/src/main/java/com/jarvys/agent/`; `T/` = `app/app/src/test/java/com/jarvys/agent/`. Los estados reflejan inspección estática, no ejecución de pruebas.
+
+| Apartado S1 | Estado | Evidencia |
+|---|---|---|
+| Room v3 y archivo de base nuevo | IMPLEMENTADO | `J/chatdb/JarvysChatDatabase.kt:97,171` |
+| Esquema aditivo; columnas anteriores conservadas | IMPLEMENTADO | Comparación `schemas/.../2.json` frente a `3.json`; `J/chatdb/PersonalAgentEntities.kt:73` |
+| Ocho columnas nuevas de `memory_entries` | IMPLEMENTADO | `J/chatdb/PersonalAgentEntities.kt:73` |
+| `memory_evidence`, `memory_links`, `transcript_artifact_refs` | IMPLEMENTADO | `J/chatdb/PersonalAgentEntities.kt:134,153,164`; registro en `JarvysChatDatabase.kt:90` |
+| `message_fts` y ampliación de `memory_fts` | IMPLEMENTADO | `J/chatdb/MessageSearchIndex.kt:5`; `PersonalMemoryFtsSql.kt:12`; instalación en `JarvysChatDatabase.kt:537` |
+| Base vacía, Central y siembra personal perezosa | IMPLEMENTADO | `J/SingleSessionReset.kt:41`; `T/SingleSessionResetTest.kt:81,96` |
+| Registro nuevo de workspaces | IMPLEMENTADO | `J/SingleSessionReset.kt:50`; `workspaces/WorkspaceRegistry.kt:24` |
+| Arranque, restauración, intents y `newChat` en Central | IMPLEMENTADO | `J/MainActivity.kt:339,464,693,1195,1549` |
+| Servicio y sobrecargas sin UUID de sesión ordinaria | IMPLEMENTADO | `J/AgentForegroundService.java:586,727,1278`; `workspaces/WorkspaceIdentity.java:31` |
+| `attachment_picker_session` normalizado | IMPLEMENTADO | `J/MainActivity.kt:426` |
+| Ancla inexistente cae al hilo Central sin objetivo | IMPLEMENTADO | `J/MainActivity.kt:1405,1416` |
+| Rechazo de borrado de Central | IMPLEMENTADO | `J/chatdb/ConversationRepository.kt:432`; `ConversationMetadataAccess.java:96` |
+| Fases recuperables y estado atómico | IMPLEMENTADO | `J/SingleSessionReset.kt:35,65,157,167` |
+| Arranque sin bloquear `Application.onCreate` | NO | `J/apkfactory/FactoryInstallCoordinator.kt:415` |
+| Invalidación de notificaciones, PendingIntents y memoria antigua | PARCIAL | `J/SingleSessionReset.kt:80`; incidencia 2 |
+| Guardas de generación en workers | IMPLEMENTADO | `J/PersonalMemoryExtractionWorker.kt:27,126`; `PersonalMemoryConsolidationWorker.kt:23,111` |
+| Preservación de configuración | IMPLEMENTADO | `J/SingleSessionReset.kt:101`: elimina únicamente las claves de sesión previstas |
+| Retirada tras primer run correcto y reanudación | IMPLEMENTADO | `J/AgentForegroundService.java:1849`; `SingleSessionReset.kt:107,119` |
+| Retirada excluye `g3` y Descargas públicas | IMPLEMENTADO | Inventario literal privado en `J/SingleSessionReset.kt:27`; borrado en `:141` |
+| Separación `filesDir` / `chatRoot`; anclas por profundidad | IMPLEMENTADO | `J/StorageGeneration.java:12`; `LocalRunStore.java:1638`; `DeliveredArtifactStore.java:55`; `WorkspaceStore.java:201` |
+| Adjuntos, entregables, imágenes, miniaturas y Crew | IMPLEMENTADO | `J/AttachmentStore.java:27`; `DeliveredArtifactStore.java:58`; `GeneratedImageStore.java:19`; `HtmlThumbnailStore.java:63`; `CrewContextArtifacts.java:47`; `CrewCheckpointStore.java:299` |
+| Coding, identidad y `legacyRoot()` | IMPLEMENTADO | `J/coding/ProjectScopeStore.java:39`; `ProjectScopeIdentity.java:31`; `ProjectScope.java:88` |
+| Módulos, lector y FileProvider | IMPLEMENTADO | `J/ConversationModuleCapabilityAccess.kt:29`; `ConversationReader.kt:1275,1282`; `res/xml/generated_image_paths.xml:3` |
+| Almacenes adicionales: runs, notas, MemFS, índice y recibos privados | IMPLEMENTADO | `J/LocalRunStore.java:105`; `MemoryStore.java:153`; `MemorySearchIndexRuntime.kt:142`; `DownloadStore.java:440` |
+| Reacciones por id/índice | IMPLEMENTADO | `J/MessageReactionTool.java:34,60` |
+| Propiedad de artefactos sin releer transcript | IMPLEMENTADO | `J/MainChatTranscriptStore.java:47`; `chatdb/ModelTranscriptRepository.kt:386` |
+| Transcript seleccionado por grupos completos | IMPLEMENTADO | `J/chatdb/ModelTranscriptRepository.kt:395` |
+| Entradas por cursor y estado por ids | IMPLEMENTADO | `J/chatdb/ConversationRepository.kt:1127,1137`; `LocalRunStore.java:1837` |
+| Incorporación por rango conservando el journal | IMPLEMENTADO | `J/chatdb/ConversationRepository.kt:1153`; `LocalRunStore.java:1510` |
+| Último índice de usuario mediante `MAX` | IMPLEMENTADO | `J/chatdb/ConversationRepository.kt:1162`; `LocalRunStore.java:1618` |
+| Contratos B9/B10/B11 | PARCIAL | Implementados, pero B9 no ejecuta la `Application` productiva ni detecta la incidencia 1 |
+
+No identifiqué adelantos de S2–S8. Se conservan privacidad, drawer, pantallas de workspace y destinos internos proactivo/tareas. No encontré topes nuevos ni validadores por idioma.
+
+Las decisiones adicionales sobre la segunda sobrecarga del servicio, las rutas adicionales y el estado técnico del índice en `storage_meta` son coherentes con S1. Mover ese estado desde `agent_docs` permite mantener vacías las tablas personales tras el reset. La decisión de bloquear ante corrupción de la base antigua es incorrecta por la incidencia 2.
+
+Inventario de tests borrados o adaptados:
+
+| Test o fichero | Cambio y juicio |
+|---|---|
+| `MainActivityWorkspaceRoutingTest.emptyCentralSelectionPreservesHiddenLiveOwnerAndReturningRestoresItsRun` | **Eliminado. Justificado:** exigía alternar entre chats ordinarios. |
+| `existingLegacySelectionSurvivesStartupAndEmptyCentralNeverBorrowsItsTranscript` | Sustituido por `legacySelectionIsIgnoredAndCentralNeverBorrowsItsTranscript`. Justificado por Central obligatorio. |
+| `deletingTheCurrentChatReturnsToAgentInsteadOfCreatingAnEmptyChat` | Sustituido por `deletingAnOldConversationKeepsCentralSelected`. Justificado. |
+| Resto de `MainActivityWorkspaceRoutingTest` | Adaptados `warmWorkerIntentRedirectsToCentralWithoutOpeningTheWorkerAsAChat`, `recreationKeepsCentralSelectionEvenWhenOriginalIntentStillPointsAtLegacy`, `sendingAndPausingWorkspaceControlsPreservesTheCurrentChatDraftAndSkills`, `realDrawerCatalogDetailFilesAndBackPreserveIndependentDraftAndBothAttachmentOwners` y `realCatalogNextPreviousAndFirstBrowseBoundedPagesWithoutStartingCrew`; fixtures y selector observan Central. Justificado. |
+| `WorkspaceArtifactDeliveryTest.deletedCentralCannotReceiveAndOrdinarySnapshotStillRejectsCrossChat` | Sustituido por `centralDeletionIsRejectedAndOrdinarySnapshotStillRejectsCrossChat`. Justificado: comprueba rechazo del borrado y mantiene el rechazo entre conversaciones. |
+| Resto de `WorkspaceArtifactDeliveryTest` | Fixtures, rutas y comprobaciones de efectos de almacenamiento adaptados a `g3`. Justificado; no se eliminan los escenarios de revocación, cancelación o aislamiento. |
+| `AgentRunRestorationComposeTest.restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping` | Constructor y rutas nuevas. Justificado. |
+| `CrewCheckpointRecoveryTest` | Helper de ubicación del checkpoint adaptado a `g3`. Justificado. |
+| `CrewContextArtifactsRecoveryTest` | Helper de ubicación del artefacto adaptado a `g3`. Justificado. |
+| `DeliveredArtifactTest` | Fixtures, reaperturas, rutas de symlinks y proveedor adaptados. Justificado. |
+| `GeneratedImageStoreTest` | Rutas, XML esperado, inicialización real del proveedor y shadow de separadores del host. Justificado; mantiene resolución de URI y acceso a bytes. |
+| `HtmlPreviewSnapshotTest` | Fixtures, reaperturas, manifests y rutas de corrupción/symlinks adaptados. Justificado. |
+| `HtmlThumbnailStoreTest` | Fixtures y rutas de caché, manifests y borrado adaptados. Justificado. |
+| `ProjectScopeExistingTest.uncachedRootWithoutIdentityDoesNotCreateState` | Ruta del fixture adaptada. Justificado. |
+| `ConversationRepositoryTest.rawRepositoryInsertsProvideEveryRequiredSchemaColumn` | Excluye también `message_fts` del auditor de tablas Room. Justificado por ser FTS externo. |
+| `JarvysChatDatabaseM0Test` | Expectativas v3, tablas globales nuevas, estado técnico e índices externos; conserva fixtures publicados v1/v2. Justificado. |
+| `M1bRepositoriesTest.modelProtocolUsesFirstResultsAndExcludesPreBoundaryProviderOutputsAfterCompaction` | Distingue selección compactada y lectura completa de referencia. Justificado. |
+| `PersonalMemoryFts5Test.externalIndexTracksWritesAndSearchUsesBm25Ranking` y `reservedWordsAreQuotedBeforeFts5PrefixMatching` | Columnas nuevas en fixtures e inserciones explícitas. Justificado. |
+| `ChatTestStore` | Inicialización de WorkManager para fixtures. Justificado; es infraestructura compartida. |
+
+Los B11 nuevos incluyen los tres lotes exigidos y comparan reconstrucción completa frente a seleccionada; no los considero tautológicos. B9 tiene una comprobación circular limitada: genera los árboles antiguos desde `SingleSessionReset.oldTrees` y verifica esa misma lista (`T/SingleSessionResetTest.kt:108`); no detectaría una omisión del inventario. Además, usa `application = Application::class` (`:30`), evitando el arranque productivo bloqueante.
+
+No modifiqué archivos ni ejecuté builds/tests. `git diff --check` no mostró errores. No verifiqué los resultados de ejecución declarados ni la atribución de los 22 fallos a HEAD. Tampoco comprobé en dispositivo ANR, workers realmente activos, cortes dentro de una fase o durante la retirada, fallos físicos de escritura ni rendimiento con un historial extenso.

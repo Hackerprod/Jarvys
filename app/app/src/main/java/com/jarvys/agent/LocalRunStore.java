@@ -1645,6 +1645,14 @@ public final class LocalRunStore {
     }
 
     File filesDirectory() { return filesDirectory; }
+    List<com.jarvys.agent.chatdb.EpisodeReference> episodesForSourceMessages(String sessionId, List<String> messageIds) {
+        if (chatDatabaseBridge == null) return Collections.emptyList();
+        return chatDatabaseBridge.personalAgentEpisodesForSourceMessagesSync(sessionId, messageIds);
+    }
+    List<com.jarvys.agent.chatdb.EpisodeReference> episodesForSourceMessages(String sessionId, List<String> messageIds) {
+        if (chatDatabaseBridge == null) return Collections.emptyList();
+        return chatDatabaseBridge.personalAgentEpisodesForSourceMessagesSync(sessionId, messageIds);
+    }
 
     JSONObject readConversationMessageRow(String sessionId, String messageId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();

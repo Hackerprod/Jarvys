@@ -1,0 +1,679 @@
+{
+  "changed_classes": {
+    "CodingJobManager": "app/app/src/full/java/com/jarvys/agent/linux/CodingJobManager.kt",
+    "AgentForegroundService": "app/app/src/main/java/com/jarvys/agent/AgentForegroundService.java",
+    "AttachmentStore": "app/app/src/main/java/com/jarvys/agent/AttachmentStore.java",
+    "ConversationMetadataAccess": "app/app/src/main/java/com/jarvys/agent/ConversationMetadataAccess.java",
+    "ConversationModuleCapabilityAccess": "app/app/src/main/java/com/jarvys/agent/ConversationModuleCapabilityAccess.kt",
+    "ConversationReader": "app/app/src/main/java/com/jarvys/agent/ConversationReader.kt",
+    "CrewCheckpointStore": "app/app/src/main/java/com/jarvys/agent/CrewCheckpointStore.java",
+    "CrewContextArtifacts": "app/app/src/main/java/com/jarvys/agent/CrewContextArtifacts.java",
+    "DeliveredArtifactStore": "app/app/src/main/java/com/jarvys/agent/DeliveredArtifactStore.java",
+    "DownloadStore": "app/app/src/main/java/com/jarvys/agent/DownloadStore.java",
+    "GeneratedImageStore": "app/app/src/main/java/com/jarvys/agent/GeneratedImageStore.java",
+    "HtmlThumbnailStore": "app/app/src/main/java/com/jarvys/agent/HtmlThumbnailStore.java",
+    "LocalRunStore": "app/app/src/main/java/com/jarvys/agent/LocalRunStore.java",
+    "MainActivity": "app/app/src/main/java/com/jarvys/agent/MainActivity.kt",
+    "MainChatTranscriptStore": "app/app/src/main/java/com/jarvys/agent/MainChatTranscriptStore.java",
+    "MemorySearchIndexRuntime": "app/app/src/main/java/com/jarvys/agent/MemorySearchIndexRuntime.kt",
+    "MemoryStore": "app/app/src/main/java/com/jarvys/agent/MemoryStore.java",
+    "MessageReactionTool": "app/app/src/main/java/com/jarvys/agent/MessageReactionTool.java",
+    "PersonalMemoryConsolidationWorker": "app/app/src/main/java/com/jarvys/agent/PersonalMemoryConsolidationWorker.kt",
+    "PersonalMemoryExtractionWorker": "app/app/src/main/java/com/jarvys/agent/PersonalMemoryExtractionWorker.kt",
+    "WorkspaceArtifactDelivery": "app/app/src/main/java/com/jarvys/agent/WorkspaceArtifactDelivery.java",
+    "WorkspacePreviewScreen": "app/app/src/main/java/com/jarvys/agent/WorkspacePreviewScreen.kt",
+    "WorkspaceStore": "app/app/src/main/java/com/jarvys/agent/WorkspaceStore.java",
+    "WorkspaceTools": "app/app/src/main/java/com/jarvys/agent/WorkspaceTools.java",
+    "FactoryInstallCoordinator": "app/app/src/main/java/com/jarvys/agent/apkfactory/FactoryInstallCoordinator.kt",
+    "ChatDatabaseBridge": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
+    "ConversationRepository": "app/app/src/main/java/com/jarvys/agent/chatdb/ConversationRepository.kt",
+    "JarvysChatDatabase": "app/app/src/main/java/com/jarvys/agent/chatdb/JarvysChatDatabase.kt",
+    "PersonalAgentEntities": "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalAgentEntities.kt",
+    "PersonalMemoryFtsSql": "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalMemoryFtsSql.kt",
+    "ProjectScope": "app/app/src/main/java/com/jarvys/agent/coding/ProjectScope.java",
+    "ProjectScopeIdentity": "app/app/src/main/java/com/jarvys/agent/coding/ProjectScopeIdentity.java",
+    "ProjectScopeStore": "app/app/src/main/java/com/jarvys/agent/coding/ProjectScopeStore.java",
+    "ApprovalNotificationCenter": "app/app/src/main/java/com/jarvys/agent/connectors/ApprovalNotificationCenter.kt",
+    "ProactiveInteractionDispatcher": "app/app/src/main/java/com/jarvys/agent/proactive/ProactiveInteractionDispatcher.kt",
+    "ProactiveNotifier": "app/app/src/main/java/com/jarvys/agent/proactive/ProactiveNotifier.kt",
+    "TaskNotifier": "app/app/src/main/java/com/jarvys/agent/tasks/TaskNotifier.kt",
+    "WorkspaceRegistry": "app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceRegistry.kt",
+    "strings": "app/app/src/main/res/values/strings.xml",
+    "generated_image_paths": "app/app/src/main/res/xml/generated_image_paths.xml"
+  },
+  "tests": {
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentForegroundServiceMainThreadAdmissionTest.kt": [
+      "AgentForegroundService",
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentInputApprovalPolicyTest.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentMessagingPipelineTest.kt": [
+      "AgentForegroundService",
+      "CrewCheckpointStore",
+      "LocalRunStore",
+      "ChatDatabaseBridge",
+      "ProjectScopeStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentModelTurnLimitTest.java": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentResultPresentationTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AgentRunRestorationComposeTest.kt": [
+      "DeliveredArtifactStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AppLanguagePolicyTest.kt": [
+      "AgentForegroundService",
+      "MainActivity",
+      "WorkspacePreviewScreen",
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ApplicationIdentityTest.kt": [
+      "MainActivity"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AppNavigationBackPolicyTest.kt": [
+      "MainActivity",
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ArtifactHtmlPreviewUiTest.kt": [
+      "DeliveredArtifactStore",
+      "DownloadStore",
+      "LocalRunStore",
+      "WorkspacePreviewScreen",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AttachmentModelContextRecoveryTest.java": [
+      "AttachmentStore",
+      "GeneratedImageStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\AttachmentRecoveryTest.java": [
+      "AttachmentStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CentralAgentInputCatalogTest.kt": [
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ChatTestStore.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CodexImageGenerationToolScopeTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CodexReasoningPersistenceTest.java": [
+      "LocalRunStore",
+      "MainChatTranscriptStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CodingMissionAccessRuntimeTest.java": [
+      "CrewCheckpointStore",
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CompleteSkillCrewDeliveryTest.kt": [
+      "CrewContextArtifacts"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ConnectorArtifactAccessTest.java": [
+      "AttachmentStore",
+      "DeliveredArtifactStore",
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ConnectorArtifactScopeTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ContinuousMissionServiceTest.kt": [
+      "AgentForegroundService",
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CoreAgentLoopCompactionBehaviorTest.java": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CoreAgentLoopProviderCompactionRecoveryTest.java": [
+      "CrewContextArtifacts"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CoreMcpToolNameTest.kt": [
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewC0Test.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewC1ComposeTest.kt": [
+      "WorkspaceStore",
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewC1cTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewC2Test.kt": [
+      "AgentForegroundService",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewCheckpointDurabilityTest.java": [
+      "ConversationMetadataAccess",
+      "CrewCheckpointStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewCheckpointIncorporationCodecTest.java": [
+      "CrewCheckpointStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewCheckpointRecoveryTest.java": [
+      "ConversationMetadataAccess",
+      "CrewCheckpointStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewContextArtifactsRecoveryTest.java": [
+      "ConversationMetadataAccess",
+      "CrewCheckpointStore",
+      "CrewContextArtifacts"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewConversationCompactionRecoveryTest.java": [
+      "CrewContextArtifacts"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewConversationReplayTest.java": [
+      "CrewCheckpointStore",
+      "LocalRunStore",
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewCoordinationCheckpointTest.java": [
+      "CrewCheckpointStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewMissionPersistenceTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewMissionTitleCheckpointTest.java": [
+      "CrewCheckpointStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\CrewPartialPresentationUx38Test.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\DeliveredArtifactTest.java": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "MainChatTranscriptStore",
+      "WorkspaceStore",
+      "WorkspaceTools",
+      "ChatDatabaseBridge",
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\DownloadStoreTest.java": [
+      "DownloadStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ExistingUserSetupWizardRule.kt": [
+      "MainActivity"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\GeneratedImageStoreTest.kt": [
+      "GeneratedImageStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlPreviewSnapshotTest.java": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlThumbnailCardUiTest.kt": [
+      "DeliveredArtifactStore",
+      "DownloadStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlThumbnailLifecycleUiTest.kt": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlThumbnailOverlayUiTest.kt": [
+      "DownloadStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlThumbnailRendererTest.kt": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\HtmlThumbnailStoreTest.java": [
+      "ConversationMetadataAccess",
+      "DeliveredArtifactStore",
+      "HtmlThumbnailStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\LauncherIconTest.kt": [
+      "ApprovalNotificationCenter"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\LocalRunAttachmentRecoveryTest.java": [
+      "AttachmentStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\LocalRunDirectoryCreationTest.java": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\LocalRunStoreMessageMetadataTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainActivityWorkspacePreviewGestureTest.kt": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "MainActivity",
+      "MemoryStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainActivityWorkspaceRoutingTest.kt": [
+      "AttachmentStore",
+      "LocalRunStore",
+      "MainActivity",
+      "MemoryStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainAgentContractTest.java": [
+      "LocalRunStore",
+      "MainChatTranscriptStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainAgentInteractionTest.kt": [
+      "AgentForegroundService",
+      "LocalRunStore",
+      "MainChatTranscriptStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainChatToolContinuityTest.java": [
+      "LocalRunStore",
+      "MainChatTranscriptStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MainHeaderLiveStateRecoveryTest.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemoryLanguageQ2Test.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemoryScopeRuntimeTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemoryScopeStoreTest.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemorySearchIndexTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemorySearchToolTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemorySeedFixtures.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MemoryStoreTest.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MessageReactionSubmissionTest.kt": [
+      "LocalRunStore",
+      "MessageReactionTool"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\MessageReactionTest.kt": [
+      "LocalRunStore",
+      "MessageReactionTool"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\NativeMemoryActionRuntimeTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\OptionalImageToolNullArgumentsTest.java": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\PersonalAgentBehaviorTest.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\PersonalMemoryScreenTest.kt": [
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\PreviewMobileViewportIntegrationTest.kt": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\PreviewResponsePolicyTest.kt": [
+      "DeliveredArtifactStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ProjectImageToolTest.java": [
+      "GeneratedImageStore",
+      "LocalRunStore",
+      "WorkspaceStore",
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ProviderDiagnosticsCaptureTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ProviderDiagnosticsTransportTest.java": [
+      "LocalRunStore",
+      "MainChatTranscriptStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\TokenStatisticsRemovalTest.kt": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ToolActivityRecoveryTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ToolArgumentValidatorTest.java": [
+      "WorkspaceStore",
+      "WorkspaceTools",
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ToolTimelinePersistenceTest.java": [
+      "LocalRunStore",
+      "MainChatTranscriptStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ToolTimelineRecoveryTest.kt": [
+      "AgentForegroundService",
+      "LocalRunStore",
+      "MainChatTranscriptStore",
+      "WorkspacePreviewScreen",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\UserDecisionLocalizationTest.kt": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\UserDecisionScopeTest.kt": [
+      "MemoryStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceArtifactDeliveryTest.java": [
+      "DeliveredArtifactStore",
+      "HtmlThumbnailStore",
+      "LocalRunStore",
+      "WorkspaceArtifactDelivery",
+      "WorkspaceStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceAttachmentRecoveryTest.java": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceCoordinationDeliveryTest.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceCoordinationLedgerTest.java": [
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceInputIncorporationDeliveryTest.kt": [
+      "ConversationMetadataAccess",
+      "CrewCheckpointStore",
+      "LocalRunStore",
+      "ProjectScopeStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceInputIncorporationLedgerTest.java": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspacePreviewRecompositionTest.kt": [
+      "WorkspacePreviewScreen",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceResultDeliveryTest.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceResultLedgerTest.java": [
+      "LocalRunStore",
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceStoreTest.kt": [
+      "MemoryStore",
+      "WorkspaceStore",
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\WorkspaceSupervisorMessagePipelineTest.kt": [
+      "LocalRunStore",
+      "WorkspaceStore",
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\DexBindingsTest.java": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactoryApkSignerTest.kt": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactoryDocumentCoordinatorTest.kt": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactoryHistoricalSigningScopeTest.kt": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactoryInstallCoordinatorTest.kt": [
+      "FactoryInstallCoordinator",
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactorySignedArtifactHistoryTest.kt": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\FactorySigningScopeTest.kt": [
+      "ProjectScope"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\apkfactory\\TemplateApkTest.java": [
+      "ProjectScope",
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\ChatReadProgressTest.kt": [
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\ConversationReaderDatabaseTest.kt": [
+      "ConversationReader",
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\ConversationReaderPerfTest.kt": [
+      "ConversationReader",
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\ConversationRepositoryTest.kt": [
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\JarvysChatDatabaseM0Test.kt": [
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\M1bRepositoriesTest.kt": [
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\PersonalMemoryFts5Test.kt": [
+      "PersonalMemoryFtsSql"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\PersonalMemorySearchFallbackTest.kt": [
+      "ChatDatabaseBridge"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\StrictJournalRepositoryTest.kt": [
+      "ConversationRepository",
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\chatdb\\WorkspaceLedgerIndependenceTest.kt": [
+      "JarvysChatDatabase"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\CodingProjectToolsTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\FactoryPackagingSourceTest.kt": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\FactoryProjectServiceTest.kt": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectAdoptionServiceTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectBinaryMutationTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectFileCreationPolicyTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectMutationRecoveryTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectReadSearchTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectScopeExistingTest.java": [
+      "ProjectScope",
+      "ProjectScopeIdentity",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\coding\\ProjectScopeTest.java": [
+      "ProjectScope",
+      "ProjectScopeStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\connectors\\ApprovalNotificationCenterTest.kt": [
+      "ApprovalNotificationCenter"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\connectors\\RemoteServiceCatalogTest.kt": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\crew\\BotIdentityUiTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\crew\\CrewCoordinationCaptureTest.java": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\crew\\CrewModelPhaseComposeTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\crew\\CrewTaskPresentationTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\crew\\ToolActivityComposeTest.kt": [
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\mcp\\GitHubWriteJournalTest.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\proactive\\ProactiveActionReceiverTest.kt": [
+      "ProactiveInteractionDispatcher"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\proactive\\ProactiveAgentProcessorTest.kt": [
+      "AgentForegroundService",
+      "LocalRunStore",
+      "MainActivity",
+      "ProactiveInteractionDispatcher",
+      "ProactiveNotifier"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\skills\\BundledSkillSeederTest.kt": [
+      "WorkspaceTools"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\tasks\\ScheduledTaskProcessorTest.kt": [
+      "LocalRunStore",
+      "TaskNotifier"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\tasks\\TaskManagementLocalizationTest.kt": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\tasks\\TaskManualRunWorkerTest.kt": [
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\tasks\\TaskNotifierTest.kt": [
+      "MainActivity",
+      "TaskNotifier"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\tasks\\TaskPlatformContractTest.kt": [
+      "strings"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\Th1VisualCaptureTest.kt": [
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\workspaces\\WorkspaceCatalogPageTest.kt": [
+      "LocalRunStore",
+      "ChatDatabaseBridge",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\workspaces\\WorkspaceCoordinatorIntegrationTest.kt": [
+      "LocalRunStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\workspaces\\WorkspaceFilesPagingComposeTest.kt": [
+      "WorkspaceStore",
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\workspaces\\WorkspacePendingProjectionQueryTest.kt": [
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\workspaces\\WorkspaceRegistryTest.kt": [
+      "WorkspaceRegistry"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\ArchivedChatsComposeTest.kt": [
+      "MainActivity"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\DeliveredFileUiTest.kt": [
+      "DeliveredArtifactStore",
+      "DownloadStore",
+      "LocalRunStore",
+      "WorkspaceStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\GeneratedImageComposeTest.kt": [
+      "GeneratedImageStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\I1VisualCaptureTest.kt": [
+      "GeneratedImageStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\MainActivityDownloadFlowTest.kt": [
+      "DownloadStore",
+      "GeneratedImageStore",
+      "LocalRunStore",
+      "MainActivity"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\MainActivityDrawerNavigationTest.kt": [
+      "AttachmentStore",
+      "LocalRunStore",
+      "MainActivity",
+      "MemoryStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\MainActivityImageDownloadGestureTest.kt": [
+      "GeneratedImageStore",
+      "LocalRunStore",
+      "MainActivity"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\MessageReactionTestSupport.kt": [
+      "AttachmentStore",
+      "LocalRunStore"
+    ],
+    "app\\app\\src\\test\\java\\com\\jarvys\\agent\\ui\\chat\\Ux1VisualCaptureTest.kt": [
+      "GeneratedImageStore"
+    ]
+  }
+}

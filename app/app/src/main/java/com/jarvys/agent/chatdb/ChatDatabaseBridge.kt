@@ -10,6 +10,7 @@ import com.jarvys.agent.proactive.ProactiveReplyClaim
 import com.jarvys.agent.crew.CrewCoordinationEvidence as CrewCoordinationJournalEvidence
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewResultEvidence as CrewResultJournalEvidence
+import com.jarvys.agent.connectors.AutonomyAuditRecord
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReply as WorkspaceCoordinationReplyJournal
 import com.jarvys.agent.workspaces.WorkspaceInputIncorporation as WorkspaceInputIncorporationJournal
@@ -200,6 +201,80 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     }
 
     fun personalAgentNameSync(): String? = withAgentMemory("read agent name") { it.agentName() }
+
+    fun appendConnectorAuditSync(record: AutonomyAuditRecord) = execute { repositories ->
+        repositories.database.withChatWriteTransaction {
+            repositories.database.chatSql.execSQL(
+                "INSERT OR IGNORE INTO connector_autonomy_audit(id,timestamp_millis,connector_id,connector_name,operation_name,operation_label,summary) VALUES(?,?,?,?,?,?,?)",
+                arrayOf(record.id, record.timestampMillis, record.connectorId, record.connectorName,
+                    record.operationName, record.operationLabel, record.summary),
+            )
+        }
+    }
+
+    fun recordConnectorStateEventSync(connectorId: String, connected: Boolean, atMs: Long = System.currentTimeMillis()) = execute { repositories ->
+        repositories.database.withChatWriteTransaction {
+            repositories.database.chatSql.execSQL(
+                "INSERT INTO connector_state_events(id,connector_id,connected,connected_at_ms) VALUES(?,?,?,?)",
+                arrayOf(java.util.UUID.randomUUID().toString(), connectorId, if (connected) 1 else 0, atMs),
+            )
+        }
+    }
+
+    fun recentConnectorAuditSync(connectorId: String, limit: Int): List<AutonomyAuditRecord> = execute { repositories ->
+        require(limit >= 0)
+        repositories.database.withChatReadTransaction {
+            repositories.database.chatSql.query(
+                "SELECT id,timestamp_millis,connector_id,connector_name,operation_name,operation_label,summary FROM connector_autonomy_audit WHERE connector_id=? ORDER BY timestamp_millis DESC,id DESC LIMIT ?",
+                arrayOf(connectorId, limit),
+            ).use { cursor -> buildList {
+                while (cursor.moveToNext()) add(AutonomyAuditRecord(
+                    id = cursor.getString(0), timestampMillis = cursor.getLong(1), connectorId = cursor.getString(2),
+                    connectorName = cursor.getString(3), operationName = cursor.getString(4),
+                    operationLabel = cursor.getString(5), summary = cursor.getString(6),
+                ))
+            } }
+        }
+    }
+
+    fun personalAgentRecordEpisodeToolStartedSync(conversationId: String, sourceMessageId: String, callId: String,
+        toolName: String, connector: String?, authorization: String?, factsJson: String, outcome: String,
+        actionId: String? = null, attemptId: String? = null): String =
+        withAgentMemory("record episode evidence") {
+            it.recordEpisodeToolStarted(conversationId, sourceMessageId, callId, toolName, connector, authorization,
+                factsJson, outcome, actionId, attemptId)
+        }
+
+    fun personalAgentFinishEpisodeToolEvidenceSync(conversationId: String, callId: String, outcome: String, factsJson: String) =
+        withAgentMemory("finish episode evidence") { it.finishEpisodeToolEvidence(conversationId, callId, outcome, factsJson) }
+
+    fun personalAgentEnsureTaskAttemptEvidenceSync(conversationId: String, sourceMessageId: String, actionId: String,
+        attemptId: String, toolName: String, authorization: String, outcome: String, factsJson: String) =
+        withAgentMemory("reconcile task action evidence") {
+            it.ensureTaskAttemptEvidence(conversationId, sourceMessageId, actionId, attemptId, toolName,
+                authorization, outcome, factsJson)
+        }
+
+    fun personalAgentReconcileEpisodeEvidenceSync(conversationId: String? = null) =
+        withAgentMemory("reconcile episode evidence") { it.reconcileEpisodeEvidence(conversationId) }
+
+    fun personalAgentPendingEpisodeNarrationsSync(conversationId: String): List<PersonalMemoryHit> =
+        withAgentMemory("read episode narration queue") { it.pendingEpisodeNarrations(conversationId) }
+
+    fun personalAgentEpisodeNarrationInputSync(id: String): EpisodeNarrationInput? =
+        withAgentMemory("read episode narration evidence") { it.episodeNarrationInput(id) }
+
+    fun personalAgentEpisodesForSourceMessagesSync(conversationId: String, messageIds: List<String>): List<EpisodeReference> =
+        withAgentMemory("read compacted episode references") { it.episodesForSourceMessages(conversationId, messageIds) }
+
+    fun personalAgentSetEpisodeNarrationSync(id: String, state: String, title: String?, text: String?) =
+        withAgentMemory("update episode narration") { it.setEpisodeNarration(id, state, title, text) }
+
+    fun personalAgentNarrationCursorSync(conversationId: String): Long =
+        withAgentMemory("read narration cursor") { it.narrationCursor(conversationId) }
+
+    fun personalAgentAdvanceNarrationCursorSync(conversationId: String, throughSeq: Long) =
+        withAgentMemory("advance narration cursor") { it.advanceNarrationCursor(conversationId, throughSeq) }
 
     fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean): PersonalAgentPromptContext =
         personalAgentPromptContext(conversationId, memoryEnabled, "principal")

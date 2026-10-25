@@ -120,11 +120,13 @@ public final class ConversationCompactor {
                     && memoryFlush.beforeCompact(new ArrayList<>(transcript), token);
             List<String> sourceArtifacts = new ArrayList<>();
             String summary = summarize(plan.summarize, plan.mode, token, sourceArtifacts);
+            summary = appendEpisodeReferences(summary, plan.summarize);
             if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
                 plan = ConversationCompactionPolicy.planAll(transcript);
                 if (plan.summarize.isEmpty()) return null;
                 sourceArtifacts.clear();
                 summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token, sourceArtifacts);
+                summary = appendEpisodeReferences(summary, plan.summarize);
             }
             token.throwIfCancelled();
             int firstKept = store.conversationMessageCount(sessionId);
@@ -164,6 +166,29 @@ public final class ConversationCompactor {
         } finally {
             sessionLock.unlock();
         }
+    }
+
+    private String appendEpisodeReferences(String summary, List<ConversationTurn> turns) {
+        if (store == null) return summary;
+        List<String> sourceIds = new ArrayList<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.kind == ConversationTurn.Kind.MESSAGE && "user".equals(turn.role)
+                    && turn.durableMessageId != null && !turn.durableMessageId.isEmpty()) sourceIds.add(turn.durableMessageId);
+        }
+        if (sourceIds.isEmpty()) return summary;
+        List<com.jarvys.agent.chatdb.EpisodeReference> episodes = store.episodesForSourceMessages(sessionId, sourceIds);
+        if (episodes.isEmpty()) return summary;
+        List<String> labels = new ArrayList<>();
+        for (com.jarvys.agent.chatdb.EpisodeReference episode : episodes) {
+            String title = episode.getTitle() == null || episode.getTitle().isBlank() ? episode.getId() : episode.getTitle();
+            String day = episode.getEventAt() == null ? "" : " (" + java.time.Instant.ofEpochMilli(episode.getEventAt())
+                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate() + ")";
+            labels.add(episode.getId() + " " + title + day);
+        }
+        String appendix = "\n\nEpisodes: " + String.join("; ", labels);
+        int keep = Math.max(0, ConversationCompactionPolicy.MAX_SUMMARY_CHARS - appendix.length());
+        String safe = summary.length() > keep ? summary.substring(0, keep) : summary;
+        return safe + appendix;
     }
 
     /** A model-written summary may omit completed effects. Preserve bounded source-backed evidence. */

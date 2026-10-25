@@ -1,0 +1,108 @@
+VEREDICTO: FAIL
+
+Encontré **cinco incidencias importantes**. Los dos importantes de la revisión anterior están corregidos, pero S5 todavía presenta fallos de guardado, retención y paginación.
+
+Rutas abreviadas: `J/` = `app/app/src/main/java/com/jarvys/agent/`; `T/` = `app/app/src/test/java/com/jarvys/agent/`. Revisión estática y contraste de logs existentes; no modifiqué archivos ni ejecuté builds/tests del proyecto.
+
+1. **IMPORTANTE — deduplicar por texto omite los enlaces y puede retirar una entrada sin registrar su sustitución.**  
+   `J/chatdb/PersonalAgentRepository.kt:333` retira primero `supersedes_id`; `:340-344` retorna `already_saved` si encuentra el texto existente, antes de ejecutar los enlaces de `:382-383`.
+
+   Ejemplo: existen A y B; `memory_save(text=B.text, supersedes_id=A.id)` sin `topic_key` retira A, pero no crea B→A `supersedes`. También ignora `related_ids`. Afecta al flujo documentado de guardar, recibir candidatos y repetir la llamada para relacionarlos. **Corrección:** aplicar las relaciones al id deduplicado antes del retorno, dentro de la misma transacción.
+
+2. **IMPORTANTE — repetir bajo presión un contenido ya expulsado puede abortar el run.**  
+   `J/MainChatTranscriptStore.java:235-244,287-291` intenta registrar ese mismo hash como `unavailable`, con ruta vacía y cero bytes. `J/chatdb/ModelTranscriptRepository.kt:318-324` compara esos metadatos con los anteriores de `expelled` y devuelve `Conflict`: no considera válida esa transición. `J/LocalRunStore.java:1812` exige éxito y lanza.
+
+   **Corrección:** resolver explícitamente la transición sin contenido, conservando metadatos y estado coherentes sin abortar. Falta probar guardar A → expulsar A → repetir A mientras continúa la presión.
+
+3. **IMPORTANTE — una expulsión desde otra instancia deja ownership obsoleto y rompe escrituras posteriores.**  
+   `J/MainChatTranscriptStore.java:68-93` refresca su JSON de metadatos, pero no `CrewContextArtifacts.owned`. Otra instancia expulsa y borra A en `:276-277`; la instancia original sigue teniendo A en su mapa. Al guardar B, `:256` llama a `snapshotOwnership()`, que verifica todos sus archivos en `J/CrewContextArtifacts.java:195-197` y falla sobre A.
+
+   Existe una ruta real: el runtime conserva su productor (`J/CoreAgentRuntime.java:336-338,381`), mientras el compactador crea otra instancia (`J/ConversationCompactor.java:199`). El lock serializa, pero no invalida esos mapas. **Corrección:** reconciliar ownership o consultar solamente los metadatos del archivo recién guardado. Falta una prueba con ambas instancias.
+
+4. **IMPORTANTE — los cursores de historial sobreviven a borrados/regeneraciones y omiten resultados silenciosamente.**  
+   `J/chatdb/MessageHistoryRepository.kt:68-96,138-151` guarda fingerprint de consulta, secuencia máxima y `OFFSET`, sin revisión de las fuentes.
+
+   Con coincidencias 5,4,3,2,1, una primera página devuelve 5,4. Si se oculta 5, continuar con `OFFSET 2` devuelve 2,1: pierde 3 sin rechazar el cursor. Contradice `docs/context/SPEC.md:427,433`, adoptado por `docs/SINGLE_SESSION.md:379`. **Corrección:** ligar el cursor a una revisión y rechazarlo o reiniciarlo explícitamente cuando cambien las fuentes.
+
+5. **IMPORTANTE — `history_search` permite consultas sin freno efectivo; el overflow elimina el límite SQL.**  
+   `J/PersonalMemoryTools.java:302-321` acepta `limit` directamente. `J/chatdb/MessageHistoryRepository.kt:68,77,83` solo lo fuerza a positivo y calcula `max + 1` usando `Int`. Con `Int.MAX_VALUE`, resulta un `LIMIT` negativo, que SQLite interpreta como ilimitado. Puede cargar y serializar todo el historial; reducir el extracto no limita los metadatos ni las filas.
+
+   **Corrección:** derivar el máximo del presupuesto real de salida y usar aritmética segura. No requiere inventar una cuota numérica.
+
+6. **MENOR — el presupuesto de `expand=source` sigue incompleto.**  
+   `J/PersonalMemoryTools.java:257-261` reparte por evidencias y reutiliza correctamente los almacenes. Sin embargo, `J/MainChatTranscriptStore.java:328,336` concede ese presupuesto tanto a `output` como a cada `artifacts[].text`. No descuenta todos los textos de una misma bolsa.
+
+   El test `T/SingleSessionMemoryRetentionTest.kt:476-477` suma únicamente `source.output`. **Corrección:** contabilizar todos los extractos emitidos y comprobarlos conjuntamente.
+
+7. **MENOR — la migración de reglas V3 no reconoce el V3 real de HEAD.**  
+   `J/chatdb/PersonalAgentRepository.kt:886-888` reconoce V1, V2 y `CORE_RULES_V3_PRE_RECALL`; esta última constante (`:945`) corresponde al primer pase S5, no al texto de HEAD/export (`PersonalAgentRepository.kt:564` allí). Una instalación de desarrollo procedente de S4 conserva el prompt antiguo.
+
+   La base nueva exigida al actualizar limita el impacto. La comparación exacta preserva personalizaciones distintas y resulta idempotente después de migrar, pero **no cubre todas las huellas V3 declaradas**. El test `T/SingleSessionMemoryRetentionTest.kt:181-196` solo siembra la huella del primer pase.
+
+8. **MENOR — quedan excepciones en consultas compuestas solo por puntuación.**  
+   `J/chatdb/PersonalMemoryFtsSql.kt:66-67` conserva `%` y `_` como términos. Con esos caracteres y un filtro, `J/chatdb/PersonalAgentRepository.kt:524-528` ejecuta búsqueda textual en vez de búsqueda solo por filtros. El test cubre `!!! ???`. **Corrección:** unificar la identificación de términos buscables.
+
+9. **MENOR — `history_read` puede devolver una página sin avance.**  
+   `J/chatdb/MessageHistoryRepository.kt:113-119`: al comenzar con un emoji y pedir `limit_chars=1`, retrocede el final hasta el inicio y devuelve texto vacío con el mismo `next_offset`. **Corrección:** garantizar avance por punto de código.
+
+La situación de las incidencias anteriores es:
+
+| Incidencia previa | Estado | Evidencia |
+|---|---|---|
+| Cierre limitado a entradas activas | **RESUELTA** | `ArtifactRetentionRepository.kt:26-29` consulta evidencias sin filtrar `memory_entries`; supersedes y forget conservan evidencias |
+| Protección de todas las compactaciones posteriores | **RESUELTA** | `ArtifactRetentionRepository.kt:35-38` selecciona el mínimo `first_kept` cubridor; B14 prueba dos compactaciones |
+| Enlace en `unchanged` con topic | **RESUELTA** | `PersonalAgentRepository.kt:351-354`; persiste el defecto distinto del duplicado sin topic |
+| Puntuación con filtro | **PARCIAL** | Funciona para el caso probado; incidencia 8 |
+| LIKE de candidatos con texto completo | **RESUELTA** | `PersonalAgentRepository.kt:434-444`: términos normalizados y consultas individuales; reutiliza el límite existente |
+| `expand=source`: una instancia y reparto | **PARCIAL** | Instancias corregidas; falta contabilizar todos los textos |
+| Fingerprint de `CORE_RULES_V3` | **PARCIAL** | Migra el primer pase S5, no la huella de HEAD |
+| F34 | **RESUELTA** | `PersonalAgentRepository.kt:946`: instrucción de plantear el conflicto al usuario, sin umbral en código |
+| Referencia textual conserva `retained` tras expulsión | **NO**, aceptada | El lector y los metadatos muestran el estado vigente |
+| LIKE sin normalización de acentos | **NO**, aceptada | Limitación del fallback |
+| Aviso de Almacenamiento leído una vez | **NO**, aceptada | No es observación reactiva |
+
+Sobre la cobertura de S5:
+
+| Apartado | Estado | Resultado |
+|---|---|---|
+| Upsert por `topic_key`, revisiones y tipos | **IMPLEMENTADO** | Actualización de la misma fila y revisiones |
+| Enlaces y candidatos | **PARCIAL** | Falla el retorno por deduplicación sin topic |
+| Search: extractos y filtros estructurados | **IMPLEMENTADO** | Incluye episodios sin narración; excepción menor de puntuación |
+| Get, evidencia y fuentes | **PARCIAL** | Expansión funcional; presupuesto incompleto |
+| Retirada de `memory_entries.scope` | **IMPLEMENTADO** | Sin referencias en main; permanecen `user_directives.scope` y `memory_jobs.scope` |
+| Entidades y `3.json` | **IMPLEMENTADO** | Coherentes en inspección; incluye `connector`, índices y estados |
+| `history_*`: registro, READ y aislamiento | **IMPLEMENTADO** | Sesión inyectada, SQL parametrizado, lectura restringida a la conversación; registro en runtime principal |
+| Historial: búsqueda, cursor y lectura exacta | **PARCIAL** | Incidencias 4, 5 y 9 |
+| FTS5 con fallback LIKE | **IMPLEMENTADO** | No reconstruye el índice en cada búsqueda |
+| Productor real y refs transaccionales | **IMPLEMENTADO** | Resultado, argumentos, texto de lote y compactación trasladan sus ids hasta Room |
+| Cierre protegido P7 | **IMPLEMENTADO** | Todas las evidencias persistentes protegen, incluidas las de entradas retiradas |
+| Cuatro estados en metadatos y lectores | **IMPLEMENTADO** | `retained`, `bounded`, `expelled`, `unavailable`; excepción textual aceptada |
+| Retirada de cuota y freno real | **PARCIAL** | Cuota retirada y presión real consultada; las incidencias 2 y 3 rompen la degradación |
+| Ajustes > Almacenamiento | **IMPLEMENTADO** | Ruta, aviso, recuentos y recursos `values`/`values-es` |
+| Separación S5 frente a S6–S8 | **IMPLEMENTADO** | Sin `EpisodeRecorder`, `<recent_episodes>` ni `effectClass`; `MemoryStore` permanece |
+
+**P7 tras retirar entradas:** supersedes y forget son borrados lógicos y mantienen las evidencias. No encontré un borrado físico de entradas en producción. La FK sigue siendo `ON DELETE CASCADE` (`PersonalAgentEntities.kt:133-134`), por lo que no cabe afirmar protección después de un borrado SQL físico arbitrario.
+
+Los tests nuevos aportan cobertura real, pero dejan huecos relevantes:
+
+- B14 usa el productor real, comprueba refs de argumentos/resultados/lote y prueba dos compactaciones. La comprobación final tras supersedes y forget detecta el antiguo filtro por entradas activas.
+- La comprobación inmediatamente posterior a supersedes está enmascarada por otro episodio activo que referencia la misma llamada (`SingleSessionMemoryRetentionTest.kt:488-498`). No demuestra ese caso aisladamente ni vuelve a aplicar presión después.
+- B1 evita el duplicado problemático cambiando el texto. B2 oculta mensajes después de terminar la paginación. Ninguno cubre las incidencias 1 y 4.
+- El test de presupuesto omite los textos de artefactos.
+- `M1bRepositoriesTest.kt:127-132` comprueba un primer artefacto de exactamente 16 MiB, que también cabía antes. Retiró la operación que cruzaba la cuota; debería conservarla y exigir éxito.
+- Las adaptaciones de navegación, FTS y `.archive(...).text` son coherentes. No se borraron tests.
+
+Los fallos declarados preexistentes son **plausibles y coinciden en nombres y líneas** entre los logs HEAD y S5: 6 de `MemoryScopeRuntimeTest`, 5 de `MemorySearchToolTest`, 21 de `MainAgentInteractionTest` y los tres casos individuales indicados. Los seis archivos de tests coinciden con HEAD/export.
+
+Eso no acredita ausencia de regresiones: `MainAgentInteractionTest` atraviesa `LocalRunStore` y runtime modificados; los fallos de symlinks ocurren antes de comprobar su seguridad. Además, atribuir todos los fallos de `MemorySearchToolTest` a rename/symlinks es impreciso: dos son aserciones. Los tests fallidos no sustituyen cobertura de las rutas nuevas.
+
+La tabla Engram menciona F01–F44 y declara sus adaptaciones y descartes. Necesita estos ajustes:
+
+- **F22:** pendiente explícita de S7; MEMORY/RECALL no implementa el nudge temporal.
+- **F37:** export/import sigue sin implementar ni asignar; requiere propuesta al dueño para incluirlo o descartarlo.
+- **F34:** el primer informe quedó desactualizado; ahora existe la instrucción de prompt.
+- Las etiquetas de cobertura de relaciones y expansión deben reflejar los defectos anteriores.
+
+Siguen presentes las discrepancias declaradas: recuperación de espacio solo al escribir, posible archivo huérfano tras morir entre marcar y borrar, y ausencia de «Ver en Memoria». La columna indexada `memory_evidence.connector` sí está incorporada coherentemente.
+
+No pude verificar presión real Android/ENOSPC, ejecución Play, navegación completa en dispositivo, rendimiento con historial grande ni resultados nuevos de compilación/tests. Los fallos descritos se deducen de las rutas del código; no ejecuté reproducciones Java/Kotlin.

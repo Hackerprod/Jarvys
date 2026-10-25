@@ -423,6 +423,7 @@ class TaskManagementTools @JvmOverloads constructor(
     ) : CoreTool {
         private val requiredFields = required.toList()
         override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
+        override fun effectClass() = if (toolName in setOf(LIST_TASKS, TASK_RUNS)) CoreTool.EffectClass.READ else CoreTool.EffectClass.WRITE
         override fun declaration() = ToolSpec(toolName, "jarvys/tasks", description, "conversation",
             ToolSpec.Status.IMPLEMENTED, emptyMap(), requiredFields, schema)
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {

@@ -14,6 +14,7 @@ import org.json.JSONObject;
 
 /** Explicit captain-owned copy; workers never receive a mount of private chat images. */
 final class ImportProjectImageTool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     static final String NAME = "import_project_image";
     private final Context context;
     private final String session;

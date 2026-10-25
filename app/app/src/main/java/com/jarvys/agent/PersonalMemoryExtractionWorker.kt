@@ -38,7 +38,7 @@ class PersonalMemoryExtractionWorker(
             ?: return@withContext Result.failure()
         val type = inputData.getString(KEY_TYPE) ?: TYPE_EXTRACT
         val manual = inputData.getBoolean(KEY_MANUAL, false)
-        if (type !in setOf(TYPE_EXTRACT, TYPE_SNAPSHOT) || !MessageReactionTool.isOrdinaryChat(conversationId)) {
+        if (type !in setOf(TYPE_EXTRACT, TYPE_SNAPSHOT, TYPE_NARRATE) || !MessageReactionTool.isOrdinaryChat(conversationId)) {
             return@withContext Result.success()
         }
         val preferences = applicationContext.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
@@ -67,14 +67,14 @@ class PersonalMemoryExtractionWorker(
             val token = CancellationToken.cancellable()
             val cancellationRegistration = currentCoroutineContext().job.invokeOnCompletion { token.cancel() }
             try {
-                val transcript = runStore.loadConversationContext(conversationId)
                 val model = CoreAgentModel(applicationContext, "$conversationId-memory-maintenance")
-                val completed = PersonalMemoryFlush(
-                    applicationContext,
-                    conversationId,
-                    "principal",
-                    model,
-                ).runOffline(transcript, token, job.type == TYPE_SNAPSHOT)
+                val completed = if (job.type == TYPE_NARRATE) {
+                    narrateEpisodes(conversationId, bridge, model, token)
+                } else {
+                    val transcript = runStore.loadConversationContext(conversationId)
+                    PersonalMemoryFlush(applicationContext, conversationId, "principal", model)
+                        .runOffline(transcript, token, job.type == TYPE_SNAPSHOT)
+                }
                 token.throwIfCancelled()
                 if (!completed) throw IllegalStateException("memory_maintenance_failed")
                 if (!bridge.personalAgentCompleteJob(job.id, owner)) throw IllegalStateException("memory_job_lease_lost")
@@ -97,6 +97,18 @@ class PersonalMemoryExtractionWorker(
         }
     }
 
+    private fun narrateEpisodes(conversationId: String, bridge: ChatDatabaseBridge,
+                                model: CoreAgentModel, token: CancellationToken): Boolean {
+        val cursor = bridge.personalAgentNarrationCursorSync(conversationId)
+        val messages = bridge.readInputsAfterSync(conversationId, cursor)
+        val throughSeq = messages.maxOfOrNull { it.seq } ?: cursor
+        val byId = messages.associateBy { it.messageId }
+        val completed = EpisodeNarrator(applicationContext, conversationId, model).narratePending(token)
+        if (!completed) return false
+        if (throughSeq > cursor) bridge.personalAgentAdvanceNarrationCursorSync(conversationId, throughSeq)
+        return true
+    }
+
     private fun retryOwnedJob(bridge: ChatDatabaseBridge, id: String?, owner: String,
                               leased: Boolean, reason: String) {
         if (!leased || id == null) return
@@ -110,6 +122,24 @@ class PersonalMemoryExtractionWorker(
         private const val KEY_MANUAL = "manual_request"
         const val TYPE_EXTRACT = "extract"
         const val TYPE_SNAPSHOT = "snapshot"
+        const val TYPE_NARRATE = "narrate"
+
+        @JvmStatic
+        fun enqueueNarration(context: Context, conversationId: String) {
+            val input = Data.Builder()
+                .putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME)
+                .putString(KEY_CONVERSATION_ID, conversationId)
+                .putString(KEY_TYPE, TYPE_NARRATE)
+                .build()
+            val request = OneTimeWorkRequest.Builder(PersonalMemoryExtractionWorker::class.java)
+                .setInputData(input)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL,
+                    androidx.work.WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
+                .addTag(TAG_ALL)
+                .build()
+            WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+                uniqueName(conversationId, TYPE_NARRATE), ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
 
         @JvmStatic
         @JvmOverloads
@@ -149,6 +179,8 @@ class PersonalMemoryExtractionWorker(
                 .cancelUniqueWork(uniqueName(conversationId, TYPE_EXTRACT))
             WorkManager.getInstance(context.applicationContext)
                 .cancelUniqueWork(uniqueName(conversationId, TYPE_SNAPSHOT))
+            WorkManager.getInstance(context.applicationContext)
+                .cancelUniqueWork(uniqueName(conversationId, TYPE_NARRATE))
         }
 
         private const val TAG_ALL = "jarvys_personal_memory_maintenance"

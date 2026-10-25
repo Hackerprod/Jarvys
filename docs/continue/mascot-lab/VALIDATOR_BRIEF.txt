@@ -1,0 +1,16 @@
+Eres un validador INDEPENDIENTE y ESTRICTO (solo lectura de codigo; puedes ejecutar los scripts de medicion). No arreglas nada. Primera linea de tu respuesta: `VEREDICTO: PASS` o `VEREDICTO: FAIL`.
+
+Contexto: en C:\Projects\mascot-lab, otro agente (Astra) retoco `jdraw.js`, una mascota ("Jarvys") dibujada con Canvas 2D que debe parecerse al render original `reference.png` (1254x1254, transparente) y seguir animable por partes. El dueno rechazo la version anterior por "muchisimas incoherencias". Un agente anterior (yo) dio por terminada la tarea sin verlas: tu trabajo es evitar eso. No te fies del informe de Astra (out/astra-last.txt); verifica tu mismo.
+
+Que hacer
+1. Ejecuta `python cmp.py --grid` y `python poses.py` en C:\Projects\mascot-lab (si falla Edge/python, dilo). Lee las imagenes con la herramienta Read: reference.png, out/mine.png, out/sheet.png, out/poses_sheet.png, y haz recortes ampliados con `python cmp.py --crop x0,y0,x1,y1` (ojos, orejas, manos/estrella, rizo, boca, parte baja de la cabeza) y miralos. Mira TAMBIEN poses sueltas a tamano completo: crea en un directorio temporal tuyo (no dentro de mascot-lab) un script que use `cmp.render(pose, ruta)` para las poses que dudes.
+2. Busca activamente incoherencias, comparando con el original y entre poses: partes desconectadas o flotando (orejas/petalos/manos), huecos entre partes al rotar orejas o mover manos, formas raras (boca abierta, boca triste, ojos cerrados/felices, parpadeo a medias), iris saliendose de la esclerotica al mirar a los lados/arriba/abajo, cejas desalineadas, bandas o cortes duros en degradados, bordes con halos que no existen en el original, colores claramente distintos (cabeza, cuerpo, orejas, rizo, ojos), proporciones o posiciones distintas (ojos, boca, estrella, orejas), siluetas distintas (usa --rows para tramos concretos), clipping por el borde del lienzo en las poses (el rizo cortado por arriba en la pose de estiramiento ya es conocido y se arregla en la pagina; no lo cuentes), artefactos.
+3. Comprueba el contrato: `drawJarvys(ctx,P)` y `JARVYS_DEFAULT` con los parametros y, sx, sy, tilt, earL, earR, swirl, lx, ly, open, happy, mouth, mopen, blush, star, browL, browR, worry, handL, handR, red, spin; solo Canvas 2D; sin imagenes, sin ctx.filter, sin shadowBlur (grep); sin bucles enormes por frame; ES5.
+4. Mide: IoU final y que significa; lista las celdas de --grid con |diferencia| > 12 y dime a que parte corresponden.
+
+Formato de la respuesta
+- `VEREDICTO: PASS|FAIL`
+- Metricas (IoU, celdas altas).
+- Lista numerada de incoherencias, cada una con: parte, pose (o default), que se ve mal frente al original, severidad (bloqueante / molesta / menor). PASS solo si no queda ninguna bloqueante y el parecido global al original es alto a simple vista; en caso de duda, FAIL.
+- Lo que NO pudiste verificar.
+Se concreto; sin elogios.

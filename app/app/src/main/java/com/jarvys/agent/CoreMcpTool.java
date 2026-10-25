@@ -39,6 +39,7 @@ final class CoreMcpTool implements PolicyGatedTool {
     @Override public UnattendedAccess unattendedAccess() {
         return definition.getAccess() == McpToolAccess.WRITE ? UnattendedAccess.WRITE : UnattendedAccess.READ;
     }
+    @Override public EffectClass effectClass() { return definition.getAccess() == McpToolAccess.WRITE ? EffectClass.WRITE : EffectClass.READ; }
     @Override public boolean isMcpTool() { return true; }
 
     @Override public String policyGroupName() { return "mcp_server:" + definition.getServerId(); }

@@ -152,6 +152,12 @@ class CentralWorkspaceTool internal constructor(
 
     override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
 
+    override fun effectClass() = CoreTool.EffectClass.READ
+
+    override fun effectClass(arguments: Map<String, Any>): CoreTool.EffectClass =
+        if ((arguments["action"] as? String) in setOf("create", "delegate", "deliver", "reply", "message"))
+            CoreTool.EffectClass.WRITE else CoreTool.EffectClass.READ
+
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
         if (!isAvailableForSession(sessionId) || token.isCrewRun)

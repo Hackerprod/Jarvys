@@ -1,0 +1,26 @@
+﻿Diagnóstico de entorno Windows / Robolectric API34 (2026-10-24)
+
+Inspección mediante javap -p -c de android.util.AtomicFile en:
+C:\Users\danil\.m2\repository\org\robolectric\android-all-instrumented\14-robolectric-10818077-i7\android-all-instrumented-14-robolectric-10818077-i7.jar
+
+finishWrite(FileOutputStream): cierra stream y llama rename(mNewName,mBaseName).
+rename(File,File): llama java.io.File.renameTo; si devuelve false sólo registra Log.e("AtomicFile", "Failed to rename ..."), no lanza excepción.
+
+Reproducción independiente en JShell del JAVA_HOME del build:
+import java.nio.file.*;
+var dir = Files.createTempDirectory("s1fix-rename-");
+var base = Files.writeString(dir.resolve("state.json"), "created");
+var next = Files.writeString(dir.resolve("state.json.new"), "done");
+System.out.println("renameTo replacing existing file: " + next.toFile().renameTo(base.toFile()));
+System.out.println("Persisted base: " + Files.readString(base));
+Files.deleteIfExists(next);
+Files.deleteIfExists(base);
+Files.delete(dir);
+
+Salida observada:
+renameTo replacing existing file: false
+Persisted base: created
+
+B9 Startup API34: reset terminaba sin excepción (awaitReadyBlocking pasaba) pero al leer el estado persistido resultaba created. Esta lectura es coherente con el mecanismo de rename anterior. No se conserva el archivo temporal de Robolectric; no se afirma haber leído su .new tras el test.
+
+Ajuste: B9 Startup ejecuta API28, como SingleSessionResetTest ya existente; API28 AtomicFile usa backup. Sin cambios a AtomicFile productivo ni shadow que esconda este comportamiento del host. No se verifica persistencia AtomicFile API34 real en dispositivo.

@@ -16,6 +16,7 @@ import org.json.JSONObject;
 
 /** Project-bound adapter. It never inherits access to private conversation images. */
 final class ProjectImageTool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     static final String NAME = "project_image";
     private final Context context;
     private final ProjectScope scope;

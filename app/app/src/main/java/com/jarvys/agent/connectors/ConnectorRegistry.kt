@@ -155,7 +155,8 @@ interface ConnectorConnectionPreferences {
 }
 
 class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
-    private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val app = context.applicationContext
+    private val preferences = app.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     init {
         ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
@@ -165,7 +166,12 @@ class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
     override fun isConnected(id: String): Boolean = preferences.getBoolean("connected_$id", false)
     override fun hasConnectionChoice(id: String): Boolean = preferences.contains("connected_$id")
     override fun setConnected(id: String, connected: Boolean) {
+        val wasConnected = isConnected(id)
         preferences.edit().putBoolean("connected_$id", connected).apply()
+        if (connected && !wasConnected) {
+            com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app)
+                .recordConnectorStateEventSync(id, true)
+        }
     }
 
     companion object { const val PREFERENCES = "jarvys_connectors" }

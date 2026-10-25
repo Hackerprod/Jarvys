@@ -1,0 +1,100 @@
+VEREDICTO: FAIL
+
+Leí completo [docs/SINGLE_SESSION.md](/C:/Projects/Jarvys-wt/single/docs/SINGLE_SESSION.md) y el informe anterior. Persisten bloqueos en la recuperación de memoria y en las dependencias de S1. No modifiqué archivos ni ejecuté builds o pruebas.
+
+**Citas verificadas: 64 correctas / 1 incorrecta / 2 imprecisas.** Son afirmaciones distintas, descontando repeticiones. Incluyen más de 20 comprobaciones de citas añadidas, ampliadas o rectificadas respecto de las incidencias anteriores.
+
+`J/` significa `app/app/src/main/java/com/jarvys/agent/`. Selección del muestreo correcto:
+
+| Área | Citas contrastadas |
+|---|---|
+| Reset y tombstones | `J/chatdb/JarvysChatDatabase.kt:35,395,417,540` |
+| Persistencia y almacenes externos | `J/chatdb/ExecutionEntities.kt:40`; `J/workspaces/WorkspaceRegistry.kt:24`; `J/tasks/TaskStore.kt:23`; `J/proactive/ProactiveEventStore.kt:16` |
+| Central, MemFS y delegación | `J/CoreAgentRuntime.java:252,351,366`: MemFS desconectado, `delegate_subtask` excluido y capitán condicionado a sesión distinta de Central |
+| Tipo y lecturas completas | `J/chatdb/PersonalAgentRepository.kt:67`; `J/MessageReactionTool.java:36`; `J/MainChatTranscriptStore.java:47` |
+| Reconstrucción de contexto | `J/AgentForegroundService.java:1637`; `J/ConversationReader.kt:74`; `J/chatdb/ModelTranscriptRepository.kt:390` |
+| Lecturas de procesadores | `J/proactive/ProactiveAgentProcessor.kt:218`; `J/proactive/ProactiveInteractionDispatcher.kt:40,64`; `J/tasks/ScheduledTaskProcessor.kt:157`; `J/tasks/TaskNotifier.kt:45` |
+| Adjuntos restaurados | `J/MainActivity.kt:425,744`; `J/AttachmentDraftViewModel.kt:58,71` |
+| Identidad y entrega de misiones | `J/chatdb/MemoryCrewEntities.kt:93`; `J/MainActivity.kt:1895,1968`; `J/crew/CrewMissionNotifier.java:46`; `J/WorkspaceArtifactDelivery.java:115` |
+| Compactación y clasificación | `J/CoreAgentLoop.java:536,748`; `J/CoreTool.java:45`; `J/chatdb/ProtocolEntities.kt:139` |
+| Memoria y auditoría | `J/chatdb/PersonalAgentRepository.kt:359,418,467`; `J/PersonalMemoryExtractionWorker.kt:38`; `J/connectors/Autonomy.kt:187,207`; `J/MainChatTranscriptStore.java:197` |
+
+La **cita incorrecta**:
+
+- **§4.3, documento:213:** afirma que el contexto del aviso ya se adjunta mediante `threadKey`. `ProactiveInteractionDispatcher.kt:35-57` encuentra el hilo, guarda el texto de respuesta y arranca el turno. `ConversationReader.kt:84-85,126-135` no incorpora ese referente al modelo; `AgentForegroundService.java:1825-1845` utiliza la clave para etiquetar la respuesta y actualizar la notificación. Hay que implementar explícitamente la recuperación del aviso.
+
+Las **dos imprecisas**:
+
+- **§7.5/A3, documento:410:** las «tres ramas de salida» no cubren todas las salidas de tareas. También existen `RETRYABLE` y `permanentFailure` en `ScheduledTaskProcessor.kt:182-186`. Además, registrar al salir no cubre muerte del proceso durante el efecto.
+- **§8, documento:520:** presenta `attachment_picker_session` como preferencia de `jarvys_chat`. Es estado de actividad guardado/restaurado mediante `savedInstanceState`, en `MainActivity.kt:425,744`. La normalización correcta sí aparece en §4.4/S1.
+
+**Estado de las 13 incidencias anteriores:**
+
+| Previa | Estado | Comprobación actual |
+|---|---|---|
+| 1. Posible pérdida de memoria personal | **PARCIAL** | §8:517-523 conserva archivos y bloquea envío, pero validación y reconciliación son incompatibles. |
+| 2. Esquema y dependencias S1/S5 | **PARCIAL** | v3 pasa a S1; sus consumidores todavía se adaptan después. |
+| 3. Reset recuperable de ambas bases | **RESUELTA** | §8:516-521 usa nombres distintos y conserva ambas bases antiguas hasta retirada. |
+| 4. Efectos parciales sin episodio | **PARCIAL** | §7.5 añade captura y reconciliación, con huecos en metadatos y tareas. |
+| 5. Lecturas completas omitidas | **PARCIAL** | Inventario ampliado; asignación contradictoria entre S1, S3 y S6. |
+| 6. Retención sin política asignada | **RESUELTA** | §7.10, S5 y B14 definen estados y presión real de almacenamiento. |
+| 7. Episodio sin narración no encontrable | **RESUELTA** | §7.3 permite filtros SQL sin `query`; B5 lo comprueba. |
+| 8. Deep link de misión incompleto | **PARCIAL** | Persiste sesión+mision; falta trasladar la sesión a la ruta del bot. |
+| 9. Avisos y adjuntos antiguos | **RESUELTA** | Cancelación de avisos, anclas inexistentes y selector restaurado cubiertos; queda la imprecisión indicada. |
+| 10. UUID y retirada del privado | **PARCIAL** | Responsables explícitos, pero dependencias y aceptación de etapas siguen siendo incompatibles. |
+| 11. D4 reabierta por preview | **RESUELTA** | §5.3/S4 exige eliminar rutas `workspace*` y abrir entregables desde Central. |
+| 12. Topes numéricos inventados | **RESUELTA** | Desaparecen cuotas de pruebas; episodios reciben presupuesto remanente existente. |
+| 13. Pruebas desalineadas | **RESUELTA** | S4 usa B12/B13; S7 usa B7/B6 y distingue integración guionada de evaluación real. |
+
+**D1–D8, una por una:**
+
+| Decisión | Resultado |
+|---|---|
+| D1 | Destino conforme: Central única y sin chats legacy. La aceptación incremental de S1 sigue sin ser ejecutable tal como está escrita. |
+| D2 | Conforme: sin importador de chats. |
+| D3 | Conforme: drawer con perfil y Ajustes. |
+| D4 | Conforme en el destino: eliminación explícita de pantallas y rutas de workspace. |
+| D5 | Retirada declarada, pero calendario y grep de aceptación contradictorios. |
+| D6 | Conserva motor y pantallas de bots/Crew; falta completar identidad navegable del bot. |
+| D7 | **Incompleta:** recuperación de memoria y captura determinista tras interrupciones todavía tienen huecos. |
+| D8 | No encontré las cuotas inventadas anteriores ni nuevos validadores de frases por idioma. |
+
+**Incidencias actuales:**
+
+1. **§8:517-523 — bloqueante: la recuperación tras «Continuar sin memoria» no puede validar.**  
+   Se exige igualdad de número de filas y hash entre tablas viejas y nuevas, pero se permiten nuevas escrituras y transformaciones a `superseded`/inactivo. Cualquiera rompe esa igualdad. `INSERT OR IGNORE` tampoco preserva ambas versiones ante colisión de PK. Falta reconciliar `agent_profiles` y `agent_docs`: `PersonalAgentRepository.kt:497,504` crea valores nuevos que harían ignorar los antiguos.  
+   **Corrección:** validar mediante un manifiesto de filas copiadas y su transformación canónica; definir conflictos por tabla y conservar versiones. B9 debe probar reintento después de escribir memoria nueva. La validación tampoco puede asumir un `id` y `updated_at` comunes: `agent_docs` tiene PK compuesta y `user_directives` usa `observed_at` (`PersonalAgentEntities.kt:20,37`).
+
+2. **§7.2/S1/S5 — bloqueante: S1 elimina columnas antes de adaptar consultas activas.**  
+   S1 crea `memory_entries` sin `scope`, pero `PersonalAgentRepository.kt:93,198,210,238` todavía lo requiere; la adaptación se asigna a S5. También elimina `interrupt_requests.memory_disabled`, utilizado por `ConversationRepository.kt:193,871,1827`. El esquema «completo» omite `day` y `source_ref`, usados por consolidación (`PersonalAgentRepository.kt:210,238,251`); A3/B4 sigue exigiendo `source_ref=task:<id>`.  
+   **Corrección:** adaptar en S1 todos los lectores/escritores afectados y definir el mapeo de campos conservados o sustituidos.
+
+3. **§7.3.2/7.5 A2 — importante: reconciliación sin evidencia persistida suficiente.**  
+   A2 busca llamadas WRITE sin evidencia, pero la clasificación se guardaría precisamente en `memory_evidence`; `tool_calls` no la contiene (`ProtocolEntities.kt:139-149`). Además, una fila `tool_results` no demuestra éxito: se persisten errores y placeholders (`MainChatTranscriptStore.java:143-155`).  
+   **Corrección:** persistir clasificación y resultado normalizado, o hacer atómicos STARTED y evidencia. Los resultados inciertos deben permanecer `uncertain`.
+
+4. **§7.5 A3/B4/S6 — importante: muerte durante una tarea todavía deja efectos sin episodio.**  
+   El recorder se invocaría al salir. Los registros actuales viven en memoria y se añaden después de `delegate.execute` (`ScheduledTaskProcessor.kt:88,444-455`). Una muerte durante el efecto no llega a esas salidas.  
+   **Corrección:** registrar antes del dispatch por llamada y reconciliar después. Para aprobaciones posteriores, integrar el claim durable de `TaskPendingActionExecution.kt:16,33`, ejecución `:53` y recibo `:65-73`. B4 debe incluir interrupción del proceso durante tarea y acción aprobada.
+
+5. **§4.3:213/S3 — importante: responder a un aviso compactado pierde el referente.**  
+   Una respuesta como «sí» puede llegar al modelo sin el aviso original. El supuesto mecanismo existente no lo recupera.  
+   **Corrección:** incorporar al contexto el aviso obtenido por mensaje/hilo, con su fuente; ampliar B8 con una respuesta posterior a compactación.
+
+6. **§5.3:256/S4 — importante: la sesión se pierde al navegar de misión a bot.**  
+   La propuesta cambia la ruta de misión, pero la del bot sigue siendo `crew/{missionId}/bot/{botId}` y se construye sin sesión (`CrewNavigation.kt:18,45,55-61`).  
+   **Corrección:** propagar `executionSessionId` a ambas rutas y probar misión → bot → recreación de actividad.
+
+7. **§4.2:196 y S1/S2/S3/S6/S8 — importante: aceptación contradictoria entre etapas.**  
+   S1 promete corregir todas las lecturas completas, mientras cinco consumidores quedan en S3 y el worker en S6. S2 exige ausencia total de símbolos privados, aunque componentes que los contienen se mantienen hasta S8 (`MemoryReflectionCoordinator.java:43,84`).  
+   **Corrección:** asignar cada retirada y consulta a una etapa concreta; ajustar sus aceptaciones. S3, S5 y S8 tienen criterios observables; S1/S2 requieren esta corrección, S4 la propagación de sesión, S6 la captura durable y S7 cerrar P10 antes de verificar recencia protegida.
+
+8. **§5.3/S4 — menor: el visor conservado comparte la pantalla que se pretende retirar.**  
+   `ARTIFACT_PREVIEW` utiliza `WorkspacePreviewScreen` (`MainActivity.kt:2554`).  
+   **Corrección:** indicar expresamente la extracción del visor de snapshots antes de eliminar la pantalla de workspace.
+
+9. **§11 y marcas `[NV]` — menor: quedan comprobaciones locales accesibles sin resolver.**  
+   `MemoryConstants.MAX_PROMPT_CHARACTERS` vale `80 * 1024` (`MemoryConstants.java:15`). `TaskPendingActionExecution.kt` y la incorporación de contexto proactivo podían verificarse leyendo el repo.  
+   **Corrección:** sustituir esos `[NV]` por los resultados comprobados. Documentar también que no existe entrada `ACTION_SEND/SEND_MULTIPLE` y que la notificación foreground solo ofrece Stop, sin deep link de sesión (`AgentForegroundService.java:2041-2068`).
+
+**Lo que no pude verificar:** comportamiento en dispositivo, rendimiento medido del hilo, carreras reales durante reset, compatibilidad efectiva de `ATTACH` con el driver Android de Room, OAuth completo de Gmail y comportamiento de un modelo real. Tampoco contrasté el código externo de Engram ni aprobaciones históricas mencionadas desde otras sesiones.

@@ -10,6 +10,7 @@ import org.json.JSONObject;
 
 /** Local delivery to the current owner chat; never uploads a file or grants a child new access. */
 final class DeliverFileTool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     static final String NAME = "deliver_file";
     private final String session;
     private final WorkspaceStore workspace;

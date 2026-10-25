@@ -15,8 +15,13 @@ class AutonomyAuditPersistenceTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val preferences get() = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, 0)
 
-    @Before fun clearAudit() { preferences.edit().remove("autonomy_audit").remove("autonomy_hourly_reservations").commit() }
-    @After fun cleanupAudit() { preferences.edit().remove("autonomy_audit").remove("autonomy_hourly_reservations").commit() }
+    @Before fun clearAudit() {
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
+        preferences.edit().remove("autonomy_audit").remove("autonomy_audit_room_migrated")
+            .remove("autonomy_hourly_reservations").commit()
+    }
+    @After fun cleanupAudit() { preferences.edit().remove("autonomy_audit").remove("autonomy_audit_room_migrated")
+        .remove("autonomy_hourly_reservations").commit() }
 
     @Test fun twoHundredAuditEntriesSurviveStoreRecreationAndRecentAuditUsesTheRequestedPageSize() {
         val store = SharedPreferencesConnectorAutonomyStore(context)

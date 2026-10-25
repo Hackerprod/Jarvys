@@ -1,0 +1,272 @@
+<title>Jarvys Canvas Sketch</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: live Canvas mascot with the original PNG available as a ghost overlay, state chips, then a draggable before/after comparison. */
+:root {
+  --bg: #f4f5fb; --fg: #1c2040; --muted: #5d6385; --line: #d7daee; --card: #ffffff;
+  --accent: #4b5de0; --accent-fg: #ffffff; --stage-a: #1b2158; --stage-b: #0c1033;
+  --font-body: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0b0e26; --fg: #e9ebff; --muted: #9aa1cc; --line: #232a5a; --card: #121638; --accent: #8fa2ff; --accent-fg: #0b0e26; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #0b0e26; --fg: #e9ebff; --muted: #9aa1cc; --line: #232a5a; --card: #121638; --accent: #8fa2ff; --accent-fg: #0b0e26; color-scheme: dark; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-block: 20px 32px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 18px; }
+h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 17px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 4px 0 0; max-width: 62ch; }
+.stage { border-radius: 22px; overflow: hidden; position: relative; background: radial-gradient(120% 90% at 50% 20%, var(--stage-a), var(--stage-b)); border: 1px solid var(--line); }
+.stage canvas, .stage img { display: block; width: 100%; aspect-ratio: 1 / 1; }
+canvas { touch-action: manipulation; cursor: pointer; }
+.ghost { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .15s; }
+.badge { position: absolute; left: 14px; top: 12px; font-family: var(--font-mono); font-size: 12px; color: #c9d0ff; background: rgba(255,255,255,.1); padding: 4px 9px; border-radius: 999px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: inherit; font-weight: 700; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.desc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px; min-height: 3.4em; }
+.desc b { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+.tools { display: flex; flex-wrap: wrap; gap: 14px 22px; color: var(--muted); font-size: 14px; }
+.tools label { display: inline-flex; gap: 8px; align-items: center; }
+.cmp { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: grid; gap: 10px; }
+.cmpbox { position: relative; border-radius: 14px; overflow: hidden; background: radial-gradient(120% 90% at 50% 20%, var(--stage-a), var(--stage-b)); }
+.cmpbox canvas, .cmpbox img { display: block; width: 100%; aspect-ratio: 1 / 1; }
+.cmpbox img { position: absolute; inset: 0; }
+.cmpbox .lbl { position: absolute; top: 10px; font-family: var(--font-mono); font-size: 11px; color: #dfe4ff; background: rgba(0,0,0,.35); padding: 3px 8px; border-radius: 999px; }
+.cmp input[type=range] { width: 100%; accent-color: var(--accent); }
+.note { color: var(--muted); font-size: 13.5px; margin: 0; }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&family=JetBrains+Mono:wght@500&display=swap">
+
+<div class="wrap">
+  <header>
+    <h1>Jarvys dibujado con código</h1>
+    <p class="sub">Todo está pintado en Canvas sobre las medidas y colores del PNG original, sin ninguna imagen en el dibujo. Toca al fantasma, mueve el puntero y cambia de estado.</p>
+  </header>
+
+  <div class="stage">
+    <canvas id="c" aria-label="Jarvys animado en Canvas"></canvas>
+    <img class="ghost" id="ghost" alt="" src="data:image/webp;base64,__REF__">
+    <span class="badge" id="badge">estado: reposo</span>
+  </div>
+
+  <div class="chips" id="chips" role="group" aria-label="Estado del agente"></div>
+  <div class="desc" id="desc"></div>
+  <div class="tools">
+    <label><input type="checkbox" id="ghostToggle"> Superponer el original al 50%</label>
+  </div>
+
+  <section class="cmp">
+    <div>
+      <h2>Comparación con el original</h2>
+      <p class="note">Arrastra: a la izquierda el dibujo en código, a la derecha el PNG actual. Coincidencia de silueta medida: <b id="iou">96%</b>.</p>
+    </div>
+    <div class="cmpbox" id="cmpbox">
+      <canvas id="cmpc"></canvas>
+      <img id="cmpimg" alt="Imagen actual del fantasma de Jarvys" src="data:image/webp;base64,__REF__">
+      <span class="lbl" style="left:10px">código</span><span class="lbl" style="right:10px">original</span>
+    </div>
+    <input type="range" id="split" min="0" max="100" value="50" aria-label="Deslizador de comparación">
+  </section>
+  <p class="note">Esto es un boceto de fidelidad alta, no una copia exacta: el pelaje y los brillos del render original son más ricos que lo que dibujan los degradados. Los ojos, orejas, rizo, manos y estrella se mueven por separado.</p>
+</div>
+
+<script>
+/*JDRAW*/
+</script>
+<script>
+(function () {
+  var cv = document.getElementById('c'), ctx = cv.getContext('2d'), N = 1254, scale = 1;
+  var calm = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0.4 : 1;
+  function fit() { var r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2); cv.width = Math.round(r.width * d); cv.height = Math.round(r.height * d); scale = cv.width / N; }
+  fit(); window.addEventListener('resize', function () { fit(); drawCompare(); });
+
+  function Spring(v, k, d) { this.x = v; this.v = 0; this.t = v; this.k = k || 140; this.d = d || 16; }
+  Spring.prototype.step = function (dt) { var a = this.k * (this.t - this.x) - this.d * this.v; this.v += a * dt; this.x += this.v * dt; };
+  var P = {
+    y: new Spring(0, 70, 7), sx: new Spring(1, 220, 13), sy: new Spring(1, 220, 13), tilt: new Spring(0, 90, 10),
+    earL: new Spring(0, 60, 5), earR: new Spring(0, 60, 5), swirl: new Spring(0, 40, 3.5),
+    lx: new Spring(0, 160, 18), ly: new Spring(0, 160, 18), open: new Spring(1, 520, 34), happy: new Spring(0, 200, 22),
+    mouth: new Spring(0.6, 160, 18), mopen: new Spring(0, 200, 20), blush: new Spring(0.5, 80, 14), star: new Spring(1, 80, 9),
+    browL: new Spring(0, 160, 16), browR: new Spring(0, 160, 16), worry: new Spring(0, 140, 16),
+    handL: new Spring(0, 200, 14), handR: new Spring(0, 200, 14), red: new Spring(0, 90, 14)
+  };
+  var events = [], parts = [], T = 0, stateT = 0, state = 'idle', nextBlink = 1.5, blinkUntil = 0, spinA = 0, lastZ = 0, over = null;
+  var pointer = { x: 0, y: 0, at: -99 };
+  function at(dt, fn) { events.push({ t: T + dt, fn: fn }); }
+  function burst(type, n, x, y, spd, life, col) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, s = spd * (0.5 + Math.random() * 0.7);
+      parts.push({ type: type, x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - spd * 0.3, g: type === 'drop' ? 800 : 180, age: 0, life: life * (0.7 + Math.random() * 0.5), r: 16 + Math.random() * 20, col: col, rot: Math.random() * 6 });
+    }
+  }
+  function squashJump(h) { over = { sx: 1.14, sy: 0.86, until: T + 0.12 }; at(0.12, function () { P.y.v = -h; over = { sx: 0.92, sy: 1.12, until: T + 0.22 }; }); }
+
+  var STATES = {
+    idle:    { label: 'Reposo',             ev: 'Sin tarea activa',     txt: 'Respira, parpadea a intervalos al azar y los ojos siguen tu puntero. Si no lo mueves, mira alrededor.' },
+    thinking:{ label: 'Pensando',           ev: 'El agente razona',     txt: 'Mira hacia arriba, inclina la cabeza, el rizo se balancea y tres puntos suben uno tras otro.' },
+    tool:    { label: 'Usando herramienta', ev: 'tool_call en curso',   txt: 'Mira hacia abajo, las manitos teclean y la estrella gira con chispas en órbita.' },
+    waiting: { label: 'Espera permiso',     ev: 'Aprobación pendiente', txt: 'Te mira de frente con las orejas levantadas y un signo de pregunta. Pequeño rebote cada tanto.' },
+    done:    { label: 'Listo',              ev: 'Turno terminado',      txt: 'Aplastamiento, salto, ojos felices y una ráfaga de chispas. Después vuelve al reposo.' },
+    error:   { label: 'Error',              ev: 'Falló una herramienta', txt: 'Sacudida corta, ojos grandes, boca temblorosa, gota de sudor y la estrella en rojo.' },
+    sleep:   { label: 'Dormido',            ev: 'Chat inactivo',        txt: 'Ojos cerrados, orejas caídas, respiración lenta y una Z que sube cada rato.' }
+  };
+  var demo = false, demoBtn, keys = Object.keys(STATES);
+  function setState(s) {
+    state = s; stateT = 0; events.length = 0; over = null;
+    document.getElementById('badge').textContent = 'estado: ' + STATES[s].label.toLowerCase();
+    document.getElementById('desc').innerHTML = '<b>' + STATES[s].ev + '</b> &nbsp;' + STATES[s].txt;
+    var b = document.querySelectorAll('#chips button');
+    for (var i = 0; i < b.length; i++) if (b[i].dataset.s) b[i].setAttribute('aria-pressed', b[i].dataset.s === s ? 'true' : 'false');
+    if (s === 'done') {
+      squashJump(1500);
+      at(0.2, function () { burst('spark', 16, 627, 640, 600, 1.1, '#ffe9a8'); burst('spark', 8, 627, 640, 380, 1.0, '#a9c0ff'); });
+      at(3.2, function () { if (state === 'done') setState('idle'); });
+    }
+    if (s === 'error') burst('drop', 1, 900, 470, 60, 1.4, '#9fd4ff');
+    if (s === 'waiting') at(0.2, function () { squashJump(520); });
+  }
+
+  function drive(dt) {
+    T += dt; stateT += dt;
+    for (var i = events.length - 1; i >= 0; i--) if (T >= events[i].t) { var f = events[i].fn; events.splice(i, 1); f(); }
+    var br = Math.sin(T * 2.1) * 0.012 * calm;
+    var sx = 1 - br * 0.8, sy = 1 + br, y = -Math.sin(T * 1.6) * 12 * calm;
+    var tilt = 0, eL = 0, eR = 0, sw = Math.sin(T * 1.3) * 0.3 * calm, open = 1, happy = 0, mouth = 0.6, mopen = 0, blush = 0.5;
+    var star = 1 + Math.sin(T * 2.4) * 0.1, bl = 0, brr = 0, worry = 0, hl = 0, hr = 0, red = 0;
+    var fresh = T - pointer.at < 3, ox = fresh ? pointer.x : Math.sin(T * 0.45) * 0.6, oy = fresh ? pointer.y : Math.sin(T * 0.31 + 1) * 0.25;
+
+    if (state === 'thinking') {
+      ox = -0.55; oy = -0.8; tilt = -0.09; sw = Math.sin(T * 3.2) * 0.9 * calm; bl = 0.8; mouth = 0.1; star = 1 + Math.sin(T * 4) * 0.25; eL = 0.1; open = 0.92;
+    } else if (state === 'tool') {
+      ox = Math.sin(T * 1.5) * 0.4; oy = 0.85; mouth = 0.35; spinA += dt * 4; star = 1.15 + Math.sin(T * 12) * 0.12;
+      hl = Math.sin(T * 14) * 22; hr = -Math.sin(T * 14) * 22; sw = Math.sin(T * 5) * 0.5 * calm; open = 0.9; tilt = Math.sin(T * 3) * 0.02;
+    } else if (state === 'waiting') {
+      ox = 0; oy = 0; eL = 0.55; eR = 0.55; tilt = Math.sin(T * 1.8) * 0.07 * calm; bl = 0.5; brr = 0.5; mouth = 0.2; blush = 0.7; star = 1.1 + Math.sin(T * 3) * 0.2;
+      if (stateT % 3.4 > 3.2) squashJump(480);
+    } else if (state === 'done') {
+      happy = 1; mouth = 1; mopen = 0.5; blush = 0.95; star = 1.3; eL = 0.4; eR = 0.4; sw = 1.2; bl = 0.5; brr = 0.5;
+    } else if (state === 'error') {
+      var k = Math.max(0, 1 - stateT / 0.7);
+      tilt = Math.sin(T * 48) * 0.07 * k; ox = 0; oy = -0.1; mouth = -0.6; mopen = 0.15 + Math.sin(T * 14) * 0.05;
+      eL = -0.2; eR = -0.2; worry = 1; open = 1.12; blush = 0; star = 0.8 + Math.sin(T * 6) * 0.15; red = 1; bl = 0.7; brr = 0.7;
+    } else if (state === 'sleep') {
+      var b2 = Math.sin(T * 1.1) * 0.025; open = 0; ox = 0; oy = 0; eL = -0.35; eR = -0.35; mouth = 0.25; blush = 0.6; tilt = 0.06;
+      star = 0.6 + Math.sin(T * 1.1) * 0.15; sx = 1 - b2 * 0.8; sy = 1 + b2; y = 12 + Math.sin(T * 1.1) * 6; sw = -0.4;
+      if (T - lastZ > 1.8) { lastZ = T; parts.push({ type: 'z', x: 860, y: 330, vx: 50, vy: -80, g: 0, age: 0, life: 2.6, r: 80, col: '#c9d0ff', rot: 0 }); }
+    }
+    if (state === 'idle' && T > nextBlink) { blinkUntil = T + 0.13; nextBlink = T + (Math.random() < 0.2 ? 0.28 : 2 + Math.random() * 3.2); }
+    if (state !== 'idle' && state !== 'sleep' && T > nextBlink) { blinkUntil = T + 0.13; nextBlink = T + 2.4 + Math.random() * 3; }
+    if (state !== 'sleep' && T < blinkUntil) open = 0.05;
+    if (over && T < over.until) { sx = over.sx; sy = over.sy; } else over = null;
+    if (state === 'tool' && Math.random() < dt * 5) burst('spark', 1, 627, 857, 200, 0.9, '#a9c0ff');
+
+    P.sx.t = sx; P.sy.t = sy; P.tilt.t = tilt; P.earL.t = eL; P.earR.t = eR; P.swirl.t = sw; P.lx.t = ox; P.ly.t = oy; P.open.t = open;
+    P.happy.t = happy; P.mouth.t = mouth; P.mopen.t = mopen; P.blush.t = blush; P.star.t = star; P.browL.t = bl; P.browR.t = brr;
+    P.worry.t = worry; P.handL.t = hl; P.handR.t = hr; P.red.t = red;
+    if (!over) P.y.t = y;
+    for (var n in P) P[n].step(dt);
+    for (var j = parts.length - 1; j >= 0; j--) {
+      var p = parts[j]; p.age += dt; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += dt * 2;
+      if (p.age > p.life) parts.splice(j, 1);
+    }
+  }
+
+  function star4(r, inner) {
+    ctx.beginPath();
+    for (var i = 0; i < 8; i++) { var a = i * Math.PI / 4 - Math.PI / 2, rr = i % 2 ? r * inner : r; ctx[i ? 'lineTo' : 'moveTo'](Math.cos(a) * rr, Math.sin(a) * rr); }
+    ctx.closePath();
+  }
+  function disc(x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, Math.max(rx, 0.01), Math.max(ry, 0.01), 0, 0, Math.PI * 2); }
+  function drawParts() {
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i], a = Math.max(0, 1 - p.age / p.life);
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(p.x, p.y); ctx.fillStyle = p.col;
+      if (p.type === 'spark') { ctx.rotate(p.rot); ctx.shadowColor = p.col; ctx.shadowBlur = 30; star4(p.r * (0.6 + a * 0.6), 0.28); ctx.fill(); }
+      else if (p.type === 'z') { ctx.font = '800 ' + (p.r + p.age * 20) + 'px Nunito, sans-serif'; ctx.fillText('Z', 0, 0); }
+      else if (p.type === 'drop') { ctx.beginPath(); ctx.moveTo(0, -30); ctx.quadraticCurveTo(26, 6, 0, 26); ctx.quadraticCurveTo(-26, 6, 0, -30); ctx.fill(); }
+      ctx.restore();
+    }
+  }
+  function drawOverlays() {
+    if (state === 'thinking') for (var i = 0; i < 3; i++) {
+      var ph = (Math.sin(T * 4 - i * 0.9) + 1) / 2;
+      ctx.fillStyle = 'rgba(190,205,255,' + (0.35 + ph * 0.65) + ')'; disc(860 + i * 62, 170 - ph * 22 - i * 12, 15 + ph * 6, 15 + ph * 6); ctx.fill();
+    }
+    if (state === 'waiting') {
+      var by = 210 + Math.sin(T * 3) * 12;
+      ctx.save(); ctx.translate(960, by); ctx.fillStyle = 'rgba(214,224,255,.96)'; disc(0, 0, 88, 80); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-46, 50); ctx.lineTo(-96, 112); ctx.lineTo(-8, 76); ctx.fill();
+      ctx.fillStyle = '#2a2f9a'; ctx.font = '800 100px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('?', 0, 6); ctx.restore();
+    }
+    if (state === 'tool') for (var k = 0; k < 3; k++) {
+      var a = T * 2.6 + k * Math.PI * 2 / 3;
+      ctx.save(); ctx.translate(627 + Math.cos(a) * 250, 857 + Math.sin(a) * 80); ctx.shadowColor = '#9fb6ff'; ctx.shadowBlur = 30; ctx.fillStyle = '#cfdcff'; star4(18, 0.3); ctx.fill(); ctx.restore();
+    }
+  }
+
+  function draw() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    var lift = Math.max(0, -P.y.x);
+    ctx.fillStyle = 'rgba(0,0,10,' + Math.max(0.05, 0.32 - Math.min(lift, 400) / 1500) + ')'; disc(627, 1196, 250 - lift * 0.15, 30 - lift * 0.03); ctx.fill();
+    var q = {}; for (var n in P) q[n] = P[n].x; q.spin = spinA;
+    q.swirl = P.swirl.x; drawJarvys(ctx, q);
+    drawParts(); drawOverlays();
+  }
+
+  var last = 0, raf = 0, visible = true;
+  function frame(ts) {
+    raf = 0; var dt = Math.min((ts - last) / 1000, 0.05); last = ts || 0;
+    var steps = Math.max(1, Math.round(dt / (1 / 120))); for (var i = 0; i < steps; i++) drive(dt / steps);
+    draw(); if (visible && !document.hidden) raf = requestAnimationFrame(frame);
+  }
+  function kick() { if (!raf && visible && !document.hidden) { last = performance.now(); raf = requestAnimationFrame(frame); } }
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { visible = e[0].isIntersecting; kick(); }).observe(cv);
+  document.addEventListener('visibilitychange', kick);
+
+  function track(e) {
+    var r = cv.getBoundingClientRect();
+    pointer.x = Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / (r.width / 2)));
+    pointer.y = Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height * 0.48)) / (r.height / 2)));
+    pointer.at = T;
+  }
+  window.addEventListener('pointermove', track);
+  cv.addEventListener('pointerdown', function (e) {
+    track(e); over = { sx: 1.16, sy: 0.84, until: T + 0.1 };
+    at(0.1, function () { P.y.v = -800; over = { sx: 0.93, sy: 1.1, until: T + 0.18 }; });
+    for (var i = 0; i < 5; i++) parts.push({ type: 'spark', x: 627 + (Math.random() - 0.5) * 380, y: 470 + Math.random() * 120, vx: (Math.random() - 0.5) * 200, vy: -160 - Math.random() * 120, g: 0, age: 0, life: 0.9, r: 20 + Math.random() * 14, col: '#ffc8e6', rot: Math.random() * 6 });
+    if (state === 'sleep') setState('idle');
+  });
+
+  var chips = document.getElementById('chips');
+  keys.forEach(function (k) {
+    var b = document.createElement('button'); b.type = 'button'; b.dataset.s = k; b.textContent = STATES[k].label;
+    b.addEventListener('click', function () { demo = false; demoBtn.setAttribute('aria-pressed', 'false'); setState(k); });
+    chips.appendChild(b);
+  });
+  demoBtn = document.createElement('button'); demoBtn.type = 'button'; demoBtn.textContent = 'Recorrer todos'; demoBtn.setAttribute('aria-pressed', 'false'); chips.appendChild(demoBtn);
+  var di = 0;
+  demoBtn.addEventListener('click', function () { demo = !demo; demoBtn.setAttribute('aria-pressed', demo ? 'true' : 'false'); if (demo) { di = 0; setState(keys[0]); } });
+  setInterval(function () { if (demo) { di = (di + 1) % keys.length; setState(keys[di]); demoBtn.setAttribute('aria-pressed', 'true'); } }, 3800);
+
+  document.getElementById('ghostToggle').addEventListener('change', function (e) { document.getElementById('ghost').style.opacity = e.target.checked ? '0.5' : '0'; });
+
+  /* ---------- static comparison ---------- */
+  var cc = document.getElementById('cmpc'), cctx = cc.getContext('2d'), img = document.getElementById('cmpimg'), split = document.getElementById('split');
+  function drawCompare() {
+    var r = cc.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2); cc.width = Math.round(r.width * d); cc.height = Math.round(r.height * d);
+    cctx.setTransform(cc.width / N, 0, 0, cc.width / N, 0, 0); cctx.clearRect(0, 0, N, N);
+    var base = JSON.parse(JSON.stringify(JARVYS_DEFAULT)); drawJarvys(cctx, base);
+  }
+  function applySplit() { var v = +split.value; img.style.clipPath = 'inset(0 0 0 ' + v + '%)'; }
+  split.addEventListener('input', applySplit); applySplit(); drawCompare();
+
+  setState('idle'); kick();
+})();
+</script>

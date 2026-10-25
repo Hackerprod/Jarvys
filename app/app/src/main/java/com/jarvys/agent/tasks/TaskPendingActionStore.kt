@@ -2,6 +2,8 @@ package com.jarvys.agent.tasks
 
 import android.content.Context
 import android.os.Process
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
@@ -31,6 +33,8 @@ data class TaskPendingAction(
     val status: TaskPendingActionStatus,
     val resultJson: String? = null,
     internal val claimOwner: String? = null,
+    internal val approvalAttemptId: String? = null,
+    val occurrenceId: String = runId,
 ) {
     fun isCurrentFor(task: ScheduledTask): Boolean = task.id == taskId && task.revision == taskRevision &&
         taskBinding == TaskPendingActionStore.taskBindingFor(task, runId, toolName, argumentsJson)
@@ -46,16 +50,19 @@ sealed interface TaskPendingActionClaim {
 class TaskPendingActionStore private constructor(
     private val ledger: File,
     private val processToken: String,
+    private val appContext: Context?,
 ) {
-    constructor(ledger: File) : this(ledger, CURRENT_PROCESS_TOKEN)
+    constructor(ledger: File) : this(ledger, CURRENT_PROCESS_TOKEN, null)
     constructor(context: Context) : this(
         File(File(context.applicationContext.filesDir, "jarvys"), "tasks/pending-actions.jsonl"),
         CURRENT_PROCESS_TOKEN,
+        context.applicationContext,
     )
 
     internal constructor(ledger: File, testProcessToken: String, forTesting: Boolean) : this(
         ledger,
         if (forTesting) testProcessToken else CURRENT_PROCESS_TOKEN,
+        null,
     )
 
     fun enqueue(
@@ -63,6 +70,7 @@ class TaskPendingActionStore private constructor(
         runId: String,
         toolName: String,
         canonicalArgumentsJson: String,
+        occurrenceId: String = runId,
     ): TaskPendingAction = withLock {
         require(runId.isNotBlank()) { "runId is required" }
         require(toolName.isNotBlank()) { "toolName is required" }
@@ -85,7 +93,8 @@ class TaskPendingActionStore private constructor(
         val boundTask = taskBinding(task, runId, toolName, arguments)
         val actionBinding = actionBinding(id, task.id, task.revision, runId, toolName, arguments, boundTask)
         TaskPendingAction(id, task.id, task.revision, runId, toolName, arguments, boundTask,
-            actionBinding, resumeState, TaskPendingActionStatus.PENDING).also { appendLocked(it) }
+            actionBinding, resumeState, TaskPendingActionStatus.PENDING, occurrenceId = occurrenceId)
+            .also { appendLocked(it) }
     }
 
     /** Returns the original scheduler state while any action in this task revision still needs attention. */
@@ -113,7 +122,7 @@ class TaskPendingActionStore private constructor(
     }
 
     /** Persists CLAIMED before execution. A repeated click cannot claim a second time. */
-    fun claim(id: String, currentTask: ScheduledTask?): TaskPendingActionClaim = withLock {
+    fun claim(id: String, currentTask: ScheduledTask?, attemptId: String? = null): TaskPendingActionClaim = withLock {
         recoverForeignClaimsLocked()
         val current = readLatestLocked()[id] ?: return@withLock TaskPendingActionClaim.NotPending(null)
         if (current.status !in setOf(TaskPendingActionStatus.PENDING, TaskPendingActionStatus.WAITING_VISIBLE_APP)) {
@@ -125,7 +134,8 @@ class TaskPendingActionStore private constructor(
             return@withLock TaskPendingActionClaim.Stale(stale)
         }
         val wasWaitingForVisibleApp = current.status == TaskPendingActionStatus.WAITING_VISIBLE_APP
-        val claimed = current.copy(status = TaskPendingActionStatus.CLAIMED, claimOwner = processToken)
+        val claimed = current.copy(status = TaskPendingActionStatus.CLAIMED, claimOwner = processToken,
+            approvalAttemptId = attemptId)
         appendLocked(claimed)
         TaskPendingActionClaim.Claimed(claimed, wasWaitingForVisibleApp)
     }
@@ -192,9 +202,52 @@ class TaskPendingActionStore private constructor(
     }
 
     private fun recoverForeignClaimsLocked() {
-        readLatestLocked().values.filter {
-            it.status == TaskPendingActionStatus.CLAIMED && it.claimOwner != processToken
-        }.forEach { appendLocked(it.copy(status = TaskPendingActionStatus.INTERRUPTED_UNCERTAIN, claimOwner = null)) }
+        readLatestLocked().values.forEach { action ->
+            val recovered = when {
+                action.status == TaskPendingActionStatus.CLAIMED && action.claimOwner != processToken ->
+                    action.copy(status = TaskPendingActionStatus.INTERRUPTED_UNCERTAIN, claimOwner = null,
+                        approvalAttemptId = action.approvalAttemptId ?: UUID.randomUUID().toString()).also(::appendLocked)
+                action.status in setOf(TaskPendingActionStatus.EXECUTED, TaskPendingActionStatus.WAITING_VISIBLE_APP,
+                    TaskPendingActionStatus.INTERRUPTED_UNCERTAIN) && action.approvalAttemptId == null ->
+                    action.copy(approvalAttemptId = UUID.randomUUID().toString()).also(::appendLocked)
+                else -> action
+            }
+            reconcileEpisodeEvidence(recovered)
+        }
+    }
+
+    private fun reconcileEpisodeEvidence(action: TaskPendingAction) {
+        val attemptId = action.approvalAttemptId ?: return
+        val outcome = when (action.status) {
+            TaskPendingActionStatus.EXECUTED -> "ok"
+            TaskPendingActionStatus.WAITING_VISIBLE_APP -> "deferred"
+            TaskPendingActionStatus.INTERRUPTED_UNCERTAIN -> "uncertain"
+            else -> return
+        }
+        val app = appContext ?: return
+        runCatching {
+            val facts = JSONObject().put("action_id", action.id).put("attempt_id", attemptId)
+                .put("action_binding", action.actionBinding).put("task_id", action.taskId)
+                .put("occurrence_id", action.occurrenceId).put("state", "store_reconciled")
+                .put("action_status", action.status.name).toString()
+            val bridge = ChatDatabaseBridge.getInstance(app)
+            bridge.personalAgentEnsureTaskAttemptEvidenceSync(
+                WorkspaceIdentity.CENTRAL_SESSION,
+                "task:${action.taskId}:${action.occurrenceId}",
+                action.id,
+                attemptId,
+                action.toolName,
+                "ask_approved",
+                outcome,
+                facts,
+            )
+            bridge.personalAgentFinishEpisodeToolEvidenceSync(
+                WorkspaceIdentity.CENTRAL_SESSION,
+                attemptId,
+                outcome,
+                facts,
+            )
+        }
     }
 
     private fun validActionBinding(action: TaskPendingAction): Boolean = runCatching {
@@ -230,6 +283,7 @@ class TaskPendingActionStore private constructor(
         .put("taskId", action.taskId)
         .put("taskRevision", action.taskRevision)
         .put("runId", action.runId)
+        .put("occurrenceId", action.occurrenceId)
         .put("toolName", action.toolName)
         .put("argumentsJson", action.argumentsJson)
         .put("taskBinding", action.taskBinding)
@@ -238,10 +292,11 @@ class TaskPendingActionStore private constructor(
         .put("status", action.status.name)
         .put("resultJson", action.resultJson ?: JSONObject.NULL)
         .put("claimOwner", action.claimOwner ?: JSONObject.NULL)
+        .put("approvalAttemptId", action.approvalAttemptId ?: JSONObject.NULL)
         .toString()
 
     private fun decode(row: JSONObject): TaskPendingAction {
-        require(row.getInt("schemaVersion") == SCHEMA_VERSION)
+        require(row.getInt("schemaVersion") in 1..SCHEMA_VERSION)
         val result = TaskPendingAction(
             id = row.getString("id"), taskId = row.getString("taskId"),
             taskRevision = row.getLong("taskRevision"), runId = row.getString("runId"),
@@ -250,6 +305,8 @@ class TaskPendingActionStore private constructor(
             resumeState = row.getString("resumeState"),
             status = TaskPendingActionStatus.valueOf(row.getString("status")),
             resultJson = row.optNullableString("resultJson"), claimOwner = row.optNullableString("claimOwner"),
+            approvalAttemptId = row.optNullableString("approvalAttemptId"),
+            occurrenceId = row.optString("occurrenceId", row.getString("runId")),
         )
         require(result.taskRevision > 0L && result.runId.isNotBlank() && result.toolName.isNotBlank())
         require(result.resumeState in setOf(TaskPendingActionResumeState.ACTIVE, TaskPendingActionResumeState.PAUSED))
@@ -272,7 +329,7 @@ class TaskPendingActionStore private constructor(
     }
 
     companion object {
-        private const val SCHEMA_VERSION = 1
+        private const val SCHEMA_VERSION = 2
         private val LOCKS = ConcurrentHashMap<String, Any>()
         private val CURRENT_PROCESS_TOKEN: String by lazy {
             "${runCatching { Process.myPid() }.getOrDefault(0)}:${UUID.randomUUID()}"

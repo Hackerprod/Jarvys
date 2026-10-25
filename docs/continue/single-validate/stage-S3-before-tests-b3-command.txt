@@ -1,0 +1,1 @@
+(HEAD export + awaitReady in setUp of the 3 classes) .\gradlew.bat :app:testFullDebugUnitTest --rerun --tests "com.jarvys.agent.proactive.ProactiveAgentProcessorTest" --tests "com.jarvys.agent.proactive.ProactiveActionReceiverTest" --tests "com.jarvys.agent.tasks.ScheduledTaskProcessorTest" -x :app:prepareApkFactoryTemplate --console=plain

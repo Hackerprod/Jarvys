@@ -12,6 +12,7 @@ import java.util.concurrent.CancellationException
 
 /** Local, bounded visual authoring only. It cannot grant capabilities or execute scene content. */
 class BotMascotTool internal constructor(private val service: BotMascotService) : CoreTool {
+    override fun effectClass() = CoreTool.EffectClass.WRITE
     constructor(context: Context, sessionId: String) : this(BotMascotService(context, sessionId))
     override fun canDelegate() = false
     override fun auditDetail(arguments: Map<String, Any>?) = "Review and compile a bot mascot locally"

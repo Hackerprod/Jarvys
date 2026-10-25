@@ -1,0 +1,44 @@
+﻿[
+    {
+        "class":  "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest",
+        "tests":  1,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    },
+    {
+        "class":  "com.jarvys.agent.GeneratedImageStoreTest",
+        "tests":  1,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    },
+    {
+        "class":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest",
+        "tests":  1,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    },
+    {
+        "class":  "com.jarvys.agent.SingleSessionReadBoundariesTest",
+        "tests":  2,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    },
+    {
+        "class":  "com.jarvys.agent.SingleSessionResetTest",
+        "tests":  2,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    },
+    {
+        "class":  "com.jarvys.agent.SingleSessionStartupTest",
+        "tests":  1,
+        "failures":  0,
+        "errors":  0,
+        "skipped":  0
+    }
+]

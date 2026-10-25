@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test --tests com.jarvys.agent.chatdb.ConversationRepositoryTest -x :app:prepareApkFactoryTemplate --console=plain

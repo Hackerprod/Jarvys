@@ -1,0 +1,207 @@
+﻿[
+    {
+        "test":  "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest.startCommandAdmitsAgentSystemAndUserInputsOffMainThread",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test.createsEveryDeclaredEntityTableAndEnforcesPragmaContract",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.GeneratedImageStoreTest.fileProviderOnlyExposesThePrivateGeneratedSubtreeAndIsNotExported",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.B10_startIntentNewChatAndRestoredPickerAlwaysUseCentral",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.coldWorkerIntentRedirectsToCentralWithoutConsumingIndependentSelection",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.deletingAnOldConversationKeepsCentralSelected",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.legacySelectionIsIgnoredAndCentralNeverBorrowsItsTranscript",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.mainActivityUsesTheMatchingLiveSessionSnapshotForThinkingAndPauseTogether",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.mainActivityWorkspaceThinkingAndPauseButtonUseProjectedCurrentProcessActivity",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.realCatalogNextPreviousAndFirstBrowseBoundedPagesWithoutStartingCrew",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.realDrawerCatalogDetailFilesAndBackPreserveIndependentDraftAndBothAttachmentOwners",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.recreationKeepsCentralSelectionEvenWhenOriginalIntentStillPointsAtLegacy",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.reservedSessionTitleGuardReturnsBeforeSchedulingAnyTitleWork",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.selectedPauseOnlyBotKeepsItsPauseAndGetsAnAccurateCorrectionHint",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.sendingAndPausingWorkspaceControlsPreservesTheCurrentChatDraftAndSkills",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.MainActivityWorkspaceRoutingTest.warmWorkerIntentRedirectsToCentralWithoutOpeningTheWorkerAsAChat",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.enabledKeepsOnePlatformMinimumPeriodicWorkAndDisabledCancelsBothNames",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.listenerDispatchExtractsAndStoresOnlyWhenEnabledAndRequestsRunOnlyForCandidates",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.onlyTimeSensitiveCategoriesRequestImmediateProviderWork",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.punctualRequestsKeepOneUniqueChainWhileRunIsActiveAndBackoffOwnsRetryTiming",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.retryableProcessorResultMapsToWorkManagerRetryAndLeavesBatchPending",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.workerReturnsWorkManagerRetryForAnActiveAgentWithoutTouchingQueueOrReviewState",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.proactive.ProactiveWorkManagerTest.workerReviewsPendingBatchesWithoutConsumingAndPublishesCountsAndNextWorkTime",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.SingleSessionReadBoundariesTest.B11_compactedSelectionPreservesCompleteRetainedAndCrossingGroups",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.SingleSessionReadBoundariesTest.B11_runCheckpointsAndArtifactOwnershipNeverReadTheWholeMessageStream",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.SingleSessionResetTest.B9_eachCommittedPhaseResumesWithoutImportingAndMemorySeedsOnlyOnFirstUse",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.SingleSessionResetTest.B9_retirementKeepsNewFilesAndInvalidatesOldNotificationTokens",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.SingleSessionStartupTest.B9_productiveStartupReturnsBeforeResetAndEarlyActivityWaitsEvenWithCorruptOldDatabase",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-contracts-final-results"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskManualRunWorkerTest.boundManualWorkRejectsChangedRevisionPayloadOrIncompleteBindingBeforeProcessor",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskManualRunWorkerTest.manualWorkUsesTheNormalProcessorAndKeepsManualOccurrenceDistinctFromScheduledRun",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskManualRunWorkerTest.manualWorkWaitsForPendingApprovalWithoutDeletingTheReviewedTask",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskPendingActionExecutionTest.approvalInvokesTheExactActionOnceAndPersistsItsReceipt",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskPendingActionExecutionTest.failedExecutionIsMarkedUncertainAndARepeatedWorkerCannotReplayIt",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskPendingActionExecutionTest.rejectionAndRevisionChangeNeverInvokeTheApprovedTool",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.globalPauseCancelsTickResumeSkipsMissedRunsAndManualRunStillQueues",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.manifestRearmReceiverIsNotExportedAndHasOnlyTimeAndPackageActions",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.rearmRecalculatesFollowDeviceWallTimeAfterZoneChangeAndLeavesExplicitZoneUnchanged",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.rearmSelectsEarliestDeadlineReplacesUniqueWorkAndCancelsWhenNoneRemain",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.retryUsesWorkManagerRetryAndRepeatsTheSameOccurrenceUntilOneFinalLedgerRow",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.tasks.TaskWorkManagerTest.workerProcessesDueTasksAndCallsRearmBeforeReturning",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    },
+    {
+        "test":  "com.jarvys.agent.workspaces.WorkspaceRegistryTest.registryDoesNotMigrateLegacyFilesOrInventWorkOnOpen",
+        "pass":  true,
+        "source":  "C:\\Projects\\Jarvys-wt\\single-validate\\stage-S1fix-selected-attempt1"
+    }
+]

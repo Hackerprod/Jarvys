@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests "com.jarvys.agent.proactive.ProactiveAgentProcessorTest" --tests "com.jarvys.agent.proactive.ProactiveActionReceiverTest" --tests "com.jarvys.agent.tasks.ScheduledTaskProcessorTest" -x :app:prepareApkFactoryTemplate --console=plain

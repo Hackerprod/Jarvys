@@ -1,0 +1,87 @@
+VEREDICTO: FAIL
+
+Leí completo [SINGLE_SESSION.md](C:/Projects/Jarvys-wt/single/docs/SINGLE_SESSION.md) y el informe de ronda 4. Quedan **tres incidencias importantes y una menor**. No modifiqué archivos ni ejecuté builds o pruebas.
+
+**Citas verificadas: 50 correctas / 0 incorrectas / 2 imprecisas.** Más de 20 sostienen texto nuevo o modificado en esta ronda. Cada referencia separada por punto y coma cuenta como una cita; `J/` corresponde al directorio Java/Kotlin indicado en el documento.
+
+| Área | Citas correctas contabilizadas — todas relativas a `J/` |
+|---|---|
+| Identidad, UI y Crew — 5 | `workspaces/WorkspaceIdentity.java:5`; `MainActivity.kt:339`; `MainActivity.kt:463-467`; `ui/chat/ConversationDrawer.kt:191-226`; `chatdb/MemoryCrewEntities.kt:91-132` |
+| Memoria y auditoría — 5 | `CoreAgentRuntime.java:252-256`; `chatdb/PersonalAgentRepository.kt:67-77`; `PersonalMemoryFlush.java:129-144`; `PersonalMemoryExtractionWorker.kt:72`; `connectors/Autonomy.kt:187-195` |
+| Reset y tombstones — 5 | `chatdb/JarvysChatDatabase.kt:36`; `chatdb/JarvysChatDatabase.kt:396`; `chatdb/JarvysChatDatabase.kt:540-560`; `chatdb/ConversationRepository.kt:430-455`; `workspaces/WorkspaceRegistry.kt:24` |
+| Rutas generacionales — 5 | `AttachmentStore.java:150-156`; `DeliveredArtifactStore.java:647-651`; `coding/ProjectScopeStore.java:39-49`; `coding/ProjectScopeIdentity.java:31-45`; `coding/ProjectScope.java:87-89` |
+| Anclas y reinicialización — 5 | `DeliveredArtifactStore.java:582`; `LocalRunStore.java:1652`; `WorkspaceStore.java:194-201`; `chatdb/PersonalAgentRepository.kt:494-514`; `chatdb/PersonalAgentRepository.kt:553-561` |
+| Privacidad y errores — 5 | `AgentErrorReporter.java:13-64`; `AgentErrorReporter.java:66-84`; `CoreAgentModel.java:41-121`; `LocalDiagnostics.java:128-134`; `LocalDiagnostics.java:226-230` |
+| Clasificación de efectos — 5 | `CoreTool.java:25-26`; `WorkspaceTools.java:499`; `WorkspaceTools.java:566`; `WorkspaceTools.java:608`; `CoreAgentRuntime.java:155-169` |
+| Aprobaciones — 5 | `tasks/TaskPendingActionStore.kt:119-120`; `tasks/TaskPendingActionStore.kt:128-130`; `tasks/TaskPendingActionStore.kt:194-197`; `tasks/TaskPendingActionExecution.kt:33`; `tasks/TaskPendingActionExecution.kt:65-74` |
+| Compactación — 5 | `MainChatTranscriptStore.java:311-315`; `chatdb/ProtocolEntities.kt:109-119`; `chatdb/ProtocolEntities.kt:139-149`; `chatdb/ModelTranscriptRepository.kt:386-395`; `ConversationCompactionPolicy.java:78-121` |
+| Preview, retención y delegación — 5 | `WorkspaceTools.java:757-760`; `WorkspaceTools.java:773-799`; `WorkspaceTools.java:801-807`; `MainChatTranscriptStore.java:197-202`; `CoreAgentRuntime.java:351-353` |
+
+Las **dos citas imprecisas** son:
+
+- **Documento:510 → `ProtocolEntities.kt:162-173`.** La columna `file_artifact_id` existe, pero eso no demuestra que las salidas archivadas productivas estén enlazadas mediante ella. Actualmente no lo están. Corrección: distinguir existencia del campo de su población efectiva; véase incidencia 1.
+- **Documento:619 → `SPEC.md:75-81`.** El SPEC define identidad, intentos y pertenencia de la interacción; no define «todo lo que sigue hasta el siguiente mensaje». Corrección: usar pertenencia durable por identificadores; véase incidencia 4.
+
+También contrasté las lecturas completas reclamadas: `MessageReactionTool` carga mensajes, `MainChatTranscriptStore` reconstruye propiedad leyendo el transcript y el worker carga contexto completo. `promptContext` efectivamente sobrescribe `kind`. El grep de `withMemoryInstructions` solo encuentra sus propias sobrecargas; el runtime mantiene `memoryStore=null`. El documento reconoce correctamente los accesos residuales de MemFS mediante `WorkspaceStore`.
+
+**Estado de las incidencias de ronda 4**
+
+| Incidencia previa | Estado | Resultado |
+|---|---|---|
+| Aislamiento `g3` incompleto | **PARCIAL** | Añade Coding, identidad, `legacyRoot()` y anclas señaladas. Quedan consumidores y configuración de URI sin cubrir, incidencia 2. |
+| Escrituras clasificadas READ | **RESUELTA** | §7.5:423-424 y S6 incluyen nativas, clasificación normalizada, propagación e inventario; exigen escritura nativa real. |
+| Filtro de compactación por grupos | **RESUELTA** | §4.2:203 reproduce la condición completa; B11 incluye lote retenido anterior, lote cruzado y lote antiguo descartable. |
+| `NotPending` / intento de aprobación | **RESUELTA** | A3 y B4 separan `attempt_id` de `action_id` y conservan la evidencia del intento dueño del efecto. |
+| Productor de preview | **RESUELTA** | S4:600 retira la rama sin `path` y su descripción; B13 verifica las referencias producidas. |
+
+**D1–D8 y decisiones posteriores**
+
+D1–D6 y D8 se respetan en el destino descrito, aplicando las sustituciones P1/P4: se borra también la memoria personal y desaparece toda privacidad. Se conservan bots/Crew y sus pantallas; Bots y Tareas pasan a Ajustes. No encontré topes nuevos inventados ni validadores lingüísticos; las diez interacciones son decisión expresa del dueño.
+
+**D7/P7 queda incompleta:** la protección de artefactos depende de un enlace que el productor actual no escribe. El aislamiento pendiente también puede hacer que la retirada de archivos antiguos alcance archivos nuevos escritos por consumidores todavía apuntados a rutas antiguas.
+
+**Incidencias**
+
+1. **§7.10:510 / S5 / B14 — importante: la protección de artefactos no alcanza las salidas productivas.**
+
+   `MainChatTranscriptStore.java:152-155` escribe `output=retain(output)` sin añadir `artifactId`. `retain/archive`, `:183-217`, devuelve texto y registra el artefacto separadamente.
+
+   `LocalRunStore.java:1715-1720` y `:1773-1777` solo trasladan el campo JSON ausente. `ModelTranscriptRepository.kt:250-251` termina guardando `file_artifact_id=NULL`. No encontré otro productor o actualización que repare esa relación.
+
+   Por tanto, el predicado propuesto puede considerar expulsable una salida utilizada por un episodio. Además, los argumentos archivados (`MainChatTranscriptStore.java:179`) y el texto del lote (`:124`) tampoco tienen las relaciones estructuradas necesarias.
+
+   **Corrección:** hacer que la retención devuelva texto e identificadores estructurados; persistir las dependencias de resultados y argumentos, y proteger su cierre completo desde `memory_evidence`. B14 debe generar salidas y argumentos largos mediante el productor real antes de simular presión; insertar artificialmente `file_artifact_id` no detecta este fallo.
+
+2. **§8:539 / S1:576 / B9 — importante: el traslado a `g3` sigue sin cubrir todos los consumidores.**
+
+   Hay caminos concretos adicionales:
+
+   - `ConversationModuleCapabilityAccess.kt:29-48` construye `WorkspaceStore` con `filesDir/jarvys/workspaces` y escribe allí. Si permanece así, puede escribir archivos nuevos dentro del árbol antiguo que la fase 5 retira.
+   - `ConversationReader.kt:1275-1276` construye el almacén de entregables desde el padre del archivo de DB. Con `jarvys/jarvys-chat-v3.db`, sigue buscando en `jarvys/delivered`, aunque los nuevos entregables estén en `jarvys/g3/delivered`.
+   - `res/xml/generated_image_paths.xml:3` solo autoriza `jarvys/generated/`. `GeneratedImageIntents.java:18` utiliza ese `FileProvider`; trasladar las imágenes a `jarvys/g3/generated/` exige adaptar su configuración para poder compartirlas.
+
+   El inventario genérico no asigna ni prueba estos casos, y B9 solo menciona supervivencia de adjunto, entregable y proyecto.
+
+   **Corrección:** incluir explícitamente estos consumidores y el XML en S1. Ampliar el contrato generacional con escritura de módulo, recuperación de snapshot tras recarga y URI de imagen compartida, comprobando también que ningún archivo nuevo cae en árboles retirables.
+
+3. **B9:493 / S1:579 / S2:583 — importante: S1 exige una protección asignada a S2.**
+
+   S1 ejecuta B9, cuyo último aserto exige que `deleteConversation` rechace Central. Esa protección se implementa expresamente en S2, que depende de S1. El código actual de `ConversationRepository.kt:430-455` permite tombstonear y borrar Central.
+
+   Además, B9 dice «sin conversaciones» mientras la fase 1 exige crear Central. El estado observable del test queda contradictorio.
+
+   **Corrección:** mover la protección de Central y su prueba a S1, o separar ese aserto de B9 y asignarlo a S2. Definir el resultado del reset como «solo Central, sin datos antiguos y con los valores predeterminados correspondientes», indicando cuándo se ejecuta `initialize()`.
+
+4. **S7:619 / B7 — menor: definición de interacción por contigüidad no respaldada por el SPEC.**
+
+   El SPEC usa identidad y pertenencia. Hay steering durante un run, mientras `MainChatTranscriptStore.java:85-88` fija propietario e índice del turno. Cortar por el siguiente mensaje no expresa correctamente esos casos.
+
+   **Corrección:** definir la interacción mediante `owner_user_message_id` y sus intentos; añadir a B7 un caso de steering con resultado tardío, verificando que permanece asociado y protegido.
+
+Las etapas restantes tienen aceptación observable y pruebas vinculadas a sus cambios. **S1/B9 y S5/B14 requieren las correcciones anteriores**; no hace falta ampliar indiscriminadamente la suite.
+
+**Lo que no pude verificar**
+
+La implementación futura del reset, `StorageGeneration`, recorder y SQL por grupos; ejecución Android, carreras y recuperación real dentro de cada fase; cortes de energía y durabilidad del estado JSON; presión real de almacenamiento, OAuth completo de Gmail y comportamiento de modelos reales. Los `[NV]` que declaran esas limitaciones son aceptables.
+
+No detecté copia de memoria personal encubierta: su pérdida está expresamente autorizada por P1. La retirada propuesta excluye nominalmente `g3`; el problema pendiente es que todavía hay consumidores capaces de escribir fuera de esa generación.

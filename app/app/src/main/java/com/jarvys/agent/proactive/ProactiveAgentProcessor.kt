@@ -135,6 +135,8 @@ private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : 
     override fun declaration(): ToolSpec = delegate.declaration()
     override fun canDelegate() = delegate.canDelegate()
     override fun unattendedAccess() = delegate.unattendedAccess()
+    override fun effectClass() = delegate.effectClass()
+    override fun effectClass(arguments: Map<String, Any>) = delegate.effectClass(arguments)
     override fun isConnectorTool() = delegate.isConnectorTool()
     override fun isMcpTool() = delegate.isMcpTool()
     override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()

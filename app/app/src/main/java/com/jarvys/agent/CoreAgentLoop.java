@@ -1260,7 +1260,7 @@ public final class CoreAgentLoop {
         return registry.invoke(item.call.name, item.arguments, token, message -> {
             if (listener != null && !item.hideFromProgress && message != null && !message.isEmpty())
                 listener.onToolActivity(item.activity.event("tool_progress", message, null));
-        });
+        }, item.call.id);
     }
 
     private static void cancelPreparedTool(PreparedToolCall item) {

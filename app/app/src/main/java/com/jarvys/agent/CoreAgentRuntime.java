@@ -307,6 +307,10 @@ public final class CoreAgentRuntime {
       final boolean mainChat,
       final CancellationToken token,
       CoreAgentLoop.ProgressListener listener) {
+    if (context != null && depth == 0 && mainChat) {
+      try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+          .personalAgentReconcileEpisodeEvidenceSync(sessionId); } catch (RuntimeException ignored) { }
+    }
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
@@ -369,14 +373,18 @@ public final class CoreAgentRuntime {
               ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat,
                   compactionMemoryLifecycle(model))
               : null;
-      final CoreToolRegistry runToolRegistry = toolRegistry;
-      final String runInstructions = instructions(runToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
-      CoreAgentLoop.Model scopedModel = requestModel(model, runToolRegistry, mainChat, reactionTool);
+      if (mainChat && depth == 0 && context != null && !currentTurnOwnerMessageId.isBlank()) {
+        toolRegistry = toolRegistry.withInvocationObserver(
+            new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId));
+      }
+      final CoreToolRegistry observedToolRegistry = toolRegistry;
+      final String runInstructions = instructions(observedToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
+      CoreAgentLoop.Model scopedModel = requestModel(model, observedToolRegistry, mainChat, reactionTool);
       CoreAgentLoop.TurnContextProvider turnContextProvider = mainChat && depth == 0
               ? mainChatSteeringProvider : null;
       CoreAgentLoop loop =
           new CoreAgentLoop(
-              scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor,
+              scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
       if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId);
       CoreAgentLoop.Result result = AgentResultPresentation.localize(context,
@@ -398,6 +406,10 @@ public final class CoreAgentRuntime {
             crewMissionId, null, token.isStoppedByUser() ? "STOPPED" : "FAILED");
       throw failure;
     } finally {
+      if (context != null && depth == 0 && mainChat) {
+        try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+            .personalAgentReconcileEpisodeEvidenceSync(sessionId); } catch (RuntimeException ignored) { }
+      }
       for (ConnectorRegistry registry : registries) registry.endAgentRun(token.generation());
     }
   }
@@ -1758,6 +1770,8 @@ public final class CoreAgentRuntime {
       return delegate.requiresMemoryScopeForScheduledTask();
     }
     @Override public AccessClassification accessClassification() { return delegate.accessClassification(); }
+    @Override public EffectClass effectClass() { return delegate.effectClass(); }
+    @Override public EffectClass effectClass(Map<String, Object> arguments) { return delegate.effectClass(arguments); }
     @Override public PersistenceEffect persistenceEffect() { return delegate.persistenceEffect(); }
     @Override public ExecutionMode executionMode() { return delegate.executionMode(); }
     @Override public ResponseCallPolicy responseCallPolicy() { return delegate.responseCallPolicy(); }

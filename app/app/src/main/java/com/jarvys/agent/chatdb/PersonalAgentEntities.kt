@@ -177,3 +177,22 @@ data class TranscriptArtifactRef(
     val call_id: String?,
     val artifact_id: String,
 )
+
+@Entity(tableName = "connector_autonomy_audit", indices = [Index(value = ["connector_id", "timestamp_millis", "id"])])
+data class ConnectorAutonomyAudit(
+    @androidx.room.PrimaryKey val id: String,
+    val timestamp_millis: Long,
+    val connector_id: String,
+    val connector_name: String,
+    val operation_name: String,
+    val operation_label: String,
+    val summary: String,
+)
+
+@Entity(tableName = "connector_state_events", indices = [Index(value = ["connector_id", "connected_at_ms"])])
+data class ConnectorStateEvent(
+    @androidx.room.PrimaryKey val id: String,
+    val connector_id: String,
+    val connected: Boolean,
+    val connected_at_ms: Long,
+)

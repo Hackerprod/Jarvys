@@ -49,6 +49,7 @@ public final class CoreConnectorTool implements CoreTool {
     @Override public UnattendedAccess unattendedAccess() {
         return operation.getWrite() ? UnattendedAccess.WRITE : UnattendedAccess.READ;
     }
+    @Override public EffectClass effectClass() { return operation.getWrite() ? EffectClass.WRITE : EffectClass.READ; }
     @Override public boolean isConnectorTool() { return true; }
     String groupName() { return "connector:" + definition.getId(); }
     String operationName() { return operation.getName(); }

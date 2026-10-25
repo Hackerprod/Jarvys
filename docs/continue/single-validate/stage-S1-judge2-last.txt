@@ -1,0 +1,100 @@
+VEREDICTO: FAIL
+
+Persisten **tres incidencias importantes**. Revisión de `feat/single-session`, HEAD `47ac4557`, incluidos los archivos nuevos sin seguimiento. Solo lectura; sin builds ni tests.
+
+1. **Importante — se descartan resultados de selectores mientras la Activity espera el reset.**  
+   [MainActivity.kt:388](C:/Projects/Jarvys-wt/single/app/app/src/main/java/com/jarvys/agent/MainActivity.kt:388): los callbacks de fotos/documentos consumen las URI cuando `attachmentPickerSession` todavía es `null` y `attachmentDrafts` no está inicializado. Ambos se restauran después de `awaitReady`, en las líneas 439–441. Tras morir el proceso con el selector abierto, Android puede entregar el resultado al iniciar la Activity antes de completarse la barrera: la selección desaparece definitivamente.
+
+   La importación de skills tiene la misma carrera: el callback de la línea 385 puede alcanzar `skillRepository.importMarkdown` antes de inicializar ese repositorio; termina mostrando un error de importación.
+
+   **Corrección:** conservar los resultados pendientes y procesarlos tras inicializar sus consumidores; normalizar antes la sesión restaurada. Añadir un caso con el executor del reset retenido y un resultado real de Activity pendiente.
+
+2. **Importante — otra recreación durante la espera destruye el estado restaurado.**  
+   [MainActivity.kt:759](C:/Projects/Jarvys-wt/single/app/app/src/main/java/com/jarvys/agent/MainActivity.kt:759): `onSaveInstanceState` guarda los campos actuales aunque todavía no se hayan restaurado del `Bundle`. Escribe borrador vacío y skills seleccionadas vacías, y omite `attachment_picker_session`. La restauración está aplazada a las líneas 441, 473 y 492.
+
+   **Reproducción por orden de eventos:** recibir un `Bundle` con borrador/skills/picker → esperar la barrera → guardar/recrear antes de liberarla. La siguiente instancia recibe los valores vacíos.
+
+   **Corrección:** restaurar los campos puramente en memoria antes de suspender, o conservar y volver a guardar el estado pendiente. Probar una recreación mientras el reset permanece retenido.
+
+3. **Importante — B9 evita comprobar quién inicia realmente el reset productivo.**  
+   [SingleSessionStartupTest.kt:69](C:/Projects/Jarvys-wt/single/app/app/src/test/java/com/jarvys/agent/SingleSessionStartupTest.kt:69) llama a `SingleSessionReset.start(context, executorRetenido)` **antes** de `application.onCreate()`. Eso deja `started=true`; la llamada productiva de Application se convierte en un retorno inmediato.
+
+   El test seguiría pasando si se eliminara `SingleSessionReset.start(this)` de Application, aunque en producción todos los consumidores quedaran esperando indefinidamente. Sí comprueba la espera de Activity, la base corrupta y el retorno de `onCreate`; no demuestra el primer agendado productivo.
+
+   **Corrección:** sustituir únicamente el executor utilizado por producción y dejar que Application efectúe la primera llamada a `start`.
+
+Las incidencias anteriores quedan así:
+
+| Incidencia previa | Estado | Evidencia |
+|---|---|---|
+| Application bloquea main esperando el reset | RESUELTA en su causa original | `FactoryInstallCoordinator.kt:401,420`; `SingleSessionReset.kt:61,64`. Preparación asíncrona y liberación después de `done`. Las nuevas regresiones de Activity son las incidencias 1–2. |
+| Base antigua corrupta impide completar el reset | RESUELTA | `SingleSessionReset.kt:150`: invalidación sin abrir SQLite antigua; cancelaciones por etiqueta/nombre. |
+| B9 evita Application productiva y usa inventario circular | PARCIAL | Ahora instancia Application productiva y usa inventario literal; sigue evitando su primer agendado. Incidencia 3. |
+
+En las tablas siguientes, `J/` representa `app/app/src/main/java/com/jarvys/agent/` y `T/`, su equivalente en `src/test`.
+
+| Apartado S1 | Estado | Evidencia |
+|---|---|---|
+| Base nueva Room v3 y `3.json` | IMPLEMENTADO | `J/chatdb/JarvysChatDatabase.kt:97,171`; esquema nuevo presente. |
+| Esquema aditivo | IMPLEMENTADO | Comparación estructural de `2.json` y `3.json`: ninguna tabla o columna anterior retirada ni alterada. |
+| Ocho columnas de `memory_entries` | IMPLEMENTADO | `J/chatdb/PersonalAgentEntities.kt:73`. |
+| Tablas nuevas de evidencia, enlaces y referencias | IMPLEMENTADO | `PersonalAgentEntities.kt:134,153,164`; registro en `JarvysChatDatabase.kt:90`. |
+| `message_fts` y ampliación de `memory_fts` | IMPLEMENTADO | `J/chatdb/MessageSearchIndex.kt:5`; `PersonalMemoryFtsSql.kt:12`; instalación en `JarvysChatDatabase.kt:538`. |
+| Central única, base sin importación y memoria perezosa | IMPLEMENTADO | `J/SingleSessionReset.kt:110`; `T/SingleSessionResetTest.kt:55`. |
+| Registro nuevo y vacío de workspaces | IMPLEMENTADO | `J/SingleSessionReset.kt:120`; `WorkspaceRegistry.kt:24`. |
+| MainActivity: arranque, intents, restauración y `newChat` | IMPLEMENTADO | `J/MainActivity.kt:339,479,711,1216,1411,1570`. |
+| Servicio y sobrecargas sin UUID de sesión ordinaria | IMPLEMENTADO | `J/AgentForegroundService.java:592,733,1284`; `WorkspaceIdentity.java:31`. |
+| Picker restaurado normalizado y conservado | PARCIAL | Normalización en `MainActivity.kt:441`; pérdidas durante espera, incidencias 1–2. |
+| Ancla inexistente cae a Central sin objetivo | IMPLEMENTADO | `J/MainActivity.kt:1428,1437`. |
+| Rechazo del borrado de Central | IMPLEMENTADO | `J/chatdb/ConversationRepository.kt:433`; `ConversationMetadataAccess.java:96`. |
+| Orden de fases y estado atómico recuperable | IMPLEMENTADO | `J/SingleSessionReset.kt:38,135,220,230`. |
+| Barrera previa a proveedores; reset fuera de main | IMPLEMENTADO | `FactoryInstallCoordinator.kt:401,420`; `SingleSessionReset.kt:83`. |
+| Conservación del estado de Activity durante la espera | PARCIAL | Incidencias 1–2. |
+| Invalidación independiente de la base antigua | IMPLEMENTADO | `J/SingleSessionReset.kt:150`. |
+| Cancelación de memoria antigua y guardas de generación | IMPLEMENTADO | `SingleSessionReset.kt:162`; extracción `:27,133,157`; consolidación `:23,118`. |
+| Preservación de ajustes | IMPLEMENTADO | `SingleSessionReset.kt:164`: elimina únicamente claves de sesión previstas. |
+| Retirada tras primer run correcto y reanudación | IMPLEMENTADO | `AgentForegroundService.java:1856`; `SingleSessionReset.kt:170,182,190`. |
+| Retirada excluye `g3` y Descargas públicas | IMPLEMENTADO | Inventario privado en `SingleSessionReset.kt:39,204`; no borra los archivos públicos exportados. |
+| Separación explícita `filesDir`/`chatRoot` | IMPLEMENTADO | `StorageGeneration.java:12`; `LocalRunStore.java:1638`; `DeliveredArtifactStore.java:55`; `WorkspaceStore.java:138,272`. |
+| Adjuntos, entregables, imágenes y miniaturas | IMPLEMENTADO | `AttachmentStore.java:27`; `DeliveredArtifactStore.java:57`; `GeneratedImageStore.java:19`; `HtmlThumbnailStore.java:63`. |
+| Crew, workspaces e inspecciones | IMPLEMENTADO | `CrewContextArtifacts.java:47`; `CrewCheckpointStore.java:299,554`; `WorkspaceStore.java:226`; `WorkspaceArtifactDelivery.java:80`. |
+| Coding, identidad y `legacyRoot()` | IMPLEMENTADO | `coding/ProjectScopeStore.java:39`; `ProjectScopeIdentity.java:31,45`; `ProjectScope.java:88`. |
+| Módulos, ConversationReader y FileProvider | IMPLEMENTADO | `ConversationModuleCapabilityAccess.kt:29`; `ConversationReader.kt:1275,1282`; `GeneratedImageFileProvider.kt:12`; XML de imágenes `:3`. |
+| Runs, notas, MemFS, índice y recibos privados | IMPLEMENTADO | `LocalRunStore.java:105`; `MemoryStore.java:153`; `MemorySearchIndexRuntime.kt:142`; `DownloadStore.java:443`. |
+| Reacciones y propiedad de artefactos sin lectura completa | IMPLEMENTADO | `MessageReactionTool.java:34,60`; `MainChatTranscriptStore.java:47`; `ModelTranscriptRepository.kt:386`. |
+| Transcript seleccionado por grupos completos | IMPLEMENTADO | `ModelTranscriptRepository.kt:395,442`; fixture comparativo `T/SingleSessionReadBoundariesTest.kt:26`. |
+| Entradas por cursor y estados por ids | IMPLEMENTADO | `ConversationRepository.kt:1127,1136`. |
+| Incorporación por rango y último índice mediante `MAX` | IMPLEMENTADO | `ConversationRepository.kt:1153,1162`; conservación del journal mediante `markInputState`. |
+| B9/B10/B11 | PARCIAL | B11 compara reconstrucciones y comprueba las lecturas previstas. B9 tiene el hueco de la incidencia 3; B10 recrea después de esperar la barrera en su fixture. |
+
+No identifiqué adelantos de S2–S8: permanecen privacidad, drawer, pantallas de workspace, `scope`, MemFS y destinos internos de proactivo/tareas. No encontré topes nuevos ni validadores por idioma.
+
+Las decisiones adicionales de mover el estado técnico del índice a `storage_meta`, añadir el proveedor de imágenes con barrera y conservar las sesiones internas del servicio son coherentes con S1. La inicialización diferida de Activity introduce las pérdidas descritas; el informe del implementador no las contempla.
+
+Inventario de tests borrados o adaptados frente a HEAD:
+
+| Test o fichero | Cambio y juicio |
+|---|---|
+| `MainActivityWorkspaceRoutingTest.emptyCentralSelectionPreservesHiddenLiveOwnerAndReturningRestoresItsRun` | Eliminado. Justificado: exigía alternar chats ordinarios. |
+| `existingLegacySelectionSurvivesStartupAndEmptyCentralNeverBorrowsItsTranscript` | Sustituido por `legacySelectionIsIgnoredAndCentralNeverBorrowsItsTranscript`, añadiendo B10. Cambio funcional justificado; cobertura de espera insuficiente. |
+| `deletingTheCurrentChatReturnsToAgentInsteadOfCreatingAnEmptyChat` | Sustituido por `deletingAnOldConversationKeepsCentralSelected`. Justificado. |
+| Resto de `MainActivityWorkspaceRoutingTest` | Adaptados intent caliente, recreación, controles, borradores/skills y navegación por catálogo. Fixtures esperan la barrera. Justificado, pero esa espera excluye las incidencias 1–2. |
+| `WorkspaceArtifactDeliveryTest.deletedCentralCannotReceiveAndOrdinarySnapshotStillRejectsCrossChat` | Sustituido por rechazo del borrado de Central, conservando aislamiento entre conversaciones. Justificado. |
+| Resto de `WorkspaceArtifactDeliveryTest` | Rutas y fixtures `g3`; conserva cancelación, revocación y aislamiento. Justificado. |
+| `AgentForegroundServiceMainThreadAdmissionTest.startCommandAdmitsAgentSystemAndUserInputsOffMainThread` | Sesiones unificadas en Central y selección del mensaje por ID. Justificado; conserva las aserciones de admisión y SYSTEM. |
+| `AgentRunRestorationComposeTest.restoredDeliveredPreviewHidesOnlyItsToolResultBeforeGrouping` | Constructor/ruta nuevos. Justificado. |
+| `CrewCheckpointRecoveryTest`, `CrewContextArtifactsRecoveryTest` | Helpers de rutas `g3`. Justificado. |
+| `DeliveredArtifactTest` | Fixtures, reaperturas y rutas de symlinks. Justificado. |
+| `GeneratedImageStoreTest` | Rutas, proveedor productivo, XML y shadow de separadores. Justificado; conserva URI/bytes/permisos. |
+| `HtmlPreviewSnapshotTest`, `HtmlThumbnailStoreTest` | Fixtures, manifests y rutas de corrupción/borrado/symlinks. Justificado. |
+| `ConversationRepositoryTest.rawRepositoryInsertsProvideEveryRequiredSchemaColumn` | Excluye FTS externo del auditor Room. Justificado. |
+| `JarvysChatDatabaseM0Test` | Expectativas v3, tablas nuevas e índices externos; conserva fixtures publicados. Justificado. |
+| `M1bRepositoriesTest.modelProtocolUsesFirstResultsAndExcludesPreBoundaryProviderOutputsAfterCompaction` | Distingue selección compactada y lectura completa de referencia. Justificado. |
+| `PersonalMemoryFts5Test.externalIndexTracksWritesAndSearchUsesBm25Ranking`, `reservedWordsAreQuotedBeforeFts5PrefixMatching` | Fixtures explícitos con columnas nuevas. Justificado. |
+| `ProjectScopeExistingTest.uncachedRootWithoutIdentityDoesNotCreateState` | Ruta `g3`. Justificado. |
+| `TaskManualRunWorkerTest` | Setup espera la barrera. Justificado. |
+| `ChatTestStore` | Inicialización de WorkManager para fixtures. Justificado. |
+
+Los archivos nuevos de B9/B11 y el shadow fueron leídos. B11 no es tautológico; el inventario literal de B9 corrige la circularidad anterior. El nuevo test de Application conserva el defecto señalado en la incidencia 3.
+
+No modifiqué archivos. `git diff --check` está limpio. **No verifiqué mediante ejecución** compilación, resultados declarados, las nuevas intercalaciones de ciclo de vida, ANR en dispositivo, trabajos antiguos realmente activos, cortes físicos dentro de una fase/retirada ni rendimiento con historiales extensos. Los estados de la tabla son conclusiones de inspección estática.

@@ -236,6 +236,7 @@ public final class CodingProjectTools {
   }
 
   private static final class Tool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     final Binding binding;
     final String name;
     final ToolSpec spec;

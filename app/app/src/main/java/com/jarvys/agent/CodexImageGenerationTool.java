@@ -12,6 +12,7 @@ import java.util.UUID;
 
 /** Main-chat-only image tool backed by the existing ChatGPT Codex sign-in. */
 final class CodexImageGenerationTool implements CoreTool {
+    @Override public EffectClass effectClass() { return EffectClass.WRITE; }
     static final String NAME = "generate_image";
     private final Context context;
     private final String sessionId;

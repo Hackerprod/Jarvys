@@ -93,8 +93,10 @@ import kotlin.coroutines.ContinuationInterceptor
         MemoryRevision::class,
         AgentSessionState::class,
         MemoryJob::class,
+        ConnectorAutonomyAudit::class,
+        ConnectorStateEvent::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -161,13 +163,15 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "memory_revisions",
             "agent_session_state",
             "memory_jobs",
+            "connector_autonomy_audit",
+            "connector_state_events",
         )
     }
 }
 
 /** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 3
+    private const val DATABASE_VERSION = 4
     private const val DATABASE_NAME = "jarvys-chat-v3.db"
     private const val DATABASE_DIRECTORY = "jarvys"
     private const val BUSY_TIMEOUT_MILLIS = 5_000

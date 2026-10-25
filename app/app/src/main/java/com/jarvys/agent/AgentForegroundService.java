@@ -1986,6 +1986,8 @@ public final class AgentForegroundService extends Service {
   private void enqueueAutomaticReflection(String sessionId, String throughMessageId) {
     try { PersonalMemoryExtractionWorker.enqueue(this, sessionId, false); }
     catch (RuntimeException failure) { AgentErrorReporter.reportBackgroundFailure(this, failure); }
+    try { PersonalMemoryExtractionWorker.enqueueNarration(this, sessionId); }
+    catch (RuntimeException failure) { AgentErrorReporter.reportBackgroundFailure(this, failure); }
   }
 
   private void createNotificationChannel() {

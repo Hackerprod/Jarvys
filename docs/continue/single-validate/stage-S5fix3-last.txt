@@ -1,0 +1,9 @@
+He corregido la paginación para usar `seq DESC` con cursor keyset; quité el score BM25, que no forma parte del contrato y no puede sostener un orden estable entre páginas. También cerré la ventana entre preparar y confirmar los metadatos de un checkpoint.
+
+Los tres hallazgos menores ya estaban corregidos y cubiertos por B1/B14; verifiqué sus pruebas. El informe detallado está en [stage-S5fix3-report.md](C:/Projects/Jarvys-wt/single-validate/stage-S5fix3-report.md).
+
+- Compilación Full y Play, incluidas las fuentes de tests: **BUILD SUCCESSFUL**.
+- Selección indicada de pruebas: **109 tests, 0 fallos**.
+- `git diff --check`: **sin errores**.
+
+No ejecuté la suite completa, pruebas Play ni pruebas en dispositivo. Conservé los cambios sin commit; no hice push, no generé APK ni modifiqué `docs/SINGLE_SESSION.md`.

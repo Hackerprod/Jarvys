@@ -11,6 +11,7 @@ public interface CoreTool {
   enum ResponseCallPolicy { MULTIPLE_PER_RESPONSE, ONE_PER_RESPONSE }
   enum UnattendedAccess { EXCLUDED, READ, WRITE }
   enum AccessClassification { READ, WRITE }
+  enum EffectClass { READ, WRITE }
   enum PersistenceEffect { NONE, MEMORY }
 
   interface ProgressListener {
@@ -43,6 +44,13 @@ public interface CoreTool {
 
   /** Generic access and persistence-effect metadata; it does not depend on tool names. */
   default AccessClassification accessClassification() { return AccessClassification.READ; }
+  /** Normalized external effect classification used by durable episode capture. */
+  default EffectClass effectClass() {
+    return accessClassification() == AccessClassification.WRITE || unattendedAccess() == UnattendedAccess.WRITE
+        ? EffectClass.WRITE : EffectClass.READ;
+  }
+  /** Argument-sensitive effects are used by tools whose one declaration supports reads and writes. */
+  default EffectClass effectClass(Map<String, Object> arguments) { return effectClass(); }
   default PersistenceEffect persistenceEffect() { return PersistenceEffect.NONE; }
 
   /**

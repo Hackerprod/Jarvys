@@ -1,0 +1,1 @@
+.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.ui.Th1VisualCaptureTest --tests com.jarvys.agent.ui.Ux3VisualCaptureTest --tests com.jarvys.agent.ui.A1VisualCaptureTest --tests com.jarvys.agent.ui.chat.I1VisualCaptureTest --tests com.jarvys.agent.ui.chat.Ux1VisualCaptureTest -x :app:prepareApkFactoryTemplate --console=plain

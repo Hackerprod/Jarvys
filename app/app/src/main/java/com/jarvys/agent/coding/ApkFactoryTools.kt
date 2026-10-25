@@ -16,6 +16,7 @@ object ApkFactoryTools {
         Tool(FactoryProjectService(context, scope, owner, available::getAsBoolean))
 
     internal class Tool(private val service: FactoryProjectService) : CoreTool {
+        override fun effectClass() = CoreTool.EffectClass.WRITE
         override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
         override fun canDelegate() = false
         override fun declaration(): ToolSpec {

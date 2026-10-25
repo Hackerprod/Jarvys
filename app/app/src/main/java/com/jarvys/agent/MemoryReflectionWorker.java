@@ -93,6 +93,8 @@ public final class MemoryReflectionWorker {
                 @Override public boolean requiresMemoryScopeForScheduledTask() { return original.requiresMemoryScopeForScheduledTask(); }
                 @Override public AccessClassification accessClassification() { return original.accessClassification(); }
                 @Override public PersistenceEffect persistenceEffect() { return original.persistenceEffect(); }
+                @Override public EffectClass effectClass() { return original.effectClass(); }
+                @Override public EffectClass effectClass(Map<String, Object> arguments) { return original.effectClass(arguments); }
                 @Override public ExecutionMode executionMode() { return original.executionMode(); }
                 @Override public ResponseCallPolicy responseCallPolicy() { return original.responseCallPolicy(); }
                 @Override public String additionalCallNotStartedMessage() { return original.additionalCallNotStartedMessage(); }

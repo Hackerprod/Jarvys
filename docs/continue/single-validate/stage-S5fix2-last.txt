@@ -1,0 +1,8 @@
+Corregí las nueve incidencias y adapté las pruebas B1/B2/B5/B14 y M1b. Se conservaron los cambios previos; no hice commit ni push, no generé APK y no modifiqué `docs/SINGLE_SESSION.md`.
+
+- **Build:** Full y Play compilaron Kotlin y Java, incluidos los tests.
+- **Pruebas focales:** 109 tests, 0 fallos.
+- **Comparación con HEAD:** `MainAgentInteractionTest` tuvo 21 fallos en ambos árboles con los mismos nombres. `MemoryScopeRuntimeTest` y `MemorySearchToolTest` también reprodujeron en HEAD los mismos 11 fallos; las dos aserciones de `MemorySearchToolTest` no se atribuyeron a rename/symlink.
+- **`git diff --check`:** sin errores.
+
+Dejé comandos, cambios y límites de verificación en el [informe S5fix2](C:/Projects/Jarvys-wt/single-validate/stage-S5fix2-report.md). No ejecuté la suite completa ni tests Play; tampoco verifiqué en dispositivo la presión real de almacenamiento o la navegación visual.
