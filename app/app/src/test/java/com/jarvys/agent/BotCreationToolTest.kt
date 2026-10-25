@@ -5,8 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.BotDefinition
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewProfileRepository
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.After
@@ -203,10 +201,9 @@ class BotCreationToolTest {
         assertEquals(1, repository.definitions().count { !it.builtIn })
         assertEquals(1, availabilityChecks)
     }
-    @Test fun childrenAndScheduledOrProactiveRunsCannotCreateBots() {
+    @Test fun childrenAndSessionlessRunsCannotCreateBots() {
         assertFalse(tool().execute(arguments(), CancellationToken.crewChild()).success)
-        for (sessionId in listOf("", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID))
-            assertFalse(tool(sessionId = sessionId).execute(arguments(), CancellationToken.uncancellable()).success)
+        assertFalse(tool(sessionId = "").execute(arguments(), CancellationToken.uncancellable()).success)
         assertFalse(tool().canDelegate())
         assertTrue(CoreToolRegistry(listOf(tool())).forDelegatedAgent().names().isEmpty())
         assertTrue(CoreAgentRuntime.crewBotCapabilityScope(CoreToolRegistry(listOf(tool()))).names().isEmpty())

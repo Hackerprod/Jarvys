@@ -64,14 +64,19 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         }
     }
 
+    /**
+     * [runKind] describes this run, not the session: Central hosts principal turns, notices and task results
+     * together, so only a principal run records its kind on the session row and background or delegated runs
+     * never rewrite it. Background callers pass an empty [conversationId].
+     */
     suspend fun promptContext(
         conversationId: String,
         memoryEnabled: Boolean,
-        sessionKind: String = "principal",
+        runKind: String = "principal",
     ): PersonalAgentPromptContext {
         initialize()
-        val kind = sessionKind.takeIf { it in setOf("principal", "task", "proactive", "subagent") } ?: "principal"
-        if (conversationId.isNotBlank() && kind != "subagent") database.withChatWriteTransaction {
+        val kind = runKind.takeIf { it in setOf("principal", "task", "proactive", "subagent") } ?: "principal"
+        if (conversationId.isNotBlank() && kind == "principal") database.withChatWriteTransaction {
             val existing = sql.query("SELECT kind FROM agent_session_state WHERE conversation_id=? LIMIT 1", arrayOf(conversationId))
                 .use { if (it.moveToFirst()) it.getString(0) else null }
             if (existing == null) sql.execSQL(

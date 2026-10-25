@@ -438,9 +438,13 @@ public final class ConversationTurn {
         ? modelContent : incomingMetadata.render(modelContent, adapter);
   }
 
-  /** Provider-facing role for message turns; internal AGENT input is always untrusted user content. */
+  /**
+   * Provider-facing role for message turns. Internal AGENT and SYSTEM input is always untrusted user content
+   * (wrapped in its untrusted marker), never an assistant message: it can end a request, and a request that
+   * ends in an assistant message is a prefill that providers may reject.
+   */
   public String providerMessageRole() {
-    return incomingMetadata != null && incomingMetadata.origin == ConversationInput.Origin.AGENT
+    return incomingMetadata != null && incomingMetadata.origin != ConversationInput.Origin.USER
         ? "user" : role;
   }
 

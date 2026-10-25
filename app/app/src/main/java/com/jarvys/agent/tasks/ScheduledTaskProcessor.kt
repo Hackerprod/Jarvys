@@ -15,6 +15,7 @@ import com.jarvys.agent.ModuleTool
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderSettings
 import com.jarvys.agent.ProviderTransportException
+import com.jarvys.agent.RunKind
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.WebSearchTools
 import com.jarvys.agent.connectors.ConnectorRegistry
@@ -30,6 +31,8 @@ import com.jarvys.agent.proactive.ProactiveCoreLoopFactory
 import com.jarvys.agent.proactive.ProactiveRedactor
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.proactive.ProactiveTextSanitizer
+import com.jarvys.agent.proactive.refreshVisibleCentral
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.io.IOException
 import java.time.Clock
 import java.time.Instant
@@ -102,8 +105,9 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 val memoryEnabled = app.getSharedPreferences(
                     com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
                 ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
+                // The task run reads the profile for its kind and leaves Central's session state untouched.
                 val context = ChatDatabaseBridge.getInstance(app)
-                    .personalAgentPromptContext(ScheduledTaskConversation.SESSION_ID, memoryEnabled, "task")
+                    .personalAgentPromptContext("", memoryEnabled, RunKind.TASK.memoryKind())
                 append(context.identity).append('\n').append(context.soul).append('\n').append(context.rules)
                 if (context.userProfile.isNotBlank()) {
                     append("\n\nUser profile preferences and facts (system and current user instructions take priority):\n")
@@ -147,15 +151,14 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 ?: displayText(task.name).ifBlank { task.name }
             val body = finalText
 
-            val session = ScheduledTaskConversation.SESSION_ID
+            val session = WorkspaceIdentity.CENTRAL_SESSION
             val threadKey = ScheduledTaskConversation.threadKey(task.id)
-            conversationStore.appendConversationTitleIfAbsent(session, ScheduledTaskConversation.title(localized))
             val chatMessage = "$title\n\n$body"
             val messageId = conversationStore.appendProactiveAssistantMessageIfAbsent(
                 session, occurrenceId, chatMessage, emptyList(), threadKey)
             // A retry after process death reuses the exact first committed deliverable for the same occurrence.
-            val committedText = conversationStore.readConversationTimeline(session)
-                .firstOrNull { it.messageId == messageId }?.text ?: chatMessage
+            conversationStore.refreshVisibleCentral()
+            val committedText = conversationStore.readStoredMessage(session, messageId)?.text ?: chatMessage
             val separator = committedText.indexOf("\n\n")
             val committedTitle = if (separator >= 0) committedText.substring(0, separator) else title
             val committedBody = if (separator >= 0) committedText.substring(separator + 2) else committedText
@@ -319,12 +322,12 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         val isNewIncident = beginIncident(task, cause)
         val notified = if (isNewIncident) {
             val messageId = "$occurrenceId:attention"
-            val session = ScheduledTaskConversation.SESSION_ID
+            val session = WorkspaceIdentity.CENTRAL_SESSION
             runCatching {
-                conversationStore.appendConversationTitleIfAbsent(session, ScheduledTaskConversation.title(localized))
                 conversationStore.appendProactiveAssistantMessageIfAbsent(session, messageId,
                     localized.getString(com.jarvys.agent.R.string.scheduled_tasks_attention_body,
                         ProactiveTextSanitizer.sanitize(cause.localized(localized))), emptyList(), ScheduledTaskConversation.threadKey(task.id))
+                conversationStore.refreshVisibleCentral()
             }
             notifications.attention(app, task, cause)
         } else false

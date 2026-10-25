@@ -2,7 +2,6 @@ package com.jarvys.agent;
 
 import android.content.Context;
 
-import com.jarvys.agent.proactive.ProactiveConversation;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -72,8 +71,6 @@ final class CodexImageGenerationTool implements CoreTool {
     static boolean isAvailable(Context context, ProviderSettings settings, int depth, String sessionId,
                                SecretStore secrets) {
         if (context == null || depth != 0 || sessionId == null || sessionId.isEmpty()) return false;
-        if (ProactiveConversation.SESSION_ID.equals(sessionId)
-                || com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return false;
         if (settings.getProvider() != ProviderSettings.Provider.OPENAI_CODEX) return false;
         return secrets != null && secrets.getCodexCredentials() != null;
     }

@@ -6,11 +6,19 @@ import android.util.Log
 import com.jarvys.agent.AgentForegroundService
 import com.jarvys.agent.AgentRunUiState
 import com.jarvys.agent.LocalRunStore
+import com.jarvys.agent.chatdb.StoredMessage
+import com.jarvys.agent.tasks.ScheduledTaskConversation
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/** Routes a user-selected reply into the ordinary chat/service run path, never the silent review loop. */
+/**
+ * Routes a user-selected reply into Central as an ordinary turn, never the silent review loop. The reply row
+ * carries the thread (and the notice it answers) so the turn can recover a notice that compaction has dropped.
+ */
 object ProactiveInteractionDispatcher {
+    private const val SESSION = WorkspaceIdentity.CENTRAL_SESSION
+
     fun submitSuggestedReply(context: Context, messageId: String, index: Int): Boolean {
         val claim = prepareSuggestedReply(context, messageId, index) ?: return false
         return launchPreparedTurn(context.applicationContext, claim)
@@ -19,31 +27,27 @@ object ProactiveInteractionDispatcher {
     fun prepareSuggestedReply(context: Context, messageId: String, index: Int): ProactiveReplyClaim? {
         val app = context.applicationContext
         val store = LocalRunStore(app)
-        val claim = store.claimProactiveSuggestedReply(ProactiveConversation.SESSION_ID, messageId, index) ?: return null
+        val claim = store.claimProactiveSuggestedReply(SESSION, messageId, index) ?: return null
         AgentRunUiState.markProactiveRepliesUsed(messageId)
-        val userMessageId = store.appendProactiveUserMessage(
-            ProactiveConversation.SESSION_ID, claim.text, claim.threadKey, messageId,
-        )
+        val userMessageId = store.appendProactiveUserMessage(SESSION, claim.text, claim.threadKey, messageId)
         return claim.copy(userMessageId = userMessageId)
     }
 
-    fun submitInlineReply(context: Context, threadToken: String, text: String): Boolean {
-        val claim = prepareInlineReply(context, threadToken, text) ?: return false
+    fun submitInlineReply(context: Context, messageId: String, threadToken: String, text: String): Boolean {
+        val claim = prepareInlineReply(context, messageId, threadToken, text) ?: return false
         return launchPreparedTurn(context.applicationContext, claim)
     }
 
-    fun prepareInlineReply(context: Context, threadToken: String, text: String): ProactiveReplyClaim? {
+    /** [messageId] is a message of the notified thread; [threadToken] must match that row's thread. */
+    fun prepareInlineReply(context: Context, messageId: String, threadToken: String, text: String): ProactiveReplyClaim? {
         val normalized = text.trim()
         if (normalized.isEmpty()) return null
         val app = context.applicationContext
         val store = LocalRunStore(app)
-        val threadKey = store.readConversationTimeline(ProactiveConversation.SESSION_ID)
-            .lastOrNull { it.proactiveThreadKey?.let(ProactiveThreadKey::fingerprint) == threadToken }
-            ?.proactiveThreadKey
+        val threadKey = store.readStoredMessage(SESSION, messageId)?.proactiveThreadKey
+            ?.takeIf { ProactiveThreadKey.fingerprint(it) == threadToken }
             ?: return null
-        val userMessageId = store.appendProactiveUserMessage(
-            ProactiveConversation.SESSION_ID, normalized, threadKey, null,
-        )
+        val userMessageId = store.appendProactiveUserMessage(SESSION, normalized, threadKey, null)
         return ProactiveReplyClaim(normalized, threadKey, userMessageId)
     }
 
@@ -52,29 +56,27 @@ object ProactiveInteractionDispatcher {
         claim: ProactiveReplyClaim,
     ): Boolean {
         return runCatching {
-            AgentForegroundService.startRealAgentFromStoredChatMessage(
-                context, ProactiveConversation.SESSION_ID, claim.userMessageId,
-            )
+            AgentForegroundService.startRealAgentFromStoredChatMessage(context, SESSION, claim.userMessageId)
             true
         }.getOrDefault(false)
     }
 
     fun refreshNotification(context: Context, threadKey: String, latestMessageId: String) {
+        // Task threads are notified by TaskNotifier, which does not refresh after a reply.
+        if (ScheduledTaskConversation.isTaskThread(threadKey)) return
         val store = LocalRunStore(context.applicationContext)
-        val timeline = store.readConversationTimeline(ProactiveConversation.SESSION_ID)
-            .filter { it.proactiveThreadKey == threadKey }
-        val messages = timeline.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") }
-        val notice = timeline.lastOrNull { it.proactiveNotice }
-        val latestAssistant = timeline.lastOrNull { it.kind == "assistant" } ?: return
+        val thread = store.readProactiveThreadMessages(SESSION, threadKey)
+        val notice = thread.lastOrNull { it.proactiveDecisionId != null }
+        val latestAssistant = thread.lastOrNull { it.role == "assistant" } ?: return
         ProactiveNotifier.refreshThread(
             context.applicationContext,
             threadKey,
             latestMessageId.ifBlank { latestAssistant.messageId },
             latestAssistant.text,
-            messages,
+            thread.map(StoredMessage::toThreadMessage),
             notice?.messageId.orEmpty(),
-            notice?.proactiveReplies.orEmpty(),
-            notice?.proactiveRepliesUsed ?: false,
+            notice?.suggestedReplies.orEmpty().map { ProactiveSuggestedReply(it.label, it.text) },
+            notice?.suggestedRepliesConsumedSeq != null,
         )
     }
 }
@@ -100,8 +102,9 @@ class ProactiveActionReceiver : android.content.BroadcastReceiver() {
                             )
                         }
                         ACTION_INLINE_REPLY -> {
-                            if (threadToken.isNotBlank()) {
-                                ProactiveInteractionDispatcher.submitInlineReply(context.applicationContext, threadToken, text)
+                            if (threadToken.isNotBlank() && messageId.isNotBlank()) {
+                                ProactiveInteractionDispatcher.submitInlineReply(
+                                    context.applicationContext, messageId, threadToken, text)
                             }
                         }
                     }

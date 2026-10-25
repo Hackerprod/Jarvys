@@ -111,6 +111,14 @@ data class AssistantMarkerValue(val seq: Long, val ownerUserMessageId: String?)
 
 data class MessageWindow(val conversationId: String, val slots: List<MessageSlot>, val olderCursorSeq: Long?)
 
+/** A compacted proactive or task notice and the rest of its exchange, notice first, in ledger order. */
+data class ProactiveReferent(
+    val threadKey: String,
+    val noticeMessageId: String,
+    val noticeDecisionId: String?,
+    val messages: List<StoredMessage>,
+)
+
 data class MessageCounts(val total: Long, val users: Long)
 
 data class ConversationDecisionValue(
@@ -559,10 +567,11 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             val nowMillis = System.currentTimeMillis()
             sql.execSQL(
                 "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,'proactive',0,0,?,?,0,1 WHERE NOT EXISTS(" +
+                    "SELECT ?,?,0,0,?,?,0,1 WHERE NOT EXISTS(" +
                     "SELECT 1 FROM conversations WHERE id=? OR EXISTS(" +
                     "SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?))",
-                arrayOf(conversationId, nowMillis, nowMillis, conversationId, conversationId),
+                arrayOf(conversationId, conversationKindForSession(conversationId), nowMillis, nowMillis,
+                    conversationId, conversationId),
             )
         }
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
@@ -1042,6 +1051,63 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         messageIds.mapNotNull(loaded::get)
         } }
     }
+
+    /**
+     * Visible user/assistant rows of one proactive or task thread in ledger order. The lookup runs through
+     * `idx_messages_proactive_thread`, so its cost follows the thread and not the length of Central.
+     */
+    suspend fun readThreadMessages(conversationId: String, threadKey: String): List<StoredMessage> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            val ids = sql.query(
+                "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? AND seq<=? " +
+                    "AND role IN ('user','assistant') AND hidden_kind IS NULL ORDER BY seq",
+                arrayOf(conversationId, threadKey, highWater),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            hydrateMessages(conversationId, ids, highWater)
+        } }
+
+    /**
+     * The notice that [replyMessageId] answers, when compaction already moved it out of the live context
+     * ([firstKept] is the active compaction's first kept message index), together with the rest of that
+     * exchange. The notice is the row the reply points at or, for a free-text reply, the latest notice of its
+     * thread; the exchange runs from the notice to the next notice or to the reply and only holds rows that
+     * were compacted too. Returns null when the reply is not a thread reply or the notice is still live.
+     * Every step is a lookup by message id or through `idx_messages_proactive_thread`.
+     */
+    suspend fun readCompactedProactiveReferent(
+        conversationId: String,
+        replyMessageId: String,
+        firstKept: Long,
+    ): ProactiveReferent? = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+        val highWater = maxSeq(conversationId)
+        val reply = hydrateMessages(conversationId, listOf(replyMessageId), highWater).singleOrNull()
+            ?: return@withChatReadTransaction null
+        val replyThread = reply.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: return@withChatReadTransaction null
+        val noticeId = reply.proactiveReplyToMessageId ?: sql.query(
+            "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
+                "AND proactive_decision_id IS NOT NULL AND seq<? ORDER BY seq DESC LIMIT 1",
+            arrayOf(conversationId, replyThread, reply.seq),
+        ).use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: return@withChatReadTransaction null
+        val notice = hydrateMessages(conversationId, listOf(noticeId), highWater).singleOrNull()
+            ?: return@withChatReadTransaction null
+        if (notice.messageIndex >= firstKept) return@withChatReadTransaction null
+        val threadKey = notice.proactiveThreadKey?.takeIf(String::isNotEmpty) ?: replyThread
+        val nextNoticeSeq = sql.query(
+            "SELECT MIN(seq) FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
+                "AND proactive_decision_id IS NOT NULL AND seq>?",
+            arrayOf(conversationId, threadKey, notice.seq),
+        ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null }
+        val end = minOf(reply.seq, nextNoticeSeq ?: reply.seq)
+        val ids = sql.query(
+            "SELECT message_id FROM messages WHERE conversation_id=? AND proactive_thread_key=? " +
+                "AND seq>=? AND seq<? AND message_index<? AND role IN ('user','assistant') AND hidden_kind IS NULL " +
+                "ORDER BY seq",
+            arrayOf(conversationId, threadKey, notice.seq, end, firstKept),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        val exchange = hydrateMessages(conversationId, ids, highWater)
+        if (exchange.isEmpty()) null else ProactiveReferent(threadKey, notice.messageId, notice.proactiveDecisionId, exchange)
+    } }
 
     /** Hydrates only pending AGENT/SYSTEM rows addressed by their source-derived stable IDs. */
     suspend fun getPendingInternalMessagesByStableIds(

@@ -35,12 +35,10 @@ import com.jarvys.agent.mcp.McpToolDefinition;
 import com.jarvys.agent.mcp.McpWriteApprovalCoordinator;
 import com.jarvys.agent.modules.ModuleRegistry;
 import com.jarvys.agent.modules.WebViewModuleRuntime;
-import com.jarvys.agent.proactive.ProactiveConversation;
 import com.jarvys.agent.proactive.ProactiveStatusCoreTool;
 import com.jarvys.agent.skills.SkillEntry;
 import com.jarvys.agent.skills.SkillRepository;
 import com.jarvys.agent.skills.SkillScopePolicy;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import com.jarvys.agent.tasks.TaskManagementTools;
 import com.jarvys.agent.tasks.ScheduledTask;
 import com.jarvys.agent.tasks.ScheduledTaskWriteDeferrer;
@@ -77,6 +75,9 @@ public final class CoreAgentRuntime {
   private final List<String> allowedTools;
   // Only the trusted history reconstruction path sets this, never generic delegation.
   private boolean restoredCrewScope;
+  // What this run is for, never derived from the session it writes into. Principal unless the factory that
+  // builds a background runtime sets it once, before the runtime is used.
+  private RunKind runKind = RunKind.PRINCIPAL;
   private final CorePromptBudget budget;
   private final ConnectorRegistry connectorRegistry;
   private final List<CoreTool> connectorTools;
@@ -265,12 +266,7 @@ public final class CoreAgentRuntime {
       CoreAgentLoop.ProgressListener listener) {
     if (com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(this.sessionId))
       throw new IllegalArgumentException("Workspace worker sessions cannot be opened as ordinary chats");
-    boolean mainChat =
-        (this.depth != 0
-                || ProactiveConversation.SESSION_ID.equals(this.sessionId)
-                || ScheduledTaskConversation.SESSION_ID.equals(this.sessionId))
-            ? false
-            : true;
+    boolean mainChat = this.depth == 0 && runKind() == RunKind.PRINCIPAL;
     if (!mainChat && attachments != null && !attachments.isEmpty()) {
       throw new IllegalArgumentException("Attachments are available only in the main chat");
     }
@@ -1562,7 +1558,7 @@ public final class CoreAgentRuntime {
 
   ConversationCompactor.MemoryFlush compactionMemoryLifecycle(CoreAgentModel model) {
     if (context == null || depth != 0 || !memoryEnabled) return null;
-    final String kind = sessionKind();
+    final String kind = runKind().memoryKind();
     return new ConversationCompactor.MemoryFlush() {
       @Override public boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token) {
         return new PersonalMemoryFlush(context, sessionId, kind, model)
@@ -1581,11 +1577,8 @@ public final class CoreAgentRuntime {
     };
   }
 
-  private String sessionKind() {
-    if (depth > 0) return "subagent";
-    if (ProactiveConversation.SESSION_ID.equals(sessionId)) return "proactive";
-    if (ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return "task";
-    return "principal";
+  private RunKind runKind() {
+    return depth > 0 ? RunKind.SUBAGENT : runKind;
   }
 
   /** Creates the exact current chat tool implementations under the persisted task ceiling. */
@@ -1650,6 +1643,7 @@ public final class CoreAgentRuntime {
         WorkspaceTools.createScheduledTask(appContext, workspaceSession,
             false, task.getToolScope().getSkillIds()), connectorRegistry, 0,
         CorePromptBudget.standard(), true, null);
+    runtime.runKind = RunKind.TASK;
     return runtime.createScheduledTaskToolRegistry(task, approvedPendingAction, deferrer);
   }
 
@@ -2117,19 +2111,19 @@ public final class CoreAgentRuntime {
     List<String> declared = effective.names();
     String base = mainChat ? MainAgentPrompt.core(responseLocale(context), true) : BASE_INSTRUCTIONS;
     StringBuilder prompt = new StringBuilder(base);
-    boolean ordinaryChat = MessageReactionTool.isOrdinaryChat(this.sessionId);
-    String memorySessionKind = sessionKind();
+    RunKind kind = runKind();
+    boolean ordinaryChat = kind == RunKind.PRINCIPAL && MessageReactionTool.isOrdinaryChat(this.sessionId);
+    String memorySessionKind = kind.memoryKind();
     if (this.context != null && this.depth > 0) {
       // Persist the session class without loading any user content into delegated agents.
       com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context)
-          .personalAgentPromptContext(this.sessionId, false, "subagent");
+          .personalAgentPromptContext(this.sessionId, false, memorySessionKind);
       prompt.append("\n\nDelegated subagent memory boundary: do not read or write the user's profile or personal memory, or ask bootstrap questions. Return user facts to the parent agent for review.");
     }
-    if (this.context != null && this.depth == 0
-        && (ordinaryChat || "task".equals(memorySessionKind) || "proactive".equals(memorySessionKind))) {
+    if (this.context != null && this.depth == 0 && (ordinaryChat || kind.isBackground())) {
       com.jarvys.agent.chatdb.PersonalAgentPromptContext memory =
           com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context)
-              .personalAgentPromptContext(this.sessionId, this.memoryEnabled, memorySessionKind);
+              .personalAgentPromptContext(ordinaryChat ? this.sessionId : "", this.memoryEnabled, memorySessionKind);
       prompt.append("\n\n<assistant_identity authority=\"system\">\n")
           .append(xml(memory.getIdentity())).append('\n').append(xml(memory.getSoul())).append("\n</assistant_identity>");
       prompt.append("\n\n<execution_and_memory_rules authority=\"system\">\n")
@@ -2146,7 +2140,7 @@ public final class CoreAgentRuntime {
       } else {
         if (ordinaryChat) {
           prompt.append("\n\nMemory is disabled in the app settings. Do not read or write global user memory; say so if asked to remember something.");
-        } else if ("task".equals(memorySessionKind) || "proactive".equals(memorySessionKind)) {
+        } else if (kind.isBackground()) {
           prompt.append("\n\n<user_profile authority=\"user preferences and facts; system and current user instructions take priority\">\n")
               .append(xml(memory.getUserProfile())).append("\n</user_profile>");
           prompt.append("\nBackground session: use the permitted profile context only. Do not read private conversation memory or ask bootstrap questions.");
@@ -2173,15 +2167,6 @@ public final class CoreAgentRuntime {
           .append(AgentPrompts.USER_DECISION_GUIDANCE)
           .append("\n\n")
           .append(AgentPrompts.TASK_MANAGEMENT_GUIDANCE);
-    }
-    if (this.context != null
-        && (ProactiveConversation.SESSION_ID.equals(this.sessionId)
-            || ScheduledTaskConversation.SESSION_ID.equals(this.sessionId))) {
-      int safetyPrompt =
-          ProactiveConversation.SESSION_ID.equals(this.sessionId)
-              ? R.string.proactive_normal_thread_safety
-              : R.string.scheduled_tasks_normal_thread_safety;
-      prompt.append("\n\n").append(this.context.getString(safetyPrompt));
     }
     if (declared.contains(WebSearchTools.SEARCH) || declared.contains(WebSearchTools.FETCH)) {
       prompt.append("\n\n").append(WebSearchTools.citationPrompt());

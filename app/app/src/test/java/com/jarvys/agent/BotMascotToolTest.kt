@@ -5,8 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Before
@@ -129,7 +127,7 @@ class BotMascotToolTest {
     }
     @Test fun scopeIsMainChatOnlyWithoutImageAccessOrDelegationAuthority() {
         val tool=BotMascotTool(service());assertFalse(tool.canDelegate());assertFalse(tool.execute(args(),CancellationToken.crewChild()).success)
-        for(session in listOf("",ProactiveConversation.SESSION_ID,ScheduledTaskConversation.SESSION_ID))assertFalse(BotMascotTool(service(session)).execute(args(),CancellationToken.uncancellable()).success)
+        assertFalse(BotMascotTool(service("")).execute(args(),CancellationToken.uncancellable()).success)
         assertTrue(CoreToolRegistry(listOf(tool)).forDelegatedAgent().names().isEmpty())
         assertTrue(CoreAgentRuntime.crewBotCapabilityScope(CoreToolRegistry(listOf(tool))).names().isEmpty());assertTrue(CrewManager.isCaptainOnly(BotMascotTool.NAME))
         val context=ApplicationProvider.getApplicationContext<Context>();assertTrue(CoreAgentRuntime(context,"main",emptyList()).createTools().names().contains(BotMascotTool.NAME))

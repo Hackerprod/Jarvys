@@ -74,13 +74,9 @@ public class ConnectorArtifactAccessTest {
         });
         assertThrows(IllegalStateException.class, () -> ConnectorArtifactAccess.publish(binary, "x", "application/octet-stream", CancellationToken.uncancellable()));
     }
-    @Test public void crewAndBackgroundCannotUseMainChatFiles() {
+    @Test public void crewAndSessionlessRunsCannotUseMainChatFiles() {
         assertThrows(IllegalStateException.class, () -> publish("x", "application/octet-stream", CancellationToken.crewChild()));
-        assertThrows(IllegalStateException.class, () -> ConnectorArtifactAccess.invoke(context,
-                com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID,
-                () -> ConnectorArtifactAccess.publish(binary, "x", "application/octet-stream", CancellationToken.uncancellable())));
-        assertThrows(IllegalStateException.class, () -> ConnectorArtifactAccess.invoke(context,
-                com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID,
+        assertThrows(IllegalStateException.class, () -> ConnectorArtifactAccess.invoke(context, "",
                 () -> ConnectorArtifactAccess.publish(binary, "x", "application/octet-stream", CancellationToken.uncancellable())));
     }
     @Test public void cancellationPreventsFilePublication() {

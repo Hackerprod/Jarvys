@@ -1,9 +1,7 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.crew.CrewMissionSnapshot
-import com.jarvys.agent.proactive.ProactiveConversation
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -427,10 +425,6 @@ data class AgentRunUiPresenceSummary(
 }
 
 
-/** Proactive and scheduled-task threads are written by the app, never by the user's own messages. */
-internal fun isManagedSystemConversation(sessionId: String): Boolean =
-    sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID
-
 /** Bridges the foreground service's existing AgentLoop progress callback into a Compose-observable StateFlow. */
 object AgentRunUiState {
     private data class RunOwnership(
@@ -788,7 +782,6 @@ object AgentRunUiState {
             owner().stoppingGeneration = null
             owner().stoppedCompletion = null
         }
-        val visibleAttachments = if (isManagedSystemConversation(sessionId)) emptyList() else attachments
         val current = _state.value
         val sameTurnAlreadyStarted = current.sessionId == sessionId && current.running && current.goal == goal
         val appendUser = !sameTurnAlreadyStarted || appendUserForSameTurn
@@ -797,7 +790,7 @@ object AgentRunUiState {
             else if (appendUser) resolveHeaderMascotAnimationLocked(request, "rejected", "The animation request was cleared when a new run started.")
         }
         if (appendUser && !preservePreviousRunState) pendingProgress.clear()
-        val optimisticUserEvent = if (appendUser) event("user", goal).copyAttachments(visibleAttachments) else null
+        val optimisticUserEvent = if (appendUser) event("user", goal).copyAttachments(attachments) else null
         val events = if (current.sessionId == sessionId) {
             optimisticUserEvent?.let { append(current.events, it) } ?: current.events
         } else listOf(checkNotNull(optimisticUserEvent))

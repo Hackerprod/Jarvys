@@ -238,6 +238,28 @@ class PersonalAgentBehaviorTest {
         assertEquals("principal", kind)
     }
 
+    @Test fun B8_backgroundRunKindsNeverRewriteCentralsSessionKind() {
+        val central = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+        bridge.personalAgentPromptContext(central, true, RunKind.PRINCIPAL.memoryKind())
+        // Background runs pass no session; a stray caller that passes Central still cannot change its kind.
+        bridge.personalAgentPromptContext("", true, RunKind.TASK.memoryKind())
+        bridge.personalAgentPromptContext("", true, RunKind.PROACTIVE.memoryKind())
+        bridge.personalAgentPromptContext(central, true, RunKind.TASK.memoryKind())
+        bridge.personalAgentPromptContext(central, true, RunKind.PROACTIVE.memoryKind())
+
+        val database = SQLiteDatabase.openDatabase(
+            File(context.filesDir, "jarvys/jarvys-chat-v3.db").absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READONLY,
+        )
+        val rows = database.rawQuery("SELECT conversation_id,kind FROM agent_session_state", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) }
+        }
+        database.close()
+
+        assertEquals(listOf(central to "principal"), rows)
+    }
+
     @Test fun profileDirectivesCanBeForgottenOrCorrectedWithRevisionReceipts() {
         val original = bridge.personalAgentSetDirective("nickname", "The user's nickname is Hackerprod.", "m1", "explicit")
         val forgotten = bridge.personalAgentForget(original.id)

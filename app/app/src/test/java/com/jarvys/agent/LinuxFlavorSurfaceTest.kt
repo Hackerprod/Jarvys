@@ -2,8 +2,6 @@ package com.jarvys.agent
 
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.flavor.FlavorLinuxTools
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -42,9 +40,7 @@ class LinuxFlavorSurfaceTest {
         assertTrue(FlavorLinuxTools.create(context, "main-session", 1).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, "main-session/crew/bot-1", 0).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, "jarvys-subagent-main-session-1", 0).isEmpty())
-        assertTrue(FlavorLinuxTools.create(context, ProactiveConversation.SESSION_ID, 0).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, "proactive-decision-123", 0).isEmpty())
-        assertTrue(FlavorLinuxTools.create(context, ScheduledTaskConversation.SESSION_ID, 0).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, "task-42-1700000000000", 0).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, "task:42:1700000000000", 0).isEmpty())
         assertTrue(FlavorLinuxTools.create(context, null, 0).isEmpty())

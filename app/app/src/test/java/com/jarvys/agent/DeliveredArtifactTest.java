@@ -271,7 +271,7 @@ public class DeliveredArtifactTest {
         ChatAttachment artifact = delivered(); assertEquals(".._bad_name.zip", artifact.name); assertEquals("application/zip", artifact.mimeType);
         request.put("mime_type", "image/png"); assertFalse(tool().execute(request, CancellationToken.uncancellable()).success);
     }
-    @Test public void toolIsActuallyRegisteredButUnavailableToDelegatedAndSystemScopes() {
+    @Test public void toolIsActuallyRegisteredButUnavailableToDelegatedAndSessionlessScopes() {
         Context context = ApplicationProvider.getApplicationContext();
         CoreToolRegistry registry = new CoreAgentRuntime(context, "real-delivery", Collections.emptyList()).createTools();
         assertTrue(registry.names().contains("deliver_file"));
@@ -280,8 +280,8 @@ public class DeliveredArtifactTest {
         assertFalse(registry.forDelegatedAgent().names().contains("deliver_file"));
         assertFalse(CoreAgentRuntime.crewBotCapabilityScope(registry).names().contains("deliver_file"));
         assertFalse(tool().execute(args("file.txt"), CancellationToken.crewChild()).success);
-        DeliverFileTool scheduled = new DeliverFileTool(com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID, workspace, artifacts, ledger);
-        assertFalse(scheduled.execute(args("file.txt"), CancellationToken.uncancellable()).success);
+        DeliverFileTool sessionless = new DeliverFileTool("", workspace, artifacts, ledger);
+        assertFalse(sessionless.execute(args("file.txt"), CancellationToken.uncancellable()).success);
     }
     @Test public void realLoopPersistsStableToolResultAndReopensNativeCardWithoutReplay() throws Exception {
         workspace.write("report.pdf", "%PDF-1.4 fixture"); AtomicInteger turns = new AtomicInteger();

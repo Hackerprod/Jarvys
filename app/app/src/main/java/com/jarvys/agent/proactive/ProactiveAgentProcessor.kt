@@ -10,11 +10,14 @@ import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.StoredMessage
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.ModelReply
 import com.jarvys.agent.ProviderSettings
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderTransportException
 import com.jarvys.agent.ProviderRetryWaiter
+import com.jarvys.agent.RunKind
 import com.jarvys.agent.SecretStore
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.providers.ProviderClientRegistry
@@ -202,27 +205,23 @@ class ProactiveAgentProcessor(
                 if (savedDecision.notify) {
                     token.throwIfCancelled()
                     val message = chatMessage(savedDecision)
-                    conversationStore.appendConversationTitleIfAbsent(
-                        ProactiveConversation.SESSION_ID,
-                        ProactiveConversation.title(localized),
-                    )
-                    token.throwIfCancelled()
                     val messageId = conversationStore.appendProactiveAssistantMessageIfAbsent(
-                        ProactiveConversation.SESSION_ID,
+                        WorkspaceIdentity.CENTRAL_SESSION,
                         decisionId,
                         message,
                         savedDecision.suggestedReplies,
                         savedDecision.threadKey,
                     )
+                    conversationStore.refreshVisibleCentral()
                     if (!com.jarvys.agent.MainActivity.isAppForeground()) {
-                        val timeline = conversationStore.readConversationTimeline(ProactiveConversation.SESSION_ID)
-                        val threadMessages = timeline.filter { it.proactiveThreadKey == savedDecision.threadKey }
-                            .map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") }
-                        val storedReply = timeline.firstOrNull { it.messageId == messageId }
+                        val thread = conversationStore.readProactiveThreadMessages(
+                            WorkspaceIdentity.CENTRAL_SESSION, savedDecision.threadKey)
+                        val storedNotice = thread.firstOrNull { it.messageId == messageId }
                         ProactiveNotifier.post(localized, savedDecision.threadKey, messageId,
-                            message, savedDecision.urgency, threadMessages,
+                            message, savedDecision.urgency, thread.map(StoredMessage::toThreadMessage),
                             messageId,
-                            storedReply?.proactiveReplies.orEmpty(), storedReply?.proactiveRepliesUsed ?: false)
+                            storedNotice?.suggestedReplies.orEmpty().map { ProactiveSuggestedReply(it.label, it.text) },
+                            storedNotice?.suggestedRepliesConsumedSeq != null)
                     }
                 }
 
@@ -280,8 +279,9 @@ class ProactiveAgentProcessor(
         val memoryEnabled = localized.getSharedPreferences(
             com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
         ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
+        // The decision loop is a run of its own: it reads the profile for its kind and records nothing on Central.
         val memoryContext = ChatDatabaseBridge.getInstance(localized)
-            .personalAgentPromptContext(sessionId, memoryEnabled, "proactive")
+            .personalAgentPromptContext("", memoryEnabled, RunKind.PROACTIVE.memoryKind())
         val systemPrompt = buildString {
             append(ProactivePrompt.system(localized))
             append("\n\nAssistant identity and user profile; follow profile preferences unless system or current user instructions differ:\n")

@@ -3,7 +3,6 @@ package com.jarvys.agent
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewRoleTemplates
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import com.jarvys.agent.proactive.ProactiveDecisionSink
 import com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory
 import java.nio.file.Files
@@ -36,6 +35,8 @@ class UserDecisionScopeTest {
 
     @Test fun mainChatGetsDecisionToolButProactiveReflectionCrewAndChildScopesDoNot() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        // The test body runs on the main looper: let the single-session startup finish before any store opens.
+        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(context) }
         val runtime = CoreAgentRuntime(context, "e1-scope-${System.nanoTime()}", emptyList())
         val mainTools = runtime.createTools()
         assertTrue(mainTools.names().contains(UserDecisionTool.NAME))
@@ -74,9 +75,5 @@ class UserDecisionScopeTest {
         assertEquals(listOf("ls", "read", "write", "edit", "delete"), reflection.names())
         assertFalse(reflection.names().contains(UserDecisionTool.NAME))
         com.jarvys.agent.tasks.TaskManagementTools.TOOL_NAMES.forEach { assertFalse(it in reflection.names()) }
-
-        val taskConversation = CoreAgentRuntime(context, ScheduledTaskConversation.SESSION_ID, emptyList())
-        assertTrue(taskConversation.instructions().contains(
-            context.getString(R.string.scheduled_tasks_normal_thread_safety)))
     }
 }

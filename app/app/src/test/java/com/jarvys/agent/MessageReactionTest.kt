@@ -114,10 +114,7 @@ class MessageReactionTest {
             assertNotNull(runtime.reactionToolForRun(true))
             assertNull(runtime.reactionToolForRun(false))
             assertFalse(runtime.createTools().names().contains(MessageReactionTool.NAME))
-            listOf("jarvys-proactive", "jarvys-tasks").forEach {
-                assertNull(CoreAgentRuntime(context, it, emptyList()).reactionToolForRun(true))
-                assertTrue(runCatching { MessageReactionTool(store, it) }.isFailure)
-            }
+            assertTrue(runCatching { MessageReactionTool(store, "") }.isFailure)
             assertTrue(MessageReactionTool.GUIDANCE.contains("sparingly"))
             assertTrue(MessageReactionTool.GUIDANCE.contains("must not replace an answer"))
             assertTrue(MessageReactionTool.GUIDANCE.contains("completion has actually been verified"))
@@ -288,11 +285,7 @@ class MessageReactionTest {
         assertFalse(historical.contains("Current incoming user request"))
     }
 
-    @Test fun specialChatsAndProactiveThreadMessagesCannotBeReactedTo() {
-        listOf("jarvys-proactive", "jarvys-tasks").forEach { specialSession ->
-            store.appendConversationMessage(specialSession, "user", "Automatic request")
-            assertTrue(runCatching { MessageReactionTool(store, specialSession) }.isFailure)
-        }
+    @Test fun proactiveThreadMessagesCannotBeReactedTo() {
         val threadMessage = store.appendConversationMessage(session, "user", "Thread scoped request",
             null, "", "", "", "thread")
         val threadTool = MessageReactionTool(store, session)

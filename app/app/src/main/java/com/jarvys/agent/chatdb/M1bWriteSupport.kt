@@ -1,7 +1,5 @@
 package com.jarvys.agent.chatdb
 
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 
 /** Shared M1b transaction and sequence primitives. M1a remains the owner of message writes. */
@@ -110,8 +108,6 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
 
 /** Kind used when a non-message ledger row is the first durable write for a session. */
 internal fun conversationKindForSession(conversationId: String): String = when {
-    ProactiveConversation.SESSION_ID == conversationId -> "proactive"
-    ScheduledTaskConversation.SESSION_ID == conversationId -> "tasks"
     WorkspaceIdentity.isCentral(conversationId) -> "central"
     WorkspaceIdentity.isExecutionSession(conversationId) -> "workspace_exec"
     else -> "chat"

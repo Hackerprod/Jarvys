@@ -28,14 +28,10 @@ public class LocalRunAttachmentRecoveryTest {
     private ChatAttachment file(String session, String name) throws Exception {
         return attachments().copyFromStream(session, name, "text/plain", null, new ByteArrayInputStream(new byte[]{1, 2, 3}));
     }
-    @Test public void assistantProactiveAndScheduledScopesRejectAttachmentPersistence() throws Exception {
+    @Test public void assistantAndThreadRepliesRejectAttachmentPersistence() throws Exception {
         LocalRunStore store = store();
         List<ChatAttachment> items = Collections.singletonList(file("chat", "private.txt"));
         assertThrows(IllegalArgumentException.class, () -> store.appendConversationMessage("chat", "assistant", "x", items));
-        assertThrows(IllegalArgumentException.class, () -> store.appendConversationMessage(
-                com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID, "user", "x", items));
-        assertThrows(IllegalArgumentException.class, () -> store.appendConversationMessage(
-                com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID, "user", "x", items));
         assertThrows(IllegalArgumentException.class, () -> store.appendConversationMessage("chat", "user", "x", null,
                 "", "", "", "proactive-thread", items));
         assertTrue(store.readConversationMessages("chat").isEmpty());

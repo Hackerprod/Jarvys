@@ -20,6 +20,7 @@ import com.jarvys.agent.chatdb.MessageWindow
 import com.jarvys.agent.chatdb.ModelTranscriptEntry
 import com.jarvys.agent.chatdb.ModelTranscriptRepository
 import com.jarvys.agent.chatdb.ModelTranscriptSnapshot
+import com.jarvys.agent.chatdb.ProactiveReferent
 import com.jarvys.agent.chatdb.ReflectionPayloadSnapshot
 import com.jarvys.agent.chatdb.StrictJournalRepository
 import com.jarvys.agent.chatdb.ToolActivity as StoredToolActivity
@@ -179,6 +180,13 @@ internal class ConversationReader(
 
     suspend fun proactiveThreadKeyForUserMessage(conversationId: String, messageId: String): String? =
         readProjection { conversations.getMessage(conversationId, messageId)?.takeIf { it.role == "user" }?.proactiveThreadKey }
+
+    /** Resolves the active compaction boundary and asks for the compacted notice a thread reply answers. */
+    suspend fun readCompactedProactiveReferent(conversationId: String, replyMessageId: String): ProactiveReferent? =
+        readProjection {
+            val firstKept = memory.activeCompaction(conversationId)?.first_kept ?: return@readProjection null
+            conversations.readCompactedProactiveReferent(conversationId, replyMessageId, firstKept)
+        }
 
     suspend fun assistantOwnerUserMessageId(conversationId: String, messageId: String): String =
         readProjection { conversations.getMessage(conversationId, messageId)?.takeIf { it.role == "assistant" }?.ownerUserMessageId.orEmpty() }

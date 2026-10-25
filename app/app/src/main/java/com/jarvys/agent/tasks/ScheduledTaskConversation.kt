@@ -1,9 +1,13 @@
 package com.jarvys.agent.tasks
 
-import android.content.Context
-
+/** Task results are written into Central; this names the thread that groups the results of one task. */
 object ScheduledTaskConversation {
-    const val SESSION_ID = "jarvys-tasks"
-    fun title(context: Context): String = context.getString(com.jarvys.agent.R.string.scheduled_tasks_conversation_title)
-    fun threadKey(taskId: String): String = "task:$taskId"
+    private const val THREAD_PREFIX = "task:"
+
+    @JvmStatic fun threadKey(taskId: String): String = "$THREAD_PREFIX$taskId"
+
+    @JvmStatic fun isTaskThread(threadKey: String): Boolean = threadKey.startsWith(THREAD_PREFIX)
+
+    /** The task a thread belongs to, or null for a proactive thread. */
+    @JvmStatic fun taskId(threadKey: String): String? = threadKey.takeIf(::isTaskThread)?.removePrefix(THREAD_PREFIX)
 }

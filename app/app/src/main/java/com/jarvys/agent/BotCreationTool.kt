@@ -5,8 +5,6 @@ import com.jarvys.agent.crew.BotDefinition
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
 import com.jarvys.agent.skills.SkillRepository
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
@@ -89,7 +87,7 @@ internal class BotCreationService(
 
     fun create(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
-        if (token.isCrewRun || (sessionId.isBlank() || sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID))
+        if (token.isCrewRun || sessionId.isBlank())
             return CoreToolResult.failure("Bot creation is available only in the main chat.")
         try {
             require(arguments != null && (arguments.keys == LEGACY_FIELDS || arguments.keys == FIELDS)) {

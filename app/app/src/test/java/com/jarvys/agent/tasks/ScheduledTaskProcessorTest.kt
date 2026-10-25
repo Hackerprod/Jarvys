@@ -75,6 +75,8 @@ class ScheduledTaskProcessorTest {
 
     @Before fun setUp() {
         context = RuntimeEnvironment.getApplication()
+        // The test body runs on the main looper: let the single-session startup finish before any store opens.
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
         actionPolicyPreferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
         hadPriorDefaultPolicy = actionPolicyPreferences.contains(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY)
         priorDefaultPolicy = actionPolicyPreferences.getString(ActionPolicyDefaults.DEFAULT_POLICY_PREFERENCE_KEY, null)
@@ -142,10 +144,13 @@ class ScheduledTaskProcessorTest {
         assertTrue(factory.userPrompts.first().contains("Europe/Madrid"))
         assertEquals(before, AgentRunUiState.state.value)
         assertTrue(AgentRunUiState.state.value.events.none { it.kind == "approval" })
-        val taskMessages = store.readConversationTimeline(ScheduledTaskConversation.SESSION_ID)
+        val taskMessages = store.readConversationTimeline(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
             .filter { it.kind == "assistant" && it.proactiveThreadKey == ScheduledTaskConversation.threadKey(task.id) }
         assertEquals(1, taskMessages.size)
         assertTrue(taskMessages.single().text.contains("There is one event."))
+        // B8: the result lives in Central, no task conversation exists and the run left no session state behind.
+        assertEquals(listOf(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION),
+            com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).listAllConversationsSync(emptySet()).map { it.id })
         assertEquals("There is one event.", result.deliveredResult)
         assertEquals(taskMessages.single().messageId, result.conversationMessageId)
         assertEquals(1, notifications.resultCalls.get())
@@ -732,7 +737,7 @@ class ScheduledTaskProcessorTest {
         // Simulate a process death after the idempotent chat/notification delivery but before the run ledger row.
         assertEquals("OK", processor.execute(task, scheduledFor, scheduledFor, "first-attempt",
             CancellationToken.cancellable()).status)
-        val firstMessages = conversationStore.readConversationTimeline(ScheduledTaskConversation.SESSION_ID)
+        val firstMessages = conversationStore.readConversationTimeline(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
             .filter { it.proactiveThreadKey == ScheduledTaskConversation.threadKey(taskId) }
         assertEquals(1, firstMessages.size)
         assertEquals(1, shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications.size)
@@ -743,7 +748,7 @@ class ScheduledTaskProcessorTest {
             Clock.fixed(Instant.ofEpochMilli(scheduledFor), ZoneOffset.UTC)).tick()
         assertEquals(1, result.started)
         assertEquals(2, factory.turns.get()) // a crash retries the safe, idempotently delivered occurrence
-        val messages = conversationStore.readConversationTimeline(ScheduledTaskConversation.SESSION_ID)
+        val messages = conversationStore.readConversationTimeline(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
             .filter { it.proactiveThreadKey == ScheduledTaskConversation.threadKey(taskId) }
         assertEquals(1, messages.size)
         assertEquals(1, shadowOf(context.getSystemService(NotificationManager::class.java)).allNotifications.size)

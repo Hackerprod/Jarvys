@@ -137,7 +137,6 @@ import com.jarvys.agent.proactive.ProactiveStatusProvider
 import com.jarvys.agent.proactive.ProactiveWorkNames
 import com.jarvys.agent.proactive.ProactiveRunController
 import com.jarvys.agent.proactive.ProactiveDecisionAuditStore
-import com.jarvys.agent.proactive.ProactiveConversation
 import com.jarvys.agent.proactive.ProactiveNotificationPermission
 import androidx.work.WorkManager
 import androidx.compose.ui.platform.LocalConfiguration
@@ -1208,10 +1207,6 @@ ${event.text}
     }
 
     private fun canAttachToCurrentChat(): Boolean {
-        if (isManagedSystemConversation(conversationSessionId)) {
-            toast(getString(R.string.chat_attachment_main_only))
-            return false
-        }
         val state = AgentRunUiState.state.value
         return !state.running && !state.compacting && !state.reflecting && !attachmentDrafts.sending.value
     }

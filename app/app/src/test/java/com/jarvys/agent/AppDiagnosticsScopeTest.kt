@@ -2,8 +2,6 @@ package com.jarvys.agent
 
 import android.app.Application
 import android.content.Context
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -56,7 +54,7 @@ class AppDiagnosticsScopeTest {
         for (includeDelegate in listOf(false, true)) {
             assertFalse(main.createToolsNames(tools.handlers(), includeDelegate).contains(MascotAnimationTool.NAME))
         }
-        for (session in listOf(null, "", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID)) {
+        for (session in listOf(null, "")) {
             assertFalse(diagnosticScopeRuntime(context, session, allowed = listOf("*")).createTools().names()
                 .contains(MascotAnimationTool.NAME))
         }
@@ -77,14 +75,6 @@ class AppDiagnosticsScopeTest {
     @Test fun emptyAndNullSessionsCannotRegisterDiagnosticsEvenWithExplicitAllowList() {
         for (session in listOf(null, "")) {
             assertExcluded(diagnosticScopeRuntime(context, session, allowed = listOf(AppDiagnosticsTool.NAME)))
-        }
-    }
-
-    @Test fun proactiveAndScheduledScopesCannotRegisterDiagnosticsEvenWithExplicitAllowList() {
-        for (session in listOf(ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID)) {
-            for (allowed in listOf(null, listOf(AppDiagnosticsTool.NAME), listOf("*"))) {
-                assertExcluded(diagnosticScopeRuntime(context, session, allowed = allowed))
-            }
         }
     }
 

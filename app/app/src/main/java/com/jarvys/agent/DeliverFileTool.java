@@ -1,8 +1,6 @@
 package com.jarvys.agent;
 
 import android.content.Context;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -43,8 +41,7 @@ final class DeliverFileTool implements CoreTool {
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
         token.throwIfCancelled();
-        if (token.isCrewRun() || session == null || session.isEmpty() || ProactiveConversation.SESSION_ID.equals(session)
-                || ScheduledTaskConversation.SESSION_ID.equals(session)) return CoreToolResult.failure("File delivery is available only in the main chat.");
+        if (token.isCrewRun() || session == null || session.isEmpty()) return CoreToolResult.failure("File delivery is available only in the main chat.");
         try {
             if (arguments == null || !arguments.keySet().stream().allMatch(Arrays.asList("path", "filename")::contains)
                     || !(arguments.get("path") instanceof String) || ((String) arguments.get("path")).isEmpty()

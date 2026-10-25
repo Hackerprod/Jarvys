@@ -127,8 +127,7 @@ public class ProjectImageRuntimeTest {
     }
     @Test(timeout=60000) public void oldMainImageRestrictionsRemainIntact() {
         assertFalse(CoreAgentRuntime.crewBotCapabilityScope(new CoreToolRegistry(Arrays.asList(new Stub("generate_image"),new Stub("project_image"),new Stub("list_image_references")))).names().contains("generate_image"));
-        assertFalse(ProjectImageTool.available(context,com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID));
-        assertFalse(ProjectImageTool.available(context,com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID));
+        assertFalse(ProjectImageTool.available(context,""));
     }
     private static void await(CrewManager.Bot bot) throws Exception {
         java.util.concurrent.CountDownLatch finished=new java.util.concurrent.CountDownLatch(1);

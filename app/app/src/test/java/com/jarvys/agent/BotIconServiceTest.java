@@ -7,8 +7,6 @@ import androidx.test.core.app.ApplicationProvider;
 import com.jarvys.agent.crew.BotDefinition;
 import com.jarvys.agent.crew.CrewProfile;
 import com.jarvys.agent.crew.CrewProfileRepository;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import java.io.File;
 import java.util.Collections;
 import java.util.concurrent.CancellationException;
@@ -262,10 +260,8 @@ public class BotIconServiceTest {
     @Test public void mainChatAvailabilityRequiresExistingCodexAccessAndBlocksBackgroundScopes() {
         BotIconService service = service((body, session, token) -> success());
         assertTrue(service.isAvailable());
-        for (String session : new String[]{ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID, ""}) {
-            assertFalse(new BotIconService(context, session, settings, secrets, repository, icons,
-                    client((body, id, token) -> success())).isAvailable());
-        }
+        assertFalse(new BotIconService(context, "", settings, secrets, repository, icons,
+                client((body, id, token) -> success())).isAvailable());
         assertThrows(BotIconService.Failure.class, () -> service.generateAndAssign(original.id, original.revision, "freeform", CancellationToken.crewChild()));
         settings.setProvider(ProviderSettings.Provider.OPENAI_API);
         assertFalse(service.isAvailable());
@@ -343,8 +339,7 @@ public class BotIconServiceTest {
         assertFalse(result.content.contains(original.iconRef));
         assertTrue(BotCatalogTool.isAvailable(context, 0, "main-bot-test"));
         assertFalse(BotCatalogTool.isAvailable(context, 1, "main-bot-test"));
-        assertFalse(BotCatalogTool.isAvailable(context, 0, ProactiveConversation.SESSION_ID));
-        assertFalse(BotCatalogTool.isAvailable(context, 0, ScheduledTaskConversation.SESSION_ID));
+        assertFalse(BotCatalogTool.isAvailable(context, 0, ""));
         assertFalse(catalog.execute(Collections.emptyMap(), CancellationToken.crewChild()).success);
         assertFalse(catalog.canDelegate());
     }

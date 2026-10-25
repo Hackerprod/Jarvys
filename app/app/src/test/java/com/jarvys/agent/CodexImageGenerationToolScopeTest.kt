@@ -2,8 +2,6 @@ package com.jarvys.agent
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.jarvys.agent.tasks.ScheduledTaskConversation
-import com.jarvys.agent.proactive.ProactiveConversation
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,8 +37,7 @@ class CodexImageGenerationToolScopeTest {
             "account-test")
         assertTrue(CodexImageGenerationTool.isAvailable(context, settings, 0, "normal-chat", secrets))
         assertFalse(CodexImageGenerationTool.isAvailable(context, settings, 1, "normal-chat", secrets))
-        assertFalse(CodexImageGenerationTool.isAvailable(context, settings, 0, ProactiveConversation.SESSION_ID, secrets))
-        assertFalse(CodexImageGenerationTool.isAvailable(context, settings, 0, ScheduledTaskConversation.SESSION_ID, secrets))
+        assertFalse(CodexImageGenerationTool.isAvailable(context, settings, 0, "", secrets))
 
         listOf(ProviderSettings.Provider.OPENAI_API, ProviderSettings.Provider.OPENROUTER,
             ProviderSettings.Provider.CUSTOM).forEach { provider ->

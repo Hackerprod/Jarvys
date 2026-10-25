@@ -1,8 +1,6 @@
 package com.jarvys.agent;
 
 import android.content.Context;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.InputStream;
@@ -41,9 +39,7 @@ public final class ConnectorArtifactAccess {
     private static Binding requireBinding(CancellationToken token) {
         token.throwIfCancelled();
         Binding binding = CURRENT.get();
-        if (binding == null || token.isCrewRun() || binding.session.isEmpty()
-                || ProactiveConversation.SESSION_ID.equals(binding.session)
-                || ScheduledTaskConversation.SESSION_ID.equals(binding.session))
+        if (binding == null || token.isCrewRun() || binding.session.isEmpty())
             throw new IllegalStateException("Connector files are available only in the current main chat.");
         if (new LocalRunStore(binding.context).readConversationMetadata(binding.session).deleted)
             throw new IllegalStateException("This conversation was deleted.");

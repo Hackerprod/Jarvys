@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "95f99c7449b22e26dd10ed6942b7314f",
+    "identityHash": "658f8ea521358c9221c0ccec73d212a2",
     "entities": [
       {
         "tableName": "conversations",
@@ -423,6 +423,17 @@
             ],
             "orders": [],
             "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `idx_messages_proactive_decision` ON `${TABLE_NAME}` (`conversation_id`, `proactive_decision_id`)"
+          },
+          {
+            "name": "idx_messages_proactive_thread",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "proactive_thread_key",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_messages_proactive_thread` ON `${TABLE_NAME}` (`conversation_id`, `proactive_thread_key`, `seq`)"
           },
           {
             "name": "idx_messages_interrupt",
@@ -6383,7 +6394,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '95f99c7449b22e26dd10ed6942b7314f')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '658f8ea521358c9221c0ccec73d212a2')"
     ]
   }
 }

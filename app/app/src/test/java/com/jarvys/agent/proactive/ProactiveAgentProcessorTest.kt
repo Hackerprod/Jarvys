@@ -59,9 +59,12 @@ import org.robolectric.annotation.Config
 class ProactiveAgentProcessorTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     private lateinit var context: Application
+    private val CENTRAL = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
 
     @Before fun setUp() {
         context = RuntimeEnvironment.getApplication()
+        // The test body runs on the main looper: let the single-session startup finish before any store opens.
+        kotlinx.coroutines.runBlocking { com.jarvys.agent.SingleSessionReset.awaitReady(context) }
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
         WorkManagerTestInitHelper.getTestDriver(context)
         context.getSharedPreferences("jarvys_proactive_preferences", Context.MODE_PRIVATE).edit().clear().commit()
@@ -69,7 +72,6 @@ class ProactiveAgentProcessorTest {
         eventFile().delete()
         watermarkFile().delete()
         auditFile().delete()
-        proactiveConversationFile().delete()
         context.getSystemService(NotificationManager::class.java)?.cancelAll()
         MainActivityForegroundReset.set(false)
         ProactiveRunController.cancelAll()
@@ -118,7 +120,7 @@ class ProactiveAgentProcessorTest {
         assertEquals(2, ProactiveEventStore(context).readAll().count { it.state == ProactiveEvent.PROCESSED })
         assertEquals(2, ProactiveDecisionAuditStore(context).readAll().count { !it.notify })
         assertTrue(ProactiveDecisionAuditStore(context).readAll().all { it.title == null && it.body == null })
-        assertNull(LocalRunStore(context).readConversationTitle(ProactiveConversation.SESSION_ID))
+        assertTrue(LocalRunStore(context).readConversationTimeline(CENTRAL).isEmpty())
         assertTrue(context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().isEmpty())
 
         assertEquals(2, provider.prompts.size)
@@ -156,7 +158,7 @@ class ProactiveAgentProcessorTest {
         assertFalse(safeConnectorOutput.getString("text").contains("4111111111111111"))
     }
 
-    @Test fun importantDecisionPostsCleanNotificationAndRestorableDedicatedChatMessage() {
+    @Test fun importantDecisionPostsCleanNotificationAndRestorableCentralMessage() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val originalTime = 1_700_000_000_123L
         val event = event(
@@ -191,9 +193,12 @@ class ProactiveAgentProcessorTest {
         assertFalse(provider.prompts.single().contains("4111111111111111"))
 
         val storedThread = LocalRunStore(context)
-        assertEquals("Proactive", storedThread.readConversationTitle(ProactiveConversation.SESSION_ID))
-        val restored = LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID)
+        assertNull(storedThread.readConversationTitle(CENTRAL))
+        val restored = LocalRunStore(context).readConversationTimeline(CENTRAL)
         assertEquals(1, restored.size)
+        // B8: the notice lives in Central and no proactive conversation exists.
+        assertEquals(listOf(CENTRAL),
+            com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).listAllConversationsSync(emptySet()).map { it.id })
         assertEquals("assistant", restored.single().kind)
         assertTrue(restored.single().text.contains("A bank transfer arrived."))
         assertFalse(restored.single().text.contains("Fuente:"))
@@ -202,7 +207,7 @@ class ProactiveAgentProcessorTest {
             ProactiveReadOnlyToolFactory.create(fakeConnectedRegistry(), app, sink)
         }).review(listOf(ProactiveEventBatch("com.example.bank\u001fAva", listOf(event))), CancellationToken.cancellable())
             is ProactiveProcessingResult.Completed)
-        assertEquals(1, LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID).size)
+        assertEquals(1, LocalRunStore(context).readConversationTimeline(CENTRAL).size)
         assertEquals(1, provider.promptCalls)
 
         val posted = context.getSystemService(NotificationManager::class.java)?.activeNotifications
@@ -224,7 +229,7 @@ class ProactiveAgentProcessorTest {
         assertFalse(eventFile().readText().contains("A transfer arrived"))
     }
 
-    @Test fun notificationPermissionDeniedStillSavesTheNotifyDecisionInTheProactiveChat() {
+    @Test fun notificationPermissionDeniedStillSavesTheNotifyDecisionInCentral() {
         shadowOf(context).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val event = event("Card purchase", "A purchase was made", receivedAt = 1_710_000_000_000L)
         ProactiveEventStore(context).append(event)
@@ -240,7 +245,7 @@ class ProactiveAgentProcessorTest {
         assertFalse(status.notificationPermissionGranted)
         assertEquals(ProactiveEvent.PROCESSED, ProactiveEventStore(context).readAll().single().state)
         assertTrue(ProactiveDecisionAuditStore(context).readAll().single().notify)
-        assertEquals(1, LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID).size)
+        assertEquals(1, LocalRunStore(context).readConversationTimeline(CENTRAL).size)
         assertTrue(context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().isEmpty())
     }
 
@@ -261,7 +266,7 @@ class ProactiveAgentProcessorTest {
         assertEquals(ProactiveProcessingResult.Completed, processor(provider, fakeConnectedRegistry()).review(
             listOf(ProactiveEventBatch("payments", listOf(event))), CancellationToken.cancellable()))
 
-        val persisted = LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID).single()
+        val persisted = LocalRunStore(context).readConversationTimeline(CENTRAL).single()
         assertEquals(replies, persisted.proactiveReplies)
         assertFalse(persisted.proactiveRepliesUsed)
         val posted = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().single()
@@ -278,14 +283,14 @@ class ProactiveAgentProcessorTest {
         }
 
         val restartedStore = LocalRunStore(context)
-        val claim = restartedStore.claimProactiveSuggestedReply(ProactiveConversation.SESSION_ID, persisted.messageId, 0)
+        val claim = restartedStore.claimProactiveSuggestedReply(CENTRAL, persisted.messageId, 0)
         assertEquals("Yes, that was me", claim?.text)
         assertEquals("payments", claim?.threadKey)
-        assertNull(LocalRunStore(context).claimProactiveSuggestedReply(ProactiveConversation.SESSION_ID, persisted.messageId, 2))
-        val restored = LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID).single()
+        assertNull(LocalRunStore(context).claimProactiveSuggestedReply(CENTRAL, persisted.messageId, 2))
+        val restored = LocalRunStore(context).readConversationTimeline(CENTRAL).single()
         assertTrue(restored.proactiveRepliesUsed)
         assertEquals(replies, restored.proactiveReplies)
-        assertNull(LocalRunStore(context).claimProactiveSuggestedReply(ProactiveConversation.SESSION_ID, persisted.messageId, 0))
+        assertNull(LocalRunStore(context).claimProactiveSuggestedReply(CENTRAL, persisted.messageId, 0))
     }
 
     @Test fun inlineReplyBecomesUserMessageRunsNormalFakeLoopAndUpdatesTheSameThreadNotification() {
@@ -293,28 +298,27 @@ class ProactiveAgentProcessorTest {
         val threadKey = "account-update"
         val sourceDetail = "private-source-event-detail"
         val store = LocalRunStore(context)
-        store.appendConversationTitleIfAbsent(ProactiveConversation.SESSION_ID, "Proactivo")
         val noticeText = "A new account update needs review: $sourceDetail"
         val noticeId = store.appendProactiveAssistantMessageIfAbsent(
-            ProactiveConversation.SESSION_ID, "notice-decision", noticeText,
+            CENTRAL, "notice-decision", noticeText,
             listOf(ProactiveSuggestedReply("Summarize", "Summarize this update"),
                 ProactiveSuggestedReply("Draft", "Draft a reply")), threadKey,
         )
-        val initialTimeline = store.readConversationTimeline(ProactiveConversation.SESSION_ID)
+        val initialTimeline = store.readConversationTimeline(CENTRAL)
         ProactiveNotifier.post(context, threadKey, noticeId, noticeText, "normal",
             initialTimeline.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
             noticeId, initialTimeline.single().proactiveReplies, false)
-        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, "not-a-thread", "Summarize"))
+        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, noticeId, "not-a-thread", "Summarize"))
 
         val prepared = requireNotNull(ProactiveInteractionDispatcher.prepareInlineReply(
-            context, ProactiveThreadKey.fingerprint(threadKey), "Summarize this update",
+            context, noticeId, ProactiveThreadKey.fingerprint(threadKey), "Summarize this update",
         ))
-        val timeline = store.readConversationTimeline(ProactiveConversation.SESSION_ID)
+        val timeline = store.readConversationTimeline(CENTRAL)
         assertEquals("user", timeline.last().kind)
         assertEquals(prepared.text, timeline.last().text)
         assertEquals(threadKey, timeline.last().proactiveThreadKey)
         val serviceIntent = com.jarvys.agent.AgentForegroundService.storedChatMessageIntent(
-            context, ProactiveConversation.SESSION_ID, prepared.userMessageId,
+            context, CENTRAL, prepared.userMessageId,
         )
         assertNull(serviceIntent.getStringExtra("agent_goal"))
         assertNull(serviceIntent.getStringExtra(Intent.EXTRA_TEXT))
@@ -333,17 +337,15 @@ class ProactiveAgentProcessorTest {
                 return ModelReply("Calendar action is ready for review.", emptyList())
             }
         }
-        val normalLoop = CoreAgentLoop(normalModel, normalTools,
-            context.getString(com.jarvys.agent.R.string.proactive_normal_thread_safety), ProactiveConversation.SESSION_ID)
-        val priorTurns = store.loadConversationContext(ProactiveConversation.SESSION_ID).dropLast(1)
+        val normalLoop = CoreAgentLoop(normalModel, normalTools, "", CENTRAL)
+        val priorTurns = store.loadConversationContext(CENTRAL).dropLast(1)
         val result = normalLoop.run(prepared.text, priorTurns, CancellationToken.cancellable(), null)
         assertEquals("Summarize this update", observedText.get())
         assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
         assertTrue(observedTranscript.get().any { it.role == "assistant" && it.content.contains(sourceDetail) })
-        assertTrue(context.getString(com.jarvys.agent.R.string.proactive_normal_thread_safety).contains("untrusted event data"))
         assertFalse(ProactiveReadOnlyToolFactory.connectorAllowlist.values.flatten().contains("create_event"))
 
-        val assistantId = store.appendConversationMessage(ProactiveConversation.SESSION_ID, "assistant", result.text,
+        val assistantId = store.appendConversationMessage(CENTRAL, "assistant", result.text,
             result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
         ProactiveInteractionDispatcher.refreshNotification(context, threadKey, assistantId)
         val active = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty()
@@ -357,19 +359,19 @@ class ProactiveAgentProcessorTest {
 
         val chipClaim = requireNotNull(ProactiveInteractionDispatcher.prepareSuggestedReply(context, noticeId, 1))
         assertEquals("Draft a reply", chipClaim.text)
-        assertEquals("user", store.readConversationTimeline(ProactiveConversation.SESSION_ID).last().kind)
-        val chipLoop = CoreAgentLoop(normalModel, normalTools,
-            context.getString(com.jarvys.agent.R.string.proactive_normal_thread_safety), ProactiveConversation.SESSION_ID)
-        val chipHistory = store.loadConversationContext(ProactiveConversation.SESSION_ID).dropLast(1)
+        assertEquals(noticeId, store.readStoredMessage(CENTRAL, chipClaim.userMessageId)?.proactiveReplyToMessageId)
+        assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
+        val chipLoop = CoreAgentLoop(normalModel, normalTools, "", CENTRAL)
+        val chipHistory = store.loadConversationContext(CENTRAL).dropLast(1)
         val chipResult = chipLoop.run(chipClaim.text, chipHistory, CancellationToken.cancellable(), null)
         assertEquals("Draft a reply", observedText.get())
-        val chipAssistantId = store.appendConversationMessage(ProactiveConversation.SESSION_ID, "assistant", chipResult.text,
+        val chipAssistantId = store.appendConversationMessage(CENTRAL, "assistant", chipResult.text,
             chipResult.durationMs, chipResult.runId, chipClaim.userMessageId, "COMPLETED", threadKey)
         ProactiveInteractionDispatcher.refreshNotification(context, threadKey, chipAssistantId)
         val updated = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().single()
         assertEquals(threadKey.hashCode(), updated.id)
         assertEquals(1, updated.notification.actions.size)
-        assertTrue(store.readConversationTimeline(ProactiveConversation.SESSION_ID).first { it.messageId == noticeId }.proactiveRepliesUsed)
+        assertTrue(store.readConversationTimeline(CENTRAL).first { it.messageId == noticeId }.proactiveRepliesUsed)
         assertNull(ProactiveInteractionDispatcher.prepareSuggestedReply(context, noticeId, 0))
     }
 
@@ -426,7 +428,7 @@ class ProactiveAgentProcessorTest {
         val record = ProactiveDecisionAuditStore(context).readAll().last()
         assertEquals("payments", record.threadKey)
         assertFalse(auditFile().readText().contains("second raw source message"))
-        val timeline = LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID)
+        val timeline = LocalRunStore(context).readConversationTimeline(CENTRAL)
         val latestMessage = timeline.last().text
         assertTrue(latestMessage.contains("Second notice"))
         assertFalse(latestMessage.contains("**"))
@@ -454,11 +456,10 @@ class ProactiveAgentProcessorTest {
         val threadKey = "billing-question"
         val sourceDetail = "private-billing-event-detail"
         val store = LocalRunStore(context)
-        store.appendConversationTitleIfAbsent(ProactiveConversation.SESSION_ID, ProactiveConversation.title(context))
         val noticeId = store.appendProactiveAssistantMessageIfAbsent(
-            ProactiveConversation.SESSION_ID, "billing-notice", "A payment needs your review: $sourceDetail", emptyList(), threadKey,
+            CENTRAL, "billing-notice", "A payment needs your review: $sourceDetail", emptyList(), threadKey,
         )
-        val initial = store.readConversationTimeline(ProactiveConversation.SESSION_ID)
+        val initial = store.readConversationTimeline(CENTRAL)
         ProactiveNotifier.post(context, threadKey, noticeId, initial.single().text, "normal",
             initial.map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") },
             noticeId, emptyList(), false)
@@ -476,11 +477,12 @@ class ProactiveAgentProcessorTest {
         android.app.RemoteInput.addResultsToIntent(arrayOf(remoteInput), fillIn,
             Bundle().apply { putCharSequence(remoteInput.resultKey, "Summarize the payment notice") })
         val remoteText = android.app.RemoteInput.getResultsFromIntent(fillIn)?.getCharSequence(remoteInput.resultKey)?.toString().orEmpty()
+        assertEquals(noticeId, replyIntent.getStringExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID))
         val prepared = requireNotNull(ProactiveInteractionDispatcher.prepareInlineReply(
-            context, ProactiveThreadKey.fingerprint(threadKey), remoteText,
+            context, noticeId, ProactiveThreadKey.fingerprint(threadKey), remoteText,
         ))
-        assertEquals("user", store.readConversationTimeline(ProactiveConversation.SESSION_ID).last().kind)
-        assertEquals(threadKey, store.proactiveThreadKeyForUserMessage(ProactiveConversation.SESSION_ID, prepared.userMessageId))
+        assertEquals("user", store.readConversationTimeline(CENTRAL).last().kind)
+        assertEquals(threadKey, store.proactiveThreadKeyForUserMessage(CENTRAL, prepared.userMessageId))
 
         val observedPrompt = AtomicReference<String>()
         val observedTools = AtomicReference<List<String>>()
@@ -493,14 +495,13 @@ class ProactiveAgentProcessorTest {
                 return ModelReply("Calendar action is ready for review.", emptyList())
             }
         }
-        val normalLoop = CoreAgentLoop(provider, ordinaryTools,
-            context.getString(com.jarvys.agent.R.string.proactive_normal_thread_safety), ProactiveConversation.SESSION_ID)
-        val result = normalLoop.run(prepared.text, store.loadConversationContext(ProactiveConversation.SESSION_ID).dropLast(1),
+        val normalLoop = CoreAgentLoop(provider, ordinaryTools, "", CENTRAL)
+        val result = normalLoop.run(prepared.text, store.loadConversationContext(CENTRAL).dropLast(1),
             CancellationToken.cancellable(), null)
         assertEquals("Summarize the payment notice", observedPrompt.get())
         assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
         assertEquals("Calendar action is ready for review.", result.text)
-        val assistantId = store.appendConversationMessage(ProactiveConversation.SESSION_ID, "assistant", result.text,
+        val assistantId = store.appendConversationMessage(CENTRAL, "assistant", result.text,
             result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
 
         ProactiveInteractionDispatcher.refreshNotification(context, threadKey, assistantId)
@@ -511,22 +512,25 @@ class ProactiveAgentProcessorTest {
             .toString().contains("Calendar action is ready"))
         val deepLink = org.robolectric.Shadows.shadowOf(active.single().notification.contentIntent).savedIntent
         assertFalse(deepLink.extras?.toString().orEmpty().contains("payment notice"))
-        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, "invalid-thread-token", "hello"))
+        assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, assistantId, "invalid-thread-token", "hello"))
     }
 
-    @Test fun foregroundAppStoresNoticeInProactiveChatWithoutPostingAndroidNotification() {
+    @Test fun foregroundAppStoresNoticeInCentralWithoutPostingAndroidNotification() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val event = event("Urgent update", "Needs attention", receivedAt = 1_750_000_000_000L)
         ProactiveEventStore(context).append(event)
         val provider = FakeLoopFactory(reply = { _, _ -> response(true, "Attention", "Please review.", "high", listOf(event.id), "attention") })
         MainActivityForegroundReset.set(true)
+        com.jarvys.agent.AgentRunUiState.showSession(CENTRAL)
         try {
             assertEquals(ProactiveProcessingResult.Completed, processor(provider, fakeConnectedRegistry()).review(
                 listOf(ProactiveEventBatch("attention", listOf(event))), CancellationToken.cancellable()))
         } finally {
             MainActivityForegroundReset.set(false)
         }
-        assertEquals(1, LocalRunStore(context).readConversationTimeline(ProactiveConversation.SESSION_ID).size)
+        // The visible Central session shows the notice without waiting for a reopen.
+        assertTrue(com.jarvys.agent.AgentRunUiState.state.value.events.any { it.text.contains("Please review.") })
+        assertEquals(1, LocalRunStore(context).readConversationTimeline(CENTRAL).size)
         assertTrue(ProactiveDecisionAuditStore(context).readAll().single().notify)
         assertTrue(context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().isEmpty())
     }
@@ -684,7 +688,7 @@ class ProactiveAgentProcessorTest {
         ))
 
     private fun resetP3Data() {
-        listOf(eventFile(), auditFile(), proactiveConversationFile()).forEach(File::delete)
+        listOf(eventFile(), auditFile()).forEach(File::delete)
         watermarkFile().delete()
         context.getSharedPreferences("jarvys_proactive_review_state", Context.MODE_PRIVATE).edit().clear().commit()
     }
@@ -692,7 +696,6 @@ class ProactiveAgentProcessorTest {
     private fun eventFile() = File(File(context.filesDir, "jarvys"), "proactive/events.jsonl")
     private fun watermarkFile() = File(File(File(context.filesDir, "jarvys"), "proactive"), "notification-capture-boundary")
     private fun auditFile() = File(File(context.filesDir, "jarvys"), "proactive/decisions.jsonl")
-    private fun proactiveConversationFile() = File(File(File(context.filesDir, "jarvys"), "conversations"), "${ProactiveConversation.SESSION_ID}.jsonl")
 
     private class FakeLoopFactory(
         private val reply: (String, List<ToolSpec>) -> ModelReply,

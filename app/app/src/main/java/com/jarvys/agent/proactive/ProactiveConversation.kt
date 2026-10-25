@@ -7,12 +7,6 @@ import java.text.SimpleDateFormat
 import org.json.JSONArray
 import org.json.JSONObject
 
-object ProactiveConversation {
-    const val SESSION_ID = "jarvys-proactive"
-
-    fun title(context: Context): String = context.getString(com.jarvys.agent.R.string.proactive_chat_title)
-}
-
 object ProactivePrompt {
     fun system(context: Context): String = context.getString(com.jarvys.agent.R.string.proactive_system_prompt)
 

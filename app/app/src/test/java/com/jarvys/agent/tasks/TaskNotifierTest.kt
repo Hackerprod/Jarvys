@@ -55,8 +55,9 @@ class TaskNotifierTest {
             .contains("Body", ignoreCase = true))
         assertEquals(2, posted.single().actions.size)
         val chatIntent = shadowOf(posted.single().contentIntent).savedIntent
-        assertEquals(ScheduledTaskConversation.SESSION_ID,
-            chatIntent.getStringExtra(com.jarvys.agent.MainActivity.EXTRA_OPEN_CHAT_SESSION))
+        assertEquals("result-1",
+            chatIntent.getStringExtra(com.jarvys.agent.MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID))
+        assertFalse(chatIntent.hasExtra(com.jarvys.agent.MainActivity.EXTRA_OPEN_CHAT_SESSION))
         val viewTaskAction = posted.single().actions.first { it.title.toString() == context.getString(com.jarvys.agent.R.string.task_view_task) }
         assertTrue(shadowOf(viewTaskAction.actionIntent).isImmutable)
         val viewTaskIntent = shadowOf(viewTaskAction.actionIntent).savedIntent

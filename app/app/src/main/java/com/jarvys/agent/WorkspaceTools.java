@@ -779,8 +779,7 @@ public final class WorkspaceTools {
           return CoreToolResult.failure("Explicit previews require a local HTML file in the owning main chat.");
         try {
           String session = workspace.deliveryConversationId();
-          if (session == null || com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID.equals(session)
-              || com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID.equals(session))
+          if (session == null)
             return CoreToolResult.failure("Explicit previews are available only in the main chat.");
           java.io.File files = workspace.appFilesForDelivery();
           DeliveredArtifactStore artifacts = new DeliveredArtifactStore(files);

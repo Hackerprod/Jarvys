@@ -37,8 +37,7 @@ public final class MessageReactionTool implements CoreTool {
     }
 
     static boolean isOrdinaryChat(String sessionId) {
-        return sessionId != null && !sessionId.isEmpty()
-                && !"jarvys-proactive".equals(sessionId) && !"jarvys-tasks".equals(sessionId);
+        return sessionId != null && !sessionId.isEmpty();
     }
 
     /** Legacy IDs derive from the immutable message index and chat, without rewriting original rows. */

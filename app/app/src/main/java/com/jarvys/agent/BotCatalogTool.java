@@ -3,8 +3,6 @@ package com.jarvys.agent;
 import android.content.Context;
 import com.jarvys.agent.crew.BotDefinition;
 import com.jarvys.agent.crew.CrewProfileRepository;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,9 +48,7 @@ public final class BotCatalogTool implements CoreTool {
     static boolean isAvailableForSession(String sessionId) { return mainSession(0, sessionId); }
 
     private static boolean mainSession(int depth, String sessionId) {
-        return depth == 0 && sessionId != null && !sessionId.isEmpty()
-                && !ProactiveConversation.SESSION_ID.equals(sessionId)
-                && !ScheduledTaskConversation.SESSION_ID.equals(sessionId);
+        return depth == 0 && sessionId != null && !sessionId.isEmpty();
     }
 
     @Override public boolean canDelegate() { return false; }

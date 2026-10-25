@@ -85,8 +85,7 @@ internal class BotMascotService(
     private val sessionId: String,
 ) {
     constructor(context: Context, sessionId: String): this(CrewProfileRepository(context),BotMascotStore(context),sessionId)
-    fun available(token: CancellationToken) = !token.isCrewRun && sessionId.isNotBlank() &&
-        sessionId != com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID && sessionId != com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID
+    fun available(token: CancellationToken) = !token.isCrewRun && sessionId.isNotBlank()
 
     fun assign(id: String, revision: Int, request: String, description: String, source: String,
                token: CancellationToken): CrewProfileRepository.MascotAssignment {

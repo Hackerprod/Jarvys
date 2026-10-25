@@ -29,9 +29,7 @@ public final class WorkspaceIdentity {
     }
 
     public static String serviceSession(String requested) {
-        if (isExecutionSession(requested) || "jarvys-proactive".equals(requested) || "jarvys-tasks".equals(requested))
-            return requested;
-        return CENTRAL_SESSION;
+        return isExecutionSession(requested) ? requested : CENTRAL_SESSION;
     }
 
     public static boolean isCentral(String sessionId) { return CENTRAL_SESSION.equals(sessionId); }

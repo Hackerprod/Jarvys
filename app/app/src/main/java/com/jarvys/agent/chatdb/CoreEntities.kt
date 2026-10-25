@@ -84,6 +84,8 @@ data class ConversationItem(
         Index(name = "idx_messages_message_id", value = ["message_id"]),
         Index(name = "idx_messages_stable_id", value = ["conversation_id", "stable_id"], unique = true),
         Index(name = "idx_messages_proactive_decision", value = ["conversation_id", "proactive_decision_id"], unique = true),
+        // Proactive and task threads live inside Central; their rows are found here instead of by scanning the timeline.
+        Index(name = "idx_messages_proactive_thread", value = ["conversation_id", "proactive_thread_key", "seq"]),
         Index(name = "idx_messages_interrupt", value = ["conversation_id", "interrupt_request_id"]),
     ],
 )

@@ -200,9 +200,10 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean): PersonalAgentPromptContext =
         personalAgentPromptContext(conversationId, memoryEnabled, "principal")
 
+    /** [runKind] is the wire name of the run's `RunKind`; unattended runs pass an empty [conversationId]. */
     fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean,
-                                   sessionKind: String): PersonalAgentPromptContext =
-        withAgentMemory("read personal context") { it.promptContext(conversationId, memoryEnabled, sessionKind) }
+                                   runKind: String): PersonalAgentPromptContext =
+        withAgentMemory("read personal context") { it.promptContext(conversationId, memoryEnabled, runKind) }
 
     fun personalAgentSetDirective(section: String, directive: String, sourceMessageId: String?, evidence: String,
                                   supersedesId: String? = null, conversationId: String? = null): PersonalMemoryReceipt =
@@ -549,6 +550,14 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun readConversationMessageSync(conversationId: String, messageId: String): String? =
         execute { it.reader.readConversationMessage(conversationId, messageId) }
+
+    /** Rows of one proactive or task thread through the thread index, never the whole conversation. */
+    fun readThreadMessagesSync(conversationId: String, threadKey: String): List<StoredMessage> =
+        execute { it.conversations.readThreadMessages(conversationId, threadKey) }
+
+    /** The compacted notice a thread reply answers plus its exchange, or null while the notice is still live. */
+    fun readCompactedProactiveReferentSync(conversationId: String, replyMessageId: String): ProactiveReferent? =
+        execute { it.reader.readCompactedProactiveReferent(conversationId, replyMessageId) }
 
     fun readMessageAttachmentsSync(conversationId: String, messageId: String): List<com.jarvys.agent.ChatAttachment> =
         execute { it.reader.readMessageAttachments(conversationId, messageId) }

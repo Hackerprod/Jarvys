@@ -51,10 +51,7 @@ class AppDiagnosticsToolTest {
             mapOf("action" to "list", "limit" to 11), mapOf("action" to "report", "id" to id, "limit" to 1),
             mapOf("action" to "list", "id" to id))
         invalid.forEach { assertFalse(tool.execute(it, CancellationToken.uncancellable()).success) }
-        listOf("", com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID,
-            com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID).forEach { session ->
-            assertFalse(tool(session = session, read = reader).execute(mapOf("action" to "list"), CancellationToken.uncancellable()).success)
-        }
+        assertFalse(tool(session = "", read = reader).execute(mapOf("action" to "list"), CancellationToken.uncancellable()).success)
         assertFalse(tool.execute(mapOf("action" to "list"), CancellationToken.crewChild()).success)
         assertEquals(0, reads)
     }

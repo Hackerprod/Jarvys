@@ -5,8 +5,6 @@ import android.content.Context;
 import androidx.test.core.app.ApplicationProvider;
 import com.jarvys.agent.connectors.ConnectorRegistry;
 import com.jarvys.agent.crew.CrewRoleTemplates;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -79,7 +77,7 @@ public class BotCatalogToolScopeTest {
         for (String name : Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME)) {
             assertThrows(IllegalArgumentException.class, () -> CrewRoleTemplates.custom("Forbidden", "Mission", Collections.singletonList(name), registry));
         }
-        for (String session : Arrays.asList("scope-child", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID)) {
+        for (String session : Arrays.asList("scope-child", "")) {
             int depth = "scope-child".equals(session) ? 1 : 0;
             CoreAgentRuntime isolated = runtime(session, depth, Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME));
             assertFalse(isolated.createTools().names().contains(BotCatalogTool.NAME));

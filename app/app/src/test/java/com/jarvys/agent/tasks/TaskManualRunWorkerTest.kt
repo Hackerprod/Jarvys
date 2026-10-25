@@ -91,7 +91,7 @@ class TaskManualRunWorkerTest {
         val taskRuns = ledger.forTask(task.id)
         assertEquals(2, taskRuns.size)
         assertEquals(setOf("${task.id}:$scheduledFor", occurrenceId), taskRuns.map { it.idempotencyKey }.toSet())
-        val delivered = com.jarvys.agent.LocalRunStore(context).readConversationTimeline(ScheduledTaskConversation.SESSION_ID)
+        val delivered = com.jarvys.agent.LocalRunStore(context).readConversationTimeline(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
             .filter { it.proactiveThreadKey == ScheduledTaskConversation.threadKey(task.id) }
         assertEquals(1, delivered.size)
         assertTrue(delivered.single().text.contains("Manual result"))

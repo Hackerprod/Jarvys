@@ -51,8 +51,8 @@ object ProactiveNotifier {
         }
         return runCatching {
             ensureChannel(app, AppLanguageRuntime.localizedContext(app))
+            // The notice lives in Central: the intent only carries the anchor message to open it at.
             val openChat = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
-                .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, ProactiveConversation.SESSION_ID)
                 .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, messageId)
                 .setData(Uri.parse("jarvys://proactive/${ProactiveThreadKey.fingerprint(threadKey)}/${Uri.encode(messageId)}"))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -102,6 +102,7 @@ object ProactiveNotifier {
             }
             val replyIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, ProactiveActionReceiver::class.java))
                 .setAction(ProactiveActionReceiver.ACTION_INLINE_REPLY)
+                .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, messageId)
                 .putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, ProactiveThreadKey.fingerprint(threadKey))
                 .setData(Uri.parse("jarvys://proactive/reply/$notificationId"))
             val replyPendingIntent = PendingIntent.getBroadcast(app, notificationId,

@@ -5,8 +5,6 @@ import android.os.Build;
 import android.util.Base64;
 import java.io.IOException;
 import java.util.Collections;
-import com.jarvys.agent.proactive.ProactiveConversation;
-import com.jarvys.agent.tasks.ScheduledTaskConversation;
 
 import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.crew.CrewMissionSnapshot;
@@ -34,6 +32,7 @@ import com.jarvys.agent.chatdb.DispatchedInterrupt;
 import com.jarvys.agent.chatdb.InterruptRequestValue;
 import com.jarvys.agent.chatdb.MessageAttachmentInput;
 import com.jarvys.agent.chatdb.MessagePartInput;
+import com.jarvys.agent.chatdb.ProactiveReferent;
 import com.jarvys.agent.chatdb.ReactionUpdate;
 import com.jarvys.agent.chatdb.RegenerationPromptValue;
 import com.jarvys.agent.chatdb.StoredMessage;
@@ -175,8 +174,6 @@ public final class LocalRunStore {
     }
 
     private static String conversationKindFor(String sessionId) {
-        if (ProactiveConversation.SESSION_ID.equals(sessionId)) return "proactive";
-        if (ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return "tasks";
         if (WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)) return "central";
         if (WorkspaceIdentity.isExecutionSession(sessionId)) return "workspace_exec";
         return "chat";
@@ -709,8 +706,7 @@ public final class LocalRunStore {
                                                           String status, String proactiveThreadKey,
                                                           List<ChatAttachment> attachments) {
         if (attachments != null && !attachments.isEmpty() && (!"user".equals(role)
-                || (proactiveThreadKey != null && !proactiveThreadKey.isEmpty())
-                || ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId))) {
+                || (proactiveThreadKey != null && !proactiveThreadKey.isEmpty()))) {
             throw new IllegalArgumentException("Attachments are supported only in main-chat user messages");
         }
         if (!"user".equals(role) && !"assistant".equals(role)) {
@@ -808,7 +804,7 @@ public final class LocalRunStore {
         return result.getAssistantMessage().getMessageId();
     }
 
-    /** Idempotent system-authored assistant message for the dedicated Proactive conversation. */
+    /** Idempotent system-authored assistant message (proactive notice or task result) in the given conversation. */
     public String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
             String content) {
         return appendProactiveAssistantMessageIfAbsent(sessionId, decisionId, content, null, "");
@@ -858,6 +854,27 @@ public final class LocalRunStore {
         if (message == null || !"user".equals(message.getRole())) return null;
         String key = message.getProactiveThreadKey();
         return key == null || key.isEmpty() ? null : key;
+    }
+
+    /** One stored row by message id, whatever its role. */
+    public StoredMessage readStoredMessage(String sessionId, String messageId) {
+        if (messageId == null || messageId.isEmpty()) return null;
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readMessageSync(sessionId, messageId);
+    }
+
+    /** Visible rows of one proactive or task thread, read through the thread index instead of the timeline. */
+    public List<StoredMessage> readProactiveThreadMessages(String sessionId, String threadKey) {
+        if (threadKey == null || threadKey.isEmpty()) return Collections.emptyList();
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readThreadMessagesSync(sessionId, threadKey);
+    }
+
+    /** The compacted notice a thread reply answers and its exchange; null while the notice is still live. */
+    public ProactiveReferent readCompactedProactiveReferent(String sessionId, String replyMessageId) {
+        if (replyMessageId == null || replyMessageId.isEmpty()) return null;
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readCompactedProactiveReferentSync(sessionId, replyMessageId);
     }
 
     public String readConversationMessage(String sessionId, String messageId) {
@@ -1081,8 +1098,7 @@ public final class LocalRunStore {
 
     List<ConversationImageReference> readConversationImageReferences(String sessionId) {
         List<ConversationImageReference> empty = Collections.emptyList();
-        if (sessionId == null || ProactiveConversation.SESSION_ID.equals(sessionId)
-                || ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return empty;
+        if (sessionId == null) return empty;
         if (chatDatabaseBridge == null) throw noChatDatabase();
         List<ConversationImageReference> result = new ArrayList<>();
         for (ConversationImageReferenceValue value : chatDatabaseBridge.readConversationImageReferencesSync(sessionId)) {

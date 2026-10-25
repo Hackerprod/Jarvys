@@ -19,8 +19,11 @@ import com.jarvys.agent.R
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.proactive.ProactiveTextSanitizer
 import com.jarvys.agent.proactive.ProactiveRedactor
-import com.jarvys.agent.proactive.ProactiveThreadMessage
+import com.jarvys.agent.chatdb.StoredMessage
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.proactive.ProactiveThreadMessage
+import com.jarvys.agent.proactive.toThreadMessage
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -41,10 +44,9 @@ object TaskNotifier : ScheduledTaskNotifications {
     override fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
                         messageId: String, title: String, body: String, urgency: String,
                         suggestedReplies: List<ProactiveSuggestedReply>): Boolean {
-        val threadKey = ScheduledTaskConversation.threadKey(task.id)
-        val messages = store.readConversationTimeline(ScheduledTaskConversation.SESSION_ID)
-            .filter { it.proactiveThreadKey == threadKey }
-            .map { ProactiveThreadMessage(it.text, it.timestampMillis, it.kind == "assistant") }
+        val messages = store.readProactiveThreadMessages(
+            WorkspaceIdentity.CENTRAL_SESSION, ScheduledTaskConversation.threadKey(task.id))
+            .map(StoredMessage::toThreadMessage)
         return post(context, task, messageId, messages, title, body, urgency, suggestedReplies)
     }
 
@@ -165,9 +167,10 @@ object TaskNotifier : ScheduledTaskNotifications {
             ensureChannel(app)
             val taskTag = "$NOTIFICATION_TAG:${task.id}"
             val notificationId = task.id.hashCode()
+            // A result lives in Central: its intent carries the anchor message; incidents open the task instead.
             val openIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
-                .putExtra(if (openTask) MainActivity.EXTRA_OPEN_TASK else MainActivity.EXTRA_OPEN_CHAT_SESSION,
-                    if (openTask) task.id else ScheduledTaskConversation.SESSION_ID)
+                .putExtra(if (openTask) MainActivity.EXTRA_OPEN_TASK else MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID,
+                    if (openTask) task.id else messageId)
                 .setData(Uri.parse(if (openTask) "jarvys://task/detail/${Uri.encode(task.id)}"
                     else "jarvys://task/${Uri.encode(task.id)}/$messageId"))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -219,6 +222,7 @@ object TaskNotifier : ScheduledTaskNotifications {
                 val actionIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, TaskActionReceiver::class.java))
                     .setAction(TaskActionReceiver.ACTION_SUGGESTED_REPLY)
                     .putExtra(TaskActionReceiver.EXTRA_TASK_ID, task.id)
+                    .putExtra(TaskActionReceiver.EXTRA_MESSAGE_ID, messageId)
                     .putExtra(TaskActionReceiver.EXTRA_REPLY_TEXT,
                         ProactiveTextSanitizer.sanitize(ProactiveRedactor.redactForModel(reply.text)))
                     .setData(Uri.parse("jarvys://task/reply/${Uri.encode(task.id)}/$messageId/$index"))
@@ -265,17 +269,15 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
             TaskReplyReceiverExecutor.execute {
                 try {
                     val store = com.jarvys.agent.LocalRunStore(app)
-                    val sessionId = ScheduledTaskConversation.SESSION_ID
+                    val sessionId = WorkspaceIdentity.CENTRAL_SESSION
+                    // The reply is an ordinary Central turn; its thread and the result it answers let the turn
+                    // recover that result if compaction has already dropped it.
                     val messageId = try {
-                        store.appendConversationMessage(sessionId, "user", text)
+                        store.appendProactiveUserMessage(sessionId, text, ScheduledTaskConversation.threadKey(taskId),
+                            intent.getStringExtra(EXTRA_MESSAGE_ID)?.takeIf(String::isNotBlank))
                     } catch (failure: RuntimeException) {
                         Log.e("JarvysTasks", "Could not persist suggested task reply", failure)
                         return@execute
-                    }
-                    try {
-                        store.appendConversationTitleIfAbsent(sessionId, ScheduledTaskConversation.title(app))
-                    } catch (failure: RuntimeException) {
-                        Log.e("JarvysTasks", "Could not persist scheduled task chat title", failure)
                     }
                     runCatching {
                         com.jarvys.agent.AgentForegroundService.startRealAgentFromStoredChatMessage(
@@ -285,11 +287,11 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
                 } catch (failure: RuntimeException) {
                     Log.e("JarvysTasks", "Could not handle suggested task reply", failure)
                 } finally {
-                    pendingResult.finish()
+                    pendingResult?.finish()
                 }
             }
         } catch (failure: RuntimeException) {
-            pendingResult.finish()
+            pendingResult?.finish()
             Log.e("JarvysTasks", "Could not queue suggested task reply", failure)
         }
     }
@@ -297,6 +299,7 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
     companion object {
         const val ACTION_SUGGESTED_REPLY = "com.jarvys.agent.tasks.SUGGESTED_REPLY"
         const val EXTRA_TASK_ID = "scheduled_task_id"
+        const val EXTRA_MESSAGE_ID = "scheduled_task_message_id"
         const val EXTRA_REPLY_TEXT = "scheduled_task_reply_text"
     }
 }

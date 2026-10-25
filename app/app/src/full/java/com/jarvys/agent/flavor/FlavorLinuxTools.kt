@@ -34,8 +34,6 @@ import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.linux.LinuxEnvironment
 import com.jarvys.agent.linux.LinuxOutputSanitizer
 import com.jarvys.agent.linux.LinuxRuntime
-import com.jarvys.agent.proactive.ProactiveConversation
-import com.jarvys.agent.tasks.ScheduledTaskConversation
 
 /** Full-flavor seam only. No Linux implementation is linked from the Play source set. */
 object FlavorLinuxTools {
@@ -224,7 +222,6 @@ object FlavorLinuxTools {
 
     internal fun available(context: Context?, sessionId: String?, depth: Int): Boolean {
         if (context == null || depth != 0 || sessionId.isNullOrBlank()) return false
-        if (sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID) return false
         if (sessionId.startsWith("proactive-") || sessionId.startsWith("task-") || sessionId.startsWith("task:")) return false
         if ("/crew/" in sessionId || sessionId.startsWith("jarvys-subagent-")) return false
         return !MemoryReflectionRuntime.isRunning(sessionId)
