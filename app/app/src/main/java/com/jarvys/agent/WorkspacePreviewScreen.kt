@@ -126,7 +126,7 @@ private fun ScopedPreviewScreen(projectId: String, sessionId: String?, modifier:
 
 /** Static preview reads never instantiate skills, connectors or credentials. Reject root symlinks. */
 internal fun readOnlyPreviewWorkspace(context: Context, projectId: String): WorkspaceStore {
-    val root = File(context.applicationContext.filesDir.canonicalFile, "jarvys/workspaces")
+    val root = StorageGeneration(context.applicationContext.filesDir.canonicalFile).directory("workspaces")
     val project = File(root, projectId)
     require(root.canonicalFile == root.absoluteFile && project.canonicalFile == project.absoluteFile)
     return WorkspaceStore(root, projectId).withoutAttachments()
@@ -173,7 +173,7 @@ internal class WorkspacePreviewContent(context: Context, private val workspace: 
     // Independent registrable hosts also prevent parent-domain cookies crossing previews.
     val host = "jarvys-${if (thumbnail) "thumbnail" else "preview"}-${previewOriginKey(key)}.invalid"
     private val prefix = if (descriptor == null) "/workspaces/${workspace!!.projectId()}/" else "/"
-    private val root = workspace?.let { File(context.filesDir.canonicalFile, "jarvys/workspaces/${it.projectId()}") }
+    private val root = workspace?.let { File(StorageGeneration(context.filesDir.canonicalFile).directory("workspaces"), it.projectId()) }
     private val artifacts = if (descriptor != null) DeliveredArtifactStore(context) else null
     val entryUrl = "https://$host$prefix" + (descriptor?.entryPath ?: "index.html").split('/').joinToString("/") { Uri.encode(it) }
     val warningCount = descriptor?.warnings?.size ?: 0

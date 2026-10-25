@@ -296,7 +296,7 @@ public final class CrewCheckpointStore {
         synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             Listing result = new Listing();
-            File directory = new File(this.filesDirectory, "jarvys/crew-context/" + digest(conversationId.getBytes(StandardCharsets.UTF_8)));
+            File directory = new File(new StorageGeneration(this.filesDirectory).directory("crew-context"), digest(conversationId.getBytes(StandardCharsets.UTF_8)));
             try {
                 verify(directory);
                 if (!directory.exists()) {
@@ -551,7 +551,7 @@ public final class CrewCheckpointStore {
         if (botId == null || botId.trim().isEmpty()) {
             throw new IllegalArgumentException("Bot identity is required");
         }
-        File result = new File(this.filesDirectory, "jarvys/crew-context/" + digest(conversationId.getBytes(StandardCharsets.UTF_8)) + "/" + digest(botId.getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
+        File result = new File(new StorageGeneration(this.filesDirectory).directory("crew-context"), digest(conversationId.getBytes(StandardCharsets.UTF_8)) + "/" + digest(botId.getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
         verify(result);
         return result;
     }

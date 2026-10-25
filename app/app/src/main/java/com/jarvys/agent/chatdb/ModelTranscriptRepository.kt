@@ -383,16 +383,77 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      * in the suffix of its generated `legacy-<timestamp>-<rowIndex>` ID. This keeps the summary
      * boundary stable when the reader reconstructs the model context.
      */
-    suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+    suspend fun readArtifactRows(conversationId: String): List<org.json.JSONObject> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            sql.query("SELECT artifact_id,path,sha256,chars,bytes FROM model_artifacts WHERE conversation_id=? ORDER BY seq",
+                arrayOf(conversationId)).use { c -> buildList { while (c.moveToNext()) add(org.json.JSONObject()
+                    .put("type", "model_artifact").put("artifactId", c.getString(0))
+                    .put("artifact", org.json.JSONObject().put("path", c.getString(1)).put("sha256", c.getString(2))
+                        .put("chars", c.getLong(3)).put("bytes", c.getLong(4)))) } }
+        } }
+
+    suspend fun readModelTranscript(conversationId: String, includeCompacted: Boolean = false): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
         database.withChatReadTransaction {
             val highWater = sql.query("SELECT COALESCE(next_seq-1,0) FROM conversations WHERE id=?", arrayOf(conversationId))
                 .use { if (it.moveToFirst()) it.getLong(0) else 0L }
+            val boundary = sql.query(
+                "SELECT c.seq,c.compaction_id,c.first_kept,ci.sort_seq,ci.sort_sub FROM compactions c " +
+                    "JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
+                "WHERE c.conversation_id=? AND c.seq<=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
+                    "ON hi.conversation_id=m.conversation_id AND hi.seq=m.hidden_seq WHERE m.conversation_id=c.conversation_id " +
+                    "AND m.hidden_seq<=? AND hi.seq<=? AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
+                    "(hi.sort_seq>ci.sort_seq OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub>ci.sort_sub) " +
+                    "OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub=ci.sort_sub AND hi.seq>ci.seq))) " +
+                    "ORDER BY ci.sort_seq DESC,ci.sort_sub DESC,ci.seq DESC LIMIT 1",
+                arrayOf(conversationId, highWater, highWater, highWater),
+            ).use { c ->
+                if (c.moveToFirst()) CompactionBoundary(c.getLong(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)) else null
+            }
+            val afterBoundary = "(i.sort_seq>? OR (i.sort_seq=? AND i.sort_sub>?) OR (i.sort_seq=? AND i.sort_sub=? AND i.seq>=?))"
+            val arguments = mutableListOf<Any?>(conversationId, highWater)
+            val selection = if (boundary == null || includeCompacted) "" else {
+                arguments += boundary.firstKept
+                arguments.addAll(listOf(boundary.sortSeq, boundary.sortSeq, boundary.sortSub,
+                    boundary.sortSeq, boundary.sortSub, boundary.seq))
+                arguments += boundary.firstKept
+                arguments.addAll(listOf(boundary.sortSeq, boundary.sortSeq, boundary.sortSub,
+                    boundary.sortSeq, boundary.sortSub, boundary.seq))
+                """ AND (
+                    (i.item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result')
+                        AND EXISTS (SELECT 1 FROM retained_batches b WHERE
+                            (i.item_kind='model_tool_calls' AND i.item_key=b.batch_id) OR
+                            (i.item_kind<>'model_tool_calls' AND i.item_key IN (
+                                SELECT key.item_key FROM tool_calls c JOIN conversation_items key
+                                    ON key.conversation_id=c.conversation_id AND key.seq=c.lifecycle_seq
+                                WHERE c.conversation_id=i.conversation_id AND c.batch_id=b.batch_id
+                                    AND key.item_kind IN ('model_tool_started','model_tool_not_started')
+                                UNION SELECT key.item_key FROM tool_results r JOIN conversation_items key
+                                    ON key.conversation_id=r.conversation_id AND key.seq=r.seq
+                                WHERE r.conversation_id=i.conversation_id AND r.batch_id=b.batch_id))))
+                    OR (i.item_kind='model_error' AND EXISTS (SELECT 1 FROM model_errors e
+                        WHERE e.conversation_id=i.conversation_id AND e.seq=i.seq AND e.message_index>=?) AND $afterBoundary)
+                    OR (i.item_kind='model_provider_output_items' AND EXISTS (SELECT 1 FROM model_provider_outputs p
+                        WHERE p.conversation_id=i.conversation_id AND p.seq=i.seq AND p.message_index>=?) AND $afterBoundary))"""
+            }
+            val cteArguments = mutableListOf<Any?>()
+            val cte = if (boundary == null || includeCompacted) "" else {
+                cteArguments.addAll(listOf(conversationId, boundary.firstKept, boundary.sortSeq,
+                    boundary.sortSeq, boundary.sortSub, boundary.sortSeq, boundary.sortSub, boundary.seq))
+                """WITH retained_batches AS (
+                    SELECT b.batch_id FROM tool_batches b
+                    JOIN conversation_items a ON a.conversation_id=b.conversation_id AND a.seq=COALESCE(b.last_activity_seq,b.seq)
+                    WHERE b.conversation_id=? AND (b.message_index>=?
+                        OR a.sort_seq>? OR (a.sort_seq=? AND a.sort_sub>?) OR (a.sort_seq=? AND a.sort_sub=? AND a.seq>=?)
+                        OR (SELECT COUNT(*) FROM tool_calls c WHERE c.conversation_id=b.conversation_id AND c.batch_id=b.batch_id)
+                           > (SELECT COUNT(*) FROM tool_results r WHERE r.conversation_id=b.conversation_id AND r.batch_id=b.batch_id))) """
+            }
             val rows = sql.query(
-                "SELECT seq,item_kind,item_key,sort_seq,sort_sub FROM conversation_items WHERE conversation_id=? " +
-                    "AND seq<=? AND item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
-                    "ORDER BY sort_seq,sort_sub,seq",
-                arrayOf(conversationId, highWater),
+                cte + "SELECT i.seq,i.item_kind,i.item_key,i.sort_seq,i.sort_sub FROM conversation_items i WHERE i.conversation_id=? " +
+                    "AND i.seq<=? AND i.item_kind IN ('model_tool_calls','model_tool_started','model_tool_not_started','model_tool_result','model_error','model_provider_output_items','model_artifact') " +
+                    selection + " ORDER BY i.sort_seq,i.sort_sub,i.seq",
+                (cteArguments + arguments).toTypedArray(),
             ).use { c -> buildList { while (c.moveToNext()) add(SpineEntry(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4))) } }
+
 
             val batchIds = rows.mapNotNull { item ->
                 when (item.kind) {
@@ -443,19 +504,6 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                 }
             }
 
-            val boundary = sql.query(
-                "SELECT c.seq,c.compaction_id,c.first_kept,ci.sort_seq,ci.sort_sub FROM compactions c " +
-                    "JOIN conversation_items ci ON ci.conversation_id=c.conversation_id AND ci.seq=c.seq " +
-                "WHERE c.conversation_id=? AND c.seq<=? AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversation_items hi " +
-                    "ON hi.conversation_id=m.conversation_id AND hi.seq=m.hidden_seq WHERE m.conversation_id=c.conversation_id " +
-                    "AND m.hidden_seq<=? AND hi.seq<=? AND m.hidden_kind IN ('assistant_regenerated','assistant_deleted') AND " +
-                    "(hi.sort_seq>ci.sort_seq OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub>ci.sort_sub) " +
-                    "OR (hi.sort_seq=ci.sort_seq AND hi.sort_sub=ci.sort_sub AND hi.seq>ci.seq))) " +
-                    "ORDER BY ci.sort_seq DESC,ci.sort_sub DESC,ci.seq DESC LIMIT 1",
-                arrayOf(conversationId, highWater, highWater, highWater),
-            ).use { c ->
-                if (c.moveToFirst()) CompactionBoundary(c.getLong(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)) else null
-            }
             val boundaryPosition = boundary?.let { Triple(it.sortSeq, it.sortSub, it.seq) }
             val latestProviders = linkedMapOf<String, ModelProviderOutput>()
             rows.asSequence().filter { it.kind == "model_provider_output_items" }.forEach { item ->

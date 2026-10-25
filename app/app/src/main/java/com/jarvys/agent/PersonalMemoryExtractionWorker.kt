@@ -24,6 +24,16 @@ class PersonalMemoryExtractionWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        if (inputData.getString(SingleSessionReset.GENERATION_EXTRA) != StorageGeneration.NAME)
+            return@withContext Result.success()
+        try {
+            SingleSessionReset.awaitReady(applicationContext)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
+            return@withContext Result.retry()
+        }
         val conversationId = inputData.getString(KEY_CONVERSATION_ID)?.takeIf(String::isNotBlank)
             ?: return@withContext Result.failure()
         val type = inputData.getString(KEY_TYPE) ?: TYPE_EXTRACT
@@ -120,6 +130,7 @@ class PersonalMemoryExtractionWorker(
             if (!MessageReactionTool.isOrdinaryChat(conversationId)) return
             val type = if (snapshot) TYPE_SNAPSHOT else TYPE_EXTRACT
             val input = Data.Builder()
+                .putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME)
                 .putString(KEY_CONVERSATION_ID, conversationId)
                 .putString(KEY_TYPE, type)
                 .putBoolean(KEY_MANUAL, manual)

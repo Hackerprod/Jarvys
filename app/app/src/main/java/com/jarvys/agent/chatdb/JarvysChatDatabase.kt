@@ -87,11 +87,14 @@ import kotlin.coroutines.ContinuationInterceptor
         AgentDoc::class,
         UserDirective::class,
         MemoryEntry::class,
+        MemoryEvidence::class,
+        MemoryLink::class,
+        TranscriptArtifactRef::class,
         MemoryRevision::class,
         AgentSessionState::class,
         MemoryJob::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -152,6 +155,9 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "agent_docs",
             "user_directives",
             "memory_entries",
+            "memory_evidence",
+            "memory_links",
+            "transcript_artifact_refs",
             "memory_revisions",
             "agent_session_state",
             "memory_jobs",
@@ -161,8 +167,8 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
 
 /** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 2
-    private const val DATABASE_NAME = "jarvys-chat.db"
+    private const val DATABASE_VERSION = 3
+    private const val DATABASE_NAME = "jarvys-chat-v3.db"
     private const val DATABASE_DIRECTORY = "jarvys"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
     private const val WAL_AUTOCHECKPOINT_PAGES = 1_000
@@ -174,11 +180,16 @@ internal object JarvysChatDatabaseProvider {
     private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
     private val writerDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
     private val databaseFiles = IdentityHashMap<JarvysChatDatabase, File>()
+    private val applicationFiles = IdentityHashMap<JarvysChatDatabase, File>()
+
+    internal fun filesDirectory(database: JarvysChatDatabase): File =
+        synchronized(applicationFiles) { requireNotNull(applicationFiles[database]) }
     private val readPools = IdentityHashMap<JarvysChatDatabase, ReadDatabasePool>()
 
     /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
     fun getInstance(context: Context): JarvysChatDatabase {
+        com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.applicationContext.filesDir)
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "JarvysChatDatabaseProvider.getInstance must be called off the main thread"
         }
@@ -207,6 +218,7 @@ internal object JarvysChatDatabaseProvider {
                 throw error
             }
             opened.also {
+                synchronized(applicationFiles) { applicationFiles[it] = context.applicationContext.filesDir }
                 synchronized(databaseExecutors) { databaseExecutors[it] = executorSet }
                 synchronized(databaseFiles) { databaseFiles[it] = databaseFile }
                 synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
@@ -235,6 +247,7 @@ internal object JarvysChatDatabaseProvider {
                 synchronized(databaseExecutors) { databaseExecutors[database] = executorSet }
                 synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
                 synchronized(writerDispatchers) { writerDispatchers[database] = executorSet[1].asCoroutineDispatcher() }
+                synchronized(applicationFiles) { applicationFiles[database] = context.applicationContext.filesDir }
                 synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
                 synchronized(readPools) { readPools[database] = checkNotNull(readPool) }
             }
@@ -257,6 +270,7 @@ internal object JarvysChatDatabaseProvider {
             synchronized(readPools) {
                 if (readPools[database] === readPool) readPools.remove(database)
             }
+            synchronized(applicationFiles) { applicationFiles.remove(database) }
             val file = synchronized(databaseFiles) { databaseFiles.remove(database) }
             try {
                 database.close()
@@ -518,7 +532,10 @@ internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase, context: Context? = null) = create(SupportChatSqlDatabase(db), context)
 
     fun create(db: ChatSqlDatabase, context: Context? = null) {
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
         PersonalMemorySearchIndex.install(db, context)
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_artifact_owner ON transcript_artifact_refs(conversation_id,owner_kind,batch_id,IFNULL(call_id,''),artifact_id)")
+        MessageSearchIndex.install(db)
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS trg_conversation_no_replace " +
                 "BEFORE INSERT ON conversations " +

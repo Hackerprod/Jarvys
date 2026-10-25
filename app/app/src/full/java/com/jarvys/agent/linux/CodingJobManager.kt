@@ -67,7 +67,7 @@ class CodingJobManager(
         require(redactionBufferChars > 0) { "Pending-output resource budget must be positive" }
         val anchor = filesDir.canonicalFile
         require(anchor.isDirectory) { "App files directory is unavailable" }
-        root = File(anchor, "jarvys/crew-context")
+        root = com.jarvys.agent.StorageGeneration(anchor).directory("crew-context")
         verifyPath(root)
         require(!root.exists() || root.isDirectory) { "Coding job storage is not a directory" }
         restore()

@@ -81,6 +81,7 @@ object ProactiveInteractionDispatcher {
 
 class ProactiveActionReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: android.content.Intent) {
+        if (!com.jarvys.agent.SingleSessionReset.isCurrent(intent)) return
         val action = intent.action
         if (action != ACTION_SUGGESTED_REPLY && action != ACTION_INLINE_REPLY) return
         val messageId = intent.getStringExtra(EXTRA_MESSAGE_ID).orEmpty()

@@ -139,7 +139,7 @@ class MemorySearchIndexCoordinator internal constructor(
         @JvmStatic
         fun forContext(context: Context, projectId: String, memoryAllowed: Boolean): MemorySearchIndexCoordinator {
             val app = context.applicationContext
-            val filesRoot = File(app.filesDir, "jarvys")
+            val filesRoot = StorageGeneration(app).chatRoot()
             val key = filesRoot.absolutePath + "/" + projectId + if (memoryAllowed) "-memory" else "-no-memory"
             return coordinators.computeIfAbsent(key) {
                 val indexFile = File(File(filesRoot, "index"), "workspace-scope-v64-$projectId-${if (memoryAllowed) "m" else "n"}.bin")
@@ -149,7 +149,7 @@ class MemorySearchIndexCoordinator internal constructor(
 
         @JvmStatic
         fun notifySkillsChanged(context: Context) {
-            val root = File(context.applicationContext.filesDir, "jarvys").absolutePath + "/"
+            val root = StorageGeneration(context).chatRoot().absolutePath + "/"
             coordinators.filterKeys { it.startsWith(root) }.values.forEach { coordinator ->
                 coordinator.lastWorkspace?.let { workspace -> coordinator.refreshZone(workspace, "skills") }
             }

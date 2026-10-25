@@ -211,6 +211,16 @@ class AttachmentDraftViewModel internal constructor(
         }
     }
 
+    internal fun restoreCameraFile(path: String, session: String) = synchronized(lock) {
+        if (cameraFile != null) return@synchronized
+        val file = File(path)
+        val root = File(app.cacheDir.canonicalFile, "jarvys/camera")
+        if (file.isFile && file.parentFile?.canonicalFile == root && file.canonicalFile.parentFile == root) {
+            cameraFile = file
+            cameraSession = session
+        }
+    }
+
     private fun clearCameraFile() {
         cameraFile?.let(::safeDeleteCamera)
         cameraFile = null

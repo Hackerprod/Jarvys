@@ -120,6 +120,6 @@ public class CrewContextArtifactsRecoveryTest {
         return artifacts.recoveryTool(ignored -> 32768).execute(Collections.singletonMap("artifact_id", id), token);
     }
     private static File artifact(File root, String chat, String bot, String id) {
-        return new File(root, "jarvys/crew-context/" + CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
+        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest(chat.getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest(bot.getBytes(StandardCharsets.UTF_8)) + "/" + id + ".txt");
     }
 }

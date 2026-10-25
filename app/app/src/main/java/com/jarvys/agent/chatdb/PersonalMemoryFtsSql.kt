@@ -10,17 +10,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** SQL for each optional memory-search implementation. Never let an FTS failure block chat DB open. */
 internal object PersonalMemoryFtsSql {
     const val FTS5_CREATE =
-        "CREATE VIRTUAL TABLE memory_fts USING fts5(text, content='memory_entries', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')"
+        "CREATE VIRTUAL TABLE memory_fts USING fts5(title,text,topic_key, content='memory_entries', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')"
     const val FTS5_INSERT_TRIGGER =
         "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(rowid,text) VALUES(NEW.rowid,NEW.text); END"
+            "INSERT INTO memory_fts(rowid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
     const val FTS5_DELETE_TRIGGER =
         "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(memory_fts,rowid,text) VALUES('delete',OLD.rowid,OLD.text); END"
+            "INSERT INTO memory_fts(memory_fts,rowid,title,text,topic_key) VALUES('delete',OLD.rowid,OLD.title,OLD.text,OLD.topic_key); END"
     const val FTS5_UPDATE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF text ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(memory_fts,rowid,text) VALUES('delete',OLD.rowid,OLD.text); " +
-            "INSERT INTO memory_fts(rowid,text) VALUES(NEW.rowid,NEW.text); END"
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key ON memory_entries BEGIN " +
+            "INSERT INTO memory_fts(memory_fts,rowid,title,text,topic_key) VALUES('delete',OLD.rowid,OLD.title,OLD.text,OLD.topic_key); " +
+            "INSERT INTO memory_fts(rowid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
     const val FTS5_REBUILD = "INSERT INTO memory_fts(memory_fts) VALUES('rebuild')"
 
     const val FTS4_CREATE = "CREATE VIRTUAL TABLE memory_fts USING fts4(text, tokenize=unicode61)"
@@ -31,7 +31,7 @@ internal object PersonalMemoryFtsSql {
         "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
             "DELETE FROM memory_fts WHERE docid=OLD.rowid; END"
     const val FTS4_UPDATE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF text ON memory_entries BEGIN " +
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key ON memory_entries BEGIN " +
             "DELETE FROM memory_fts WHERE docid=OLD.rowid; " +
             "INSERT INTO memory_fts(docid,text) VALUES(NEW.rowid,NEW.text); END"
     const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,text) SELECT rowid,text FROM memory_entries"
@@ -167,25 +167,18 @@ internal object PersonalMemorySearchIndex {
     }
 
     private fun readMode(db: ChatSqlDatabase): PersonalMemorySearchMode =
-        db.query("SELECT content FROM agent_docs WHERE agent_id='default' AND kind=?", arrayOf(STATE_DOC_KIND)).use {
+        db.query("SELECT value FROM storage_meta WHERE key=?", arrayOf(STATE_DOC_KIND)).use {
             if (it.moveToFirst()) PersonalMemorySearchMode.from(it.getString(0)) else PersonalMemorySearchMode.LIKE
         }
 
     private fun hasStoredMode(db: ChatSqlDatabase): Boolean =
-        db.query("SELECT 1 FROM agent_docs WHERE agent_id='default' AND kind=? LIMIT 1", arrayOf(STATE_DOC_KIND)).use {
+        db.query("SELECT 1 FROM storage_meta WHERE key=? LIMIT 1", arrayOf(STATE_DOC_KIND)).use {
             it.moveToFirst()
         }
 
     private fun saveMode(db: ChatSqlDatabase, mode: PersonalMemorySearchMode) {
-        val hash = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(mode.storedValue.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        val now = System.currentTimeMillis()
-        db.execSQL("UPDATE agent_docs SET content=?,revision=revision+1,content_hash=?,updated_at=? WHERE agent_id='default' AND kind=?",
-            arrayOf(mode.storedValue, hash, now, STATE_DOC_KIND))
-        val updated = db.query("SELECT changes()").use { it.moveToFirst(); it.getInt(0) > 0 }
-        if (!updated) db.execSQL(
-            "INSERT INTO agent_docs(agent_id,kind,content,revision,content_hash,updated_at) VALUES('default',?,?,1,?,?)",
-            arrayOf(STATE_DOC_KIND, mode.storedValue, hash, now),
-        )
+        db.execSQL("INSERT OR IGNORE INTO storage_meta(key,value) VALUES(?,?)",
+            arrayOf(STATE_DOC_KIND, mode.storedValue))
+        db.execSQL("UPDATE storage_meta SET value=? WHERE key=?", arrayOf(mode.storedValue, STATE_DOC_KIND))
     }
 }

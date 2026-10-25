@@ -150,7 +150,7 @@ public final class MemoryStore {
 
     public MemoryStore(Context context, MemorySeedTextProvider seedTextProvider) {
         Context app = context.getApplicationContext();
-        this.root = canonicalMemoryRoot(new File(new File(app.getFilesDir(), "jarvys"), MemoryConstants.MEMORY_DIRECTORY));
+        this.root = canonicalMemoryRoot(new StorageGeneration(app).directory(MemoryConstants.MEMORY_DIRECTORY));
         this.owner = this;
         this.scopeConversationId = null;
         this.scopeKey = "";

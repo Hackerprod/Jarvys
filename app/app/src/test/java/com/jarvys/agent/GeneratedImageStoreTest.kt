@@ -22,7 +22,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [FileProviderPathShadow::class], instrumentedPackages = ["androidx.core.content"])
 class GeneratedImageStoreTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore()
     @get:Rule val temporaryFolder = TemporaryFolder()
@@ -50,7 +50,7 @@ class GeneratedImageStoreTest {
     fun imageRowsRoundTripAndConversationDeletionRemovesOnlyThatImageDirectory() {
         val files = temporaryFolder.root
         val runStore = chatTestStore.localRunStore(files)
-        val images = GeneratedImageStore(File(files, "jarvys"))
+        val images = GeneratedImageStore(StorageGeneration(files).chatRoot())
         val session = "generated-session"
         val relativePath = images.save(session, UUID.randomUUID().toString(), pngFixture())
         runStore.appendConversationMessage(session, "user", "Make a lighthouse.")
@@ -138,7 +138,7 @@ class GeneratedImageStoreTest {
         val files = chatTestStore.newFilesDirectory()
         val store = chatTestStore.localRunStore(files)
         val session = "live-generated-image"
-        val images = GeneratedImageStore(File(files, "jarvys"))
+        val images = GeneratedImageStore(StorageGeneration(files).chatRoot())
         val path = images.save(session, UUID.randomUUID().toString(), pngFixture())
         store.appendGeneratedImageEvent(session, path, "A lighthouse", "", "auto", "image/png")
         val restored = store.readConversationTimeline(session)
@@ -164,7 +164,7 @@ class GeneratedImageStoreTest {
         val relativePath = store.save(session, UUID.randomUUID().toString(), pngFixture())
         val image = store.resolve(session, relativePath)
         val provider = context.packageManager.getProviderInfo(
-            android.content.ComponentName(context, FileProvider::class.java), PackageManager.GET_META_DATA)
+            android.content.ComponentName(context, GeneratedImageFileProvider::class.java), PackageManager.GET_META_DATA)
         assertFalse(provider.exported)
         assertTrue(provider.grantUriPermissions)
         val pathsId = provider.metaData.getInt("android.support.FILE_PROVIDER_PATHS")
@@ -175,12 +175,13 @@ class GeneratedImageStoreTest {
                 entries++
                 val attributes = (0 until paths.attributeCount).associate { paths.getAttributeName(it) to paths.getAttributeValue(it) }
                 assertEquals("generated_images", attributes["name"])
-                assertEquals("jarvys/generated/", attributes["path"])
+                assertEquals("jarvys/g3/generated/", attributes["path"])
             }
         }
         paths.close()
         assertEquals(1, entries)
 
+        GeneratedImageFileProvider().attachInfo(context, provider)
         val share = GeneratedImageIntents.shareIntent(context, image)
         assertEquals(Intent.ACTION_SEND, share.action)
         assertEquals("image/png", share.type)

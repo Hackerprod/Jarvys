@@ -60,11 +60,11 @@ public final class HtmlThumbnailStore {
 
     public HtmlThumbnailStore(Context context) {
         this(new LocalRunStore(context),
-                new DeliveredArtifactStore(new File(context.getApplicationContext().getFilesDir(), "jarvys")),
+                new DeliveredArtifactStore(context),
                 MAX_DISK_BYTES, MAX_DISK_ENTRIES);
     }
     HtmlThumbnailStore(File filesDirectory) {
-        this(new LocalRunStore(filesDirectory), new DeliveredArtifactStore(new File(filesDirectory, "jarvys")),
+        this(new LocalRunStore(filesDirectory), new DeliveredArtifactStore(filesDirectory),
                 MAX_DISK_BYTES, MAX_DISK_ENTRIES);
     }
     HtmlThumbnailStore(LocalRunStore ledger, DeliveredArtifactStore delivered, long diskLimit, int entryLimit) {

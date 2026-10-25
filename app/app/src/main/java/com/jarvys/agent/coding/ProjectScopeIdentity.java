@@ -28,7 +28,7 @@ final class ProjectScopeIdentity {
   }
 
   static File manifestPath(File anchor, String id) {
-    return new File(anchor, "jarvys/coding-project-state/" + id + "/identity.json");
+    return new File(new com.jarvys.agent.StorageGeneration(anchor).directory("coding-project-state"), id + "/identity.json");
   }
 
   static ProjectScopeIdentity open(File anchor, String id, List<ProjectScope.Anchor> roots)
@@ -42,9 +42,9 @@ final class ProjectScopeIdentity {
     int i;
     List<ProjectScope.Anchor> privateAnchors = new ArrayList<>();
     privateAnchors.add(new ProjectScope.Anchor(anchor));
-    String[] strArr = {"jarvys", "coding-project-state", id};
+    String[] strArr = {"jarvys", com.jarvys.agent.StorageGeneration.NAME, "coding-project-state", id};
     File directory = anchor;
-    for (int i2 = 0; i2 < 3; i2++) {
+    for (int i2 = 0; i2 < strArr.length; i2++) {
       String part = strArr[i2];
       validate(privateAnchors);
       directory = new File(directory, part);

@@ -160,6 +160,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             try {
                 // This method only runs from execute()'s background task. Provider initialization
                 // and its schema preflight therefore cannot block the caller's main thread.
+                com.jarvys.agent.SingleSessionReset.ensure(applicationContext)
                 val database = JarvysChatDatabaseProvider.getInstance(applicationContext)
                 val conversations = ConversationRepository(database)
                 val transcript = ModelTranscriptRepository(database)
@@ -506,6 +507,24 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     // UI and model readers keep projections under ConversationReader's shared read fence.
     fun readConversationMessagesSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readConversationMessages(conversationId) }
+
+    fun readInputsAfterSync(conversationId: String, afterSeq: Long): List<StoredMessage> =
+        execute { it.conversations.readInputsAfter(conversationId, afterSeq) }
+
+    fun inputStateMessageIdsSync(conversationId: String, state: String?, ids: List<String>?): Set<String> =
+        execute { it.conversations.inputStateMessageIds(conversationId, state, ids) }
+
+    fun markIncorporatedThroughSync(conversationId: String, messageId: String): ChatDbResult<List<String>> =
+        execute { it.conversations.markIncorporatedThrough(conversationId, messageId) }
+
+    fun latestUserMessageIndexSync(conversationId: String): Long =
+        execute { it.conversations.latestUserMessageIndex(conversationId) }
+
+    fun readMessageAtIndexSync(conversationId: String, index: Long): StoredMessage? =
+        execute { it.conversations.getMessageAtIndex(conversationId, index) }
+
+    fun readModelArtifactRowsSync(conversationId: String): List<JSONObject> =
+        execute { it.transcript.readArtifactRows(conversationId) }
 
     fun readPendingAgentInputsSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readPendingAgentInputs(conversationId) }

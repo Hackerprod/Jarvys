@@ -320,6 +320,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectorRegistry: ConnectorRegistry
     private lateinit var attachmentDrafts: AttachmentDraftViewModel
     private var attachmentPickerSession: String? = null
+    private var activityResultsReady = false
+    private var pendingPhotoUris: ArrayList<Uri>? = null
+    private var pendingFileUris: ArrayList<Uri>? = null
+    private val pendingSkillUris = arrayListOf<Uri>()
+    private var pendingCameraResult: Boolean? = null
+    private var restoredCameraPath: String? = null
     private var conversationActionPending by mutableStateOf(false)
     private var goalInput by mutableStateOf("")
     private var lastRunReport by mutableStateOf("")
@@ -336,7 +342,7 @@ class MainActivity : ComponentActivity() {
     private var runHistory by mutableStateOf<List<RunHistoryItem>>(emptyList())
     private var selectedHistoryRunId by mutableStateOf<String?>(null)
     private var proactiveTargetMessageId by mutableStateOf<String?>(null)
-    private var conversationSessionId by mutableStateOf(java.util.UUID.randomUUID().toString())
+    private var conversationSessionId by mutableStateOf(WorkspaceIdentity.CENTRAL_SESSION)
     private var conversationTitle by mutableStateOf<String?>(null)
     private var crewModeChoice by mutableStateOf(CrewMode.AUTO)
     private var timelinePageSessionId by mutableStateOf<String?>(null)
@@ -383,20 +389,20 @@ class MainActivity : ComponentActivity() {
     }
     private lateinit var fileTransfers: ChatFileTransfers
     private val skillImportLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(::importSkillMarkdown)
+        uri?.let { pendingSkillUris.add(it) }
+        consumePendingActivityResults()
     }
     private val attachmentPhotosLauncher = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-        val session = attachmentPickerSession
-        attachmentPickerSession = null
-        if (session != null && ::attachmentDrafts.isInitialized) attachmentDrafts.addUris(session, uris, ChatAttachment.Kind.IMAGE)
+        pendingPhotoUris = ArrayList(uris)
+        consumePendingActivityResults()
     }
     private val attachmentFilesLauncher = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val session = attachmentPickerSession
-        attachmentPickerSession = null
-        if (session != null && ::attachmentDrafts.isInitialized) attachmentDrafts.addUris(session, uris)
+        pendingFileUris = ArrayList(uris)
+        consumePendingActivityResults()
     }
     private val attachmentCameraLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (::attachmentDrafts.isInitialized) attachmentDrafts.finishCamera(success)
+        pendingCameraResult = success
+        consumePendingActivityResults()
     }
     private val proactiveNotificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -409,6 +415,59 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoreConversationUiState(savedInstanceState)
+        if (SingleSessionReset.isReady(this)) initializeConversationUi()
+        else lifecycleScope.launch {
+            try {
+                SingleSessionReset.awaitReady(this@MainActivity)
+                initializeConversationUi()
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resumeConversationUi()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                reportChatDatabaseFailure(failure)
+            }
+        }
+    }
+
+    private fun restoreConversationUiState(state: Bundle?) {
+        // Android can deliver picker results and save another instance while storage is still starting.
+        attachmentPickerSession = state?.getString("attachment_picker_session")?.let { WorkspaceIdentity.CENTRAL_SESSION }
+        goalInput = state?.getString(STATE_GOAL).orEmpty()
+        selectedSkillIds = state?.getStringArrayList(STATE_SELECTED_SKILLS)?.toSet().orEmpty()
+        conversationTitle = state?.getString(STATE_SESSION_TITLE)
+        proactiveTargetMessageId = state?.getString(STATE_PROACTIVE_TARGET_MESSAGE)
+        pendingTaskId = state?.getString(STATE_OPEN_TASK)
+        pendingPhotoUris = state?.getParcelableArrayList(STATE_PENDING_PHOTOS)
+        pendingFileUris = state?.getParcelableArrayList(STATE_PENDING_FILES)
+        pendingSkillUris.addAll(state?.getParcelableArrayList<Uri>(STATE_PENDING_SKILLS).orEmpty())
+        pendingCameraResult = state?.takeIf { it.containsKey(STATE_PENDING_CAMERA) }?.getBoolean(STATE_PENDING_CAMERA)
+        restoredCameraPath = state?.getString(STATE_CAMERA_PATH)
+    }
+
+    private fun consumePendingActivityResults() {
+        if (!activityResultsReady) return
+        val session = attachmentPickerSession
+        if (pendingPhotoUris != null || pendingFileUris != null) {
+            if (session != null) {
+                pendingPhotoUris?.let { attachmentDrafts.addUris(session, it, ChatAttachment.Kind.IMAGE) }
+                pendingFileUris?.let { attachmentDrafts.addUris(session, it) }
+            }
+            pendingPhotoUris = null
+            pendingFileUris = null
+            attachmentPickerSession = null
+        }
+        pendingCameraResult?.let {
+            pendingCameraResult = null
+            attachmentDrafts.finishCamera(it)
+        }
+        val skillUris = pendingSkillUris.toList()
+        pendingSkillUris.clear()
+        skillUris.forEach(::importSkillMarkdown)
+    }
+
+    private fun initializeConversationUi() {
+        if (SingleSessionReset.takeStartupNotice(this)) toast(getString(R.string.single_session_started), Toast.LENGTH_LONG)
         languageChoice = AppLanguageRuntime.current(this)
         setupWizardPreferences = SetupWizardPreferences(this)
         CodexModelCatalog.loadCached(this)
@@ -422,7 +481,8 @@ class MainActivity : ComponentActivity() {
         localRunStore = LocalRunStore(this)
         attachmentDrafts = ViewModelProvider(this)[AttachmentDraftViewModel::class.java]
         fileTransfers = ViewModelProvider(this)[ChatFileTransfers::class.java]
-        attachmentPickerSession = savedInstanceState?.getString("attachment_picker_session")
+        restoredCameraPath?.let { attachmentDrafts.restoreCameraFile(it, WorkspaceIdentity.CENTRAL_SESSION) }
+        restoredCameraPath = null
         assistantSpeechController = AssistantSpeechController(
             this,
             onSpeakingChanged = { messageId -> runOnUiThread { speakingMessageId = messageId } },
@@ -454,17 +514,12 @@ class MainActivity : ComponentActivity() {
         showAgentEvents = uiPreferences.showAgentEvents()
         proactiveEnabled = proactivePreferences.enabled
         refreshProactiveStatus()
-        goalInput = savedInstanceState?.getString(STATE_GOAL).orEmpty()
-        selectedHistoryRunId = savedInstanceState?.getString(STATE_HISTORY_RUN)
+        selectedHistoryRunId = null
         proactiveTargetMessageId = intent?.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
-            ?: savedInstanceState?.getString(STATE_PROACTIVE_TARGET_MESSAGE)
+            ?: proactiveTargetMessageId
         pendingTaskId = TaskDeepLink.existingTaskId(this,
-            intent?.getStringExtra(EXTRA_OPEN_TASK) ?: savedInstanceState?.getString(STATE_OPEN_TASK))
-        conversationSessionId = savedInstanceState?.getString(STATE_SESSION_ID)
-            ?: intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
-            ?: getSharedPreferences("jarvys_chat", MODE_PRIVATE).getString("active_session_id", null)
-            ?: WorkspaceIdentity.CENTRAL_SESSION
-        if (WorkspaceIdentity.isExecutionSession(conversationSessionId)) conversationSessionId = WorkspaceIdentity.CENTRAL_SESSION
+            intent?.getStringExtra(EXTRA_OPEN_TASK) ?: pendingTaskId)
+        conversationSessionId = WorkspaceIdentity.CENTRAL_SESSION
         val openingProactiveThread = conversationSessionId == ProactiveConversation.SESSION_ID
         if (openingProactiveThread) {
             selectedHistoryRunId = null
@@ -473,14 +528,13 @@ class MainActivity : ComponentActivity() {
         }
         crewModeChoice = CrewMode.read(this)
         chatWithoutMemory = getChatPreferences().getBoolean(MemoryUiLogic.sessionMemoryDisabledKey(conversationSessionId), false)
-        conversationTitle = if (openingProactiveThread) ProactiveConversation.title(this)
-            else savedInstanceState?.getString(STATE_SESSION_TITLE)
+        if (openingProactiveThread) conversationTitle = ProactiveConversation.title(this)
         persistConversationSession(conversationSessionId)
-        showingNewChat = if (openingProactiveThread) false else savedInstanceState?.getBoolean(STATE_NEW_CHAT, false) ?: false
-        selectedSkillIds = if (openingProactiveThread) emptySet()
-            else savedInstanceState?.getStringArrayList(STATE_SELECTED_SKILLS)?.toSet().orEmpty()
+        showingNewChat = false
         refreshUi()
         restoreConversationSession(conversationSessionId)
+        activityResultsReady = true
+        consumePendingActivityResults()
         window.statusBarColor = android.graphics.Color.TRANSPARENT
 
         lifecycleScope.launch {
@@ -664,6 +718,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!::localRunStore.isInitialized) return
+        resumeConversationUi()
+    }
+
+    private fun resumeConversationUi() {
         languageChoice = AppLanguageRuntime.synchronizeSystemChoice(this)
         if (::providersRepository.isInitialized) providersRepository.refresh()
         refreshUi()
@@ -683,6 +742,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (!::localRunStore.isInitialized) return
         pendingTaskId = null
         val taskId = TaskDeepLink.existingTaskId(this, intent.getStringExtra(EXTRA_OPEN_TASK))
         if (taskId != null) {
@@ -693,9 +753,7 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        val session = intent.getStringExtra(EXTRA_OPEN_CHAT_SESSION)?.takeIf { it.matches(Regex("[A-Za-z0-9_.-]{1,100}")) }
-            ?.let { if (WorkspaceIdentity.isExecutionSession(it)) WorkspaceIdentity.CENTRAL_SESSION else it }
-            ?: return
+        val session = WorkspaceIdentity.CENTRAL_SESSION
         proactiveTargetMessageId = intent.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
         if (session != conversationSessionId) {
             conversationSessionId = session
@@ -742,6 +800,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         attachmentPickerSession?.let { outState.putString("attachment_picker_session", it) }
+        pendingPhotoUris?.let { outState.putParcelableArrayList(STATE_PENDING_PHOTOS, it) }
+        pendingFileUris?.let { outState.putParcelableArrayList(STATE_PENDING_FILES, it) }
+        outState.putParcelableArrayList(STATE_PENDING_SKILLS, ArrayList(pendingSkillUris))
+        pendingCameraResult?.let { outState.putBoolean(STATE_PENDING_CAMERA, it) }
+        val cameraPath = if (::attachmentDrafts.isInitialized) attachmentDrafts.cameraFile?.path else restoredCameraPath
+        cameraPath?.let { outState.putString(STATE_CAMERA_PATH, it) }
         outState.putString(STATE_GOAL, goalInput)
         outState.putString(STATE_SESSION_ID, conversationSessionId)
         conversationTitle?.let { outState.putString(STATE_SESSION_TITLE, it) }
@@ -1198,14 +1262,9 @@ ${event.text}
     }
 
     private fun newChat() {
-        persistConversationSession(java.util.UUID.randomUUID().toString())
-        conversationTitle = null
-        AgentRunUiState.resetSession(conversationSessionId)
-        selectedHistoryRunId = null
-        goalInput = ""
-        showingNewChat = true
-        captureContextRequested = false
-        selectedSkillIds = emptySet()
+        persistConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
+        showingNewChat = false
+        restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
     }
 
     private fun markCaptureContext() {
@@ -1331,7 +1390,7 @@ ${event.text}
         val historyItem = runHistory.firstOrNull { it.id == runId }
         conversationTitle = historyItem?.title
         val sessionId = historyItem?.sessionId ?: runId
-        if (WorkspaceIdentity.isExecutionSession(sessionId)) { openCentralWorkspaceChat(); return }
+        if (!WorkspaceIdentity.isCentral(sessionId)) { openCentralWorkspaceChat(); return }
         persistConversationSession(sessionId)
         val requestSerial = ++timelineRequestSerial
         timelineOlderRequestSerial++
@@ -1397,7 +1456,8 @@ ${event.text}
         }
     }
 
-    private fun restoreConversationSession(sessionId: String) {
+    private fun restoreConversationSession(requestedSessionId: String) {
+        val sessionId = WorkspaceIdentity.CENTRAL_SESSION
         val requestSerial = ++timelineRequestSerial
         timelineOlderRequestSerial++
         timelinePageSessionId = sessionId
@@ -1411,13 +1471,18 @@ ${event.text}
         timelineOlderLoadError = false
         timelineHasOlder = false
         timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
+        val requestedTarget = proactiveTargetMessageId
         historyExecutor.execute {
+            val targetExists = requestedTarget == null || chatDatabaseResult {
+                localRunStore.readConversationMessage(sessionId, requestedTarget) != null
+            }.getOrDefault(false)
             val page = chatDatabaseResult {
                 localRunStore.readConversationTimelinePage(
                     sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
             }.getOrNull()
             runOnUiThread {
                 if (requestSerial == timelineRequestSerial && conversationSessionId == sessionId && selectedHistoryRunId == null) {
+                    if (!targetExists && proactiveTargetMessageId == requestedTarget) proactiveTargetMessageId = null
                     page?.let {
                         val currentEvents = AgentRunUiState.snapshotForSession(sessionId).events
                         if (currentEvents.isEmpty()) AgentRunUiState.restoreSession(sessionId, it.events)
@@ -1550,12 +1615,13 @@ ${event.text}
         }
     }
 
-    private fun persistConversationSession(sessionId: String) {
+    private fun persistConversationSession(requestedSessionId: String) {
+        val sessionId = WorkspaceIdentity.CENTRAL_SESSION
         conversationSessionId = sessionId
         AgentRunUiState.showSession(sessionId)
         if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
-            .putString("active_session_id", sessionId)
+            .remove("active_session_id")
             .apply()
         chatWithoutMemory = getChatPreferences().getBoolean(MemoryUiLogic.sessionMemoryDisabledKey(sessionId), false)
         refreshReflectionUiState(sessionId)
@@ -1676,6 +1742,11 @@ ${event.text}
         const val STATE_SESSION_TITLE = "chat_session_title"
         const val STATE_NEW_CHAT = "showing_new_chat"
         const val STATE_SELECTED_SKILLS = "selected_run_skills"
+        private const val STATE_PENDING_PHOTOS = "pending_attachment_photos"
+        private const val STATE_PENDING_FILES = "pending_attachment_files"
+        private const val STATE_PENDING_SKILLS = "pending_skill_imports"
+        private const val STATE_PENDING_CAMERA = "pending_camera_result"
+        private const val STATE_CAMERA_PATH = "attachment_camera_path"
     }
 }
 

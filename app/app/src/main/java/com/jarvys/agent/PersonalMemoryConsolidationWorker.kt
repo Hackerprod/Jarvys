@@ -20,6 +20,16 @@ import kotlinx.coroutines.withContext
 class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParameters) :
     CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        if (inputData.getString(SingleSessionReset.GENERATION_EXTRA) != StorageGeneration.NAME)
+            return@withContext Result.success()
+        try {
+            SingleSessionReset.awaitReady(applicationContext)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
+            return@withContext Result.retry()
+        }
         if (!enabled(applicationContext)) return@withContext Result.success()
         val bridge = ChatDatabaseBridge.getInstance(applicationContext)
         val owner = UUID.randomUUID().toString()
@@ -105,6 +115,7 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
                 return
             }
             val request = PeriodicWorkRequest.Builder(PersonalMemoryConsolidationWorker::class.java, 1, TimeUnit.DAYS)
+                .setInputData(androidx.work.Data.Builder().putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME).build())
                 .addTag(UNIQUE_WORK)
                 .build()
             work.enqueueUniquePeriodicWork(UNIQUE_WORK, ExistingPeriodicWorkPolicy.KEEP, request)

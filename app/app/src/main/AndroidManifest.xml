@@ -183,7 +183,7 @@
             android:exported="false" />
 
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="com.jarvys.agent.GeneratedImageFileProvider"
             android:authorities="${applicationId}.generated-images"
             android:exported="false"
             android:grantUriPermissions="true">

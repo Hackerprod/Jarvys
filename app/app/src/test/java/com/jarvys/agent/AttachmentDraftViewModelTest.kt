@@ -17,6 +17,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.UUID
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -64,6 +65,27 @@ class AttachmentDraftViewModelTest {
         assertNull(model.cameraFile)
         assertNull(model.cameraSession)
         assertTrue(model.drafts.value.isEmpty())
+    }
+
+    @Test fun restoredCameraOnlyAcceptsItsPrivateCacheAndKeepsAnExistingCapture() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        val model = AttachmentDraftViewModel(application)
+        val store = ViewModelStore().apply { put("attachments", model) }
+        val outside = File(application.cacheDir, "outside-camera.jpg").apply { writeText("outside") }
+        val restored = File(application.cacheDir, "jarvys/camera/restored.jpg").apply {
+            parentFile!!.mkdirs(); writeText("capture")
+        }
+        try {
+            model.restoreCameraFile(outside.path, "central")
+            assertNull(model.cameraFile)
+            model.restoreCameraFile(restored.path, "central")
+            assertEquals(restored, model.cameraFile)
+            assertEquals("central", model.cameraSession)
+            model.restoreCameraFile(outside.path, "other")
+            assertEquals(restored, model.cameraFile)
+        } finally { store.clear() }
+        assertFalse(restored.exists())
+        assertTrue(outside.exists())
     }
 
     @Test fun userRowIsVisibleBeforeMessagePersistenceStarts() {

@@ -44,7 +44,7 @@ public final class CrewContextArtifacts {
             requireActiveConversation();
             try {
                 String path = conversationId == null ? "standalone/" + digest(botId) : digest(conversationId) + "/" + digest(botId);
-                this.root = new File(filesDirectory.getCanonicalFile(), "jarvys/crew-context/" + path);
+                this.root = new File(new StorageGeneration(filesDirectory.getCanonicalFile()).directory("crew-context"), path);
                 verify(this.root);
                 if (!this.root.isDirectory() && !this.root.mkdirs()) {
                     throw new IOException("Could not create artifact directory");
@@ -60,7 +60,7 @@ public final class CrewContextArtifacts {
         ConversationMetadataAccess.validateSessionId(conversationId);
         synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             try {
-                File directory = new File(filesDirectory.getCanonicalFile(), "jarvys/crew-context/" + digest(conversationId));
+                File directory = new File(new StorageGeneration(filesDirectory.getCanonicalFile()).directory("crew-context"), digest(conversationId));
                 return deleteTree(directory);
             } catch (IOException | RuntimeException failure) {
                 return false;

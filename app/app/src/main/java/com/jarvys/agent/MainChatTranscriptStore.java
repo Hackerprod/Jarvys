@@ -44,7 +44,7 @@ final class MainChatTranscriptStore {
             while (keys.hasNext()) old.add(keys.next());
             for (String key : old) ownership.remove(key);
             retainedBytes = 0;
-            for (JSONObject row : store.readModelTranscriptRows(sessionId)) {
+            for (JSONObject row : store.readModelArtifactRows(sessionId)) {
                 retainOwnership(row);
             }
             // archive() can be called several times while one checkpoint is still being built.

@@ -107,6 +107,10 @@ class ChatTestStore @JvmOverloads constructor(
         val key = files.path
         registeredFilesDirectories.computeIfAbsent(key) {
             val appContext = ApplicationProvider.getApplicationContext<Context>()
+            try { androidx.work.WorkManager.getInstance(appContext) }
+            catch (_: IllegalStateException) {
+                androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(appContext)
+            }
             val context = TestFilesContext(appContext, files)
             val bridgeExecutor = bridgeExecutorFactory?.invoke()
             if (bridgeExecutor == null) ChatDatabaseBridge.getInstance(context)

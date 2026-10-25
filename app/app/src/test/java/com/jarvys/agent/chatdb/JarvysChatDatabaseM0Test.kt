@@ -92,7 +92,7 @@ class JarvysChatDatabaseM0Test {
         val actualTables = mutableSetOf<String>()
         sqlite.query(
             "SELECT name FROM sqlite_master WHERE type='table' " +
-                "AND name NOT LIKE 'sqlite_%' AND name != 'android_metadata' AND name != 'room_master_table'"
+                "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'message_fts%' AND name NOT LIKE 'memory_fts%' AND name != 'android_metadata' AND name != 'room_master_table'"
         ).use { cursor ->
             while (cursor.moveToNext()) actualTables += cursor.getString(0)
         }
@@ -445,10 +445,10 @@ class JarvysChatDatabaseM0Test {
         val seeded = seedEveryConversationChild(sqlite, id)
         val childTables = JarvysChatDatabase.ENTITY_TABLE_NAMES - setOf(
             "conversations", "tombstones", "storage_meta", "file_refs",
-            "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions",
+            "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_evidence", "memory_links", "memory_revisions",
         )
         assertEquals(childTables, seeded.keys - setOf(
-            "conversations", "file_refs", "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions",
+            "conversations", "file_refs", "agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_evidence", "memory_links", "memory_revisions",
         ))
         childTables.forEach { table -> assertEquals("fixture row in $table", 1L, rowCount(sqlite, table)) }
         assertEmptyForeignKeyCheck(sqlite)
@@ -457,14 +457,9 @@ class JarvysChatDatabaseM0Test {
         childTables.forEach { table -> assertEquals("CASCADE did not clear $table", 0L, rowCount(sqlite, table)) }
         assertEquals(1L, rowCount(sqlite, "tombstones"))
         assertEquals(1L, rowCount(sqlite, "file_refs"))
-        assertEquals(0L, rowCount(sqlite, "storage_meta"))
-        listOf("agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_revisions").forEach {
-            val capabilityRows = if (it == "agent_docs") scalarLong(
-                sqlite,
-                "SELECT COUNT(*) FROM agent_docs WHERE kind='memory_search_capability'",
-                emptyArray(),
-            ) else 0L
-            assertEquals("global memory table should survive conversation deletion: $it", 1L, rowCount(sqlite, it) - capabilityRows)
+        assertEquals(1L, rowCount(sqlite, "storage_meta"))
+        listOf("agent_profiles", "agent_docs", "user_directives", "memory_entries", "memory_evidence", "memory_links", "memory_revisions").forEach {
+            assertEquals("global memory table should survive conversation deletion: $it", 1L, rowCount(sqlite, it))
         }
         assertTrue(database.conversationDao().isTombstoned(id))
         assertNull(database.conversationDao().getById(id))
@@ -867,7 +862,7 @@ class JarvysChatDatabaseM0Test {
 
     /** v1 is published; schema changes require a version bump and a migration or owner-approved reset. */
     @Test
-    fun exportedSchemaV2MatchesRealDatabaseAndV1RemainsThePublishedFixture() = onDatabaseThreadBlocking {
+    fun exportedSchemaV3MatchesRealDatabaseAndPublishedFixturesRemainUnchanged() = onDatabaseThreadBlocking {
         val v1File = exportedSchemaFile(1)
         val v1Bytes = v1File.readBytes()
         val v1Database = JSONObject(String(v1Bytes, Charsets.UTF_8)).getJSONObject("database")
@@ -877,18 +872,24 @@ class JarvysChatDatabaseM0Test {
 
         val v2File = exportedSchemaFile(2)
         assertTrue("Exported Room schema JSON is missing: ${v2File.absolutePath}", v2File.isFile)
-        val exportedDatabase = JSONObject(v2File.readText(Charsets.UTF_8)).getJSONObject("database")
-        assertEquals("Exported schema version", 2, exportedDatabase.getInt("version"))
-        assertEquals("Pinned v2 identity hash", EXPECTED_SCHEMA_V2_IDENTITY_HASH, exportedDatabase.getString("identityHash"))
+        val publishedV2 = JSONObject(v2File.readText(Charsets.UTF_8)).getJSONObject("database")
+        assertEquals(EXPECTED_SCHEMA_V2_IDENTITY_HASH, publishedV2.getString("identityHash"))
+        val exportedDatabase = JSONObject(exportedSchemaFile(3).readText(Charsets.UTF_8)).getJSONObject("database")
+        assertEquals("Exported schema version", 3, exportedDatabase.getInt("version"))
+
 
         val sqlite = database.testChatSql
-        assertEquals("Room database version", 2L, pragmaLong(sqlite, "user_version"))
+        assertEquals("Room database version", 3L, pragmaLong(sqlite, "user_version"))
         assertEquals(
             "Room identity hash",
-            EXPECTED_SCHEMA_V2_IDENTITY_HASH,
+            exportedDatabase.getString("identityHash"),
             scalarString(sqlite, "SELECT identity_hash FROM room_master_table WHERE id=42"),
         )
         assertExportedSchemaMatchesDatabase(exportedDatabase, sqlite)
+        assertTrue(scalarString(sqlite, "SELECT sql FROM sqlite_master WHERE name='idx_memory_entries_topic_active'")
+            .contains("WHERE topic_key IS NOT NULL AND deleted_at IS NULL"))
+        assertTrue(scalarString(sqlite, "SELECT sql FROM sqlite_master WHERE name='idx_transcript_artifact_owner'")
+            .contains("IFNULL(call_id,'')"))
     }
 
     @Test
@@ -911,9 +912,9 @@ class JarvysChatDatabaseM0Test {
             val freshDatabase = checkNotNull(fresh)
             onDatabaseThread {
                 val migratedSql = migrated.testChatSql
-                assertEquals(2L, pragmaLong(migratedSql, "user_version"))
+                assertEquals(3L, pragmaLong(migratedSql, "user_version"))
                 assertEquals(
-                    EXPECTED_SCHEMA_V2_IDENTITY_HASH,
+                    JSONObject(exportedSchemaFile(3).readText()).getJSONObject("database").getString("identityHash"),
                     scalarString(migratedSql, "SELECT identity_hash FROM room_master_table WHERE id=42"),
                 )
                 assertEquals("old v1 conversation was not discarded", 0L, rowCount(migratedSql, "conversations"))
@@ -983,7 +984,7 @@ class JarvysChatDatabaseM0Test {
         try {
             onDatabaseThread {
                 val reopenedSql = reopened.testChatSql
-                assertEquals(2L, pragmaLong(reopenedSql, "user_version"))
+                assertEquals(3L, pragmaLong(reopenedSql, "user_version"))
                 assertEquals("SQLite integrity after WAL reopen", "ok", scalarString(reopenedSql, "PRAGMA integrity_check"))
                 assertTrue("foreign_key_check found rows after WAL reopen", !hasAnyRow(reopenedSql, "PRAGMA foreign_key_check"))
                 assertEquals(0L, scalarLong(
@@ -1323,7 +1324,7 @@ class JarvysChatDatabaseM0Test {
 
         val actualTables = sqlite.query(
             "SELECT name FROM sqlite_master WHERE type='table' " +
-                "AND name NOT LIKE 'sqlite_%' AND name NOT IN ('android_metadata', 'room_master_table')",
+                "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'message_fts%' AND name NOT LIKE 'memory_fts%' AND name NOT IN ('android_metadata', 'room_master_table')",
         ).use { cursor ->
             buildSet {
                 while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
@@ -1402,7 +1403,7 @@ class JarvysChatDatabaseM0Test {
                     val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
                     // SQLite creates these implementation indexes for primary/unique constraints;
                     // Room's exported indices describe the named indexes declared by the entity.
-                    if (!name.startsWith("sqlite_autoindex_")) {
+                    if (!name.startsWith("sqlite_autoindex_") && name !in setOf("idx_memory_entries_topic_active", "idx_transcript_artifact_owner")) {
                         add(name to (cursor.getInt(cursor.getColumnIndexOrThrow("unique")) != 0))
                     }
                 }

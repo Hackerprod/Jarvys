@@ -27,7 +27,7 @@ internal class ConversationModuleCapabilityAccess(
 
     private val appContext = context.applicationContext
     private val workspace = WorkspaceStore(
-        File(appContext.filesDir, "jarvys/workspaces"),
+        StorageGeneration(appContext),
         WorkspaceStore.projectIdForSession(conversationId),
         null,
         null,

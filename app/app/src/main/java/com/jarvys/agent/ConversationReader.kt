@@ -1272,15 +1272,14 @@ internal class ConversationReader(
                 val attachment = runCatching {
                     ChatAttachment(artifact.artifact_id, artifact.name, artifact.mime_type, artifact.size_bytes, kind, artifact.relative_path)
                 }.getOrNull() ?: return null
-                val jarvysRoot = JarvysChatDatabaseProvider.databaseFileForRawQuery(database).parentFile ?: return null
-                DeliveredArtifactStore(jarvysRoot).previewMetadataForAttachment(conversationId, attachment)
+                val filesDirectory = JarvysChatDatabaseProvider.filesDirectory(database)
+                DeliveredArtifactStore(filesDirectory).previewMetadataForAttachment(conversationId, attachment)
                     .token.takeIf { it == recordedId }
             } else {
                 val expected = WorkspaceStore.projectIdForSession(conversationId)
                 if (recordedId != expected) return null
-                val databaseFile = JarvysChatDatabaseProvider.databaseFileForRawQuery(database)
-                val filesDirectory = databaseFile.parentFile?.parentFile ?: return null
-                val workspaces = File(filesDirectory.canonicalFile, "jarvys/workspaces")
+                val filesDirectory = JarvysChatDatabaseProvider.filesDirectory(database)
+                val workspaces = StorageGeneration(filesDirectory).directory("workspaces")
                 val project = File(workspaces, expected)
                 if (!project.isDirectory || project.canonicalFile != project.absoluteFile) return null
                 val index = WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html")

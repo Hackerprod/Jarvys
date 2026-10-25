@@ -175,6 +175,12 @@ object TaskPendingActionWork {
 
 class TaskPendingActionWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
     override fun doWork(): Result {
+        try {
+            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(applicationContext.filesDir)
+        } catch (failure: Exception) {
+            com.jarvys.agent.AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
+            return Result.retry()
+        }
         val actionId = inputData.getString(KEY_ACTION_ID)?.takeIf(String::isNotBlank) ?: return Result.failure()
         val taskId = inputData.getString(KEY_TASK_ID)?.takeIf(String::isNotBlank) ?: return Result.failure()
         val app = applicationContext

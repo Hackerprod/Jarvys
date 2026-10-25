@@ -10,14 +10,14 @@ class PersonalMemoryFts5Test {
     @Test fun externalIndexTracksWritesAndSearchUsesBm25Ranking() {
         val connection = BundledSQLiteDriver().open(":memory:")
         try {
-            exec(connection, "CREATE TABLE memory_entries(id TEXT PRIMARY KEY, scope TEXT, layer TEXT, text TEXT, updated_at INTEGER, deleted_at INTEGER)")
+            exec(connection, "CREATE TABLE memory_entries(id TEXT PRIMARY KEY, scope TEXT, layer TEXT, text TEXT, updated_at INTEGER, deleted_at INTEGER, title TEXT, topic_key TEXT)")
             exec(connection, PersonalMemoryFtsSql.FTS5_CREATE)
             exec(connection, PersonalMemoryFtsSql.FTS5_INSERT_TRIGGER)
             exec(connection, PersonalMemoryFtsSql.FTS5_DELETE_TRIGGER)
             exec(connection, PersonalMemoryFtsSql.FTS5_UPDATE_TRIGGER)
             exec(connection, PersonalMemoryFtsSql.FTS5_REBUILD)
-            exec(connection, "INSERT INTO memory_entries VALUES('relevant','user','curated','Hackerprod develops Android applications',1,NULL)")
-            exec(connection, "INSERT INTO memory_entries VALUES('other','user','daily','Hackerprod enjoys gardening',2,NULL)")
+            exec(connection, "INSERT INTO memory_entries(id,scope,layer,text,updated_at,deleted_at) VALUES('relevant','user','curated','Hackerprod develops Android applications',1,NULL)")
+            exec(connection, "INSERT INTO memory_entries(id,scope,layer,text,updated_at,deleted_at) VALUES('other','user','daily','Hackerprod enjoys gardening',2,NULL)")
 
             val ranked = search(connection, "Hackerprod Android")
             assertEquals(listOf("relevant", "other"), ranked.map { it.first })
@@ -33,9 +33,9 @@ class PersonalMemoryFts5Test {
     @Test fun reservedWordsAreQuotedBeforeFts5PrefixMatching() {
         val connection = BundledSQLiteDriver().open(":memory:")
         try {
-            exec(connection, "CREATE TABLE memory_entries(id TEXT PRIMARY KEY, scope TEXT, layer TEXT, text TEXT, updated_at INTEGER, deleted_at INTEGER)")
+            exec(connection, "CREATE TABLE memory_entries(id TEXT PRIMARY KEY, scope TEXT, layer TEXT, text TEXT, updated_at INTEGER, deleted_at INTEGER, title TEXT, topic_key TEXT)")
             exec(connection, PersonalMemoryFtsSql.FTS5_CREATE)
-            exec(connection, "INSERT INTO memory_entries VALUES('reserved','user','curated','AND OR NOT NEAR are ordinary remembered words',1,NULL)")
+            exec(connection, "INSERT INTO memory_entries(id,scope,layer,text,updated_at,deleted_at) VALUES('reserved','user','curated','AND OR NOT NEAR are ordinary remembered words',1,NULL)")
             exec(connection, PersonalMemoryFtsSql.FTS5_REBUILD)
 
             assertEquals("\"AND\"*", PersonalMemoryFtsSql.matchExpression("AND"))

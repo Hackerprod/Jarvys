@@ -67,6 +67,7 @@ public final class LocalRunStore {
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
     private final Context appContext;
     private final File root;
+    private final File filesDirectory;
     private final String runBoundary;
     /** Null only for the package-private file fixture; production instances always use Room. */
     private final ChatDatabaseBridge chatDatabaseBridge;
@@ -100,12 +101,13 @@ public final class LocalRunStore {
     public LocalRunStore(Context context) {
         this.appContext = context.getApplicationContext();
         File filesDirectory = context.getFilesDir();
-        File jarvys = new File(filesDirectory, "jarvys");
+        this.filesDirectory = filesDirectory;
+        File jarvys = new StorageGeneration(filesDirectory).chatRoot();
         root = new File(jarvys, "runs");
         notes = new File(jarvys, "notes");
         chatDatabaseBridge = ChatDatabaseBridge.getInstance(context);
         try {
-            runBoundary = new File(new File(filesDirectory.getCanonicalFile(), "jarvys"), "runs").getPath();
+            runBoundary = new StorageGeneration(filesDirectory.getCanonicalFile()).directory("runs").getPath();
             verifyRunPath(root);
         } catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
         ensureDirectory(root);
@@ -115,12 +117,13 @@ public final class LocalRunStore {
     /** Non-production file fixture for run-store tests; conversation operations require a registered DB bridge. */
     LocalRunStore(File filesDirectory) {
         this.appContext = null;
-        File jarvys = new File(filesDirectory, "jarvys");
+        this.filesDirectory = filesDirectory;
+        File jarvys = new StorageGeneration(filesDirectory).chatRoot();
         root = new File(jarvys, "runs");
         notes = new File(jarvys, "notes");
         chatDatabaseBridge = ChatDatabaseBridge.findInstanceForFilesDirectory(filesDirectory);
         try {
-            runBoundary = new File(new File(filesDirectory.getCanonicalFile(), "jarvys"), "runs").getPath();
+            runBoundary = new StorageGeneration(filesDirectory.getCanonicalFile()).directory("runs").getPath();
             verifyRunPath(root);
         } catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
         ensureDirectory(root);
@@ -158,7 +161,7 @@ public final class LocalRunStore {
         } catch (IOException | RuntimeException failure) { complete = false; }
         try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
         catch (RuntimeException failure) { complete = false; }
-        try { complete &= new DeliveredArtifactStore(root.getParentFile()).deleteSession(sessionId); }
+        try { complete &= new DeliveredArtifactStore(filesDirectory).deleteSession(sessionId); }
         catch (RuntimeException failure) { complete = false; }
         try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
         catch (RuntimeException failure) { complete = false; }
@@ -166,7 +169,7 @@ public final class LocalRunStore {
             complete &= new WorkspaceStore(new File(root.getParentFile(), "workspaces"),
                     WorkspaceStore.projectIdForSession(sessionId)).deleteImportedAttachments();
         } catch (RuntimeException failure) { complete = false; }
-        try { complete &= CrewContextArtifacts.deleteConversation(root.getParentFile().getParentFile(), sessionId); }
+        try { complete &= CrewContextArtifacts.deleteConversation(filesDirectory, sessionId); }
         catch (RuntimeException failure) { complete = false; }
         return complete;
     }
@@ -938,7 +941,7 @@ public final class LocalRunStore {
     public String appendDeliveredModuleArtifact(String sessionId, ChatAttachment artifact, String artifactType,
                                     String moduleId, String manifestJson, String title,
                                     DeliveredArtifactStore.ThumbnailFile thumbnail) {
-        DeliveredArtifactStore store = new DeliveredArtifactStore(root.getParentFile());
+        DeliveredArtifactStore store = new DeliveredArtifactStore(filesDirectory);
         store.resolve(sessionId, artifact);
         if (chatDatabaseBridge == null) throw noChatDatabase();
         try {
@@ -1296,7 +1299,7 @@ public final class LocalRunStore {
     private String verifiedPreview(String sessionId, String recordedId, Map<String, ChatAttachment> ownedFiles) {
         if (HtmlPreviewDescriptor.isSnapshotToken(recordedId)) {
             try {
-                DeliveredArtifactStore artifacts = new DeliveredArtifactStore(root.getParentFile());
+                DeliveredArtifactStore artifacts = new DeliveredArtifactStore(filesDirectory);
                 String id = recordedId.substring(HtmlPreviewDescriptor.TOKEN_PREFIX.length());
                 ChatAttachment owner = ownedFiles == null ? findChatFile(sessionId, "delivered", id) : ownedFiles.get(id);
                 HtmlPreviewDescriptor preview = owner == null ? null : artifacts.previewMetadataForAttachment(sessionId, owner);
@@ -1306,7 +1309,7 @@ public final class LocalRunStore {
         String expected = WorkspaceStore.projectIdForSession(sessionId);
         if (recordedId == null || !expected.equals(recordedId)) return null;
         try {
-            File workspaces = new File(filesDirectory().getCanonicalFile(), "jarvys/workspaces");
+            File workspaces = new StorageGeneration(filesDirectory().getCanonicalFile()).directory("workspaces");
             File project = new File(workspaces, expected);
             if (!project.isDirectory() || !project.getCanonicalFile().equals(project.getAbsoluteFile())) return null;
             File index = new WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html");
@@ -1507,16 +1510,8 @@ public final class LocalRunStore {
     public void markConversationMessagesIncorporatedThrough(String sessionId, String messageId) {
         if (sessionId == null || messageId == null || messageId.isEmpty()) return;
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        List<StoredMessage> messages = chatDatabaseBridge.readConversationMessagesSync(sessionId);
-        long throughSeq = -1L;
-        for (StoredMessage message : messages)
-            if (messageId.equals(message.getMessageId())) { throughSeq = message.getSeq(); break; }
-        if (throughSeq < 0L) return;
-        List<String> idsThrough = new ArrayList<>();
-        for (StoredMessage message : messages)
-            if (message.getSeq() <= throughSeq && "user".equals(message.getRole()))
-                idsThrough.add(message.getMessageId());
-        if (!idsThrough.isEmpty()) markConversationMessagesIncorporated(sessionId, idsThrough);
+        requireChatDbSuccess(chatDatabaseBridge.markIncorporatedThroughSync(sessionId, messageId),
+                "acknowledge incorporated chat inputs");
     }
 
     Set<String> incorporatedConversationMessageIds(String sessionId) {
@@ -1540,14 +1535,8 @@ public final class LocalRunStore {
     }
 
     private Set<String> inputStateMessageIds(String sessionId, String wantedState, Set<String> requestedIds) {
-        Set<String> result = new HashSet<>();
-        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId)) {
-            if (!isConversationInputRole(message.getRole())) continue;
-            if (requestedIds != null && !requestedIds.contains(message.getMessageId())) continue;
-            if (wantedState == null ? message.getInputState() != null : wantedState.equals(message.getInputState()))
-                result.add(message.getMessageId());
-        }
-        return Collections.unmodifiableSet(result);
+        return chatDatabaseBridge.inputStateMessageIdsSync(sessionId, wantedState,
+                requestedIds == null ? null : new ArrayList<>(requestedIds));
     }
 
     /** Persists an intermediate assistant turn at its logical point before the steering row already on disk. */
@@ -1627,11 +1616,8 @@ public final class LocalRunStore {
     }
 
     public int latestUserMessageIndex(String sessionId) {
-        List<JSONObject> messages = readConversationMessages(sessionId);
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            if ("user".equals(messages.get(index).optString("role"))) return index;
-        }
-        return -1;
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return Math.toIntExact(chatDatabaseBridge.latestUserMessageIndexSync(sessionId));
     }
 
     /** Returns the persisted model-order index for the exact message, regardless of input role. */
@@ -1649,7 +1635,24 @@ public final class LocalRunStore {
         return id == null ? "" : id;
     }
 
-    File filesDirectory() { return root.getParentFile().getParentFile(); }
+    File filesDirectory() { return filesDirectory; }
+
+    JSONObject readConversationMessageRow(String sessionId, String messageId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        StoredMessage message = chatDatabaseBridge.readMessageSync(sessionId, messageId);
+        return message == null ? null : messageJson(message);
+    }
+
+    JSONObject readConversationMessageAtIndex(String sessionId, int index) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        StoredMessage message = chatDatabaseBridge.readMessageAtIndexSync(sessionId, index);
+        return message == null ? null : messageJson(message);
+    }
+
+    synchronized List<JSONObject> readModelArtifactRows(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readModelArtifactRowsSync(sessionId);
+    }
 
     synchronized List<JSONObject> readModelTranscriptRows(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -1831,7 +1834,7 @@ public final class LocalRunStore {
         StoredMessage cursor = chatDatabaseBridge.readMessageSync(sessionId, messageId);
         if (cursor == null) return Collections.emptyList();
         List<JSONObject> later = new ArrayList<>();
-        for (StoredMessage message : chatDatabaseBridge.readConversationMessagesSync(sessionId))
+        for (StoredMessage message : chatDatabaseBridge.readInputsAfterSync(sessionId, cursor.getSeq()))
             if (message.getSeq() > cursor.getSeq() && isConversationInputRole(message.getRole()))
                 later.add(messageJson(message));
         return Collections.unmodifiableList(later);

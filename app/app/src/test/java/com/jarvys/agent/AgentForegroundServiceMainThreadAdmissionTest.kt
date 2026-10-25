@@ -52,9 +52,9 @@ class AgentForegroundServiceMainThreadAdmissionTest {
                 context.getSharedPreferences("main-thread-admission-secrets", Context.MODE_PRIVATE)))
             val store = LocalRunStore(context)
             val suffix = System.nanoTime().toString()
-            val agentSession = "main-thread-agent-$suffix"
-            val systemSession = "main-thread-system-$suffix"
-            val userSession = "main-thread-user-$suffix"
+            val agentSession = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+            val systemSession = agentSession
+            val userSession = agentSession
             val agentInputId = chatTestStore.onDatabaseWorker {
                 val sourceId = "agent-source-$suffix"
                 store.appendConversationInput(ConversationInput(
@@ -87,7 +87,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
             val generationBinds = AtomicInteger()
 
             val agentController = serviceForTest(context, agentSession, runnerCalls, generationBinds,
-                observedOrigins, observedIds, store)
+                observedOrigins, observedIds, store, agentInputId)
             val agentService = agentController.get()
             agentService.onStartCommand(storedInputIntent(context, agentSession, agentInputId), 0, 1)
             agentService.awaitSessionIdleForTesting(agentSession).get(10, TimeUnit.SECONDS)
@@ -109,7 +109,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
             val callsBeforeSystem = runnerCalls.get()
             val bindsBeforeSystem = generationBinds.get()
             val systemController = serviceForTest(context, systemSession, runnerCalls, generationBinds,
-                observedOrigins, observedIds, store)
+                observedOrigins, observedIds, store, systemInputId)
             val systemService = systemController.get()
             systemService.onStartCommand(storedInputIntent(context, systemSession, systemInputId), 0, 2)
             systemService.awaitSessionIdleForTesting(systemSession).get(10, TimeUnit.SECONDS)
@@ -118,7 +118,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
             systemController.destroy()
 
             val userController = serviceForTest(context, userSession, runnerCalls, generationBinds,
-                observedOrigins, observedIds, store)
+                observedOrigins, observedIds, store, userInputId)
             val userService = userController.get()
             userService.onStartCommand(storedInputIntent(context, userSession, userInputId), 0, 3)
             userService.awaitSessionIdleForTesting(userSession).get(10, TimeUnit.SECONDS)
@@ -141,6 +141,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
         observedOrigins: MutableList<ConversationInput.Origin?>,
         observedIds: MutableList<String>,
         store: LocalRunStore,
+        expectedMessageId: String,
     ): org.robolectric.android.controller.ServiceController<AgentForegroundService> {
         val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = controller.get()
@@ -150,7 +151,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
         }
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, history, _, _, progress ->
             runnerCalls.incrementAndGet()
-            val input = history.firstOrNull { it.durableMessageId.isNotEmpty() }
+            val input = history.firstOrNull { it.durableMessageId == expectedMessageId }
             assertNotNull("the durable message is present in the turn history", input)
             observedOrigins += input!!.incomingMetadata?.origin
             observedIds += input.durableMessageId

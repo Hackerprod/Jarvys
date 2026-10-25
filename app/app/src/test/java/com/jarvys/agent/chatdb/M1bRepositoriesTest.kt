@@ -179,7 +179,9 @@ class M1bRepositoriesTest {
         )))
         assertEquals("legacy-123.5-$beforeCompactionRows", compaction.compaction_id)
 
-        val transcript = model.readModelTranscript("protocol")
+        val retained = model.readModelTranscript("protocol")
+        assertEquals(listOf(incompleteId), retained.entries.filterIsInstance<ModelTranscriptEntry.Batch>().map { it.value.batch.batch_id })
+        val transcript = model.readModelTranscript("protocol", includeCompacted = true)
         assertEquals(
             listOf("Artifact", "Batch", "ResultActivity", "ResultActivity", "ProviderOutput", "ProviderOutput", "Error", "Batch", "Lifecycle", "Lifecycle"),
             transcript.entries.map { entry -> when (entry) {

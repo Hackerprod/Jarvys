@@ -397,7 +397,15 @@ internal class FactoryInstallCoordinator(
 }
 
 /** Restores family-local outcome and resource journals at application startup. */
-class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvider {
+class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvider, androidx.work.Configuration.Provider {
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        com.jarvys.agent.SingleSessionReset.register(base.filesDir)
+    }
+
+    override val workManagerConfiguration: androidx.work.Configuration
+        get() = androidx.work.Configuration.Builder().build()
+
     override fun taskPendingActionHandler(): TaskPendingActionHandler =
         TaskPendingActionHandler { context, action -> TaskPendingActionWork.enqueue(context, action) }
 
@@ -409,6 +417,7 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
 
     override fun onCreate() {
         super.onCreate()
+        com.jarvys.agent.SingleSessionReset.start(this)
         com.jarvys.agent.modules.ModuleHostVisibility.install(this) {
             com.jarvys.agent.tasks.TaskPendingActionWork.resumeWaitingForVisibleApp(this)
         }

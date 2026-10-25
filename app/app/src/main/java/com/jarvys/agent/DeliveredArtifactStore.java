@@ -33,6 +33,7 @@ public final class DeliveredArtifactStore {
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private static final Map<String, Long> THUMBNAIL_GENERATIONS = new ConcurrentHashMap<>();
     private final File root;
+    private final File filesDirectory;
     private final String expected;
     private final Object lock;
 
@@ -50,8 +51,10 @@ public final class DeliveredArtifactStore {
         }
     }
 
-    public DeliveredArtifactStore(Context context) { this(new File(context.getApplicationContext().getFilesDir(), "jarvys")); }
-    DeliveredArtifactStore(File jarvysRoot) {
+    public DeliveredArtifactStore(Context context) { this(context.getApplicationContext().getFilesDir()); }
+    DeliveredArtifactStore(File filesDirectory) {
+        this.filesDirectory = filesDirectory.getAbsoluteFile();
+        File jarvysRoot = new StorageGeneration(filesDirectory).chatRoot();
         root = new File(jarvysRoot.getAbsoluteFile(), "delivered");
         try {
             expected = new File(jarvysRoot.getParentFile().getCanonicalFile(), jarvysRoot.getName() + "/delivered").getPath();
@@ -579,7 +582,7 @@ public final class DeliveredArtifactStore {
             // Do not recreate a session directory removed by deleteSession, even without a ledger.
             if (!sessionDirectory.isDirectory()) throw new IOException("The delivered conversation is unavailable");
             try {
-                if (new ConversationMetadataAccess(root.getParentFile().getParentFile()).read(session).deleted)
+                if (new ConversationMetadataAccess(filesDirectory).read(session).deleted)
                     throw new IOException("The conversation has been deleted");
             } catch (IllegalStateException invalid) { throw new IOException("Conversation ownership is unavailable", invalid); }
         }

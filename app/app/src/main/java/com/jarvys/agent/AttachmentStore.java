@@ -24,7 +24,7 @@ public final class AttachmentStore {
     private final Object rootLock;
 
     public AttachmentStore(Context context) {
-        this(new File(context.getApplicationContext().getFilesDir(), "jarvys"),
+        this(new StorageGeneration(context).chatRoot(),
                 context.getApplicationContext().getContentResolver());
     }
 

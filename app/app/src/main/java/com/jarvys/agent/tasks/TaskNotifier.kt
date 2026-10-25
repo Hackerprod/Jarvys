@@ -67,7 +67,7 @@ object TaskNotifier : ScheduledTaskNotifications {
         if (!notificationPermissionGranted(app) || !NotificationManagerCompat.from(app).areNotificationsEnabled()) return false
         return runCatching {
             ensureChannel(app)
-            val taskIntent = Intent(app, MainActivity::class.java)
+            val taskIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
                 .putExtra(MainActivity.EXTRA_OPEN_TASK, task.id)
                 .setData(Uri.parse("jarvys://task/detail/${Uri.encode(task.id)}"))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -106,7 +106,7 @@ object TaskNotifier : ScheduledTaskNotifications {
         if (!notificationPermissionGranted(app) || !NotificationManagerCompat.from(app).areNotificationsEnabled()) return false
         return runCatching {
             ensureChannel(app)
-            val taskIntent = Intent(app, MainActivity::class.java)
+            val taskIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
                 .putExtra(MainActivity.EXTRA_OPEN_TASK, task.id)
                 .setData(Uri.parse("jarvys://task/detail/${Uri.encode(task.id)}"))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -140,7 +140,7 @@ object TaskNotifier : ScheduledTaskNotifications {
     }
 
     private fun pendingActionIntent(context: Context, action: TaskPendingAction, actionName: String): PendingIntent {
-        val intent = Intent(context, TaskPendingActionReceiver::class.java)
+        val intent = com.jarvys.agent.SingleSessionReset.stamp(Intent(context, TaskPendingActionReceiver::class.java))
             .setAction(actionName)
             .putExtra(TaskPendingActionReceiver.EXTRA_ACTION_ID, action.id)
             .putExtra(TaskPendingActionReceiver.EXTRA_TASK_ID, action.taskId)
@@ -165,7 +165,7 @@ object TaskNotifier : ScheduledTaskNotifications {
             ensureChannel(app)
             val taskTag = "$NOTIFICATION_TAG:${task.id}"
             val notificationId = task.id.hashCode()
-            val openIntent = Intent(app, MainActivity::class.java)
+            val openIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
                 .putExtra(if (openTask) MainActivity.EXTRA_OPEN_TASK else MainActivity.EXTRA_OPEN_CHAT_SESSION,
                     if (openTask) task.id else ScheduledTaskConversation.SESSION_ID)
                 .setData(Uri.parse(if (openTask) "jarvys://task/detail/${Uri.encode(task.id)}"
@@ -207,7 +207,7 @@ object TaskNotifier : ScheduledTaskNotifications {
                     .build())
             if (urgency != "high") builder.setSilent(true)
             if (!openTask) {
-                val detailIntent = Intent(app, MainActivity::class.java)
+                val detailIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
                     .putExtra(MainActivity.EXTRA_OPEN_TASK, task.id)
                     .setData(Uri.parse("jarvys://task/view/${Uri.encode(task.id)}"))
                     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -216,7 +216,7 @@ object TaskNotifier : ScheduledTaskNotifications {
                         detailIntent, pendingIntentFlags()))
             }
             suggestedReplies.take(MAX_NOTIFICATION_REPLY_ACTIONS).forEachIndexed { index, reply ->
-                val actionIntent = Intent(app, TaskActionReceiver::class.java)
+                val actionIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, TaskActionReceiver::class.java))
                     .setAction(TaskActionReceiver.ACTION_SUGGESTED_REPLY)
                     .putExtra(TaskActionReceiver.EXTRA_TASK_ID, task.id)
                     .putExtra(TaskActionReceiver.EXTRA_REPLY_TEXT,
@@ -255,6 +255,7 @@ object TaskNotifier : ScheduledTaskNotifications {
 
 class TaskActionReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (!com.jarvys.agent.SingleSessionReset.isCurrent(intent)) return
         if (intent.action != ACTION_SUGGESTED_REPLY) return
         val taskId = intent.getStringExtra(EXTRA_TASK_ID)?.takeIf(String::isNotBlank) ?: return
         val text = intent.getStringExtra(EXTRA_REPLY_TEXT)?.trim()?.takeIf(String::isNotBlank) ?: return
@@ -326,6 +327,7 @@ interface TaskPendingActionHandlerProvider {
 
 class TaskPendingActionReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (!com.jarvys.agent.SingleSessionReset.isCurrent(intent)) return
         val actionId = intent.getStringExtra(EXTRA_ACTION_ID)?.takeIf(String::isNotBlank) ?: return
         val taskId = intent.getStringExtra(EXTRA_TASK_ID)?.takeIf(String::isNotBlank) ?: return
         val app = context.applicationContext

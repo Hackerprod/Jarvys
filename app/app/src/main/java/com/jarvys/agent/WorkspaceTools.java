@@ -783,7 +783,7 @@ public final class WorkspaceTools {
               || com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID.equals(session))
             return CoreToolResult.failure("Explicit previews are available only in the main chat.");
           java.io.File files = workspace.appFilesForDelivery();
-          DeliveredArtifactStore artifacts = new DeliveredArtifactStore(new java.io.File(files, "jarvys"));
+          DeliveredArtifactStore artifacts = new DeliveredArtifactStore(files);
           LocalRunStore conversations = new LocalRunStore(files);
           if (conversations.readConversationMetadata(session).deleted) return CoreToolResult.failure("This conversation was deleted.");
           ChatAttachment attachment = artifacts.snapshot(session, workspace, path, null, token);

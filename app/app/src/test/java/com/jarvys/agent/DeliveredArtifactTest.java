@@ -36,8 +36,8 @@ public class DeliveredArtifactTest {
         priorSecrets = singleton.get(null);
         singleton.set(null, new SecretStore(context.getSharedPreferences("delivery-fixture", Context.MODE_PRIVATE)));
         files = chatTestStore.newFilesDirectory(); ledger = chatTestStore.localRunStore(files);
-        artifacts = new DeliveredArtifactStore(new File(files, "jarvys"));
-        workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
+        artifacts = new DeliveredArtifactStore(files);
+        workspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(session),
                 null, null, null, session, false);
         ledger.appendConversationMessage(session, "user", "Attach the report");
     }
@@ -57,7 +57,7 @@ public class DeliveredArtifactTest {
         assertTrue(result.content, result.success);
         ChatAttachment file = delivered(); assertEquals("report.txt", file.name); assertEquals(8, file.sizeBytes);
         workspace.write("report.txt", "replacement");
-        File saved = new DeliveredArtifactStore(new File(files, "jarvys")).resolve(session, file);
+        File saved = new DeliveredArtifactStore(files).resolve(session, file);
         assertEquals("original", new String(Files.readAllBytes(saved.toPath()), StandardCharsets.UTF_8));
         assertTrue(chatTestStore.localRunStore(files).conversationHasPrivateImagesOrAttachments(session));
         assertFalse(result.content.contains(files.getAbsolutePath()));
@@ -81,7 +81,7 @@ public class DeliveredArtifactTest {
         LocalRunStore reopened = chatTestStore.localRunStore(files);
         assertEquals(1,reopened.readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact()!=null).count());
         assertEquals(artifact,reopened.findChatFile(session,"delivered",artifact.id));
-        assertEquals(sha,new DeliveredArtifactStore(new File(files,"jarvys")).sha256(session,artifact));
+        assertEquals(sha,new DeliveredArtifactStore(files).sha256(session,artifact));
         assertEquals("original bytes",new String(Files.readAllBytes(artifacts.resolve(session,artifact).toPath()),StandardCharsets.UTF_8));
     }
 
@@ -175,7 +175,7 @@ public class DeliveredArtifactTest {
                 "{\"schemaVersion\":1}", "Quarterly report", secondThumbnail);
 
         // Re-opening the same delivery identity returns the stored copy, even after store recreation.
-        DeliveredArtifactStore restoredStore = new DeliveredArtifactStore(new File(files, "jarvys"));
+        DeliveredArtifactStore restoredStore = new DeliveredArtifactStore(files);
         ChatAttachment retry = restoredStore.snapshotModuleBytes(session, artifactBytes, "report.pptx",
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation", deliveryId,
                 CancellationToken.uncancellable());
@@ -220,7 +220,7 @@ public class DeliveredArtifactTest {
     }
     @Test public void symlinkFilesAndParentsFailClosedWithoutLeakingPrivateBytes() throws Exception {
         workspace.write("base.txt", "safe");
-        File root = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(session));
+        File root = new File(files, "jarvys/g3/workspaces/" + WorkspaceStore.projectIdForSession(session));
         File outside = chatTestStore.newFilesDirectory("private"); Files.write(new File(outside, "token").toPath(), "secret".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(new File(root, "link").toPath(), new File(outside, "token").toPath());
         Files.createSymbolicLink(new File(root, "directory").toPath(), outside.toPath());
@@ -230,7 +230,7 @@ public class DeliveredArtifactTest {
     }
     @Test public void descriptorIdentityRejectsSwapAndRestoreDuringOpen() throws Exception {
         workspace.write("folder/file.txt", "safe");
-        File root = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(session));
+        File root = new File(files, "jarvys/g3/workspaces/" + WorkspaceStore.projectIdForSession(session));
         File parent = new File(root,"folder"), kept = new File(root,"kept");
         ArtifactOsShadow.hookTargetPath = new File(parent, "file.txt").toPath();
         ArtifactOsShadow.beforeOpen = () -> { try {
@@ -302,7 +302,7 @@ public class DeliveredArtifactTest {
     }
     @Test public void providerOnlyOpensOwnedArtifactsReadOnlyAndSuppliesFilenameSizeMime() throws Exception {
         Context context = ApplicationProvider.getApplicationContext(); String chat = "provider-" + UUID.randomUUID();
-        WorkspaceStore actualWorkspace = new WorkspaceStore(new File(context.getFilesDir(), "jarvys/workspaces"), WorkspaceStore.projectIdForSession(chat), null,null,null,chat,false);
+        WorkspaceStore actualWorkspace = new WorkspaceStore(new File(context.getFilesDir(), "jarvys/g3/workspaces"), WorkspaceStore.projectIdForSession(chat), null,null,null,chat,false);
         actualWorkspace.write("bundle.zip", "zip fixture"); LocalRunStore actualLedger = new LocalRunStore(context);
         actualLedger.appendConversationMessage(chat,"user","send file");
         assertTrue(new DeliverFileTool(context,chat,actualWorkspace).execute(args("bundle.zip"), CancellationToken.uncancellable()).success);

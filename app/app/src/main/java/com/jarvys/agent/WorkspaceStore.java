@@ -38,6 +38,7 @@ public final class WorkspaceStore {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final String projectId;
     private final File root;
+    private final File appFiles;
     private final String canonicalRoot;
     private final Object projectLock;
     private final File skillsRoot;
@@ -87,7 +88,7 @@ public final class WorkspaceStore {
     WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed,
                    MemoryStore sharedMemoryStore, MemoryStore.Actor memoryActor,
                    String reflectionGroupId, boolean memoryOnly) {
-        this(workspaceRoot(context), projectId,
+        this(new StorageGeneration(context), workspaceRoot(context), projectId,
                 new File(context.getApplicationContext().getFilesDir(), "skills"),
                 SkillRepository.Companion.get(context.getApplicationContext()),
                 sharedMemoryStore, conversationId, memoryAccessAllowed, memoryActor, reflectionGroupId, memoryOnly);
@@ -119,6 +120,26 @@ public final class WorkspaceStore {
                    SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
                    String conversationId, boolean memoryAccessAllowed, MemoryStore.Actor memoryActor,
                    String reflectionGroupId, boolean memoryOnly) {
+        this(null, workspacesRoot, projectId, skillsRoot, skillWorkspaceObserver, memoryStore,
+                conversationId, memoryAccessAllowed, memoryActor, reflectionGroupId, memoryOnly);
+    }
+
+    WorkspaceStore(StorageGeneration storage, String projectId) {
+        this(storage, projectId, null, null, null, projectId, true);
+    }
+
+    WorkspaceStore(StorageGeneration storage, String projectId, File skillsRoot,
+                   SkillWorkspaceObserver observer, MemoryStore memoryStore, String conversationId,
+                   boolean memoryAccessAllowed) {
+        this(storage, storage.directory("workspaces"), projectId, skillsRoot, observer, memoryStore,
+                conversationId, memoryAccessAllowed, MemoryStore.Actor.AGENT, null, false);
+    }
+
+    private WorkspaceStore(StorageGeneration storage, File workspacesRoot, String projectId, File skillsRoot,
+                   SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
+                   String conversationId, boolean memoryAccessAllowed, MemoryStore.Actor memoryActor,
+                   String reflectionGroupId, boolean memoryOnly) {
+        this.appFiles = storage == null ? null : storage.filesDir();
         if (projectId == null || !projectId.matches("[a-f0-9]{24}")) {
             throw new IllegalArgumentException("Workspace id is invalid");
         }
@@ -141,10 +162,8 @@ public final class WorkspaceStore {
             File absoluteWorkspaces = workspacesRoot.getAbsoluteFile();
             File parent = absoluteWorkspaces.getParentFile();
             if (parent == null) throw new IllegalArgumentException("Workspace root needs a parent");
-            expectedAttachmentWorkspaceRoot = "workspaces".equals(absoluteWorkspaces.getName())
-                    && "jarvys".equals(parent.getName()) && parent.getParentFile() != null
-                    ? new File(parent.getParentFile().getCanonicalFile(), "jarvys/workspaces/" + projectId).getPath()
-                    : new File(new File(parent.getCanonicalFile(), absoluteWorkspaces.getName()), projectId).getPath();
+            expectedAttachmentWorkspaceRoot = new File(
+                    new File(parent.getCanonicalFile(), absoluteWorkspaces.getName()), projectId).getPath();
             canonicalSkillsRoot = skillsRoot == null ? null : skillsRoot.getCanonicalPath();
         } catch (Exception error) {
             throw new IllegalStateException("Could not resolve workspace directory", error);
@@ -154,6 +173,7 @@ public final class WorkspaceStore {
 
     private WorkspaceStore(WorkspaceStore original, boolean attachmentsAllowed, boolean privateZonesDenied) {
         projectId = original.projectId;
+        appFiles = original.appFiles;
         root = original.root;
         canonicalRoot = original.canonicalRoot;
         expectedAttachmentWorkspaceRoot = original.expectedAttachmentWorkspaceRoot;
@@ -178,7 +198,7 @@ public final class WorkspaceStore {
     public static WorkspaceStore forCrewBoard(Context context, String sessionId) {
         Context app = context.getApplicationContext();
         com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app);
-        return new WorkspaceStore(new File(new File(app.getFilesDir(), "jarvys"), "workspaces"),
+        return new WorkspaceStore(new StorageGeneration(app), new StorageGeneration(app).directory("workspaces"),
                 projectIdForSession(sessionId), null, null, null, sessionId, false,
                 MemoryStore.Actor.AGENT, null, false).withoutAttachments();
     }
@@ -191,10 +211,7 @@ public final class WorkspaceStore {
         if (delegatedPrivateZonesDenied || memoryOnly || conversationId == null) {
             throw new IllegalArgumentException("The Coding project namespace is unavailable in this workspace scope");
         }
-        File workspaces = root.getParentFile();
-        File jarvys = workspaces == null ? null : workspaces.getParentFile();
-        File appFiles = jarvys == null ? null : jarvys.getParentFile();
-        if (appFiles == null || !"workspaces".equals(workspaces.getName()) || !"jarvys".equals(jarvys.getName())) {
+        if (appFiles == null) {
             throw new IllegalArgumentException("A conversation app-files anchor is required for the Coding project");
         }
         new LocalRunStore(appFiles).markConversationHasPrivateCode(conversationId);
@@ -206,7 +223,7 @@ public final class WorkspaceStore {
         // Register the lazy per-filesDir database bridge for tools that retain only this store's
         // app-files anchor. The bridge opens SQLite only when a background DB method is used.
         com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app);
-        return new File(app.getFilesDir(), "jarvys/workspaces");
+        return new StorageGeneration(app).directory("workspaces");
     }
 
     /** Pins the same ordinary source boundaries used by delivery and bounded HTML capture. */
@@ -255,11 +272,8 @@ public final class WorkspaceStore {
     File appFilesForDelivery() throws IOException {
         if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed || conversationId == null)
             throw new IOException("Explicit HTML previews require an owning main conversation");
-        File workspaces = root.getParentFile();
-        File jarvys = workspaces == null ? null : workspaces.getParentFile();
-        if (jarvys == null || jarvys.getParentFile() == null || !"workspaces".equals(workspaces.getName())
-                || !"jarvys".equals(jarvys.getName())) throw new IOException("Conversation storage is unavailable");
-        return jarvys.getParentFile();
+        if (appFiles == null) throw new IOException("Conversation storage is unavailable");
+        return appFiles;
     }
 
     String deliveryConversationId() { return conversationId; }

@@ -59,13 +59,21 @@ object TaskManualRunScheduler {
 class TaskManualRunWorker @JvmOverloads constructor(
     appContext: Context,
     params: WorkerParameters,
-    private val processor: ScheduledTaskProcessor = ScheduledTaskProcessor(appContext.applicationContext),
+    private val processor: ScheduledTaskProcessor? = null,
     private val tasks: TaskStore = TaskStore(appContext.applicationContext),
     private val runs: TaskRunLedger = TaskRunLedger(appContext.applicationContext),
     private val clock: Clock = Clock.systemUTC(),
     private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(appContext.applicationContext),
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
+        try {
+            com.jarvys.agent.SingleSessionReset.awaitReady(applicationContext)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            com.jarvys.agent.AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
+            return Result.retry()
+        }
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
         val occurrenceId = inputData.getString(KEY_OCCURRENCE_ID) ?: return Result.failure()
         val scheduledFor = inputData.getLong(KEY_SCHEDULED_FOR, clock.millis())
@@ -102,7 +110,8 @@ class TaskManualRunWorker @JvmOverloads constructor(
         val token = CancellationToken.cancellable()
         val cancellation = currentCoroutineContext().job.invokeOnCompletion { token.cancel() }
         val result = try {
-            processor.executeManual(task, scheduledFor, started, runId, occurrenceId, token)
+            (processor ?: ScheduledTaskProcessor(applicationContext))
+                .executeManual(task, scheduledFor, started, runId, occurrenceId, token)
         } finally {
             cancellation.dispose()
         }

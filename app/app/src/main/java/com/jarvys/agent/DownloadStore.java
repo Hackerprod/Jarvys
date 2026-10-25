@@ -410,7 +410,7 @@ public final class DownloadStore {
 
     private void ensurePrivateRoot() throws IOException {
         if (!journalRoot.isDirectory() && !journalRoot.mkdirs()) throw new IOException("Private storage unavailable");
-        File expected = new File(context.getFilesDir().getCanonicalFile(), "jarvys/download_results");
+        File expected = new StorageGeneration(context.getFilesDir().getCanonicalFile()).directory("download_results");
         if (!journalRoot.getCanonicalFile().equals(expected))
             throw new IOException("Unexpected journal path");
     }
@@ -440,7 +440,7 @@ public final class DownloadStore {
         return canonical; // Pin the path already checked; never resolve the alias a second time.
     }
 
-    static File journalRoot(Context context) { return new File(context.getFilesDir(), "jarvys/download_results"); }
+    static File journalRoot(Context context) { return new StorageGeneration(context.getFilesDir()).directory("download_results"); }
     private static File legacyRoot() {
         return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
     }

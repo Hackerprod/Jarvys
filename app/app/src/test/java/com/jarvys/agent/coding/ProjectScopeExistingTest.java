@@ -46,9 +46,9 @@ public class ProjectScopeExistingTest {
   @Test public void uncachedRootWithoutIdentityDoesNotCreateState() throws Exception {
     File root = temporary.newFolder();
     String id = ProjectScope.sha256("incomplete".getBytes(StandardCharsets.UTF_8));
-    assertTrue(new File(root, "jarvys/coding-projects/" + id + "/root").mkdirs());
+    assertTrue(new File(root, "jarvys/g3/coding-projects/" + id + "/root").mkdirs());
     assertThrows(IOException.class, () -> new ProjectScopeStore(root).openExisting("incomplete"));
-    assertFalse(new File(root, "jarvys/coding-project-state").exists());
+    assertFalse(new File(root, "jarvys/g3/coding-project-state").exists());
   }
 
   @Test public void cachedMissingManifestAndJournalNeverGetRepaired() throws Exception {

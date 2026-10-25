@@ -23,8 +23,6 @@ public final class MessageReactionTool implements CoreTool {
 
     private final LocalRunStore store;
     private final String sessionId;
-    private final List<JSONObject> messages;
-    private final Map<String, Integer> uniqueUserTargets = new LinkedHashMap<>();
     private final String currentUserId;
     private Set<String> visibleTargets = Collections.emptySet();
     private boolean initialModelRequest = true;
@@ -33,21 +31,9 @@ public final class MessageReactionTool implements CoreTool {
         if (!isOrdinaryChat(sessionId)) throw new IllegalArgumentException("Reactions require an ordinary chat");
         this.store = store;
         this.sessionId = sessionId;
-        messages = store.readConversationMessages(sessionId);
-        Set<String> duplicates = new LinkedHashSet<>();
-        Set<String> seenIds = new LinkedHashSet<>();
-        String latest = "";
-        for (int i = 0; i < messages.size(); i++) {
-            JSONObject row = messages.get(i);
-            String id = stableMessageId(sessionId, row, i);
-            // Never relabel an older eligible row as current when the latest user row is ineligible.
-            if ("user".equals(row.optString("role"))) latest = id;
-            if (!seenIds.add(id)) duplicates.add(id);
-            if (!"user".equals(row.optString("role")) || !row.optString("proactiveThreadKey").isEmpty()) continue;
-            uniqueUserTargets.put(id, i);
-        }
-        for (String duplicate : duplicates) uniqueUserTargets.remove(duplicate);
-        currentUserId = uniqueUserTargets.containsKey(latest) ? latest : "";
+        String latestId = store.latestUserMessageId(sessionId);
+        JSONObject latest = latestId.isEmpty() ? null : store.readConversationMessageRow(sessionId, latestId);
+        currentUserId = latest != null && latest.optString("proactiveThreadKey").isEmpty() ? latestId : "";
     }
 
     static boolean isOrdinaryChat(String sessionId) {
@@ -70,11 +56,11 @@ public final class MessageReactionTool implements CoreTool {
             ConversationTurn turn = transcript.get(i);
             int index = turn.originalMessageIndex;
             if (turn.kind != ConversationTurn.Kind.MESSAGE || !"user".equals(turn.role)
-                    || index < 0 || index >= messages.size()) continue;
-            JSONObject row = messages.get(index);
+                    || index < 0) continue;
+            JSONObject row = store.readConversationMessageAtIndex(sessionId, index);
+            if (row == null || !"user".equals(row.optString("role")) || !row.optString("proactiveThreadKey").isEmpty()) continue;
             String id = stableMessageId(sessionId, row, index);
-            if (!uniqueUserTargets.containsKey(id) || uniqueUserTargets.get(id) != index
-                    || !row.optString("content").trim().equals(turn.content.trim())) continue;
+            if (!row.optString("content").trim().equals(turn.content.trim())) continue;
             exposed.add(id);
             result.append("- Transcript entry ").append(i + 1).append(" (user): message_id=")
                     .append(JSONObject.quote(id)).append('\n');

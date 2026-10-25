@@ -36,7 +36,7 @@ public final class ProjectScopeStore {
       throw new IOException("Conversation id is required");
     }
     String id = ProjectScope.sha256(conversationId.getBytes(StandardCharsets.UTF_8));
-    String key = new File(anchor, "jarvys/coding-projects/" + id + "/root").getPath();
+    String key = new File(new com.jarvys.agent.StorageGeneration(anchor).directory("coding-projects"), id + "/root").getPath();
     synchronized (OPEN) {
       ProjectScope existing = OPEN.get(key);
       if (existing != null) {
@@ -46,7 +46,7 @@ public final class ProjectScopeStore {
       List<ProjectScope.Anchor> anchors = new ArrayList<>();
       anchors.add(new ProjectScope.Anchor(anchor));
       File path = anchor;
-      for (String part : new String[] {"jarvys", "coding-projects", id, "root"}) {
+      for (String part : new String[] {"jarvys", com.jarvys.agent.StorageGeneration.NAME, "coding-projects", id, "root"}) {
         for (ProjectScope.Anchor known : anchors) known.validate();
         path = new File(path, part);
         if (!ProjectFileIO.exists(path)) {

@@ -14,13 +14,21 @@ import kotlinx.coroutines.withContext
 class ProactiveWorker(
     appContext: Context,
     params: WorkerParameters,
-    private val processor: ProactiveBatchProcessor,
+    private val processor: ProactiveBatchProcessor?,
 ) : CoroutineWorker(appContext, params) {
     constructor(appContext: Context, params: WorkerParameters) :
-        this(appContext, params, ProactiveBatchProcessorFactory.create(appContext))
+        this(appContext, params, null)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val app = applicationContext
+        try {
+            com.jarvys.agent.SingleSessionReset.awaitReady(app)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            com.jarvys.agent.AgentErrorReporter.reportBackgroundFailure(app, failure)
+            return@withContext Result.retry()
+        }
         val preferences = ProactivePreferences(app)
         if (!preferences.enabled) return@withContext Result.success()
 
@@ -54,7 +62,8 @@ class ProactiveWorker(
                 return@withContext Result.retry()
             }
             runToken.throwIfCancelled()
-            when (val result = processor.review(batches, runToken)) {
+            val currentProcessor = processor ?: ProactiveBatchProcessorFactory.create(app)
+            when (val result = currentProcessor.review(batches, runToken)) {
                 ProactiveProcessingResult.Completed -> Result.success()
                 is ProactiveProcessingResult.Retryable -> Result.retry()
                 is ProactiveProcessingResult.Failed -> Result.failure()

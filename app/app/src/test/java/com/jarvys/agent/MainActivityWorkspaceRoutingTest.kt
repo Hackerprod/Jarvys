@@ -152,11 +152,15 @@ class MainActivityWorkspaceRoutingTest {
             .apply { isAccessible = true }.set(null, null)
         secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux43-route-test-secrets", 0)))
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
+        chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
         MemoryStore(context).markDisclosureShown()
         MemoryReflectionPreferences(context).markDisclosureShown()
         AgentRunUiState.bindGeneration(legacy, Long.MAX_VALUE)
         AgentRunUiState.stopPendingGeneration(legacy, Long.MAX_VALUE)
         AgentRunUiState.resetSession(legacy)
+        AgentRunUiState.bindGeneration(WorkspaceIdentity.CENTRAL_SESSION, Long.MAX_VALUE)
+        AgentRunUiState.stopPendingGeneration(WorkspaceIdentity.CENTRAL_SESSION, Long.MAX_VALUE)
+        AgentRunUiState.resetSession(WorkspaceIdentity.CENTRAL_SESSION)
         attachment = AttachmentStore(context).copyFromStream(legacy, "kept.txt", "text/plain",
             ChatAttachment.Kind.FILE, ByteArrayInputStream(bytes))
         db {
@@ -186,10 +190,34 @@ class MainActivityWorkspaceRoutingTest {
         WorkManagerTestCleanup.close(context)
     }
 
-    @Test fun existingLegacySelectionSurvivesStartupAndEmptyCentralNeverBorrowsItsTranscript() {
+    @Test fun B10_startIntentNewChatAndRestoredPickerAlwaysUseCentral() {
+        val stale = UUID.randomUUID().toString()
+        start(Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, stale)
+            .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, "missing-message"))
+        awaitCentralEmpty()
+        await { activityState<String?>("proactiveTargetMessageId").value == null }
+        assertFalse(context.getSharedPreferences("jarvys_chat", 0).contains("active_session_id"))
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(stale))
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(null))
+        assertEquals(execution, WorkspaceIdentity.serviceSession(execution))
+        db { store.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "user", "kept across newChat") }
+        invoke("newChat")
+        await { AgentRunUiState.state.value.events.any { it.text == "kept across newChat" } }
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
+        val picker = MainActivity::class.java.getDeclaredField("attachmentPickerSession").apply { isAccessible = true }
+        picker.set(activity, stale)
+        controller!!.recreate()
+        activities += activity
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION }
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, picker.get(activity))
+        assertTrue(db { store.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION).any { it.text == "kept across newChat" } })
+    }
+
+    @Test fun legacySelectionIsIgnoredAndCentralNeverBorrowsItsTranscript() {
         val original = transcript(legacy)
         start()
-        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy && AgentRunUiState.state.value.events.isNotEmpty() }
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         assertEquals(original, transcript(legacy))
         invoke("openCentralWorkspaceChat")
         awaitCentralEmpty()
@@ -200,10 +228,9 @@ class MainActivityWorkspaceRoutingTest {
         WorkspaceRegistry(context).use { assertTrue("Selecting central cannot create a worker workspace", it.listWorkspaces().isEmpty()) }
     }
 
-    @Test fun deletingTheCurrentChatReturnsToAgentInsteadOfCreatingAnEmptyChat() {
+    @Test fun deletingAnOldConversationKeepsCentralSelected() {
         start()
-        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
-            AgentRunUiState.state.value.events.isNotEmpty() }
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         invoke("applyConversationAction",
             arrayOf(String::class.java, ConversationAction::class.java, String::class.java),
             arrayOf(legacy, ConversationAction.DELETE, ""))
@@ -220,7 +247,7 @@ class MainActivityWorkspaceRoutingTest {
         val workerBefore = transcript(execution)
         val legacyBefore = transcript(legacy)
         start()
-        await { AgentRunUiState.state.value.sessionId == legacy }
+        await { AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         invoke("onNewIntent", arrayOf(Intent::class.java), arrayOf(Intent(context, MainActivity::class.java)
             .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, execution)))
         awaitCentralEmpty()
@@ -238,7 +265,7 @@ class MainActivityWorkspaceRoutingTest {
 
     @Test fun recreationKeepsCentralSelectionEvenWhenOriginalIntentStillPointsAtLegacy() {
         start(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, legacy))
-        await { AgentRunUiState.state.value.sessionId == legacy }
+        await { AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         invoke("openCentralWorkspaceChat")
         awaitCentralEmpty()
         assertEquals(legacy, activity.intent.getStringExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
@@ -247,27 +274,9 @@ class MainActivityWorkspaceRoutingTest {
         awaitCentralEmpty()
     }
 
-    @Test fun emptyCentralSelectionPreservesHiddenLiveOwnerAndReturningRestoresItsRun() {
-        start()
-        await { AgentRunUiState.state.value.sessionId == legacy && AgentRunUiState.state.value.events.isNotEmpty() }
-        val generation = 501L
-        AgentRunUiState.beginServiceRun(legacy, "Synthetic live owner", emptyList(), false, generation)
-        assertEquals("Synthetic live run owns its source before navigation", legacy,
-            AgentRunUiState.state.value.interactiveOwnerSessionId)
-        invoke("openCentralWorkspaceChat")
-        awaitCentralEmpty(expectedInteractiveOwnerSessionId = legacy)
-        assertEquals(legacy, AgentRunUiState.state.value.interactiveOwnerSessionId)
-        assertFalse(AgentRunUiState.state.value.running)
-        assertNull(mainJarvysMascotMode(AgentRunUiState.state.value, WorkspaceIdentity.CENTRAL_SESSION, true))
-        AgentRunUiState.restoreSession(legacy, db { store.readConversationTimeline(legacy) })
-        assertTrue(AgentRunUiState.state.value.running)
-        assertEquals(legacy, AgentRunUiState.state.value.interactiveOwnerSessionId)
-        AgentRunUiState.stopPendingGeneration(legacy, generation)
-    }
-
     @Test fun sendingAndPausingWorkspaceControlsPreservesTheCurrentChatDraftAndSkills() {
         start()
-        await { selected() == legacy && activityState<String>("conversationSessionId").value == legacy }
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && activityState<String>("conversationSessionId").value == WorkspaceIdentity.CENTRAL_SESSION }
         val draft = "A draft unrelated to the workspace control"
         val selectedSkills = setOf("selected-skill")
         compose.runOnIdle {
@@ -284,8 +293,8 @@ class MainActivityWorkspaceRoutingTest {
             arrayOf(workspaceId, UUID.randomUUID().toString(), 1L, WorkspaceControlType.PAUSE, ""))
 
         await { WorkspaceChanges.revision.value >= revision + 2 }
-        assertEquals(legacy, selected())
-        assertEquals(legacy, activityState<String>("conversationSessionId").value)
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, activityState<String>("conversationSessionId").value)
         assertEquals(draft, activityState<String>("goalInput").value)
         assertEquals(selectedSkills, activityState<Set<String>>("selectedSkillIds").value)
         assertFalse(activityState<Boolean>("conversationActionPending").value)
@@ -323,8 +332,7 @@ class MainActivityWorkspaceRoutingTest {
         }
         val original = transcript(legacy)
         start()
-        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
-            AgentRunUiState.state.value.events.isNotEmpty() }
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         settleNativeFrame()
         val draftText = "Unsent independent draft survives workspace browsing"
         compose.onNode(hasSetTextAction()).performTextInput(draftText)
@@ -332,16 +340,16 @@ class MainActivityWorkspaceRoutingTest {
         val draftUri = Uri.parse("content://navigation-fixture/unsent.txt")
         Shadows.shadowOf(context.contentResolver).registerInputStream(draftUri, ByteArrayInputStream(draftBytes))
         val draftOwner = ViewModelProvider(activity)[AttachmentDraftViewModel::class.java]
-        compose.runOnIdle { draftOwner.addUris(legacy, listOf(draftUri), ChatAttachment.Kind.FILE) }
+        compose.runOnIdle { draftOwner.addUris(WorkspaceIdentity.CENTRAL_SESSION, listOf(draftUri), ChatAttachment.Kind.FILE) }
         await { draftOwner.drafts.value.singleOrNull()?.attachment != null }
         val draftBefore = draftOwner.drafts.value.single()
         val pendingFile = requireNotNull(draftBefore.attachment)
-        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(legacy, pendingFile).readBytes())
+        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(WorkspaceIdentity.CENTRAL_SESSION, pendingFile).readBytes())
 
         openDrawer()
         compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
         compose.onNodeWithText(workspace.title).assertDoesNotExist()
-        compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
+        compose.onNodeWithTag("drawer-open-central").assertIsSelected()
         // Native rapid taps must still create exactly one catalog destination.
         compose.onNodeWithTag("drawer-open-workspaces").performTouchInput {
             click(); advanceEventTime(20); click()
@@ -356,8 +364,8 @@ class MainActivityWorkspaceRoutingTest {
         compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
         assertEquals(1, navigation().currentBackStack.value.count { it.destination.route == AppNavigationBackPolicy.WORKSPACES })
         assertNull("Catalog must not create a Crew manager", CoreAgentRuntime.crewManagerForSession(workspace.executionSessionId))
-        assertEquals(legacy, selected())
-        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
         assertEquals(listOf(draftBefore), draftOwner.drafts.value)
 
         openDrawer()
@@ -424,16 +432,16 @@ class MainActivityWorkspaceRoutingTest {
         compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
         systemBack()
         awaitRoute(AppNavigationBackPolicy.CHAT_ROOT)
-        await { AgentRunUiState.state.value.sessionId == legacy }
+        await { AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         compose.onNode(hasSetTextAction()).assertTextEquals(draftText)
         compose.onNodeWithTag("pending-attachment-${draftBefore.id}").assertIsDisplayed()
         assertSame(draftOwner, ViewModelProvider(activity)[AttachmentDraftViewModel::class.java])
         assertEquals(listOf(draftBefore), draftOwner.drafts.value)
         assertEquals(original, transcript(legacy))
-        assertEquals(legacy, selected())
-        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
         assertArrayEquals(bytes, AttachmentStore(context).resolve(legacy, attachment).readBytes())
-        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(legacy, pendingFile).readBytes())
+        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(WorkspaceIdentity.CENTRAL_SESSION, pendingFile).readBytes())
         WorkspaceRegistry(context).use { registry ->
             assertEquals(listOf(workspace), registry.listWorkspaces())
             assertTrue(registry.listAssignments(workspace.workspaceId).isEmpty())
@@ -446,7 +454,7 @@ class MainActivityWorkspaceRoutingTest {
             registry.listWorkspaces(100)
         }
         start()
-        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy }
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         openDrawer()
         tapTag("drawer-open-workspaces")
         awaitRoute(AppNavigationBackPolicy.WORKSPACES)
@@ -480,8 +488,8 @@ class MainActivityWorkspaceRoutingTest {
             assertEquals(rows, registry.listWorkspaces(100))
             rows.forEach { assertTrue(registry.listAssignments(it.workspaceId).isEmpty()) }
         }
-        assertEquals(legacy, selected())
-        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
+        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
     }
 
     private fun navigation(): NavHostController = MainActivity::class.java.getDeclaredField("activeNavController")
@@ -548,8 +556,7 @@ class MainActivityWorkspaceRoutingTest {
     private fun executor(value: MainActivity, name: String): ExecutorService =
         MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(value) as ExecutorService
 
-    private fun selected(): String? = context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
-        .getString("active_session_id", null)
+    private fun selected(): String = activityState<String>("conversationSessionId").value
 
     private fun transcript(session: String): List<Pair<String, String>> = db {
         store.readConversationTimeline(session).map { it.messageId to "${it.kind}:${it.text}" }

@@ -154,7 +154,7 @@ public class CrewCheckpointRecoveryTest {
     }
 
     private static File checkpoint(File root) {
-        return new File(root, "jarvys/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
+        return new File(root, "jarvys/g3/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8)) + "/" + CrewCheckpointStore.digest("bot-one".getBytes(StandardCharsets.UTF_8)) + "/checkpoint.json");
     }
 
     private static void writePayload(File file, JSONObject payload) throws Exception {

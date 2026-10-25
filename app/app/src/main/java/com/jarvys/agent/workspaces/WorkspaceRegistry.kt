@@ -21,7 +21,7 @@ import java.util.UUID
  */
 class WorkspaceRegistry(context: Context) : Closeable {
     companion object {
-        const val DATABASE_NAME = "jarvys-workspaces-v1.db"
+        const val DATABASE_NAME = "jarvys-workspaces-v2.db"
         const val NATIVE_UI_ORIGIN = "NATIVE_UI"
         private val TRANSACTION_LOCK = Any()
         private const val MAX_PAGE = 100
@@ -30,6 +30,8 @@ class WorkspaceRegistry(context: Context) : Closeable {
     }
 
     private val helper = Helper(context.applicationContext ?: context)
+
+    internal fun openForReset() { helper.writableDatabase }
 
     fun nativeControls(): NativeWorkspaceControls = NativeWorkspaceControls(this)
 
@@ -569,8 +571,8 @@ class WorkspaceRegistry(context: Context) : Closeable {
             Collections.unmodifiableList(result)
         }
     private fun <T> transaction(block: (SQLiteDatabase) -> T): T {
+        val db = helper.writableDatabase
         return synchronized(TRANSACTION_LOCK) {
-            val db = helper.writableDatabase
             db.beginTransaction()
             try {
                 val result = block(db)
@@ -580,8 +582,16 @@ class WorkspaceRegistry(context: Context) : Closeable {
         }
     }
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,
+    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,
         DatabaseErrorHandler { throw WorkspaceRegistryCorruptException("Workspace database is corrupt; preserved without deletion") }) {
+        override fun getReadableDatabase(): SQLiteDatabase {
+            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir)
+            return super.getReadableDatabase()
+        }
+        override fun getWritableDatabase(): SQLiteDatabase {
+            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir)
+            return super.getWritableDatabase()
+        }
         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""CREATE TABLE workspace (

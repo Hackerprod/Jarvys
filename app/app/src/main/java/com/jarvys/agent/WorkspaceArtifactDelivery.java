@@ -77,8 +77,8 @@ public final class WorkspaceArtifactDelivery {
             CancellationToken token, Runnable admission) throws IOException {
         SourceScope source = source(registry, files, workspaceId, token, admission);
         source.validate.run();
-        File directory = new File(files.getAbsoluteFile(), "jarvys/workspace-inspections");
-        String expected = new File(files.getCanonicalFile(), "jarvys/workspace-inspections").getPath();
+        File directory = new StorageGeneration(files.getAbsoluteFile()).directory("workspace-inspections");
+        String expected = new StorageGeneration(files.getCanonicalFile()).directory("workspace-inspections").getPath();
         if (!directory.getCanonicalPath().equals(expected)) throw new IOException("Inspection storage changed");
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create inspection storage");
         if (!directory.getCanonicalPath().equals(expected)) throw new IOException("Inspection storage changed");
@@ -105,7 +105,7 @@ public final class WorkspaceArtifactDelivery {
             SourceScope source = source(registry, files, workspaceId, token, admission);
             source.validate.run();
             LocalRunStore conversations = new LocalRunStore(files);
-            DeliveredArtifactStore artifacts = new DeliveredArtifactStore(new File(files, "jarvys"));
+            DeliveredArtifactStore artifacts = new DeliveredArtifactStore(files);
             ChatAttachment artifact = artifacts.snapshotWorkspace(registry, workspaceId, source.workspace, path, filename,
                     expectedSha256, token, source.validate);
             source.validate.run();
@@ -146,7 +146,7 @@ public final class WorkspaceArtifactDelivery {
         };
         validate.run();
         // No skill or memory mounts. Coding identity still derives solely from the registered session.
-        WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"),
+        WorkspaceStore workspace = new WorkspaceStore(new StorageGeneration(files),
                 WorkspaceStore.projectIdForSession(source.getExecutionSessionId()), null, null, null,
                 source.getExecutionSessionId(), false);
         return new SourceScope(workspace, validate);

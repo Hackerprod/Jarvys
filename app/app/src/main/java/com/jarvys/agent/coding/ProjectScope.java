@@ -85,7 +85,7 @@ public final class ProjectScope {
   }
 
   File legacyRoot() {
-    return new File(this.anchors.get(0).path, "jarvys/workspaces/" + this.id.substring(0, 24));
+    return new File(new com.jarvys.agent.StorageGeneration(this.anchors.get(0).path).directory("workspaces"), this.id.substring(0, 24));
   }
 
   public String id() {

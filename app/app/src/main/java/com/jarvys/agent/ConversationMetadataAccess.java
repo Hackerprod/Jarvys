@@ -93,6 +93,8 @@ public final class ConversationMetadataAccess {
 
   void update(String sessionId, String key, Object value, Consumer<Throwable> databaseFailureReporter) {
     validateSessionId(sessionId);
+    if ("deleted".equals(key) && com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId))
+      throw new IllegalArgumentException("Central cannot be deleted");
     ChatDatabaseBridge bridge = databaseCall(databaseFailureReporter, this::database);
     switch (key) {
       case "deleted":

@@ -19,7 +19,7 @@ import kotlinx.coroutines.withTimeout
 class TaskTickWorker(
     appContext: Context,
     params: WorkerParameters,
-    private val executor: TaskExecutor,
+    private val executor: TaskExecutor?,
     private val tasks: TaskStore = TaskStore(appContext),
     private val runs: TaskRunLedger = TaskRunLedger(appContext),
     private val clock: Clock = Clock.systemUTC(),
@@ -28,16 +28,18 @@ class TaskTickWorker(
     private val isGloballyPaused: () -> Boolean = { TaskGlobalPauseStore(appContext).isPaused() },
     private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(appContext),
 ) : CoroutineWorker(appContext, params) {
-    constructor(appContext: Context, params: WorkerParameters) : this(appContext, params, ScheduledTaskExecutor(appContext))
+    constructor(appContext: Context, params: WorkerParameters) : this(appContext, params, null)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val deadline = SystemClock.elapsedRealtime() + MAX_TICK_PROCESSING_MILLIS
         try {
+            com.jarvys.agent.SingleSessionReset.awaitReady(applicationContext)
+            val currentExecutor = executor ?: ScheduledTaskExecutor(applicationContext)
+            val deadline = SystemClock.elapsedRealtime() + MAX_TICK_PROCESSING_MILLIS
             val result = withTimeout(MAX_TICK_PROCESSING_MILLIS) {
                 val token = CancellationToken.cancellable()
                 val cancellationRegistration = currentCoroutineContext().job.invokeOnCompletion { token.cancel() }
                 try {
-                    TaskTickEngine(tasks, runs, calculator, executor, clock, rearm, {
+                    TaskTickEngine(tasks, runs, calculator, currentExecutor, clock, rearm, {
                         !isStopped && SystemClock.elapsedRealtime() < deadline
                     }, token, isGloballyPaused, pendingActions).tick()
                 } finally { cancellationRegistration.dispose() }

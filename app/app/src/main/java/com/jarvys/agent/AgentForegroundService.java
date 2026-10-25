@@ -219,6 +219,11 @@ public final class AgentForegroundService extends Service {
   }
 
   private void drainSession(String sessionId, SessionLane lane) {
+    RuntimeException storageFailure = null;
+    try { SingleSessionReset.awaitReadyBlocking(getFilesDir()); }
+    catch (Exception failure) {
+      storageFailure = new IllegalStateException("Conversation storage could not be initialized", failure);
+    }
     while (!worker.isShutdown()) {
       final SessionRequest request;
       final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters;
@@ -244,7 +249,7 @@ public final class AgentForegroundService extends Service {
           }
         }
         if (request != null) {
-          if (!request.followUpClaimId.isEmpty()
+          if (storageFailure == null && !request.followUpClaimId.isEmpty()
               && (!hasFollowUpClaim(sessionId, request.followUpClaimId)
                   || !isPendingFollowUp(sessionId, request.followUpClaimId))) {
             // STOP or another terminal recovery resolved this request while it was queued.
@@ -267,9 +272,10 @@ public final class AgentForegroundService extends Service {
       // Admission can include blocking Room reads. Keep it on this worker, before a run token or
       // UI generation is created, and outside the lane locks so a new start or STOP stays quick.
       boolean admitted = !request.stopped.get();
-      if (admitted && request.admission != null) {
+      if (admitted) {
         try {
-          admitted = request.admission.admit(request);
+          if (storageFailure != null) throw storageFailure;
+          if (request.admission != null) admitted = request.admission.admit(request);
         } catch (RuntimeException failure) {
           admitted = false;
           if (request.onAdmissionFailure != null) {
@@ -583,7 +589,7 @@ public final class AgentForegroundService extends Service {
   }
 
   public static void startRealAgent(Context context, String goal, ArrayList<String> skillIds) {
-    startRealAgent(context, goal, skillIds, java.util.UUID.randomUUID().toString());
+    startRealAgent(context, goal, skillIds, WorkspaceIdentity.CENTRAL_SESSION);
   }
 
   public static void startRealAgent(
@@ -724,6 +730,7 @@ public final class AgentForegroundService extends Service {
       boolean regeneration,
       String userMessageId,
       String followUpRequestId) {
+    sessionId = WorkspaceIdentity.serviceSession(sessionId);
     Intent intent =
         new Intent(context, AgentForegroundService.class)
             .setAction(ACTION_REAL_AGENT)
@@ -1274,9 +1281,7 @@ public final class AgentForegroundService extends Service {
     boolean chatRegeneration = intent != null && intent.getBooleanExtra("chat_regeneration", false);
     String chatUserMessageId = intent == null ? "" : intent.getStringExtra("chat_user_message_id");
     String chatFollowUpRequestId = intent == null ? "" : intent.getStringExtra("chat_follow_up_request_id");
-    String sessionId = intent == null ? null : intent.getStringExtra("chat_session_id");
-    if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,100}"))
-      sessionId = java.util.UUID.randomUUID().toString();
+    String sessionId = WorkspaceIdentity.serviceSession(intent == null ? null : intent.getStringExtra("chat_session_id"));
     final String chatSessionId = sessionId;
     final String chatAgentGoal = agentGoal == null ? "" : agentGoal;
     final String chatDisplayGoal = displayGoal == null ? "" : displayGoal;
@@ -1847,6 +1852,10 @@ public final class AgentForegroundService extends Service {
       finishCoreRun(token, chatMessage);
       if (!token.wasStoppedByUser() && steeringProvider != null && steeringRemainsUnconsumed)
         enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
+      if (!timedOut && "COMPLETED".equals(result.outcome)) {
+        try { SingleSessionReset.onSuccessfulRun(this, sessionId); }
+        catch (Exception failure) { AgentErrorReporter.reportBackgroundFailure(this, failure); }
+      }
       if (!assistantOwnerInternal.get() && !timedOut && "COMPLETED".equals(result.outcome)) {
         enqueueAutomaticReflection(sessionId, assistantMessageId);
       }
@@ -2066,6 +2075,7 @@ public final class AgentForegroundService extends Service {
                     .build())
             .setOngoing(true)
             .build();
+    notification.extras.putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME);
     return notification;
   }
 

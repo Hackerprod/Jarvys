@@ -429,6 +429,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      */
     suspend fun deleteConversation(conversationId: String, deletedAtMillis: Long = System.currentTimeMillis()): ChatDbResult<Boolean> =
         transactionResult {
+            if (conversationId == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
+                return@transactionResult ChatDbResult.Invalid("Central cannot be deleted")
             if (conversationId.isBlank()) return@transactionResult ChatDbResult.Invalid("conversation id is required")
             val current = findConversation(conversationId)
             val metadataPayload = current?.let {
@@ -1120,6 +1122,54 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 arrayOf(conversationId, highWater),
             ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
             hydrateMessages(conversationId, ids, highWater)
+        } }
+
+    suspend fun readInputsAfter(conversationId: String, afterSeq: Long): List<StoredMessage> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val highWater = maxSeq(conversationId)
+            val ids = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND seq>? AND seq<=? " +
+                "AND role IN ('user','agent','system') ORDER BY seq", arrayOf(conversationId, afterSeq, highWater))
+                .use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            hydrateMessages(conversationId, ids, highWater)
+        } }
+
+    suspend fun inputStateMessageIds(conversationId: String, state: String?, requestedIds: List<String>?): Set<String> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val result = linkedSetOf<String>()
+            val groups = requestedIds?.distinct()?.chunked(MAX_SQL_BIND_PARAMETERS) ?: listOf(null)
+            for (ids in groups) {
+                val arguments = mutableListOf<Any?>(conversationId)
+                var query = "SELECT message_id FROM messages WHERE conversation_id=? AND role IN ('user','agent','system') "
+                query += if (state == null) "AND input_state IS NOT NULL" else "AND input_state=?".also { arguments += state }
+                if (ids != null) {
+                    query += " AND message_id IN (${ids.joinToString(",") { "?" }})"
+                    arguments.addAll(ids)
+                }
+                sql.query(query, arguments.toTypedArray()).use { c -> while (c.moveToNext()) result += c.getString(0) }
+            }
+            result
+        } }
+
+    suspend fun markIncorporatedThrough(conversationId: String, messageId: String): ChatDbResult<List<String>> {
+        val ids = JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND role='user' AND input_state IS NULL " +
+                "AND seq<=(SELECT seq FROM messages WHERE conversation_id=? AND message_id=?) ORDER BY seq",
+                arrayOf(conversationId, conversationId, messageId)).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        } }
+        return markInputState(conversationId, ids, INPUT_INCORPORATED)
+    }
+
+    suspend fun latestUserMessageIndex(conversationId: String): Long =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            sql.query("SELECT COALESCE(MAX(message_index),-1) FROM messages WHERE conversation_id=? AND role='user'",
+                arrayOf(conversationId)).use { it.moveToFirst(); it.getLong(0) }
+        } }
+
+    suspend fun getMessageAtIndex(conversationId: String, index: Long): StoredMessage? =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            val id = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND message_index=?",
+                arrayOf(conversationId, index)).use { if (it.moveToFirst()) it.getString(0) else null }
+            id?.let { hydrateMessages(conversationId, listOf(it)).singleOrNull() }
         } }
 
     /** Hydrates only unacknowledged AGENT inputs, using the existing conversation/role index. */

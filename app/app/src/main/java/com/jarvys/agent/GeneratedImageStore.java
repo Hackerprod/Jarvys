@@ -16,7 +16,7 @@ public final class GeneratedImageStore {
     private final String canonicalRoot;
 
     public GeneratedImageStore(Context context) {
-        this(new File(context.getApplicationContext().getFilesDir(), "jarvys"));
+        this(new StorageGeneration(context).chatRoot());
     }
 
     /** Package constructor accepts the private filesDir/jarvys root for local tests. */

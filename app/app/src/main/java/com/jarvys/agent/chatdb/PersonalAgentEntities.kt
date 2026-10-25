@@ -70,6 +70,14 @@ data class MemoryEntry(
     val created_at: Long,
     val updated_at: Long,
     val deleted_at: Long?,
+    @androidx.room.ColumnInfo(defaultValue = "'note'") val kind: String = "note",
+    val topic_key: String? = null,
+    val title: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "'none'") val narration: String = "none",
+    val event_at: Long? = null,
+    val source_conversation_id: String? = null,
+    val source_message_id: String? = null,
+    val through_seq: Long? = null,
 )
 
 @Entity(tableName = "memory_revisions", indices = [Index(name = "idx_memory_revisions_target", value = ["target_type", "target_id", "created_at"])])
@@ -118,4 +126,46 @@ data class MemoryJob(
     val last_error: String?,
     val created_at: Long,
     val updated_at: Long,
+)
+
+@Entity(tableName = "memory_evidence", primaryKeys = ["entry_id", "ordinal"], foreignKeys = [
+    ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["entry_id"], onDelete = ForeignKey.CASCADE),
+])
+data class MemoryEvidence(
+    val entry_id: String,
+    val ordinal: Long,
+    val ref_kind: String,
+    val ref_conversation_id: String?,
+    val ref_id: String,
+    val action_id: String?,
+    val attempt_id: String?,
+    val at_ms: Long,
+    val tool_name: String?,
+    val outcome: String?,
+    val authorization: String?,
+    val facts_json: String,
+)
+
+@Entity(tableName = "memory_links", primaryKeys = ["from_id", "to_id", "relation"], foreignKeys = [
+    ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["from_id"], onDelete = ForeignKey.CASCADE),
+    ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["to_id"], onDelete = ForeignKey.CASCADE),
+], indices = [Index(value = ["to_id"])])
+data class MemoryLink(
+    val from_id: String,
+    val to_id: String,
+    val relation: String,
+    val actor: String,
+    val reason: String?,
+    val created_at: Long,
+)
+
+@Entity(tableName = "transcript_artifact_refs", indices = [Index(value = ["conversation_id"])],
+    foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)])
+data class TranscriptArtifactRef(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversation_id: String,
+    val owner_kind: String,
+    val batch_id: String,
+    val call_id: String?,
+    val artifact_id: String,
 )

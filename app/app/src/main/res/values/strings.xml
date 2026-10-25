@@ -1526,4 +1526,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="setup_wizard_continue">Continue</string>
     <string name="setup_wizard_back">Back</string>
     <string name="setup_wizard_finish">Finish</string>
+    <string name="single_session_retired">This update starts a new Central conversation and personal memory. Old conversations, memory and their files will now be removed.</string>
+    <string name="single_session_started">This update starts a new Central conversation and resets all personal memory. Old data will be removed after the first successful run.</string>
 </resources>
