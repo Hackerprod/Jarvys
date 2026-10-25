@@ -241,6 +241,7 @@ private object Routes {
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
     const val SETTINGS_DEVELOPER = AppNavigationBackPolicy.SETTINGS_DEVELOPER
+    const val SETTINGS_STORAGE = AppNavigationBackPolicy.SETTINGS_STORAGE
     const val SETUP_WIZARD = AppNavigationBackPolicy.SETUP_WIZARD
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
@@ -1793,6 +1794,7 @@ private fun JarvysApp(
                             JarvysSettingsPage.HOME -> Routes.SETTINGS
                             JarvysSettingsPage.PREFERENCES -> Routes.SETTINGS_PREFERENCES
                             JarvysSettingsPage.DEVELOPER -> Routes.SETTINGS_DEVELOPER
+                            JarvysSettingsPage.STORAGE -> Routes.SETTINGS_STORAGE
                         }
                         navController.navigate(path) { launchSingleTop = true }
                     },
@@ -1884,6 +1886,7 @@ private fun JarvysApp(
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
                 composable(Routes.SETTINGS_DEVELOPER) { settingsPageContent(JarvysSettingsPage.DEVELOPER) }
+                composable(Routes.SETTINGS_STORAGE) { settingsPageContent(JarvysSettingsPage.STORAGE) }
                 composable(Routes.SETUP_WIZARD) {
                     SetupWizardScreen(
                         preferences = setupWizardPreferences,

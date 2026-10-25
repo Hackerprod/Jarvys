@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "658f8ea521358c9221c0ccec73d212a2",
+    "identityHash": "e227967aad0ac2a83f3a446f79970255",
     "entities": [
       {
         "tableName": "conversations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, `history_revision` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -70,6 +70,13 @@
             "columnName": "next_seq",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "history_revision",
+            "columnName": "history_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -2335,7 +2342,7 @@
       },
       {
         "tableName": "model_artifacts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `artifact_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `path` TEXT NOT NULL, `sha256` TEXT NOT NULL, `chars` INTEGER NOT NULL, `bytes` INTEGER NOT NULL, `file_ref_id` TEXT, PRIMARY KEY(`conversation_id`, `artifact_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`file_ref_id`) REFERENCES `file_refs`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `artifact_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `path` TEXT NOT NULL, `sha256` TEXT NOT NULL, `chars` INTEGER NOT NULL, `bytes` INTEGER NOT NULL, `file_ref_id` TEXT, `state` TEXT NOT NULL DEFAULT 'retained', `state_reason` TEXT, PRIMARY KEY(`conversation_id`, `artifact_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`file_ref_id`) REFERENCES `file_refs`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -2382,6 +2389,18 @@
           {
             "fieldPath": "file_ref_id",
             "columnName": "file_ref_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'retained'"
+          },
+          {
+            "fieldPath": "state_reason",
+            "columnName": "state_reason",
             "affinity": "TEXT"
           }
         ],
@@ -5753,17 +5772,11 @@
       },
       {
         "tableName": "memory_entries",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `scope` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
             "columnName": "id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "scope",
-            "columnName": "scope",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -5893,15 +5906,14 @@
         },
         "indices": [
           {
-            "name": "idx_memory_entries_scope_layer_day",
+            "name": "idx_memory_entries_layer_day",
             "unique": false,
             "columnNames": [
-              "scope",
               "layer",
               "day"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_entries_scope_layer_day` ON `${TABLE_NAME}` (`scope`, `layer`, `day`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_entries_layer_day` ON `${TABLE_NAME}` (`layer`, `day`)"
           },
           {
             "name": "idx_memory_entries_deleted",
@@ -5911,12 +5923,31 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_entries_deleted` ON `${TABLE_NAME}` (`deleted_at`)"
+          },
+          {
+            "name": "idx_memory_entries_kind_event",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "event_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_entries_kind_event` ON `${TABLE_NAME}` (`kind`, `event_at`)"
+          },
+          {
+            "name": "idx_memory_entries_source_message",
+            "unique": false,
+            "columnNames": [
+              "source_message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_entries_source_message` ON `${TABLE_NAME}` (`source_message_id`)"
           }
         ]
       },
       {
         "tableName": "memory_evidence",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`entry_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `ref_kind` TEXT NOT NULL, `ref_conversation_id` TEXT, `ref_id` TEXT NOT NULL, `action_id` TEXT, `attempt_id` TEXT, `at_ms` INTEGER NOT NULL, `tool_name` TEXT, `outcome` TEXT, `authorization` TEXT, `facts_json` TEXT NOT NULL, PRIMARY KEY(`entry_id`, `ordinal`), FOREIGN KEY(`entry_id`) REFERENCES `memory_entries`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`entry_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `ref_kind` TEXT NOT NULL, `ref_conversation_id` TEXT, `ref_id` TEXT NOT NULL, `action_id` TEXT, `attempt_id` TEXT, `at_ms` INTEGER NOT NULL, `tool_name` TEXT, `outcome` TEXT, `authorization` TEXT, `facts_json` TEXT NOT NULL, `connector` TEXT, PRIMARY KEY(`entry_id`, `ordinal`), FOREIGN KEY(`entry_id`) REFERENCES `memory_entries`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "entry_id",
@@ -5983,6 +6014,11 @@
             "columnName": "facts_json",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "connector",
+            "columnName": "connector",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -5992,6 +6028,37 @@
             "ordinal"
           ]
         },
+        "indices": [
+          {
+            "name": "idx_memory_evidence_ref",
+            "unique": false,
+            "columnNames": [
+              "ref_conversation_id",
+              "ref_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_evidence_ref` ON `${TABLE_NAME}` (`ref_conversation_id`, `ref_id`)"
+          },
+          {
+            "name": "idx_memory_evidence_tool",
+            "unique": false,
+            "columnNames": [
+              "tool_name",
+              "outcome"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_evidence_tool` ON `${TABLE_NAME}` (`tool_name`, `outcome`)"
+          },
+          {
+            "name": "idx_memory_evidence_connector",
+            "unique": false,
+            "columnNames": [
+              "connector"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_memory_evidence_connector` ON `${TABLE_NAME}` (`connector`)"
+          }
+        ],
         "foreignKeys": [
           {
             "table": "memory_entries",
@@ -6394,7 +6461,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '658f8ea521358c9221c0ccec73d212a2')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e227967aad0ac2a83f3a446f79970255')"
     ]
   }
 }

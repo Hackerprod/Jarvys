@@ -27,8 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.PersonalMemoryConsolidationWorker
+import com.jarvys.agent.R
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.PersonalMemoryItem
 import kotlinx.coroutines.Dispatchers
@@ -115,8 +117,21 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                 items(items, key = { "${it.kind}:${it.id}" }) { item ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(if (item.kind == "profile") "Perfil · ${item.section}" else "Recuerdo · ${item.section}", style = MaterialTheme.typography.labelLarge)
-                            Text(item.text)
+                            val episode = item.memoryKind == "episode"
+                            Text(
+                                when {
+                                    item.kind == "profile" -> "Perfil · ${item.section}"
+                                    episode -> stringResource(R.string.memory_episode_label,
+                                        java.text.DateFormat.getDateInstance().format(java.util.Date(item.eventAt ?: item.updatedAt)))
+                                    else -> "Recuerdo · ${item.section}"
+                                },
+                                style = MaterialTheme.typography.labelLarge, modifier = Modifier.testTag("memory-item-kind"),
+                            )
+                            // An episode is recognizable before its narration exists: title, else the label from its evidence.
+                            Text(if (episode) item.title ?: item.label else item.text)
+                            if (episode && item.text.isNotBlank()) Text(item.text)
+                            if (episode && item.narration == "pending") Text(stringResource(R.string.memory_episode_narration_pending), style = MaterialTheme.typography.labelSmall)
+                            if (episode && item.narration == "failed") Text(stringResource(R.string.memory_episode_narration_failed), style = MaterialTheme.typography.labelSmall)
                             if (item.kind == "memory" || item.kind == "profile") {
                                 TextButton(onClick = {
                                     scope.launch {

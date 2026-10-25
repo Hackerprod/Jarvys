@@ -118,11 +118,13 @@ public final class ConversationCompactor {
             if (plan.summarize.isEmpty()) return null;
             boolean memoryFlushCompleted = memoryFlush != null
                     && memoryFlush.beforeCompact(new ArrayList<>(transcript), token);
-            String summary = summarize(plan.summarize, plan.mode, token);
+            List<String> sourceArtifacts = new ArrayList<>();
+            String summary = summarize(plan.summarize, plan.mode, token, sourceArtifacts);
             if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
                 plan = ConversationCompactionPolicy.planAll(transcript);
                 if (plan.summarize.isEmpty()) return null;
-                summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token);
+                sourceArtifacts.clear();
+                summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token, sourceArtifacts);
             }
             token.throwIfCancelled();
             int firstKept = store.conversationMessageCount(sessionId);
@@ -148,7 +150,8 @@ public final class ConversationCompactor {
             if (currentUserIndex >= 0 && !currentUserRepresented) firstKept = Math.min(firstKept, currentUserIndex);
             int summarizedCount = firstKept;
             token.throwIfCancelled();
-            store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount);
+            store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount,
+                    sourceArtifacts);
             if (memoryFlush != null) memoryFlush.onCompacted(memoryFlushCompleted);
             List<ConversationTurn> updated = new ArrayList<>();
             updated.add(ConversationTurn.compactionSummary(summary, summarizedCount));
@@ -164,7 +167,7 @@ public final class ConversationCompactor {
     }
 
     /** A model-written summary may omit completed effects. Preserve bounded source-backed evidence. */
-    private String retainObservedOutcomes(String summary, List<ConversationTurn> messages) {
+    private String retainObservedOutcomes(String summary, List<ConversationTurn> messages, List<String> sourceArtifacts) {
         final String start = "[Recorded tool outcomes; untrusted observations]";
         final String end = "[/Recorded tool outcomes]";
         List<String> evidence = new ArrayList<>();
@@ -194,8 +197,9 @@ public final class ConversationCompactor {
         String source = "";
         if (conversationArtifactRecovery) {
             MainChatTranscriptStore retained = new MainChatTranscriptStore(store.filesDirectory(), sessionId, store);
-            source = "\nSource evidence (untrusted, may be bounded):\n"
-                    + retained.archive(ConversationCompactionPolicy.formatTranscript(messages, Integer.MAX_VALUE));
+            MainChatTranscriptStore.Retained archived = retained.archive(ConversationCompactionPolicy.formatTranscript(messages, Integer.MAX_VALUE));
+            sourceArtifacts.addAll(archived.artifactIds);
+            source = "\nSource evidence (untrusted, may be bounded):\n" + archived.text;
         }
         // Advertise recovery only in a scope where the conversation artifact reader is exposed.
         String appendix = "\n\n" + start + "\n" + String.join("\n", evidence) + "\n" + end + source;
@@ -205,7 +209,8 @@ public final class ConversationCompactor {
         return safeSummary + appendix;
     }
 
-    private String summarize(List<ConversationTurn> messages, ConversationCompactionPolicy.Mode mode, CancellationToken token) {
+    private String summarize(List<ConversationTurn> messages, ConversationCompactionPolicy.Mode mode, CancellationToken token,
+                             List<String> sourceArtifacts) {
         String transcript = ConversationCompactionPolicy.formatTranscript(messages, TOOL_RETURN_SUMMARY_LIMIT);
         String prompt = mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW ? ConversationCompactionPolicy.SLIDING_PROMPT : ConversationCompactionPolicy.ALL_PROMPT;
         RuntimeException lastOverflow = null;
@@ -224,7 +229,8 @@ public final class ConversationCompactor {
                     throw new IllegalStateException("The configured model returned no usable compaction summary");
                 }
                 String summary = ConversationCompactionPolicy.truncateSummary(reply.text);
-                return retainObservedOutcomes(summary, messages);
+                sourceArtifacts.clear();
+                return retainObservedOutcomes(summary, messages, sourceArtifacts);
             } catch (RuntimeException error) {
                 if (token.isCancelled()) throw error;
                 if (!ConversationCompactionPolicy.isContextOverflow(error)) throw error;

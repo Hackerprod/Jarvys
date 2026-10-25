@@ -3,7 +3,13 @@ package com.jarvys.agent.chatdb
 import java.util.UUID
 import java.nio.charset.StandardCharsets
 
-data class ModelCallInput(val callId: String, val toolName: String, val argumentsJson: String)
+/** [artifactIds] are the conversation artifacts that hold this call's archived arguments. */
+data class ModelCallInput(
+    val callId: String,
+    val toolName: String,
+    val argumentsJson: String,
+    val artifactIds: List<String> = emptyList(),
+)
 
 data class ModelToolBatchInput(
     val conversationId: String,
@@ -17,6 +23,8 @@ data class ModelToolBatchInput(
     val callsDecodeError: String? = null,
     val providerOutputItemsJson: String? = null,
     val createdAtSeconds: Double? = null,
+    /** Artifacts that hold the archived assistant text of the batch. */
+    val textArtifactIds: List<String> = emptyList(),
 )
 
 data class ModelToolResultInput(
@@ -29,6 +37,8 @@ data class ModelToolResultInput(
     val output: String,
     val artifactId: String? = null,
     val createdAtSeconds: Double? = null,
+    /** Every artifact that holds part of the archived output; [artifactId] stays the first for older readers. */
+    val artifactIds: List<String> = emptyList(),
 )
 
 data class ModelCallState(
@@ -202,7 +212,9 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                 "INSERT INTO tool_calls(conversation_id,batch_id,ordinal,call_id,name,arguments_json,lifecycle,lifecycle_seq) VALUES(?,?,?,?,?,?,?,?)",
                 arrayOf(input.conversationId, input.batchId, ordinal, call.callId, call.toolName, call.argumentsJson, "INTENT", seq),
             )
+            insertArtifactRefs(input.conversationId, OWNER_TOOL_CALL_ARGS, input.batchId, call.callId, call.artifactIds)
         }
+        insertArtifactRefs(input.conversationId, OWNER_BATCH_TEXT, input.batchId, null, input.textArtifactIds)
         ChatDbResult.Success(readBatchSnapshot(input.conversationId, input.batchId)!!)
     }
 
@@ -239,17 +251,18 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         val time = input.createdAtSeconds ?: nowSeconds()
         val seq = insertLedgerItem(input.conversationId, "model_tool_result", encodeCallItemKey(input.batchId, input.callId), time,
             ownerMessageSeq(input.conversationId, readBatch(input.conversationId, input.batchId)?.owner_user_message_id))
-        if (input.artifactId != null) {
-            val owned = sql.query("SELECT EXISTS(SELECT 1 FROM model_artifacts WHERE conversation_id=? AND artifact_id=?)", arrayOf(input.conversationId, input.artifactId))
-                .use { it.moveToFirst(); it.getInt(0) != 0 }
-            if (!owned) throw M1bAbort("model_artifact_reference_missing")
-        }
+        // `file_artifact_id` keeps the first artifact for older readers; the relation table holds all of them.
+        val artifactIds = (listOfNotNull(input.artifactId) + input.artifactIds).distinct()
         val first = sql.query("SELECT 1 FROM tool_results WHERE conversation_id=? AND batch_id=? AND call_id=?", arrayOf(input.conversationId, input.batchId, input.callId))
             .use { !it.moveToFirst() }
-        if (first) sql.execSQL(
-            "INSERT INTO tool_results(conversation_id,batch_id,call_id,seq,tool_name,lifecycle,output,created_at,file_artifact_id) VALUES(?,?,?,?,?,?,?,?,?)",
-            arrayOf(input.conversationId, input.batchId, input.callId, seq, input.toolName, input.lifecycle, input.output, time, input.artifactId),
-        )
+        if (first) {
+            requireOwnedArtifacts(input.conversationId, artifactIds)
+            sql.execSQL(
+                "INSERT INTO tool_results(conversation_id,batch_id,call_id,seq,tool_name,lifecycle,output,created_at,file_artifact_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                arrayOf(input.conversationId, input.batchId, input.callId, seq, input.toolName, input.lifecycle, input.output, time, artifactIds.firstOrNull()),
+            )
+            insertArtifactRefs(input.conversationId, OWNER_TOOL_RESULT, input.batchId, input.callId, artifactIds)
+        }
         sql.execSQL("UPDATE tool_batches SET last_activity_seq=? WHERE conversation_id=? AND batch_id=?", arrayOf(seq, input.conversationId, input.batchId))
         ChatDbResult.Success(readToolResult(input.conversationId, input.batchId, input.callId))
     }
@@ -285,31 +298,65 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
     }
 
     /**
-     * Persists one `model_artifact` ownership row; replaces `MainChatTranscriptStore.archive`
-     * (`MainChatTranscriptStore.java:160-192`), including its conversation-wide 16 MiB retention
-     * quota. Artifact bytes remain on disk and `file_refs` stores only path, digest, and byte count.
+     * Persists one `model_artifact` ownership row, replacing `MainChatTranscriptStore.archive`. There is no
+     * conversation-wide byte quota: storage pressure is handled by the retention policy, which only ever expels
+     * artifacts outside the protected closure of an episode (`ArtifactRetentionRepository`). Artifact bytes remain
+     * on disk and `file_refs` stores only path, digest, and byte count. An `unavailable` artifact has no file; the
+     * row records that the text was not kept. Writing content again for an `expelled` or `unavailable` id restores it.
      */
     suspend fun appendModelArtifact(
         conversationId: String, artifactId: String, relativePath: String, sha256: String, chars: Long, bytes: Long,
-        mimeType: String = "text/plain",
+        mimeType: String = "text/plain", state: String = ModelArtifactState.RETAINED, stateReason: String? = null,
     ): ChatDbResult<ModelArtifact> = transaction {
-        if (conversationId.isBlank() || artifactId.isBlank() || relativePath.isBlank() || sha256.isBlank() || chars < 0L || bytes < 0L)
+        if (state !in ModelArtifactState.ALL) return@transaction ChatDbResult.Invalid("model artifact state is unknown")
+        val hasContent = ModelArtifactState.hasContent(state)
+        if (conversationId.isBlank() || artifactId.isBlank() || sha256.isBlank() || chars < 0L || bytes < 0L || (hasContent && relativePath.isBlank()))
             return@transaction ChatDbResult.Invalid("model artifact metadata is invalid")
         ensureConversationExists(conversationId)
         val existing = readModelArtifact(conversationId, artifactId)
-        if (existing != null) return@transaction if (existing.path == relativePath && existing.sha256 == sha256 && existing.chars == chars && existing.bytes == bytes)
-            ChatDbResult.Success(existing) else ChatDbResult.Conflict("model artifact identity has different metadata")
-        val total = sql.query("SELECT COALESCE(SUM(bytes),0) FROM model_artifacts WHERE conversation_id=?", arrayOf(conversationId))
-            .use { it.moveToFirst(); it.getLong(0) }
-        if (bytes > MAX_MODEL_ARTIFACT_BYTES - total) return@transaction ChatDbResult.Invalid("model artifact retention quota exceeded")
+        if (existing != null) {
+            val sameContent = existing.path == relativePath && existing.sha256 == sha256 && existing.chars == chars && existing.bytes == bytes
+            if (existing.state == state && sameContent) return@transaction ChatDbResult.Success(existing)
+            if (existing.sha256 != sha256) return@transaction ChatDbResult.Conflict("model artifact identity has different metadata")
+            // Content written again restores an artifact that was expelled or never kept; nothing else changes state.
+            val restores = hasContent && !ModelArtifactState.hasContent(existing.state)
+            val bounds = existing.state == ModelArtifactState.RETAINED && state == ModelArtifactState.BOUNDED && sameContent
+            if (!restores && !bounds) return@transaction if (sameContent) ChatDbResult.Success(existing) else ChatDbResult.Conflict("model artifact identity has different metadata")
+            val fileRefId = if (hasContent) ensureFileRef(relativePath, sha256, bytes, mimeType, nowMillis()) else existing.file_ref_id
+            sql.execSQL("UPDATE model_artifacts SET path=?,chars=?,bytes=?,file_ref_id=?,state=?,state_reason=? WHERE conversation_id=? AND artifact_id=?",
+                arrayOf(relativePath, chars, bytes, fileRefId, state, stateReason, conversationId, artifactId))
+            return@transaction ChatDbResult.Success(readModelArtifact(conversationId, artifactId)!!)
+        }
         val time = nowSeconds()
-        val fileRefId = ensureFileRef(relativePath, sha256, bytes, mimeType, (time * 1000.0).toLong())
+        val fileRefId = if (hasContent) ensureFileRef(relativePath, sha256, bytes, mimeType, (time * 1000.0).toLong()) else null
         val seq = insertLedgerItem(conversationId, "model_artifact", artifactId, time)
-        sql.execSQL("INSERT INTO model_artifacts(conversation_id,artifact_id,seq,path,sha256,chars,bytes,file_ref_id) VALUES(?,?,?,?,?,?,?,?)",
-            arrayOf(conversationId, artifactId, seq, relativePath, sha256, chars, bytes, fileRefId))
+        sql.execSQL("INSERT INTO model_artifacts(conversation_id,artifact_id,seq,path,sha256,chars,bytes,file_ref_id,state,state_reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(conversationId, artifactId, seq, relativePath, sha256, chars, bytes, fileRefId, state, stateReason))
         ChatDbResult.Success(readModelArtifact(conversationId, artifactId)!!)
     }
 
+    private fun requireOwnedArtifacts(conversationId: String, artifactIds: List<String>) {
+        artifactIds.forEach { id ->
+            val owned = sql.query("SELECT EXISTS(SELECT 1 FROM model_artifacts WHERE conversation_id=? AND artifact_id=?)", arrayOf(conversationId, id))
+                .use { it.moveToFirst(); it.getInt(0) != 0 }
+            if (!owned) throw M1bAbort("model_artifact_reference_missing")
+        }
+    }
+
+    /**
+     * Records which artifacts hold a tool call's result, arguments or batch text, in the transaction that writes
+     * the transcript row itself. The retention policy reads this relation to find the closure it must protect.
+     */
+    private fun insertArtifactRefs(conversationId: String, ownerKind: String, batchId: String, callId: String?, artifactIds: List<String>) {
+        val distinct = artifactIds.distinct()
+        requireOwnedArtifacts(conversationId, distinct)
+        distinct.forEach { id ->
+            sql.execSQL(
+                "INSERT OR IGNORE INTO transcript_artifact_refs(conversation_id,owner_kind,batch_id,call_id,artifact_id) VALUES(?,?,?,?,?)",
+                arrayOf(conversationId, ownerKind, batchId, callId, id),
+            )
+        }
+    }
     /**
      * Appends a `tool_activity` row and resolves its source batch through indexed `(executionId,
      * callId)` history, falling back to the latest indexed `callId` match. Replaces
@@ -385,12 +432,30 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
      */
     suspend fun readArtifactRows(conversationId: String): List<org.json.JSONObject> =
         JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
-            sql.query("SELECT artifact_id,path,sha256,chars,bytes FROM model_artifacts WHERE conversation_id=? ORDER BY seq",
+            sql.query("SELECT artifact_id,path,sha256,chars,bytes,state,state_reason FROM model_artifacts WHERE conversation_id=? ORDER BY seq",
                 arrayOf(conversationId)).use { c -> buildList { while (c.moveToNext()) add(org.json.JSONObject()
                     .put("type", "model_artifact").put("artifactId", c.getString(0))
                     .put("artifact", org.json.JSONObject().put("path", c.getString(1)).put("sha256", c.getString(2))
-                        .put("chars", c.getLong(3)).put("bytes", c.getLong(4)))) } }
+                        .put("chars", c.getLong(3)).put("bytes", c.getLong(4)).put("state", c.getString(5))
+                        .put("stateReason", c.getStringOrNullM1b("state_reason") ?: org.json.JSONObject.NULL))) } }
         } }
+
+    /** The stored result of one call and the artifacts that hold its archived output; null when no result exists. */
+    suspend fun readToolResultSource(conversationId: String, callId: String): org.json.JSONObject? = JarvysChatDatabaseProvider.onQueryExecutor(database) {
+        database.withChatReadTransaction {
+            val row = sql.query(
+                "SELECT batch_id,tool_name,lifecycle,output FROM tool_results WHERE conversation_id=? AND call_id=? LIMIT 1",
+                arrayOf(conversationId, callId),
+            ).use { c -> if (c.moveToFirst()) listOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3)) else null }
+                ?: return@withChatReadTransaction null
+            val ids = sql.query(
+                "SELECT artifact_id FROM transcript_artifact_refs WHERE conversation_id=? AND batch_id=? AND call_id=? AND owner_kind='tool_result' ORDER BY id",
+                arrayOf(conversationId, row[0], callId),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            org.json.JSONObject().put("batchId", row[0]).put("toolName", row[1]).put("lifecycle", row[2]).put("output", row[3])
+                .put("artifactIds", org.json.JSONArray(ids))
+        }
+    }
 
     suspend fun readModelTranscript(conversationId: String, includeCompacted: Boolean = false): ModelTranscriptSnapshot = JarvysChatDatabaseProvider.onQueryExecutor(database) {
         database.withChatReadTransaction {
@@ -892,7 +957,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         "SELECT * FROM model_artifacts WHERE conversation_id=? AND seq=?", arrayOf(conversationId, seq),
     ).use { if (it.moveToFirst()) readModelArtifact(it) else null }
 
-    private fun readModelArtifact(c: android.database.Cursor) = ModelArtifact(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getLong(5), c.getLong(6), c.getStringOrNullM1b("file_ref_id"))
+    private fun readModelArtifact(c: android.database.Cursor) = ModelArtifact(c.getString(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getLong(5), c.getLong(6), c.getStringOrNullM1b("file_ref_id"), c.getString(c.getColumnIndexOrThrow("state")), c.getStringOrNullM1b("state_reason"))
 
     private fun ensureFileRef(relativePath: String, sha256: String, bytes: Long, mimeType: String, nowMillis: Long): String {
         val existing = sql.query("SELECT id,sha256,bytes FROM file_refs WHERE relative_path=?", arrayOf(relativePath)).use { c ->
@@ -982,7 +1047,9 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
 
     companion object {
         private const val INLINE_TOOL_OUTPUT_CHARS = 8_000
-        private const val MAX_MODEL_ARTIFACT_BYTES = 16L * 1024L * 1024L
+        private const val OWNER_TOOL_RESULT = "tool_result"
+        private const val OWNER_TOOL_CALL_ARGS = "tool_call_args"
+        private const val OWNER_BATCH_TEXT = "batch_text"
         /** Keep the conversation bind plus the IN values under SQLite's conservative variable limit. */
         private const val MAX_IN_QUERY_IDS = 900
 

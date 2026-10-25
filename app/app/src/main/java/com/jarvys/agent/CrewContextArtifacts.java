@@ -138,6 +138,54 @@ public final class CrewContextArtifacts {
         }
     }
 
+    /** The identifier {@link #save} would give {@code content}, computed without writing anything. */
+    public static String artifactId(String content) {
+        return digest(redact(content == null ? "" : content));
+    }
+
+    /** The first {@code maxChars} characters of an owned artifact, verified against its digest; null when it is not owned. */
+    public String readPrefix(String id, int maxChars) {
+        synchronized (scopeLock) {
+            requireActiveConversation();
+            Integer chars = this.owned.get(id);
+            if (chars == null) return null;
+            File file = new File(this.root, id + ".txt");
+            try {
+                verifyArtifact(id, chars.intValue(), file.length());
+                StringBuilder text = new StringBuilder();
+                try (Reader reader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)) {
+                    char[] chunk = new char[4096];
+                    int limit = Math.max(0, maxChars);
+                    while (text.length() < limit) {
+                        int count = reader.read(chunk, 0, Math.min(chunk.length, limit - text.length()));
+                        if (count < 0) break;
+                        text.append(chunk, 0, count);
+                    }
+                }
+                if (text.length() > 0 && Character.isHighSurrogate(text.charAt(text.length() - 1))) text.setLength(text.length() - 1);
+                return text.toString();
+            } catch (IOException unavailable) {
+                throw new IllegalStateException("Retained conversation artifact is missing or changed", unavailable);
+            }
+        }
+    }
+
+    /** Removes one artifact from disk and from this scope's ownership; true when no file is left. */
+    public boolean delete(String id) {
+        synchronized (scopeLock) {
+            try {
+                if (!id.matches("[0-9a-f]{64}")) return false;
+                File file = new File(this.root, id + ".txt");
+                verify(this.root);
+                verify(file);
+                this.owned.remove(id);
+                return !file.exists() || file.delete();
+            } catch (IOException failure) {
+                return false;
+            }
+        }
+    }
+
     public JSONObject snapshotOwnership() {
         JSONObject snapshot;
         synchronized (scopeLock) {

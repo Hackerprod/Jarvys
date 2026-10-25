@@ -28,6 +28,7 @@ object AppNavigationBackPolicy {
     const val SETTINGS = "settings"
     const val SETTINGS_PREFERENCES = "settings/preferences"
     const val SETTINGS_DEVELOPER = "settings/developer"
+    const val SETTINGS_STORAGE = "settings/storage"
     const val SETUP_WIZARD = "settings/setup-wizard"
     const val PROVIDERS = "providers"
     const val PROVIDERS_OPENAI = "providers/openai"
@@ -68,7 +69,7 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD,
+        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETTINGS_STORAGE, SETUP_WIZARD,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
@@ -85,6 +86,7 @@ object AppNavigationBackPolicy {
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         SETTINGS_DEVELOPER -> AppRouteMeta(context.getString(R.string.settings_developer), false)
+        SETTINGS_STORAGE -> AppRouteMeta(context.getString(R.string.settings_storage), false)
         SETUP_WIZARD -> AppRouteMeta(context.getString(R.string.setup_wizard_entry), false, showTopBar = false)
         PROVIDERS -> AppRouteMeta(context.getString(R.string.settings_providers), false)
         PROVIDERS_OPENAI -> AppRouteMeta(context.getString(R.string.provider_openai_name), false)

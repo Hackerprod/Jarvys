@@ -24,6 +24,8 @@ data class CompactionInput(
     val mode: String? = null,
     val summarizedMessages: Long,
     val createdAtSeconds: Double? = null,
+    /** Artifacts holding the summarized source text; stored as `compaction` owners of the protected closure. */
+    val artifactIds: List<String> = emptyList(),
 )
 
 data class ReflectionInput(
@@ -94,6 +96,15 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             arrayOf(input.conversationId, id, seq, input.summary, input.firstKept.coerceAtLeast(0L),
                 input.summarizedMessages.coerceAtLeast(0L), input.trigger ?: "manual", input.mode ?: "all", time),
         )
+        input.artifactIds.distinct().forEach { artifactId ->
+            val owned = sql.query("SELECT EXISTS(SELECT 1 FROM model_artifacts WHERE conversation_id=? AND artifact_id=?)", arrayOf(input.conversationId, artifactId))
+                .use { it.moveToFirst(); it.getInt(0) != 0 }
+            if (!owned) throw M1bAbort("model_artifact_reference_missing")
+            sql.execSQL(
+                "INSERT OR IGNORE INTO transcript_artifact_refs(conversation_id,owner_kind,batch_id,call_id,artifact_id) VALUES(?,?,?,NULL,?)",
+                arrayOf(input.conversationId, "compaction", id, artifactId),
+            )
+        }
         ChatDbResult.Success(readCompaction(input.conversationId, id)!!)
     }
 

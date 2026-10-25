@@ -18,6 +18,7 @@ data class Conversation(
     val last_message_at: Long? = null,
     val message_count: Long = 0L,
     val next_seq: Long = 1L,
+    @androidx.room.ColumnInfo(defaultValue = "0") val history_revision: Long = 0L,
 )
 
 /** Deletion history survives the conversation CASCADE and permanently blocks resurrection. */

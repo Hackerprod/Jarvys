@@ -323,7 +323,22 @@ data class ModelArtifact(
     val chars: Long,
     val bytes: Long,
     val file_ref_id: String? = null,
+    /** `retained` (complete), `bounded` (truncated), `expelled` (removed under storage pressure) or `unavailable` (never kept). */
+    @androidx.room.ColumnInfo(defaultValue = "'retained'") val state: String = ModelArtifactState.RETAINED,
+    val state_reason: String? = null,
 )
+
+/** Retention states of one conversation artifact; the model-visible text and the metadata both carry them. */
+object ModelArtifactState {
+    const val RETAINED = "retained"
+    const val BOUNDED = "bounded"
+    const val EXPELLED = "expelled"
+    const val UNAVAILABLE = "unavailable"
+    val ALL = setOf(RETAINED, BOUNDED, EXPELLED, UNAVAILABLE)
+
+    /** Whether the artifact text is on disk and can be read back. */
+    fun hasContent(state: String): Boolean = state == RETAINED || state == BOUNDED
+}
 
 /** `delivered_file` ownership rows; the file itself remains on disk. */
 @Entity(

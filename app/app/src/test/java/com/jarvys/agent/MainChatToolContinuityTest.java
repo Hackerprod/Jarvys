@@ -399,7 +399,7 @@ public class MainChatToolContinuityTest {
     store.appendConversationMessage(session, "user", "Inspect data");
     CoreTool originalReader = new MainChatTranscriptStore(files, session, store).recoveryTool();
     MainChatTranscriptStore compactorStore = new MainChatTranscriptStore(files, session, chatTestStore.localRunStore(files));
-    String reference = compactorStore.archive("Fresh source after model context compaction");
+    String reference = compactorStore.archive("Fresh source after model context compaction").text;
     java.util.regex.Matcher id = java.util.regex.Pattern.compile("artifact_id=\"([0-9a-f]{64})\"").matcher(reference);
     assertTrue(reference, id.find());
     CoreToolResult recovered = originalReader.execute(arguments("artifact_id", id.group(1)), CancellationToken.uncancellable());

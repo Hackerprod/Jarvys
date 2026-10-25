@@ -1477,4 +1477,20 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="setup_wizard_finish">Finish</string>
     <string name="single_session_retired">This update starts a new Central conversation and personal memory. Old conversations, memory and their files will now be removed.</string>
     <string name="single_session_started">This update starts a new Central conversation and resets all personal memory. Old data will be removed after the first successful run.</string>
+
+    <string name="settings_storage">Storage</string>
+    <string name="settings_storage_description">Jarvys keeps the full output of its tools so it can answer exactly what it did. When the device runs low on space it only removes copies that no remembered action depends on.</string>
+    <string name="settings_storage_loading">Reading storage…</string>
+    <string name="settings_storage_error">Storage details could not be read.</string>
+    <string name="settings_storage_low_title">Device storage is low</string>
+    <string name="settings_storage_low_body">Nothing more can be freed without losing the records of what Jarvys did, so new tool output is no longer kept in full. Free up space outside Jarvys. Your messages, memories and their evidence are untouched.</string>
+    <string name="settings_storage_state_retained">Kept in full</string>
+    <string name="settings_storage_state_bounded">Kept truncated</string>
+    <string name="settings_storage_state_expelled">Removed to free space</string>
+    <string name="settings_storage_state_unavailable">Not kept (storage was low)</string>
+    <string name="settings_storage_protected">Protected by remembered actions</string>
+    <string name="settings_storage_used">Space used by kept outputs</string>
+    <string name="memory_episode_label">Episode · %1$s</string>
+    <string name="memory_episode_narration_pending">Summary pending</string>
+    <string name="memory_episode_narration_failed">Summary could not be written</string>
 </resources>

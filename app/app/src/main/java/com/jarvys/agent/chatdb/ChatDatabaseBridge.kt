@@ -85,6 +85,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         val reader: ConversationReader,
         val modelTurnWriter: ConversationModelTurnWriter,
         val agentMemory: PersonalAgentRepository,
+        val history: MessageHistoryRepository,
+        val retention: ArtifactRetentionRepository,
     )
 
     companion object {
@@ -175,6 +177,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                     ConversationReader(database),
                     ConversationModelTurnWriter(database, conversations, transcript),
                     PersonalAgentRepository(database),
+                    MessageHistoryRepository(database),
+                    ArtifactRetentionRepository(database),
                 ).also { repositories = it }
             } catch (failure: Exception) {
                 // A corrupt or inaccessible database must not trigger an open/retry loop. Keep the
@@ -213,20 +217,30 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                                 sourceRef: String?): PersonalMemoryReceipt =
         withAgentMemory("save memory") { it.saveMemory(text, layer, category, importance, sourceRef) }
 
+    fun personalAgentSaveMemory(text: String, layer: String, category: String?, importance: Double,
+                                sourceRef: String?, options: MemorySaveOptions): PersonalMemoryReceipt =
+        withAgentMemory("save memory") { it.saveMemory(text, layer, category, importance, sourceRef, options) }
+
     fun personalAgentDailyConsolidationCandidates(): List<PersonalMemoryCandidate> =
         withAgentMemory("read daily consolidation candidates") { it.dailyConsolidationCandidates() }
 
     fun personalAgentConsolidateDailyNotes(sourceIds: List<String>, summary: String): PersonalMemoryReceipt =
         withAgentMemory("consolidate daily notes") { it.consolidateDailyNotes(sourceIds, summary) }
 
-    fun personalAgentSearch(query: String, limit: Int = 8): List<PersonalMemoryHit> =
+    fun personalAgentSearch(query: String, limit: Int = DEFAULT_MEMORY_SEARCH_LIMIT): List<PersonalMemoryHit> =
         withAgentMemory("search memory") { it.search(query, limit) }
+
+    fun personalAgentSearch(query: String, limit: Int, filter: MemorySearchFilter): List<PersonalMemoryHit> =
+        withAgentMemory("search memory") { it.search(query, limit, filter) }
 
     fun personalAgentSearchCapability(): String =
         withAgentMemory("read memory search capability") { it.searchCapability() }
 
     fun personalAgentGet(ids: List<String>): List<PersonalMemoryHit> =
         withAgentMemory("read memory") { it.get(ids) }
+
+    fun personalAgentGet(ids: List<String>, withEvidence: Boolean): List<PersonalMemoryHit> =
+        withAgentMemory("read memory") { it.get(ids, withEvidence) }
 
     fun personalAgentBrowse(): List<PersonalMemoryItem> =
         withAgentMemory("browse memory") { it.browse() }
@@ -526,6 +540,33 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun readModelArtifactRowsSync(conversationId: String): List<JSONObject> =
         execute { it.transcript.readArtifactRows(conversationId) }
 
+    fun readToolResultSourceSync(conversationId: String, callId: String): JSONObject? =
+        execute { it.transcript.readToolResultSource(conversationId, callId) }
+
+    // Artifact retention (SINGLE_SESSION 7.10): states, the protected closure of episode evidence, storage pressure.
+    fun nextExpellableArtifactSync(conversationId: String): ExpellableArtifact? =
+        execute { it.retention.nextExpellable(conversationId) }
+
+    fun expelArtifactSync(conversationId: String, artifactId: String, reason: String): Boolean =
+        execute { it.retention.expel(conversationId, artifactId, reason) }
+
+    fun protectedArtifactIdsSync(conversationId: String): Set<String> =
+        execute { it.retention.protectedArtifactIds(conversationId) }
+
+    fun setStorageWarningSync(active: Boolean) = execute { it.retention.setStorageWarning(active) }
+
+    fun retentionSummarySync(conversationId: String): RetentionSummary =
+        execute { it.retention.summary(conversationId) }
+
+    // Layer 3 of the memory model: the stored messages, searchable and readable exactly.
+    fun historySearchSync(
+        conversationId: String, query: String, role: String?, fromMs: Long?, toMsExclusive: Long?,
+        cursor: String?, limit: Int, excerptChars: Int,
+    ): HistoryPage = execute { it.history.search(conversationId, query, role, fromMs, toMsExclusive, cursor, limit, excerptChars) }
+
+    fun historyReadSync(conversationId: String, messageId: String, offset: Int, limitChars: Int): HistoryMessage? =
+        execute { it.history.read(conversationId, messageId, offset, limitChars) }
+
     fun readPendingAgentInputsSync(conversationId: String): List<StoredMessage> =
         execute { it.reader.readPendingAgentInputs(conversationId) }
 
@@ -698,8 +739,10 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         chars: Long,
         bytes: Long,
         mimeType: String = "text/plain",
+        state: String = ModelArtifactState.RETAINED,
+        stateReason: String? = null,
     ): ChatDbResult<ModelArtifact> = execute {
-        it.transcript.appendModelArtifact(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType)
+        it.transcript.appendModelArtifact(conversationId, artifactId, relativePath, sha256, chars, bytes, mimeType, state, stateReason)
     }
 
     fun appendToolActivitySync(input: ToolActivityInput): ChatDbResult<ToolActivity?> =

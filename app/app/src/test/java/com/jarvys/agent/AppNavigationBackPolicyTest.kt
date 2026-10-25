@@ -28,7 +28,7 @@ class AppNavigationBackPolicyTest {
 
     @Test fun explicitNavigationGraphHasOnlyTheChatRootWithBackForEveryOtherRouteAndNoWorkspaceRoutes() {
         assertEquals(listOf(
-            "chat", "settings", "settings/preferences", "settings/developer", "settings/setup-wizard",
+            "chat", "settings", "settings/preferences", "settings/developer", "settings/storage", "settings/setup-wizard",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "modules", "connectors", "connectors/device/{connectorId}",

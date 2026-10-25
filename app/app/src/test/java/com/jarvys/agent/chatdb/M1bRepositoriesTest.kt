@@ -127,9 +127,12 @@ class M1bRepositoriesTest {
         val modelArtifact = success(model.appendModelArtifact(
             "protocol", "artifact-model-1", "chats/protocol/model.txt", "a".repeat(64), 10, 16L * 1024L * 1024L,
         ))
-        assertTrue(model.appendModelArtifact(
-            "protocol", "artifact-model-over", "chats/protocol/over.txt", "b".repeat(64), 1, 1,
-        ) is ChatDbResult.Invalid)
+        // There is no per-conversation byte quota any more (SINGLE_SESSION 7.10): a 16 MiB artifact is an ordinary one.
+        assertEquals("retained", modelArtifact.state)
+        val beyondFormerQuota = success(model.appendModelArtifact(
+            "protocol", "artifact-model-2", "chats/protocol/next.txt", "b".repeat(64), 11, 1L,
+        ))
+        assertEquals("retained", beyondFormerQuota.state)
         val completeId = UUID.randomUUID().toString()
         val incompleteId = UUID.randomUUID().toString()
         success(model.appendToolBatch(ModelToolBatchInput(
@@ -172,7 +175,7 @@ class M1bRepositoriesTest {
         val beforeCompactionRows = database.testChatSql.query(
             "SELECT COUNT(*) FROM conversation_items WHERE conversation_id=?", arrayOf("protocol"),
         ).use { it.moveToFirst(); it.getLong(0) }
-        assertEquals(16L, beforeCompactionRows)
+        assertEquals(17L, beforeCompactionRows)
         val compaction = success(memory.appendCompaction(CompactionInput(
             conversationId = "protocol", summary = "summary", firstKept = 1, summarizedMessages = 1,
             createdAtSeconds = 123.5,
@@ -183,7 +186,7 @@ class M1bRepositoriesTest {
         assertEquals(listOf(incompleteId), retained.entries.filterIsInstance<ModelTranscriptEntry.Batch>().map { it.value.batch.batch_id })
         val transcript = model.readModelTranscript("protocol", includeCompacted = true)
         assertEquals(
-            listOf("Artifact", "Batch", "ResultActivity", "ResultActivity", "ProviderOutput", "ProviderOutput", "Error", "Batch", "Lifecycle", "Lifecycle"),
+            listOf("Artifact", "Artifact", "Batch", "ResultActivity", "ResultActivity", "ProviderOutput", "ProviderOutput", "Error", "Batch", "Lifecycle", "Lifecycle"),
             transcript.entries.map { entry -> when (entry) {
                 is ModelTranscriptEntry.Artifact -> "Artifact"
                 is ModelTranscriptEntry.Batch -> "Batch"
@@ -210,7 +213,7 @@ class M1bRepositoriesTest {
         assertEquals(first.seq, resultEvents.first().firstResult!!.seq)
         assertEquals(resultEvents.last().seq, batchEntries.first().value.batch.last_activity_seq)
         assertTrue("pre-boundary provider outputs are excluded from restored state", transcript.latestProviderOutputItemsByOwner.isEmpty())
-        assertEquals(16L, transcript.compactionBoundaryRowIndex)
+        assertEquals(17L, transcript.compactionBoundaryRowIndex)
         assertEquals(compaction.seq, transcript.compactionBoundarySeq)
         assertEquals(1L, transcript.firstKeptMessageIndex)
         assertEquals(incompleteId, model.latestBatchForOwner("protocol", owner)!!.batch.batch_id)

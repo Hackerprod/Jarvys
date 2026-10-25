@@ -1477,4 +1477,20 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="setup_wizard_continue">Continuar</string>
     <string name="setup_wizard_back">Atrás</string>
     <string name="setup_wizard_finish">Finalizar</string>
+
+    <string name="settings_storage">Almacenamiento</string>
+    <string name="settings_storage_description">Jarvys guarda la salida completa de sus herramientas para poder responder con exactitud qué hizo. Cuando el dispositivo se queda sin espacio, solo elimina copias de las que no depende ninguna acción recordada.</string>
+    <string name="settings_storage_loading">Leyendo el almacenamiento…</string>
+    <string name="settings_storage_error">No se pudieron leer los datos de almacenamiento.</string>
+    <string name="settings_storage_low_title">El almacenamiento del dispositivo está bajo</string>
+    <string name="settings_storage_low_body">No se puede liberar nada más sin perder los registros de lo que hizo Jarvys, así que la salida nueva de las herramientas ya no se guarda completa. Libera espacio fuera de Jarvys. Tus mensajes, recuerdos y su evidencia no se tocan.</string>
+    <string name="settings_storage_state_retained">Guardadas completas</string>
+    <string name="settings_storage_state_bounded">Guardadas truncadas</string>
+    <string name="settings_storage_state_expelled">Eliminadas para liberar espacio</string>
+    <string name="settings_storage_state_unavailable">No guardadas (poco espacio)</string>
+    <string name="settings_storage_protected">Protegidas por acciones recordadas</string>
+    <string name="settings_storage_used">Espacio de las salidas guardadas</string>
+    <string name="memory_episode_label">Episodio · %1$s</string>
+    <string name="memory_episode_narration_pending">Resumen pendiente</string>
+    <string name="memory_episode_narration_failed">No se pudo escribir el resumen</string>
 </resources>

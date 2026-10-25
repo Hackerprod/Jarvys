@@ -618,6 +618,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (current.status.isTerminalStatus()) return@transactionResult ChatDbResult.Success(hydrateMessages(conversationId, listOf(messageId)).single())
         if (parts.any { it.kind.isBlank() }) return@transactionResult ChatDbResult.Invalid("part kind is required")
         replaceParts(conversationId, messageId, preserveAttachmentReferences(conversationId, messageId, parts))
+        bumpHistoryRevision(conversationId)
         sql.execSQL(
             "UPDATE messages SET status=COALESCE(?,status),run_id=COALESCE(?,run_id)," +
                 "owner_user_message_id=COALESCE(?,owner_user_message_id),duration_ms=COALESCE(?,duration_ms),updated_at=? " +
@@ -644,6 +645,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (current.role != ROLE_ASSISTANT) return@transactionResult ChatDbResult.Invalid("finalization belongs to assistant messages")
         if (parts.any { it.kind.isBlank() }) return@transactionResult ChatDbResult.Invalid("part kind is required")
         replaceParts(conversationId, messageId, preserveAttachmentReferences(conversationId, messageId, parts))
+        bumpHistoryRevision(conversationId)
         sql.execSQL(
             "UPDATE messages SET status=?,duration_ms=COALESCE(?,duration_ms),updated_at=? WHERE conversation_id=? AND message_id=?",
             arrayOf(finalStatus, durationMillis?.takeIf { it > 0 }, updatedAtSeconds, conversationId, messageId),
@@ -690,6 +692,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             "UPDATE messages SET hidden_kind=?,hidden_seq=? WHERE conversation_id=? AND message_id=?",
             arrayOf(kind, seq, conversationId, messageId),
         )
+        bumpHistoryRevision(conversationId)
         ChatDbResult.Success(AssistantMarkerValue(seq, target.ownerUserMessageId))
     }
 
@@ -752,6 +755,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             "UPDATE messages SET hidden_kind='assistant_regenerated',hidden_seq=? WHERE conversation_id=? AND message_id=? AND hidden_kind IS NULL",
             arrayOf(seq, conversationId, messageId),
         )
+        bumpHistoryRevision(conversationId)
         ChatDbResult.Success(RegenerationPromptValue(prompt.text, prompt.messageId))
     }
 
@@ -1527,7 +1531,13 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         } else {
             sql.execSQL("UPDATE messages SET $valueColumn=?,$seqColumn=? WHERE conversation_id=? AND message_id=?", arrayOf(kind, seq, conversationId, messageId))
         }
+        if (kind == "assistant_regenerated" || kind == "assistant_deleted") bumpHistoryRevision(conversationId)
         ChatDbResult.Success(seq)
+    }
+
+    /** Advances the durable history-source generation inside the message mutation transaction. */
+    private fun bumpHistoryRevision(conversationId: String) {
+        sql.execSQL("UPDATE conversations SET history_revision=history_revision+1 WHERE id=?", arrayOf(conversationId))
     }
 
     private fun readWindow(conversationId: String, cursorSeq: Long?, turns: Int): MessageWindow {

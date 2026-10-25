@@ -65,6 +65,7 @@ public final class LocalRunStore {
     private static final Object SESSION_TITLE_LOCK = new Object();
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
     private final Context appContext;
+    private volatile StoragePressure storagePressure;
     private final File root;
     private final File filesDirectory;
     private final String runBoundary;
@@ -99,6 +100,7 @@ public final class LocalRunStore {
 
     public LocalRunStore(Context context) {
         this.appContext = context.getApplicationContext();
+        this.storagePressure = StoragePressure.system(appContext);
         File filesDirectory = context.getFilesDir();
         this.filesDirectory = filesDirectory;
         File jarvys = new StorageGeneration(filesDirectory).chatRoot();
@@ -116,6 +118,7 @@ public final class LocalRunStore {
     /** Non-production file fixture for run-store tests; conversation operations require a registered DB bridge. */
     LocalRunStore(File filesDirectory) {
         this.appContext = null;
+        this.storagePressure = StoragePressure.NONE;
         this.filesDirectory = filesDirectory;
         File jarvys = new StorageGeneration(filesDirectory).chatRoot();
         root = new File(jarvys, "runs");
@@ -1272,7 +1275,7 @@ public final class LocalRunStore {
             JSONObject row = new JSONObject().put("type", "tool_presentation").put("schemaVersion", 1)
                     .put("userMessageId", userMessageId == null ? "" : userMessageId)
                     .put("toolName", displayName == null ? "tool" : displayName).put("stage", stage)
-                    .put("callId", callId).put("detail", retained.retain(detail == null ? "" : detail))
+                    .put("callId", callId).put("detail", retained.retain(detail == null ? "" : detail).text)
                     .put("auditDetail", MainChatTranscriptStore.shortText(
                             CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
@@ -1293,7 +1296,7 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         try {
             JSONObject value = activity.toJson();
-            value.put("detail", new MainChatTranscriptStore(filesDirectory(),sessionId,this).retain(activity.detail));
+            value.put("detail", new MainChatTranscriptStore(filesDirectory(),sessionId,this).retain(activity.detail).text);
             value.put("auditDetail", MainChatTranscriptStore.shortText(CrewCheckpointStore.sanitizeText(activity.auditDetail),4000));
             com.jarvys.agent.chatdb.ToolActivityInput input = new com.jarvys.agent.chatdb.ToolActivityInput(
                     sessionId, activity.eventId, emptyToNull(userMessageId), activity.executionId,
@@ -1706,7 +1709,8 @@ public final class LocalRunStore {
                     JSONObject arguments = call.optJSONObject("arguments");
                     if (arguments == null) arguments = new JSONObject();
                     calls.add(new com.jarvys.agent.chatdb.ModelCallInput(
-                            call.optString("id"), call.optString("name"), arguments.toString()));
+                            call.optString("id"), call.optString("name"), arguments.toString(),
+                            artifactIds(call.optJSONArray("artifactIds"))));
                 }
                 String provider = row.optString("providerOutputItems", "");
                 if (provider.isEmpty()) provider = null;
@@ -1714,7 +1718,8 @@ public final class LocalRunStore {
                         new com.jarvys.agent.chatdb.ModelToolBatchInput(
                                 sessionId, row.optString("batchId"), emptyToNull(row.optString("userMessageId")),
                                 row.optLong("messageIndex"), row.optString("assistantText", ""),
-                                row.optBoolean("assistantProgress", true), calls, null, null, provider, time));
+                                row.optBoolean("assistantProgress", true), calls, null, null, provider, time,
+                                artifactIds(row.optJSONArray("assistantTextArtifactIds"))));
             }
             case "model_tool_started":
             case "model_tool_not_started":
@@ -1726,7 +1731,7 @@ public final class LocalRunStore {
                         new com.jarvys.agent.chatdb.ModelToolResultInput(
                                 sessionId, row.optString("batchId"), row.optString("callId"), row.optString("toolName"),
                                 row.optString("lifecycle", "RESULT"), row.optString("output", ""),
-                                emptyToNull(row.optString("artifactId")), time));
+                                emptyToNull(row.optString("artifactId")), time, artifactIds(row.optJSONArray("artifactIds"))));
             case "model_error":
                 return new com.jarvys.agent.chatdb.ModelTranscriptErrorWrite(
                         new com.jarvys.agent.chatdb.ModelErrorWrite(emptyToNull(row.optString("userMessageId")),
@@ -1743,7 +1748,9 @@ public final class LocalRunStore {
                         new com.jarvys.agent.chatdb.ModelArtifactWrite(row.optString("artifactId"),
                                 artifact.optString("path"), artifact.optString("sha256"),
                                 artifact.optLong("chars"), artifact.optLong("bytes"),
-                                artifact.optString("mimeType", "text/plain")));
+                                artifact.optString("mimeType", "text/plain"),
+                                artifact.optString("state", com.jarvys.agent.chatdb.ModelArtifactState.RETAINED),
+                                emptyToNull(artifact.optString("stateReason", ""))));
             }
             default: throw new IllegalArgumentException("Invalid model transcript record: " + type);
         }
@@ -1762,14 +1769,16 @@ public final class LocalRunStore {
                     JSONObject arguments = call.optJSONObject("arguments");
                     if (arguments == null) arguments = new JSONObject();
                     calls.add(new com.jarvys.agent.chatdb.ModelCallInput(
-                            call.optString("id"), call.optString("name"), arguments.toString()));
+                            call.optString("id"), call.optString("name"), arguments.toString(),
+                            artifactIds(call.optJSONArray("artifactIds"))));
                 }
                 String provider = row.optString("providerOutputItems", "");
                 if (provider.isEmpty()) provider = null;
                 com.jarvys.agent.chatdb.ModelToolBatchInput batch = new com.jarvys.agent.chatdb.ModelToolBatchInput(
                         sessionId, row.optString("batchId"), emptyToNull(row.optString("userMessageId")),
                         row.optLong("messageIndex"), row.optString("assistantText", ""),
-                        row.optBoolean("assistantProgress", true), calls, null, null, provider, time);
+                        row.optBoolean("assistantProgress", true), calls, null, null, provider, time,
+                        artifactIds(row.optJSONArray("assistantTextArtifactIds")));
                 requireChatDbSuccess(chatDatabaseBridge.appendToolBatchSync(batch), "append model tool batch");
                 return;
             }
@@ -1783,7 +1792,7 @@ public final class LocalRunStore {
                 com.jarvys.agent.chatdb.ModelToolResultInput result = new com.jarvys.agent.chatdb.ModelToolResultInput(
                         sessionId, row.optString("batchId"), row.optString("callId"), row.optString("toolName"),
                         row.optString("lifecycle", "RESULT"), row.optString("output", ""),
-                        emptyToNull(row.optString("artifactId")), time);
+                        emptyToNull(row.optString("artifactId")), time, artifactIds(row.optJSONArray("artifactIds")));
                 requireChatDbSuccess(chatDatabaseBridge.appendToolResultSync(result), "append model tool result");
                 return;
             }
@@ -1802,7 +1811,9 @@ public final class LocalRunStore {
                 if (artifact == null) throw new IllegalArgumentException("Model artifact metadata is required");
                 requireChatDbSuccess(chatDatabaseBridge.appendModelArtifactSync(sessionId,
                         row.optString("artifactId"), artifact.optString("path"), artifact.optString("sha256"),
-                        artifact.optLong("chars"), artifact.optLong("bytes"), artifact.optString("mimeType", "text/plain")),
+                        artifact.optLong("chars"), artifact.optLong("bytes"), artifact.optString("mimeType", "text/plain"),
+                        artifact.optString("state", com.jarvys.agent.chatdb.ModelArtifactState.RETAINED),
+                        emptyToNull(artifact.optString("stateReason", ""))),
                         "append model artifact");
                 return;
             }
@@ -1811,6 +1822,16 @@ public final class LocalRunStore {
     }
 
     private static String emptyToNull(String value) { return value == null || value.isEmpty() ? null : value; }
+
+    private static List<String> artifactIds(JSONArray ids) {
+        if (ids == null) return Collections.emptyList();
+        List<String> result = new ArrayList<>();
+        for (int index = 0; index < ids.length(); index++) {
+            String id = ids.optString(index, "");
+            if (!id.isEmpty()) result.add(id);
+        }
+        return result;
+    }
 
     public synchronized List<JSONObject> readActiveConversationMessages(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -2149,13 +2170,52 @@ public final class LocalRunStore {
 
     public synchronized void appendCompaction(String sessionId, String summary, int firstKept,
                                                String trigger, String mode, int summarizedMessages) {
+        appendCompaction(sessionId, summary, firstKept, trigger, mode, summarizedMessages, Collections.emptyList());
+    }
+
+    /** [sourceArtifactIds] hold the summarized source text; they become the compaction owners of the retention closure. */
+    public synchronized void appendCompaction(String sessionId, String summary, int firstKept,
+                                               String trigger, String mode, int summarizedMessages,
+                                               List<String> sourceArtifactIds) {
         if (summary == null || summary.trim().isEmpty()) throw new IllegalArgumentException("Compaction summary is empty");
         if (chatDatabaseBridge == null) throw noChatDatabase();
         requireChatDbSuccess(chatDatabaseBridge.appendCompactionSync(
                 new com.jarvys.agent.chatdb.CompactionInput(sessionId, summary, Math.max(0, firstKept),
                         trigger == null ? "manual" : trigger, mode == null ? "all" : mode,
-                        Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0)),
+                        Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0,
+                        sourceArtifactIds == null ? Collections.emptyList() : new ArrayList<>(sourceArtifactIds))),
                 "append compaction");
+    }
+
+    /** Free-space signal used by the artifact retention policy; a store without a context never reports pressure. */
+    StoragePressure storagePressure() { return storagePressure; }
+
+    void setStoragePressureForTests(StoragePressure pressure) { this.storagePressure = pressure; }
+
+    /** The oldest retained artifact outside the protected closure of any episode, or null when none may be expelled. */
+    synchronized JSONObject nextExpellableArtifact(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        com.jarvys.agent.chatdb.ExpellableArtifact artifact = chatDatabaseBridge.nextExpellableArtifactSync(sessionId);
+        if (artifact == null) return null;
+        try {
+            return new JSONObject().put("artifactId", artifact.getArtifactId()).put("path", artifact.getPath())
+                    .put("bytes", artifact.getBytes());
+        } catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    synchronized JSONObject readToolResultSource(String sessionId, String callId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readToolResultSourceSync(sessionId, callId);
+    }
+
+    synchronized boolean expelArtifact(String sessionId, String artifactId, String reason) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.expelArtifactSync(sessionId, artifactId, reason);
+    }
+
+    synchronized void setStorageWarning(boolean active) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        chatDatabaseBridge.setStorageWarningSync(active);
     }
 
     public String readFirstUserMessage(String sessionId) {

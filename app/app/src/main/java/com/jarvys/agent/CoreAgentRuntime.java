@@ -1550,7 +1550,8 @@ public final class CoreAgentRuntime {
     }
     if (this.depth == 0 && this.context != null && this.memoryEnabled
         && MessageReactionTool.isOrdinaryChat(this.sessionId)) {
-      tools.addAll(PersonalMemoryTools.create(this.context, this.mainChatSteeringCursor, this.sessionId));
+      tools.addAll(PersonalMemoryTools.create(this.context, this.mainChatSteeringCursor, this.sessionId,
+          this.budget.toolResultsPerTurnChars));
     }
     return new CoreToolRegistry(tools);
   }

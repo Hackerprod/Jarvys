@@ -23,28 +23,39 @@ internal object PersonalMemoryFtsSql {
             "INSERT INTO memory_fts(rowid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
     const val FTS5_REBUILD = "INSERT INTO memory_fts(memory_fts) VALUES('rebuild')"
 
-    const val FTS4_CREATE = "CREATE VIRTUAL TABLE memory_fts USING fts4(text, tokenize=unicode61)"
+    const val FTS4_CREATE = "CREATE VIRTUAL TABLE memory_fts USING fts4(title, text, topic_key, tokenize=unicode61)"
     const val FTS4_INSERT_TRIGGER =
         "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(docid,text) VALUES(NEW.rowid,NEW.text); END"
+            "INSERT INTO memory_fts(docid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
     const val FTS4_DELETE_TRIGGER =
         "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
             "DELETE FROM memory_fts WHERE docid=OLD.rowid; END"
     const val FTS4_UPDATE_TRIGGER =
         "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key ON memory_entries BEGIN " +
             "DELETE FROM memory_fts WHERE docid=OLD.rowid; " +
-            "INSERT INTO memory_fts(docid,text) VALUES(NEW.rowid,NEW.text); END"
-    const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,text) SELECT rowid,text FROM memory_entries"
+            "INSERT INTO memory_fts(docid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
+    const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,title,text,topic_key) SELECT rowid,title,text,topic_key FROM memory_entries"
 
-    const val FTS5_SEARCH =
-        "SELECT m.id,m.text,m.scope,m.layer,bm25(memory_fts) AS score,m.updated_at FROM memory_fts " +
+    /** bm25 column weights: a title or topic key match outranks the same words in a long body. */
+    private const val FTS5_WEIGHTS = "5.0,1.0,3.0"
+
+    /**
+     * Ranked search; [filters] is an `AND ...` suffix over alias `m` with its own bind arguments, appended after
+     * the MATCH argument and before the LIMIT argument.
+     */
+    fun fts5Search(filters: String = ""): String =
+        "SELECT m.id,m.updated_at,bm25(memory_fts,$FTS5_WEIGHTS) AS score FROM memory_fts " +
             "JOIN memory_entries m ON m.rowid=memory_fts.rowid " +
-            "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL AND m.scope='user' " +
+            "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL $filters " +
             "ORDER BY score,m.updated_at DESC LIMIT ?"
-    const val FTS4_SEARCH =
-        "SELECT m.id,m.text,m.scope,m.layer,matchinfo(memory_fts,'pcx'),m.updated_at FROM memory_fts " +
+
+    fun fts4Search(filters: String = ""): String =
+        "SELECT m.id,m.updated_at,matchinfo(memory_fts,'pcx') FROM memory_fts " +
             "JOIN memory_entries m ON m.rowid=memory_fts.docid " +
-            "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL AND m.scope='user'"
+            "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL $filters"
+
+    val FTS5_SEARCH = fts5Search()
+    val FTS4_SEARCH = fts4Search()
 
     fun matchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
         ?.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"*" }
@@ -52,7 +63,7 @@ internal object PersonalMemoryFtsSql {
     fun exactMatchExpression(query: String): String? = terms(query).takeIf(List<String>::isNotEmpty)
         ?.joinToString(" OR ") { "\"${it.replace("\"", "\"\"")}\"" }
 
-    fun terms(query: String): List<String> = query.split(Regex("[^\\p{L}\\p{N}_%]+"))
+    fun terms(query: String): List<String> = query.split(Regex("[^\\p{L}\\p{N}]+"))
         .filter(String::isNotBlank).distinctBy { it.lowercase() }
 
     /** FTS4 matchinfo('pcx') rank: term frequency weighted by inverse document frequency. */

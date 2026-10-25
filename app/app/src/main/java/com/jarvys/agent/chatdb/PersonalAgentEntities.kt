@@ -50,13 +50,14 @@ data class UserDirective(
 @Entity(
     tableName = "memory_entries",
     indices = [
-        Index(name = "idx_memory_entries_scope_layer_day", value = ["scope", "layer", "day"]),
+        Index(name = "idx_memory_entries_layer_day", value = ["layer", "day"]),
         Index(name = "idx_memory_entries_deleted", value = ["deleted_at"]),
+        Index(name = "idx_memory_entries_kind_event", value = ["kind", "event_at"]),
+        Index(name = "idx_memory_entries_source_message", value = ["source_message_id"]),
     ],
 )
 data class MemoryEntry(
     @androidx.room.PrimaryKey val id: String,
-    val scope: String,
     val layer: String,
     val day: String?,
     val text: String,
@@ -128,8 +129,13 @@ data class MemoryJob(
     val updated_at: Long,
 )
 
+/** Runtime-written pointers and neutral facts behind an episode; the model never writes these rows. */
 @Entity(tableName = "memory_evidence", primaryKeys = ["entry_id", "ordinal"], foreignKeys = [
     ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["entry_id"], onDelete = ForeignKey.CASCADE),
+], indices = [
+    Index(name = "idx_memory_evidence_ref", value = ["ref_conversation_id", "ref_id"]),
+    Index(name = "idx_memory_evidence_tool", value = ["tool_name", "outcome"]),
+    Index(name = "idx_memory_evidence_connector", value = ["connector"]),
 ])
 data class MemoryEvidence(
     val entry_id: String,
@@ -144,6 +150,8 @@ data class MemoryEvidence(
     val outcome: String?,
     val authorization: String?,
     val facts_json: String,
+    /** Connector or MCP server id of the call, so a structured search can filter on it without parsing JSON. */
+    val connector: String? = null,
 )
 
 @Entity(tableName = "memory_links", primaryKeys = ["from_id", "to_id", "relation"], foreignKeys = [

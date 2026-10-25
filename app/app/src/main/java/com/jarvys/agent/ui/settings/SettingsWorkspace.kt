@@ -42,7 +42,7 @@ import com.jarvys.agent.JarvysChoiceSheet
 import com.jarvys.agent.proactive.ProactiveStatus
 import java.util.Date
 
-enum class SettingsWorkspacePage { HOME, PREFERENCES, DEVELOPER }
+enum class SettingsWorkspacePage { HOME, PREFERENCES, DEVELOPER, STORAGE }
 
 @Composable
 fun SettingsWorkspace(
@@ -97,6 +97,7 @@ fun SettingsWorkspace(
                 onSetupWizard = onSetupWizard,
                 onConnectors = onConnectors,
                 onDeveloper = { onNavigate(SettingsWorkspacePage.DEVELOPER) },
+                onStorage = { onNavigate(SettingsWorkspacePage.STORAGE) },
                 onAccessibility = onAccessibilitySettings,
             )
             SettingsWorkspacePage.PREFERENCES -> PreferencesWorkspace(
@@ -107,6 +108,7 @@ fun SettingsWorkspace(
                 proactiveStatus = proactiveStatus,
             )
             SettingsWorkspacePage.DEVELOPER -> DeveloperWorkspace()
+            SettingsWorkspacePage.STORAGE -> StorageWorkspace()
         }
     }
     if (languageChoiceOpen) JarvysChoiceSheet(
@@ -152,6 +154,7 @@ private fun SettingsIndex(
     onSetupWizard: () -> Unit,
     onConnectors: () -> Unit,
     onDeveloper: () -> Unit,
+    onStorage: () -> Unit,
     onAccessibility: () -> Unit,
 ) {
     SettingsSection(stringResource(R.string.settings_general)) {
@@ -195,6 +198,9 @@ private fun SettingsIndex(
     }
     Spacer(Modifier.height(22.dp))
     SettingsSection(stringResource(R.string.settings_device)) {
+        SettingsIndexRow(LucideIcons.Save, stringResource(R.string.settings_storage), null, onStorage,
+            testTag = "settings-storage-row")
+        SettingsRule()
         SettingsIndexRow(LucideIcons.Accessibility, stringResource(R.string.settings_accessibility), null, onAccessibility)
     }
 }

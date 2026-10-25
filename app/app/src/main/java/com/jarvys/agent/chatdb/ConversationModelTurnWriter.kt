@@ -15,6 +15,8 @@ data class ModelArtifactWrite(
     val chars: Long,
     val bytes: Long,
     val mimeType: String = "text/plain",
+    val state: String = ModelArtifactState.RETAINED,
+    val stateReason: String? = null,
 )
 data class ModelTranscriptArtifactWrite(val input: ModelArtifactWrite) : ModelTranscriptWrite
 
@@ -169,6 +171,7 @@ internal class ConversationModelTurnWriter(
                         is ModelTranscriptArtifactWrite -> requireSuccess(transcript.appendModelArtifact(
                             input.conversationId, write.input.artifactId, write.input.relativePath,
                             write.input.sha256, write.input.chars, write.input.bytes, write.input.mimeType,
+                            write.input.state, write.input.stateReason,
                         ))
                     }
                 }

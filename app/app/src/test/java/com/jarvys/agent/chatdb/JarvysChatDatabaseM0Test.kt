@@ -898,6 +898,7 @@ class JarvysChatDatabaseM0Test {
             scalarString(sqlite, "SELECT identity_hash FROM room_master_table WHERE id=42"),
         )
         assertExportedSchemaMatchesDatabase(exportedDatabase, sqlite)
+        assertTrue("conversation source revision must be durable", "history_revision" in tableColumns(sqlite, "conversations"))
         assertTrue(scalarString(sqlite, "SELECT sql FROM sqlite_master WHERE name='idx_memory_entries_topic_active'")
             .contains("WHERE topic_key IS NOT NULL AND deleted_at IS NULL"))
         assertTrue(scalarString(sqlite, "SELECT sql FROM sqlite_master WHERE name='idx_transcript_artifact_owner'")
