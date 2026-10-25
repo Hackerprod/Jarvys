@@ -1,14 +1,4 @@
 <resources>
-    <string name="workspace_file_unavailable">This file or page could not be read. Its scope, revision or format may have changed.</string>
-    <string name="workspace_coding_files">Project files</string>
-    <string name="workspace_shared_files">Shared workspace files</string>
-    <string name="workspace_file_read_only">Read-only file view. Existing readers enforce scope and page limits.</string>
-    <string name="workspace_parent_folder">Back to folder</string>
-    <string name="workspace_next_page">Next page</string>
-    <string name="workspace_control_failed">The workspace control could not be confirmed. Inspect the workspace before trying another action.</string>
-    <string name="workspace_correction_target">Workspace %1$s · assignment %2$s</string>
-    <string name="workspace_correction_text">Your correction</string>
-    <string name="workspace_send_correction">Send correction</string>
     <string name="workspace_pause_request">Pause this exact workspace assignment and retain its work.</string>
     <string name="workspace_resume_request">Resume this exact workspace assignment using its retained work and current permissions.</string>
 </resources>

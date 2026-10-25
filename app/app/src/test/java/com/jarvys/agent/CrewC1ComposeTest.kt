@@ -42,6 +42,8 @@ import com.jarvys.agent.crew.CrewModePicker
 import com.jarvys.agent.ui.motion.JarvysMotionPolicy
 import com.jarvys.agent.crew.CrewNavigationRoutes
 import com.jarvys.agent.crew.CrewRole
+import com.jarvys.agent.crew.CrewSessionAccess
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.crew.CrewTools
 import com.jarvys.agent.crew.crewDestinations
 import org.junit.Assert.assertEquals
@@ -139,6 +141,15 @@ class CrewC1ComposeTest {
         val board = CrewBoard(workspace)
         board.post("/board/source.md", "Primary source text")
         val mission = snapshot(1)
+        val executionSession = WorkspaceIdentity.executionSessionId("11111111-1111-1111-1111-111111111111")
+        val access = object : CrewSessionAccess {
+            override fun resolve(session: String) = session == executionSession
+            override fun board(session: String) = board
+            override fun manager(session: String): CrewManager? = null
+            override fun missions(session: String) = listOf(mission)
+            override fun stopAll(session: String) {}
+            override fun resumeBot(session: String, botId: String) {}
+        }
         val navControllerHolder = AtomicReference<androidx.navigation.NavController>()
         var boardReference by mutableStateOf<String?>(null)
         compose.setContent {
@@ -150,15 +161,11 @@ class CrewC1ComposeTest {
                     JarvysScreen(title = stringResource(R.string.crew_title), onBack = { nav.popBackStack() }) { padding ->
                         NavHost(nav, startDestination = "crew-home", modifier = Modifier.padding(padding).fillMaxSize()) {
                             composable("crew-home") {
-                                CrewMissionCard(mission, { nav.navigate(CrewNavigationRoutes.mission(mission.missionId)) }, true)
+                                CrewMissionCard(mission, { nav.navigate(CrewNavigationRoutes.mission(mission.missionId, executionSession)) }, true)
                             }
                             crewDestinations(
                                 navController = nav,
-                                board = board,
-                                readOnly = { false },
-                                missions = { listOf(mission) },
-                                manager = null,
-                                onStopAll = {},
+                                access = access,
                                 initialBoardReference = boardReference,
                                 onBoardReferenceConsumed = { boardReference = null },
                                 onBoardReference = { _, reference -> boardReference = reference; nav.popBackStack() },
@@ -182,13 +189,21 @@ class CrewC1ComposeTest {
         compose.onNodeWithTag("crew-bot-row-bot-0").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("crew-bot-detail").assertIsDisplayed()
+        assertEquals(CrewNavigationRoutes.BOT, navControllerHolder.get().currentDestination?.route)
+        assertEquals("the bot route keeps the mission's execution session", executionSession,
+            navControllerHolder.get().currentBackStackEntry?.arguments?.getString(CrewNavigationRoutes.SESSION))
         compose.onNodeWithTag("jarvys-back").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("crew-mission-screen").assertIsDisplayed()
-        assertTrue(navControllerHolder.get().currentDestination?.route == CrewNavigationRoutes.MISSION)
-        navControllerHolder.get().navigate(CrewNavigationRoutes.EMPTY)
-        compose.waitForIdle()
-        compose.onNodeWithTag("crew-empty-state").assertIsDisplayed()
+        assertEquals(CrewNavigationRoutes.MISSION, navControllerHolder.get().currentDestination?.route)
+        assertEquals(executionSession,
+            navControllerHolder.get().currentBackStackEntry?.arguments?.getString(CrewNavigationRoutes.SESSION))
+        // A reference whose session does not resolve is reported as unavailable; it never opens another session.
+        navControllerHolder.get().navigate(CrewNavigationRoutes.mission(mission.missionId, "unknown-session"))
+        compose.waitUntil(5_000) {
+            runCatching { compose.onNodeWithTag("crew-mission-unavailable").assertIsDisplayed(); true }.getOrDefault(false)
+        }
+        compose.onAllNodesWithTag("crew-mission-screen").assertCountEquals(0)
     }
 
     @Test

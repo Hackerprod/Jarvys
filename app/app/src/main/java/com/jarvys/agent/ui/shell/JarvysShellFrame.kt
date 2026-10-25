@@ -56,11 +56,6 @@ fun JarvysShellFrame(
     mascotVisibleSessionId: String? = null,
     mascotLiveConversationVisible: Boolean = false,
     centralMascotCentered: Boolean = false,
-    conversationActionsEnabled: Boolean = true,
-    workspaceMenuActionTitle: String? = null,
-    onWorkspaceMenuAction: () -> Unit = {},
-    workspaceBotsActionTitle: String? = null,
-    onWorkspaceBotsAction: () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -108,11 +103,6 @@ fun JarvysShellFrame(
                     mascotLiveConversationVisible = mascotLiveConversationVisible,
                     mascotSurfaceVisible = drawerState.isClosed && drawerState.targetValue == DrawerValue.Closed
                         && !drawerState.isAnimationRunning,
-                    conversationActionsEnabled = conversationActionsEnabled,
-                    workspaceMenuActionTitle = workspaceMenuActionTitle,
-                    onWorkspaceMenuAction = onWorkspaceMenuAction,
-                    workspaceBotsActionTitle = workspaceBotsActionTitle,
-                    onWorkspaceBotsAction = onWorkspaceBotsAction,
                 )
                 }
             },

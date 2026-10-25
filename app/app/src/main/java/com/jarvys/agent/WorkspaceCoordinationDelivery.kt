@@ -514,11 +514,11 @@ class WorkspaceCoordinationDelivery internal constructor(
             try {
                 WorkspaceCoordinationDelivery(context).reconcile(workspaceId, token)
                 WorkspaceInputIncorporationDelivery(context).reconcile(workspaceId, token)
-                if (errors.remove(workspaceId) != null) WorkspaceChanges.detailChanged()
+                if (errors.remove(workspaceId) != null) WorkspaceChanges.changed()
             } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
             catch (_: Exception) {
                 val message = "Coordination evidence is pending or unavailable; no worker action was repeated."
-                if (errors.put(workspaceId, message) != message) WorkspaceChanges.detailChanged()
+                if (errors.put(workspaceId, message) != message) WorkspaceChanges.changed()
             }
         }
         @JvmStatic fun isCanonicalWorkspace(context: Context, session: String): Boolean {

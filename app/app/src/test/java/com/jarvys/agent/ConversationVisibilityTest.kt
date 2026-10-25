@@ -1,7 +1,6 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.ui.chat.ConversationVisibility
-import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -23,7 +22,7 @@ class ConversationVisibilityTest {
         val interim = AgentRunUiEvent(20L, "assistant", "PROGRESS", "interim update")
         val evidence = phases.mapIndexed { i, stage -> AgentRunUiEvent(i.toLong(), "progress", stage, "internal") } + interim
 
-        // Workspace timelines keep the default projection because their runs do not enable interim updates.
+        // The default projection hides interim updates; callers opt in per timeline.
         assertTrue(ConversationVisibility.project(evidence).isEmpty())
         assertEquals(listOf(interim), ConversationVisibility.project(evidence, showAssistantProgress = true))
         assertEquals(11, evidence.size)
@@ -68,7 +67,7 @@ class ConversationVisibilityTest {
         }
     }
 
-    @Test fun persistedAgentAndSystemInputsCarryOriginAndBothChatProjectionsHideThem() {
+    @Test fun persistedAgentAndSystemInputsCarryOriginAndTheChatProjectionHidesThem() {
         val session = "durable-internal-origin"
         val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val userId = store.appendConversationInput(ConversationInput(
@@ -97,13 +96,9 @@ class ConversationVisibilityTest {
         assertEquals(ConversationInput.Origin.SYSTEM, system.conversationInputOrigin)
 
         val mainChat = ConversationVisibility.project(timeline)
-        val workspace = WorkspaceTimelineProjection.project("workspace-1", timeline)
-        for (projection in listOf(mainChat, workspace)) {
-            assertFalse(projection.any { it.messageId == agentId || it.messageId == systemId })
-            assertTrue(projection.any { it.messageId == userId })
-        }
+        assertFalse(mainChat.any { it.messageId == agentId || it.messageId == systemId })
+        assertTrue(mainChat.any { it.messageId == userId })
         assertTrue("a Central assistant response is a separate visible event", mainChat.any { it.messageId == answerId })
-        assertFalse("workspace chat hides assistant output from the worker execution", workspace.any { it.messageId == answerId })
         assertFalse(ConversationVisibility.visible(agent))
         assertFalse(ConversationVisibility.visible(system))
     }

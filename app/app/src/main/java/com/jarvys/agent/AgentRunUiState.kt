@@ -2,6 +2,7 @@ package com.jarvys.agent
 
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.workspaces.MissionRef
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -92,6 +93,8 @@ data class AgentRunUiEvent(
     val canRegenerate: Boolean = true,
     /** Discreet attribution used only for bot messages projected into a multi-bot workspace chat. */
     val workspaceSenderLabel: String? = null,
+    /** Bot mission this Central message points to; the timeline draws it as a mission card. */
+    val missionRef: MissionRef? = null,
  ) {
     /** Parsed once per immutable event instance; a data-class copy gets a fresh analysis. */
     internal val visibilityDetailAnalysis: AgentRunUiEventVisibilityDetail by lazy {
@@ -164,6 +167,11 @@ data class AgentRunUiEvent(
         fun crewMissionEvent(id: Long, snapshot: CrewMissionSnapshot): AgentRunUiEvent =
             AgentRunUiEvent(id, "crew_mission", snapshot.status, snapshot.title,
                 timestampMillis = snapshot.startedAtMillis, crewMissionSnapshot = snapshot)
+
+        @JvmStatic
+        fun missionRefEvent(id: Long, ref: MissionRef, text: String, timestampMillis: Long): AgentRunUiEvent =
+            AgentRunUiEvent(id, "mission_ref", null, text, timestampMillis = timestampMillis, missionRef = ref,
+                canRegenerate = false)
 
         @JvmStatic
         fun artifactEvent(id: Long, artifact: PresentationArtifact, timestampMillis: Long,
@@ -953,7 +961,7 @@ object AgentRunUiState {
     fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
-        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "artifact")
+        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "mission_ref", "tool", "user_decision", "artifact")
         val liveInFlightTools = if (current.running) current.events.mapNotNull { event ->
             if (event.kind == "tool" && event.stage in setOf("tool_call", "tool_progress", "approval_waiting"))
                 event.toolCallId?.let { event to refreshToolIdentity(event) }
@@ -1097,7 +1105,7 @@ object AgentRunUiState {
 
     private fun timelineEventIdentity(event: AgentRunUiEvent): String? {
         val identity = when (event.kind) {
-            "user", "assistant" -> event.messageId
+            "user", "assistant", "mission_ref" -> event.messageId
             "assistant_translation" -> event.detail
             else -> null
         }?.takeIf(String::isNotBlank)?.takeUnless {
@@ -1110,6 +1118,7 @@ object AgentRunUiState {
         val identity = when (event.kind) {
             "user", "assistant" -> event.messageId.takeIf(String::isNotBlank)
                 ?.takeUnless { it.startsWith("legacy-") }
+            "mission_ref" -> event.messageId.takeIf(String::isNotBlank)
             "assistant_translation" -> event.detail?.takeIf(String::isNotBlank)
             "tool" -> event.toolIdentity?.takeIf(String::isNotBlank)
             "user_decision" -> event.decisionId?.takeIf(String::isNotBlank)
@@ -1215,7 +1224,7 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error",
-            "memory", "crew_mission", "tool", "user_decision", "artifact")
+            "memory", "crew_mission", "mission_ref", "tool", "user_decision", "artifact")
         val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
         val retainedAssistantTimelineKeys = current.events.asSequence()
             .filter { it.kind == "assistant" && it.timelineKey != null }
@@ -2345,7 +2354,7 @@ object AgentRunUiState {
 
     private fun append(existing: List<AgentRunUiEvent>, item: AgentRunUiEvent): List<AgentRunUiEvent> {
         val result = existing + item
-        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "artifact")
+        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "mission_ref", "user_decision", "artifact")
         // Pending approvals are live requests with blocked workers behind them; evicting one
         // would orphan the ApprovalGate latch. Keep all pending cards even when history is busy.
         fun evictable(event: AgentRunUiEvent) = event.kind !in durableKinds

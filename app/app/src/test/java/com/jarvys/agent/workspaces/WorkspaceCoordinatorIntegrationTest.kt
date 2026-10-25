@@ -307,7 +307,7 @@ class WorkspaceCoordinatorIntegrationTest {
                     val user = centralMessages.single { it.getString("role") == "user" }
                     assertEquals("$userText\n[Workspace ${scope.workspaceId}; assignment ${control.assignmentId}; native control ${control.requestId}]",
                         user.getString("content"))
-                    assertTrue(centralMessages.none { it.getString("role") == "assistant" })
+                    assertTrue(centralMessages.none { it.getString("role") == "assistant" && it.optString("type") != "mission_ref" })
                     assertTrue("Admission notification arrived after cleanup", ownedPending.get())
                     assertEquals(0, completionCalls.get())
                 } catch (failure: Throwable) { callbackAssertion.set(failure) }
@@ -350,6 +350,18 @@ class WorkspaceCoordinatorIntegrationTest {
         assertEquals(1, centralMessages.count { it.getString("role") == "user" })
         assertEquals(1, centralMessages.count { it.getString("role") == "assistant" && it.getString("content") == receipt.get() })
         WorkspaceRegistry(context).use { assertEquals(1, it.listControls(scope.workspaceId).size) }
+    }
+
+    @Test fun delegationAddsOneMissionCardThatPointsAtTheWorkspaceExecutionSession() {
+        val scope = workspace("card-on-delegate")
+        val assignment = delegate(scope)
+
+        val card = LocalRunStore(context).readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION)
+            .single { it.kind == "mission_ref" }.missionRef!!
+        assertEquals(scope.executionSessionId, card.executionSessionId)
+        assertEquals(assignment.getString("mission_id"), card.missionId)
+        assertEquals(assignment.getString("assignment_id"), card.assignmentId)
+        assertNull("a delegation card announces no result yet", card.resultId)
     }
 
     @Test fun globalStopCancelsTheTokenActuallyUsedByQueuedCorrectionBeforeDispatch() {
@@ -421,7 +433,8 @@ class WorkspaceCoordinatorIntegrationTest {
             assertFalse(afterStopPending.getBoolean("automatic_retry"))
             val centralMessages = LocalRunStore(context).readConversationMessages(WorkspaceIdentity.CENTRAL_SESSION)
             assertEquals(1, centralMessages.count { it.getString("role") == "user" && it.getString("content").contains(pending.requestId) })
-            assertTrue("A cancelled, undispatched command must not claim success", centralMessages.none { it.getString("role") == "assistant" })
+            assertTrue("A cancelled, undispatched command must not claim success",
+                centralMessages.none { it.getString("role") == "assistant" && it.optString("type") != "mission_ref" })
         } finally {
             releaseAdmission.countDown()
             completed.await(10, TimeUnit.SECONDS)

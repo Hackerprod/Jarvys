@@ -26,25 +26,23 @@ class AppNavigationBackPolicyTest {
     private val compose = createEmptyComposeRule()
     @get:Rule val rules = RuleChain.outerRule(ExistingUserSetupWizardRule()).around(compose)
 
-    @Test fun explicitNavigationGraphHasChatAndWorkspacesRootsWithBackForEveryOtherRoute() {
+    @Test fun explicitNavigationGraphHasOnlyTheChatRootWithBackForEveryOtherRouteAndNoWorkspaceRoutes() {
         assertEquals(listOf(
-            "chat", "workspaces", "settings", "settings/preferences", "settings/developer", "settings/setup-wizard",
+            "chat", "settings", "settings/preferences", "settings/developer", "settings/setup-wizard",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "modules", "connectors", "connectors/device/{connectorId}",
             "connectors/remote/{serviceId}?title={title}", "connectors/google/{serviceId}?title={title}",
             "memory", "memory/history", "memory/file?path={path}&new={new}",
-            "tasks", "tasks/detail/{taskId}", "bots", "crew", "crew/{missionId}",
-            "crew/{missionId}/bot/{botId}", "workspace/{workspaceId}", "workspace/{workspaceId}/files", "workspace-preview/{projectId}",
-            "workspace-session-preview/{sessionId}/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
+            "tasks", "tasks/detail/{taskId}", "bots", "crew/{missionId}?session={session}",
+            "crew/{missionId}/bot/{botId}?session={session}", "artifact-preview/{sessionId}/{artifactId}",
             "module-artifact-viewer/{sessionId}/{artifactId}",
         ), AppNavigationBackPolicy.registeredRoutePatterns)
-        assertEquals(setOf("chat", "workspaces"), AppNavigationBackPolicy.rootRoutes)
+        assertEquals(setOf("chat"), AppNavigationBackPolicy.rootRoutes)
         AppNavigationBackPolicy.registeredRoutePatterns.forEach { route ->
-            assertEquals(route !in setOf("chat", "workspaces"), AppNavigationBackPolicy.requiresBack(route))
+            assertEquals(route != "chat", AppNavigationBackPolicy.requiresBack(route))
         }
         assertFalse(AppNavigationBackPolicy.requiresBack("chat"))
-        assertFalse(AppNavigationBackPolicy.requiresBack("workspaces"))
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val singleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
         singleton.set(null, SecretStore(context.getSharedPreferences("n1a-route-graph-secrets", 0)))
@@ -55,13 +53,10 @@ class AppNavigationBackPolicyTest {
             try {
                 compose.mainClock.advanceTimeBy(64)
                 awaitReactionDrawIdle(compose, activity.get())
-                val catalog = AppNavigationBackPolicy.metadata(context, "workspaces", "Independent title", null, null)
-                assertTrue(catalog.isRoot)
-                assertTrue(catalog.showTopBar)
-                assertEquals(context.getString(R.string.workspace_sidebar_heading), catalog.title)
-                assertEquals(AppRouteAction.NONE, catalog.action)
                 val actualGraphRoutes = activity.get().navGraphRoutePatternsForTest()
                 assertEquals(AppNavigationBackPolicy.registeredRoutePatterns.toSet(), actualGraphRoutes)
+                assertTrue("workspaces are invisible: the graph has no workspace route",
+                    actualGraphRoutes.none { it.startsWith("workspace") })
             } finally {
                 activity.pause().stop().destroy()
                 singleton.set(null, null)
@@ -86,7 +81,7 @@ class AppNavigationBackPolicyTest {
         assertEquals("Vista previa del artefacto", spanish.title)
         assertEquals(
             context.getString(R.string.chat_open_preview),
-            AppNavigationBackPolicy.metadata(context, AppNavigationBackPolicy.WORKSPACE_SESSION_PREVIEW,
+            AppNavigationBackPolicy.metadata(context, AppNavigationBackPolicy.ARTIFACT_PREVIEW,
                 "Chat", null, null).title,
         )
     }

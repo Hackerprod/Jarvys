@@ -460,8 +460,6 @@ fun CrewMissionScreen(
     onStopAll: () -> Unit,
     initialBoardReference: String? = null,
     onBoardReferenceConsumed: () -> Unit = {},
-    crewMode: CrewMode = CrewMode.AUTO,
-    onCrewModeChange: (CrewMode) -> Unit = {},
     onOpenPreview: ((String) -> Unit)? = null,
 ) {
     var configuringCoding by remember { mutableStateOf(false) }
@@ -496,8 +494,6 @@ fun CrewMissionScreen(
         title = { Text(stringResource(R.string.crew_settings_title)) },
         text = {
             ScrollableDialogContent {
-                CrewModePicker(crewMode, onCrewModeChange, stacked = true)
-                Spacer(Modifier.height(8.dp))
                 if (snapshot != null && snapshot.originalInstructions.isNotBlank()) TextButton(
                     onClick = { showSettings = false; showInstructions = true },
                     modifier = Modifier.fillMaxWidth().testTag("crew-view-instructions"),
@@ -530,7 +526,6 @@ fun CrewMissionScreen(
     val compactHeight = maxHeight < 420.dp
     Column(Modifier.fillMaxSize().testTag("crew-mission-screen")) {
         if (snapshot == null) {
-            CrewModePicker(crewMode, onCrewModeChange, modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
             TextButton(onClick = { configuringCoding = true }, modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
                 Text(stringResource(R.string.bots_runtime_details))
             }
@@ -984,6 +979,16 @@ private fun CrewEmptyState() {
             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(stringResource(R.string.crew_empty_body), Modifier.padding(top = 6.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** A mission reference that no longer resolves says so; it never opens another conversation. */
+@Composable
+fun CrewMissionUnavailable() {
+    Column(Modifier.fillMaxSize().padding(32.dp).testTag("crew-mission-unavailable"),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text(stringResource(R.string.crew_mission_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium)
     }
 }
 

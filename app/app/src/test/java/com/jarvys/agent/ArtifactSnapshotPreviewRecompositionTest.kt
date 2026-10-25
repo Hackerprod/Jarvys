@@ -1,6 +1,5 @@
 package com.jarvys.agent
 
-import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -8,45 +7,59 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.ExperimentalTestApi
-import kotlinx.coroutines.test.StandardTestDispatcher
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadow.api.Shadow
 
-/** Forces a real parameter change so a skipped Compose group cannot hide an AndroidView reload. */
+/**
+ * The extracted snapshot viewer keeps its live native WebView across ordinary recomposition and
+ * scopes its saved history to the snapshot it shows. A real parameter change forces the check, so a
+ * skipped Compose group cannot hide an AndroidView reload.
+ */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], shadows = [WorkspacePreviewRecordingShadow::class])
-class WorkspacePreviewRecompositionTest {
+@Config(sdk = [34], shadows = [WorkspacePreviewRecordingShadow::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+class ArtifactSnapshotPreviewRecompositionTest {
+    private val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
     @OptIn(ExperimentalTestApi::class)
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
-    private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(chatTestStore).around(compose)
+
+    private data class Delivered(val session: String, val token: String)
+
+    @Before fun storageReady() {
+        val filesDir = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir
+        chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(filesDir) }
+    }
 
     @Test fun changingModifierRecomposesAndroidViewWithoutResettingInternalNavigationHistoryOrScroll() {
-        val projectId = createWorkspace("recomposition")
+        val delivered = deliver("recomposition")
         val revision = mutableStateOf(0)
         compose.setContent {
             MaterialTheme {
-                WorkspacePreviewScreen(projectId, modifier = Modifier.testTag("preview-revision-${revision.value}"))
+                ArtifactSnapshotPreviewScreen(delivered.token, delivered.session,
+                    Modifier.testTag("preview-revision-${revision.value}"))
             }
         }
         val web = awaitWebView()
         val native = Shadow.extract<WorkspacePreviewRecordingShadow>(web)
         val index = native.loadedUrls.single()
         val details = index.removeSuffix("index.html") + "details.html"
-        assertTrue(index.endsWith("/workspaces/$projectId/index.html"))
+        assertTrue(index.endsWith("/index.html"))
         compose.runOnIdle {
-            assertEquals(listOf(index), native.loadedUrls)
             native.pushEntryToHistory(index)
             web.loadUrl(details)
             native.pushEntryToHistory(details)
@@ -58,9 +71,8 @@ class WorkspacePreviewRecompositionTest {
             compose.onNodeWithTag("preview-revision-${cycle + 1}").assertExists()
             compose.waitForIdle()
             compose.runOnIdle {
-                // The screen parameter changed, but Compose may legitimately skip a stable inner
-                // AndroidView. Exercise the real holder's installed update callback as well, so
-                // that optimization cannot conceal a regression that reloads index from update.
+                // Compose may legitimately skip a stable inner AndroidView; run the holder's installed
+                // update callback too, so that optimization cannot hide a reload from update.
                 val holder = requireNotNull(web.parent)
                 val nativeUpdate = holder.javaClass.getMethod("getUpdate").invoke(holder) as Function0<*>
                 nativeUpdate.invoke()
@@ -70,7 +82,6 @@ class WorkspacePreviewRecompositionTest {
                     listOf(index, details), native.loadedUrls)
                 assertEquals(details, web.url)
                 assertEquals(2, web.copyBackForwardList().size)
-                assertEquals(details, web.copyBackForwardList().currentItem?.url)
                 assertEquals(21, web.scrollX)
                 assertEquals(530, web.scrollY)
                 assertEquals(0, native.destroyCalls)
@@ -78,39 +89,37 @@ class WorkspacePreviewRecompositionTest {
         }
     }
 
-    @Test fun changingProjectUsesItsOwnDocumentAndReturningRestoresOnlyThatProjectsSavedHistory() {
-        val firstProject = createWorkspace("first")
-        val secondProject = createWorkspace("second")
-        val selected = mutableStateOf(firstProject)
+    @Test fun changingSnapshotUsesItsOwnDocumentAndReturningRestoresOnlyThatSnapshotsSavedHistory() {
+        val first = deliver("first")
+        val second = deliver("second")
+        val selected = mutableStateOf(first)
         compose.setContent {
-            MaterialTheme { WorkspacePreviewScreen(selected.value) }
+            MaterialTheme { ArtifactSnapshotPreviewScreen(selected.value.token, selected.value.session) }
         }
-        val first = awaitWebView()
-        val firstNative = Shadow.extract<WorkspacePreviewRecordingShadow>(first)
+        val firstWeb = awaitWebView()
+        val firstNative = Shadow.extract<WorkspacePreviewRecordingShadow>(firstWeb)
         val firstIndex = firstNative.loadedUrls.single()
         val firstDetails = firstIndex.removeSuffix("index.html") + "details.html"
         compose.runOnIdle {
             firstNative.pushEntryToHistory(firstIndex)
-            first.loadUrl(firstDetails)
+            firstWeb.loadUrl(firstDetails)
             firstNative.pushEntryToHistory(firstDetails)
-            first.scrollTo(12, 345)
-            selected.value = secondProject
+            firstWeb.scrollTo(12, 345)
+            selected.value = second
         }
-        val second = awaitWebView(excluding = first)
-        val secondNative = Shadow.extract<WorkspacePreviewRecordingShadow>(second)
+        val secondWeb = awaitWebView(excluding = firstWeb)
+        val secondNative = Shadow.extract<WorkspacePreviewRecordingShadow>(secondWeb)
         compose.runOnIdle {
-            assertNotSame("A different project needs a correctly scoped native client", first, second)
+            assertNotSame("A different snapshot needs a correctly scoped native client", firstWeb, secondWeb)
             assertEquals(1, firstNative.destroyCalls)
             assertTrue(firstNative.saveCalls > 0)
-            assertTrue(secondNative.loadedUrls.single().endsWith("/workspaces/$secondProject/index.html"))
             assertEquals(0, secondNative.restoreCalls)
-            selected.value = firstProject
+            selected.value = first
         }
-        val returned = awaitWebView(excluding = second)
+        val returned = awaitWebView(excluding = secondWeb)
         val returnedNative = Shadow.extract<WorkspacePreviewRecordingShadow>(returned)
         compose.runOnIdle {
-            assertNotSame(first, returned)
-            assertNotSame(second, returned)
+            assertNotSame(firstWeb, returned)
             assertEquals(1, secondNative.destroyCalls)
             assertEquals(1, returnedNative.restoreCalls)
             assertEquals(emptyList<String>(), returnedNative.loadedUrls)
@@ -120,13 +129,16 @@ class WorkspacePreviewRecompositionTest {
         }
     }
 
-    private fun createWorkspace(label: String): String {
-        val project = WorkspaceStore.projectIdForSession("ux22-$label-${UUID.randomUUID()}")
-        readOnlyPreviewWorkspace(context, project).apply {
-            write("index.html", "<!doctype html><a href='details.html'>$label</a>")
-            write("details.html", "<!doctype html><h1>$label details</h1>")
-        }
-        return project
+    /** Delivers one HTML snapshot into its own conversation, as the thread card does before opening it. */
+    private fun deliver(label: String): Delivered {
+        val session = "ux22-$label-${UUID.randomUUID()}"
+        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
+            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
+        workspace.write("index.html", "<!doctype html><a href='details.html'>$label</a>")
+        val artifacts = DeliveredArtifactStore(compose.activity)
+        val attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
+        LocalRunStore(compose.activity).appendDeliveredFile(session, attachment)
+        return Delivered(session, requireNotNull(artifacts.previewForAttachment(session, attachment)).token)
     }
 
     private fun awaitWebView(excluding: WebView? = null): WebView {

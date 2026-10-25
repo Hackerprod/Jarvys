@@ -201,7 +201,7 @@ public class HtmlPreviewSnapshotTest {
         assertNotNull(store.resolve(session, connector));
     }
 
-    @Test public void explicitProjectPreviewPersistsOwnedSnapshotAndLegacyPreviewRemainsCompatible() throws Exception {
+    @Test public void explicitProjectPreviewPersistsOwnedSnapshotAndNeverReturnsAWorkspaceReference() throws Exception {
         File coding = workspace.codingProjectScope().rootDirectory();
         File site = new File(coding, "site"); assertTrue(site.mkdir());
         Files.write(new File(site, "app.html").toPath(), "<html><script src='main.js'></script></html>".getBytes(StandardCharsets.UTF_8));
@@ -211,8 +211,17 @@ public class HtmlPreviewSnapshotTest {
         assertTrue(HtmlPreviewDescriptor.isSnapshotToken(result.previewId));
         assertEquals("site/app.html", store.previewForAttachment(session, attachment).entryPath);
         assertFalse(previewTool(workspace.forDelegatedAgent()).execute(Collections.singletonMap("path", "/project/site/app.html"), CancellationToken.crewChild()).success);
-        write("index.html", "<html>legacy</html>");
-        assertEquals(workspace.projectId(), previewTool(workspace).execute(Collections.emptyMap(), CancellationToken.uncancellable()).previewId);
+        // B13: the tool only produces openable conversation artifacts. Without a path there is no live
+        // workspace preview, the schema requires the path and no result carries the workspace id.
+        write("index.html", "<html>live project</html>");
+        CoreToolResult withoutPath = previewTool(workspace).execute(Collections.emptyMap(), CancellationToken.uncancellable());
+        assertFalse(withoutPath.content, withoutPath.success);
+        assertNull(withoutPath.previewId);
+        assertFalse(withoutPath.content.contains(workspace.projectId()));
+        assertFalse(result.content.contains(workspace.projectId()));
+        ToolSpec declaration = previewTool(workspace).declaration();
+        assertEquals(Collections.singletonList("path"), declaration.required);
+        assertFalse(declaration.description.toLowerCase(java.util.Locale.ROOT).contains("live"));
     }
 
     @Test public void assetCorruptionAndManifestOwnershipChangesFailClosed() throws Exception {
@@ -313,7 +322,7 @@ public class HtmlPreviewSnapshotTest {
         for (String id : Arrays.asList("recover-exact", "recover-truncated", "recover-malformed"))
             calls.put(new JSONObject().put("id", id).put("name", "preview_workspace")
                     .put("arguments", new JSONObject().put("path", "pages/site.html")));
-        // An ordinary no-path sibling proves recovery must inspect this exact call's arguments.
+        // A no-path sibling proves recovery must inspect this exact call's arguments.
         calls.put(new JSONObject().put("id", "recover-legacy").put("name", "preview_workspace").put("arguments", new JSONObject()));
         ledger.appendModelTranscriptRow(session, new JSONObject().put("type", "model_tool_calls").put("schemaVersion", 1)
                 .put("batchId", batch).put("userMessageId", user).put("messageIndex", 1)
@@ -336,7 +345,8 @@ public class HtmlPreviewSnapshotTest {
         assertEquals(explicit.previewId, timeline.stream().filter(e -> "recover-exact".equals(e.getToolCallId())).findFirst().get().getPreviewId());
         for (String id : Arrays.asList("recover-truncated", "recover-malformed"))
             assertNull(id, timeline.stream().filter(e -> id.equals(e.getToolCallId())).findFirst().get().getPreviewId());
-        assertEquals(workspace.projectId(), timeline.stream().filter(e -> "recover-legacy".equals(e.getToolCallId())).findFirst().get().getPreviewId());
+        // A recorded no-path call pointed at the live workspace; that id has no viewer, so it is not a preview.
+        assertNull(timeline.stream().filter(e -> "recover-legacy".equals(e.getToolCallId())).findFirst().get().getPreviewId());
         assertEquals("window.version = 'captured';", asset(store, store.resolvePreview(session, explicit.previewId), "pages/app.js"));
         assertEquals("<html>Unrelated current workspace home</html>", workspace.read("index.html"));
         assertEquals("<html>Mutable replacement</html>", workspace.read("pages/site.html"));

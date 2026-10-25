@@ -4,8 +4,6 @@ import com.jarvys.agent.crew.CrewBoard
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMessage
 import com.jarvys.agent.crew.CrewMissionSnapshot
-import com.jarvys.agent.workspaces.WorkspaceIdentity
-import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -53,33 +51,5 @@ class CrewMissionPersistenceTest {
         val recoveredAgain = store.recoverCrewMissions(session).single()
         assertEquals("INTERRUPTED", recoveredAgain.status)
         assertFalse(recoveredAgain.bots.single().active())
-    }
-
-    @Test
-    fun assistantProgressSurvivesCrewSnapshotDatabaseReopen() {
-        val workspaceId = "11111111-1111-1111-1111-111111111111"
-        val session = WorkspaceIdentity.executionSessionId(workspaceId)
-        val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
-        store.appendConversationMessage(session, "user", "Implement the requested change")
-        val bot = CrewBotSnapshot("bot-1", "coding", "Coding", "Ada", "amber", "Implement the change",
-            "COMPLETED", "", "", "", listOf("file_read"), 100L, 150L)
-        val progress = CrewMessage("progress-1", session, "bot-1", "user", CrewMessage.Type.PROGRESS,
-            "I found the implementation and am updating its caller.", emptyList(), 120L)
-        val snapshot = CrewMissionSnapshot("mission-1", session, "process", "Implement the requested change",
-            "COMPLETED", "Done", 100L, 150L, listOf(bot), listOf(progress))
-
-        store.appendCrewMissionSnapshot(snapshot)
-        val persistedEvents = store.readConversationTimeline(session)
-        val persistedRow = WorkspaceTimelineProjection.project(workspaceId, persistedEvents).single {
-            it.kind == "assistant" && it.stage == "PROGRESS"
-        }
-        val combinedLiveAndPersisted = WorkspaceTimelineProjection.project(workspaceId, listOf(
-            AgentRunUiEvent.crewMissionEvent(10L, snapshot),
-            persistedEvents.single { it.kind == "crew_mission" },
-        )).filter { it.kind == "assistant" && it.stage == "PROGRESS" }
-
-        assertEquals(progress.id, persistedRow.messageId)
-        assertEquals(progress.text, persistedRow.text)
-        assertEquals(persistedRow.timelineKey, combinedLiveAndPersisted.single().timelineKey)
     }
 }

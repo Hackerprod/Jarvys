@@ -31,6 +31,7 @@ import com.jarvys.agent.chatdb.withChatReadTransaction
 import com.jarvys.agent.chatdb.readPendingInterruptRows
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.workspaces.MissionRef
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.ToolActivity as UiToolActivity
 import com.jarvys.agent.UserDecisionOption
@@ -38,7 +39,6 @@ import com.jarvys.agent.UserDecisionRole
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
-import java.io.File
 import java.util.Locale
 
 /**
@@ -117,6 +117,7 @@ internal class ConversationReader(
                 }
                 if (message.role == "assistant" && message.hiddenKind in HIDDEN_ASSISTANT_KINDS) return@forEach
                 if (message.role == "assistant" && isAssistantRunStatus(message.status)) return@forEach
+                if (message.isMissionReference()) return@forEach
                 val index = message.messageIndex.toInt()
                 val assistantItems = if (message.role == "assistant") providerItems[message.ownerUserMessageId] else null
                 if (message.role == "agent" || message.role == "system") {
@@ -162,6 +163,7 @@ internal class ConversationReader(
             conversations.readMessagesAtOrAfterIndex(conversationId)
                 .map(ConversationMessageAt::message)
                 .filterNot { it.role == "assistant" && it.hiddenKind in HIDDEN_ASSISTANT_KINDS }
+                .filterNot(StoredMessage::isMissionReference)
         }
 
     suspend fun latestUserMessageId(conversationId: String): String? =
@@ -374,6 +376,15 @@ internal class ConversationReader(
                     continue
                 }
                 if (role != "user" && role != "assistant") continue
+                if (role == "assistant") {
+                    // A message that points at a bot mission is drawn as that mission's card.
+                    val mission = message.missionReference()
+                    if (mission != null) {
+                        events += AgentRunUiEvent.missionRefEvent(seq, mission, message.text, timestamp)
+                            .copyMetadata(message.messageId, 0L)
+                        continue
+                    }
+                }
                 val threadKey = message.proactiveThreadKey.orEmpty()
                 val proactive = message.proactiveDecisionId != null
                 if (role == "user") {
@@ -1266,30 +1277,21 @@ internal class ConversationReader(
         return rows.sortedBy { it.position }
     }
 
+    /** Only a snapshot this conversation owns is a preview; a recorded workspace id has no viewer to open. */
     private suspend fun verifiedTimelinePreview(conversationId: String, recordedId: String): String? {
+        if (!HtmlPreviewDescriptor.isSnapshotToken(recordedId)) return null
         return try {
-            if (HtmlPreviewDescriptor.isSnapshotToken(recordedId)) {
-                val artifactId = recordedId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX)
-                val owned = artifacts.findChatFile(conversationId, "delivered", artifactId) as? ChatFileOwnership.Delivered
-                    ?: return null
-                val artifact = owned.value
-                val kind = if (artifact.kind.equals("IMAGE", ignoreCase = true)) ChatAttachment.Kind.IMAGE else ChatAttachment.Kind.FILE
-                val attachment = runCatching {
-                    ChatAttachment(artifact.artifact_id, artifact.name, artifact.mime_type, artifact.size_bytes, kind, artifact.relative_path)
-                }.getOrNull() ?: return null
-                val filesDirectory = JarvysChatDatabaseProvider.filesDirectory(database)
-                DeliveredArtifactStore(filesDirectory).previewMetadataForAttachment(conversationId, attachment)
-                    .token.takeIf { it == recordedId }
-            } else {
-                val expected = WorkspaceStore.projectIdForSession(conversationId)
-                if (recordedId != expected) return null
-                val filesDirectory = JarvysChatDatabaseProvider.filesDirectory(database)
-                val workspaces = StorageGeneration(filesDirectory).directory("workspaces")
-                val project = File(workspaces, expected)
-                if (!project.isDirectory || project.canonicalFile != project.absoluteFile) return null
-                val index = WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html")
-                expected.takeIf { index.isFile && index.canRead() }
-            }
+            val artifactId = recordedId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX)
+            val owned = artifacts.findChatFile(conversationId, "delivered", artifactId) as? ChatFileOwnership.Delivered
+                ?: return null
+            val artifact = owned.value
+            val kind = if (artifact.kind.equals("IMAGE", ignoreCase = true)) ChatAttachment.Kind.IMAGE else ChatAttachment.Kind.FILE
+            val attachment = runCatching {
+                ChatAttachment(artifact.artifact_id, artifact.name, artifact.mime_type, artifact.size_bytes, kind, artifact.relative_path)
+            }.getOrNull() ?: return null
+            val filesDirectory = JarvysChatDatabaseProvider.filesDirectory(database)
+            DeliveredArtifactStore(filesDirectory).previewMetadataForAttachment(conversationId, attachment)
+                .token.takeIf { it == recordedId }
         } catch (_: Exception) {
             null
         }
@@ -1411,6 +1413,15 @@ internal class ConversationReader(
 
 private fun android.database.Cursor.getStringOrNull(index: Int): String? = if (isNull(index)) null else getString(index)
 private fun android.database.Cursor.getLongOrNull(index: Int): Long? = if (isNull(index)) null else getLong(index)
+
+/** The mission this Central message points at, when it carries a coherent `mission_ref` part. */
+private fun StoredMessage.missionReference(): MissionRef? =
+    if (role != "assistant") null
+    else parts.firstOrNull { it.kind == MissionRef.PART_KIND }?.let { MissionRef.fromJson(it.payload) }
+
+/** A reference message is a timeline card only; the model and compaction never read it as conversation. */
+private fun StoredMessage.isMissionReference(): Boolean =
+    role == "assistant" && parts.any { it.kind == MissionRef.PART_KIND }
 
 private fun String.isTimelineToolResultStage(): Boolean = this in setOf(
     "tool_result", "tool_error", "tool_interrupted", "tool_not_started",

@@ -124,7 +124,7 @@ internal class WorkspaceInputIncorporationDelivery(
             } while (assignments.size == PAGE)
             return insertedAny
         } finally {
-            if (insertedAny) WorkspaceChanges.detailChanged()
+            if (insertedAny) WorkspaceChanges.changed()
         }
     }
 

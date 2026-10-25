@@ -75,7 +75,7 @@ internal object ChatCanvasEventSerializer {
                 "$origin/benchmark-image.svg" else "$origin/chat-assets/artifact/${event.id}/thumbnail")
         }
         val canOpen = event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||
-            event.crewMissionSnapshot != null || event.scheduledTaskArtifact != null
+            event.missionRef != null || event.scheduledTaskArtifact != null
         val canTransfer = event.deliveredArtifact != null || !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
         val canRetry = allowRetry && !running && event.kind == "assistant" && event.stage == null &&
             event.messageId.isNotBlank() && event.messageId == latestAssistant
@@ -140,7 +140,7 @@ internal object ChatCanvasActionPolicy {
             "retry" -> allowRetry && !running && event.kind == "assistant" && event.messageId.isNotBlank() &&
                 (event.stage == "FAILED" || event.messageId == latestAssistantMessageId)
             "open_viewer" -> event.previewId?.isNotBlank() == true || event.presentationArtifact != null ||
-                event.crewMissionSnapshot != null || event.scheduledTaskArtifact != null
+                event.missionRef != null || event.scheduledTaskArtifact != null
             "download", "share" -> event.deliveredArtifact != null ||
                 !event.generatedImagePath.isNullOrBlank() || event.attachments.isNotEmpty()
             "resolve_decision" -> event.kind == "user_decision" && event.decisionStatus == "PENDING" &&

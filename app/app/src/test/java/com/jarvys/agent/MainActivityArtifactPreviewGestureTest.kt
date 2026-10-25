@@ -10,8 +10,8 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.WebSettings
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
@@ -21,8 +21,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavHostController
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.io.File
-import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -37,23 +37,31 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadow.api.Shadow
 
 /**
- * UX22: native event dispatch through the real MainActivity, shell, AndroidView and WebView.
- * The recording shadow models native touch acceptance only. No test here claims to execute DOM,
- * measure Chromium scrolling/fling/pinch, or establish device frame-rate performance.
+ * Native event dispatch through the real MainActivity, shell, AndroidView and WebView for the viewer of a
+ * DELIVERED HTML artifact (the only preview the thread opens). The recording shadow models native touch
+ * acceptance only. No test here claims to execute DOM, measure Chromium scrolling/fling/pinch, or
+ * establish device frame-rate performance.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi",
     shadows = [WorkspacePreviewRecordingShadow::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
-class MainActivityWorkspacePreviewGestureTest {
+class MainActivityArtifactPreviewGestureTest {
     private val compose = createAndroidComposeRule<MainActivity>()
-    private val session = "ux22-native-preview-${UUID.randomUUID()}"
+    private val session = WorkspaceIdentity.CENTRAL_SESSION
     private val projectId = WorkspaceStore.projectIdForSession(session)
-    private val previewCall = "ux22-existing-preview"
-    private val draft = "Keep this unsent draft while I inspect my web preview"
+    private val draft = "Keep this unsent draft while I inspect my delivered page"
+    private val deliveredHtml = """
+        <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+        <main style="height:4000px;width:1600px"><a href="details.html">Details</a>
+        <button onclick="this.textContent='Tapped'">Tap here</button><p>Long delivered page</p></main>
+    """.trimIndent()
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val store: LocalRunStore get() = LocalRunStore(context)
+    private lateinit var attachment: ChatAttachment
+    private lateinit var descriptor: HtmlPreviewDescriptor
     private lateinit var indexUrl: String
+    private val previewTag get() = "delivered-file-preview-${attachment.id}"
     private val detailUrl get() = indexUrl.removeSuffix("index.html") + "details.html"
     private val secretSingleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
 
@@ -63,28 +71,23 @@ class MainActivityWorkspacePreviewGestureTest {
                 .apply { isAccessible = true }.set(null, null)
             secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux22-preview-secrets", 0)))
             WorkManagerTestInitHelper.initializeTestWorkManager(context)
+            chatTestStore.onDatabaseWorker { SingleSessionReset.awaitReadyBlocking(context.filesDir) }
             MemoryStore(context).markDisclosureShown()
             MemoryReflectionPreferences(context).markDisclosureShown()
-            val workspace = readOnlyPreviewWorkspace(context, projectId)
-            workspace.write("index.html", """
-                <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
-                <main style="height:4000px;width:1600px"><a href="details.html">Details</a>
-                <button onclick="this.textContent='Tapped'">Tap here</button><p>Long local preview</p></main>
-            """.trimIndent())
-            workspace.write("details.html", "<!doctype html><h1>Existing internal page</h1>")
-            val seededPreview = db {
-                val user = store.appendConversationMessage(session, "user", "Open my existing local web preview")
-                store.appendConversationToolPresentation(session, user, "preview_workspace", "tool_result",
-                    previewCall, "Existing preview is ready", projectId, "")
-                store.appendConversationMessage(session, "assistant", "Your local preview is ready.",
-                    0L, "", user, "COMPLETED")
-                store.renameConversation(session, "Native preview regression")
-                store.readConversationTimeline(session).single { it.toolCallId == previewCall }
+            val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), projectId,
+                null, null, null, session, false)
+            workspace.write("index.html", deliveredHtml)
+            val artifacts = DeliveredArtifactStore(context)
+            attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
+            descriptor = requireNotNull(artifacts.previewForAttachment(session, attachment))
+            db {
+                val user = store.appendConversationMessage(session, "user", "Show me the page")
+                store.appendConversationMessage(session, "assistant", "Your page is ready.", 0L, "", user, "COMPLETED")
+                store.appendDeliveredFile(session, attachment)
             }
-            assertEquals("Persisted preview must reference this chat's existing workspace", projectId, seededPreview.previewId)
+            // The live project changes after delivery; the viewer must keep serving the snapshot.
+            workspace.write("index.html", "<!doctype html><h1>Changed after delivery</h1>")
             AgentRunUiState.resetSession(session)
-            context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE).edit()
-                .putString("active_session_id", session).commit()
         }
 
         override fun after() {
@@ -98,7 +101,7 @@ class MainActivityWorkspacePreviewGestureTest {
         .around(chatTestStore).around(fixtures).around(compose)
 
     @Test fun verticalDiagonalHorizontalAndFastStreamsReachNativeViewWithoutOpeningDrawer() {
-        val web = openExistingPreview()
+        val web = openDeliveredPreview()
         val native = recording(web)
         data class Drag(val name: String, val start: Offset, val end: Offset, val duration: Long)
         val drags = listOf(
@@ -125,7 +128,7 @@ class MainActivityWorkspacePreviewGestureTest {
     }
 
     @Test fun tapCancelAndMultitouchKeepNativeDispatchAndDoNotPoisonTheNextGesture() {
-        val web = openExistingPreview()
+        val web = openDeliveredPreview()
         val native = recording(web)
         val center = Offset(.5f, .5f)
         val downTime = SystemClock.uptimeMillis()
@@ -167,7 +170,7 @@ class MainActivityWorkspacePreviewGestureTest {
         awaitChat()
         val before = transcript()
         compose.onNode(hasSetTextAction()).performTextInput(draft)
-        val web = openExistingPreview()
+        val web = openDeliveredPreview()
         val native = recording(web)
         // Native browser history must not override the app's established Back-to-chat contract.
         compose.runOnIdle {
@@ -181,7 +184,6 @@ class MainActivityWorkspacePreviewGestureTest {
         compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
         awaitChat()
         assertEquals(before, transcript())
-        assertEquals(session, selectedSession())
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
         compose.runOnIdle {
             assertEquals(AppNavigationBackPolicy.CHAT_ROOT, navigation().currentDestination?.route)
@@ -194,15 +196,15 @@ class MainActivityWorkspacePreviewGestureTest {
             swipe(Offset(1f, height * .45f), Offset(width * .85f, height * .45f), durationMillis = 400)
         }
         compose.waitForIdle()
-        compose.onNodeWithTag("drawer-header").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-profile-header").assertIsDisplayed()
         compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
-        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+        compose.onNodeWithTag("drawer-profile-header").assertIsNotDisplayed()
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
     }
 
     @Test fun rotationRestoresNativeHistoryAndViewScrollInsteadOfReloadingIndex() {
-        val first = openExistingPreview()
+        val first = openDeliveredPreview()
         val oldNative = recording(first)
         compose.runOnIdle {
             oldNative.pushEntryToHistory(indexUrl)
@@ -241,11 +243,10 @@ class MainActivityWorkspacePreviewGestureTest {
         assertPreviewWithDrawerClosed(restored)
         tap(restored, Offset(.5f, .5f))
         assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), restoredNative.touches.map { it.action })
-        assertEquals(session, selectedSession())
     }
 
     @Test fun pauseResumeAndNativeConfigurationPreserveBrowserPolicyAndLoadedDocument() {
-        val web = openExistingPreview()
+        val web = openDeliveredPreview()
         val native = recording(web)
         compose.runOnIdle {
             assertTrue(web.settings.javaScriptEnabled)
@@ -270,31 +271,11 @@ class MainActivityWorkspacePreviewGestureTest {
         assertPreviewWithDrawerClosed(web)
     }
 
-    @Test
-    @Config(sdk = [25], shadows = [WorkspacePreviewRecordingShadow::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
-    fun deliveredHtmlCardUsesItsOwningArtifactRouteAcrossRecreationBackAndReopen() {
+    @Test fun deliveredHtmlCardUsesItsOwningArtifactRouteAcrossRecreationBackAndReopen() {
         awaitChat()
         compose.onNode(hasSetTextAction()).performTextInput(draft)
-        val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), projectId,
-            null, null, null, session, false)
-        val capturedHtml = workspace.read("index.html")
-        val artifacts = DeliveredArtifactStore(context)
-        val attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
-        val timeline = db {
-            store.appendDeliveredFile(session, attachment)
-            store.readConversationTimeline(session)
-        }
-        val descriptor = requireNotNull(artifacts.previewForAttachment(session, attachment))
-        workspace.write("index.html", "<!doctype html><h1>Changed after delivery</h1>")
         val before = transcript()
-        compose.runOnIdle { AgentRunUiState.refreshPersistedSession(session, timeline) }
-        val previewTag = "delivered-file-preview-${attachment.id}"
-        compose.waitUntil(10_000) { compose.onAllNodesWithTag(previewTag).fetchSemanticsNodes().size == 1 }
-        compose.onNodeWithTag(previewTag).performScrollTo()
-        settleNativeFrame()
-        compose.onNodeWithTag(previewTag).assertIsDisplayed().performTouchInput { click() }
-        val first = awaitWebView()
-        settleNativeFrame()
+        val first = openDeliveredPreview()
 
         fun assertOwnedRouteAndBytes(web: WebView) {
             compose.runOnIdle {
@@ -305,17 +286,18 @@ class MainActivityWorkspacePreviewGestureTest {
                 assertEquals(descriptor.token, HtmlPreviewDescriptor.TOKEN_PREFIX + entry.arguments?.getString("artifactId"))
                 val response = requireNotNull(Shadows.shadowOf(web).webViewClient)
                     .shouldInterceptRequest(web, object : WebResourceRequest {
-                    override fun getUrl(): Uri = Uri.parse(web.url)
-                    override fun isForMainFrame() = true
-                    override fun isRedirect() = false
-                    override fun hasGesture() = true
-                    override fun getMethod() = "GET"
-                    override fun getRequestHeaders(): Map<String, String> = emptyMap()
-                })
+                        override fun getUrl(): Uri = Uri.parse(web.url)
+                        override fun isForMainFrame() = true
+                        override fun isRedirect() = false
+                        override fun hasGesture() = true
+                        override fun getMethod() = "GET"
+                        override fun getRequestHeaders(): Map<String, String> = emptyMap()
+                    })
                 assertEquals(200, requireNotNull(response).statusCode)
-                assertEquals(capturedHtml, response.data.bufferedReader().use { it.readText() })
+                assertTrue("The immutable snapshot is served, not the changed project",
+                    response.data.bufferedReader().use { it.readText() }.contains("Long delivered page"))
             }
-            compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+            compose.onNodeWithTag("drawer-profile-header").assertIsNotDisplayed()
         }
         assertOwnedRouteAndBytes(first)
         drag(first, Offset(.01f, .5f), Offset(.9f, .5f), 400)
@@ -330,7 +312,6 @@ class MainActivityWorkspacePreviewGestureTest {
         compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
         awaitChat()
         assertEquals(before, transcript())
-        assertEquals(session, selectedSession())
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
         // Returning navigation can publish the chat before its merged preview semantics are ready.
         compose.waitUntil(10_000) { compose.onAllNodesWithTag(previewTag).fetchSemanticsNodes().size == 1 }
@@ -346,18 +327,16 @@ class MainActivityWorkspacePreviewGestureTest {
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
     }
 
-    private fun openExistingPreview(): WebView {
+    private fun openDeliveredPreview(): WebView {
         awaitChat()
-        compose.onNodeWithTag("tool-output-toggle-$previewCall").performClick()
-        compose.waitUntil(10_000) {
-            compose.onAllNodesWithTag("tool-preview-$previewCall").fetchSemanticsNodes().isNotEmpty()
-        }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag(previewTag).fetchSemanticsNodes().size == 1 }
+        compose.onNodeWithTag(previewTag).performScrollTo()
         settleNativeFrame()
-        compose.onNodeWithTag("tool-preview-$previewCall").performScrollTo().performTouchInput { click() }
+        compose.onNodeWithTag(previewTag).assertIsDisplayed().performTouchInput { click() }
         val web = awaitWebView()
         settleNativeFrame()
         indexUrl = recording(web).loadedUrls.single()
-        assertTrue(indexUrl.endsWith("/workspaces/$projectId/index.html"))
+        assertTrue(indexUrl.endsWith("/index.html"))
         assertPreviewWithDrawerClosed(web)
         return web
     }
@@ -365,8 +344,8 @@ class MainActivityWorkspacePreviewGestureTest {
     private fun awaitChat() {
         compose.waitUntil(10_000) {
             val count = compose.onAllNodesWithTag("chat-message-list").fetchSemanticsNodes().size
-            count == 1 && selectedSession() == session && AgentRunUiState.state.value.sessionId == session &&
-                AgentRunUiState.state.value.events.any { it.toolCallId == previewCall }
+            count == 1 && AgentRunUiState.state.value.sessionId == session &&
+                AgentRunUiState.state.value.events.any { it.kind == "artifact" }
         }
         compose.waitForIdle()
     }
@@ -384,10 +363,10 @@ class MainActivityWorkspacePreviewGestureTest {
 
     private fun assertPreviewWithDrawerClosed(web: WebView) {
         compose.waitForIdle()
-        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+        compose.onNodeWithTag("drawer-profile-header").assertIsNotDisplayed()
         compose.runOnIdle {
             assertSame(web, findWebView(compose.activity.window.decorView))
-            assertEquals(AppNavigationBackPolicy.WORKSPACE_PREVIEW, navigation().currentDestination?.route)
+            assertEquals(AppNavigationBackPolicy.ARTIFACT_PREVIEW, navigation().currentDestination?.route)
         }
     }
 
@@ -435,9 +414,6 @@ class MainActivityWorkspacePreviewGestureTest {
             try { compose.activity.dispatchTouchEvent(event) } finally { event.recycle() }
         }
     }
-
-    private fun selectedSession(): String? = context.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
-        .getString("active_session_id", null)
 
     private fun transcript(): List<Pair<String, String>> = db {
         store.readConversationTimeline(session).map { it.messageId to "${it.kind}:${it.text}" }

@@ -32,7 +32,12 @@ private data class BotCatalogConfiguration(val definitions: List<BotDefinition>,
 
 /** Catalog configuration is independent of conversation/mission execution. Opening it starts no run. */
 @Composable
-fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> = emptyMap(), onClose: () -> Unit) {
+fun BotsCatalogScreen(
+    working: Map<String, Int> = emptyMap(),
+    crewMode: CrewMode? = null,
+    onCrewModeChange: (CrewMode) -> Unit = {},
+    onClose: () -> Unit,
+) {
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
@@ -54,7 +59,6 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
     val failedMessage = stringResource(R.string.bots_operation_failed)
     val loadFailedMessage = stringResource(R.string.bots_load_failed)
     val draftFailedMessage = stringResource(R.string.bots_draft_failed)
-    val latestConversation by rememberUpdatedState(conversationId)
 
     fun cancelRequest() {
         epoch++
@@ -93,12 +97,12 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
         }
         onDispose { remove?.run() }
     }
-    LaunchedEffect(context, conversationId, reload) {
+    LaunchedEffect(context, reload) {
         cancelRequest(); error = null
         try {
             val fresh = withContext(Dispatchers.IO) {
                 val definitions = repository.getOrThrow().definitions()
-                val capabilities = CoreAgentRuntime.profileCapabilities(context, conversationId)
+                val capabilities = CoreAgentRuntime.profileCapabilities(context, null)
                     .filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
                 val skills = SkillRepository.get(context).also { it.refresh() }
                 val available = skills.enabledForRun().map { it.metadata.id }.toSet()
@@ -166,19 +170,16 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
                 if (operation == null && !immutableCatalogBot(edited)) {
                     operation = "save"; error = null
                     val newBot = draft != null
-                    val session = conversationId
                     scope.launch {
                         try {
                             val updated = withContext(Dispatchers.IO) {
-                                val capabilities = CoreAgentRuntime.profileCapabilities(context, session)
+                                val capabilities = CoreAgentRuntime.profileCapabilities(context, null)
                                 val skills = SkillRepository.get(context).also { it.refresh() }.enabledForRun().map { it.metadata.id }
                                 if (newBot) repository.getOrThrow().create(edited.profile, capabilities, skills)
                                 else repository.getOrThrow().save(edited, capabilities, skills)
                             }
-                            if (latestConversation == session) {
-                                replaceDefinition(updated)
-                                selectedId = null; draft = null; creating = false
-                            }
+                            replaceDefinition(updated)
+                            selectedId = null; draft = null; creating = false
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) { error = "$failedMessage ${failure.message.orEmpty()}" }
                         finally { operation = null }
@@ -204,7 +205,7 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
             })
         else -> BotsCatalogGrid(loaded.definitions, working, onOpen = { selectedId = it.id; error = null; iconError = null; iconCompletedRevision = null },
             onCreate = { creating = true; error = null }, onClose = onClose,
-            busy = operation != null, error = error)
+            busy = operation != null, error = error, crewMode = crewMode, onCrewModeChange = onCrewModeChange)
     }
     }
 }

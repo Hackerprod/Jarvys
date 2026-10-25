@@ -670,8 +670,7 @@ public final class CoreAgentRuntime {
     AgentRunUiState.crewMissionChanged(this.sessionId, snapshot);
     try {
       crewStore.appendCrewMissionSnapshot(snapshot);
-      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId,
-          com.jarvys.agent.workspaces.WorkspaceCatalogStatusSignature.from(snapshot));
+      com.jarvys.agent.workspaces.WorkspaceChanges.snapshotSaved(this.sessionId, snapshot.missionId);
     } catch (RuntimeException e) {
       if (e instanceof java.util.concurrent.CancellationException) {
         Thread.interrupted();

@@ -220,6 +220,10 @@ public final class LocalRunStore {
                 row.put("type", "proactive_message");
                 row.put("proactiveDecisionId", message.getProactiveDecisionId());
             }
+            for (MessagePartInput part : message.getParts()) if (com.jarvys.agent.workspaces.MissionRef.PART_KIND.equals(part.getKind())) {
+                row.put("type", "mission_ref");
+                break;
+            }
             if (message.getInputState() != null) row.put("inputState", message.getInputState());
             if ("agent".equals(message.getRole()) || "system".equals(message.getRole())) {
                 row.put("inputOrigin", message.getRole().toUpperCase(java.util.Locale.ROOT));
@@ -749,6 +753,25 @@ public final class LocalRunStore {
                 null, false, Collections.emptyList(), Collections.emptyList(),
                 System.currentTimeMillis() / 1000.0, conversationKindFor(input.conversationId), input.stableId())),
                 "append attributed conversation input");
+        return saved.getMessageId();
+    }
+
+    /**
+     * Appends the assistant message that points a Central thread at a bot mission. The reference is a
+     * separate message part. It is a timeline card, not conversation: model context and compaction skip it.
+     * The same stable id never appends twice.
+     */
+    public synchronized String appendMissionReferenceMessage(String sessionId, String text, String referencePayload,
+                                                              String stableId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        List<MessagePartInput> parts = new ArrayList<>();
+        parts.add(new MessagePartInput("text", text));
+        parts.add(new MessagePartInput(com.jarvys.agent.workspaces.MissionRef.PART_KIND, referencePayload));
+        StoredMessage saved = requireChatDbSuccess(chatDatabaseBridge.appendMessageSync(new AppendMessageInput(
+                sessionId, "assistant", parts, null, null, null, null, null, null, null, null,
+                null, false, Collections.emptyList(), Collections.emptyList(),
+                System.currentTimeMillis() / 1000.0, conversationKindFor(sessionId), stableId)),
+                "append mission reference");
         return saved.getMessageId();
     }
 
@@ -1284,30 +1307,20 @@ public final class LocalRunStore {
     }
 
     /** Resolves activity ownership newest-first without materializing or parsing the full timeline. */
-    /** Only reconnect a preview to this chat's canonical existing workspace. Never create a file. */
+    /** Only a snapshot this conversation owns is a preview; a workspace id has no viewer to open. */
     private String verifiedPreview(String sessionId, String recordedId) {
         return verifiedPreview(sessionId, recordedId, null);
     }
 
     private String verifiedPreview(String sessionId, String recordedId, Map<String, ChatAttachment> ownedFiles) {
-        if (HtmlPreviewDescriptor.isSnapshotToken(recordedId)) {
-            try {
-                DeliveredArtifactStore artifacts = new DeliveredArtifactStore(filesDirectory);
-                String id = recordedId.substring(HtmlPreviewDescriptor.TOKEN_PREFIX.length());
-                ChatAttachment owner = ownedFiles == null ? findChatFile(sessionId, "delivered", id) : ownedFiles.get(id);
-                HtmlPreviewDescriptor preview = owner == null ? null : artifacts.previewMetadataForAttachment(sessionId, owner);
-                return preview != null && recordedId.equals(preview.token) ? recordedId : null;
-            } catch (Exception unavailable) { return null; }
-        }
-        String expected = WorkspaceStore.projectIdForSession(sessionId);
-        if (recordedId == null || !expected.equals(recordedId)) return null;
+        if (!HtmlPreviewDescriptor.isSnapshotToken(recordedId)) return null;
         try {
-            File workspaces = new StorageGeneration(filesDirectory().getCanonicalFile()).directory("workspaces");
-            File project = new File(workspaces, expected);
-            if (!project.isDirectory() || !project.getCanonicalFile().equals(project.getAbsoluteFile())) return null;
-            File index = new WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html");
-            return index.isFile() && index.canRead() ? expected : null;
-        } catch (Exception unsafeOrMissing) { return null; }
+            DeliveredArtifactStore artifacts = new DeliveredArtifactStore(filesDirectory);
+            String id = recordedId.substring(HtmlPreviewDescriptor.TOKEN_PREFIX.length());
+            ChatAttachment owner = ownedFiles == null ? findChatFile(sessionId, "delivered", id) : ownedFiles.get(id);
+            HtmlPreviewDescriptor preview = owner == null ? null : artifacts.previewMetadataForAttachment(sessionId, owner);
+            return preview != null && recordedId.equals(preview.token) ? recordedId : null;
+        } catch (Exception unavailable) { return null; }
     }
 
     private static boolean isPreviewTool(String name) {

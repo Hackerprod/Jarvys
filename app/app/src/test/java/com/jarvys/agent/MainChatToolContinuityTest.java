@@ -27,8 +27,7 @@ public class MainChatToolContinuityTest {
     AtomicInteger requests = new AtomicInteger();
     List<ModelReply.Call> calls = Arrays.asList(
         new ModelReply.Call("provider-list-17", "ls", Collections.singletonMap("path", ".")),
-        new ModelReply.Call("provider-write-18", "write", arguments("path", "index.html", "content", "<h1>Done</h1>")),
-        new ModelReply.Call("provider-preview-19", "preview_workspace", Collections.emptyMap()));
+        new ModelReply.Call("provider-write-18", "write", arguments("path", "index.html", "content", "<h1>Done</h1>")));
     CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) ->
         requests.getAndIncrement() == 0 ? new ModelReply("Creating the page", calls)
             : new ModelReply("Page created", Collections.emptyList()),
@@ -51,8 +50,6 @@ public class MainChatToolContinuityTest {
     assertTrue("Successful write proof must be present in model context",
         reloaded.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
             && "provider-write-18".equals(t.toolCallId) && t.content.contains("Wrote index.html")));
-    assertTrue(reloaded.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT
-        && "provider-preview-19".equals(t.toolCallId) && t.content.contains("ready to open")));
     assertProviderRequests(reloaded, "provider-write-18", "Wrote index.html");
   }
 

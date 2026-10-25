@@ -39,6 +39,7 @@ import java.time.Duration
 import java.util.UUID
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import org.junit.Test
@@ -66,6 +67,14 @@ class ArtifactHtmlPreviewUiTest {
         effectContext = StandardTestDispatcher(),
     )
     @get:Rule val rules = RuleChain.outerRule(chatTestStore).around(compose)
+
+    // The conversation store is gated by the single-session reset; await it off the main thread first.
+    @Before fun storageReady() {
+        chatTestStore.onDatabaseWorker {
+            SingleSessionReset.awaitReadyBlocking(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().filesDir)
+        }
+    }
 
     private data class Fixture(
         val session: String,
@@ -117,7 +126,7 @@ class ArtifactHtmlPreviewUiTest {
                             previews += it
                             selected.value = it
                         }
-                        else WorkspacePreviewScreen(token, sessionId = fixture.session)
+                        else ArtifactSnapshotPreviewScreen(token, sessionId = fixture.session)
                     }
                 }
             }
@@ -303,7 +312,7 @@ class ArtifactHtmlPreviewUiTest {
         fixture.workspace.resolvePreviewPath("pixel.png").writeBytes(byteArrayOf(1, 2, 3))
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
-                WorkspacePreviewScreen(fixture.descriptor.token, sessionId = fixture.session)
+                ArtifactSnapshotPreviewScreen(fixture.descriptor.token, sessionId = fixture.session)
             }
         }
         val web = awaitWebView()
@@ -334,7 +343,7 @@ class ArtifactHtmlPreviewUiTest {
         assertTrue(fixture.descriptor.warnings.isNotEmpty())
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.DARK) {
-                WorkspacePreviewScreen(fixture.descriptor.token, sessionId = fixture.session)
+                ArtifactSnapshotPreviewScreen(fixture.descriptor.token, sessionId = fixture.session)
             }
         }
         val web = awaitWebView()
@@ -392,7 +401,7 @@ class ArtifactHtmlPreviewUiTest {
         val selectedSession = mutableStateOf("different-conversation-${UUID.randomUUID()}")
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
-                WorkspacePreviewScreen(fixture.descriptor.token, sessionId = selectedSession.value)
+                ArtifactSnapshotPreviewScreen(fixture.descriptor.token, sessionId = selectedSession.value)
             }
         }
         compose.waitUntil(10_000) {

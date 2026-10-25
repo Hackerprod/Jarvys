@@ -21,6 +21,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class PreviewResponsePolicyTest {
+    // The conversation store is gated by the single-session reset; await it before building fixtures.
+    @org.junit.Before fun storageReady() {
+        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
+    }
+
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val interactiveCsp = "default-src 'self' data: blob:; " +
         "img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +

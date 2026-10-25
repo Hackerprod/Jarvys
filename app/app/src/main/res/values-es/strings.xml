@@ -428,6 +428,8 @@
     <string name="crew_tab_board">Pizarra</string>
     <string name="crew_tab_bots">Bots</string>
     <string name="crew_read_only">Solo lectura</string>
+    <string name="crew_mission_unavailable">Esta misión ya no está disponible.</string>
+    <string name="mission_card_result_ready">Se entregó a Jarvys un resultado de esta misión.</string>
     <string name="crew_debate_empty">La tripulación aún no intercambió mensajes.</string>
     <string name="crew_board_empty">Aún no hay archivos. Los bots pueden compartir notas en /board/.</string>
     <string name="crew_board_folder">Carpeta</string>
@@ -1282,7 +1284,6 @@ Después:
     <string name="crew_resume_failed">No se pudo reanudar el trabajo guardado.</string>
     <string name="drawer_archive">Archivar</string>
     <string name="drawer_archived_chats">Chats archivados</string>
-    <string name="drawer_chat_actions">Opciones de %1$s</string>
     <string name="drawer_pin">Anclar</string>
     <string name="full_project_exec_bot">Bot: %1$s</string>
     <string name="full_project_exec_command">"Comando (literal):
@@ -1453,22 +1454,11 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
         <item quantity="many">%1$d preguntas o bloqueos pueden recibir una respuesta dirigida.</item>
         <item quantity="other">%1$d preguntas o bloqueos pueden recibir una respuesta dirigida.</item>
     </plurals>
-    <plurals name="workspace_coordination_uncertain">
-        <item quantity="one">%1$d intento de respuesta tiene resultado incierto. No reenviar automáticamente.</item>
-        <item quantity="many">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
-        <item quantity="other">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
-    </plurals>
-    <plurals name="workspace_coordination_pending">
-        <item quantity="one">%1$d entrada de coordinación espera confirmación.</item>
-        <item quantity="many">%1$d entradas de coordinación esperan confirmación.</item>
-        <item quantity="other">%1$d entradas de coordinación esperan confirmación.</item>
-    </plurals>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d solicitud histórica o sustituida. Reabrir no reanuda el trabajo.</item>
         <item quantity="many">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
         <item quantity="other">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
     </plurals>
-    <string name="workspace_coordination_unavailable">La evidencia de coordinación no está disponible. No se repitió trabajo.</string>
     <string name="crew_type_blocker">Bloqueo</string>
     <string name="workspace_correction_checkpoint_incorporated">La corrección exacta se incorporó a un punto de control guardado. Esto no verifica comprensión, ejecución ni finalización.</string>
     <string name="workspace_correction_checkpoint_unverified">El envío de la corrección está registrado. Su incorporación a un punto de control guardado no está verificada; no se debe reenviar automáticamente.</string>

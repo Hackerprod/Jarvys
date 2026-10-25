@@ -25,7 +25,6 @@ data class AppRouteMeta(
 /** Route names are the single source used by MainActivity's graph and back/title/action metadata. */
 object AppNavigationBackPolicy {
     const val CHAT_ROOT = "chat"
-    const val WORKSPACES = "workspaces"
     const val SETTINGS = "settings"
     const val SETTINGS_PREFERENCES = "settings/preferences"
     const val SETTINGS_DEVELOPER = "settings/developer"
@@ -51,13 +50,9 @@ object AppNavigationBackPolicy {
     const val MEMORY_HISTORY = "memory/history"
     const val MEMORY_FILE = "memory/file?path={path}&new={new}"
     const val BOTS = "bots"
-    const val CREW_EMPTY = "crew"
-    const val CREW = "crew/{missionId}"
-    const val CREW_BOT = "crew/{missionId}/bot/{botId}"
-    const val COORDINATED_WORKSPACE = "workspace/{workspaceId}"
-    const val COORDINATED_FILES = "workspace/{workspaceId}/files"
-    const val WORKSPACE_PREVIEW = "workspace-preview/{projectId}"
-    const val WORKSPACE_SESSION_PREVIEW = "workspace-session-preview/{sessionId}/{projectId}"
+    /** A mission is addressed by its execution session, which the argument keeps through activity recreation. */
+    const val CREW = "crew/{missionId}?session={session}"
+    const val CREW_BOT = "crew/{missionId}/bot/{botId}?session={session}"
     const val ARTIFACT_PREVIEW = "artifact-preview/{sessionId}/{artifactId}"
     const val MODULE_ARTIFACT_VIEWER = "module-artifact-viewer/{sessionId}/{artifactId}"
     const val MODULE_ARTIFACT_VIEWER_PREFIX = "module-artifact-viewer"
@@ -73,22 +68,20 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, WORKSPACES, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD,
+        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
         TASKS, TASK_DETAIL,
-        BOTS, CREW_EMPTY, CREW, CREW_BOT, COORDINATED_WORKSPACE, COORDINATED_FILES, WORKSPACE_PREVIEW,
-        WORKSPACE_SESSION_PREVIEW, ARTIFACT_PREVIEW, MODULE_ARTIFACT_VIEWER,
+        BOTS, CREW, CREW_BOT, ARTIFACT_PREVIEW, MODULE_ARTIFACT_VIEWER,
     )
-    val rootRoutes = setOf(CHAT_ROOT, WORKSPACES)
+    val rootRoutes = setOf(CHAT_ROOT)
 
     fun requiresBack(route: String): Boolean = route !in rootRoutes
 
     fun metadata(context: Context, route: String, chatTitle: String, crewBotTitle: String?,
                  detailTitle: String?): AppRouteMeta = when (route) {
         CHAT_ROOT -> AppRouteMeta(chatTitle, isRoot = true, action = AppRouteAction.CHAT)
-        WORKSPACES -> AppRouteMeta(context.getString(R.string.workspace_sidebar_heading), isRoot = true)
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         SETTINGS_DEVELOPER -> AppRouteMeta(context.getString(R.string.settings_developer), false)
@@ -114,12 +107,9 @@ object AppNavigationBackPolicy {
         TASKS -> AppRouteMeta(context.getString(R.string.tasks_title), false)
         TASK_DETAIL -> AppRouteMeta(detailTitle ?: context.getString(R.string.task_detail_title), false)
         BOTS -> AppRouteMeta(context.getString(R.string.drawer_bots), false, showTopBar = false)
-        CREW_EMPTY, CREW -> AppRouteMeta(context.getString(R.string.crew_title), false)
+        CREW -> AppRouteMeta(context.getString(R.string.crew_title), false)
         CREW_BOT -> AppRouteMeta(crewBotTitle ?: context.getString(R.string.crew_bot_title), false)
-        COORDINATED_WORKSPACE -> AppRouteMeta(context.getString(R.string.workspace_title), false)
-        COORDINATED_FILES -> AppRouteMeta(context.getString(R.string.workspace_open_files), false)
-        WORKSPACE_PREVIEW, ARTIFACT_PREVIEW, WORKSPACE_SESSION_PREVIEW ->
-            AppRouteMeta(context.getString(R.string.chat_open_preview), false)
+        ARTIFACT_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
         MODULE_ARTIFACT_VIEWER -> AppRouteMeta(context.getString(R.string.module_artifact_viewer_title), false)
         else -> AppRouteMeta(context.getString(R.string.drawer_chat_fallback), false,
             action = AppRouteAction.HOME_FALLBACK)

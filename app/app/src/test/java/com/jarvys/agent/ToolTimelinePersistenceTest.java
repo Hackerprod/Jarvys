@@ -2,7 +2,6 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 import java.io.File;
-import java.nio.file.Files;
 import java.util.List;
 import org.junit.Rule;
 import org.junit.Test;
@@ -12,13 +11,14 @@ import org.junit.Test;
 public class ToolTimelinePersistenceTest {
     @org.junit.Rule public final ChatTestStore chatTestStore = new ChatTestStore();
 
-    @Test public void terminalDetailsAuditAndExactPreviewSurviveFreshStoreWithoutReflectionLeak() throws Exception {
+    @Test public void terminalDetailsAndAuditSurviveFreshStoreAndAWorkspaceIdIsNotAPreview() throws Exception {
         File files = chatTestStore.newFilesDirectory(); String session = "terminal-presentation";
         LocalRunStore store = chatTestStore.localRunStore(files);
         String user = store.appendConversationMessage(session, "user", "Show preview");
         String project = WorkspaceStore.projectIdForSession(session);
         WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), project);
         workspace.write("index.html", "<h1>saved</h1>");
+        // A recorded workspace id has no viewer: only a delivered snapshot can be opened from the thread.
         store.appendConversationToolPresentation(session, user, "Preview Workspace", "tool_result", "saved-preview",
                 "Private page result password=hidden-sentinel", project, "read index.html");
         store.appendReflectionToolEvent(session, user, "Preview Workspace", "workspace", "tool_result", "saved-preview");
@@ -28,23 +28,17 @@ public class ToolTimelinePersistenceTest {
         assertEquals(1, events.stream().filter(e -> "tool".equals(e.getKind())).count());
         assertTrue(tool.getDetail().contains("Private page result"));
         assertFalse(tool.getDetail().contains("hidden-sentinel"));
+        assertTrue(tool.getDetail().contains("no longer available"));
         assertEquals("read index.html", tool.getToolAuditDetail());
-        assertEquals(project, tool.getPreviewId());
+        assertNull(tool.getPreviewId());
         assertFalse(tool.getPreviewIsCurrent());
         assertFalse(store.buildReflectionPayload(session).text.contains("Private page result"));
-        assertTrue(workspace.resolvePreviewPath("index.html").delete());
-        AgentRunUiEvent missing = chatTestStore.localRunStore(files).readConversationTimeline(session).stream()
-                .filter(e -> "tool".equals(e.getKind())).findFirst().get();
-        assertNull(missing.getPreviewId());
-        assertTrue(missing.getDetail().contains("no longer available"));
-        assertFalse(missing.getDetail().contains("hidden-sentinel"));
-        assertEquals("read index.html", missing.getToolAuditDetail());
     }
 
-    @Test public void legacyPreviewRequiresOwnExistingCanonicalFileAndNeverReconstructsOutput() throws Exception {
+    @Test public void legacyPreviewMarkerNeverReconstructsAWorkspacePreview() throws Exception {
         File files = chatTestStore.newFilesDirectory(); LocalRunStore store = chatTestStore.localRunStore(files);
-        String own = "legacy-own", other = "legacy-other", missing = "legacy-missing";
-        for (String session : new String[] {own, other, missing}) {
+        String own = "legacy-own", missing = "legacy-missing";
+        for (String session : new String[] {own, missing}) {
             String user = store.appendConversationMessage(session, "user", "Show preview");
             store.appendReflectionToolEvent(session, user, "Preview Workspace", "workspace", "tool_result", "preview-" + session);
         }
@@ -52,17 +46,11 @@ public class ToolTimelinePersistenceTest {
         WorkspaceStore workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), ownProject);
         workspace.write("index.html", "<h1>current only</h1>");
         AgentRunUiEvent current = store.readConversationTimeline(own).stream().filter(e -> "tool".equals(e.getKind())).findFirst().get();
-        assertEquals(ownProject, current.getPreviewId());
-        assertTrue(current.getPreviewIsCurrent());
-        assertTrue(current.getDetail().contains("unavailable"));
-        assertFalse(current.getDetail().contains("current only"));
+        assertNull("an existing project is never turned into a preview", current.getPreviewId());
+        assertFalse(current.getPreviewIsCurrent());
         assertNull(store.readConversationTimeline(missing).stream().filter(e -> "tool".equals(e.getKind())).findFirst().get().getPreviewId());
-        File otherRoot = new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(other));
-        Files.createSymbolicLink(otherRoot.toPath(), workspace.resolvePreviewPath("index.html").getParentFile().toPath());
-        assertNull(store.readConversationTimeline(other).stream().filter(e -> "tool".equals(e.getKind())).findFirst().get().getPreviewId());
         assertFalse(new File(files, "jarvys/workspaces/" + WorkspaceStore.projectIdForSession(missing)).exists());
     }
-
     @Test public void hydrationAndOptimisticRowsDeduplicateOnlySameMessageIdentity() throws Exception {
         LocalRunStore store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory()); String session = "identity-hydration";
         String first = store.appendConversationMessage(session, "user", "Same words");

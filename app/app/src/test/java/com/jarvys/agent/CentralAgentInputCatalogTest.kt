@@ -6,7 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.workspaces.WorkspaceIdentity
-import com.jarvys.agent.workspaces.WorkspaceProjection
+import com.jarvys.agent.workspaces.WorkspaceChanges
 import com.jarvys.agent.workspaces.WorkspaceRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -24,7 +24,7 @@ import java.util.UUID
 class CentralAgentInputCatalogTest {
     @get:Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
 
-    @Test fun acknowledgingCentralAgentInputInvalidatesCatalogOnceAndRefreshesPendingCount() {
+    @Test fun acknowledgingCentralAgentInputInvalidatesOnceAndRefreshesPendingCount() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = chatTestStore.localRunStore(context.filesDir)
         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(
@@ -43,22 +43,24 @@ class CentralAgentInputCatalogTest {
                 sourceMessageId, ConversationInput.Kind.RESULT,
                 ConversationInput.Provenance.PrincipalRole.SUBORDINATE),
         ))
-        val projection = { WorkspaceProjection.sidebarPage(context).rows.single { it.id == scope.workspaceId } }
-        assertEquals(1, projection().coordination.pendingInputs)
+        val pendingInputs = {
+            store.countPendingAgentInputsByWorkspace(linkedMapOf(WorkspaceIdentity.CENTRAL_SESSION to "",
+                scope.executionSessionId to scope.workspaceId))[scope.workspaceId] ?: 0
+        }
+        assertEquals(1, pendingInputs())
 
-        val catalogBeforeAcknowledgement = com.jarvys.agent.workspaces.WorkspaceChanges.catalogRevision.value
+        val revisionBeforeAcknowledgement = WorkspaceChanges.revision.value
         val provider = MainChatTurnContextProvider(store, WorkspaceIdentity.CENTRAL_SESSION, cursorId)
         val delivered = provider.takeDurableMessages()
         assertEquals(listOf(messageId), delivered.map { it.id })
         provider.durableMessagesIncorporated(delivered)
 
-        assertEquals(catalogBeforeAcknowledgement + 1,
-            com.jarvys.agent.workspaces.WorkspaceChanges.catalogRevision.value)
-        assertEquals(0, projection().coordination.pendingInputs)
+        assertEquals(revisionBeforeAcknowledgement + 1, WorkspaceChanges.revision.value)
+        assertEquals(0, pendingInputs())
         assertEquals("incorporated", store.readConversationInputState(WorkspaceIdentity.CENTRAL_SESSION, messageId))
 
         provider.durableMessagesIncorporated(delivered)
-        assertEquals("Repeated acknowledgement must not reload the catalog", catalogBeforeAcknowledgement + 1,
-            com.jarvys.agent.workspaces.WorkspaceChanges.catalogRevision.value)
+        assertEquals("Repeated acknowledgement must not invalidate again", revisionBeforeAcknowledgement + 1,
+            WorkspaceChanges.revision.value)
     }
 }

@@ -755,14 +755,13 @@ public final class WorkspaceTools {
           coordinator,
           "preview_workspace",
           "Prepare an in-chat Open preview action for this conversation's on-device WebView."
-              + " Without path, opens the ordinary workspace index.html as a live preview."
-              + " An explicit path (including /project/site/index.html) captures an immutable HTML preview"
+              + " The required path (including /project/site/index.html) captures an immutable HTML preview"
               + " and native attachment in the owning main chat, with bounded local CSS/JS/images."
               + " External resources are disabled; missing assets and capture limits are reported."
               + " Phone HTML should author a device-width viewport and responsive CSS; the viewer preserves"
               + " explicit viewport declarations and never rewrites source/downloads or fixes desktop-width CSS.",
           WorkspaceTools.properties("path", "string"),
-          Collections.emptyList());
+          Collections.singletonList("path"));
     }
 
     @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.EXCLUDED; }
@@ -770,40 +769,32 @@ public final class WorkspaceTools {
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
       token.throwIfCancelled();
-      if (arguments != null && arguments.containsKey("path")) {
-        if (arguments.size() != 1 || !(arguments.get("path") instanceof String)
-            || ((String) arguments.get("path")).isEmpty() || ((String) arguments.get("path")).length() > 1024)
-          return CoreToolResult.failure("Provide one explicit HTML path in this conversation's workspace or /project/.");
-        String path = (String) arguments.get("path");
-        if (!HtmlPreviewCapture.htmlName(path) || token.isCrewRun())
-          return CoreToolResult.failure("Explicit previews require a local HTML file in the owning main chat.");
-        try {
-          String session = workspace.deliveryConversationId();
-          if (session == null)
-            return CoreToolResult.failure("Explicit previews are available only in the main chat.");
-          java.io.File files = workspace.appFilesForDelivery();
-          DeliveredArtifactStore artifacts = new DeliveredArtifactStore(files);
-          LocalRunStore conversations = new LocalRunStore(files);
-          if (conversations.readConversationMetadata(session).deleted) return CoreToolResult.failure("This conversation was deleted.");
-          ChatAttachment attachment = artifacts.snapshot(session, workspace, path, null, token);
-          HtmlPreviewDescriptor descriptor = artifacts.previewForAttachment(session, attachment);
-          if (descriptor == null) return CoreToolResult.failure("This file could not be captured as a safe UTF-8 HTML preview within the preview limits.");
-          token.throwIfCancelled();
-          conversations.appendDeliveredFile(session, attachment);
-          AgentRunUiState.deliveredFileAdded(session, attachment);
-          return DeliverFileTool.deliveryResult(session, attachment, artifacts);
-        } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
-        catch (Exception unavailable) {
-          return CoreToolResult.failure("Could not prepare the HTML preview. Check its scoped path, file type and available storage.");
-        }
+      // Only a captured conversation artifact is an openable reference; a workspace id never reaches the thread.
+      if (arguments == null || arguments.size() != 1 || !(arguments.get("path") instanceof String)
+          || ((String) arguments.get("path")).isEmpty() || ((String) arguments.get("path")).length() > 1024)
+        return CoreToolResult.failure("Provide one explicit HTML path in this conversation's workspace or /project/.");
+      String path = (String) arguments.get("path");
+      if (!HtmlPreviewCapture.htmlName(path) || token.isCrewRun())
+        return CoreToolResult.failure("Previews require a local HTML file in the owning main chat.");
+      try {
+        String session = workspace.deliveryConversationId();
+        if (session == null)
+          return CoreToolResult.failure("Previews are available only in the main chat.");
+        java.io.File files = workspace.appFilesForDelivery();
+        DeliveredArtifactStore artifacts = new DeliveredArtifactStore(files);
+        LocalRunStore conversations = new LocalRunStore(files);
+        if (conversations.readConversationMetadata(session).deleted) return CoreToolResult.failure("This conversation was deleted.");
+        ChatAttachment attachment = artifacts.snapshot(session, workspace, path, null, token);
+        HtmlPreviewDescriptor descriptor = artifacts.previewForAttachment(session, attachment);
+        if (descriptor == null) return CoreToolResult.failure("This file could not be captured as a safe UTF-8 HTML preview within the preview limits.");
+        token.throwIfCancelled();
+        conversations.appendDeliveredFile(session, attachment);
+        AgentRunUiState.deliveredFileAdded(session, attachment);
+        return DeliverFileTool.deliveryResult(session, attachment, artifacts);
+      } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
+      catch (Exception unavailable) {
+        return CoreToolResult.failure("Could not prepare the HTML preview. Check its scoped path, file type and available storage.");
       }
-      if (arguments != null && !arguments.isEmpty()) return CoreToolResult.failure("Only optional path is supported for preview_workspace.");
-      if (!this.workspace.hasIndexHtml()) {
-        return CoreToolResult.failure(
-            "Preview needs index.html at the root of the project workspace.");
-      }
-      return CoreToolResult.preview(
-          "Local HTML preview is ready to open.", this.workspace.projectId());
     }
   }
 

@@ -44,39 +44,37 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
 
-/** In-app local preview. The native WebView, not a Compose drag handler, owns page gestures. */
+/**
+ * In-app viewer of an immutable HTML snapshot delivered into a conversation. The native WebView,
+ * not a Compose drag handler, owns page gestures. A token that is not a snapshot of [sessionId]
+ * shows the unavailable state instead of reading any other source.
+ */
 @Composable
-fun WorkspacePreviewScreen(projectId: String, modifier: Modifier = Modifier, sessionId: String? = null) {
-    key(projectId, sessionId) { ScopedPreviewScreen(projectId, sessionId, modifier) }
+fun ArtifactSnapshotPreviewScreen(token: String, sessionId: String?, modifier: Modifier = Modifier) {
+    key(token, sessionId) { ScopedSnapshotScreen(token, sessionId, modifier) }
 }
 
 private data class PreviewLoad(val content: WorkspacePreviewContent? = null, val loaded: Boolean = false)
 
 @Composable
-private fun ScopedPreviewScreen(projectId: String, sessionId: String?, modifier: Modifier) {
+private fun ScopedSnapshotScreen(token: String, sessionId: String?, modifier: Modifier) {
     val context = LocalContext.current
-    val loaded by produceState(PreviewLoad(), projectId, sessionId) {
+    val loaded by produceState(PreviewLoad(), token, sessionId) {
         value = withContext(Dispatchers.IO) {
             PreviewLoad(runCatching {
-                if (HtmlPreviewDescriptor.isSnapshotToken(projectId)) {
-                    requireNotNull(sessionId)
-                    val artifacts = DeliveredArtifactStore(context)
-                    val descriptor = artifacts.resolvePreview(sessionId, projectId)
-                    val owner = try {
-                        LocalRunStore(context).findChatFile(sessionId, "delivered", descriptor.artifactId)
-                    } catch (failure: RuntimeException) {
-                        AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
-                        throw failure
-                    }
-                        ?: error("Preview is not owned by this conversation")
-                    require(owner.id == descriptor.artifactId)
-                    WorkspacePreviewContent(context.applicationContext, null, sessionId, descriptor)
-                } else {
-                    require(sessionId == null || WorkspaceStore.projectIdForSession(sessionId) == projectId)
-                    val workspace = readOnlyPreviewWorkspace(context, projectId)
-                    require(workspace.hasIndexHtml())
-                    WorkspacePreviewContent(context.applicationContext, workspace)
+                require(HtmlPreviewDescriptor.isSnapshotToken(token))
+                requireNotNull(sessionId)
+                val artifacts = DeliveredArtifactStore(context)
+                val descriptor = artifacts.resolvePreview(sessionId, token)
+                val owner = try {
+                    LocalRunStore(context).findChatFile(sessionId, "delivered", descriptor.artifactId)
+                } catch (failure: RuntimeException) {
+                    AgentErrorReporter.reportChatDatabaseFailure(context.applicationContext, failure)
+                    throw failure
                 }
+                    ?: error("Preview is not owned by this conversation")
+                require(owner.id == descriptor.artifactId)
+                WorkspacePreviewContent(context.applicationContext, null, sessionId, descriptor)
             }.getOrNull(), true)
         }
     }
@@ -122,14 +120,6 @@ private fun ScopedPreviewScreen(projectId: String, sessionId: String?, modifier:
             },
         )
     }
-}
-
-/** Static preview reads never instantiate skills, connectors or credentials. Reject root symlinks. */
-internal fun readOnlyPreviewWorkspace(context: Context, projectId: String): WorkspaceStore {
-    val root = StorageGeneration(context.applicationContext.filesDir.canonicalFile).directory("workspaces")
-    val project = File(root, projectId)
-    require(root.canonicalFile == root.absoluteFile && project.canonicalFile == project.absoluteFile)
-    return WorkspaceStore(root, projectId).withoutAttachments()
 }
 
 private fun Context.previewActivity(): ComponentActivity = when (this) {

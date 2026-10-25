@@ -43,7 +43,8 @@ public final class CrewMissionNotifier {
                         context.getString(R.string.crew_result_notification_channel), NotificationManager.IMPORTANCE_DEFAULT));
             }
             Intent open = new Intent(context, MainActivity.class)
-                    .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, mission.conversationId)
+                    .putExtra(MainActivity.EXTRA_OPEN_MISSION, mission.missionId)
+                    .putExtra(MainActivity.EXTRA_OPEN_MISSION_SESSION, mission.conversationId)
                     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;

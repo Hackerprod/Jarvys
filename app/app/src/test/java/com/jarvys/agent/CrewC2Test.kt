@@ -164,6 +164,11 @@ class CrewC2Test {
         assertEquals(1, posted.size)
         assertTrue(posted.single().extras.getCharSequence(android.app.Notification.EXTRA_TEXT)
             .toString().contains("Design brief"))
+        // B12: the notification opens the mission by its own session, never a conversation selection.
+        val open = shadowOf(posted.single().contentIntent).savedIntent
+        assertEquals(mission.missionId, open.getStringExtra(MainActivity.EXTRA_OPEN_MISSION))
+        assertEquals(mission.conversationId, open.getStringExtra(MainActivity.EXTRA_OPEN_MISSION_SESSION))
+        assertFalse(open.hasExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
         assertEquals(android.app.NotificationManager.IMPORTANCE_DEFAULT,
             shadowOf(notificationManager).notificationChannels.single { it.id == "jarvys_crew_results" }.importance)
     }

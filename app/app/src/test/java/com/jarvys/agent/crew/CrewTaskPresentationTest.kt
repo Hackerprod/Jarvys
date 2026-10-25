@@ -170,32 +170,18 @@ class CrewTaskPresentationTest {
         capture("w320-h400-content320-es-dark-font2-detail")
     }
 
-    @Test fun settingsStackModesAndKeepCodingDetailsFullWidth() {
+    @Test fun settingsKeepCodingDetailsFullWidthAndOfferNoCrewModeChoice() {
         val mission = fixture()
         val board = board()
-        var mode by mutableStateOf(CrewMode.AUTO)
-        val changes = mutableListOf<CrewMode>()
         install(fontScale = 2f) {
-            Mission(mission, board, mode = mode, onMode = { mode = it; changes += it })
+            Mission(mission, board)
         }
         node("crew-mode-off").assertDoesNotExist()
         node("crew-mission-settings").performClick()
-        assertEquals(2f, layout(compose.onNodeWithText(localized("en", R.string.crew_mode_off),
+        assertEquals(2f, layout(compose.onNodeWithText(localized("en", R.string.crew_settings_title),
             useUnmergedTree = true)).layoutInput.density.fontScale, 0.01f)
-        val off = bounds("crew-mode-off")
-        val auto = bounds("crew-mode-auto")
-        val always = bounds("crew-mode-always")
-        assertEquals(off.left, auto.left, 1f)
-        assertEquals(off.right, auto.right, 1f)
-        assertEquals(auto.left, always.left, 1f)
-        assertTrue("Mode choices must be stacked", off.bottom <= auto.top && auto.bottom <= always.top)
-        listOf("off", "auto", "always").forEach { name ->
-            node("crew-mode-$name").performScrollTo()
-            assertTouchTarget("crew-mode-$name")
-            node("crew-mode-$name").performClick()
-        }
-        assertEquals(listOf(CrewMode.OFF, CrewMode.AUTO, CrewMode.ALWAYS), changes)
-        node("crew-mode-always").assertIsSelected()
+        // Crew mode is a global setting; it lives in Settings > Bots, not in a mission.
+        node("crew-mode-off").assertDoesNotExist()
         node("crew-view-instructions").performScrollTo().assertIsDisplayed()
         val instructions = bounds("crew-view-instructions")
         node("crew-configure-coding").performScrollTo().assertIsDisplayed()
@@ -519,10 +505,8 @@ class CrewTaskPresentationTest {
 
     @Composable
     private fun Mission(mission: CrewMissionSnapshot, board: CrewBoard, readOnly: Boolean = false,
-        mode: CrewMode = CrewMode.AUTO, onMode: (CrewMode) -> Unit = {}, onOpen: (String) -> Unit = {},
-        onAsk: (String, String) -> Unit = { _, _ -> }, onStop: () -> Unit = {}) {
-        CrewMissionScreen(mission, board, readOnly, onOpen, onAsk, onStop,
-            crewMode = mode, onCrewModeChange = onMode)
+        onOpen: (String) -> Unit = {}, onAsk: (String, String) -> Unit = { _, _ -> }, onStop: () -> Unit = {}) {
+        CrewMissionScreen(mission, board, readOnly, onOpen, onAsk, onStop)
     }
 
     private fun fixture(language: String = "en", status: String = "RUNNING",

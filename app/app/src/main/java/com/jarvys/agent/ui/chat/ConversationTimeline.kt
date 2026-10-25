@@ -120,7 +120,7 @@ import com.jarvys.agent.canvas.ChatCanvasCallbacks
 import com.jarvys.agent.canvas.ChatCanvasPreferences
 import com.jarvys.agent.canvas.ChatCanvasTimeline
 import com.jarvys.agent.crew.CrewApprovalAttribution
-import com.jarvys.agent.crew.CrewMissionCard
+import com.jarvys.agent.workspaces.MissionRef
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -179,7 +179,7 @@ fun ConversationTimeline(
     compactionStatus: String? = null,
     isReflecting: Boolean = false,
     reflectionStatus: String? = null,
-    onOpenCrewMission: (String) -> Unit = {},
+    onOpenMission: (MissionRef) -> Unit = {},
     onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
@@ -219,7 +219,7 @@ fun ConversationTimeline(
                         } ?: event.previewId
                         when {
                             target != null -> onOpenPreview(target)
-                            event.crewMissionSnapshot != null -> onOpenCrewMission(event.crewMissionSnapshot.missionId)
+                            event.missionRef != null -> onOpenMission(event.missionRef)
                             event.scheduledTaskArtifact != null -> onOpenScheduledTask(event.scheduledTaskArtifact)
                         }
                     }
@@ -311,7 +311,7 @@ fun ConversationTimeline(
                                 latestUserEventIndex = latestUserEventIndex,
                                 latestAssistantEventIndex = latestAssistantEventIndex,
                                 isLatestAssistantEvent = ChatMessageArrivalPolicy.key(event) == latestAssistantEventKey),
-                            onOpenCrewMission = onOpenCrewMission,
+                            onOpenMission = onOpenMission,
                             onOpenScheduledTask = onOpenScheduledTask,
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
@@ -463,7 +463,7 @@ private fun JarvysConversationEvent(
     translationError: String? = null,
     isLastAssistant: Boolean = false,
     streamActive: Boolean = false,
-    onOpenCrewMission: (String) -> Unit = {},
+    onOpenMission: (MissionRef) -> Unit = {},
     onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
@@ -488,8 +488,8 @@ private fun JarvysConversationEvent(
         "compaction" -> CompactionLine(event)
         "approval" -> TimelineArrival(animateEntry) { ApprovalDecisionCard(event, connectorRegistry) }
         "user_decision" -> TimelineArrival(animateEntry) { UserDecisionEventCard(event) }
-        "crew_mission" -> event.crewMissionSnapshot?.let { mission ->
-            CrewMissionCard(mission, onOpen = { onOpenCrewMission(mission.missionId) })
+        "mission_ref" -> event.missionRef?.let { mission ->
+            TimelineArrival(animateEntry) { MissionRefCard(mission, onOpen = onOpenMission) }
         }
         "scheduled_task" -> event.scheduledTaskArtifact?.let { artifact ->
             TimelineArrival(animateEntry) {

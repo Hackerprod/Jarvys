@@ -428,6 +428,8 @@
     <string name="crew_tab_board">Board</string>
     <string name="crew_tab_bots">Bots</string>
     <string name="crew_read_only">Read only</string>
+    <string name="crew_mission_unavailable">This mission is no longer available.</string>
+    <string name="mission_card_result_ready">A result from this mission was delivered to Jarvys.</string>
     <string name="crew_debate_empty">The crew has not exchanged messages yet.</string>
     <string name="crew_board_empty">No board files yet. Bots can post shared notes under /board/.</string>
     <string name="crew_board_folder">Folder</string>
@@ -1282,7 +1284,6 @@ After:
     <string name="crew_resume_failed">The saved work could not be resumed.</string>
     <string name="drawer_archive">Archive</string>
     <string name="drawer_archived_chats">Archived chats</string>
-    <string name="drawer_chat_actions">Actions for %1$s</string>
     <string name="drawer_pin">Pin</string>
     <string name="full_project_exec_bot">Bot: %1$s</string>
     <string name="full_project_exec_command">"Command (literal):
@@ -1452,19 +1453,10 @@ Their exit results are unknown. Do not repeat them automatically. Review project
         <item quantity="one">%1$d question or blocker can receive an exact reply.</item>
         <item quantity="other">%1$d questions or blockers can receive an exact reply.</item>
     </plurals>
-    <plurals name="workspace_coordination_uncertain">
-        <item quantity="one">%1$d reply attempt has an uncertain outcome. Do not resend automatically.</item>
-        <item quantity="other">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</item>
-    </plurals>
-    <plurals name="workspace_coordination_pending">
-        <item quantity="one">%1$d coordination input is awaiting acknowledgement.</item>
-        <item quantity="other">%1$d coordination inputs are awaiting acknowledgement.</item>
-    </plurals>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d historical or superseded request. Reopening does not resume work.</item>
         <item quantity="other">%1$d historical or superseded requests. Reopening does not resume work.</item>
     </plurals>
-    <string name="workspace_coordination_unavailable">Coordination evidence is unavailable. No work was repeated.</string>
     <string name="crew_type_blocker">Blocker</string>
     <string name="workspace_correction_checkpoint_incorporated">The exact correction was incorporated into a saved checkpoint. This does not verify understanding, execution or completion.</string>
     <string name="workspace_correction_checkpoint_unverified">Correction dispatch is recorded. Incorporation into a saved checkpoint is not verified; do not resend automatically.</string>

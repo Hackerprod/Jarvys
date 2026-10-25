@@ -70,7 +70,10 @@ class WorkspaceResultDelivery internal constructor(
                     ledger.appendWorkspaceResultNoticeIfAbsent(reference, beforeWrite)
                 }) token.throwIfCancelled()
         }
-        // This notice is audit metadata only. Content delivery uses the conversation input ledger.
+        // The notice is audit metadata and content delivery uses the conversation input ledger; the
+        // thread learns of the result through a card. It is written on every pass (idempotent), not only
+        // when the notice was inserted, so a card lost after the notice is recovered.
+        WorkspaceMissionCards.resultDelivered(app, reference)
         return inserted
     }
 
@@ -81,6 +84,7 @@ class WorkspaceResultDelivery internal constructor(
     internal fun reconcile(workspaceId: String, token: CancellationToken) {
         val scope = owner(workspaceId)
         if (!WorkspaceRegistry(app).use { it.hasBoundAssignments(workspaceId) }) return
+        announceDelegations(scope, token)
         var visibleChange = false
         var cursor: String? = null
         try {
@@ -95,8 +99,20 @@ class WorkspaceResultDelivery internal constructor(
                 cursor = ids.lastOrNull()
             } while (ids.size == PAGE)
         } finally {
-            if (visibleChange) WorkspaceChanges.detailChanged()
+            if (visibleChange) WorkspaceChanges.changed()
         }
+    }
+
+    /** Recovers the thread card of every bound delegation; each card exists at most once. */
+    private fun announceDelegations(scope: WorkspaceRecord, token: CancellationToken) {
+        var cursor: String? = null
+        do {
+            token.throwIfCancelled()
+            val page = WorkspaceRegistry(app).use { it.listAssignments(scope.workspaceId, PAGE, cursor) }
+            page.filter { it.state == WorkspaceAssignmentState.BOUND }
+                .forEach { WorkspaceMissionCards.delegated(app, scope, it) }
+            cursor = page.lastOrNull()?.assignmentId
+        } while (page.size == PAGE)
     }
 
     fun list(workspaceId: String, limit: Int, after: String?, admission: Runnable): JSONObject {
@@ -135,7 +151,7 @@ class WorkspaceResultDelivery internal constructor(
         // Reading the exact evidence can also finish its corresponding local receipt.
         // The current turn is already attending to this evidence; record local disclosure without
         // creating another system-origin request for the same result.
-        if (notice(reference, token, admission)) WorkspaceChanges.detailChanged()
+        if (notice(reference, token, admission)) WorkspaceChanges.changed()
         val current = assignment(reference)
         admission.run(); token.throwIfCancelled()
         ledger.requireWorkspaceResultDisclosureLive(reference, true)
@@ -226,7 +242,7 @@ class WorkspaceResultDelivery internal constructor(
                         beginPending(entry)
                         WorkspaceCoordinationDelivery.reconcileScheduled(app, id, token)
                         WorkspaceResultDelivery(app).reconcile(id, token)
-                        if (errors.remove(id) != null) WorkspaceChanges.detailChanged()
+                        if (errors.remove(id) != null) WorkspaceChanges.changed()
                     } catch (_: java.util.concurrent.CancellationException) {
                         // Durable evidence remains pending; STOP does not replay or delete it.
                     } catch (_: Exception) {
@@ -251,7 +267,7 @@ class WorkspaceResultDelivery internal constructor(
         }
 
         private fun setIssue(workspaceId: String, message: String) {
-            if (errors.put(workspaceId, message) != message) WorkspaceChanges.detailChanged()
+            if (errors.put(workspaceId, message) != message) WorkspaceChanges.changed()
         }
     }
 }

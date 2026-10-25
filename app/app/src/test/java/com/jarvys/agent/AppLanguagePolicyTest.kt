@@ -141,7 +141,7 @@ class AppLanguagePolicyTest {
             "src/main/java/com/jarvys/agent/ui/shell/JarvysShellFrame.kt",
             "src/main/java/com/jarvys/agent/ui/shell/ModelSelectorSheet.kt",
             "src/main/java/com/jarvys/agent/AssistantMarkdown.kt",
-            "src/main/java/com/jarvys/agent/WorkspacePreviewScreen.kt",
+            "src/main/java/com/jarvys/agent/ArtifactSnapshotPreviewScreen.kt",
             "src/main/java/com/jarvys/agent/CodexOAuthManager.java",
             "src/main/java/com/jarvys/agent/StopOverlayService.java",
             "src/main/java/com/jarvys/agent/AgentForegroundService.java",

@@ -89,6 +89,8 @@ internal fun BotsCatalogGrid(
     onClose: () -> Unit,
     busy: Boolean = false,
     error: String? = null,
+    crewMode: CrewMode? = null,
+    onCrewModeChange: (CrewMode) -> Unit = {},
 ) {
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     BackHandler(onBack = onClose)
@@ -97,6 +99,12 @@ internal fun BotsCatalogGrid(
         LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.weight(1f).testTag("bots-grid"),
             contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Crew mode is a global setting; delegation to bots from the thread follows it.
+            crewMode?.let { mode ->
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    CrewModePicker(mode, onCrewModeChange)
+                }
+            }
             error?.let { message ->
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { BotsError(message) }
             }

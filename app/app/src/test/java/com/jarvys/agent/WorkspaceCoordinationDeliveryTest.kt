@@ -389,26 +389,20 @@ class WorkspaceCoordinationDeliveryTest {
     @Test fun reconciliationInvalidatesOnceForNewVisibleEvidenceAndNeverForAnIdempotentScan() {
         bind(); evidence()
         val detailBefore = WorkspaceChanges.revision.value
-        val catalogBefore = WorkspaceChanges.catalogRevision.value
 
         reconcile()
         assertEquals(detailBefore + 1, WorkspaceChanges.revision.value)
-        assertEquals(catalogBefore + 1, WorkspaceChanges.catalogRevision.value)
         val detailAfterInsert = WorkspaceChanges.revision.value
-        val catalogAfterInsert = WorkspaceChanges.catalogRevision.value
 
         reconcile()
 
         assertEquals("replaying the same evidence writes no invalidation", detailAfterInsert,
             WorkspaceChanges.revision.value)
-        assertEquals("replaying the same evidence does not reload the catalog", catalogAfterInsert,
-            WorkspaceChanges.catalogRevision.value)
     }
 
-    @Test fun checkpointScheduleWithNoVisibleEvidenceDoesNotInvalidateCatalogOrDetail() {
+    @Test fun checkpointScheduleWithNoVisibleEvidenceDoesNotInvalidateTheProjection() {
         bind()
         val detailBefore = WorkspaceChanges.revision.value
-        val catalogBefore = WorkspaceChanges.catalogRevision.value
 
         // CoreAgentRuntime's committed-checkpoint listener enters this same scheduling route.
         WorkspaceCoordinationDelivery.schedule(app, scope.executionSessionId)
@@ -416,8 +410,6 @@ class WorkspaceCoordinationDeliveryTest {
 
         assertEquals("a checkpoint-triggered no-op scan has no detail change", detailBefore,
             WorkspaceChanges.revision.value)
-        assertEquals("a checkpoint-triggered no-op scan does not reload catalog rows", catalogBefore,
-            WorkspaceChanges.catalogRevision.value)
     }
 
     @Test fun asciiFragmentsReconstructAllUtf16TextAndRefsAcrossEscapeBoundaries() {

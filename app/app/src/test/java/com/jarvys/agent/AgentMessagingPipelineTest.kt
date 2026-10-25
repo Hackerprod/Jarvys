@@ -16,7 +16,6 @@ import com.jarvys.agent.chatdb.ChatDbResult
 import com.jarvys.agent.device.ScreenData
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
-import com.jarvys.agent.workspaces.WorkspaceTimelineProjection
 import com.jarvys.agent.ui.chat.ConversationVisibility
 import com.jarvys.agent.coding.ProjectScopeStore
 import org.json.JSONObject
@@ -112,9 +111,7 @@ class AgentMessagingPipelineTest {
         }
         assertTrue(deliveredTimelineEvent.text.contains("APK built"))
         val mainProjection = ConversationVisibility.project(timeline)
-        val workspaceProjection = WorkspaceTimelineProjection.project(worker.scope.workspaceId, timeline)
         assertFalse(mainProjection.any { it.messageId == deliveredTimelineEvent.messageId })
-        assertFalse(workspaceProjection.any { it.messageId == deliveredTimelineEvent.messageId })
         assertTrue(mainProjection.any { it.kind == "assistant" && it.text == "Jarvys processed the result" })
         assertEquals("", chatTestStore.onDatabaseWorker { store.latestUserMessageId(WorkspaceIdentity.CENTRAL_SESSION) })
         assertEquals("RESULT", input.incomingMetadata.type)

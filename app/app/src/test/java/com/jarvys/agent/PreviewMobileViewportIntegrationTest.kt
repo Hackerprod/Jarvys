@@ -20,6 +20,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class PreviewMobileViewportIntegrationTest {
+    // The conversation store is gated by the single-session reset; await it before building fixtures.
+    @org.junit.Before fun storageReady() {
+        kotlinx.coroutines.runBlocking { SingleSessionReset.awaitReady(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()) }
+    }
+
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val html = "<!doctype html><html><head><meta charset=utf-8><style>@media(max-width:600px){main{display:block}}table{min-width:1000px}</style></head><body><main><input><button>Tap</button><a href='next.html#part'>Next</a></main></body></html>"
 

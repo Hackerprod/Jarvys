@@ -8,7 +8,6 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.runtime.MutableState
 import androidx.navigation.NavHostController
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
-import com.jarvys.agent.workspaces.WORKSPACE_PAGE_SIZE
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import androidx.lifecycle.ViewModelProvider
@@ -16,15 +15,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
-import com.jarvys.agent.workspaces.WorkspaceChanges
-import com.jarvys.agent.workspaces.WorkspaceControlType
-import com.jarvys.agent.workspaces.WorkspaceAssignmentUi
-import com.jarvys.agent.workspaces.WorkspaceChatUiState
-import com.jarvys.agent.workspaces.WorkspaceUiStatus
-import com.jarvys.agent.workspaces.workspaceChatCorrectionDisabledHintResource
-import com.jarvys.agent.workspaces.workspaceChatSelectedAssignment
 import com.jarvys.agent.crew.CrewBotSnapshot
 import com.jarvys.agent.crew.CrewMissionSnapshot
+import com.jarvys.agent.crew.CrewNavigationRoutes
 import com.jarvys.agent.crew.CrewProcessIdentity
 import java.io.ByteArrayInputStream
 import java.lang.reflect.InvocationTargetException
@@ -65,86 +58,6 @@ class MainActivityWorkspaceRoutingTest {
     private val bytes = "Exact independent attachment bytes".toByteArray()
     private lateinit var attachment: ChatAttachment
     private val activity: MainActivity get() = requireNotNull(controller).get()
-
-    @Test fun mainActivityWorkspaceThinkingAndPauseButtonUseProjectedCurrentProcessActivity() {
-        start()
-        val assignmentId = "activity-assignment"
-        fun state(status: WorkspaceUiStatus, processId: String, botStatus: String): WorkspaceChatUiState {
-            val bot = CrewBotSnapshot("activity-bot", "worker", "Worker", "Worker", "blue", "Task",
-                botStatus, "", "", "", emptyList(), 1L, 0L)
-            val mission = CrewMissionSnapshot("activity-mission", execution, processId,
-                "Workspace mission", "RUNNING", "", 1L, 0L, listOf(bot), emptyList())
-            val event = AgentRunUiEvent.crewMissionEvent(61L, mission)
-            return WorkspaceChatUiState("11111111-1111-1111-1111-111111111111", execution,
-                "Workspace", status, listOf(event), assignments = listOf(WorkspaceAssignmentUi(
-                    assignmentId, 1L, "Worker", "Task", status, canPause = true)))
-        }
-        fun active(state: WorkspaceChatUiState) = invoke("workspaceHasActiveWorkForUi",
-            arrayOf(WorkspaceChatUiState::class.java), arrayOf(state)) as Boolean
-        fun pauseEnabled(state: WorkspaceChatUiState) = invoke("workspacePauseEnabledForUi",
-            arrayOf(WorkspaceChatUiState::class.java, String::class.java), arrayOf(state, assignmentId)) as Boolean
-
-        val terminal = state(WorkspaceUiStatus.COMPLETED, CrewProcessIdentity.ID, "DONE")
-        assertFalse("mission status RUNNING cannot override terminal bot projections", active(terminal))
-        assertFalse("terminal workspace keeps the wired stop button disabled", pauseEnabled(terminal))
-
-        val previousProcess = state(WorkspaceUiStatus.INTERRUPTED, "previous-install-process", "WAITING")
-        assertFalse("a previous process snapshot is recovered as interrupted", active(previousProcess))
-        assertFalse("the previous process cannot enable the pause button", pauseEnabled(previousProcess))
-
-        val live = state(WorkspaceUiStatus.UNKNOWN, CrewProcessIdentity.ID, "RUNNING")
-        assertTrue("a current-process active bot drives workspace thinking", active(live))
-        assertTrue("the real MainActivity pause-button calculation follows current active work", pauseEnabled(live))
-    }
-
-    @Test fun mainActivityUsesTheMatchingLiveSessionSnapshotForThinkingAndPauseTogether() {
-        start()
-        val assignmentId = "live-snapshot-assignment"
-        val terminal = AgentRunUiEvent.crewMissionEvent(61L, CrewMissionSnapshot(
-            "live-snapshot-mission", execution, CrewProcessIdentity.ID, "Workspace mission", "RUNNING", "", 1L, 0L,
-            listOf(CrewBotSnapshot("live-snapshot-bot", "worker", "Worker", "Worker", "blue", "Task",
-                "DONE", "", "", "", emptyList(), 1L, 0L)), emptyList()))
-        val live = AgentRunUiEvent.crewMissionEvent(62L, CrewMissionSnapshot(
-            "live-snapshot-mission", execution, CrewProcessIdentity.ID, "Workspace mission", "RUNNING", "", 2L, 0L,
-            listOf(CrewBotSnapshot("live-snapshot-bot", "worker", "Worker", "Worker", "blue", "Task",
-                "RUNNING", "", "", "", emptyList(), 2L, 0L)), emptyList()))
-        val state = WorkspaceChatUiState("11111111-1111-1111-1111-111111111111", execution,
-            "Workspace", WorkspaceUiStatus.UNKNOWN, listOf(terminal), assignments = listOf(WorkspaceAssignmentUi(
-                assignmentId, 1L, "Worker", "Task", WorkspaceUiStatus.ACTIVE, canPause = true)))
-        val snapshot = AgentRunUiSnapshot(sessionId = execution, events = listOf(live))
-        val active = invoke("workspaceHasActiveWorkForUi",
-            arrayOf(WorkspaceChatUiState::class.java, AgentRunUiSnapshot::class.java), arrayOf(state, snapshot)) as Boolean
-        val pauseEnabled = invoke("workspacePauseEnabledForUi",
-            arrayOf(WorkspaceChatUiState::class.java, String::class.java, Boolean::class.javaPrimitiveType!!),
-            arrayOf(state, assignmentId, active)) as Boolean
-
-        assertTrue("the matching live workspace snapshot controls Thinking", active)
-        assertTrue("the pause button consumes that exact activity result", pauseEnabled)
-        val unrelatedSnapshot = AgentRunUiSnapshot(sessionId = legacy, events = listOf(live))
-        val unrelatedActive = invoke("workspaceHasActiveWorkForUi",
-            arrayOf(WorkspaceChatUiState::class.java, AgentRunUiSnapshot::class.java), arrayOf(state, unrelatedSnapshot)) as Boolean
-        assertFalse("a snapshot from another session cannot override the workspace state", unrelatedActive)
-    }
-
-    @Test fun selectedPauseOnlyBotKeepsItsPauseAndGetsAnAccurateCorrectionHint() {
-        val correctable = WorkspaceAssignmentUi("correctable", 4L, "Writer", "Write",
-            WorkspaceUiStatus.ACTIVE, canCorrect = true)
-        val pauseOnly = WorkspaceAssignmentUi("pause-only", 7L, "Scout", "Inspect",
-            WorkspaceUiStatus.ACTIVE, canPause = true)
-        val assignments = listOf(correctable, pauseOnly)
-
-        val selected = workspaceChatSelectedAssignment(assignments, pauseOnly.id)
-        assertEquals(pauseOnly, selected)
-        assertFalse(requireNotNull(selected).canCorrect)
-        assertTrue(selected.canPause)
-        assertEquals(R.string.workspace_chat_selected_assignment_cannot_correct_hint,
-            workspaceChatCorrectionDisabledHintResource(assignments, selected))
-        assertNull(workspaceChatCorrectionDisabledHintResource(assignments, correctable))
-        assertEquals(R.string.workspace_chat_input_hint,
-            workspaceChatCorrectionDisabledHintResource(listOf(pauseOnly), pauseOnly))
-        assertNotEquals(context.getString(R.string.workspace_chat_selected_assignment_cannot_correct_hint),
-            context.getString(R.string.workspace_chat_input_hint))
-    }
 
     @Before fun setUp() {
         compose.mainClock.autoAdvance = false
@@ -254,33 +167,99 @@ class MainActivityWorkspaceRoutingTest {
         awaitCentralEmpty()
     }
 
-    @Test fun sendingAndPausingWorkspaceControlsPreservesTheCurrentChatDraftAndSkills() {
+    @Test fun B12_missionNotificationOpensTheMissionWithItsSessionAndRecreationKeepsItFromMissionToBot() {
+        val (session, missionId) = registeredMission()
         start()
-        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && activityState<String>("conversationSessionId").value == WorkspaceIdentity.CENTRAL_SESSION }
-        val draft = "A draft unrelated to the workspace control"
-        val selectedSkills = setOf("selected-skill")
-        compose.runOnIdle {
-            activityState<String>("goalInput").value = draft
-            activityState<Set<String>>("selectedSkillIds").value = selectedSkills
-        }
-        val revision = WorkspaceChanges.revision.value
-        val parameterTypes = arrayOf<Class<*>>(String::class.java, String::class.java, Long::class.javaPrimitiveType!!,
-            WorkspaceControlType::class.java, String::class.java)
-        val workspaceId = UUID.randomUUID().toString()
-        invoke("applyWorkspaceControl", parameterTypes,
-            arrayOf(workspaceId, UUID.randomUUID().toString(), 1L, WorkspaceControlType.CORRECT, "Continue the worker"))
-        invoke("applyWorkspaceControl", parameterTypes,
-            arrayOf(workspaceId, UUID.randomUUID().toString(), 1L, WorkspaceControlType.PAUSE, ""))
+        awaitCentralEmpty()
+        invoke("onNewIntent", arrayOf(Intent::class.java), arrayOf(missionIntent(missionId, session)))
+        await { route() == AppNavigationBackPolicy.CREW }
+        assertEquals(session, routeSession())
+        await { hasTag("crew-mission-screen") }
 
-        await { WorkspaceChanges.revision.value >= revision + 2 }
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, activityState<String>("conversationSessionId").value)
-        assertEquals(draft, activityState<String>("goalInput").value)
-        assertEquals(selectedSkills, activityState<Set<String>>("selectedSkillIds").value)
+        compose.runOnUiThread { nav().navigate(CrewNavigationRoutes.bot(missionId, "b12-bot", requireNotNull(routeSession()))) }
+        await { route() == AppNavigationBackPolicy.CREW_BOT && hasTag("crew-bot-detail") }
+        assertEquals(session, routeSession())
+
+        controller!!.recreate()
+        activities += activity
+        await { route() == AppNavigationBackPolicy.CREW_BOT && hasTag("crew-bot-detail") }
+        assertEquals("the bot route keeps the execution session through recreation", session, routeSession())
     }
 
-    private fun settleNativeFrame() {
-        compose.mainClock.advanceTimeBy(600)
+    @Test fun B12_launchIntentOpensTheMissionOnceAndRecreationDoesNotReplayIt() {
+        val (session, missionId) = registeredMission()
+        start(missionIntent(missionId, session))
+        await { route() == AppNavigationBackPolicy.CREW && hasTag("crew-mission-screen") }
+        compose.runOnUiThread { nav().popBackStack() }
+        await { route() == AppNavigationBackPolicy.CHAT_ROOT }
+
+        controller!!.recreate()
+        activities += activity
+        awaitCentralEmpty()
+        assertEquals("the launch intent was already handled", AppNavigationBackPolicy.CHAT_ROOT, route())
+    }
+
+    @Test fun B12_unresolvedMissionReferencesShowUnavailableAndNeverFallBackToCentral() {
+        val (registered, _) = registeredMission()
+        start()
+        awaitCentralEmpty()
+        val unregistered = WorkspaceIdentity.executionSessionId("22222222-2222-2222-2222-222222222222")
+        listOf(
+            missionIntent("ghost", unregistered),                 // workspace that was never registered
+            missionIntent("ghost", ""),                            // reference that lost its session
+            missionIntent("ghost", registered),                    // registered session, mission that does not exist
+            missionIntent("ghost", UUID.randomUUID().toString()),  // a conversation id is not an execution session
+        ).forEach { intent ->
+            invoke("onNewIntent", arrayOf(Intent::class.java), arrayOf(intent))
+            await { route() == AppNavigationBackPolicy.CREW && hasTag("crew-mission-unavailable") }
+            assertFalse(hasTag("crew-mission-screen"))
+            compose.runOnUiThread { nav().popBackStack() }
+            await { route() == AppNavigationBackPolicy.CHAT_ROOT }
+        }
+    }
+
+    @Test fun B12_aLaterIntentReplacesAMissionTargetThatIsStillWaitingForTheGraph() {
+        start()
+        awaitCentralEmpty()
+        val pending = MainActivity::class.java.getDeclaredField("pendingMission").apply { isAccessible = true }
+        val target = Class.forName("com.jarvys.agent.MissionTarget")
+            .getDeclaredConstructor(String::class.java, String::class.java).apply { isAccessible = true }
+            .newInstance("stale-mission", "stale-session")
+        compose.runOnUiThread { pending.set(activity, target) }
+
+        invoke("onNewIntent", arrayOf(Intent::class.java), arrayOf(Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, "later-message")))
+
+        assertNull("the stale target must not capture a later intent", pending.get(activity))
+        assertEquals(AppNavigationBackPolicy.CHAT_ROOT, route())
+    }
+    /** A workspace in the registry whose execution session records one running mission with one bot. */
+    private fun registeredMission(): Pair<String, String> {
+        val scope = WorkspaceRegistry(context).use { it.createWorkspace("b12-${UUID.randomUUID()}", "B12 workspace") }
+        db { store.appendConversationMessage(scope.executionSessionId, "user", "Mission fixture") }
+        val bot = CrewBotSnapshot("b12-bot", "worker", "Worker", "Worker", "blue", "Task", "RUNNING", "", "", "",
+            emptyList(), 1L, 0L)
+        db {
+            store.appendCrewMissionSnapshot(CrewMissionSnapshot("b12-mission", scope.executionSessionId,
+                CrewProcessIdentity.ID, "Bot mission", "RUNNING", "", 1L, 0L, listOf(bot), emptyList()))
+        }
+        return scope.executionSessionId to "b12-mission"
+    }
+
+    private fun missionIntent(missionId: String, session: String) = Intent(context, MainActivity::class.java)
+        .putExtra(MainActivity.EXTRA_OPEN_MISSION, missionId)
+        .putExtra(MainActivity.EXTRA_OPEN_MISSION_SESSION, session)
+
+    private fun nav(): NavHostController = MainActivity::class.java.getDeclaredField("activeNavController")
+        .apply { isAccessible = true }.get(activity) as NavHostController
+
+    private fun route(): String? = nav().currentDestination?.route
+
+    private fun routeSession(): String? = nav().currentBackStackEntry?.arguments?.getString(CrewNavigationRoutes.SESSION)
+
+    private fun hasTag(tag: String): Boolean = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
+
+    private fun settleNativeFrame() {        compose.mainClock.advanceTimeBy(600)
         awaitReactionDrawIdle(compose, activity)
     }
 
