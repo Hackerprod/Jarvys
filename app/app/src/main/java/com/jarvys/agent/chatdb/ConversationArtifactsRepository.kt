@@ -308,16 +308,6 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             .use { it.moveToFirst(); it.getInt(0) != 0 }
     }
 
-    /** Equivalent to `LocalRunStore.conversationHasPrivateImagesOrAttachments`; delivered files count with generated images. */
-    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean = readSnapshot {
-        sql.query(
-            "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE conversation_id=? UNION ALL " +
-                "SELECT 1 FROM artifacts WHERE conversation_id=? UNION ALL " +
-                "SELECT 1 FROM generated_images WHERE conversation_id=?)",
-            arrayOf(conversationId, conversationId, conversationId),
-        ).use { it.moveToFirst(); it.getInt(0) != 0 }
-    }
-
     private fun normalizeMimeType(raw: String?): String {
         val mime = raw?.trim()?.lowercase(Locale.ROOT).orEmpty()
         return if (mime.matches(Regex("[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+"))) mime else "application/octet-stream"

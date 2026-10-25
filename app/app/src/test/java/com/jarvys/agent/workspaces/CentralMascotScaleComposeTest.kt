@@ -58,7 +58,6 @@ class CentralMascotScaleComposeTest {
 
     private fun assertCentralLayout() {
         var drawer = 0
-        var newChat = 0
         var settings = 0
         var headerInset = 0.dp
         var insetTarget: View? = null
@@ -70,9 +69,8 @@ class CentralMascotScaleComposeTest {
                     route = AppRouteMeta("Central", true, action = AppRouteAction.CHAT),
                     agentSnapshot = AgentRunUiSnapshot(),
                     onBack = {}, onOpenDrawer = { drawer++ }, onOpenSettings = { settings++ },
-                    onNewChat = { newChat++ }, onAddServer = {}, onImportSkill = {},
-                    chatWithoutMemory = false, canCompact = false, compacting = false, canReflect = false,
-                    onToggleMemory = {}, onCompact = {}, onReflect = {}, bottomBar = {},
+                    onAddServer = {}, onImportSkill = {}, canCompact = false, compacting = false, canReflect = false,
+                    onCompact = {}, onReflect = {}, bottomBar = {},
                     mascotVisibleSessionId = WorkspaceIdentity.CENTRAL_SESSION,
                     mascotLiveConversationVisible = true, centralMascotCentered = true,
                 ) {
@@ -113,7 +111,6 @@ class CentralMascotScaleComposeTest {
         awaitReactionDrawIdle(compose)
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).assertDoesNotExist()
         assertEquals(1, drawer)
-        assertEquals(0, newChat)
         assertEquals(0, settings)
     }
 }

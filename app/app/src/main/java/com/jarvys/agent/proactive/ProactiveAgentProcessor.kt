@@ -281,7 +281,7 @@ class ProactiveAgentProcessor(
             com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
         ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
         val memoryContext = ChatDatabaseBridge.getInstance(localized)
-            .personalAgentPromptContext(sessionId, !memoryEnabled, "proactive")
+            .personalAgentPromptContext(sessionId, memoryEnabled, "proactive")
         val systemPrompt = buildString {
             append(ProactivePrompt.system(localized))
             append("\n\nAssistant identity and user profile; follow profile preferences unless system or current user instructions differ:\n")

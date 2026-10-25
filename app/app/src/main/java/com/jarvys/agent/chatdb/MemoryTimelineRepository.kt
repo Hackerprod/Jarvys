@@ -57,7 +57,6 @@ data class PendingInterrupt(
     val requestId: String,
     val seq: Long,
     val content: String,
-    val memoryDisabled: Boolean,
     val skills: List<String>,
     val dispatchedMessageId: String?,
     val dispatchedSeq: Long?,
@@ -441,7 +440,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
     }
 
     private fun InterruptRequestValue.toPendingInterrupt() = PendingInterrupt(
-        conversationId, requestId, seq, content, memoryDisabled, skills, dispatchedMessageId,
+        conversationId, requestId, seq, content, skills, dispatchedMessageId,
         dispatchedSeq, inputState, alreadyDispatched, acknowledgementRequired,
     )
 

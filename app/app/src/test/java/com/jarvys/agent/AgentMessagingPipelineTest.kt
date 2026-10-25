@@ -803,7 +803,7 @@ class AgentMessagingPipelineTest {
     private fun newManager(sessionId: String,
         onModel: (List<ConversationTurn>, CancellationToken) -> ModelReply): CrewManager {
         val provider = ProviderDouble(onModel)
-        val runtime = CoreAgentRuntime(context, sessionId, emptyList(), CorePromptBudget.standard(), true)
+        val runtime = CoreAgentRuntime(context, sessionId, emptyList(), CorePromptBudget.standard())
         return runtime.configureCrewManager(runtime.createTools(), CoreAgentModel(context, provider, sessionId), null)
     }
 
@@ -878,8 +878,8 @@ class AgentMessagingPipelineTest {
     }
 
     private fun installProvider(service: AgentForegroundService, provider: ModelProviderClient) {
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
-            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled, provider)
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), provider)
         }
     }
 

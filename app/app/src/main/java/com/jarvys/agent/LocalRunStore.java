@@ -203,7 +203,6 @@ public final class LocalRunStore {
             JSONObject row = new JSONObject().put("type", "main_interrupt_request")
                     .put("sessionId", request.getConversationId()).put("requestId", request.getRequestId())
                     .put("content", request.getContent()).put("skills", new JSONArray(request.getSkills()))
-                    .put("memoryDisabled", request.getMemoryDisabled())
                     .put("alreadyDispatched", request.getAlreadyDispatched());
             if (request.getDispatchedMessageId() != null) row.put("messageId", request.getDispatchedMessageId());
             return row;
@@ -1046,9 +1045,9 @@ public final class LocalRunStore {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         ConversationMetadataValue value = chatDatabaseBridge.readConversationMetadataSync(sessionId);
         return value == null
-                ? new ConversationMetadataAccess.Snapshot(null, false, false, false, false)
+                ? new ConversationMetadataAccess.Snapshot(null, false, false, false)
                 : new ConversationMetadataAccess.Snapshot(value.getTitle(), value.getPinned(),
-                        value.getArchived(), value.getDeleted(), value.getPrivateCode());
+                        value.getArchived(), value.getDeleted());
     }
 
     public void renameConversation(String sessionId, String title) {
@@ -1059,13 +1058,13 @@ public final class LocalRunStore {
 
     public void setConversationPinned(String sessionId, boolean pinned) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, pinned, null, null),
+        requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, pinned, null),
                 "update conversation pinned state");
     }
 
     public void setConversationArchived(String sessionId, boolean archived) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, null, archived, null),
+        requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, null, archived),
                 "update conversation archived state");
     }
 
@@ -1075,31 +1074,9 @@ public final class LocalRunStore {
     }
 
     public boolean conversationHasAttachments(String sessionId) {
-        return conversationContainsPrivateData(sessionId, false);
-    }
-
-    public boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
-        return conversationContainsPrivateData(sessionId, true);
-    }
-
-    private boolean conversationContainsPrivateData(String sessionId, boolean includeGeneratedArtifacts) {
         if (sessionId == null) return false;
         if (chatDatabaseBridge == null) throw noChatDatabase();
-        return includeGeneratedArtifacts
-                ? chatDatabaseBridge.conversationHasPrivateImagesOrAttachmentsSync(sessionId)
-                : chatDatabaseBridge.conversationHasAttachmentsSync(sessionId);
-    }
-
-    public void markConversationHasPrivateCode(String sessionId) {
-        if (chatDatabaseBridge == null) throw noChatDatabase();
-        if (!readConversationMetadata(sessionId).privateCode)
-            requireChatDbSuccess(chatDatabaseBridge.updateMetadataSync(sessionId, null, null, null, null, true),
-                    "update conversation privacy state");
-    }
-
-    public boolean conversationHasPrivateCode(String sessionId) {
-        ConversationMetadataAccess.Snapshot privacy = readConversationMetadata(sessionId);
-        return privacy.privateCode || privacy.deleted;
+        return chatDatabaseBridge.conversationHasAttachmentsSync(sessionId);
     }
 
     List<ConversationImageReference> readConversationImageReferences(String sessionId) {
@@ -1447,24 +1424,24 @@ public final class LocalRunStore {
     /** Loads model context as the latest summary plus the raw tail after its persisted boundary. */
     /** Durable, inert input. It is not model history or permission until explicitly dispatched. */
     public synchronized String appendInterruptRequest(String sessionId, String text,
-            List<String> skills, boolean memoryDisabled) {
+            List<String> skills) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || text == null || text.trim().isEmpty()
                 || text.length() > 32000) throw new IllegalArgumentException("Invalid replacement message");
         if (chatDatabaseBridge == null) throw noChatDatabase();
         InterruptRequestValue request = requireChatDbSuccess(chatDatabaseBridge.appendInterruptRequestSync(
-                sessionId, text, skills == null ? Collections.emptyList() : skills, memoryDisabled),
+                sessionId, text, skills == null ? Collections.emptyList() : skills),
                 "append replacement request");
         return request.getRequestId();
     }
 
     /** Atomically admits a steering receipt and inserts its ordered user row before provider dispatch. */
     public synchronized String appendAndDispatchInterruptRequest(String sessionId, String text,
-            List<String> skills, boolean memoryDisabled) {
+            List<String> skills) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || text == null || text.trim().isEmpty()
                 || text.length() > 32000) throw new IllegalArgumentException("Invalid replacement message");
         if (chatDatabaseBridge == null) throw noChatDatabase();
         DispatchedInterrupt dispatched = requireChatDbSuccess(chatDatabaseBridge.appendAndDispatchInterruptRequestSync(
-                sessionId, text, skills == null ? Collections.emptyList() : skills, memoryDisabled),
+                sessionId, text, skills == null ? Collections.emptyList() : skills),
                 "append and dispatch replacement request");
         return dispatched.getRequest().getRequestId();
     }

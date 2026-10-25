@@ -153,7 +153,7 @@ public class LocalRunAttachmentRecoveryTest {
         assertEquals("Live goal", rows.get(0).optString("goal"));
     }
 
-    @Test public void privacyFlagsIncludeGeneratedFailuresAndCodeAndCleanupPreservesPersistedAttachments() throws Exception {
+    @Test public void cleanupPreservesPersistedAttachments() throws Exception {
         LocalRunStore store = store();
         ChatAttachment keep = file("chat", "keep.txt");
         ChatAttachment orphan = file("chat", "orphan.txt");
@@ -161,13 +161,6 @@ public class LocalRunAttachmentRecoveryTest {
         store.cleanupOrphanAttachments();
         assertTrue(attachments().resolve("chat", keep).isFile());
         assertThrows(IllegalArgumentException.class, () -> attachments().resolve("chat", orphan));
-        assertTrue(store.conversationHasPrivateImagesOrAttachments("chat"));
-        assertFalse(store.conversationHasPrivateImagesOrAttachments("image-chat"));
-        store.appendGeneratedImageFailure("image-chat", "private prompt", "failure");
-        assertTrue(store.conversationHasPrivateImagesOrAttachments("image-chat"));
-        assertFalse(store.conversationHasPrivateCode("code-chat"));
-        store.markConversationHasPrivateCode("code-chat");
-        assertTrue(store.conversationHasPrivateCode("code-chat"));
-        assertTrue(chatTestStore.localRunStore(files).conversationHasPrivateCode("code-chat"));
+        assertTrue(store.conversationHasAttachments("chat"));
     }
 }

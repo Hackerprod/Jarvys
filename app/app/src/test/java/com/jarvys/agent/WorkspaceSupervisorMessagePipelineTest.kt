@@ -132,7 +132,7 @@ class WorkspaceSupervisorMessagePipelineTest {
             } else ModelReply("Initial worker task completed.", emptyList())
         }
 
-        val runtime = CoreAgentRuntime(context, scope.executionSessionId, emptyList(), CorePromptBudget.standard(), true)
+        val runtime = CoreAgentRuntime(context, scope.executionSessionId, emptyList(), CorePromptBudget.standard())
         val manager = runtime.configureCrewManager(runtime.createTools(),
             CoreAgentModel(context, provider, scope.executionSessionId), null)
         managers += manager
@@ -310,7 +310,7 @@ class WorkspaceSupervisorMessagePipelineTest {
             } else ModelReply("The finding is saved on the shared board.", emptyList())
         }
         val runtime = CoreAgentRuntime(context, scope.executionSessionId, emptyList(),
-            CorePromptBudget.standard(), true)
+            CorePromptBudget.standard())
         val manager = runtime.configureCrewManager(runtime.createTools(),
             CoreAgentModel(context, provider, scope.executionSessionId), null)
         managers += manager

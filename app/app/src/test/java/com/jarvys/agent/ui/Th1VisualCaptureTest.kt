@@ -46,7 +46,6 @@ import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.MemoryConstants
 import com.jarvys.agent.MemorySettingsScreen
 import com.jarvys.agent.MemoryStore
-import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.tasks.ui.TasksListScreen
 import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.CalendarCadence
@@ -161,15 +160,14 @@ class Th1VisualCaptureTest {
                                 JarvysRouteTopBar(
                                     route = AppRouteMeta("Conversación", isRoot = true, action = AppRouteAction.CHAT),
                                     agentSnapshot = AgentRunUiSnapshot(events = events),
-                                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                                    onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                                    onAddServer = {}, onImportSkill = {},
                                     canCompact = false, compacting = false, canReflect = false,
-                                    onToggleMemory = {}, onCompact = {}, onReflect = {},
+                                    onCompact = {}, onReflect = {},
                                 )
                                 Box(Modifier.weight(1f)) {
                                     ConversationTimeline("th1-chat-$mode", events = events, isRunning = false,
-                                        connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                                        chatWithoutMemory = false, runSnapshot = AgentRunUiSnapshot(events = events),
+                                        connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, runSnapshot = AgentRunUiSnapshot(events = events),
                                         allowMessageEntrance = false)
                                 }
                                 ChatComposer(goal = "¿Puedes resumir el plan de lanzamiento?", onGoalChange = {},
@@ -184,28 +182,21 @@ class Th1VisualCaptureTest {
                                     route = AppRouteMeta("Trabajo en curso", isRoot = true, action = AppRouteAction.CHAT),
                                     agentSnapshot = AgentRunUiSnapshot(running = true, events = listOf(
                                         AgentRunUiEvent.toolEvent(5L, "tool_call", "Calendar Search", null, "presence", null, 5L))),
-                                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                                    onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                                    onAddServer = {}, onImportSkill = {},
                                     canCompact = false, compacting = false, canReflect = false,
-                                    onToggleMemory = {}, onCompact = {}, onReflect = {},
+                                    onCompact = {}, onReflect = {},
                                 )
                                 AgentPresenceIndicator(AgentRunUiSnapshot(running = true), Modifier.padding(24.dp), showLabel = true)
                             }
                             Scene.TOOL -> Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("Actividad de herramientas", style = MaterialTheme.typography.titleMedium)
                                 ConversationTimeline("th1-tool-$mode", events = events.drop(1), isRunning = false,
-                                    connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                                    chatWithoutMemory = false, runSnapshot = AgentRunUiSnapshot(events = events.drop(1)),
+                                    connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, runSnapshot = AgentRunUiSnapshot(events = events.drop(1)),
                                     allowMessageEntrance = false)
                             }
                             Scene.DRAWER -> ConversationDrawer(
-                                history = listOf(
-                                    RunHistoryItem("chat-a", "Plan de lanzamiento", "COMPLETED", 3, 2, 1_740_000_000.0, title = "Lanzamiento azul"),
-                                    RunHistoryItem("chat-b", "Revisa el calendario", "FAILED", 2, 1, 1_739_000_000.0, title = "Calendario"),
-                                    RunHistoryItem("chat-c", "Resume la reunión", "COMPLETED", 5, 3, 1_738_000_000.0, title = "Reunión semanal"),
-                                ), activeSessionId = "chat-active", activeTitle = "Diseño del tema azul",
-                                activeGoal = "Compara opciones", activeSessionVisible = true, selectedHistoryId = null,
-                                isChatRoute = true, onNewConversation = {}, onResumeActive = {}, onOpenHistory = {}, onOpenSettings = {},
+                                agentName = "Jarvys", onOpenProfile = {}, onOpenSettings = {},
                             )
                             Scene.SETTINGS -> JarvysSettingsScreen(
                                 page = JarvysSettingsPage.HOME, themeMode = mode, showAgentEvents = true,

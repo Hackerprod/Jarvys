@@ -196,7 +196,6 @@ public final class CrewCheckpointStore {
                     throw new IOException("Could not create checkpoint directory");
                 }
                 verify(directory);
-                this.conversationMetadata.update(conversationId, "privateCode", true, databaseFailureReporter);
                 File pending = File.createTempFile("checkpoint-pending-", ".json", directory);
                 verify(pending);
                 try (FileOutputStream output = new FileOutputStream(pending);) {

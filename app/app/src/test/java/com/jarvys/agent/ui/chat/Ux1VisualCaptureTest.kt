@@ -79,7 +79,7 @@ class Ux1VisualCaptureTest {
                                     events = events,
                                     isRunning = false,
                                     connectorRegistry = connectors,
-                                    onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                                    onOpenPreview = {}, onOpenSkillFile = {},
                                     allowMessageEntrance = false,
                                 )
                             }

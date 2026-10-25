@@ -159,7 +159,6 @@ fun ConversationTimeline(
     connectorRegistry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
-    chatWithoutMemory: Boolean,
     targetMessageId: String? = null,
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     onUndoMemoryRevision: (Long) -> Unit = {},
@@ -366,10 +365,6 @@ fun ConversationTimeline(
                 }
                 if (isCompacting) item(key = "compaction-status") {
                     BackgroundStatusMarker(compactionStatus ?: stringResource(R.string.compaction_running))
-                }
-                if (chatWithoutMemory) item(key = "memory-disabled") {
-                    JarvysGroup { Text(stringResource(R.string.memory_chat_indicator), Modifier.padding(14.dp),
-                        color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall) }
                 }
                 if (olderHistoryLoadError) item(key = "timeline-older-retry") {
                     TextButton(onClick = onRetryOlderHistory,

@@ -45,7 +45,7 @@ final class DeliverFileTool implements CoreTool {
         token.throwIfCancelled();
         if (token.isCrewRun() || session == null || session.isEmpty() || ProactiveConversation.SESSION_ID.equals(session)
                 || ScheduledTaskConversation.SESSION_ID.equals(session)) return CoreToolResult.failure("File delivery is available only in the main chat.");
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
+        try {
             if (arguments == null || !arguments.keySet().stream().allMatch(Arrays.asList("path", "filename")::contains)
                     || !(arguments.get("path") instanceof String) || ((String) arguments.get("path")).isEmpty()
                     || ((String) arguments.get("path")).length() > 1024

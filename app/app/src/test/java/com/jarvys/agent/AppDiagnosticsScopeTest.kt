@@ -183,5 +183,5 @@ internal fun diagnosticScopeRuntime(context: Context?, session: String?, depth: 
         .single { it.parameterTypes.size == 12 }.apply { isAccessible = true }
     return constructor.newInstance(context, session, emptyList<Any>(), allowed,
         emptyList<CoreTool>(), emptyList<CoreTool>(), emptyList<CoreTool>(), null, depth,
-        CorePromptBudget.standard(), true, false) as CoreAgentRuntime
+        CorePromptBudget.standard(), false, null) as CoreAgentRuntime
 }

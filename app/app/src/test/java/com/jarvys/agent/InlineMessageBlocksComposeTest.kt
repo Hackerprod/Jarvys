@@ -563,7 +563,6 @@ class InlineMessageBlocksComposeTest {
                     connectorRegistry = connectors,
                     onOpenPreview = {},
                     onOpenSkillFile = {},
-                    chatWithoutMemory = false,
                     benchmarkListState = rememberLazyListState(),
                     modifier = Modifier.width(360.dp),
                 )

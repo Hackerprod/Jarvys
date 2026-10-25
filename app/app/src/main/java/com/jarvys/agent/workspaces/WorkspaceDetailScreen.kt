@@ -87,7 +87,6 @@ fun WorkspaceDetailScreen(
                 connectorRegistry = connectorRegistry,
                 onOpenPreview = onOpenPreview,
                 onOpenSkillFile = onOpenSkillFile,
-                chatWithoutMemory = false,
                 allowRegeneration = false,
                 isCompacting = sessionSnapshot?.compacting == true,
                 compactionStatus = sessionSnapshot?.compactionStatus,

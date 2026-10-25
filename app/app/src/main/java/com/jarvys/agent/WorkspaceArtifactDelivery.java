@@ -47,12 +47,10 @@ public final class WorkspaceArtifactDelivery {
         }
         admission.run();
         token.throwIfCancelled();
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
-            if (testRegistry != null) return deliver(testRegistry, testFiles, workspaceId, path, expectedSha256,
-                    filename, token, admission);
-            try (WorkspaceRegistry registry = new WorkspaceRegistry(context)) {
-                return deliver(registry, context.getFilesDir(), workspaceId, path, expectedSha256, filename, token, admission);
-            }
+        if (testRegistry != null) return deliver(testRegistry, testFiles, workspaceId, path, expectedSha256,
+                filename, token, admission);
+        try (WorkspaceRegistry registry = new WorkspaceRegistry(context)) {
+            return deliver(registry, context.getFilesDir(), workspaceId, path, expectedSha256, filename, token, admission);
         }
     }
 
@@ -65,11 +63,9 @@ public final class WorkspaceArtifactDelivery {
         requireSourcePath(path);
         admission.run();
         token.throwIfCancelled();
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
-            if (testRegistry != null) return inspect(testRegistry, testFiles, workspaceId, path, token, admission);
-            try (WorkspaceRegistry registry = new WorkspaceRegistry(context)) {
-                return inspect(registry, context.getFilesDir(), workspaceId, path, token, admission);
-            }
+        if (testRegistry != null) return inspect(testRegistry, testFiles, workspaceId, path, token, admission);
+        try (WorkspaceRegistry registry = new WorkspaceRegistry(context)) {
+            return inspect(registry, context.getFilesDir(), workspaceId, path, token, admission);
         }
     }
 

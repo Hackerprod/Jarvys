@@ -79,7 +79,7 @@ class MainChatTurnContextProviderTest {
         val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
         val session = "main-chat-steering-restart"
         val initialId = store.appendConversationMessage(session, "user", "initial request")
-        val requestId = store.appendInterruptRequest(session, "accepted steering", emptyList(), false)
+        val requestId = store.appendInterruptRequest(session, "accepted steering", emptyList())
         assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
         assertTrue(store.readConversationMessages(session).any {
             it.optString("messageId") == requestId && it.optBoolean("mainChatAcknowledgementRequired")
@@ -106,7 +106,7 @@ class MainChatTurnContextProviderTest {
         val store = chatTestStore.localRunStore(files)
         val session = "main-chat-steering-resolved"
         store.appendConversationMessage(session, "user", "initial request")
-        val requestId = store.appendInterruptRequest(session, "stopped steering", emptyList(), false)
+        val requestId = store.appendInterruptRequest(session, "stopped steering", emptyList())
         assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
 
         store.markConversationMessagesResolved(session, listOf(requestId))
@@ -123,7 +123,7 @@ class MainChatTurnContextProviderTest {
             val store = chatTestStore.localRunStore(chatTestStore.newFilesDirectory())
             val session = "main-chat-steering-terminal-$status"
             val initialId = store.appendConversationMessage(session, "user", "initial request")
-            val requestId = store.appendInterruptRequest(session, "terminal steering", emptyList(), false)
+            val requestId = store.appendInterruptRequest(session, "terminal steering", emptyList())
             assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
             val provider = MainChatTurnContextProvider(store, session, initialId)
 

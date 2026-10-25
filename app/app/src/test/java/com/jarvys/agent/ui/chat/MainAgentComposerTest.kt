@@ -71,7 +71,7 @@ class MainAgentComposerTest {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                 CompositionLocalProvider(LocalReducedMotion provides true) {
                     ConversationTimeline(conversationKey = "collision-owner", events = events, isRunning = true,
-                        connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = true)
+                        connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {})
                 }
             }
         }

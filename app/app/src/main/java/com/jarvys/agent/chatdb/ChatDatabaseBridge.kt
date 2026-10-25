@@ -195,12 +195,14 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         throw IllegalStateException("Could not $operation in the personal agent database", failure)
     }
 
-    fun personalAgentPromptContext(conversationId: String, privateMode: Boolean): PersonalAgentPromptContext =
-        personalAgentPromptContext(conversationId, privateMode, "principal")
+    fun personalAgentNameSync(): String? = withAgentMemory("read agent name") { it.agentName() }
 
-    fun personalAgentPromptContext(conversationId: String, privateMode: Boolean,
+    fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean): PersonalAgentPromptContext =
+        personalAgentPromptContext(conversationId, memoryEnabled, "principal")
+
+    fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean,
                                    sessionKind: String): PersonalAgentPromptContext =
-        withAgentMemory("read personal context") { it.promptContext(conversationId, privateMode, sessionKind) }
+        withAgentMemory("read personal context") { it.promptContext(conversationId, memoryEnabled, sessionKind) }
 
     fun personalAgentSetDirective(section: String, directive: String, sourceMessageId: String?, evidence: String,
                                   supersedesId: String? = null, conversationId: String? = null): PersonalMemoryReceipt =
@@ -353,9 +355,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         generatedTitle: String?,
         pinned: Boolean?,
         archived: Boolean?,
-        privateCode: Boolean?,
     ): ChatDbResult<Conversation> = execute {
-        it.conversations.updateMetadata(conversationId, title, generatedTitle, pinned, archived, privateCode)
+        it.conversations.updateMetadata(conversationId, title, generatedTitle, pinned, archived)
     }
 
     fun appendConversationTitleIfAbsentSync(conversationId: String, title: String?): ChatDbResult<Boolean> =
@@ -459,9 +460,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         conversationId: String,
         content: String,
         skills: List<String> = emptyList(),
-        memoryDisabled: Boolean = false,
     ): ChatDbResult<InterruptRequestValue> = execute {
-        it.conversations.appendInterruptRequest(conversationId, content, skills, memoryDisabled)
+        it.conversations.appendInterruptRequest(conversationId, content, skills)
     }
 
     fun dispatchInterruptRequestSync(conversationId: String, requestId: String): ChatDbResult<DispatchedInterrupt> =
@@ -471,9 +471,8 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         conversationId: String,
         content: String,
         skills: List<String>,
-        memoryDisabled: Boolean,
     ): ChatDbResult<DispatchedInterrupt> = execute {
-        it.modelTurnWriter.appendAndDispatchInterruptRequest(conversationId, content, skills, memoryDisabled)
+        it.modelTurnWriter.appendAndDispatchInterruptRequest(conversationId, content, skills)
     }
 
     @JvmOverloads
@@ -736,9 +735,6 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun conversationHasAttachmentsSync(conversationId: String): Boolean =
         execute { it.reader.conversationHasAttachments(conversationId) }
-
-    fun conversationHasPrivateImagesOrAttachmentsSync(conversationId: String): Boolean =
-        execute { it.reader.conversationHasPrivateImagesOrAttachments(conversationId) }
 
     fun unreferencedFileRefsSync(): List<FileRef> = execute { it.reader.unreferencedFileRefs() }
 

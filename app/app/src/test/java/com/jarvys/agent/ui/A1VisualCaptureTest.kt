@@ -225,7 +225,6 @@ class A1VisualCaptureTest {
                 connectorRegistry = registry,
                 onOpenPreview = {},
                 onOpenSkillFile = {},
-                chatWithoutMemory = false,
             )
         }
     }

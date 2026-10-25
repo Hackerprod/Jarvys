@@ -1055,12 +1055,10 @@ public final class CoreAgentLoop {
                     }
                     token.throwIfCancelled();
                     try {
-                        AgentErrorReporter.ScopeSnapshot errorScope = AgentErrorReporter.captureScope();
                         Runnable nativeAdmission = NativeEffectDispatchScope.captureAdmission();
                         item.future = PARALLEL_TOOL_EXECUTOR.submit(() -> {
                             item.executionThread = Thread.currentThread();
-                            try (AgentErrorReporter.Scope ignored = errorScope.install();
-                                 NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmission)) {
+                            try (NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmission)) {
                                 token.throwIfCancelled();
                                 CoreToolResult result = invokePreparedTool(item, registry, token, listener);
                                 item.returnedResult = result;

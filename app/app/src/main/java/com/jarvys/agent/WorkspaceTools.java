@@ -777,7 +777,7 @@ public final class WorkspaceTools {
         String path = (String) arguments.get("path");
         if (!HtmlPreviewCapture.htmlName(path) || token.isCrewRun())
           return CoreToolResult.failure("Explicit previews require a local HTML file in the owning main chat.");
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
+        try {
           String session = workspace.deliveryConversationId();
           if (session == null || com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID.equals(session)
               || com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID.equals(session))

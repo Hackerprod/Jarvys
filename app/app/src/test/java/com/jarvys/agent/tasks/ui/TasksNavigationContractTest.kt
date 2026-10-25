@@ -69,9 +69,10 @@ class TasksNavigationContractTest {
         val settingsSource = File(appRoot, "src/main/java/com/jarvys/agent/ui/settings/SettingsWorkspace.kt").readText()
         assertFalse(settingsSource.contains("if (scheduledTasksAvailable)"))
         assertFalse(settingsSource.contains("TaskSettingsEntry"))
-        assertFalse(settingsSource.contains("onScheduledTasks"))
+        // Scheduled tasks live in Settings next to Memory; the drawer only offers the profile and Settings.
+        assertTrue(settingsSource.contains("onScheduledTasks"))
         val drawerSource = File(appRoot, "src/main/java/com/jarvys/agent/ui/chat/ConversationDrawer.kt").readText()
-        assertTrue(drawerSource.contains("drawer-open-scheduled-tasks"))
+        assertFalse(drawerSource.contains("drawer-open-scheduled-tasks"))
     }
 
     @Test fun workManagerObservationMarksManualRunsBusyPerTaskWithoutPolling() {

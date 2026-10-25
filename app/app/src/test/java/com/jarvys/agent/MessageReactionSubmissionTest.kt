@@ -28,7 +28,7 @@ class MessageReactionSubmissionTest {
         try {
             AgentRunUiState.restoreSession(session, emptyList())
             model.switchSession(session)
-            assertTrue(model.submit(session, "Keep this request", arrayListOf(), false))
+            assertTrue(model.submit(session, "Keep this request", arrayListOf()))
             val submission = runBlocking { withTimeout(10_000) { model.submissions.first() } }
             assertTrue(submission.persisted)
             assertNotNull(submission.error)

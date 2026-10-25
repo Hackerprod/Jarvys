@@ -47,8 +47,7 @@ class WorkspaceResultNoticeComposeTest {
             ConversationTimeline(conversationKey = WorkspaceIdentity.CENTRAL_SESSION,
                 events = events.value, isRunning = false, connectorRegistry = connectors,
                 onOpenPreview = { error("Notice must not open a preview") },
-                onOpenSkillFile = { error("Notice must not open a worker link") },
-                chatWithoutMemory = false, allowMessageEntrance = false)
+                onOpenSkillFile = { error("Notice must not open a worker link") }, allowMessageEntrance = false)
         } }
         fun assertHidden() {
             compose.onAllNodesWithTag("workspace-result").assertCountEquals(0)

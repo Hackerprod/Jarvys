@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="drawer_cancel_search">Cancel search</string>
     <string name="drawer_scheduled_tasks">Scheduled tasks</string>
+    <string name="drawer_profile_memory">Profile and memory</string>
 </resources>

@@ -13,7 +13,6 @@ data class Conversation(
     val generated_title: String? = null,
     val pinned: Boolean = false,
     val archived: Boolean = false,
-    val private_code: Boolean = false,
     val created_at: Long,
     val updated_at: Long,
     val last_message_at: Long? = null,

@@ -224,8 +224,8 @@ class ChatLayoutRecoveryTest {
         JarvysShellFrame(drawerState = rememberDrawerState(DrawerValue.Closed), drawerContent = {},
             route = AppRouteMeta("Recovered conversation", true, action = AppRouteAction.CHAT),
             agentSnapshot = AgentRunUiSnapshot(), onBack = {}, onOpenDrawer = {}, onOpenSettings = {},
-            onNewChat = {}, onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
-            canCompact = false, compacting = false, canReflect = false, onToggleMemory = {},
+            onAddServer = {}, onImportSkill = {},
+            canCompact = false, compacting = false, canReflect = false, 
             onCompact = {}, onReflect = {}, bottomBar = bottomBar, content = content)
     }
 

@@ -30,7 +30,6 @@ object AppNavigationBackPolicy {
     const val SETTINGS_PREFERENCES = "settings/preferences"
     const val SETTINGS_DEVELOPER = "settings/developer"
     const val SETUP_WIZARD = "settings/setup-wizard"
-    const val ARCHIVED_CHATS = "settings/archived-chats"
     const val PROVIDERS = "providers"
     const val PROVIDERS_OPENAI = "providers/openai"
     const val PROVIDERS_OPENROUTER = "providers/openrouter"
@@ -74,7 +73,7 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, WORKSPACES, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD, ARCHIVED_CHATS,
+        CHAT_ROOT, WORKSPACES, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETUP_WIZARD,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
@@ -90,7 +89,6 @@ object AppNavigationBackPolicy {
                  detailTitle: String?): AppRouteMeta = when (route) {
         CHAT_ROOT -> AppRouteMeta(chatTitle, isRoot = true, action = AppRouteAction.CHAT)
         WORKSPACES -> AppRouteMeta(context.getString(R.string.workspace_sidebar_heading), isRoot = true)
-        ARCHIVED_CHATS -> AppRouteMeta(context.getString(R.string.drawer_archived_chats), false)
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         SETTINGS_DEVELOPER -> AppRouteMeta(context.getString(R.string.settings_developer), false)

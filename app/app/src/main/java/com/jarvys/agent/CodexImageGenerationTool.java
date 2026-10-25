@@ -82,12 +82,6 @@ final class CodexImageGenerationTool implements CoreTool {
     @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
-            return executePrivate(arguments, token);
-        }
-    }
-
-    private CoreToolResult executePrivate(Map<String, Object> arguments, CancellationToken token) {
         token.throwIfCancelled();
         if (!isAvailable(context, settings, 0, sessionId, secrets)) {
             return CoreToolResult.failure(imageString(R.string.image_error_session, "SESSION_UNAVAILABLE",

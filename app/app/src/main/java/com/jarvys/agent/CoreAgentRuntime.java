@@ -83,7 +83,7 @@ public final class CoreAgentRuntime {
   private final Context context;
   private final int depth;
   private final List<CoreTool> mcpTools;
-  private final boolean memoryDisabledForConversation;
+  private final boolean memoryEnabled;
   private final MemoryStore memoryStore;
   private final String sessionId;
   private final List<SkillEntry> skills;
@@ -135,15 +135,6 @@ public final class CoreAgentRuntime {
 
   public CoreAgentRuntime(
       Context context, String sessionId, Collection<SkillEntry> skills, CorePromptBudget budget) {
-    this(context, sessionId, skills, budget, false);
-  }
-
-  public CoreAgentRuntime(
-      Context context,
-      String sessionId,
-      Collection<SkillEntry> skills,
-      CorePromptBudget budget,
-      boolean memoryDisabledForConversation) {
     this(
         context,
         sessionId,
@@ -156,18 +147,16 @@ public final class CoreAgentRuntime {
         ConnectorRegistry.Companion.get(context),
         0,
         budget,
-        memoryDisabledForConversation,
         true,
         null);
   }
 
   /** Package-scoped provider injection for runtime boundary tests. */
   CoreAgentRuntime(Context context, String sessionId, Collection<SkillEntry> skills,
-      CorePromptBudget budget, boolean memoryDisabledForConversation,
-      ModelProviderClient modelProviderOverride) {
+      CorePromptBudget budget, ModelProviderClient modelProviderOverride) {
     this(context, sessionId, new ArrayList(skills), null, discoverMcpTools(context),
         discoverConnectorTools(context, sessionId), WorkspaceTools.createChat(context, sessionId, false),
-        ConnectorRegistry.Companion.get(context), 0, budget, memoryDisabledForConversation,
+        ConnectorRegistry.Companion.get(context), 0, budget,
         true, requireModelProvider(modelProviderOverride));
   }
 
@@ -192,7 +181,6 @@ public final class CoreAgentRuntime {
         null,
         0,
         CorePromptBudget.standard(),
-        false,
         true,
         null);
   }
@@ -214,7 +202,6 @@ public final class CoreAgentRuntime {
         connectorRegistry,
         0,
         CorePromptBudget.standard(),
-        false,
         true,
         null);
   }
@@ -230,7 +217,6 @@ public final class CoreAgentRuntime {
       ConnectorRegistry connectorRegistry,
       int depth,
       CorePromptBudget budget,
-      boolean memoryDisabledForConversation,
       boolean webSearchEnabledForConversation,
       ModelProviderClient modelProviderOverride) {
     List<String> listUnmodifiableList;
@@ -250,10 +236,9 @@ public final class CoreAgentRuntime {
     this.depth = depth;
     this.budget = budget;
     this.memoryStore = null;
-    boolean globalMemoryEnabled = this.context == null || this.context
+    this.memoryEnabled = this.context == null || this.context
         .getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
         .getBoolean(MemoryConstants.ENABLED_KEY, true);
-    this.memoryDisabledForConversation = memoryDisabledForConversation || !globalMemoryEnabled;
     this.webSearchEnabledForConversation = webSearchEnabledForConversation;
     this.modelProviderOverride = modelProviderOverride;
   }
@@ -449,16 +434,9 @@ public final class CoreAgentRuntime {
         String requestInstructions = instructions(runToolRegistry, mainChat)
             + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE
             + reactionTool.prepareModelMetadata(transcript, prompt));
-        ModelReply reply;
-        if (mainChat && context != null
-            && new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(sessionId)) {
-          try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
-            reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener);
-          }
-        } else {
-          reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener)
-              : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
-        }
+        ModelReply reply = mainChat
+            ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener)
+            : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
         if (reactionTool != null) reactionTool.modelRequestCompleted();
         return reply;
       }
@@ -783,7 +761,6 @@ public final class CoreAgentRuntime {
             1,
             CorePromptBudget.standard(),
             true,
-            true,
             null);
     runtime.restoredCrewScope = true;
     return runtime.configureCrewManager(
@@ -912,9 +889,6 @@ public final class CoreAgentRuntime {
       CrewManager.Bot bot,
       CrewManager manager) {
     List<CoreTool> workspace;
-    if (bot.role.profileVersion > 0) {
-      new LocalRunStore(context).markConversationHasPrivateCode(sessionId);
-    }
     List<String> selected = new ArrayList<>();
     for (String name : bot.role.tools) {
       if (!CrewManager.isBotTool(name)) {
@@ -1396,7 +1370,6 @@ public final class CoreAgentRuntime {
             1,
             CorePromptBudget.standard(),
             true,
-            true,
             null);
     List<String> ceiling = new ArrayList<>(crewBotCapabilityScope(runtime.createTools()).names());
     ceiling.addAll(CodingProjectTools.names());
@@ -1580,7 +1553,7 @@ public final class CoreAgentRuntime {
     if (this.depth == 0 && this.context != null) {
       tools.add(new ProactiveStatusCoreTool(this.context));
     }
-    if (this.depth == 0 && this.context != null && !this.memoryDisabledForConversation
+    if (this.depth == 0 && this.context != null && this.memoryEnabled
         && MessageReactionTool.isOrdinaryChat(this.sessionId)) {
       tools.addAll(PersonalMemoryTools.create(this.context, this.mainChatSteeringCursor, this.sessionId));
     }
@@ -1588,11 +1561,11 @@ public final class CoreAgentRuntime {
   }
 
   ConversationCompactor.MemoryFlush compactionMemoryLifecycle(CoreAgentModel model) {
-    if (context == null || depth != 0 || memoryDisabledForConversation) return null;
+    if (context == null || depth != 0 || !memoryEnabled) return null;
     final String kind = sessionKind();
     return new ConversationCompactor.MemoryFlush() {
       @Override public boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token) {
-        return new PersonalMemoryFlush(context, sessionId, kind, memoryDisabledForConversation, model)
+        return new PersonalMemoryFlush(context, sessionId, kind, model)
             .run(transcript, token);
       }
 
@@ -1676,7 +1649,7 @@ public final class CoreAgentRuntime {
         discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry, moduleRegistry),
         WorkspaceTools.createScheduledTask(appContext, workspaceSession,
             false, task.getToolScope().getSkillIds()), connectorRegistry, 0,
-        CorePromptBudget.standard(), false, true, null);
+        CorePromptBudget.standard(), true, null);
     return runtime.createScheduledTaskToolRegistry(task, approvedPendingAction, deferrer);
   }
 
@@ -2104,10 +2077,6 @@ public final class CoreAgentRuntime {
             + " performed checks, blockers, and references. Do not claim tests or commands ran"
             + " without a tool result. Selected skill IDs: "
             + requestedSkillIds);
-    if (this.context != null) {
-      new LocalRunStore(this.context).markConversationHasPrivateCode(this.sessionId);
-      new LocalRunStore(this.context).markConversationHasPrivateCode(childId);
-    }
     final CoreAgentModel sharedModel = new CoreAgentModel(this.context, childId);
     CoreAgentLoop.Model model =
         new CoreAgentLoop.Model() {
@@ -2153,20 +2122,19 @@ public final class CoreAgentRuntime {
     if (this.context != null && this.depth > 0) {
       // Persist the session class without loading any user content into delegated agents.
       com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context)
-          .personalAgentPromptContext(this.sessionId, true, "subagent");
+          .personalAgentPromptContext(this.sessionId, false, "subagent");
       prompt.append("\n\nDelegated subagent memory boundary: do not read or write the user's profile or personal memory, or ask bootstrap questions. Return user facts to the parent agent for review.");
     }
     if (this.context != null && this.depth == 0
         && (ordinaryChat || "task".equals(memorySessionKind) || "proactive".equals(memorySessionKind))) {
       com.jarvys.agent.chatdb.PersonalAgentPromptContext memory =
           com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context)
-              .personalAgentPromptContext(this.sessionId,
-                  this.memoryDisabledForConversation, memorySessionKind);
+              .personalAgentPromptContext(this.sessionId, this.memoryEnabled, memorySessionKind);
       prompt.append("\n\n<assistant_identity authority=\"system\">\n")
           .append(xml(memory.getIdentity())).append('\n').append(xml(memory.getSoul())).append("\n</assistant_identity>");
       prompt.append("\n\n<execution_and_memory_rules authority=\"system\">\n")
           .append(xml(memory.getRules())).append("\n</execution_and_memory_rules>");
-      if (ordinaryChat && !this.memoryDisabledForConversation) {
+      if (ordinaryChat && this.memoryEnabled) {
         prompt.append("\n\n<user_profile authority=\"user preferences and facts; system and current user instructions take priority\">\n")
             .append(xml(memory.getUserProfile())).append("\n</user_profile>");
         prompt.append("\n\n<curated_memory authority=\"factual context\">\n")
@@ -2177,7 +2145,7 @@ public final class CoreAgentRuntime {
         }
       } else {
         if (ordinaryChat) {
-          prompt.append("\n\nMemory is disabled for this conversation. Do not read or write global user memory; say so if asked to remember something.");
+          prompt.append("\n\nMemory is disabled in the app settings. Do not read or write global user memory; say so if asked to remember something.");
         } else if ("task".equals(memorySessionKind) || "proactive".equals(memorySessionKind)) {
           prompt.append("\n\n<user_profile authority=\"user preferences and facts; system and current user instructions take priority\">\n")
               .append(xml(memory.getUserProfile())).append("\n</user_profile>");
@@ -2400,15 +2368,7 @@ public final class CoreAgentRuntime {
 
   static String withMemoryInstructions(
       String base, MemoryStore memoryStore, CorePromptBudget budget) {
-    return withMemoryInstructions(base, memoryStore, budget, false);
-  }
-
-  static String withMemoryInstructions(
-      String base,
-      MemoryStore memoryStore,
-      CorePromptBudget budget,
-      boolean memoryDisabledForConversation) {
-    if (memoryDisabledForConversation || memoryStore == null || !memoryStore.isEnabled()) {
+    if (memoryStore == null || !memoryStore.isEnabled()) {
       return base;
     }
     String projection = memoryStore.compileSystemPromptProjection(budget.memoryChars);

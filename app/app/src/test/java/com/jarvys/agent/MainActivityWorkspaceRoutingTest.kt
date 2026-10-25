@@ -177,7 +177,7 @@ class MainActivityWorkspaceRoutingTest {
         controller = null
         // MainActivity owns daemon executors; drain already-admitted reads before this sandbox closes.
         activities.forEach { value ->
-            listOf("historyExecutor", "chatExecutor", "sessionTitleExecutor", "memoryExecutor", "skillImportExecutor")
+            listOf("historyExecutor", "chatExecutor", "memoryExecutor", "skillImportExecutor")
                 .forEach { field -> runCatching {
                     executor(value, field).apply { shutdown(); awaitTermination(10, TimeUnit.SECONDS) }
                 } }
@@ -190,7 +190,7 @@ class MainActivityWorkspaceRoutingTest {
         WorkManagerTestCleanup.close(context)
     }
 
-    @Test fun B10_startIntentNewChatAndRestoredPickerAlwaysUseCentral() {
+    @Test fun B10_startIntentAndRestoredPickerAlwaysUseCentral() {
         val stale = UUID.randomUUID().toString()
         start(Intent(context, MainActivity::class.java)
             .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, stale)
@@ -201,9 +201,6 @@ class MainActivityWorkspaceRoutingTest {
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(stale))
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, WorkspaceIdentity.serviceSession(null))
         assertEquals(execution, WorkspaceIdentity.serviceSession(execution))
-        db { store.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "user", "kept across newChat") }
-        invoke("newChat")
-        await { AgentRunUiState.state.value.events.any { it.text == "kept across newChat" } }
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
         val picker = MainActivity::class.java.getDeclaredField("attachmentPickerSession").apply { isAccessible = true }
         picker.set(activity, stale)
@@ -211,7 +208,6 @@ class MainActivityWorkspaceRoutingTest {
         activities += activity
         await { selected() == WorkspaceIdentity.CENTRAL_SESSION }
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, picker.get(activity))
-        assertTrue(db { store.readConversationTimeline(WorkspaceIdentity.CENTRAL_SESSION).any { it.text == "kept across newChat" } })
     }
 
     @Test fun legacySelectionIsIgnoredAndCentralNeverBorrowsItsTranscript() {
@@ -219,27 +215,12 @@ class MainActivityWorkspaceRoutingTest {
         start()
         await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
         assertEquals(original, transcript(legacy))
-        invoke("openCentralWorkspaceChat")
         awaitCentralEmpty()
         assertEquals(original, transcript(legacy))
         assertArrayEquals(bytes, AttachmentStore(context).resolve(legacy, attachment).readBytes())
         assertFalse(db { store.readConversationMetadata(legacy).deleted })
         assertFalse(db { store.readConversationMetadata(legacy).archived })
         WorkspaceRegistry(context).use { assertTrue("Selecting central cannot create a worker workspace", it.listWorkspaces().isEmpty()) }
-    }
-
-    @Test fun deletingAnOldConversationKeepsCentralSelected() {
-        start()
-        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
-        invoke("applyConversationAction",
-            arrayOf(String::class.java, ConversationAction::class.java, String::class.java),
-            arrayOf(legacy, ConversationAction.DELETE, ""))
-        await { selected() == WorkspaceIdentity.CENTRAL_SESSION &&
-            AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION &&
-            db { store.readConversationMetadata(legacy).deleted } }
-        awaitCentralEmpty()
-        assertEquals(AppNavigationBackPolicy.CHAT_ROOT, navigation().currentDestination?.route)
-        assertTrue(db { store.readConversationTimeline(legacy).isEmpty() })
     }
 
     @Test fun warmWorkerIntentRedirectsToCentralWithoutOpeningTheWorkerAsAChat() {
@@ -266,7 +247,6 @@ class MainActivityWorkspaceRoutingTest {
     @Test fun recreationKeepsCentralSelectionEvenWhenOriginalIntentStillPointsAtLegacy() {
         start(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, legacy))
         await { AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
-        invoke("openCentralWorkspaceChat")
         awaitCentralEmpty()
         assertEquals(legacy, activity.intent.getStringExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
         controller!!.recreate()
@@ -297,240 +277,6 @@ class MainActivityWorkspaceRoutingTest {
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, activityState<String>("conversationSessionId").value)
         assertEquals(draft, activityState<String>("goalInput").value)
         assertEquals(selectedSkills, activityState<Set<String>>("selectedSkillIds").value)
-        assertFalse(activityState<Boolean>("conversationActionPending").value)
-    }
-
-    @Test fun reservedSessionTitleGuardReturnsBeforeSchedulingAnyTitleWork() {
-        start()
-        val titleExecutor = executor(activity, "sessionTitleExecutor")
-        titleExecutor.shutdown()
-        assertTrue(titleExecutor.awaitTermination(10, TimeUnit.SECONDS))
-        // The shut-down executor is an admission trap. Any title task submission throws synchronously;
-        // this proves the guard runs before async work and avoids making a network/model test call.
-        val parameterTypes = arrayOf<Class<*>>(String::class.java, String::class.java)
-        invoke("requestConversationTitle", parameterTypes, arrayOf(WorkspaceIdentity.CENTRAL_SESSION, "Simple question"))
-        invoke("requestConversationTitle", parameterTypes, arrayOf(execution, "Worker question"))
-        try {
-            invoke("requestConversationTitle", parameterTypes, arrayOf(legacy, "Ordinary question"))
-            fail("Ordinary title path must reach the executor trap so the negative assertion is meaningful")
-        } catch (expected: InvocationTargetException) {
-            assertTrue(expected.cause is RejectedExecutionException)
-        }
-    }
-
-    @Test fun realDrawerCatalogDetailFilesAndBackPreserveIndependentDraftAndBothAttachmentOwners() {
-        val workspace = WorkspaceRegistry(context).use {
-            it.createWorkspace("navigation-detail", "Recorded navigation workspace")
-        }
-        val workerToolEvent = db {
-            val workerMessageId = store.appendConversationMessage(workspace.executionSessionId, "user",
-                "Worker transcript question")
-            store.appendConversationToolPresentation(workspace.executionSessionId, workerMessageId,
-                "Workspace test tool", "tool_result", "workspace-test-call", "Tool output for this workspace", null, "")
-            store.appendConversationMessage(workspace.executionSessionId, "assistant", "Worker transcript answer")
-            store.readConversationTimeline(workspace.executionSessionId).single { it.kind == "tool" }
-        }
-        val original = transcript(legacy)
-        start()
-        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
-        settleNativeFrame()
-        val draftText = "Unsent independent draft survives workspace browsing"
-        compose.onNode(hasSetTextAction()).performTextInput(draftText)
-        val draftBytes = "Unsent attachment retains its owner and bytes".toByteArray()
-        val draftUri = Uri.parse("content://navigation-fixture/unsent.txt")
-        Shadows.shadowOf(context.contentResolver).registerInputStream(draftUri, ByteArrayInputStream(draftBytes))
-        val draftOwner = ViewModelProvider(activity)[AttachmentDraftViewModel::class.java]
-        compose.runOnIdle { draftOwner.addUris(WorkspaceIdentity.CENTRAL_SESSION, listOf(draftUri), ChatAttachment.Kind.FILE) }
-        await { draftOwner.drafts.value.singleOrNull()?.attachment != null }
-        val draftBefore = draftOwner.drafts.value.single()
-        val pendingFile = requireNotNull(draftBefore.attachment)
-        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(WorkspaceIdentity.CENTRAL_SESSION, pendingFile).readBytes())
-
-        openDrawer()
-        compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
-        compose.onNodeWithText(workspace.title).assertDoesNotExist()
-        compose.onNodeWithTag("drawer-open-central").assertIsSelected()
-        // Native rapid taps must still create exactly one catalog destination.
-        compose.onNodeWithTag("drawer-open-workspaces").performTouchInput {
-            click(); advanceEventTime(20); click()
-        }
-        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
-        await { compose.onAllNodesWithTag("workspace-list-row-${workspace.workspaceId}")
-            .fetchSemanticsNodes().isNotEmpty() }
-        settleNativeFrame()
-        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
-        compose.onNodeWithTag("workspace-list").assertIsDisplayed()
-        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
-        compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
-        assertEquals(1, navigation().currentBackStack.value.count { it.destination.route == AppNavigationBackPolicy.WORKSPACES })
-        assertNull("Catalog must not create a Crew manager", CoreAgentRuntime.crewManagerForSession(workspace.executionSessionId))
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
-        assertEquals(listOf(draftBefore), draftOwner.drafts.value)
-
-        openDrawer()
-        compose.onNodeWithTag("drawer-open-workspaces").assertIsSelected()
-        compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
-        systemBack()
-        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
-        assertEquals(AppNavigationBackPolicy.WORKSPACES, navigation().currentDestination?.route)
-        tapTag("workspace-list-row-${workspace.workspaceId}")
-        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
-        await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId
-            && compose.onAllNodesWithTag("workspace-chat-timeline").fetchSemanticsNodes().isNotEmpty() }
-        await {
-            val title = compose.onAllNodesWithText(workspace.title, useUnmergedTree = true)
-                .fetchSemanticsNodes().isNotEmpty()
-            title &&
-                compose.onAllNodesWithText("Worker transcript question").fetchSemanticsNodes().isNotEmpty()
-        }
-        settleNativeFrame()
-        compose.onNodeWithTag("jarvys-back").assertIsDisplayed()
-        compose.onNodeWithText(workspace.title, useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
-        compose.onNodeWithText("Worker transcript question").assertIsDisplayed()
-        compose.onNodeWithText("Worker transcript answer", useUnmergedTree = true).assertDoesNotExist()
-        compose.onNodeWithTag("conversation-activity-${workerToolEvent.id}").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-assignment-selector").assertIsDisplayed()
-        compose.onNodeWithTag("chat-composer-input").assertIsNotEnabled()
-        compose.onNodeWithTag("chat-send-stop-button").assertIsNotEnabled()
-        compose.onNodeWithTag("chat-separate-stop-button").assertIsNotEnabled()
-        compose.onNodeWithTag("workspace-chat-input-hint").assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.workspace_chat_input_hint)).assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.workspace_read_only_notice)).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.workspace_recovery_unknown)).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.workspace_result_unknown)).assertDoesNotExist()
-        tapTag("jarvys-topbar-more-options")
-        compose.onNodeWithTag("workspace/topbar-action").assertIsDisplayed()
-        compose.onNodeWithTag("workspace/topbar-bots-action").assertDoesNotExist()
-        compose.onNodeWithTag("topbar-rename-chat").assertDoesNotExist()
-        compose.onNodeWithTag("topbar-delete-chat").assertDoesNotExist()
-        tapTag("workspace/topbar-action")
-        awaitRoute(AppNavigationBackPolicy.COORDINATED_FILES)
-        compose.onNodeWithText(context.getString(R.string.workspace_file_read_only)).assertIsDisplayed()
-        tapTag("jarvys-back")
-        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
-        await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId }
-        val mission = CrewMissionSnapshot("workspace-secondary-mission", workspace.executionSessionId,
-            "workspace-test-process", "Secondary menu mission", "RUNNING", "", System.currentTimeMillis(), 0L,
-            listOf(CrewBotSnapshot("workspace-bot", "writer", "Writer", "Writer", "green", "Inspect files",
-                "RUNNING", "", "", "", emptyList(), System.currentTimeMillis(), 0L)), emptyList())
-        db { store.appendCrewMissionSnapshot(mission) }
-        WorkspaceChanges.changed()
-        await { AgentRunUiState.state.value.events.any {
-            it.crewMissionSnapshot?.missionId == mission.missionId
-        } }
-        tapTag("jarvys-topbar-more-options")
-        compose.onNodeWithTag("workspace/topbar-bots-action").assertIsDisplayed()
-        tapTag("workspace/topbar-bots-action")
-        awaitRoute(AppNavigationBackPolicy.CREW)
-        systemBack()
-        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
-        systemBack()
-        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
-        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
-        compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
-        systemBack()
-        awaitRoute(AppNavigationBackPolicy.CHAT_ROOT)
-        await { AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
-        compose.onNode(hasSetTextAction()).assertTextEquals(draftText)
-        compose.onNodeWithTag("pending-attachment-${draftBefore.id}").assertIsDisplayed()
-        assertSame(draftOwner, ViewModelProvider(activity)[AttachmentDraftViewModel::class.java])
-        assertEquals(listOf(draftBefore), draftOwner.drafts.value)
-        assertEquals(original, transcript(legacy))
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
-        assertArrayEquals(bytes, AttachmentStore(context).resolve(legacy, attachment).readBytes())
-        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(WorkspaceIdentity.CENTRAL_SESSION, pendingFile).readBytes())
-        WorkspaceRegistry(context).use { registry ->
-            assertEquals(listOf(workspace), registry.listWorkspaces())
-            assertTrue(registry.listAssignments(workspace.workspaceId).isEmpty())
-        }
-    }
-
-    @Test fun realCatalogNextPreviousAndFirstBrowseBoundedPagesWithoutStartingCrew() {
-        val rows = WorkspaceRegistry(context).use { registry ->
-            repeat(WORKSPACE_PAGE_SIZE + 1) { registry.createWorkspace("navigation-page-$it", "Catalog project $it") }
-            registry.listWorkspaces(100)
-        }
-        start()
-        await { selected() == WorkspaceIdentity.CENTRAL_SESSION && AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION }
-        openDrawer()
-        tapTag("drawer-open-workspaces")
-        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
-        val firstId = rows.first().workspaceId
-        val lastId = rows.last().workspaceId
-        await { compose.onAllNodesWithTag("workspace-list-row-$firstId").fetchSemanticsNodes().isNotEmpty() }
-        scrollWorkspaceListUntil("workspace-next-page")
-        tapTag("workspace-next-page")
-        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
-        settleNativeFrame()
-        compose.onNodeWithTag("workspace-list-row-$lastId").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-list-row-$firstId").assertDoesNotExist()
-        compose.onNodeWithTag("workspace-next-page").assertDoesNotExist()
-        tapTag("workspace-previous-page")
-        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
-            compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
-        scrollWorkspaceListUntil("workspace-list-row-$firstId", towardTop = true)
-        compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
-        scrollWorkspaceListUntil("workspace-next-page")
-        tapTag("workspace-next-page")
-        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
-        settleNativeFrame()
-        tapTag("workspace-first-page")
-        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
-            compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
-        settleNativeFrame()
-        compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
-        rows.forEach { assertNull("Catalog browsing started ${it.workspaceId}", CoreAgentRuntime.crewManagerForSession(it.executionSessionId)) }
-        WorkspaceRegistry(context).use { registry ->
-            assertEquals(rows, registry.listWorkspaces(100))
-            rows.forEach { assertTrue(registry.listAssignments(it.workspaceId).isEmpty()) }
-        }
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, selected())
-        assertEquals(WorkspaceIdentity.CENTRAL_SESSION, AgentRunUiState.state.value.sessionId)
-    }
-
-    private fun navigation(): NavHostController = MainActivity::class.java.getDeclaredField("activeNavController")
-        .apply { isAccessible = true }.get(activity) as NavHostController
-
-    private fun awaitRoute(route: String) {
-        await { navigation().currentDestination?.route == route }
-        settleNativeFrame()
-    }
-
-    private fun scrollWorkspaceListUntil(tag: String, towardTop: Boolean = false) {
-        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
-        while (System.nanoTime() < end) {
-            if (compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()) return
-            compose.onNodeWithTag("workspace-list").performTouchInput {
-                if (towardTop) swipeDown() else swipeUp()
-            }
-            compose.mainClock.advanceTimeBy(300)
-            awaitReactionDrawIdle(compose, activity)
-            Thread.sleep(10)
-        }
-        assertTrue("Workspace catalog control did not become visible: $tag",
-            compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty())
-    }
-
-    private fun openDrawer() {
-        settleNativeFrame()
-        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).performTouchInput { click() }
-        settleNativeFrame()
-        compose.onNodeWithTag("drawer-header").assertIsDisplayed()
-    }
-
-    private fun tapTag(tag: String) {
-        settleNativeFrame()
-        compose.onNodeWithTag(tag).assertIsDisplayed().performTouchInput { click() }
-        settleNativeFrame()
-    }
-
-    private fun systemBack() {
-        compose.runOnIdle { activity.onBackPressedDispatcher.onBackPressed() }
-        settleNativeFrame()
     }
 
     private fun settleNativeFrame() {

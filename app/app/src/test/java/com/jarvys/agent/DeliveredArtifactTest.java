@@ -59,7 +59,6 @@ public class DeliveredArtifactTest {
         workspace.write("report.txt", "replacement");
         File saved = new DeliveredArtifactStore(files).resolve(session, file);
         assertEquals("original", new String(Files.readAllBytes(saved.toPath()), StandardCharsets.UTF_8));
-        assertTrue(chatTestStore.localRunStore(files).conversationHasPrivateImagesOrAttachments(session));
         assertFalse(result.content.contains(files.getAbsolutePath()));
         assertFalse(result.content.contains("original"));
         assertEquals(artifacts.sha256(session,file), new JSONObject(result.content).getString("sha256"));

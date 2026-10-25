@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="drawer_bots">Bots</string>
-    <string name="drawer_pinned_section">Fijados</string>
-    <string name="drawer_current_chats">Chats actuales</string>
     <string name="bots_title">Bots</string>
     <string name="bots_create">Crear bot</string>
     <string name="bots_back">Volver</string>
@@ -56,7 +54,6 @@
     <string name="bots_workspace_project">Proyecto de conversación</string>
     <string name="bots_workspace_chat">Espacio del chat</string>
     <string name="bots_tool_scope_help">Solo se guardan herramientas disponibles y skills habilitadas. Se mantienen las reglas de aprobación.</string>
-    <string name="drawer_no_pinned_chats">No hay chats fijados</string>
     <string name="bots_changed_elsewhere">Este bot cambió en otro lugar. Tus cambios siguen aquí. Cópialos si los necesitas y vuelve a abrir el bot antes de guardar.</string>
     <string name="bots_draft_failed">No se pudo preparar la configuración. Comprueba el modelo y proveedor seleccionados e inténtalo de nuevo. No se guardó ningún bot.</string>
     <string name="bots_icon_prompt_limit">Límite de caracteres para el icono: %1$d.</string>

@@ -54,7 +54,7 @@ public final class ConnectorArtifactAccess {
     public static JSONObject publish(byte[] bytes, String name, String mime, CancellationToken token) {
         Binding binding = requireBinding(token);
         if (bytes == null || bytes.length > MAX_BYTES) throw new IllegalArgumentException("Connector file exceeds the 8 MiB limit.");
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
+        try {
             DeliveredArtifactStore store = new DeliveredArtifactStore(binding.context);
             ChatAttachment artifact = store.snapshotBytes(binding.session, bytes, name, mime, token);
             token.throwIfCancelled();
@@ -81,8 +81,7 @@ public final class ConnectorArtifactAccess {
         ChatAttachment attachment = conversations.findChatFile(binding.session, ref[0], ref[1]);
         if (attachment == null || attachment.sizeBytes > MAX_BYTES)
             throw new IllegalArgumentException("File is unavailable in this chat or exceeds 8 MiB.");
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent();
-             InputStream input = "delivered".equals(ref[0])
+        try (InputStream input = "delivered".equals(ref[0])
                      ? new DeliveredArtifactStore(binding.context).open(binding.session, attachment)
                      : new FileInputStream(new AttachmentStore(binding.context).resolve(binding.session, attachment));
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {

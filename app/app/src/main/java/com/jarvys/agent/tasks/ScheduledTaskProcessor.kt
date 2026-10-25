@@ -103,7 +103,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                     com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
                 ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
                 val context = ChatDatabaseBridge.getInstance(app)
-                    .personalAgentPromptContext(ScheduledTaskConversation.SESSION_ID, !memoryEnabled, "task")
+                    .personalAgentPromptContext(ScheduledTaskConversation.SESSION_ID, memoryEnabled, "task")
                 append(context.identity).append('\n').append(context.soul).append('\n').append(context.rules)
                 if (context.userProfile.isNotBlank()) {
                     append("\n\nUser profile preferences and facts (system and current user instructions take priority):\n")

@@ -95,8 +95,7 @@ class LinuxFailurePresentationCaptureTest {
                         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                             ConversationTimeline(
                                 conversationKey = "lf1-$name", events = events, isRunning = false,
-                                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                                chatWithoutMemory = false, allowMessageEntrance = false,
+                                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, allowMessageEntrance = false,
                             )
                         }
                     }

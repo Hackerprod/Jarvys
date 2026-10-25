@@ -58,10 +58,10 @@ class JarvysShellFrameUx3Test {
                     drawerContent = {},
                     route = AppRouteMeta("Chat", isRoot = true, action = AppRouteAction.CHAT),
                     agentSnapshot = AgentRunUiSnapshot(),
-                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                    onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                    onAddServer = {}, onImportSkill = {},
                     canCompact = false, compacting = false, canReflect = false,
-                    onToggleMemory = {}, onCompact = {}, onReflect = {},
+                    onCompact = {}, onReflect = {},
                     bottomBar = {
                         Box(Modifier.fillMaxWidth().height(composerHeight).background(Color.Red)
                             .testTag("ux3-composer-surface"))
@@ -118,9 +118,9 @@ class JarvysShellFrameUx3Test {
                     drawerState = rememberDrawerState(DrawerValue.Closed), drawerContent = {},
                     route = AppRouteMeta("Settings", isRoot = false, action = AppRouteAction.NONE),
                     agentSnapshot = AgentRunUiSnapshot(), onBack = {}, onOpenDrawer = {}, onOpenSettings = {},
-                    onNewChat = {}, onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                    onAddServer = {}, onImportSkill = {},
                     canCompact = false, compacting = false, canReflect = false,
-                    onToggleMemory = {}, onCompact = {}, onReflect = {},
+                    onCompact = {}, onReflect = {},
                     bottomBar = { Box(Modifier.fillMaxWidth().height(112.dp).testTag("other-route-bottom-bar")) },
                 ) { padding ->
                     Box(Modifier.fillMaxSize().padding(padding).testTag("other-route-body"))

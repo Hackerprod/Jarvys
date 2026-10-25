@@ -123,7 +123,7 @@ class ToolActivityComposeTest {
             when (surface) {
                 0 -> ToolActivityLine(state)
                 1 -> ConversationTimeline("reopened-internal-skill",events=listOf(reopenedEvent),isRunning=false,
-                    connectorRegistry=connectors,onOpenPreview={},onOpenSkillFile={},chatWithoutMemory=false)
+                    connectorRegistry=connectors,onOpenPreview={},onOpenSkillFile={})
                 else -> CrewMissionScreen(snapshot(messages = listOf(local(loadedActivity, "crew-internal-skill"))),
                     board(), true, {}, { _, _ -> }, {})
             }
@@ -198,7 +198,7 @@ class ToolActivityComposeTest {
         },{true})
         compose.setContent { MaterialTheme {
             AgentRunScreen(conversationKey="chat",events=listOf(AgentRunUiEvent.activityEvent(1,projected)),isRunning=false,
-                emptyReport=null,connectorRegistry=registry,onOpenPreview={},onOpenSkillFile={},chatWithoutMemory=false)
+                emptyReport=null,connectorRegistry=registry,onOpenPreview={},onOpenSkillFile={})
         } }
         compose.onNodeWithTag("tool-output-toggle-execution").performClick()
         compose.onNodeWithText("Partial evidence").assertIsDisplayed()

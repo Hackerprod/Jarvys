@@ -42,7 +42,7 @@ class ConversationVisibilityUiTest {
             MaterialTheme {
                 AgentRunScreen(conversationKey = "quiet-ui", events = events.value, isRunning = false,
                     emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
-                    onOpenSkillFile = {}, chatWithoutMemory = false)
+                    onOpenSkillFile = {})
             }
         }
         compose.waitUntil(10_000) {
@@ -83,7 +83,7 @@ class ConversationVisibilityUiTest {
             MaterialTheme {
                 AgentRunScreen(conversationKey = session, events = events.value, isRunning = true,
                     emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
-                    onOpenSkillFile = {}, chatWithoutMemory = false, showAssistantProgress = true)
+                    onOpenSkillFile = {}, showAssistantProgress = true)
             }
         }
         compose.onNodeWithText("The build is underway; I am preparing its screens.").assertIsDisplayed()
@@ -135,7 +135,7 @@ class ConversationVisibilityUiTest {
             MaterialTheme {
                 AgentRunScreen(conversationKey = "tool-disclosure", events = listOf(event), isRunning = false,
                     emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
-                    onOpenSkillFile = {}, chatWithoutMemory = false)
+                    onOpenSkillFile = {})
             }
         }
         compose.onNodeWithText("Audit evidence sentinel").assertDoesNotExist()
@@ -163,7 +163,7 @@ class ConversationVisibilityUiTest {
             MaterialTheme {
                 AgentRunScreen(conversationKey = "artifact-card-ui", events = listOf(result, card), isRunning = false,
                     emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
-                    onOpenSkillFile = {}, chatWithoutMemory = false)
+                    onOpenSkillFile = {})
             }
         }
 

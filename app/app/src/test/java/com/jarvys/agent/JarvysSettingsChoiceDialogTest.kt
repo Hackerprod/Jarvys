@@ -84,7 +84,7 @@ class JarvysSettingsChoiceDialogTest {
             }
         }
 
-        compose.onAllNodesWithTag("settings-scheduled-tasks-row").assertCountEquals(0)
+        compose.onAllNodesWithTag("settings-scheduled-tasks-row").assertCountEquals(1)
 
         for (localeChoice in listOf(AppLanguageChoice.ENGLISH, AppLanguageChoice.SPANISH)) {
             for (scale in listOf(1f, 2f)) {

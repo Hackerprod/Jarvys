@@ -214,7 +214,6 @@ public final class WorkspaceStore {
         if (appFiles == null) {
             throw new IllegalArgumentException("A conversation app-files anchor is required for the Coding project");
         }
-        new LocalRunStore(appFiles).markConversationHasPrivateCode(conversationId);
         return new ProjectScopeStore(appFiles).open(conversationId);
     }
 

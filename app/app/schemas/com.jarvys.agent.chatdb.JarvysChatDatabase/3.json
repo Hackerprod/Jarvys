@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "f0a67c82b314c7b88c0c58c421649125",
+    "identityHash": "95f99c7449b22e26dd10ed6942b7314f",
     "entities": [
       {
         "tableName": "conversations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `private_code` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT, `generated_title` TEXT, `pinned` INTEGER NOT NULL, `archived` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_message_at` INTEGER, `message_count` INTEGER NOT NULL, `next_seq` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -39,12 +39,6 @@
           {
             "fieldPath": "archived",
             "columnName": "archived",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "private_code",
-            "columnName": "private_code",
             "affinity": "INTEGER",
             "notNull": true
           },
@@ -1133,7 +1127,7 @@
       },
       {
         "tableName": "interrupt_requests",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `content` TEXT NOT NULL, `memory_disabled` INTEGER NOT NULL, `dispatched_message_id` TEXT, `dispatched_seq` INTEGER, `input_state` TEXT, `input_state_seq` INTEGER, `created_at` REAL NOT NULL, PRIMARY KEY(`conversation_id`, `request_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `seq` INTEGER NOT NULL, `content` TEXT NOT NULL, `dispatched_message_id` TEXT, `dispatched_seq` INTEGER, `input_state` TEXT, `input_state_seq` INTEGER, `created_at` REAL NOT NULL, PRIMARY KEY(`conversation_id`, `request_id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `seq`) REFERENCES `conversation_items`(`conversation_id`, `seq`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "conversation_id",
@@ -1157,12 +1151,6 @@
             "fieldPath": "content",
             "columnName": "content",
             "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "memory_disabled",
-            "columnName": "memory_disabled",
-            "affinity": "INTEGER",
             "notNull": true
           },
           {
@@ -6395,7 +6383,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f0a67c82b314c7b88c0c58c421649125')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '95f99c7449b22e26dd10ed6942b7314f')"
     ]
   }
 }

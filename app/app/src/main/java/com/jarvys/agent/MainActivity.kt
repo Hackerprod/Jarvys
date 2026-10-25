@@ -128,6 +128,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.proactive.ProactivePreferences
 import com.jarvys.agent.proactive.ProactiveEventStore
 import com.jarvys.agent.proactive.ProactiveScheduler
@@ -214,7 +215,6 @@ import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatComposer
 import com.jarvys.agent.ui.chat.ConversationDrawer
-import com.jarvys.agent.ui.chat.ArchivedChatsScreen
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
 import com.jarvys.agent.ui.shell.JarvysShellFrame
 import com.jarvys.agent.ui.shell.ModelSelectorSheet
@@ -244,7 +244,6 @@ private object Routes {
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
     const val SETTINGS_DEVELOPER = AppNavigationBackPolicy.SETTINGS_DEVELOPER
     const val SETUP_WIZARD = AppNavigationBackPolicy.SETUP_WIZARD
-    const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
     const val PROVIDERS_OPENROUTER = AppNavigationBackPolicy.PROVIDERS_OPENROUTER
@@ -326,7 +325,6 @@ class MainActivity : ComponentActivity() {
     private val pendingSkillUris = arrayListOf<Uri>()
     private var pendingCameraResult: Boolean? = null
     private var restoredCameraPath: String? = null
-    private var conversationActionPending by mutableStateOf(false)
     private var goalInput by mutableStateOf("")
     private var lastRunReport by mutableStateOf("")
     private var themeMode by mutableStateOf(JarvysThemeMode.SYSTEM)
@@ -339,11 +337,9 @@ class MainActivity : ComponentActivity() {
     private var translationErrorMessageId by mutableStateOf<String?>(null)
     private var translationError by mutableStateOf<String?>(null)
     private var translationFuture: Future<*>? = null
-    private var runHistory by mutableStateOf<List<RunHistoryItem>>(emptyList())
-    private var selectedHistoryRunId by mutableStateOf<String?>(null)
+    private var agentName by mutableStateOf<String?>(null)
     private var proactiveTargetMessageId by mutableStateOf<String?>(null)
     private var conversationSessionId by mutableStateOf(WorkspaceIdentity.CENTRAL_SESSION)
-    private var conversationTitle by mutableStateOf<String?>(null)
     private var crewModeChoice by mutableStateOf(CrewMode.AUTO)
     private var timelinePageSessionId by mutableStateOf<String?>(null)
     private var timelineLoading by mutableStateOf(false)
@@ -359,7 +355,6 @@ class MainActivity : ComponentActivity() {
     private var timelineNewerTranslationMessageIds = emptySet<String>()
     private var timelineInvalidatedToolTurnMessageIds = emptySet<String>()
     private var timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
-    private var showingNewChat by mutableStateOf(false)
     private var captureContextRequested by mutableStateOf(false)
     private var selectedSkillIds by mutableStateOf<Set<String>>(emptySet())
     private var memoryEnabled by mutableStateOf(true)
@@ -370,7 +365,6 @@ class MainActivity : ComponentActivity() {
     private var reflectionLastSuccessMillis by mutableLongStateOf(0L)
     private var showReflectionDisclosure by mutableStateOf(false)
     private var manualReflectionAfterDisclosure by mutableStateOf(false)
-    private var chatWithoutMemory by mutableStateOf(false)
     private var pendingTaskId: String? = null
     private val historyExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysRunHistory").apply { isDaemon = true }
@@ -380,9 +374,6 @@ class MainActivity : ComponentActivity() {
     }
     private val chatExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysConversationChat").apply { isDaemon = true }
-    }
-    private val sessionTitleExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "JarvysSessionTitle").apply { isDaemon = true }
     }
     private val skillImportExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysSkillImport").apply { isDaemon = true }
@@ -435,7 +426,6 @@ class MainActivity : ComponentActivity() {
         attachmentPickerSession = state?.getString("attachment_picker_session")?.let { WorkspaceIdentity.CENTRAL_SESSION }
         goalInput = state?.getString(STATE_GOAL).orEmpty()
         selectedSkillIds = state?.getStringArrayList(STATE_SELECTED_SKILLS)?.toSet().orEmpty()
-        conversationTitle = state?.getString(STATE_SESSION_TITLE)
         proactiveTargetMessageId = state?.getString(STATE_PROACTIVE_TARGET_MESSAGE)
         pendingTaskId = state?.getString(STATE_OPEN_TASK)
         pendingPhotoUris = state?.getParcelableArrayList(STATE_PENDING_PHOTOS)
@@ -514,23 +504,13 @@ class MainActivity : ComponentActivity() {
         showAgentEvents = uiPreferences.showAgentEvents()
         proactiveEnabled = proactivePreferences.enabled
         refreshProactiveStatus()
-        selectedHistoryRunId = null
         proactiveTargetMessageId = intent?.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
             ?: proactiveTargetMessageId
         pendingTaskId = TaskDeepLink.existingTaskId(this,
             intent?.getStringExtra(EXTRA_OPEN_TASK) ?: pendingTaskId)
         conversationSessionId = WorkspaceIdentity.CENTRAL_SESSION
-        val openingProactiveThread = conversationSessionId == ProactiveConversation.SESSION_ID
-        if (openingProactiveThread) {
-            selectedHistoryRunId = null
-            goalInput = ""
-            selectedSkillIds = emptySet()
-        }
         crewModeChoice = CrewMode.read(this)
-        chatWithoutMemory = getChatPreferences().getBoolean(MemoryUiLogic.sessionMemoryDisabledKey(conversationSessionId), false)
-        if (openingProactiveThread) conversationTitle = ProactiveConversation.title(this)
         persistConversationSession(conversationSessionId)
-        showingNewChat = false
         refreshUi()
         restoreConversationSession(conversationSessionId)
         activityResultsReady = true
@@ -540,10 +520,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 attachmentDrafts.submissions.collect { submission ->
-                    if (submission.persisted) {
-                        requestConversationTitle(submission.sessionId, submission.text)
-                        refreshRunHistory()
-                    } else if (conversationSessionId == submission.sessionId && goalInput.isBlank()) {
+                    if (!submission.persisted && conversationSessionId == submission.sessionId && goalInput.isBlank()) {
                         goalInput = submission.text
                     }
                     submission.error?.let { toast(it, Toast.LENGTH_LONG) }
@@ -590,13 +567,11 @@ class MainActivity : ComponentActivity() {
                     onGoalChange = { goalInput = it },
                     lastRunReport = lastRunReport,
                     agentState = agentState,
-                    agentHasUserAttachments = agentRenderState.hasUserAttachments,
                     agentConversationMessageCount = agentRenderState.conversationMessageCount,
                     agentCrewMissions = agentRenderState.crewMissions,
                     workspaceHasActiveWorkForUi = { state, snapshot -> workspaceHasActiveWorkForUi(state, snapshot) },
                     workspacePauseEnabledForUi = ::workspacePauseEnabledForUi,
-                    runHistory = runHistory,
-                    selectedHistoryRunId = selectedHistoryRunId,
+                    agentName = agentName,
                     proactiveTargetMessageId = proactiveTargetMessageId,
                     timelinePageSessionId = timelinePageSessionId,
                     timelineLoading = timelineLoading,
@@ -607,7 +582,6 @@ class MainActivity : ComponentActivity() {
                     conversationSessionId = conversationSessionId,
                     crewMode = crewModeChoice,
                     onCrewModeChange = ::persistCrewMode,
-                    conversationTitle = conversationTitle,
                     memoryEnabled = memoryEnabled,
                     memoryCoreCharacters = memoryCoreCharacters,
                     showMemoryDisclosure = showMemoryDisclosure,
@@ -615,8 +589,6 @@ class MainActivity : ComponentActivity() {
                     reflectionStatus = if (agentState.reflecting) agentState.reflectionStatus.orEmpty() else reflectionStatus,
                     reflectionLastSuccessMillis = reflectionLastSuccessMillis,
                     showReflectionDisclosure = showReflectionDisclosure,
-                    chatWithoutMemory = chatWithoutMemory,
-                    showingNewChat = showingNewChat,
                     showAgentEvents = showAgentEvents,
                     onTranslateAssistant = ::translateAssistantMessage,
                     onCancelTranslation = ::cancelAssistantTranslation,
@@ -657,8 +629,6 @@ class MainActivity : ComponentActivity() {
                     onAttachmentCamera = ::launchAttachmentCamera,
                     onAttachmentPhotos = ::launchAttachmentPhotos,
                     onAttachmentFiles = ::launchAttachmentFiles,
-                    conversationActionPending = conversationActionPending,
-                    onConversationAction = ::applyConversationAction,
                     onStopRun = ::stopCurrentWork,
                     onNavControllerReady = { controller ->
                         activeNavController = controller
@@ -679,7 +649,6 @@ class MainActivity : ComponentActivity() {
                     onReflectionDisclosureShow = ::showReflectionDisclosureAgain,
                     onReflectionManual = ::startManualReflection,
                     onMemoryDisclosureShow = ::showMemoryDisclosureAgain,
-                    onMemoryToggleForChat = ::toggleMemoryForCurrentChat,
                     onManualCompact = ::startManualCompaction,
                     onMemoryChanged = {},
                     onUndoMemoryRevision = {},
@@ -691,16 +660,13 @@ class MainActivity : ComponentActivity() {
                     proactiveStatus = proactiveStatus,
                     onProactiveEnabledChange = ::persistProactiveEnabled,
                     onRefreshProactiveStatus = ::refreshProactiveStatus,
-                    onSelectHistory = ::selectHistoryRun,
-                    onNewChat = ::newChat,
-                    onOpenCentral = ::openCentralWorkspaceChat,
                     onWorkspaceControl = ::applyWorkspaceControl,
                     onCaptureContext = ::markCaptureContext,
                     onToggleRunSkill = ::toggleRunSkill,
                     onImportSkill = ::launchSkillImport,
                     onImportSkillMarkdown = ::importSkillText,
                     onImportSkillGitHub = ::importSkillFromGitHub,
-                    onHistoryUpdated = ::refreshRunHistory,
+                    onRunFinished = ::refreshAgentName,
                     onSaveGeneratedImage = { event -> saveGeneratedImage(fileActionSession, event) },
                     onShareGeneratedImage = { event -> shareGeneratedImage(fileActionSession, event) },
                     mcpServerRepository = mcpServerRepository,
@@ -759,10 +725,7 @@ class MainActivity : ComponentActivity() {
             conversationSessionId = session
             persistConversationSession(session)
         }
-        selectedHistoryRunId = null
-        showingNewChat = false
         goalInput = ""
-        conversationTitle = if (session == ProactiveConversation.SESSION_ID) ProactiveConversation.title(this) else null
         restoreConversationSession(session)
         refreshUi()
         activeNavController?.let { controller ->
@@ -807,12 +770,8 @@ class MainActivity : ComponentActivity() {
         val cameraPath = if (::attachmentDrafts.isInitialized) attachmentDrafts.cameraFile?.path else restoredCameraPath
         cameraPath?.let { outState.putString(STATE_CAMERA_PATH, it) }
         outState.putString(STATE_GOAL, goalInput)
-        outState.putString(STATE_SESSION_ID, conversationSessionId)
-        conversationTitle?.let { outState.putString(STATE_SESSION_TITLE, it) }
-        selectedHistoryRunId?.let { outState.putString(STATE_HISTORY_RUN, it) }
         proactiveTargetMessageId?.let { outState.putString(STATE_PROACTIVE_TARGET_MESSAGE, it) }
         pendingTaskId?.let { outState.putString(STATE_OPEN_TASK, it) }
-        outState.putBoolean(STATE_NEW_CHAT, showingNewChat)
         outState.putStringArrayList(STATE_SELECTED_SKILLS, ArrayList(selectedSkillIds))
         super.onSaveInstanceState(outState)
     }
@@ -826,17 +785,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun interruptAndSend() {
-        if (conversationActionPending || attachmentDrafts.drafts.value.isNotEmpty()) return
+        if (attachmentDrafts.drafts.value.isNotEmpty()) return
         val text = goalInput
         if (text.isBlank()) return
         val state = AgentRunUiState.state.value
         if (!state.running || state.reflecting || state.sessionId != conversationSessionId) return
         val skills = ArrayList(skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id })
         val sessionId = conversationSessionId
-        val memoryDisabled = chatWithoutMemory
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { AgentForegroundService.interruptAndSend(this@MainActivity, sessionId, text, skills, memoryDisabled) }
+                runCatching { AgentForegroundService.interruptAndSend(this@MainActivity, sessionId, text, skills) }
             }
             result.onSuccess { accepted ->
                 if (accepted && conversationSessionId == sessionId && goalInput == text) goalInput = ""
@@ -845,19 +803,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun submitMessage() {
-        if (conversationActionPending) return
         val message = goalInput
         if (message.isBlank() && attachmentDrafts.drafts.value.isEmpty()) return
         val state = AgentRunUiState.state.value
         if (state.running || state.compacting || state.reflecting) return
         val sessionId = conversationSessionId
         val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
-        if (WorkspaceIdentity.isCentral(sessionId)) conversationTitle = getString(R.string.workspace_central_chat)
-        else if (conversationTitle == null) conversationTitle = ConversationTitle.fromFirstMessage(message)
-        if (attachmentDrafts.submit(sessionId, message, ArrayList(enabledSkillIds), chatWithoutMemory)) {
+        if (attachmentDrafts.submit(sessionId, message, ArrayList(enabledSkillIds))) {
             goalInput = ""
-            selectedHistoryRunId = null
-            showingNewChat = false
             captureContextRequested = false
             selectedSkillIds = emptySet()
         }
@@ -892,7 +845,7 @@ class MainActivity : ComponentActivity() {
             "Accesibilidad Jarvys: activa."
         }
         lastRunReport = AgentForegroundService.getLastRunReport()
-        refreshRunHistory()
+        refreshAgentName()
     }
 
     private fun persistThemeMode(mode: JarvysThemeMode) {
@@ -926,8 +879,6 @@ class MainActivity : ComponentActivity() {
         workManager.getWorkInfosForUniqueWorkLiveData(ProactiveWorkNames.RUN_NOW)
             .observe(this) { refreshProactiveStatus() }
     }
-
-    private fun getChatPreferences() = getSharedPreferences("jarvys_chat", MODE_PRIVATE)
 
     private fun updateMemoryEnabled(enabled: Boolean) {
         getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE).edit()
@@ -988,18 +939,6 @@ class MainActivity : ComponentActivity() {
         showReflectionDisclosure = false
         manualReflectionAfterDisclosure = false
     }
-
-    private fun toggleMemoryForCurrentChat() {
-        val next = !chatWithoutMemory
-        getChatPreferences().edit()
-            .putBoolean(MemoryUiLogic.sessionMemoryDisabledKey(conversationSessionId), next)
-            .apply()
-        chatWithoutMemory = next
-        if (next) {
-            PersonalMemoryExtractionWorker.cancelConversation(this, conversationSessionId)
-        }
-    }
-
 
     private fun startManualCompaction() {
         if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting) return
@@ -1133,13 +1072,11 @@ ${event.text}
             cancelAssistantTranslation(event.messageId)
             translationErrorMessageId = null
             translationError = null
-            selectedHistoryRunId = null
-            showingNewChat = false
             refreshConversationTimeline(sessionId)
             val skillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
             runCatching {
                 AgentForegroundService.startRegenerateAssistant(this@MainActivity, prompt.text, ArrayList(skillIds),
-                    sessionId, prompt.userMessageId, chatWithoutMemory)
+                    sessionId, prompt.userMessageId)
             }.onFailure {
                 toast(getString(R.string.chat_footer_regenerate_error), Toast.LENGTH_LONG)
             }
@@ -1217,7 +1154,7 @@ ${event.text}
     }
 
     private fun startManualReflection() {
-        if (!memoryEnabled || chatWithoutMemory) {
+        if (!memoryEnabled) {
             toast(getString(R.string.reflection_unavailable))
             return
         }
@@ -1239,16 +1176,6 @@ ${event.text}
         CrewMode.write(this, mode)
     }
 
-    private fun openCentralWorkspaceChat() {
-        if (!WorkspaceIdentity.isCentral(conversationSessionId)) goalInput = ""
-        persistConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
-        conversationTitle = getString(R.string.workspace_central_chat)
-        selectedHistoryRunId = null
-        showingNewChat = false
-        selectedSkillIds = emptySet()
-        restoreConversationSession(conversationSessionId)
-    }
-
     private fun applyWorkspaceControl(workspaceId: String, assignmentId: String, revision: Long,
                                       type: WorkspaceControlType, text: String) {
         val owner = java.lang.ref.WeakReference(this)
@@ -1259,12 +1186,6 @@ ${event.text}
                         activity.toast(activity.getString(R.string.workspace_control_failed), Toast.LENGTH_LONG)
                 } }
             })
-    }
-
-    private fun newChat() {
-        persistConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
-        showingNewChat = false
-        restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
     }
 
     private fun markCaptureContext() {
@@ -1363,99 +1284,6 @@ ${event.text}
         }
     }
 
-    private fun selectHistoryRun(runId: String?) {
-        selectedHistoryRunId = runId
-        showingNewChat = false
-        if (runId == null) {
-            timelineRequestSerial++
-            timelineOlderRequestSerial++
-            timelinePageSessionId = conversationSessionId
-            timelineHiddenAssistantMessageIds = emptySet()
-            timelineHiddenTranslationMessageIds = emptySet()
-            timelineNewerTranslationMessageIds = emptySet()
-            timelineInvalidatedToolTurnMessageIds = emptySet()
-            timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
-            timelineLoading = false
-            timelineOlderLoading = false
-            timelineOlderLoadError = false
-            timelineHasOlder = false
-            timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
-            val sessionId = conversationSessionId
-            historyExecutor.execute {
-                val title = chatDatabaseResult { localRunStore.readConversationTitle(sessionId) }.getOrNull()
-                runOnUiThread { if (conversationSessionId == sessionId) conversationTitle = title }
-            }
-            return
-        }
-        val historyItem = runHistory.firstOrNull { it.id == runId }
-        conversationTitle = historyItem?.title
-        val sessionId = historyItem?.sessionId ?: runId
-        if (!WorkspaceIdentity.isCentral(sessionId)) { openCentralWorkspaceChat(); return }
-        persistConversationSession(sessionId)
-        val requestSerial = ++timelineRequestSerial
-        timelineOlderRequestSerial++
-        timelinePageSessionId = sessionId
-        timelineHiddenAssistantMessageIds = emptySet()
-        timelineHiddenTranslationMessageIds = emptySet()
-        timelineNewerTranslationMessageIds = emptySet()
-        timelineInvalidatedToolTurnMessageIds = emptySet()
-        timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
-        timelineLoading = true
-        timelineOlderLoading = false
-        timelineOlderLoadError = false
-        timelineHasOlder = false
-        timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
-        historyExecutor.execute {
-            val page = chatDatabaseResult {
-                localRunStore.readConversationTimelinePage(
-                    sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
-            }.getOrNull()
-            val conversationEvents = page?.events.orEmpty()
-            val events = if (conversationEvents.isNotEmpty()) conversationEvents else runCatching {
-                val stepEvents = localRunStore.readAllSteps().filter { it.optString("run_id") == runId }.mapIndexed { index, row ->
-                    val step = row.optInt("step", index + 1)
-                    val decisions = row.opt("decisions")?.toString().orEmpty()
-                    val result = row.optString("result", "")
-                    val summary = row.optString("summary", "")
-                    val text = listOfNotNull(
-                        decisions.takeIf(String::isNotBlank)?.let { getString(R.string.history_actions, it) },
-                        result.takeIf(String::isNotBlank)?.let { getString(R.string.history_result, it) },
-                        summary.takeIf(String::isNotBlank)?.let { getString(R.string.history_summary, it) },
-                    ).joinToString("\n")
-                    AgentRunUiEvent(id = index.toLong() + 1, kind = "progress",
-                        stage = getString(R.string.history_step, step), text = text.ifBlank { getString(R.string.history_step_recorded) })
-                }
-                buildList {
-                    historyItem?.let { add(AgentRunUiEvent(0L, "user", text = it.goal)) }
-                    addAll(stepEvents)
-                    historyItem?.let {
-                         add(AgentRunUiEvent(Long.MAX_VALUE, "result", it.outcome,
-                             getString(R.string.history_run_summary, it.outcome, it.steps, it.turns)))
-                    }
-                }
-            }.getOrDefault(emptyList())
-            runOnUiThread {
-                if (requestSerial == timelineRequestSerial && selectedHistoryRunId == runId && conversationSessionId == sessionId) {
-                    val cachedEvents = AgentRunUiState.snapshotForSession(sessionId).events
-                    if (conversationEvents.isNotEmpty() && cachedEvents.isNotEmpty()) {
-                        AgentRunUiState.refreshPersistedSession(sessionId, conversationEvents)
-                    } else {
-                        AgentRunUiState.restoreSession(sessionId, events)
-                    }
-                    timelineHiddenAssistantMessageIds = page?.hiddenAssistantMessageIds.orEmpty()
-                    timelineHiddenTranslationMessageIds = page?.hiddenTranslationMessageIds.orEmpty()
-                    timelineNewerTranslationMessageIds = page?.translationMessageIds.orEmpty()
-                    timelineInvalidatedToolTurnMessageIds = page?.invalidatedToolTurnMessageIds.orEmpty()
-                    timelineProjectionMarkers = page?.projectionMarkers ?: LocalRunStore.TimelineProjectionMarkers()
-                    timelineOlderCursor = page?.olderCursor ?: LocalRunStore.NO_TIMELINE_CURSOR
-                    timelineHasOlder = page?.hasOlder == true
-                    timelineLoading = false
-                }
-            }
-            recoverCrewMissionsAsync(sessionId)
-        }
-    }
-
     private fun restoreConversationSession(requestedSessionId: String) {
         val sessionId = WorkspaceIdentity.CENTRAL_SESSION
         val requestSerial = ++timelineRequestSerial
@@ -1481,7 +1309,7 @@ ${event.text}
                     sessionId, LocalRunStore.NO_TIMELINE_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
             }.getOrNull()
             runOnUiThread {
-                if (requestSerial == timelineRequestSerial && conversationSessionId == sessionId && selectedHistoryRunId == null) {
+                if (requestSerial == timelineRequestSerial && conversationSessionId == sessionId) {
                     if (!targetExists && proactiveTargetMessageId == requestedTarget) proactiveTargetMessageId = null
                     page?.let {
                         val currentEvents = AgentRunUiState.snapshotForSession(sessionId).events
@@ -1499,7 +1327,6 @@ ${event.text}
                         timelineHasOlder = it.hasOlder
                     } ?: run {
                         AgentRunUiState.restoreSession(sessionId, emptyList())
-                        conversationTitle = null
                         timelineHasOlder = false
                         timelineOlderCursor = LocalRunStore.NO_TIMELINE_CURSOR
                     }
@@ -1507,19 +1334,6 @@ ${event.text}
                 }
             }
             recoverCrewMissionsAsync(sessionId)
-            sessionTitleExecutor.execute {
-                val title = if (WorkspaceIdentity.isCentral(sessionId)) getString(R.string.workspace_central_chat)
-                else if (sessionId == ProactiveConversation.SESSION_ID) ProactiveConversation.title(this)
-                else chatDatabaseResult {
-                    localRunStore.readConversationTitle(sessionId)
-                        ?: ConversationTitle.fromFirstMessage(localRunStore.readFirstUserMessage(sessionId))
-                }.getOrNull()
-                runOnUiThread {
-                    if (conversationSessionId == sessionId && selectedHistoryRunId == null && title != null) {
-                        conversationTitle = title
-                    }
-                }
-            }
         }
     }
 
@@ -1528,7 +1342,6 @@ ${event.text}
         if (timelineLoading || !timelineHasOlder || timelineOlderLoading
             || timelineOlderCursor == LocalRunStore.NO_TIMELINE_CURSOR) return
         val cursor = timelineOlderCursor
-        val selectedRunId = selectedHistoryRunId
         val newerInvalidations = timelineInvalidatedToolTurnMessageIds
         val newerProjectionMarkers = timelineProjectionMarkers
         val requestSerial = ++timelineOlderRequestSerial
@@ -1541,7 +1354,7 @@ ${event.text}
             }.getOrNull()
             runOnUiThread {
                 if (requestSerial != timelineOlderRequestSerial || conversationSessionId != sessionId
-                    || timelinePageSessionId != sessionId || selectedHistoryRunId != selectedRunId) return@runOnUiThread
+                    || timelinePageSessionId != sessionId) return@runOnUiThread
                 if (page != null) {
                     AgentRunUiState.prependPersistedSession(
                         sessionId,
@@ -1574,47 +1387,6 @@ ${event.text}
         }
     }
 
-    private fun requestConversationTitle(sessionId: String, submittedMessage: String) {
-        if (WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId)) return
-        sessionTitleExecutor.execute {
-            if (!chatDatabaseResult { localRunStore.claimConversationTitleGeneration(sessionId) }.getOrDefault(false))
-                return@execute
-            try {
-                val firstUserMessage = chatDatabaseResult { localRunStore.readFirstUserMessage(sessionId) }
-                    .getOrNull()?.takeIf(String::isNotBlank) ?: submittedMessage
-                val generatedTitle = runCatching {
-                    val model = CoreAgentModel(applicationContext, "$sessionId-title")
-                    val response = model.complete(
-                        "Generate a concise conversation title in the same language as the user's first message. "
-                                + "Use 3-6 words, maximum 60 characters, sentence case, no emoji. Return only the title.",
-                        emptyList(),
-                        firstUserMessage,
-                        emptyList(),
-                        CancellationToken.uncancellable(),
-                    )
-                    ConversationTitle.normalizeModelTitle(response.text)
-                }.getOrNull()
-                val title = generatedTitle ?: ConversationTitle.fromFirstMessage(firstUserMessage) ?: "Jarvys"
-                if (chatDatabaseResult { localRunStore.appendConversationTitleIfAbsent(sessionId, title) }.getOrDefault(false)) {
-                    runOnUiThread {
-                        if (conversationSessionId == sessionId) conversationTitle = title
-                        refreshRunHistory()
-                    }
-                }
-            } catch (_: RuntimeException) {
-                val fallback = ConversationTitle.fromFirstMessage(submittedMessage) ?: "Jarvys"
-                if (chatDatabaseResult { localRunStore.appendConversationTitleIfAbsent(sessionId, fallback) }.getOrDefault(false)) {
-                    runOnUiThread {
-                        if (conversationSessionId == sessionId) conversationTitle = fallback
-                        refreshRunHistory()
-                    }
-                }
-            } finally {
-                chatDatabaseResult { localRunStore.releaseConversationTitleGeneration(sessionId) }
-            }
-        }
-    }
-
     private fun persistConversationSession(requestedSessionId: String) {
         val sessionId = WorkspaceIdentity.CENTRAL_SESSION
         conversationSessionId = sessionId
@@ -1623,104 +1395,14 @@ ${event.text}
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
             .remove("active_session_id")
             .apply()
-        chatWithoutMemory = getChatPreferences().getBoolean(MemoryUiLogic.sessionMemoryDisabledKey(sessionId), false)
         refreshReflectionUiState(sessionId)
     }
 
-    private fun applyConversationAction(sessionId: String, action: ConversationAction, title: String?) {
-        if (conversationActionPending) return
-        if (conversationActionForbiddenForWorkspace(action, sessionId)) {
-            toast(getString(R.string.workspace_reserved_conversation)); return
-        }
-        if (action == ConversationAction.DELETE && isManagedSystemConversation(sessionId)) {
-            toast(getString(R.string.drawer_system_chat_delete))
-            return
-        }
-        fun blocked() = conversationRemovalBlocked(AgentRunUiState.snapshotForSession(sessionId),
-            attachmentDrafts.isSending(sessionId), activeTranslationMessageId != null,
-            !AgentRunUiState.isRunning(sessionId) && !AgentForegroundService.hasActiveRun(sessionId),
-            CoreAgentRuntime.hasActiveCrewBots(sessionId))
-        val removal = action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE
-        if (removal && blocked()) { toast(getString(R.string.drawer_busy)); return }
-        conversationActionPending = true
-        historyExecutor.execute {
-            val result = runCatching {
-                check(!removal || !blocked()) { "Active work must finish first" }
-                when (action) {
-                    ConversationAction.PIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, true); true }.getOrThrow()
-                    ConversationAction.UNPIN -> chatDatabaseResult { localRunStore.setConversationPinned(sessionId, false); true }.getOrThrow()
-                    ConversationAction.ARCHIVE -> {
-                        PersonalMemoryExtractionWorker.enqueue(this@MainActivity, sessionId, snapshot = true, manual = true)
-                        chatDatabaseResult { localRunStore.setConversationArchived(sessionId, true); true }.getOrThrow()
-                    }
-                    ConversationAction.RESTORE -> chatDatabaseResult { localRunStore.setConversationArchived(sessionId, false); true }.getOrThrow()
-                    ConversationAction.RENAME -> chatDatabaseResult { localRunStore.renameConversation(sessionId, title.orEmpty()); true }.getOrThrow()
-                    ConversationAction.DELETE -> {
-                        val cleaned = chatDatabaseResult { localRunStore.deleteConversation(sessionId) }.getOrThrow()
-                        check(cleaned || chatDatabaseResult { localRunStore.readConversationMetadata(sessionId).deleted }.getOrThrow()) {
-                            "Chat was not deleted"
-                        }
-                        cleaned
-                    }
-                }
-            }.recoverCatching { failure ->
-                if (action == ConversationAction.DELETE
-                    && chatDatabaseResult { localRunStore.readConversationMetadata(sessionId).deleted }.getOrDefault(false)) false
-                else throw failure
-            }
-            val updatedTitle = if (result.isSuccess && action == ConversationAction.RENAME)
-                chatDatabaseResult { localRunStore.readConversationTitle(sessionId) }.getOrNull() else null
-            runOnUiThread {
-                conversationActionPending = false
-                result.onSuccess { cleaned ->
-                    if (conversationActionLeavesCurrent(action, sessionId, conversationSessionId)) {
-                        if (conversationActionNavigatesToAgent(action, sessionId, conversationSessionId)) {
-                            openCentralWorkspaceChat()
-                        } else {
-                            newChat()
-                        }
-                        activeNavController?.navigate(Routes.CHAT) {
-                            popUpTo(Routes.CHAT) { inclusive = true }; launchSingleTop = true
-                        }
-                    } else if (action == ConversationAction.RENAME && sessionId == conversationSessionId) conversationTitle = updatedTitle
-                    refreshRunHistory()
-                    when (action) {
-                        ConversationAction.ARCHIVE -> toast(getString(R.string.drawer_archived_notice))
-                        ConversationAction.RESTORE -> toast(getString(R.string.drawer_restored_notice))
-                        ConversationAction.DELETE -> toast(getString(if (cleaned) R.string.drawer_deleted_notice else R.string.drawer_deleted_partial))
-                        else -> Unit
-                    }
-                }.onFailure { toast(getString(R.string.drawer_action_failed), Toast.LENGTH_LONG) }
-            }
-        }
-    }
-
-    private fun refreshRunHistory() {
+    private fun refreshAgentName() {
         if (!::localRunStore.isInitialized) return
         historyExecutor.execute {
-            val conversations = chatDatabaseResult { localRunStore.listConversations() }.getOrElse { return@execute }
-            val items = conversations.asSequence()
-                .filterNot { it.optString("session_id") == ProactiveConversation.SESSION_ID }
-                .mapNotNull { json ->
-                    val id = json.optString("run_id").takeIf(String::isNotBlank) ?: return@mapNotNull null
-                    RunHistoryItem(
-                        id = id,
-                        goal = json.optString("goal", "Corrida de Jarvys"),
-                        outcome = json.optString("outcome", "UNKNOWN"),
-                        steps = json.optInt("steps", 0),
-                        turns = json.optInt("turns", 0),
-                        timestampSeconds = json.optDouble("timestamp", 0.0),
-                        sessionId = json.optString("session_id").takeIf(String::isNotBlank) ?: id,
-                        title = json.optString("title").takeIf(String::isNotBlank),
-                        pinned = json.optBoolean("pinned", false),
-                        archived = json.optBoolean("archived", false),
-                    )
-                }.toList()
-                .distinctBy { it.sessionId }
-            runOnUiThread {
-                runHistory = items
-                selectedHistoryRunId?.let(::selectHistoryRun)
-            }
+            val name = chatDatabaseResult { ChatDatabaseBridge.getInstance(applicationContext).personalAgentNameSync() }.getOrNull()
+            runOnUiThread { agentName = name }
         }
     }
 
@@ -1735,12 +1417,8 @@ ${event.text}
         @Volatile private var appForeground = false
         @JvmStatic fun isAppForeground(): Boolean = appForeground
         const val STATE_GOAL = "agent_goal_input"
-        const val STATE_HISTORY_RUN = "selected_history_run"
         const val STATE_PROACTIVE_TARGET_MESSAGE = "proactive_target_message"
         const val STATE_OPEN_TASK = "open_scheduled_task_id"
-        const val STATE_SESSION_ID = "chat_session_id"
-        const val STATE_SESSION_TITLE = "chat_session_title"
-        const val STATE_NEW_CHAT = "showing_new_chat"
         const val STATE_SELECTED_SKILLS = "selected_run_skills"
         private const val STATE_PENDING_PHOTOS = "pending_attachment_photos"
         private const val STATE_PENDING_FILES = "pending_attachment_files"
@@ -1760,13 +1438,11 @@ private fun JarvysApp(
     onGoalChange: (String) -> Unit,
     lastRunReport: String,
     agentState: AgentRunUiSnapshot,
-    agentHasUserAttachments: Boolean,
     agentConversationMessageCount: Int,
     agentCrewMissions: List<com.jarvys.agent.crew.CrewMissionSnapshot>,
     workspaceHasActiveWorkForUi: (WorkspaceChatUiState?, AgentRunUiSnapshot?) -> Boolean,
     workspacePauseEnabledForUi: (WorkspaceChatUiState?, String?, Boolean) -> Boolean,
-    runHistory: List<RunHistoryItem>,
-    selectedHistoryRunId: String?,
+    agentName: String?,
     proactiveTargetMessageId: String?,
     timelinePageSessionId: String?,
     timelineLoading: Boolean,
@@ -1777,7 +1453,6 @@ private fun JarvysApp(
     conversationSessionId: String,
     crewMode: CrewMode,
     onCrewModeChange: (CrewMode) -> Unit,
-    conversationTitle: String?,
     memoryEnabled: Boolean,
     memoryCoreCharacters: Int,
     showMemoryDisclosure: Boolean,
@@ -1785,8 +1460,6 @@ private fun JarvysApp(
     reflectionStatus: String,
     reflectionLastSuccessMillis: Long,
     showReflectionDisclosure: Boolean,
-    chatWithoutMemory: Boolean,
-    showingNewChat: Boolean,
     showAgentEvents: Boolean,
     proactiveEnabled: Boolean,
     proactiveStatus: ProactiveStatus,
@@ -1814,8 +1487,6 @@ private fun JarvysApp(
     onAttachmentCamera: () -> Unit,
     onAttachmentPhotos: () -> Unit,
     onAttachmentFiles: () -> Unit,
-    conversationActionPending: Boolean,
-    onConversationAction: (String, ConversationAction, String?) -> Unit,
     onStopRun: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
     onStopTest: () -> Unit,
@@ -1830,7 +1501,6 @@ private fun JarvysApp(
     onReflectionDisclosureDisable: () -> Unit,
     onReflectionDisclosureShow: () -> Unit,
     onReflectionManual: () -> Unit,
-    onMemoryToggleForChat: () -> Unit,
     onManualCompact: () -> Unit,
     onMemoryChanged: () -> Unit,
     onUndoMemoryRevision: (Long) -> Unit,
@@ -1840,16 +1510,13 @@ private fun JarvysApp(
     onShowAgentEventsChange: (Boolean) -> Unit,
     onProactiveEnabledChange: (Boolean) -> Unit,
     onRefreshProactiveStatus: () -> Unit,
-    onSelectHistory: (String?) -> Unit,
-    onNewChat: () -> Unit,
-    onOpenCentral: () -> Unit,
     onWorkspaceControl: (String, String, Long, WorkspaceControlType, String) -> Unit,
     onCaptureContext: () -> Unit,
     onToggleRunSkill: (String) -> Unit,
     onImportSkill: () -> Unit,
     onImportSkillMarkdown: (String) -> Unit,
     onImportSkillGitHub: (String) -> Unit,
-    onHistoryUpdated: () -> Unit,
+    onRunFinished: () -> Unit,
     mcpServerRepository: McpServerRepository,
     mcpConnectionManager: McpConnectionManager,
     mcpOAuthManager: McpOAuthManager,
@@ -1933,7 +1600,7 @@ private fun JarvysApp(
                 singleLine = false,
                 label = { Text(stringResource(R.string.workspace_correction_text)) })
         } },
-        confirmButton = { TextButton(enabled = correctionText.isNotBlank() && !conversationActionPending, onClick = {
+        confirmButton = { TextButton(enabled = correctionText.isNotBlank() && !drawerNavigationPending, onClick = {
             onWorkspaceControl(correctionWorkspace!!, correctionAssignment!!, correctionRevision, WorkspaceControlType.CORRECT, correctionText)
             correctionWorkspace = null; correctionAssignment = null; correctionText = ""
         }) { Text(stringResource(R.string.workspace_send_correction)) } },
@@ -2050,28 +1717,19 @@ private fun JarvysApp(
     var skillImportEntry by remember { mutableStateOf<SkillImportEntryKind?>(null) }
     var skillFileLink by remember { mutableStateOf<SkillFileLink?>(null) }
     var crewBoardReference by remember { mutableStateOf<String?>(null) }
-    val showActiveConversation = (agentState.goal.isNotBlank() || agentHasUserAttachments)
-        && selectedHistoryRunId == null && !showingNewChat
     LaunchedEffect(agentState.runId, agentState.running) {
-        if (!agentState.running && agentState.runId != null) onHistoryUpdated()
+        if (!agentState.running && agentState.runId != null) onRunFinished()
     }
 
-    val chatTitle = when {
-            workspaceChatActive -> workspaceChatState.value?.title?.takeIf(String::isNotBlank)
-                ?: stringResource(R.string.workspace_chat_loading)
-            route == Routes.CHAT && selectedHistoryRunId != null -> runHistory.firstOrNull { it.id == selectedHistoryRunId }
-                ?.let { it.title ?: ConversationTitle.fromFirstMessage(it.goal) ?: it.goal }
-                ?: stringResource(R.string.chat_previous_run)
-            route == Routes.CHAT && showingNewChat -> conversationTitle ?: stringResource(R.string.drawer_new_chat)
-            else -> conversationTitle ?: "Jarvys"
-        }
+    val chatTitle = if (workspaceChatActive) {
+        workspaceChatState.value?.title?.takeIf(String::isNotBlank) ?: stringResource(R.string.workspace_chat_loading)
+    } else stringResource(R.string.workspace_central_chat)
     val routeMeta = AppNavigationBackPolicy.metadata(context, route, chatTitle, routeBotName,
         routeDetailTitle).let { meta ->
         if (workspaceChatActive) meta.copy(title = chatTitle, action = AppRouteAction.CHAT) else meta
     }
 
     val mascotLiveConversationVisible = workspaceChatActive || route == Routes.CHAT
-        && selectedHistoryRunId == null && !showingNewChat
     val visibleConversationSessionId = if (workspaceChatActive) workspaceChatState.value?.executionSessionId
         ?: routeWorkspaceId?.let { runCatching { WorkspaceIdentity.executionSessionId(it) }.getOrNull() }
         else activeWorkspaceCrewSessionId ?: conversationSessionId
@@ -2082,11 +1740,7 @@ private fun JarvysApp(
         centralMascotCentered = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
         mascotVisibleSessionId = visibleConversationSessionId,
         mascotLiveConversationVisible = mascotLiveConversationVisible,
-        conversationActionTitle = chatTitle,
-        canRenameConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId),
-        canDeleteConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId) &&
-            !isManagedSystemConversation(conversationSessionId),
-        conversationActionsEnabled = !conversationActionPending && !drawerNavigationPending,
+        conversationActionsEnabled = !drawerNavigationPending,
         workspaceMenuActionTitle = if (workspaceChatActive) stringResource(R.string.workspace_open_files) else null,
         onWorkspaceMenuAction = {
             routeWorkspaceId?.let { id -> navController.navigate("workspace/${Uri.encode(id)}/files") { launchSingleTop = true } }
@@ -2103,48 +1757,21 @@ private fun JarvysApp(
                 }
             }
         },
-        onConversationAction = onConversationAction,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW
             && route != Routes.WORKSPACE_SESSION_PREVIEW && route != Routes.ARTIFACT_PREVIEW
             && route != Routes.MODULE_ARTIFACT_VIEWER,
         drawerContent = {
             ConversationDrawer(
-                history = runHistory,
-                centralSelected = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
-                onOpenCentral = { navigateFromDrawer { onOpenCentral(); navController.navigate(Routes.CHAT) { launchSingleTop = true } } },
-                onOpenWorkspaces = { navigateFromDrawer { navController.navigate(Routes.WORKSPACES) { launchSingleTop = true } } },
-                workspacesSelected = route == Routes.WORKSPACES || route == Routes.COORDINATED_WORKSPACE || route == Routes.COORDINATED_FILES,
-                isDrawerOpen = drawerState.isOpen,
-                onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
-                activeSessionId = conversationSessionId,
-                activeTitle = conversationTitle,
-                activeGoal = agentState.goal,
-                activeSessionVisible = showActiveConversation,
-                selectedHistoryId = selectedHistoryRunId,
-                isChatRoute = route == Routes.CHAT,
-                actionsEnabled = !conversationActionPending && !drawerNavigationPending,
-                onConversationAction = onConversationAction,
-                onNewConversation = { navigateFromDrawer {
-                    onNewChat()
-                    navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                } },
-                onResumeActive = { navigateFromDrawer {
-                    onSelectHistory(null)
-                    navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                } },
-                onOpenHistory = { runId -> navigateFromDrawer {
-                    onSelectHistory(runId)
-                    navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                } },
-                onOpenScheduledTasks = { navigateFromDrawer {
-                    navController.navigate(Routes.TASKS) { launchSingleTop = true }
-                } },
-                onOpenBots = { navigateFromDrawer {
-                    navController.navigate(Routes.BOTS) { launchSingleTop = true }
+                agentName = agentName ?: stringResource(R.string.app_name),
+                onOpenProfile = { navigateFromDrawer {
+                    navController.navigate(Routes.MEMORY) { launchSingleTop = true }
                 } },
                 onOpenSettings = { navigateFromDrawer {
                     navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
                 } },
+                actionsEnabled = !drawerNavigationPending,
+                isDrawerOpen = drawerState.isOpen,
+                onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
             )
         },
         route = routeMeta,
@@ -2152,19 +1779,13 @@ private fun JarvysApp(
         onBack = { if (!navController.popBackStack()) navController.navigate(Routes.CHAT) { launchSingleTop = true } },
         onOpenDrawer = { scope.launch { drawerState.open() } },
         onOpenSettings = { navController.navigate(Routes.SETTINGS) { launchSingleTop = true } },
-        onNewChat = {
-            onNewChat()
-            navController.navigate(Routes.CHAT) { launchSingleTop = true }
-        },
         onAddServer = { navController.navigate(Routes.MCP_NEW) },
         onImportSkill = { showSkillImportOptions = true },
-        chatWithoutMemory = chatWithoutMemory,
         canCompact = agentConversationMessageCount >= 4
             && !agentState.running && !agentState.compacting,
         compacting = agentState.compacting,
-        canReflect = memoryEnabled && !chatWithoutMemory && !agentState.running && !agentState.compacting
+        canReflect = memoryEnabled && !agentState.running && !agentState.compacting
             && !(agentState.reflecting && agentState.reflectionSessionId == conversationSessionId),
-        onToggleMemory = onMemoryToggleForChat,
         onCompact = onManualCompact,
         onReflect = onReflectionManual,
         bottomBar = {
@@ -2272,8 +1893,8 @@ private fun JarvysApp(
                     onSetupWizard = { navController.navigate(Routes.SETUP_WIZARD) { launchSingleTop = true } },
                     onConnectors = { navController.navigate(Routes.CONNECTORS) { launchSingleTop = true } },
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
-                    archivedChatsAvailable = runHistory.any { it.archived },
-                    onArchivedChats = { navController.navigate(Routes.ARCHIVED_CHATS) { launchSingleTop = true } },
+                    onBots = { navController.navigate(Routes.BOTS) { launchSingleTop = true } },
+                    onScheduledTasks = { navController.navigate(Routes.TASKS) { launchSingleTop = true } },
                     onAccessibilitySettings = onAccessibilitySettings,
                     onNavigate = { destination ->
                         val path = when (destination) {
@@ -2313,7 +1934,7 @@ private fun JarvysApp(
                         onRetryWorkspaces = { if (!workspaceCatalog.loading) {
                             workspaceCatalog = workspaceCatalog.beginRefresh(); workspaceReload++
                         } },
-                        actionsEnabled = !conversationActionPending && !drawerNavigationPending,
+                        actionsEnabled = !drawerNavigationPending,
                         onOpenWorkspace = { id -> navController.navigate("workspace/$id") { launchSingleTop = true } },
                     )
                 }
@@ -2411,17 +2032,13 @@ private fun JarvysApp(
                         timelineEventsState.events.takeIf { timelineEventsState.sessionId == conversationSessionId }
                             .orEmpty()
                     }
-                    val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else conversationSessionId
-                    Crossfade(targetState = conversationKey,
+                    Crossfade(targetState = conversationSessionId,
                         animationSpec = if (LocalReducedMotion.current) androidx.compose.animation.core.snap()
                             else JarvysMotion.placeChange(),
                         label = "chat-conversation-transition") { visibleConversationKey ->
-                        val displayedEvents = remember(selectedSessionEvents, showingNewChat, showAgentEvents) {
-                            when {
-                                showingNewChat -> emptyList()
-                                else -> selectedSessionEvents.filter {
-                                    showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
-                                }
+                        val displayedEvents = remember(selectedSessionEvents, showAgentEvents) {
+                            selectedSessionEvents.filter {
+                                showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
                             }
                         }
                         AgentRunScreen(
@@ -2439,7 +2056,7 @@ private fun JarvysApp(
                             onRetryOlderHistory = onLoadOlderTimeline,
                             targetMessageId = proactiveTargetMessageId,
                             onProactiveSuggestedReply = onProactiveSuggestedReply,
-                            isRunning = agentState.running && selectedHistoryRunId == null && !showingNewChat,
+                            isRunning = agentState.running,
                             emptyReport = null,
                             connectorRegistry = connectorRegistry,
                             onOpenPreview = { projectId ->
@@ -2454,7 +2071,6 @@ private fun JarvysApp(
                                 navController.navigate(destination) { launchSingleTop = true }
                             },
                             onOpenSkillFile = { skillFileLink = it },
-                            chatWithoutMemory = chatWithoutMemory,
                             onUndoMemoryRevision = onUndoMemoryRevision,
                             onUndoReflectionGroup = onUndoReflectionGroup,
                             onTranslateAssistant = onTranslateAssistant,
@@ -2467,9 +2083,8 @@ private fun JarvysApp(
                             activeTranslationMessageId = activeTranslationMessageId,
                             translationErrorMessageId = translationErrorMessageId,
                             translationError = translationError,
-                            streamActive = agentState.running && selectedHistoryRunId == null && !showingNewChat,
-                            allowRegeneration = !agentState.running && !agentState.compacting
-                                && selectedHistoryRunId == null && !showingNewChat,
+                            streamActive = agentState.running,
+                            allowRegeneration = !agentState.running && !agentState.compacting,
                             isCompacting = agentState.compacting && agentState.sessionId == conversationSessionId,
                             compactionStatus = agentState.compactionStatus,
                             isReflecting = agentState.reflecting && agentState.reflectionSessionId == conversationSessionId,
@@ -2484,23 +2099,11 @@ private fun JarvysApp(
                                 }
                             },
                             runSnapshot = agentState,
-                            allowMessageEntrance = selectedHistoryRunId == null && !showingNewChat,
                             showAssistantProgress = MessageReactionTool.isOrdinaryChat(conversationSessionId),
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
                         )
                     }
-                }
-                composable(Routes.ARCHIVED_CHATS) {
-                    ArchivedChatsScreen(
-                        history = runHistory,
-                        actionsEnabled = !conversationActionPending,
-                        onOpenHistory = { runId ->
-                            onSelectHistory(runId)
-                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                        },
-                        onConversationAction = onConversationAction,
-                    )
                 }
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
@@ -2568,8 +2171,7 @@ private fun JarvysApp(
                 crewDestinations(
                     navController = navController,
                     board = crewBoard,
-                    readOnly = { snapshot -> selectedHistoryRunId != null && activeWorkspaceCrewSessionId == null
-                        || CoreAgentRuntime.crewManagerForSession(crewSessionId) == null
+                    readOnly = { snapshot -> CoreAgentRuntime.crewManagerForSession(crewSessionId) == null
                         || snapshot == null },
                     missions = { agentCrewMissions },
                     manager = CoreAgentRuntime.crewManagerForSession(crewSessionId),
@@ -2765,7 +2367,6 @@ internal fun AgentRunScreen(
     connectorRegistry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
     onOpenSkillFile: (SkillFileLink) -> Unit,
-    chatWithoutMemory: Boolean,
     onUndoMemoryRevision: (Long) -> Unit = {},
     onUndoReflectionGroup: (String) -> Unit = {},
     onTranslateAssistant: (AgentRunUiEvent, String) -> Unit = { _, _ -> },
@@ -2807,7 +2408,6 @@ internal fun AgentRunScreen(
         connectorRegistry = connectorRegistry,
         onOpenPreview = onOpenPreview,
         onOpenSkillFile = onOpenSkillFile,
-        chatWithoutMemory = chatWithoutMemory,
         targetMessageId = targetMessageId,
         onProactiveSuggestedReply = onProactiveSuggestedReply,
         onUndoMemoryRevision = onUndoMemoryRevision,

@@ -8,9 +8,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 public class CoreAgentLoopToolAdmissionTest {
@@ -108,16 +106,12 @@ public class CoreAgentLoopToolAdmissionTest {
         assertEquals(3, events.stream().filter(event -> event.stage.equals("tool_not_started")).count());
     }
 
-    @Test public void parallelToolInheritsAndRestoresCallerScopes() {
-        AtomicBoolean privateScopeInTool = new AtomicBoolean();
+    @Test public void parallelToolInheritsNativeDispatchAdmission() {
         AtomicInteger nativeAdmissions = new AtomicInteger();
-        AtomicReference<Thread> scopedWorker = new AtomicReference<>();
         CoreTool scoped = new CoreTool() {
             private final ToolSpec declaration = spec("scoped", Collections.emptyMap(), Collections.emptyList());
             @Override public ToolSpec declaration() { return declaration; }
             @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-                scopedWorker.set(Thread.currentThread());
-                privateScopeInTool.set(AgentErrorReporter.attachmentReportsSuppressed());
                 NativeEffectDispatchScope.beforeDispatch();
                 return CoreToolResult.success("done");
             }
@@ -130,57 +124,13 @@ public class CoreAgentLoopToolAdmissionTest {
                         : new ModelReply("Done", Collections.emptyList()),
                 new CoreToolRegistry(Collections.singletonList(scoped)), "", "tool-scopes");
 
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent();
-             NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmissions::incrementAndGet)) {
+        try (NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmissions::incrementAndGet)) {
             CoreAgentLoop.Result result = loop.run("Run scoped tool", Collections.emptyList(),
                     CancellationToken.uncancellable(), null);
             assertEquals("COMPLETED", result.outcome);
-            assertTrue("the parallel worker inherits private-content suppression", privateScopeInTool.get());
             assertEquals("native dispatch admission is preserved on the worker", 1, nativeAdmissions.get());
-            assertTrue("the caller keeps its scope until its lexical close", AgentErrorReporter.attachmentReportsSuppressed());
         }
-        assertFalse("closing the caller scope restores its thread", AgentErrorReporter.attachmentReportsSuppressed());
-
-        AtomicBoolean leakedSuppression = new AtomicBoolean(true);
-        AtomicReference<Thread> unscopedWorker = new AtomicReference<>();
-        CoreTool unscoped = new CoreTool() {
-            private final ToolSpec declaration = spec("unscoped", Collections.emptyMap(), Collections.emptyList());
-            @Override public ToolSpec declaration() { return declaration; }
-            @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-                unscopedWorker.set(Thread.currentThread());
-                leakedSuppression.set(AgentErrorReporter.attachmentReportsSuppressed());
-                return CoreToolResult.success("done");
-            }
-        };
-        AtomicInteger unscopedModelCalls = new AtomicInteger();
-        CoreAgentLoop unscopedLoop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
-                unscopedModelCalls.incrementAndGet() == 1
-                        ? new ModelReply("", Collections.singletonList(
-                                new ModelReply.Call("unscoped-call", "unscoped", Collections.emptyMap())))
-                        : new ModelReply("Done", Collections.emptyList()),
-                new CoreToolRegistry(Collections.singletonList(unscoped)), "", "tool-scopes-restored");
-
-        assertEquals("COMPLETED", unscopedLoop.run("Run unscoped tool", Collections.emptyList(),
-                CancellationToken.uncancellable(), null).outcome);
-        assertSame("the follow-up call reuses the parallel executor worker", scopedWorker.get(), unscopedWorker.get());
-        assertFalse("the previous run's private-content scope is restored before worker reuse", leakedSuppression.get());
     }
-
-    @Test public void capturedPrivacyScopeRestoresAWorkersPriorValue() {
-        AgentErrorReporter.ScopeSnapshot unscopedSnapshot = AgentErrorReporter.captureScope();
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed());
-        try (AgentErrorReporter.AttachmentScope existingWorkerScope = AgentErrorReporter.suppressForAttachments()) {
-            assertTrue(AgentErrorReporter.attachmentReportsSuppressed());
-            try (AgentErrorReporter.Scope ignored = unscopedSnapshot.install()) {
-                assertFalse("the captured unscoped context replaces a stale worker value",
-                        AgentErrorReporter.attachmentReportsSuppressed());
-            }
-            assertTrue("closing the captured scope restores the worker's previous value",
-                    AgentErrorReporter.attachmentReportsSuppressed());
-        }
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed());
-    }
-
     private static ToolSpec spec(String name, Map<String, String> properties, List<String> required) {
         return new ToolSpec(name, "test", name, "test", ToolSpec.Status.IMPLEMENTED, properties, required);
     }

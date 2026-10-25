@@ -1227,9 +1227,6 @@ internal class ConversationReader(
     suspend fun conversationHasAttachments(conversationId: String): Boolean =
         readProjection { artifacts.conversationHasAttachments(conversationId) }
 
-    suspend fun conversationHasPrivateImagesOrAttachments(conversationId: String): Boolean =
-        readProjection { artifacts.conversationHasPrivateImagesOrAttachments(conversationId) }
-
     private suspend fun <T> readProjection(block: suspend () -> T): T =
         JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction { block() } }
 

@@ -39,11 +39,10 @@ class WorkspaceCentralTopBarComposeTest {
     @Test fun centralMascotIsCenteredAndPreservesMenuActionsWithoutOptingIntoAnimation() {
         val central = mutableStateOf(true)
         var settings = 0
-        var newChat = 0
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalReducedMotion provides true) {
                 JarvysRouteTopBar(AppRouteMeta("Independent title", true, action = AppRouteAction.CHAT), AgentRunUiSnapshot(),
-                    {}, {}, { settings++ }, { newChat++ }, {}, {}, false, false, false, false, {}, {}, {},
+                    {}, {}, { settings++ }, {}, {}, false, false, false, {}, {},
                     mainMascotMode = 2, mascotVisibleSessionId = WorkspaceIdentity.CENTRAL_SESSION,
                     mascotLiveConversationVisible = true, centralMascotCentered = central.value)
             }
@@ -60,9 +59,9 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
         compose.onNodeWithTag("topbar-rename-chat").assertDoesNotExist()
         compose.onNodeWithTag("topbar-delete-chat").assertDoesNotExist()
+        compose.onNodeWithTag("topbar-memory-action").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_new_chat)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).assertDoesNotExist()
-        assertEquals(0, newChat)
         assertEquals(0, settings)
         assertFalse(JarvysMascotProcessConsent.session.optedIn)
         compose.runOnIdle { central.value = false }
@@ -74,4 +73,22 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onAllNodesWithTag("jarvys-account-menu").assertCountEquals(1)
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
     }
-}
+
+    @Test fun manualCompactionAndReflectionStayInTheMenuOfTheSingleConversation() {
+        var compactions = 0
+        var reflections = 0
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalReducedMotion provides true) {
+                JarvysRouteTopBar(AppRouteMeta("Independent title", true, action = AppRouteAction.CHAT), AgentRunUiSnapshot(),
+                    {}, {}, {}, {}, {}, true, false, true, { compactions++ }, { reflections++ },
+                    mainMascotMode = 2, mascotVisibleSessionId = WorkspaceIdentity.CENTRAL_SESSION,
+                    mascotLiveConversationVisible = true, centralMascotCentered = true)
+            }
+        } }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
+        compose.onNodeWithTag("topbar-compaction-action").assertIsEnabled().performClick()
+        assertEquals(1, compactions)
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
+        compose.onNodeWithTag("topbar-reflection-action").assertIsEnabled().performClick()
+        assertEquals(1, reflections)
+    }}

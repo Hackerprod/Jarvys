@@ -70,7 +70,6 @@ class ProactiveSuggestedRepliesComposeTest {
                             connectorRegistry = registry,
                             onOpenPreview = {},
                             onOpenSkillFile = {},
-                            chatWithoutMemory = false,
                             onProactiveSuggestedReply = { id, index ->
                                 selected = id to index
                                 message.value = message.value.copy(proactiveRepliesUsed = true)

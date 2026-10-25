@@ -114,7 +114,7 @@ public final class LocalDiagnostics {
 
     public static void recoverable(Context context, Origin origin, Throwable failure) {
         try {
-            if (context != null && !AgentErrorReporter.attachmentReportsSuppressed()) get(context).record(origin, failure, false);
+            if (context != null) get(context).record(origin, failure, false);
         } catch (Throwable ignored) { }
     }
 
@@ -128,7 +128,7 @@ public final class LocalDiagnostics {
     /** Stores only a validated structural projection for an empty Codex response. */
     static void responseShape(Context context, ResponseDiagnostics.CodexShape shape, int textLength) {
         try {
-            if (context == null || shape == null || AgentErrorReporter.attachmentReportsSuppressed()) return;
+            if (context == null || shape == null) return;
             Context app = context.getApplicationContext();
             if (app != null) get(app).responseShapeRecord(shape, textLength);
         } catch (Throwable ignored) { }
@@ -177,7 +177,6 @@ public final class LocalDiagnostics {
         if (shape == null || textLength < 0 || textLength > ResponseDiagnosticsParser.MAX_BODY_CHARACTERS
                 || Boolean.TRUE.equals(CAPTURING.get())) return false;
         try {
-            if (AgentErrorReporter.attachmentReportsSuppressed()) return false;
             JSONObject value = responseShapeJson(shape, textLength);
             if (value == null) return false;
             CAPTURING.set(true);
@@ -226,7 +225,7 @@ public final class LocalDiagnostics {
     /** Legacy reporting retains only a validated HTTP status; every legacy text argument is discarded. */
     public static void compatibility(Context context, Integer httpStatus) {
         try {
-            if (context != null && !AgentErrorReporter.attachmentReportsSuppressed()) get(context).compatibilityRecord(httpStatus);
+            if (context != null) get(context).compatibilityRecord(httpStatus);
         } catch (Throwable ignored) { }
     }
 
@@ -283,7 +282,6 @@ public final class LocalDiagnostics {
     boolean record(Origin origin, Throwable failure, boolean fatal) {
         if (origin == null || failure == null || Boolean.TRUE.equals(CAPTURING.get())) return false;
         try {
-            if (AgentErrorReporter.attachmentReportsSuppressed()) return false;
             CAPTURING.set(true);
             long now = clock.getAsLong();
             JSONObject row = header(origin, fatal ? "fatal" : "recoverable", "exception", now, null);
@@ -329,7 +327,6 @@ public final class LocalDiagnostics {
     boolean compatibilityRecord(Integer status) {
         if (Boolean.TRUE.equals(CAPTURING.get())) return false;
         try {
-            if (AgentErrorReporter.attachmentReportsSuppressed()) return false;
             CAPTURING.set(true);
             long now = clock.getAsLong();
             return persist(header(Origin.RUNTIME, "recoverable", "compatibility", now, status), now);

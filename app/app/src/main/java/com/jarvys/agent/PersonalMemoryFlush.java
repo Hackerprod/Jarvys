@@ -19,15 +19,12 @@ final class PersonalMemoryFlush {
   private final Context context;
   private final String conversationId;
   private final String sessionKind;
-  private final boolean privateMode;
   private final CoreAgentModel model;
 
-  PersonalMemoryFlush(Context context, String conversationId, String sessionKind,
-                      boolean privateMode, CoreAgentModel model) {
+  PersonalMemoryFlush(Context context, String conversationId, String sessionKind, CoreAgentModel model) {
     this.context = context.getApplicationContext();
     this.conversationId = conversationId;
     this.sessionKind = sessionKind;
-    this.privateMode = privateMode;
     this.model = model;
   }
 
@@ -59,12 +56,9 @@ final class PersonalMemoryFlush {
   }
 
   private boolean eligible() {
-    if (privateMode || !MessageReactionTool.isOrdinaryChat(conversationId)) return false;
-    if (!context.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
-        .getBoolean(MemoryConstants.ENABLED_KEY, true)) return false;
-    LocalRunStore store = new LocalRunStore(context);
-    return !store.conversationHasPrivateImagesOrAttachments(conversationId)
-        && !store.conversationHasPrivateCode(conversationId);
+    if (!MessageReactionTool.isOrdinaryChat(conversationId)) return false;
+    return context.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
+        .getBoolean(MemoryConstants.ENABLED_KEY, true);
   }
 
   private boolean runPass(List<ConversationTurn> transcript, CancellationToken token,
@@ -76,7 +70,7 @@ final class PersonalMemoryFlush {
     boolean sawSuccessfulMemoryWrite = false;
     while (true) {
       token.throwIfCancelled();
-      PersonalAgentPromptContext promptContext = bridge.personalAgentPromptContext(conversationId, false);
+      PersonalAgentPromptContext promptContext = bridge.personalAgentPromptContext(conversationId, true);
       String maintenancePrompt = compactionFlush
           ? promptContext.getCompactionFlushPrompt()
           : promptContext.getOfflineExtractionPrompt() + (snapshot ? "\n" + promptContext.getSnapshotPrompt() : "");

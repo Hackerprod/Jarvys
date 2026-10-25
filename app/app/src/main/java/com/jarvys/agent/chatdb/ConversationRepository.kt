@@ -151,7 +151,6 @@ data class ConversationMetadataValue(
     val generatedTitle: String?,
     val pinned: Boolean,
     val archived: Boolean,
-    val privateCode: Boolean,
     val deleted: Boolean,
     val createdAtMillis: Long?,
     val updatedAtMillis: Long?,
@@ -163,7 +162,6 @@ data class InterruptRequestValue(
     val requestId: String,
     val seq: Long,
     val content: String,
-    val memoryDisabled: Boolean,
     val skills: List<String>,
     val dispatchedMessageId: String?,
     val dispatchedSeq: Long?,
@@ -190,7 +188,7 @@ internal fun readPendingInterruptRows(
         if (requestIds != null) addAll(ids)
     }.toTypedArray()
     val pending = sql.query(
-        "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+        "SELECT r.conversation_id,r.request_id,r.seq,r.content," +
             "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
             "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
             "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
@@ -211,7 +209,7 @@ internal fun readPendingInterruptRows(
             if (dispatchedSeq != null && !ackRequired) continue
             add(InterruptRequestValue(
                 conversationId = cursor.getString(0), requestId = cursor.getString(1), seq = cursor.getLong(2),
-                content = cursor.getString(3), memoryDisabled = cursor.getInt(4) != 0, skills = emptyList(),
+                content = cursor.getString(3), skills = emptyList(),
                 dispatchedMessageId = cursor.getStringOrNull("dispatched_message_id"), dispatchedSeq = dispatchedSeq,
                 inputState = state, inputStateSeq = cursor.getLongOrNull("input_state_seq"),
                 alreadyDispatched = dispatchedSeq != null, acknowledgementRequired = ackRequired,
@@ -282,7 +280,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 val live = findConversation(conversationId)
                 if (live != null) return@withChatReadTransaction ConversationMetadataValue(
                     live.id, live.kind, live.title, live.generated_title, live.pinned, live.archived,
-                    live.private_code, false, live.created_at, live.updated_at, null,
+                    false, live.created_at, live.updated_at, null,
                 )
                 sql.query(
                     "SELECT deleted_at,payload FROM tombstones WHERE scope='conversation' AND entity_id=?",
@@ -297,7 +295,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                         payload?.optString("generated_title")?.takeIf(String::isNotEmpty),
                         payload?.optBoolean("pinned") ?: false,
                         payload?.optBoolean("archived") ?: false,
-                        payload?.optBoolean("private_code") ?: false,
                         true,
                         payload?.optLong("created_at")?.takeIf { it > 0L },
                         payload?.optLong("updated_at")?.takeIf { it > 0L },
@@ -337,8 +334,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (existing != null) return ChatDbResult.Success(existing)
         val now = System.currentTimeMillis()
         sql.execSQL(
-            "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+            "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                "SELECT ?,?,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
             arrayOf(id, kind, now, now, id),
         )
         return findConversation(id)?.let { ChatDbResult.Success(it) }
@@ -355,8 +352,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     }
 
     /**
-     * Provides title/pinned/archived/privateCode updates formerly handled by the file-backed store (`LocalRunStore.java:renameConversation`,
-     * `setConversationPinned`, `setConversationArchived`, `markConversationHasPrivateCode`) and the
+     * Provides title/pinned/archived updates formerly handled by the file-backed store (`LocalRunStore.java:renameConversation`,
+     * `setConversationPinned`, `setConversationArchived`) and the
      * first-wins `role=session_title` row (`LocalRunStore.java:appendConversationTitleIfAbsent`).
      */
     suspend fun updateMetadata(
@@ -365,7 +362,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         generatedTitle: String? = null,
         pinned: Boolean? = null,
         archived: Boolean? = null,
-        privateCode: Boolean? = null,
     ): ChatDbResult<Conversation> = transactionResult {
         if (!isValidConversationId(conversationId)) return@transactionResult ChatDbResult.Invalid("conversation id is invalid")
         if (isTombstonedRaw(conversationId)) return@transactionResult ChatDbResult.Tombstoned
@@ -373,8 +369,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (current == null) {
             val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,'chat',0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'chat',0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId, now, now, conversationId),
             )
             current = findConversation(conversationId) ?: return@transactionResult missingConversation(conversationId)
@@ -385,9 +381,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         sql.execSQL(
             "UPDATE conversations SET title=COALESCE(?,title), " +
                 "generated_title=CASE WHEN generated_title IS NULL OR generated_title='' THEN COALESCE(?,generated_title) ELSE generated_title END, " +
-                "pinned=COALESCE(?,pinned),archived=COALESCE(?,archived)," +
-                "private_code=CASE WHEN ?=1 THEN 1 ELSE private_code END,updated_at=? WHERE id=?",
-            arrayOf(cleanTitle, cleanGenerated, pinned?.asSqlInt(), archived?.asSqlInt(), privateCode?.asSqlInt(), System.currentTimeMillis(), conversationId),
+                "pinned=COALESCE(?,pinned),archived=COALESCE(?,archived),updated_at=? WHERE id=?",
+            arrayOf(cleanTitle, cleanGenerated, pinned?.asSqlInt(), archived?.asSqlInt(), System.currentTimeMillis(), conversationId),
         )
         ChatDbResult.Success(findConversation(conversationId) ?: current)
     }
@@ -401,8 +396,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (findConversation(conversationId) == null) {
             val now = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,'chat',0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'chat',0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
                 arrayOf(conversationId, now, now, conversationId),
             )
         }
@@ -440,7 +435,6 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                     .put("generated_title", it.generated_title)
                     .put("pinned", it.pinned)
                     .put("archived", it.archived)
-                    .put("private_code", it.private_code)
                     .put("created_at", it.created_at)
                     .put("updated_at", it.updated_at)
                     .toString()
@@ -478,8 +472,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             if (isTombstonedRaw(input.conversationId)) return@transactionResult ChatDbResult.Tombstoned
             val nowMillis = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
+                "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,?,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM conversations WHERE id=?)",
                 arrayOf(input.conversationId, input.conversationKind, nowMillis, nowMillis, input.conversationId),
             )
             conversation = findConversation(input.conversationId)
@@ -564,8 +558,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (findConversation(conversationId) == null) {
             val nowMillis = System.currentTimeMillis()
             sql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "SELECT ?,'proactive',0,0,0,?,?,0,1 WHERE NOT EXISTS(" +
+                "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                    "SELECT ?,'proactive',0,0,?,?,0,1 WHERE NOT EXISTS(" +
                     "SELECT 1 FROM conversations WHERE id=? OR EXISTS(" +
                     "SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?))",
                 arrayOf(conversationId, nowMillis, nowMillis, conversationId, conversationId),
@@ -838,14 +832,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         conversationId: String,
         content: String,
         skills: List<String> = emptyList(),
-        memoryDisabled: Boolean = false,
-    ): ChatDbResult<InterruptRequestValue> = appendInterruptRequestInternal(conversationId, content, skills, memoryDisabled)
+    ): ChatDbResult<InterruptRequestValue> = appendInterruptRequestInternal(conversationId, content, skills)
 
     private suspend fun appendInterruptRequestInternal(
         conversationId: String,
         content: String,
         skills: List<String>,
-        memoryDisabled: Boolean,
     ): ChatDbResult<InterruptRequestValue> = transactionResult {
         if (content.isBlank() || content.length > 32000) return@transactionResult ChatDbResult.Invalid("interrupt content is invalid")
         val kind = findConversation(conversationId)?.kind ?: conversationKindForSession(conversationId)
@@ -862,7 +854,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
                 "SELECT skill_id FROM interrupt_request_skills WHERE conversation_id=? AND request_id=? ORDER BY ordinal",
                 arrayOf(conversationId, id),
             ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-            return@transactionResult if (existing.content == content && existing.memoryDisabled == memoryDisabled && existingSkills == skills)
+            return@transactionResult if (existing.content == content && existingSkills == skills)
                 ChatDbResult.Success(existing) else ChatDbResult.Conflict("interrupt request identity has different content")
         }
         if (findMessage(conversationId, id) != null) return@transactionResult ChatDbResult.Conflict("interrupt request id already belongs to a message")
@@ -870,14 +862,14 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val seq = allocateSequence(conversationId)
         insertItem(conversationId, seq, ITEM_INTERRUPT_REQUEST, id, seq, 0, latestTurnAnchor(conversationId), now)
         sql.execSQL(
-            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,created_at) VALUES(?,?,?,?,?,?)",
-            arrayOf(conversationId, id, seq, content, memoryDisabled.asSqlInt(), now),
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,created_at) VALUES(?,?,?,?,?)",
+            arrayOf(conversationId, id, seq, content, now),
         )
         skills.forEachIndexed { index, skill -> sql.execSQL(
             "INSERT INTO interrupt_request_skills(conversation_id,request_id,ordinal,skill_id) VALUES(?,?,?,?)",
             arrayOf(conversationId, id, index, skill),
         ) }
-        ChatDbResult.Success(InterruptRequestValue(conversationId, id, seq, content, memoryDisabled, skills.toList(), null, null, null, null))
+        ChatDbResult.Success(InterruptRequestValue(conversationId, id, seq, content, skills.toList(), null, null, null, null))
     }
 
     /**
@@ -1829,8 +1821,8 @@ class ConversationRepository internal constructor(private val database: JarvysCh
     private fun findConversation(id: String): Conversation? = sql.query("SELECT * FROM conversations WHERE id=?", arrayOf(id)).use { c ->
         if (!c.moveToFirst()) null else Conversation(
             id=c.getString(0), kind=c.getString(1), title=c.getStringOrNull(2), generated_title=c.getStringOrNull(3),
-            pinned=c.getInt(4)!=0, archived=c.getInt(5)!=0, private_code=c.getInt(6)!=0,
-            created_at=c.getLong(7), updated_at=c.getLong(8), last_message_at=c.getLongOrNull(9), message_count=c.getLong(10), next_seq=c.getLong(11),
+            pinned=c.getInt(4)!=0, archived=c.getInt(5)!=0,
+            created_at=c.getLong(6), updated_at=c.getLong(7), last_message_at=c.getLongOrNull(8), message_count=c.getLong(9), next_seq=c.getLong(10),
         )
     }
 
@@ -1874,7 +1866,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         val acknowledgementRequired = dispatchedMessageId?.let { messageId ->
             sql.query("SELECT ack_required FROM messages WHERE conversation_id=? AND message_id=?", arrayOf(conversationId, messageId)).use { row -> row.moveToFirst() && row.getInt(0) != 0 }
         } ?: false
-        return InterruptRequestValue(conversationId, requestId, c.getLong(c.getColumnIndexOrThrow("seq")), c.getString(c.getColumnIndexOrThrow("content")), c.getInt(c.getColumnIndexOrThrow("memory_disabled"))!=0, skills,
+        return InterruptRequestValue(conversationId, requestId, c.getLong(c.getColumnIndexOrThrow("seq")), c.getString(c.getColumnIndexOrThrow("content")), skills,
             dispatchedMessageId, dispatchedSeq, c.getStringOrNull("input_state"), c.getLongOrNull("input_state_seq"), dispatchedSeq != null, acknowledgementRequired)
     }
 
@@ -1955,9 +1947,8 @@ class ConversationRepositoryBlocking(private val repository: ConversationReposit
         generatedTitle: String?,
         pinned: Boolean?,
         archived: Boolean?,
-        privateCode: Boolean?,
     ): ChatDbResult<Conversation> = execute {
-        repository.updateMetadata(conversationId, title, generatedTitle, pinned, archived, privateCode)
+        repository.updateMetadata(conversationId, title, generatedTitle, pinned, archived)
     }
 
     fun appendConversationTitleIfAbsentSync(conversationId: String, title: String?): ChatDbResult<Boolean> =

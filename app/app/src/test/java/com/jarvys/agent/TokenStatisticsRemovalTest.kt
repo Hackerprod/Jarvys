@@ -42,7 +42,6 @@ class TokenStatisticsRemovalTest {
                     connectorRegistry = registry,
                     onOpenPreview = {},
                     onOpenSkillFile = {},
-                    chatWithoutMemory = false,
                 )
             }
         }

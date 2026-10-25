@@ -67,13 +67,10 @@ internal class ConversationModelTurnWriter(
         conversationId: String,
         content: String,
         skills: List<String>,
-        memoryDisabled: Boolean,
     ): ChatDbResult<DispatchedInterrupt> {
         return try {
             database.withChatWriteTransaction {
-                val request = requireSuccess(conversations.appendInterruptRequest(
-                    conversationId, content, skills, memoryDisabled,
-                ))
+                val request = requireSuccess(conversations.appendInterruptRequest(conversationId, content, skills))
                 ChatDbResult.Success(requireSuccess(conversations.dispatchInterruptRequest(conversationId, request.requestId)))
             }
         } catch (abort: CompositeWriteAbort) {

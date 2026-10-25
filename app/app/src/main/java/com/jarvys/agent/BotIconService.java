@@ -86,8 +86,7 @@ public final class BotIconService {
         requireEditable(original, expectedRevision);
         String stagedRef = null;
         boolean committed = false;
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments();
-             CommitGate commitGate = new CommitGate(token)) {
+        try (CommitGate commitGate = new CommitGate(token)) {
             // Forward the complete freeform prompt verbatim. No topic map, role instructions,
             // implicit references, files, chat messages, or previous images are sent.
             authorizeEffect.run();

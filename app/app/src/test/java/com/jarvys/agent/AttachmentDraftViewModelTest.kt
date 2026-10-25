@@ -41,8 +41,8 @@ class AttachmentDraftViewModelTest {
         try {
             val session = UUID.randomUUID().toString()
             model.switchSession(session)
-            assertFalse(model.submit(session, "  ", arrayListOf(), false))
-            assertFalse(model.submit("old-session", "hello", arrayListOf(), false))
+            assertFalse(model.submit(session, "  ", arrayListOf()))
+            assertFalse(model.submit("old-session", "hello", arrayListOf()))
             assertFalse(model.sending.value)
             assertTrue(model.drafts.value.isEmpty())
         } finally { store.clear() }
@@ -100,14 +100,14 @@ class AttachmentDraftViewModelTest {
                 return "persisted-message-id"
             }
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) = Unit
+                skills: ArrayList<String>) = Unit
         }, executor)
         val owner = ViewModelStore().apply { put("attachments", model) }
         try {
             AgentRunUiState.restoreSession(session, emptyList())
             model.switchSession(session)
 
-            assertTrue(model.submit(session, "Visible immediately", arrayListOf(), false))
+            assertTrue(model.submit(session, "Visible immediately", arrayListOf()))
 
             val optimistic = AgentRunUiState.state.value.events.single { it.kind == "user" }
             assertEquals("Visible immediately", optimistic.text)
@@ -137,13 +137,13 @@ class AttachmentDraftViewModelTest {
                 return "must-not-persist"
             }
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) = Unit
+                skills: ArrayList<String>) = Unit
         }, executor)
         val owner = ViewModelStore().apply { put("attachments", model) }
         try {
             AgentRunUiState.restoreSession(session, emptyList())
             model.switchSession(session)
-            assertTrue(model.submit(session, "Stop before saving", arrayListOf(), false))
+            assertTrue(model.submit(session, "Stop before saving", arrayListOf()))
 
             model.cancelSubmission(session)
             model.cancelSubmission(session)
@@ -175,7 +175,7 @@ class AttachmentDraftViewModelTest {
             override fun persistMessage(application: Application, session: String, text: String,
                 attachments: List<ChatAttachment>) = "already-persisted"
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) {
+                skills: ArrayList<String>) {
                 agentStarted.countDown()
                 check(finishAgentStart.await(10, TimeUnit.SECONDS))
             }
@@ -184,7 +184,7 @@ class AttachmentDraftViewModelTest {
         try {
             AgentRunUiState.restoreSession(session, emptyList())
             model.switchSession(session)
-            assertTrue(model.submit(session, "Already saved", arrayListOf(), false))
+            assertTrue(model.submit(session, "Already saved", arrayListOf()))
             assertTrue("agent startup should be reached after persistence", agentStarted.await(10, TimeUnit.SECONDS))
 
             model.cancelSubmission(session)
@@ -222,7 +222,7 @@ class AttachmentDraftViewModelTest {
                 return "message-$session"
             }
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) {
+                skills: ArrayList<String>) {
                 if (session == sessionA) agentAStarted.countDown() else agentBStarted.countDown()
             }
         })
@@ -230,7 +230,7 @@ class AttachmentDraftViewModelTest {
         try {
             AgentRunUiState.restoreSession(sessionA, emptyList())
             model.switchSession(sessionA)
-            assertTrue(model.submit(sessionA, "Slow save", arrayListOf(), false))
+            assertTrue(model.submit(sessionA, "Slow save", arrayListOf()))
             assertTrue("session A should reach the delayed persistence", persistenceAStarted.await(10, TimeUnit.SECONDS))
 
             AgentRunUiState.restoreSession(sessionB, emptyList())
@@ -238,7 +238,7 @@ class AttachmentDraftViewModelTest {
             assertFalse("sending projects only the visible session", model.sending.value)
             assertTrue(model.isSending(sessionA))
             assertTrue("session A must not block a send from session B",
-                model.submit(sessionB, "Save independently", arrayListOf(), false))
+                model.submit(sessionB, "Save independently", arrayListOf()))
             assertTrue(model.isSending(sessionB))
             assertTrue("session B should reach agent startup while A is still held", agentBStarted.await(10, TimeUnit.SECONDS))
             val resultB = runBlocking { withTimeout(10_000) { model.submissions.first() } }
@@ -283,17 +283,17 @@ class AttachmentDraftViewModelTest {
                 return "message-$session"
             }
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) = Unit
+                skills: ArrayList<String>) = Unit
         }, executor)
         val owner = ViewModelStore().apply { put("attachments", model) }
         try {
             AgentRunUiState.restoreSession(sessionA, emptyList())
             model.switchSession(sessionA)
-            assertTrue(model.submit(sessionA, "A stays active", arrayListOf(), false))
+            assertTrue(model.submit(sessionA, "A stays active", arrayListOf()))
             AgentRunUiState.restoreSession(sessionB, emptyList())
             model.switchSession(sessionB)
             assertFalse(model.sending.value)
-            assertTrue(model.submit(sessionB, "Cancel B", arrayListOf(), false))
+            assertTrue(model.submit(sessionB, "Cancel B", arrayListOf()))
 
             model.cancelSubmission(sessionB)
             executor.runNext()
@@ -327,17 +327,17 @@ class AttachmentDraftViewModelTest {
                 return "message-$session"
             }
             override fun startAgent(application: Application, session: String, messageId: String,
-                skills: ArrayList<String>, memoryDisabled: Boolean) = Unit
+                skills: ArrayList<String>) = Unit
         }, executor)
         val owner = ViewModelStore().apply { put("attachments", model) }
         try {
             AgentRunUiState.restoreSession(sessionA, emptyList())
             model.switchSession(sessionA)
-            assertTrue(model.submit(sessionA, "Cancel A", arrayListOf(), false))
+            assertTrue(model.submit(sessionA, "Cancel A", arrayListOf()))
             AgentRunUiState.restoreSession(sessionB, emptyList())
             model.switchSession(sessionB)
             assertFalse(model.sending.value)
-            assertTrue(model.submit(sessionB, "B stays active", arrayListOf(), false))
+            assertTrue(model.submit(sessionB, "B stays active", arrayListOf()))
 
             model.cancelSubmission(sessionA)
             executor.runNext()

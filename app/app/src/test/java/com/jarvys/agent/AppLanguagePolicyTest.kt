@@ -80,11 +80,15 @@ class AppLanguagePolicyTest {
 
     @Test fun activityRetainsConversationIdentityAndDraftAcrossLocaleRecreation() {
         val source = File(projectRoot(), "src/main/java/com/jarvys/agent/MainActivity.kt").readText()
-        assertTrue(source.contains("outState.putString(STATE_SESSION_ID, conversationSessionId)"))
-        assertTrue(source.contains("savedInstanceState?.getString(STATE_SESSION_ID)"))
+        // The identity is the fixed Central session: it is never saved or selected from the Bundle.
+        assertFalse(source.contains("STATE_SESSION_ID"))
+        assertTrue(source.contains("conversationSessionId = WorkspaceIdentity.CENTRAL_SESSION"))
         assertTrue(source.contains("persistConversationSession(conversationSessionId)"))
         assertTrue(source.contains("restoreConversationSession(conversationSessionId)"))
         assertTrue(source.contains("outState.putString(STATE_GOAL, goalInput)"))
+        assertTrue(source.contains("outState.putStringArrayList(STATE_SELECTED_SKILLS"))
+        assertTrue(source.contains("outState.putString(\"attachment_picker_session\""))
+        assertTrue(source.contains("outState.putParcelableArrayList(STATE_PENDING_PHOTOS"))
     }
 
     @Test fun baseManifestPermissionSetIncludesOnlyScopedLegacyDownloadStorage() {

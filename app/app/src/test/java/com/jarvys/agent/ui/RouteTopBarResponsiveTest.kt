@@ -126,10 +126,10 @@ class RouteTopBarResponsiveTest {
                             JarvysRouteTopBar(
                                 route = AppRouteMeta(title, isRoot = true, action = AppRouteAction.CHAT),
                                 agentSnapshot = snapshot,
-                                onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                                onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                                onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                                onAddServer = {}, onImportSkill = {},
                                 canCompact = false, compacting = false, canReflect = false,
-                                onToggleMemory = {}, onCompact = {}, onReflect = {},
+                                onCompact = {}, onReflect = {},
                             )
                         }
                     }

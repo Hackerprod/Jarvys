@@ -1,20 +1,34 @@
 package com.jarvys.agent.workspaces
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
-import com.jarvys.agent.ui.chat.ConversationListRow
-import com.jarvys.agent.ui.chat.ConversationRowMenuAction
 
 /** Reconstructed from delivered v95: catalog presentation does not start workspace execution. */
 @Composable
@@ -86,6 +100,66 @@ fun WorkspaceListScreen(
         if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {
             WorkspacePageButtons(canPreviousWorkspacePage, canFirstWorkspacePage, canNextWorkspacePage,
                 !workspacesLoading && actionsEnabled, onPreviousWorkspacePage, onNextWorkspacePage, onFirstWorkspacePage)
+        }
+    }
+}
+
+private data class ConversationRowMenuAction(
+    val key: String,
+    @androidx.annotation.StringRes val labelResource: Int,
+    val destructive: Boolean = false,
+)
+
+/** Compact catalog row; the chat drawer no longer lists conversations, so only the workspace list uses it. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ConversationListRow(
+    title: String,
+    subtitle: String? = null,
+    selected: Boolean,
+    active: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    actionsEnabled: Boolean,
+    menuActions: List<ConversationRowMenuAction>,
+    onMenuAction: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(modifier.fillMaxWidth().heightIn(min = 62.dp).semantics { role = Role.Button }
+        .combinedClickable(enabled = enabled, onClick = onClick,
+        onLongClick = { if (actionsEnabled && menuActions.isNotEmpty()) menuOpen = true })
+        .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+            else Color.Transparent, RoundedCornerShape(13.dp)).padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+        Box(Modifier.width(3.dp).height(36.dp).background(
+            if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+            RoundedCornerShape(2.dp)))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            subtitle?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        if (menuActions.isNotEmpty()) {
+            Box {
+                IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
+                    Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title),
+                        modifier = Modifier.size(18.dp).testTag("conversation-overflow-horizontal"))
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    menuActions.forEach { action ->
+                        DropdownMenuItem(
+                            modifier = Modifier.testTag("conversation-row-action-${action.key}"),
+                            text = { Text(stringResource(action.labelResource),
+                                color = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) },
+                            onClick = { menuOpen = false; onMenuAction(action.key) },
+                            enabled = actionsEnabled,
+                        )
+                    }
+                }
+            }
         }
     }
 }

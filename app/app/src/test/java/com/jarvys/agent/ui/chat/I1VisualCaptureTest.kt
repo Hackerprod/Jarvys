@@ -88,7 +88,7 @@ class I1VisualCaptureTest {
                             conversationKey = "i1-capture-$fileName", generatedImageSessionId = session,
                             events = listOf(AgentRunUiEvent.messageEvent(1L, "user", "Create a lighthouse image.", 1L), image),
                             isRunning = false, connectorRegistry = connectors,
-                            onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                            onOpenPreview = {}, onOpenSkillFile = {},
                         )
                         "generating" -> {
                             val events = listOf(
@@ -98,7 +98,7 @@ class I1VisualCaptureTest {
                             ConversationTimeline(
                                 conversationKey = "i1-generating-$fileName", generatedImageSessionId = session,
                                 events = events, isRunning = true, connectorRegistry = connectors,
-                                onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                                onOpenPreview = {}, onOpenSkillFile = {},
                                 runSnapshot = AgentRunUiSnapshot(sessionId = session, running = true, events = events),
                             )
                         }

@@ -5,7 +5,6 @@
     <string name="workspace_file_read_only">Read-only file view. Existing readers enforce scope and page limits.</string>
     <string name="workspace_parent_folder">Back to folder</string>
     <string name="workspace_next_page">Next page</string>
-    <string name="workspace_reserved_conversation">Central and workspace identities cannot be archived or deleted as ordinary chats.</string>
     <string name="workspace_control_failed">The workspace control could not be confirmed. Inspect the workspace before trying another action.</string>
     <string name="workspace_correction_target">Workspace %1$s · assignment %2$s</string>
     <string name="workspace_correction_text">Your correction</string>

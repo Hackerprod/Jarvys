@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="drawer_bots">Bots</string>
-    <string name="drawer_pinned_section">Pinned</string>
-    <string name="drawer_current_chats">Current chats</string>
     <string name="bots_title">Bots</string>
     <string name="bots_create">Create bot</string>
     <string name="bots_back">Back</string>
@@ -56,7 +54,6 @@
     <string name="bots_workspace_project">Conversation project</string>
     <string name="bots_workspace_chat">Chat workspace</string>
     <string name="bots_tool_scope_help">Only available tools and enabled skills can be saved. Existing approval rules still apply.</string>
-    <string name="drawer_no_pinned_chats">No pinned chats</string>
     <string name="bots_changed_elsewhere">This bot changed elsewhere. Your edits are still here. Copy them if needed, then reopen the bot before saving.</string>
     <string name="bots_draft_failed">Could not prepare the configuration. Check the selected model and provider, then try again. No bot was saved.</string>
     <string name="bots_icon_prompt_limit">Icon prompt character limit: %1$d.</string>

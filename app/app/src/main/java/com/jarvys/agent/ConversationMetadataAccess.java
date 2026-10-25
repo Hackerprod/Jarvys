@@ -17,14 +17,12 @@ public final class ConversationMetadataAccess {
     public final boolean pinned;
     public final boolean archived;
     public final boolean deleted;
-    public final boolean privateCode;
 
-    Snapshot(String title, boolean pinned, boolean archived, boolean deleted, boolean privateCode) {
+    Snapshot(String title, boolean pinned, boolean archived, boolean deleted) {
       this.title = title;
       this.pinned = pinned;
       this.archived = archived;
       this.deleted = deleted;
-      this.privateCode = privateCode;
     }
   }
 
@@ -63,9 +61,8 @@ public final class ConversationMetadataAccess {
     validateSessionId(sessionId);
     ConversationMetadataValue value = databaseCall(databaseFailureReporter,
         () -> database().readConversationMetadataSync(sessionId));
-    if (value == null) return new Snapshot(null, false, false, false, false);
-    return new Snapshot(value.getTitle(), value.getPinned(), value.getArchived(), value.getDeleted(),
-        value.getPrivateCode());
+    if (value == null) return new Snapshot(null, false, false, false);
+    return new Snapshot(value.getTitle(), value.getPinned(), value.getArchived(), value.getDeleted());
   }
 
   public static String normalizeTitle(String title) {
@@ -110,20 +107,14 @@ public final class ConversationMetadataAccess {
       case "pinned":
         ChatDatabaseBridge.requireSuccessSync(
             databaseCall(databaseFailureReporter,
-                () -> bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null, null)),
+                () -> bridge.updateMetadataSync(sessionId, null, null, (Boolean) value, null)),
             "Could not update pinned state");
         return;
       case "archived":
         ChatDatabaseBridge.requireSuccessSync(
             databaseCall(databaseFailureReporter,
-                () -> bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value, null)),
+                () -> bridge.updateMetadataSync(sessionId, null, null, null, (Boolean) value)),
             "Could not update archived state");
-        return;
-      case "privateCode":
-        ChatDatabaseBridge.requireSuccessSync(
-            databaseCall(databaseFailureReporter,
-                () -> bridge.updateMetadataSync(sessionId, null, null, null, null, Boolean.TRUE.equals(value))),
-            "Could not update conversation privacy state");
         return;
       default:
         throw new IllegalArgumentException("Unsupported conversation metadata field: " + key);

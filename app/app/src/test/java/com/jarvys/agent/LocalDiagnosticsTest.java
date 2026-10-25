@@ -488,15 +488,11 @@ public class LocalDiagnosticsTest {
         assertFalse(pending.exists());
     }
 
-    @Test public void cancellationPrivateScopesAndReentrantCaptureAreSilent() throws Exception {
+    @Test public void cancellationAndReentrantCaptureAreSilent() throws Exception {
         assertFalse(store.record(LocalDiagnostics.Origin.RUNTIME, new CancellationException("CANARY"), false));
         assertFalse(store.record(LocalDiagnostics.Origin.RUNTIME, new InterruptedException("CANARY"), false));
         assertFalse(store.record(LocalDiagnostics.Origin.RUNTIME,
                 new IllegalStateException(new CancellationException("CANARY")), false));
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
-            assertFalse(store.record(LocalDiagnostics.Origin.RUNTIME, failure(), false));
-            assertFalse(store.compatibilityRecord(500));
-        }
         assertFalse(directory().exists());
         RuntimeException reentrant = new RuntimeException() {
             @Override public synchronized Throwable getCause() {

@@ -40,7 +40,6 @@ public class ConnectorArtifactAccessTest {
         assertFalse(result.toString().contains(context.getFilesDir().getPath()));
         assertFalse(result.has("data"));
         assertFalse(result.has("bytes"));
-        assertTrue(new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(session));
     }
     @Test public void unchangedDownloadIsIdempotentAndByteCopyIsImmutable() throws Exception {
         JSONObject first = publish("data.bin", "application/octet-stream", CancellationToken.uncancellable());

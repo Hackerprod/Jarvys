@@ -12,6 +12,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -247,12 +248,12 @@ class JarvysChatDatabaseM0Test {
         ))
         val sqlite = database.testChatSql
         sqlite.execSQL(
-            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq,created_at) VALUES(?,?,?,?,?,?,?)",
-            arrayOf<Any?>(conversationId, "pending-1", 1L, "first", 0, null, 1.25),
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,dispatched_seq,created_at) VALUES(?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-1", 1L, "first", null, 1.25),
         )
         sqlite.execSQL(
-            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq,created_at) VALUES(?,?,?,?,?,?,?)",
-            arrayOf<Any?>(conversationId, "pending-2", 2L, "second", 0, null, 2.25),
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,dispatched_seq,created_at) VALUES(?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-2", 2L, "second", null, 2.25),
         )
 
         val indexSql = sqlite.query(
@@ -307,9 +308,9 @@ class JarvysChatDatabaseM0Test {
         }.isFailure)
         assertConstraint {
             database.testChatSql.execSQL(
-                "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                arrayOf<Any?>(id, "chat", 0, 0, 0, 1L, 1L, 0L, 1L),
+                "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 1L, 1L, 0L, 1L),
             )
         }
         assertEquals(99L, scalarLong(
@@ -317,6 +318,17 @@ class JarvysChatDatabaseM0Test {
             "SELECT deleted_at FROM tombstones WHERE scope='conversation' AND entity_id=?",
             arrayOf(id),
         ))
+    }
+
+    @Test
+    fun privacyColumnsAreNotPartOfTheSchema() = onDatabaseThread {
+        val sqlite = database.testChatSql
+        fun columns(table: String) = sqlite.query("PRAGMA table_info('$table')").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name"))) }
+        }
+        assertFalse("memory_disabled" in columns("interrupt_requests"))
+        assertFalse("private_code" in columns("conversations"))
+        assertTrue("content" in columns("interrupt_requests"))
     }
 
     @Test
@@ -359,9 +371,9 @@ class JarvysChatDatabaseM0Test {
         // allowed-replace-fixture: exercise the abort trigger that prevents REPLACE from cascading children.
         assertConstraintMessage("INSERT OR REPLACE conversation", "conversation_exists") {
             sqlite.execSQL(
-                "INSERT OR REPLACE INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " + // allowed-replace-fixture
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                arrayOf<Any?>(id, "chat", 0, 0, 0, 2L, 2L, 0L, 1L),
+                "INSERT OR REPLACE INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " + // allowed-replace-fixture
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(id, "chat", 0, 0, 2L, 2L, 0L, 1L),
             )
         }
         assertEquals(1L, rowCount(sqlite, "conversation_items"))
@@ -941,7 +953,7 @@ class JarvysChatDatabaseM0Test {
                 assertEquals("hello after reset", storedMessage!!.text)
 
                 val personalAgent = PersonalAgentRepository(migrated)
-                val initialized = personalAgent.promptContext("", privateMode = false)
+                val initialized = personalAgent.promptContext("", memoryEnabled = true)
                 assertTrue("PersonalAgentRepository.initialize did not seed profile/docs", initialized.identity.contains("Jarvys"))
                 val receipt = personalAgent.saveMemory(
                     text = "The user prefers concise replies",
@@ -1597,7 +1609,7 @@ class JarvysChatDatabaseM0Test {
         type.equals("REAL", true) -> 98_765.4321
         type.contains("INT", ignoreCase = true) -> when (name) {
             "ordinal", "sort_sub", "schema_version" -> 0
-            "memory_disabled", "allow_dismiss", "assistant_progress", "preview_expected", "resume_required", "can_resume" -> 1
+            "allow_dismiss", "assistant_progress", "preview_expected", "resume_required", "can_resume" -> 1
             else -> 1L
         }
         else -> "${table}_$name"

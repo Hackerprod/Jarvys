@@ -92,8 +92,8 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
         if (exists) return
         val now = System.currentTimeMillis()
         sql.execSQL(
-            "INSERT INTO conversations(id,kind,pinned,archived,private_code,created_at,updated_at,message_count,next_seq) " +
-                "SELECT ?,?,0,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
+            "INSERT INTO conversations(id,kind,pinned,archived,created_at,updated_at,message_count,next_seq) " +
+                "SELECT ?,?,0,0,?,?,0,1 WHERE NOT EXISTS(SELECT 1 FROM tombstones WHERE scope='conversation' AND entity_id=?)",
             arrayOf(conversationId, kind, now, now, conversationId),
         )
         val created = sql.query("SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?)", arrayOf(conversationId))

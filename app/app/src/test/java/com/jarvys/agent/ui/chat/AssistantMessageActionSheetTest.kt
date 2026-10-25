@@ -41,7 +41,7 @@ class AssistantMessageActionSheetTest {
                     conversationKey = "ux2-action-sheet",
                     events = listOf(AgentRunUiEvent.messageEvent(1L, "assistant", text, 1L)),
                     isRunning = false, connectorRegistry = connectors,
-                    onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                    onOpenPreview = {}, onOpenSkillFile = {},
                 )
             }
         }
@@ -70,7 +70,7 @@ class AssistantMessageActionSheetTest {
                         AgentRunUiEvent.messageEvent(3L, "assistant", "Current answer", 3L),
                     ),
                     isRunning = true, connectorRegistry = connectors,
-                    onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                    onOpenPreview = {}, onOpenSkillFile = {},
                 )
             }
         }

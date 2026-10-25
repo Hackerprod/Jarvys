@@ -513,7 +513,6 @@ class M1bRepositoriesTest {
         assertTrue(artifacts.findChatFile("files", "delivered", "artifact-1") is ChatFileOwnership.Delivered)
         assertEquals(listOf("artifact-1"), artifacts.artifactsForConversation("files").map { it.artifact_id })
         assertFalse(artifacts.conversationHasAttachments("files"))
-        assertTrue(artifacts.conversationHasPrivateImagesOrAttachments("files"))
 
         val completed = success(artifacts.appendGeneratedImage(GeneratedImageInput(
             conversationId = "files", prompt = "mountain", status = "COMPLETED", imagePath = "chats/files/image.png",

@@ -73,7 +73,7 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
         candidates: List<PersonalMemoryCandidate>,
         token: CancellationToken,
     ) {
-        val context = bridge.personalAgentPromptContext("", false, "principal")
+        val context = bridge.personalAgentPromptContext("", true, "principal")
         val sourceIds = candidates.map { it.id }
         val records = candidates.joinToString("\n") { candidate ->
             "<note id=\"${xml(candidate.id)}\" importance=\"${candidate.importance}\">${xml(PersonalMemoryFlush.redactSecrets(candidate.text))}</note>"

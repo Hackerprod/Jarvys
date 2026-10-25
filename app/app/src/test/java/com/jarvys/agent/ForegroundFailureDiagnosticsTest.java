@@ -56,15 +56,6 @@ public class ForegroundFailureDiagnosticsTest {
         assertFalse(row.toString().contains("/private/path"));
         assertSame(prior, Thread.getDefaultUncaughtExceptionHandler());
     }
-    @Test public void privateContentAndAttachmentScopesStillSuppressServiceCapture() throws Exception {
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
-            LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.SERVICE, failure());
-        }
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
-            LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.SERVICE, failure());
-        }
-        assertEquals(0, store.snapshot(null, 10, true).getJSONArray("records").length());
-    }
     @Test public void cancellationAndWrappedCancellationStillDoNotCreateServiceRecords() throws Exception {
         LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.SERVICE, new CancellationException("CANARY"));
         LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.SERVICE,

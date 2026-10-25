@@ -125,7 +125,7 @@ class LinuxApprovalCaptureTest {
                             ConversationTimeline(
                                 conversationKey = "l1-$name", generatedImageSessionId = "l1-capture",
                                 events = events, isRunning = true, connectorRegistry = connectors,
-                                onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                                onOpenPreview = {}, onOpenSkillFile = {},
                                 allowMessageEntrance = false,
                             )
                         }

@@ -71,10 +71,10 @@ public final class AgentForegroundService extends Service {
   MainChatRunner mainChatRunner = (runtime, goal, history, attachments, token, progress) ->
       runtime.runMainChat(goal, history, attachments, token, progress);
   interface RuntimeFactory {
-    CoreAgentRuntime create(Context context, String sessionId, List<SkillEntry> skills, boolean memoryDisabled);
+    CoreAgentRuntime create(Context context, String sessionId, List<SkillEntry> skills);
   }
-  RuntimeFactory runtimeFactory = (context, session, skills, memoryDisabled) ->
-      new CoreAgentRuntime(context, session, skills, CorePromptBudget.standard(), memoryDisabled);
+  RuntimeFactory runtimeFactory = (context, session, skills) ->
+      new CoreAgentRuntime(context, session, skills, CorePromptBudget.standard());
   volatile Runnable beforeInterruptAdmissionForTesting;
   volatile Runnable beforeGenerationBindForTesting;
   volatile Runnable afterPendingInputRecoveryScanForTesting;
@@ -594,17 +594,7 @@ public final class AgentForegroundService extends Service {
 
   public static void startRealAgent(
       Context context, String goal, ArrayList<String> skillIds, String sessionId) {
-    startRealAgentInternal(context, goal, skillIds, sessionId, goal, false, false);
-  }
-
-  public static void startRealAgent(
-      Context context,
-      String goal,
-      ArrayList<String> skillIds,
-      String sessionId,
-      boolean memoryDisabledForConversation) {
-    startRealAgentInternal(
-        context, goal, skillIds, sessionId, goal, false, memoryDisabledForConversation);
+    startRealAgentInternal(context, goal, skillIds, sessionId, goal, false);
   }
 
   public static void startRealAgentFromChat(
@@ -614,7 +604,7 @@ public final class AgentForegroundService extends Service {
       String sessionId,
       String originalUserMessage) {
     startRealAgentInternal(
-        context, taskGoal, skillIds, sessionId, originalUserMessage, true, false);
+        context, taskGoal, skillIds, sessionId, originalUserMessage, true);
   }
 
   /** Replays durable conversation inputs after process/service recovery. */
@@ -638,11 +628,9 @@ public final class AgentForegroundService extends Service {
       Context context,
       String sessionId,
       String userMessageId,
-      ArrayList<String> skillIds,
-      boolean memoryDisabled) {
+      ArrayList<String> skillIds) {
     Intent intent = storedChatMessageIntent(context, sessionId, userMessageId);
     intent.putStringArrayListExtra("agent_skill_ids", skillIds);
-    intent.putExtra("chat_memory_disabled", memoryDisabled);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
     else context.startService(intent);
   }
@@ -671,8 +659,7 @@ public final class AgentForegroundService extends Service {
       String prompt,
       ArrayList<String> skillIds,
       String sessionId,
-      String userMessageId,
-      boolean memoryDisabledForConversation) {
+      String userMessageId) {
     startRealAgentInternal(
         context,
         prompt,
@@ -680,7 +667,6 @@ public final class AgentForegroundService extends Service {
         sessionId,
         prompt,
         true,
-        memoryDisabledForConversation,
         true,
         userMessageId);
   }
@@ -691,8 +677,7 @@ public final class AgentForegroundService extends Service {
       ArrayList<String> skillIds,
       String sessionId,
       String displayGoal,
-      boolean userMessageAlreadyRecorded,
-      boolean memoryDisabledForConversation) {
+      boolean userMessageAlreadyRecorded) {
     startRealAgentInternal(
         context,
         goal,
@@ -700,7 +685,6 @@ public final class AgentForegroundService extends Service {
         sessionId,
         displayGoal,
         userMessageAlreadyRecorded,
-        memoryDisabledForConversation,
         false,
         "");
   }
@@ -712,11 +696,10 @@ public final class AgentForegroundService extends Service {
       String sessionId,
       String displayGoal,
       boolean userMessageAlreadyRecorded,
-      boolean memoryDisabledForConversation,
       boolean regeneration,
       String userMessageId) {
     startRealAgentInternal(context, goal, skillIds, sessionId, displayGoal,
-        userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration, userMessageId, "");
+        userMessageAlreadyRecorded, regeneration, userMessageId, "");
   }
 
   private static void startRealAgentInternal(
@@ -726,7 +709,6 @@ public final class AgentForegroundService extends Service {
       String sessionId,
       String displayGoal,
       boolean userMessageAlreadyRecorded,
-      boolean memoryDisabledForConversation,
       boolean regeneration,
       String userMessageId,
       String followUpRequestId) {
@@ -738,7 +720,6 @@ public final class AgentForegroundService extends Service {
             .putExtra("chat_session_id", sessionId)
             .putExtra("agent_display_goal", displayGoal == null ? "" : displayGoal)
             .putExtra("chat_user_message_recorded", userMessageAlreadyRecorded)
-            .putExtra("chat_memory_disabled", memoryDisabledForConversation)
             .putExtra("chat_regeneration", regeneration)
             .putExtra("chat_user_message_id", userMessageId == null ? "" : userMessageId)
             .putExtra("chat_follow_up_request_id", followUpRequestId == null ? "" : followUpRequestId)
@@ -751,7 +732,7 @@ public final class AgentForegroundService extends Service {
 
   /** Persist a steering message for the active main-chat loop to consume at its next checkpoint. */
   public static boolean interruptAndSend(Context context, String sessionId, String text,
-      ArrayList<String> skills, boolean memoryDisabled) {
+      ArrayList<String> skills) {
     AgentForegroundService service = currentInstance;
     if (sessionId == null || !MessageReactionTool.isOrdinaryChat(sessionId)
         || text == null || text.trim().isEmpty()) return false;
@@ -776,7 +757,7 @@ public final class AgentForegroundService extends Service {
       LocalRunStore store = new LocalRunStore(context);
       final String requestId;
       try {
-        requestId = store.appendAndDispatchInterruptRequest(sessionId, text, skills, memoryDisabled);
+        requestId = store.appendAndDispatchInterruptRequest(sessionId, text, skills);
       } catch (RuntimeException failure) {
         AgentErrorReporter.reportChatDatabaseFailure(context, failure);
         return false;
@@ -920,7 +901,7 @@ public final class AgentForegroundService extends Service {
             ConversationInput input = store.readConversationInput(sessionId, messageId);
             if (input == null || input.origin != ConversationInput.Origin.AGENT) return;
             runRealAgent(active.token, "", new ArrayList<>(), sessionId, "", true,
-                false, false, messageId);
+                false, messageId);
           } catch (RuntimeException earlyFailure) {
             if (!(earlyFailure instanceof CancellationException) && !active.token.isCancellationRequested()) {
               recordEarlyFailedAgentInputStart(sessionId, messageId);
@@ -1040,8 +1021,7 @@ public final class AgentForegroundService extends Service {
     String messageId = latest.optString("requestId", "");
     String text = latest.optString("content", "");
     try {
-      startRealAgentInternal(this, "", skills, sessionId, text, true,
-          latest.optBoolean("memoryDisabled", false), false, messageId, messageId);
+      startRealAgentInternal(this, "", skills, sessionId, text, true, false, messageId, messageId);
     } catch (CancellationException cancelled) {
       releaseFollowUpClaim(sessionId, messageId);
       throw cancelled;
@@ -1276,8 +1256,6 @@ public final class AgentForegroundService extends Service {
     if (displayGoal == null || displayGoal.isEmpty()) displayGoal = agentGoal;
     boolean chatMessageRecorded =
         intent != null && intent.getBooleanExtra("chat_user_message_recorded", false);
-    boolean chatMemoryDisabled =
-        intent != null && intent.getBooleanExtra("chat_memory_disabled", false);
     boolean chatRegeneration = intent != null && intent.getBooleanExtra("chat_regeneration", false);
     String chatUserMessageId = intent == null ? "" : intent.getStringExtra("chat_user_message_id");
     String chatFollowUpRequestId = intent == null ? "" : intent.getStringExtra("chat_follow_up_request_id");
@@ -1286,7 +1264,6 @@ public final class AgentForegroundService extends Service {
     final String chatAgentGoal = agentGoal == null ? "" : agentGoal;
     final String chatDisplayGoal = displayGoal == null ? "" : displayGoal;
     final boolean userMessageAlreadyRecorded = chatMessageRecorded;
-    final boolean memoryDisabledForConversation = chatMemoryDisabled;
     final boolean regeneration = chatRegeneration;
     final String existingUserMessageId = chatUserMessageId == null ? "" : chatUserMessageId;
     final String followUpRequestId = chatFollowUpRequestId == null ? "" : chatFollowUpRequestId;
@@ -1402,7 +1379,7 @@ public final class AgentForegroundService extends Service {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else {
             runRealAgent(active.token, chatAgentGoal, runSkillIds, chatSessionId, chatDisplayGoal,
-                userMessageAlreadyRecorded, memoryDisabledForConversation, regeneration,
+                userMessageAlreadyRecorded, regeneration,
                 internalInputSubmission ? internalRunInputId : existingUserMessageId);
           }
         } catch (RuntimeException earlyFailure) {
@@ -1527,12 +1504,8 @@ public final class AgentForegroundService extends Service {
       }
       CoreAgentModel model = new CoreAgentModel(this, sessionId);
       List<SkillEntry> skills = SkillRepository.Companion.get(this).enabledForRun();
-      boolean memoryDisabled =
-          getSharedPreferences("jarvys_chat", MODE_PRIVATE)
-              .getBoolean(MemoryUiLogic.INSTANCE.sessionMemoryDisabledKey(sessionId), false);
       CoreAgentRuntime runtime =
-          new CoreAgentRuntime(
-              this, sessionId, skills, CorePromptBudget.standard(), memoryDisabled);
+          new CoreAgentRuntime(this, sessionId, skills, CorePromptBudget.standard());
       int contextWindow = model.contextWindow(token);
       ConversationCompactor compactor = new ConversationCompactor(
           sessionId, model, store, true, runtime.compactionMemoryLifecycle(model));
@@ -1581,7 +1554,6 @@ public final class AgentForegroundService extends Service {
       String sessionId,
       String displayGoal,
       boolean userMessageAlreadyRecorded,
-      boolean memoryDisabledForConversation,
       boolean regeneration,
       String existingUserMessageId) {
     // Mission lifetime is independent of elapsed wall time. STOP still owns cancellation.
@@ -1597,7 +1569,6 @@ public final class AgentForegroundService extends Service {
     final AtomicReference<String> assistantOwnerMessageId =
         new AtomicReference<>(existingUserMessageId == null ? "" : existingUserMessageId);
     final AtomicBoolean assistantOwnerInternal = new AtomicBoolean(internalInput);
-    AgentErrorReporter.AttachmentScope privateContentScope = null;
     MainChatTurnContextProvider steeringProvider = null;
     try {
       token.throwIfCancelled();
@@ -1623,10 +1594,6 @@ public final class AgentForegroundService extends Service {
       }
       goal = goal == null ? "" : goal;
       displayGoal = displayGoal == null ? "" : displayGoal;
-      if (conversationStore.conversationHasPrivateImagesOrAttachments(sessionId)
-          || conversationStore.conversationHasPrivateCode(sessionId)) {
-        privateContentScope = AgentErrorReporter.suppressForPrivateContent();
-      }
       if (internalInput) AgentRunUiState.beginSystemServiceRun(sessionId, token.generation());
       else AgentRunUiState.beginServiceRun(sessionId, displayGoal.trim(), attachments, regeneration,
           token.generation(), userMessageId);
@@ -1647,7 +1614,7 @@ public final class AgentForegroundService extends Service {
               : skills.selectedForRun(selectedSkillIds);
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
-      CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills, memoryDisabledForConversation);
+      CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
       runtime.setMainChatSteeringCursor(userMessageId == null ? "" : userMessageId);
       runtime.setCurrentUserMessageId(internalInput ? "" : userMessageId);
       runtime.setCurrentTurnOwnerMessageId(userMessageId);
@@ -1862,8 +1829,8 @@ public final class AgentForegroundService extends Service {
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
     } catch (RuntimeException failure) {
       if (!token.isCancelled()) {
-        // Preserve bounded structural evidence inside the existing private-content scope.
-        // The recorder never retains messages, bodies, filenames or arbitrary stack text.
+        // Preserve bounded structural evidence only. The recorder never retains messages, bodies,
+        // filenames or arbitrary stack text.
         LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
       }
       boolean stopped = token.isStoppedByUser();
@@ -1919,7 +1886,6 @@ public final class AgentForegroundService extends Service {
           clearMainChatSteeringProvider(steeringProvider);
         }
       }
-      if (privateContentScope != null) privateContentScope.close();
       if (token.isTimedOut()) Thread.interrupted();
       com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
       try {

@@ -100,7 +100,7 @@ class AttachmentDraftViewModel internal constructor(
         pending.attachment?.let { attachmentIo.execute { runCatching { store.deleteAttachment(session, it) } } }
     }
 
-    fun submit(session: String, text: String, skills: ArrayList<String>, memoryDisabled: Boolean): Boolean {
+    fun submit(session: String, text: String, skills: ArrayList<String>): Boolean {
         val pending = synchronized(lock) {
             if (session != sessionId || session in activeSubmissions) return false
             val pending = mutableDrafts.value
@@ -133,7 +133,7 @@ class AttachmentDraftViewModel internal constructor(
                     persisted = true
                     attempt.cancellation.markPersisted()
                     AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticEventId)
-                    messageSubmitter.startAgent(getApplication(), session, messageId, skills, memoryDisabled)
+                    messageSubmitter.startAgent(getApplication(), session, messageId, skills)
                 } catch (failure: Exception) {
                     error = message(if (failure is CancellationException && !persisted) R.string.chat_attachment_send_cancelled
                         else R.string.chat_attachment_send_failed)
@@ -276,13 +276,13 @@ class AttachmentDraftViewModel internal constructor(
 
 internal interface AttachmentMessageSubmitter {
     fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>): String
-    fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>, memoryDisabled: Boolean)
+    fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>)
 }
 
 private object LocalAttachmentMessageSubmitter : AttachmentMessageSubmitter {
     override fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>) =
         LocalRunStore(application).appendConversationMessage(session, "user", text, attachments)
 
-    override fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>, memoryDisabled: Boolean) =
-        AgentForegroundService.startRealAgentFromStoredChatMessage(application, session, messageId, skills, memoryDisabled)
+    override fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>) =
+        AgentForegroundService.startRealAgentFromStoredChatMessage(application, session, messageId, skills)
 }

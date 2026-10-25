@@ -146,7 +146,7 @@ class AgentForegroundServiceMainThreadAdmissionTest {
         val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
         val service = controller.get()
         service.beforeGenerationBindForTesting = Runnable { generationBinds.incrementAndGet() }
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _ ->
             CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
         }
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, history, _, _, progress ->

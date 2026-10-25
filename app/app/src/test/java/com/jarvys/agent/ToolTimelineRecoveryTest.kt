@@ -116,7 +116,7 @@ class ToolTimelineRecoveryTest {
                     if (preview != null) WorkspacePreviewScreen(preview)
                     else AgentRunScreen(conversationKey = session, events = timeline, isRunning = false,
                         emptyReport = null, connectorRegistry = registry,
-                        onOpenPreview = { selectedPreview.value = it }, onOpenSkillFile = {}, chatWithoutMemory = false)
+                        onOpenPreview = { selectedPreview.value = it }, onOpenSkillFile = {})
                 }
             }
         }

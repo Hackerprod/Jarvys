@@ -127,26 +127,4 @@ public class WorkspaceAttachmentRecoveryTest {
         assertThrows(IllegalStateException.class, () -> AttachmentModelContext.requireVision(context, "text-only", false));
         AttachmentModelContext.requireVision(context, "unknown", null);
     }
-
-    @Test public void diagnosticSuppressionNestsRestoresAndIsThreadOwned() throws Exception {
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed());
-        AgentErrorReporter.AttachmentScope outer = AgentErrorReporter.suppressForAttachments();
-        assertTrue(AgentErrorReporter.attachmentReportsSuppressed());
-        try (AgentErrorReporter.AttachmentScope inner = AgentErrorReporter.suppressForPrivateContent()) {
-            // A null Context would crash normal reporting. The guard must return before accessing it.
-            AgentErrorReporter.report(null, "test", "model", 400, "private", "private", "type", "private");
-            final Throwable[] error = {null};
-            Thread other = new Thread(() -> {
-                assertFalse(AgentErrorReporter.attachmentReportsSuppressed());
-                try { outer.close(); } catch (Throwable failure) { error[0] = failure; }
-            });
-            other.start();
-            other.join();
-            assertTrue(error[0] instanceof IllegalStateException);
-        }
-        assertTrue(AgentErrorReporter.attachmentReportsSuppressed());
-        outer.close();
-        outer.close();
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed());
-    }
 }

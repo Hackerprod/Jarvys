@@ -125,10 +125,10 @@ class Ux3VisualCaptureTest {
                             route = AppRouteMeta("A long conversation title at large text size", true,
                                 action = AppRouteAction.CHAT),
                             agentSnapshot = AgentRunUiSnapshot(running = true),
-                            onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                            onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                            onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                            onAddServer = {}, onImportSkill = {},
                             canCompact = false, compacting = false, canReflect = false,
-                            onToggleMemory = {}, onCompact = {}, onReflect = {},
+                            onCompact = {}, onReflect = {},
                         )
                     }
                 }
@@ -172,10 +172,10 @@ class Ux3VisualCaptureTest {
                         drawerState = rememberDrawerState(DrawerValue.Closed), drawerContent = {},
                         route = AppRouteMeta("Conversation about rollout", true, action = AppRouteAction.CHAT),
                         agentSnapshot = AgentRunUiSnapshot(running = true, events = events),
-                        onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
-                        onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                        onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, 
+                        onAddServer = {}, onImportSkill = {},
                         canCompact = false, compacting = false, canReflect = false,
-                        onToggleMemory = {}, onCompact = {}, onReflect = {},
+                        onCompact = {}, onReflect = {},
                         bottomBar = {
                             ChatComposer(
                                 goal = composerText,
@@ -192,8 +192,7 @@ class Ux3VisualCaptureTest {
                             Box(Modifier.fillMaxWidth().weight(1f)) {
                                 ConversationTimeline(
                                     conversationKey = "ux3-floating-chat-$dark-$scrollHistory-$composerText", events = events, isRunning = false,
-                                    connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                                    chatWithoutMemory = false, runSnapshot = AgentRunUiSnapshot(events = events),
+                                    connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, runSnapshot = AgentRunUiSnapshot(events = events),
                                     allowMessageEntrance = false,
                                 )
                             }

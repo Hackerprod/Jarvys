@@ -38,7 +38,7 @@ final class ImportProjectImageTool implements CoreTool {
     @Override public CoreToolResult execute(Map<String,Object> args, CancellationToken token) {
         token.throwIfCancelled();
         if (token.isCrewRun() || !BotCatalogTool.isAvailable(context, 0, session)) return CoreToolResult.failure("Image import is available only in the main chat");
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
+        try {
             if (args == null || !Arrays.asList("image_ref", "path", "expected_sha256", "expected_scope_version", "max_bytes").containsAll(args.keySet()))
                 return CoreToolResult.failure("Unexpected image import argument");
             if (new LocalRunStore(context).readConversationMetadata(session).deleted) return CoreToolResult.failure("Conversation was deleted");

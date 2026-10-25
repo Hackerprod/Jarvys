@@ -191,8 +191,7 @@ class AssistantTextSelectionTest {
             ConversationTimeline("translation-selection", events = listOf(
                 event(1L, "assistant", "Original response excluded"),
                 event(2L, "assistant_translation", translated).copy(stage = "Spanish translation", detail = "original-id")),
-                isRunning = false, connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                chatWithoutMemory = false, onHideTranslation = { hidden = it })
+                isRunning = false, connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, onHideTranslation = { hidden = it })
         }
         select(translated, "clara")
         handles().assertCountEquals(2)
@@ -270,8 +269,8 @@ class AssistantTextSelectionTest {
             JarvysShellFrame(drawerState = rememberDrawerState(DrawerValue.Closed), drawerContent = {},
                 route = AppRouteMeta("Selection regression", true, action = AppRouteAction.CHAT),
                 agentSnapshot = AgentRunUiSnapshot(), onBack = {}, onOpenDrawer = {}, onOpenSettings = {},
-                onNewChat = {}, onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
-                canCompact = false, compacting = false, canReflect = false, onToggleMemory = {}, onCompact = {}, onReflect = {},
+                onAddServer = {}, onImportSkill = {},
+                canCompact = false, compacting = false, canReflect = false, onCompact = {}, onReflect = {},
                 bottomBar = {
                     ChatComposer(goal = goal, onGoalChange = { goal = it }, onSend = { sends++ }, onStop = {},
                         onSelectModel = {}, modelLabel = "Local model", running = false, captureContextRequested = false,
@@ -280,7 +279,7 @@ class AssistantTextSelectionTest {
                         crewMode = CrewMode.OFF, onCrewModeChange = {}, onOpenCrew = {})
                 }) {
                 ConversationTimeline("long-selection", events = listOf(event(1L, "assistant", longAnswer)),
-                    isRunning = false, connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false)
+                    isRunning = false, connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {})
             }
         }
         val node = awaitText(tail)

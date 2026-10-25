@@ -195,7 +195,6 @@ internal fun ChatCanvasBenchmarkScreen(onClose: () -> Unit) {
                 connectorRegistry = ConnectorRegistry.get(context),
                 onOpenPreview = {},
                 onOpenSkillFile = {},
-                chatWithoutMemory = false,
                 onLoadOlderHistory = {},
                 hasOlderHistory = false,
                 benchmarkListState = listState,

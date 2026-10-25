@@ -182,7 +182,7 @@ class ConversationRepositoryTest {
         val a1 = append("steering", "assistant", "a1")
         val u2 = append("steering", "user", "u2")
         val a2 = append("steering", "assistant", "a2")
-        val interrupt = success(repository.appendInterruptRequest("steering", "follow-up", listOf("skill"), true))
+        val interrupt = success(repository.appendInterruptRequest("steering", "follow-up", listOf("skill")))
         assertEquals("the steering request keeps its ordered skills", listOf("skill"), interrupt.skills)
         val dispatched = success(repository.dispatchInterruptRequest("steering", interrupt.requestId))
         assertTrue("the first dispatch inserts the steering message", dispatched.inserted)
@@ -576,7 +576,7 @@ class ConversationRepositoryTest {
                 "message-1", "message-2", "plan", "plan", "plan", "999999", "999999", "plan",
             ),
             "pending-interrupts" to explain(
-                "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+                "SELECT r.conversation_id,r.request_id,r.seq,r.content," +
                     "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
                     "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
                     "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
@@ -587,7 +587,7 @@ class ConversationRepositoryTest {
                     "WHERE r.seq<=c.next_seq-1 ORDER BY r.conversation_id,r.seq",
             ),
             "pending-interrupts-conversation" to explain(
-                "SELECT r.conversation_id,r.request_id,r.seq,r.content,r.memory_disabled," +
+                "SELECT r.conversation_id,r.request_id,r.seq,r.content," +
                     "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_message_id END AS dispatched_message_id," +
                     "CASE WHEN r.dispatched_seq<=c.next_seq-1 THEN r.dispatched_seq END AS dispatched_seq," +
                     "CASE WHEN r.input_state_seq<=c.next_seq-1 THEN r.input_state END AS input_state," +
@@ -1571,7 +1571,7 @@ class ConversationRepositoryTest {
         success(repository.updateMetadata("first-user", generatedTitle = "later generated title"))
         success(repository.ensureConversation("metadata"))
         append("metadata", "user", "other prompt")
-        success(repository.updateMetadata("metadata", generatedTitle = "ignored", pinned = true, archived = true, privateCode = true))
+        success(repository.updateMetadata("metadata", generatedTitle = "ignored", pinned = true, archived = true))
         success(repository.renameConversation("metadata", "  manual\n  title\t"))
         success(repository.ensureConversation("system", "proactive"))
         success(repository.ensureConversation("tasks", "tasks"))
@@ -1597,9 +1597,6 @@ class ConversationRepositoryTest {
         assertEquals("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <metadata.title> to equal <\"manual title\">", "manual title", metadata.title)
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <metadata.pinned> to be true", metadata.pinned)
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <metadata.archived> to be true", metadata.archived)
-        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <success(repository.ensureConversation(\"metadata\")).private_code> to be true", success(repository.ensureConversation("metadata")).private_code)
-        success(repository.updateMetadata("metadata", privateCode = false))
-        assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <success(repository.ensureConversation(\"metadata\")).private_code> to be true", success(repository.ensureConversation("metadata")).private_code)
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <repository.renameConversation(\"metadata\", \" \\t \") is ChatDbResult.Invalid> to be true", repository.renameConversation("metadata", " \t ") is ChatDbResult.Invalid)
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.none { it.id in setOf(\"system\", \"tasks\") }> to be true", rows.none { it.id in setOf("system", "tasks") })
         assertTrue("drawerSummaryUsesMetadataThenGeneratedThenFirstUserAndExcludesSpecialKinds: expected <rows.any { it.id == \"central\" }> to be true", rows.any { it.id == "central" })

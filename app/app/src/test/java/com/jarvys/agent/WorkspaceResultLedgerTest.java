@@ -235,7 +235,7 @@ public class WorkspaceResultLedgerTest {
                 "Old mission snapshot", "RUNNING", "old synthesis", 10L, 0L,
                 Collections.emptyList(), Collections.emptyList()));
 
-        String steeringId = store.appendInterruptRequest(session, "Steer the current run", Collections.emptyList(), false);
+        String steeringId = store.appendInterruptRequest(session, "Steer the current run", Collections.emptyList());
         store.dispatchInterruptRequest(session, steeringId);
         store.appendConversationMessage(session, "assistant", "Continued after steering", 0L,
                 "steering-run", steeringId, "COMPLETED");

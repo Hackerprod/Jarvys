@@ -248,7 +248,6 @@ class SingleSessionStartupTest {
         putString("agent_goal_input", "draft before reset")
         putStringArrayList("selected_run_skills", arrayListOf("selected-before-reset"))
         putString("attachment_picker_session", "old-conversation")
-        putString("chat_session_title", "saved title")
         putString("proactive_target_message", "saved-target")
         putString("open_scheduled_task_id", "saved-task")
     }
@@ -258,7 +257,6 @@ class SingleSessionStartupTest {
         assertEquals("draft before reset", state.getString("agent_goal_input"))
         assertEquals(listOf("selected-before-reset"), state.getStringArrayList("selected_run_skills"))
         assertEquals(WorkspaceIdentity.CENTRAL_SESSION, state.getString("attachment_picker_session"))
-        assertEquals("saved title", state.getString("chat_session_title"))
         assertEquals("saved-target", state.getString("proactive_target_message"))
         assertEquals("saved-task", state.getString("open_scheduled_task_id"))
     }

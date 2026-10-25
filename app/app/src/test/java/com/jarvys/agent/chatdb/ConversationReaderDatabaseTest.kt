@@ -189,11 +189,10 @@ class ConversationReaderDatabaseTest {
         assertEquals("yes", decision.optionId)
         assertEquals(listOf("yes", "no"), decision.options.map { it.id })
 
-        val request = success(conversations.appendInterruptRequest(id, "please clarify", listOf("skill-a"), memoryDisabled = true))
+        val request = success(conversations.appendInterruptRequest(id, "please clarify", listOf("skill-a")))
         val pending = reader.pendingInterruptRequests(id).single()
         assertEquals(request.requestId, pending.requestId)
         assertEquals(listOf("skill-a"), pending.skills)
-        assertTrue(pending.memoryDisabled)
         val dispatch = success(conversations.dispatchInterruptRequest(id, request.requestId))
         assertTrue(dispatch.message.acknowledgementRequired)
         val dispatchedPending = reader.pendingInterruptRequests(id).single()
@@ -254,7 +253,7 @@ class ConversationReaderDatabaseTest {
             id, "timeline-choice", "Choose", "Select a source", true,
             listOf(DecisionOptionInput("open", "Open")),
         ))
-        val interrupt = success(conversations.appendInterruptRequest(id, "add another source", emptyList(), false))
+        val interrupt = success(conversations.appendInterruptRequest(id, "add another source", emptyList()))
 
         val initial = reader.readRecentConversationTimeline(id, 10)
         val progressAndPending = initial.events.single { it.id == batchSeq }

@@ -51,7 +51,6 @@ class ToolGroupScrollStabilityTest {
         compose.setContent { MaterialTheme {
             ConversationTimeline(conversationKey = session, events = events.value, isRunning = running.value,
                 connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                chatWithoutMemory = false,
                 runSnapshot = AgentRunUiSnapshot(sessionId = session, events = events.value, running = running.value))
         } }
 
@@ -126,8 +125,7 @@ class ToolGroupScrollStabilityTest {
         val connectors = registry()
         compose.setContent { MaterialTheme {
             ConversationTimeline(conversationKey = session, events = events.value, isRunning = true,
-                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                chatWithoutMemory = false, benchmarkListState = listState,
+                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, benchmarkListState = listState,
                 runSnapshot = AgentRunUiSnapshot(sessionId = session, events = events.value, running = true))
         } }
 
@@ -170,8 +168,7 @@ class ToolGroupScrollStabilityTest {
         val connectors = registry()
         compose.setContent { MaterialTheme {
             ConversationTimeline(conversationKey = session, events = events.value, isRunning = true,
-                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
-                chatWithoutMemory = false, benchmarkListState = listState,
+                connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, benchmarkListState = listState,
                 runSnapshot = AgentRunUiSnapshot(sessionId = session, events = events.value, running = true))
         } }
 

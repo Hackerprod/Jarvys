@@ -242,12 +242,12 @@ public class MainAgentContractTest {
   @Test public void pendingInputIsDurableInertAndOnlyDispatchedOnce() throws Exception {
     File files=chatTestStore.newFilesDirectory(); LocalRunStore store=chatTestStore.localRunStore(files);
     store.appendConversationMessage("interrupt","user","old");
-    String id=store.appendInterruptRequest("interrupt","new instruction",Collections.singletonList("skill"),true);
+    String id=store.appendInterruptRequest("interrupt","new instruction",Collections.singletonList("skill"));
     LocalRunStore reopened=chatTestStore.localRunStore(files);
     assertEquals(1,reopened.readConversationMessages("interrupt").size());
     assertEquals(1,reopened.loadConversationContext("interrupt").size());
     assertEquals(1,reopened.readConversationTimeline("interrupt").stream().filter(e->"QUEUED".equals(e.getStage())).count());
-    assertTrue(reopened.dispatchInterruptRequest("interrupt",id).getBoolean("memoryDisabled"));
+    assertFalse(reopened.dispatchInterruptRequest("interrupt",id).has("memoryDisabled"));
     org.json.JSONObject duplicate = reopened.dispatchInterruptRequest("interrupt",id);
     assertNotNull(duplicate);
     assertTrue(duplicate.getBoolean("alreadyDispatched"));
@@ -259,7 +259,7 @@ public class MainAgentContractTest {
 
   @Test public void pendingInputNeverCrossesConversations() throws Exception {
     LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
-    String id=store.appendInterruptRequest("chat-one","change direction",Collections.emptyList(),false);
+    String id=store.appendInterruptRequest("chat-one","change direction",Collections.emptyList());
     assertNull(store.dispatchInterruptRequest("chat-two",id));
     assertTrue(store.loadConversationContext("chat-two").isEmpty());
     assertEquals(1,store.readConversationTimeline("chat-one").size());
@@ -267,15 +267,15 @@ public class MainAgentContractTest {
 
   @Test public void repeatedTextHasDistinctRequestIdentity() throws Exception {
     LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
-    String a=store.appendInterruptRequest("same","same text",Collections.emptyList(),false);
-    String b=store.appendInterruptRequest("same","same text",Collections.emptyList(),false);
+    String a=store.appendInterruptRequest("same","same text",Collections.emptyList());
+    String b=store.appendInterruptRequest("same","same text",Collections.emptyList());
     assertNotEquals(a,b); assertNotNull(store.dispatchInterruptRequest("same",a)); assertNotNull(store.dispatchInterruptRequest("same",b));
     assertEquals(2,store.readConversationMessages("same").size());
   }
 
   @Test public void invalidReplacementDoesNotPersist() throws Exception {
     LocalRunStore store=chatTestStore.localRunStore(chatTestStore.newFilesDirectory());
-    try { store.appendInterruptRequest("main"," ",Collections.emptyList(),false); fail(); } catch (IllegalArgumentException expected) { }
+    try { store.appendInterruptRequest("main"," ",Collections.emptyList()); fail(); } catch (IllegalArgumentException expected) { }
     assertTrue(store.readConversationTimeline("main").isEmpty());
   }
 

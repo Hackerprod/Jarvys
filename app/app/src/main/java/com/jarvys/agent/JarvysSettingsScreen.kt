@@ -29,8 +29,8 @@ fun JarvysSettingsScreen(
     onMemory: () -> Unit,
     onAccessibilitySettings: () -> Unit,
     onNavigate: (JarvysSettingsPage) -> Unit,
-    archivedChatsAvailable: Boolean = false,
-    onArchivedChats: () -> Unit = {},
+    onBots: () -> Unit = {},
+    onScheduledTasks: () -> Unit = {},
     onModules: () -> Unit = {},
     onSetupWizard: () -> Unit = {},
 ) = SettingsWorkspace(
@@ -54,8 +54,8 @@ fun JarvysSettingsScreen(
     onMemory = onMemory,
     onAccessibilitySettings = onAccessibilitySettings,
     onNavigate = onNavigate,
-    archivedChatsAvailable = archivedChatsAvailable,
-    onArchivedChats = onArchivedChats,
+    onBots = onBots,
+    onScheduledTasks = onScheduledTasks,
     onModules = onModules,
     onSetupWizard = onSetupWizard,
 )

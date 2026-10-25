@@ -31,7 +31,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import com.jarvys.agent.AppRouteMeta
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AgentRunUiSnapshot
-import com.jarvys.agent.ConversationAction
 import com.jarvys.agent.LocalChatComposerInset
 import com.jarvys.agent.LocalChatHeaderInset
 
@@ -44,14 +43,11 @@ fun JarvysShellFrame(
     onBack: () -> Unit,
     onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit,
-    onNewChat: () -> Unit,
     onAddServer: () -> Unit,
     onImportSkill: () -> Unit,
-    chatWithoutMemory: Boolean,
     canCompact: Boolean,
     compacting: Boolean,
     canReflect: Boolean,
-    onToggleMemory: () -> Unit,
     onCompact: () -> Unit,
     onReflect: () -> Unit,
     bottomBar: @Composable () -> Unit,
@@ -60,11 +56,7 @@ fun JarvysShellFrame(
     mascotVisibleSessionId: String? = null,
     mascotLiveConversationVisible: Boolean = false,
     centralMascotCentered: Boolean = false,
-    conversationActionTitle: String? = null,
-    canRenameConversation: Boolean = false,
-    canDeleteConversation: Boolean = false,
     conversationActionsEnabled: Boolean = true,
-    onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
     workspaceMenuActionTitle: String? = null,
     onWorkspaceMenuAction: () -> Unit = {},
     workspaceBotsActionTitle: String? = null,
@@ -103,14 +95,11 @@ fun JarvysShellFrame(
                     onBack = onBack,
                     onOpenDrawer = onOpenDrawer,
                     onOpenSettings = onOpenSettings,
-                    onNewChat = onNewChat,
                     onAddServer = onAddServer,
                     onImportSkill = onImportSkill,
-                    chatWithoutMemory = chatWithoutMemory,
                     canCompact = canCompact,
                     compacting = compacting,
                     canReflect = canReflect,
-                    onToggleMemory = onToggleMemory,
                     onCompact = onCompact,
                     onReflect = onReflect,
                     centralMascotCentered = centralMascotCentered,
@@ -119,11 +108,7 @@ fun JarvysShellFrame(
                     mascotLiveConversationVisible = mascotLiveConversationVisible,
                     mascotSurfaceVisible = drawerState.isClosed && drawerState.targetValue == DrawerValue.Closed
                         && !drawerState.isAnimationRunning,
-                    conversationActionTitle = conversationActionTitle,
-                    canRenameConversation = canRenameConversation,
-                    canDeleteConversation = canDeleteConversation,
                     conversationActionsEnabled = conversationActionsEnabled,
-                    onConversationAction = onConversationAction,
                     workspaceMenuActionTitle = workspaceMenuActionTitle,
                     onWorkspaceMenuAction = onWorkspaceMenuAction,
                     workspaceBotsActionTitle = workspaceBotsActionTitle,

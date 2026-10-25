@@ -106,7 +106,7 @@ class ContinuousMissionServiceTest {
             }, tools, "English test instructions", session, CorePromptBudget.standard(), null,
                 CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }, null)
-        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _ ->
             CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
         }
         AgentRunUiState.beginRun(session, "Continue a long task")

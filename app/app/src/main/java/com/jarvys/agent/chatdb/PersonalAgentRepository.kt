@@ -57,9 +57,16 @@ private data class MemoryJobRow(
 class PersonalAgentRepository internal constructor(private val database: JarvysChatDatabase) {
     private val sql get() = database.chatSql
 
+    /** The name shown in the drawer profile header. Read-only: it never seeds the default profile. */
+    suspend fun agentName(): String? = database.withChatReadTransaction {
+        sql.query("SELECT name FROM agent_profiles WHERE id='default' LIMIT 1").use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0).takeIf(String::isNotBlank) else null
+        }
+    }
+
     suspend fun promptContext(
         conversationId: String,
-        privateMode: Boolean,
+        memoryEnabled: Boolean,
         sessionKind: String = "principal",
     ): PersonalAgentPromptContext {
         initialize()
@@ -84,8 +91,8 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
             sql.query("SELECT kind,content FROM agent_docs WHERE agent_id='default'").use { cursor ->
                 while (cursor.moveToNext()) docs[cursor.getString(0)] = cursor.getString(1)
             }
-            val includeProfile = !privateMode && kind in setOf("principal", "task", "proactive")
-            val includeMemory = !privateMode && kind == "principal"
+            val includeProfile = memoryEnabled && kind in setOf("principal", "task", "proactive")
+            val includeMemory = memoryEnabled && kind == "principal"
             val directives = if (!includeProfile) emptyList() else sql.query(
                 "SELECT id,directive FROM user_directives WHERE scope='user' AND status='active' ORDER BY section,observed_at,id",
             ).use { cursor -> buildList { while (cursor.moveToNext()) add("[directive_id=${cursor.getString(0)}] ${cursor.getString(1)}") } }

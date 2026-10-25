@@ -77,7 +77,7 @@ class AgentRunRestorationComposeTest {
                 Box(Modifier.fillMaxSize()) {
                     AgentRunScreen(conversationKey = session, events = timeline, isRunning = false,
                         emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
-                        onOpenSkillFile = {}, chatWithoutMemory = false)
+                        onOpenSkillFile = {})
                 }
             }
         }
@@ -115,7 +115,6 @@ class AgentRunRestorationComposeTest {
                         connectorRegistry = registry,
                         onOpenPreview = {},
                         onOpenSkillFile = {},
-                        chatWithoutMemory = false,
                     )
                 }
             }

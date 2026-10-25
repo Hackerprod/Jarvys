@@ -68,7 +68,6 @@ data class InterruptRequest(
     val request_id: String,
     val seq: Long,
     val content: String,
-    val memory_disabled: Boolean,
     val dispatched_message_id: String? = null,
     val dispatched_seq: Long? = null,
     /** Input status can precede dispatch when the receipt names the request rather than a message. */

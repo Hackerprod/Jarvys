@@ -42,24 +42,12 @@ class PersonalMemoryExtractionWorker(
             return@withContext Result.success()
         }
         val preferences = applicationContext.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
-        val chatPreferences = applicationContext.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
         if (!preferences.getBoolean(MemoryConstants.ENABLED_KEY, true)
-            || chatPreferences.getBoolean(MemoryUiLogic.sessionMemoryDisabledKey(conversationId), false)
             || !manual && !MemoryReflectionPreferences(applicationContext).enabled()) {
             return@withContext Result.success()
         }
 
         val runStore = LocalRunStore(applicationContext)
-        try {
-            if (runStore.conversationHasPrivateImagesOrAttachments(conversationId)
-                || runStore.conversationHasPrivateCode(conversationId)) return@withContext Result.success()
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: RuntimeException) {
-            AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
-            return@withContext Result.retry()
-        }
-
         val bridge = ChatDatabaseBridge.getInstance(applicationContext)
         var jobId: String? = null
         val owner = UUID.randomUUID().toString()
@@ -85,7 +73,6 @@ class PersonalMemoryExtractionWorker(
                     applicationContext,
                     conversationId,
                     "principal",
-                    false,
                     model,
                 ).runOffline(transcript, token, job.type == TYPE_SNAPSHOT)
                 token.throwIfCancelled()

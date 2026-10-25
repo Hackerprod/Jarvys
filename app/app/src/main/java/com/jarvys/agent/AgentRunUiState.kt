@@ -1,7 +1,9 @@
 package com.jarvys.agent
 
 import com.jarvys.agent.crew.CrewMissionSnapshot
+import com.jarvys.agent.proactive.ProactiveConversation
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
+import com.jarvys.agent.tasks.ScheduledTaskConversation
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -425,18 +427,9 @@ data class AgentRunUiPresenceSummary(
 }
 
 
-data class RunHistoryItem(
-    val id: String,
-    val goal: String,
-    val outcome: String,
-    val steps: Int,
-    val turns: Int,
-    val timestampSeconds: Double,
-    val sessionId: String = id,
-    val title: String? = null,
-    val pinned: Boolean = false,
-    val archived: Boolean = false,
-)
+/** Proactive and scheduled-task threads are written by the app, never by the user's own messages. */
+internal fun isManagedSystemConversation(sessionId: String): Boolean =
+    sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID
 
 /** Bridges the foreground service's existing AgentLoop progress callback into a Compose-observable StateFlow. */
 object AgentRunUiState {

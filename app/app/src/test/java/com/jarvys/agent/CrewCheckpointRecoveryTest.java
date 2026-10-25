@@ -47,7 +47,6 @@ public class CrewCheckpointRecoveryTest {
         assertEquals(7, saved.loop.transcript.get(0).originalMessageIndex);
         assertTrue(saved.loop.appliedIncomingIds.contains("message-one"));
         assertFalse(saved.loop.transcript.get(1).content.contains("transcript-secret"));
-        assertTrue(new ConversationMetadataAccess(root).read("chat-one").privateCode);
         assertEquals(1, store.list("chat-one").size());
         assertTrue(store.listIssues("chat-one").isEmpty());
     }

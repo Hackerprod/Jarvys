@@ -89,7 +89,7 @@ final class ProjectImageTool implements CoreTool {
     }
 
     @Override public CoreToolResult execute(Map<String,Object> arguments, CancellationToken token) {
-        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForPrivateContent()) {
+        try {
             token.throwIfCancelled(); guard();
             if (arguments == null || !Arrays.asList("action", "path", "prompt", "expected_sha256", "expected_scope_version", "size", "max_bytes", "reference_images").containsAll(arguments.keySet()))
                 return CoreToolResult.failure("Unexpected project_image argument");

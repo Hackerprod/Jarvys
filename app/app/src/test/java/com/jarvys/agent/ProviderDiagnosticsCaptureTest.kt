@@ -44,7 +44,6 @@ class ProviderDiagnosticsCaptureTest {
         instanceField.set(null, store)
         secretField.set(null, SecretStore(context.getSharedPreferences("ux45-provider-secrets", Context.MODE_PRIVATE)
             .also { it.edit().clear().commit() }))
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed())
         assertEquals(0, records().size)
     }
 
@@ -123,57 +122,10 @@ class ProviderDiagnosticsCaptureTest {
         assertTrue(records().isEmpty())
     }
 
-    @Test fun privateCodeSuppressionIsStillActiveAtTheInnerCatchForAllEntryPoints() {
-        LocalRunStore(context).markConversationHasPrivateCode(session)
-        Entry.values().forEach { entry ->
-            val failure = IllegalStateException("Synthetic private source canary")
-            val provider = FakeProvider {
-                assertTrue(AgentErrorReporter.attachmentReportsSuppressed())
-                throw failure
-            }
-            assertSame(failure, runCatching {
-                invoke(entry, CoreAgentModel(context, provider, session))
-            }.exceptionOrNull())
-            assertEquals(1, provider.calls)
-            assertTrue(records().isEmpty())
-            assertFalse("Private scope must unwind after capture", AgentErrorReporter.attachmentReportsSuppressed())
-        }
-        // Positive control: a later non-private request is still recorded.
-        val provider = FakeProvider { throw IllegalStateException("Synthetic public failure") }
-        runCatching { invoke(Entry.COMPLETE, CoreAgentModel(context, provider, "$session-public")) }
-        assertRequestRecord(records().single())
-    }
-
-    @Test fun outerAttachmentSuppressionSurvivesTheInnerCatchAndNestedScopeClosure() {
-        AgentErrorReporter.suppressForAttachments().use {
-            Entry.values().forEach { entry ->
-                val failure = IllegalStateException("Synthetic attachment canary")
-                val provider = FakeProvider {
-                    assertTrue(AgentErrorReporter.attachmentReportsSuppressed())
-                    throw failure
-                }
-                AgentErrorReporter.suppressForPrivateContent().use {
-                    assertSame(failure, runCatching {
-                        invoke(entry, CoreAgentModel(context, provider, session))
-                    }.exceptionOrNull())
-                }
-                assertTrue("Closing an inner scope must retain the outer scope",
-                    AgentErrorReporter.attachmentReportsSuppressed())
-                assertTrue(records().isEmpty())
-            }
-        }
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed())
-        assertOriginalFailure(Entry.COMPLETE)
-    }
-
-    @Test fun actualRuntimeRequestAdapterKeepsHistoricalPrivateImageSuppression() {
+    @Test fun attachmentsAndImagesNeverSuppressTheRequestRecordInTheRealRuntimeAdapter() {
         LocalRunStore(context).appendGeneratedImageFailure(session, "Synthetic image prompt", "Synthetic image error")
-        assertTrue(LocalRunStore(context).conversationHasPrivateImagesOrAttachments(session))
         val failure = IllegalStateException("Synthetic provider failure")
-        val provider = FakeProvider {
-            assertTrue(AgentErrorReporter.attachmentReportsSuppressed())
-            throw failure
-        }
+        val provider = FakeProvider { throw failure }
         val model = CoreAgentModel(context, provider, session)
         val runtime = diagnosticScopeRuntime(context, session)
         val adapter = runtime.requestModel(model, CoreToolRegistry(emptyList()), true, null)
@@ -181,29 +133,25 @@ class ProviderDiagnosticsCaptureTest {
             adapter.complete(history, "Synthetic prompt", declarations, CancellationToken.uncancellable())
         }.exceptionOrNull())
         assertEquals(1, provider.calls)
-        assertTrue(records().isEmpty())
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed())
+        assertRequestRecord(records().single())
     }
 
-    @Test fun existingImageRejectionMappingStillWrapsTheOriginalFailureOutsideCapture() {
+    @Test fun existingImageRejectionMappingStillWrapsTheOriginalFailureAndIsRecorded() {
         val failure = ProviderHttpException("Synthetic image rejection", 415, 0, null)
         val provider = FakeProvider { throw failure }
         val prepared = listOf(ConversationTurn("user", "Synthetic image message")
             .withModelParts("Synthetic image metadata", listOf(ConversationTurn.Image("AA==", 1, 1))))
         val expected = AttachmentModelContext.providerFailure(AppLanguageRuntime.localizedContext(context), failure)
-        val actual = AgentErrorReporter.suppressForAttachments().use {
-            runCatching {
-                CoreAgentModel(context, provider, session).completeMainChat("Synthetic instructions", prepared,
-                    "Synthetic prompt", declarations, CancellationToken.uncancellable())
-            }.exceptionOrNull()
-        }
+        val actual = runCatching {
+            CoreAgentModel(context, provider, session).completeMainChat("Synthetic instructions", prepared,
+                "Synthetic prompt", declarations, CancellationToken.uncancellable())
+        }.exceptionOrNull()
         assertNotSame("Existing image rejection mapping must still run", failure, actual)
         assertEquals(expected.javaClass, actual?.javaClass)
         assertEquals(expected.message, actual?.message)
         assertSame(failure, actual?.cause)
         assertEquals(1, provider.calls)
-        assertTrue(records().isEmpty())
-        assertFalse(AgentErrorReporter.attachmentReportsSuppressed())
+        assertRequestRecord(records().single())
     }
 
     @Test fun generalCompletionStillStripsImageModelPartsWithoutMutatingHistory() {
