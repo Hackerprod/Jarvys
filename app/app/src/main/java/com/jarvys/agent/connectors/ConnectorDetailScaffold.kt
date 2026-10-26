@@ -61,6 +61,7 @@ internal fun ConnectorDetailScaffold(
     account: String? = null,
     primaryActionLabel: String,
     primaryActionEnabled: Boolean = true,
+    showDisconnectWhenUnavailable: Boolean = false,
     onPrimaryAction: () -> Unit,
     disconnectLabel: String,
     disconnectExplanation: String,
@@ -100,6 +101,9 @@ internal fun ConnectorDetailScaffold(
             Button(onClick = onPrimaryAction, enabled = primaryActionEnabled, modifier = Modifier.fillMaxWidth()) {
                 Text(primaryActionLabel)
             }
+            if (showDisconnectWhenUnavailable) TextButton(
+                onClick = { confirmDisconnect = true }, modifier = Modifier.fillMaxWidth(),
+            ) { Text(disconnectLabel) }
         } else {
             JarvysGroup(contentPadding = PaddingValues(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,

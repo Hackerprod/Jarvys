@@ -38,6 +38,7 @@ class DialerConnector(
     private val callPermissionGranted: () -> Boolean,
     private val emergencyNumber: (String) -> Boolean,
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
 
@@ -96,28 +97,34 @@ class DialerConnector(
             return dialerFallbackResult(number)
         }
         require(operation == PLACE_CALL) { "Unknown phone operation: $operation" }
-        if (!callPermissionGranted()) return openDialerFallback(number, preparation.authorizeEffect)
+        if (!callPermissionGranted()) return openDialerFallback(number, preparation)
+        (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke()
         try {
-            preparation.authorizeEffect?.invoke()
             gateway.placeCall(number)
+            preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
             return JSONObject().put("source", "android.phone").put("untrusted_content", false)
                 .put("status", "call_requested")
                 .put("phoneNumber", number)
                 .put("message", "Call request accepted by Android Telecom.")
         } catch (_: SecurityException) {
-            return openDialerFallback(number, preparation.authorizeEffect)
+            return openDialerFallback(number, preparation).also {
+                preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN)
+            }
         } catch (_: IllegalArgumentException) {
-            return openDialerFallback(number, preparation.authorizeEffect)
+            return openDialerFallback(number, preparation).also {
+                preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN)
+            }
         }
     }
 
-    private fun openDialerFallback(number: String, authorizeEffect: (() -> Unit)?): JSONObject {
+    private fun openDialerFallback(number: String, preparation: ConnectorWritePreparation): JSONObject {
+        (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke()
         try {
-            authorizeEffect?.invoke()
             gateway.openDialer(number)
         } catch (_: RuntimeException) {
             error("Telecom could not place the call and Android did not allow the dialer to open; no call was placed")
         }
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         return dialerFallbackResult(number)
     }
 

@@ -26,7 +26,7 @@ class MemoryStoreTest {
 
     private fun store(name: String = "memory", conversationId: String = "conv"): MemoryStore =
         MemoryStore(temporaryFolder.newFolder(name), true, testMemorySeedProvider())
-            .forConversation(conversationId).also { it.ensureInitialized() }
+            .forConversation(conversationId).bindAutomaticWritesForToolset().also { it.ensureInitialized() }
 
     private fun frontmatter(name: String, description: String = "A test note.", body: String = "body") =
         "---\nname: $name\ndescription: $description\n---\n$body\n"
@@ -50,14 +50,15 @@ class MemoryStoreTest {
         Files.createSymbolicLink(alias.toPath(), real.toPath())
         val app = FilesDirContext(base, File(alias, "files"))
 
-        val memory = MemoryStore(app, testMemorySeedProvider()).forConversation("symlink-session")
+        val memory = MemoryStore(app, testMemorySeedProvider()).forConversation("symlink-session").bindAutomaticWritesForToolset()
         memory.ensureInitialized()
         val note = frontmatter("Symlinked filesDir", body = "Production context path stays private.")
         memory.write("platform.md", note, MemoryStore.Actor.USER, "symlink-session")
 
-        val expectedRoot = File(realFiles, "jarvys/memory/.scopes").canonicalFile
+        val expectedRoot = File(realFiles, "jarvys/${StorageGeneration.NAME}/${MemoryConstants.MEMORY_DIRECTORY}/.scopes").canonicalFile
         assertEquals(expectedRoot.path, memory.rootDirectory().canonicalFile.parentFile!!.path)
         assertEquals(64, memory.rootDirectory().name.length)
+        assertFalse(File(realFiles, "jarvys/${StorageGeneration.NAME}/${MemoryConstants.MEMORY_DIRECTORY}/platform.md").exists())
         assertFalse(File(realFiles, "jarvys/memory/platform.md").exists())
         assertTrue(memory.read("platform.md").contains("Production context path stays private."))
     }

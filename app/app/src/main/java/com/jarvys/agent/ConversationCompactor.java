@@ -1,6 +1,10 @@
 package com.jarvys.agent;
 
 import java.util.ArrayList;
+import com.jarvys.agent.chatdb.Compaction;
+import com.jarvys.agent.chatdb.CompactionCoverage;
+import com.jarvys.agent.chatdb.CompactionEpisode;
+import com.jarvys.agent.chatdb.PreparedCompactionFlush;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -21,6 +25,14 @@ public final class ConversationCompactor {
 
     interface MemoryFlush {
         boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token);
+        default CompactionCoverage coverage(List<ConversationTurn> summarized, CancellationToken token) { return null; }
+        default PreparedCompactionFlush prepare(List<ConversationTurn> summarized, CompactionCoverage coverage,
+                                                CancellationToken token) {
+            // Legacy boolean completion is not an identity-bound digest receipt.
+            beforeCompact(summarized, token);
+            return null;
+        }
+        default String sessionKind() { return "principal"; }
         default void onCompacted(boolean memoryFlushCompleted) { }
     }
 
@@ -116,18 +128,23 @@ public final class ConversationCompactor {
             token.throwIfCancelled();
             ConversationCompactionPolicy.Plan plan = requestedMode == ConversationCompactionPolicy.Mode.ALL ? ConversationCompactionPolicy.planAll(transcript) : ConversationCompactionPolicy.planSliding(transcript, contextWindow, ConversationCompactionPolicy.DEFAULT_SLIDING_PERCENTAGE);
             if (plan.summarize.isEmpty()) return null;
-            boolean memoryFlushCompleted = memoryFlush != null
-                    && memoryFlush.beforeCompact(new ArrayList<>(transcript), token);
+            CompactionCoverage coverage = memoryFlush == null ? null
+                    : memoryFlush.coverage(new ArrayList<>(plan.summarize), token);
             List<String> sourceArtifacts = new ArrayList<>();
             String summary = summarize(plan.summarize, plan.mode, token, sourceArtifacts);
-            summary = appendEpisodeReferences(summary, plan.summarize);
+            summary = appendEpisodeReferences(summary, plan.summarize, coverage);
             if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
                 plan = ConversationCompactionPolicy.planAll(transcript);
                 if (plan.summarize.isEmpty()) return null;
+                coverage = memoryFlush == null ? null : memoryFlush.coverage(new ArrayList<>(plan.summarize), token);
                 sourceArtifacts.clear();
                 summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token, sourceArtifacts);
-                summary = appendEpisodeReferences(summary, plan.summarize);
+                summary = appendEpisodeReferences(summary, plan.summarize, coverage);
             }
+            // Extract facts only once, after fallback has selected the final source set.
+            PreparedCompactionFlush prepared = memoryFlush == null ? null
+                    : memoryFlush.prepare(new ArrayList<>(plan.summarize), coverage, token);
+            if (prepared != null) coverage = prepared.getCoverage();
             token.throwIfCancelled();
             int firstKept = store.conversationMessageCount(sessionId);
             int currentUserIndex = currentUserMessageIndex();
@@ -152,11 +169,22 @@ public final class ConversationCompactor {
             if (currentUserIndex >= 0 && !currentUserRepresented) firstKept = Math.min(firstKept, currentUserIndex);
             int summarizedCount = firstKept;
             token.throwIfCancelled();
-            store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount,
-                    sourceArtifacts);
-            if (memoryFlush != null) memoryFlush.onCompacted(memoryFlushCompleted);
+            Compaction committed = store.appendCompactionPrepared(sessionId, summary, firstKept, trigger,
+                    plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount, sourceArtifacts, coverage,
+                    prepared, memoryFlush == null ? "principal" : memoryFlush.sessionKind());
+            if (memoryFlush != null) {
+                boolean completed = false;
+                try { completed = store.compactionFlushCompleted(sessionId, committed.getCompaction_id()); }
+                catch (RuntimeException unavailable) {
+                    // The append already committed; missing readback is not a rollback or proof of completion.
+                }
+                memoryFlush.onCompacted(completed);
+            }
             List<ConversationTurn> updated = new ArrayList<>();
-            updated.add(ConversationTurn.compactionSummary(summary, summarizedCount));
+            ConversationTurn compactedTurn = ConversationTurn.compactionSummary(summary, summarizedCount);
+            compactedTurn.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.COMPACTION,
+                    sessionId, committed.getCompaction_id(), null));
+            updated.add(compactedTurn);
             if (currentUserIndex >= 0 && currentUserTurn != null && !plan.keep.contains(currentUserTurn))
                 updated.add(currentUserTurn);
             updated.addAll(plan.keep);
@@ -168,7 +196,19 @@ public final class ConversationCompactor {
         }
     }
 
-    private String appendEpisodeReferences(String summary, List<ConversationTurn> turns) {
+    private String appendEpisodeReferences(String summary, List<ConversationTurn> turns, CompactionCoverage coverage) {
+        if (coverage != null) {
+            List<String> labels = new ArrayList<>();
+            for (CompactionEpisode episode : coverage.getEpisodes())
+                labels.add(episode.getId() + (episode.getTitle() == null || episode.getTitle().isBlank()
+                        ? "" : " " + episode.getTitle()));
+            if (labels.isEmpty()) return summary;
+            String appendix = "\n\nEpisodes: " + String.join("; ", labels);
+            if (appendix.length() > ConversationCompactionPolicy.MAX_SUMMARY_CHARS)
+                throw new IllegalStateException("Episode references exceed the compaction summary budget; sources remain uncompacted");
+            int keep = Math.max(0, ConversationCompactionPolicy.MAX_SUMMARY_CHARS - appendix.length());
+            return (summary.length() > keep ? summary.substring(0, keep) : summary) + appendix;
+        }
         if (store == null) return summary;
         List<String> sourceIds = new ArrayList<>();
         for (ConversationTurn turn : turns) {
@@ -186,6 +226,8 @@ public final class ConversationCompactor {
             labels.add(episode.getId() + " " + title + day);
         }
         String appendix = "\n\nEpisodes: " + String.join("; ", labels);
+        if (appendix.length() > ConversationCompactionPolicy.MAX_SUMMARY_CHARS)
+            throw new IllegalStateException("Episode references exceed the compaction summary budget; sources remain uncompacted");
         int keep = Math.max(0, ConversationCompactionPolicy.MAX_SUMMARY_CHARS - appendix.length());
         String safe = summary.length() > keep ? summary.substring(0, keep) : summary;
         return safe + appendix;

@@ -5,9 +5,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.junit.rules.TemporaryFolder
 import java.io.File
 
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
 class MemorySearchToolTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
@@ -64,6 +69,7 @@ class MemorySearchToolTest {
             workspace.write("visible.md", "orchid inside")
             val link = File(projectRoot, "escape.md")
             runCatching { java.nio.file.Files.createSymbolicLink(link.toPath(), outside.toPath()) }
+            assertTrue(java.nio.file.Files.isSymbolicLink(link.toPath()))
 
             assertFalse(registry.invoke("search_files", mapOf("query" to "orchid", "zone" to "/memory/../../"),
                 CancellationToken.uncancellable()).success)
@@ -94,7 +100,7 @@ class MemorySearchToolTest {
     fun aChatWithoutMemoryCannotSearchTheMemoryZone() {
         val files = temporaryFolder.newFolder("no-memory-files")
         val memory = MemoryStore(File(files, "memory"), true, testMemorySeedProvider())
-            .forConversation("no-memory-session").also { it.ensureInitialized() }
+            .forConversation("no-memory-session").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "f".repeat(24), File(files, "skills"), null,
             memory, "no-memory-session", false)
         val coordinator = MemorySearchIndexCoordinator(
@@ -190,11 +196,13 @@ class MemorySearchToolTest {
     }
 
     private fun fixture(name: String): Fixture {
-        val projectRoot = File(temporaryFolder.root, "$name-project")
+        val workspacesRoot = File(temporaryFolder.root, "$name-project")
+        val projectId = WorkspaceStore.projectIdForSession(name)
+        val projectRoot = File(workspacesRoot, projectId)
         val skillsRoot = File(temporaryFolder.root, "$name-skills").apply { mkdirs() }
         val memoryRoot = File(temporaryFolder.root, "$name-memory")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation(name)
-        val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession(name), skillsRoot,
+        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation(name).bindAutomaticWritesForToolset()
+        val workspace = WorkspaceStore(workspacesRoot, projectId, skillsRoot,
             object : WorkspaceStore.SkillWorkspaceObserver {
                 override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) {
                     writeFile.run()

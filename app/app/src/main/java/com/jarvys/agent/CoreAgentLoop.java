@@ -663,11 +663,18 @@ public final class CoreAgentLoop {
 
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments,
                       CancellationToken token, ProgressListener listener, String currentUserMessageId) {
+        return run(request, previousTranscript, attachments, token, listener, currentUserMessageId,
+                UUID.randomUUID().toString());
+    }
+
+    public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments,
+                      CancellationToken token, ProgressListener listener, String currentUserMessageId, String runId) {
+        if (runId == null || runId.isBlank()) throw new IllegalArgumentException("Run identity is required");
         if (!runActive.compareAndSet(false, true))
             throw new IllegalStateException("This agent loop is already running");
         try {
             if (turnContextProvider != null) turnContextProvider.onRunStarted();
-            return runActive(request, previousTranscript, attachments, token, listener, currentUserMessageId);
+            return runActive(request, previousTranscript, attachments, token, listener, currentUserMessageId, runId);
         } finally {
             runActive.set(false);
         }
@@ -686,7 +693,7 @@ public final class CoreAgentLoop {
 
     private Result runActive(String request, List<ConversationTurn> previousTranscript,
             List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener,
-            String currentUserMessageId) {
+            String currentUserMessageId, String runId) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
         boolean transcriptHasPendingInput = ConversationTurn.hasCurrentUserMessage(previousTranscript)
                 || ConversationTurn.hasInternalConversationInput(previousTranscript)
@@ -697,7 +704,6 @@ public final class CoreAgentLoop {
             throw new IllegalArgumentException("A user request is required");
         }
         request = request == null ? "" : request;
-        String runId = UUID.randomUUID().toString();
         Map<String, ToolActivity> activeActivities = new java.util.concurrent.ConcurrentHashMap<>();
         List<ConversationTurn> transcript = new ArrayList<>(previousTranscript == null ? Collections.emptyList() : previousTranscript);
         boolean hasRunRequest = !request.trim().isEmpty() || !currentAttachments.isEmpty();

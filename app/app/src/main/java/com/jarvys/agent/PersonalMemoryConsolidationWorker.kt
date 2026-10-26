@@ -45,8 +45,7 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
             val token = CancellationToken.cancellable()
             val cancellationRegistration = currentCoroutineContext().job.invokeOnCompletion { token.cancel() }
             try {
-                val candidates = bridge.personalAgentDailyConsolidationCandidates()
-                if (candidates.isNotEmpty()) runConsolidation(bridge, candidates, token)
+                consolidatePersisted(bridge, token)
                 token.throwIfCancelled()
                 if (!bridge.personalAgentCompleteJob(job.id, owner)) throw IllegalStateException("memory_job_lease_lost")
                 finished = true
@@ -68,10 +67,22 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
         }
     }
 
+    /** One worker phase: authorization is captured before reading its persisted inputs. */
+    internal fun consolidatePersisted(bridge: ChatDatabaseBridge, token: CancellationToken,
+                                     model: CoreAgentModel? = null) {
+        token.throwIfCancelled()
+        val memoryTicket = MemoryWritePolicy.forContext(applicationContext).captureTicket()
+        val candidates = bridge.personalAgentDailyConsolidationCandidates()
+        if (candidates.isNotEmpty()) runConsolidation(bridge, candidates, token, memoryTicket,
+            model ?: CoreAgentModel(applicationContext, "personal-memory-daily-consolidation"))
+    }
+
     private fun runConsolidation(
         bridge: ChatDatabaseBridge,
         candidates: List<PersonalMemoryCandidate>,
         token: CancellationToken,
+        memoryTicket: MemoryWriteGate.Ticket,
+        model: CoreAgentModel,
     ) {
         val context = bridge.personalAgentPromptContext("", true, "principal")
         val sourceIds = candidates.map { it.id }
@@ -82,9 +93,9 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
             append(context.rules).append("\n\n")
             append(context.consolidationPrompt)
         }
-        val tools = CoreToolRegistry(PersonalMemoryTools.createForConsolidation(applicationContext, sourceIds))
+        val tools = CoreToolRegistry(PersonalMemoryTools.createForConsolidation(applicationContext, sourceIds, memoryTicket))
         val sessionId = "personal-memory-daily-consolidation"
-        val loop = CoreAgentLoop(CoreAgentModel(applicationContext, sessionId), tools, prompt, sessionId)
+        val loop = CoreAgentLoop(model, tools, prompt, sessionId)
         val notes = ConversationTurn("user", "<persisted_daily_notes>\n$records\n</persisted_daily_notes>")
         val result = loop.run("", listOf(notes), token, null)
         if (result.outcome != "COMPLETED") throw IllegalStateException("memory_consolidation_incomplete")
@@ -105,6 +116,11 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
         const val DAILY_ENABLED_KEY = "daily_consolidation_enabled"
         private const val UNIQUE_WORK = "jarvys_personal_memory_daily_consolidation"
         private const val TYPE_DAILY_CONSOLIDATE = "daily_consolidate"
+
+        @JvmStatic
+        fun cancelSchedule(context: Context) {
+            WorkManager.getInstance(context.applicationContext).cancelUniqueWork(UNIQUE_WORK)
+        }
 
         @JvmStatic
         fun refreshSchedule(context: Context) {
@@ -129,8 +145,7 @@ class PersonalMemoryConsolidationWorker(appContext: Context, params: WorkerParam
         }
 
         private fun enabled(context: Context): Boolean =
-            context.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
-                .getBoolean(MemoryConstants.ENABLED_KEY, true) &&
+            MemoryWritePolicy.forContext(context).isEnabled() &&
                 context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
                     .getBoolean(DAILY_ENABLED_KEY, true)
     }

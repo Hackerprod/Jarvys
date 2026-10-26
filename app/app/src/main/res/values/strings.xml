@@ -1493,4 +1493,15 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="memory_episode_label">Episode · %1$s</string>
     <string name="memory_episode_narration_pending">Summary pending</string>
     <string name="memory_episode_narration_failed">Summary could not be written</string>
+    <string name="connector_audit_loading">Loading audit history…</string>
+    <string name="connector_audit_incomplete">Audit history could not be loaded completely. Stored records have not been discarded. Retry or inspect local diagnostics.</string>
+    <string name="memory_setting_save_failed">The memory setting could not be confirmed. Automatic memory writes are disabled for now. Try again.</string>
+    <string name="memory_setting_follow_up_failed">The memory setting was saved, but its background schedule could not be updated. Try again.</string>
+    <string name="connector_transition_loading">Connection state is still loading. Try again when it is ready.</string>
+    <string name="connector_transition_failed">Could not confirm the connection change. Check its status before retrying.</string>
+    <string name="connector_transition_uncertain">The connection change is not confirmed as saved. Review its status before retrying.</string>
+    <string name="connector_transition_obsolete">This connection request is no longer current. Review the current connection state.</string>
+    <string name="connector_transition_permission_denied">Access was not granted. Review the connector permissions.</string>
+    <string name="connector_transition_runtime_failed">The connector did not finish starting. Check its status before trying again.</string>
+    <string name="connector_transition_cleanup_failed">Connector cleanup could not be confirmed. Review the current connection state.</string>
 </resources>

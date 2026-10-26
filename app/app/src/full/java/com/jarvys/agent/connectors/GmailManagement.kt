@@ -16,6 +16,17 @@ internal class GmailManagement(
     private class Reviewed(val owner: GmailManagement, val operation: String, val record: String,
         val account: String, val epoch: Long, val attempted: AtomicBoolean = AtomicBoolean(false))
 
+    /** Counts only the producer-marked mutation seam, never proof/read HTTP requests. */
+    private class MutationAdmission(private val callback: (() -> Unit)?) {
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        @Volatile var failure: Exception? = null
+        fun authorize() {
+            try { callback?.invoke() }
+            catch (error: Exception) { failure = error; throw error }
+            attempts.incrementAndGet()
+        }
+    }
+
     fun read(operation: String, args: JSONObject, token: CancellationToken): JSONObject = synchronized(LOCK) {
         when (operation) {
             SELECT -> select(args, token)
@@ -100,8 +111,21 @@ internal class GmailManagement(
             }
             saveStatus(previous)
         }
-        if (operation in MAIL_WRITES) executeMail(record, reviewed.epoch, token)
-        else executeLabel(record, reviewed.epoch, token)
+        val admission = MutationAdmission(preparation.authorizeWriteEffect)
+        if (operation in MAIL_WRITES) executeMail(record, reviewed.epoch, token, admission)
+        else executeLabel(record, reviewed.epoch, token, admission)
+        // These states are authored by this runtime's verified branches, not provider receipt text.
+        val states = objects(record.getJSONArray("targets")).map { it.getString("state") }
+        val outcome = when {
+            states.any { it in setOf("unknown", "dispatched", "accepted", "pending") } -> com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN
+            states.any { it == "rejected" } -> if (admission.attempts.get() == 0)
+                com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED else com.jarvys.agent.EffectInvocation.Outcome.ERROR
+            admission.attempts.get() == 0 && states.all { it in setOf("skipped_missing", "skipped_changed", "skipped_unsupported") } -> com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED
+            admission.attempts.get() > 0 && states.any { it == "verified" } &&
+                states.all { it == "verified" || it in setOf("skipped_missing", "skipped_changed", "skipped_unsupported") } -> com.jarvys.agent.EffectInvocation.Outcome.OK
+            else -> com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN
+        }
+        preparation.reportWriteOutcome?.invoke(outcome)
         receiptSummary(record)
     }
 
@@ -221,7 +245,7 @@ internal class GmailManagement(
             }
     }
 
-    private fun executeMail(record: JSONObject, epoch: Long, token: CancellationToken) {
+    private fun executeMail(record: JSONObject, epoch: Long, token: CancellationToken, admission: MutationAdmission) {
         val operation = record.getString("operation")
         val targets = objects(record.getJSONArray("targets")).filter { it.optString("state") == "pending" }
         for (candidateChunk in targets.chunked(if (operation in setOf(TRASH, UNTRASH, TRASH_THREADS, UNTRASH_THREADS)) 1 else CHUNK)) {
@@ -266,13 +290,13 @@ internal class GmailManagement(
                         UNTRASH, UNTRASH_THREADS -> "/users/me/messages/${path(ids.single())}/untrash"
                         else -> "/users/me/messages/batchModify"
                     }, if (operation in setOf(TRASH, UNTRASH, TRASH_THREADS, UNTRASH_THREADS)) null else body.toString(),
-                    token = token, expectedAuthorizationEpoch = epoch)
+                    token = token, expectedAuthorizationEpoch = epoch, beforeMutation = admission::authorize)
             } catch (failure: Exception) {
                 val preDispatch = failure is GooglePreDispatchAuthorizationException
                 chunk.forEach { it.put("state", if (preDispatch) "rejected" else "unknown") }
                 if (preDispatch) resolveIntent(record, hash)
                 saveStatus(record)
-                if (failure is java.util.concurrent.CancellationException) throw failure
+                if (admission.failure != null || failure is java.util.concurrent.CancellationException) throw failure
                 break
             }
             if (response.status !in 200..299) {
@@ -330,7 +354,7 @@ internal class GmailManagement(
             .put("status", "prepared")
     }
 
-    private fun executeLabel(record: JSONObject, epoch: Long, token: CancellationToken) {
+    private fun executeLabel(record: JSONObject, epoch: Long, token: CancellationToken, admission: MutationAdmission) {
         val operation = record.getString("operation")
         val target = record.getJSONArray("targets").getJSONObject(0)
         val targetId = target.getString("id")
@@ -356,13 +380,14 @@ internal class GmailManagement(
             oauth.requestCancellable(GoogleOAuthProtocol.GMAIL_LABELS,
                 when(operation) { CREATE_LABEL -> "POST"; DELETE_LABEL -> "DELETE"; else -> "PATCH" },
                 GoogleRestEndpoints.GMAIL + "/users/me/labels" + if (operation == CREATE_LABEL) "" else "/${path(targetId)}",
-                if (operation == DELETE_LABEL) null else body, token = token, expectedAuthorizationEpoch = epoch)
+                if (operation == DELETE_LABEL) null else body, token = token, expectedAuthorizationEpoch = epoch,
+                beforeMutation = admission::authorize)
         } catch (failure: Exception) {
             val preDispatch = failure is GooglePreDispatchAuthorizationException
             target.put("state", if (preDispatch) "rejected" else "unknown")
             if (preDispatch) resolveIntent(record, hash)
             saveStatus(record)
-            if (failure is java.util.concurrent.CancellationException) throw failure
+            if (admission.failure != null || failure is java.util.concurrent.CancellationException) throw failure
             return
         }
         if (response.status !in 200..299) {

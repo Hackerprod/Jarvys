@@ -1,5 +1,6 @@
 package com.jarvys.agent.tasks
 
+import com.jarvys.agent.EffectInvocation
 import android.content.Context
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -32,16 +33,25 @@ class TaskPendingActionExecution(
         val pending = store.get(actionId) ?: return TaskPendingActionExecutionStatus.NOT_FOUND
         if (pending.taskId != taskId) return TaskPendingActionExecutionStatus.NOT_FOUND
         val attemptId = java.util.UUID.randomUUID().toString()
-        recordEvidence(pending, attemptId, "intent", "approval_attempt")
+        val classification = currentTask(taskId)?.let { task ->
+            runCatching { executor.actionEffectClassification(context, task, pending) }.getOrNull()
+        }
+        val excludesExternalEvidence = classification in setOf(TaskActionEffectClassification.READ, TaskActionEffectClassification.MEMORY)
+        if (!excludesExternalEvidence) recordEvidence(pending, attemptId, "intent", "approval_attempt")
+        fun finishAttempt(action: TaskPendingAction, attempt: String, outcome: String, state: String,
+                          actionStatus: String? = null, authorization: String? = null) {
+            if (!excludesExternalEvidence) finishEvidence(action, attempt, outcome, state, actionStatus, authorization)
+        }
 
-        return when (val claim = store.claim(actionId, currentTask(taskId), attemptId)) {
+        try {
+        return when (val claim = store.claim(actionId, currentTask(taskId), attemptId, classification?.name)) {
             is TaskPendingActionClaim.Stale -> {
-                finishEvidence(pending, attemptId, "not_executed", "stale_action")
+                finishAttempt(pending, attemptId, "not_executed", "stale_action")
                 dismissNotification(actionId)
                 TaskPendingActionExecutionStatus.STALE
             }
             is TaskPendingActionClaim.NotPending -> {
-                finishEvidence(pending, attemptId, "not_executed", "duplicate_attempt",
+                finishAttempt(pending, attemptId, "not_executed", "duplicate_attempt",
                     claim.action?.status?.name)
                 if (claim.action?.status != TaskPendingActionStatus.PENDING) dismissNotification(actionId)
                 TaskPendingActionExecutionStatus.NOT_PENDING
@@ -53,41 +63,70 @@ class TaskPendingActionExecution(
                 if (task == null || !action.isCurrentFor(task)) {
                     store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("task_changed_before_dispatch"))
-                    finishEvidence(action, attemptId, "not_executed", "task_changed_before_dispatch")
+                    finishAttempt(action, attemptId, "not_executed", "task_changed_before_dispatch")
                     dismissNotification(actionId)
                     return TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
-                finishEvidence(action, attemptId, "started", "approved_dispatch")
+                val invocation = EffectInvocation { admission ->
+                    check(!excludesExternalEvidence) { "Task capability changed from READ/MEMORY to external WRITE; no write intent exists" }
+                    ChatDatabaseBridge.getInstance(context).personalAgentAdmitEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, attemptId,
+                        admission.authorization.name.lowercase(java.util.Locale.ROOT),
+                        evidenceFacts(action, attemptId, "started"), attemptId, runId = attemptId,
+                        connectionObservation = admission.connectionObservation,
+                    )
+                }
                 val result = try {
-                    executor.execute(context, task, action)
+                    executor.execute(context, task, action, invocation)
                 } catch (_: Exception) {
+                    val effect = invocation.resolveFailure(executor.hasCompleteEffectAdmissionCoverage())
+                    invocation.seal()
                     store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("tool_execution_interrupted"))
-                    finishEvidence(action, attemptId, "uncertain", "tool_execution_interrupted")
+                    finishAttempt(action, attemptId, effect.outcome.name.lowercase(java.util.Locale.ROOT),
+                        "tool_execution_interrupted", authorization = effect.admission?.authorization?.takeUnless { it == EffectInvocation.Authorization.UNSPECIFIED }?.name?.lowercase(java.util.Locale.ROOT))
                     dismissNotification(actionId)
                     return TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
-                val receipt = JSONObject().put("success", result.success).put("content", result.content).toString()
-                val deferredUntilVisible = result.success && runCatching {
-                    JSONObject(result.content).optString("status") ==
-                        com.jarvys.agent.ModuleTool.VISIBLE_APP_REQUIRED_STATUS
-                }.getOrDefault(false)
+                val effect = invocation.resolve(result, executor.hasCompleteEffectAdmissionCoverage())
+                val consistentAdministrativeResult = result.success && (result.effectReceipt == null ||
+                    effect.outcome == EffectInvocation.Outcome.NOT_EXECUTED)
+                val readCompleted = consistentAdministrativeResult && invocation.ownsReadCompletion(result.administrativeReceipt)
+                val memoryCompleted = consistentAdministrativeResult && invocation.ownsMemoryCompletion(result.administrativeReceipt)
+                val administrativeKind = when {
+                    memoryCompleted -> EffectInvocation.AdministrativeKind.MEMORY_COMPLETED
+                    readCompleted -> EffectInvocation.AdministrativeKind.READ_COMPLETED
+                    else -> null
+                }
+                invocation.seal()
+                val receipt = JSONObject().put("success", result.success).put("content", result.content)
+                    .put("admission_receipt_version", 1)
+                    .put("read_completed", readCompleted)
+                    .put("administrative_kind", administrativeKind?.name)
+                    .put("effect_outcome", effect.outcome.name)
+                    .put("authorization", effect.admission?.authorization?.name).toString()
+                var receiptDurable = true
                 val status = runCatching {
-                    if (deferredUntilVisible) store.waitForVisibleApp(actionId, action.actionBinding, receipt)?.status
-                    else if (result.success) store.markExecuted(actionId, action.actionBinding, receipt)?.status
-                    else store.markInterruptedUncertain(actionId, action.actionBinding,
-                        JSONObject().put("success", false).put("content", result.content)
-                            .put("status", TaskPendingActionStatus.INTERRUPTED_UNCERTAIN.name).toString())?.status
+                    if (administrativeKind != null) store.markExecuted(actionId, action.actionBinding, receipt)?.status
+                    else when (effect.outcome) {
+                        EffectInvocation.Outcome.DEFERRED -> store.waitForVisibleApp(actionId, action.actionBinding, receipt)?.status
+                        EffectInvocation.Outcome.OK -> store.markExecuted(actionId, action.actionBinding, receipt)?.status
+                        else -> store.markInterruptedUncertain(actionId, action.actionBinding, receipt)?.status
+                    }
                 }.getOrElse {
+                    receiptDurable = false
                     runCatching { store.markInterruptedUncertain(actionId, action.actionBinding,
                         uncertainReceipt("result_receipt_not_durable")) }.getOrNull()?.status
                 }
-                val evidenceOutcome = when (status) {
-                    TaskPendingActionStatus.EXECUTED -> "ok"
-                    TaskPendingActionStatus.WAITING_VISIBLE_APP -> "deferred"
-                    else -> "uncertain"
-                }
-                finishEvidence(action, attemptId, evidenceOutcome, status?.name ?: "receipt_unavailable")
+                val evidenceOutcome = if (receiptDurable && status != null)
+                    effect.outcome.name.lowercase(java.util.Locale.ROOT) else "uncertain"
+                finishAttempt(action, attemptId, evidenceOutcome,
+                    when (administrativeKind) {
+                        EffectInvocation.AdministrativeKind.READ_COMPLETED -> "read_only"
+                        EffectInvocation.AdministrativeKind.MEMORY_COMPLETED -> "memory_only"
+                        null -> status?.name ?: "receipt_unavailable"
+                    },
+                    authorization = effect.admission?.authorization?.takeUnless { it == EffectInvocation.Authorization.UNSPECIFIED }?.name?.lowercase(java.util.Locale.ROOT))
                 dismissNotification(actionId)
                 when (status) {
                     TaskPendingActionStatus.WAITING_VISIBLE_APP -> {
@@ -101,6 +140,9 @@ class TaskPendingActionExecution(
                     else -> TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
                 }
             }
+        }
+        } finally {
+            if (!excludesExternalEvidence) runCatching { ChatDatabaseBridge.getInstance(context).personalAgentReconcileEpisodeRunSync(attemptId) }
         }
     }
 
@@ -117,21 +159,23 @@ class TaskPendingActionExecution(
             attemptId,
             action.toolName,
             null,
-            "ask_approved",
+            null,
             facts,
             outcome,
             action.id,
             attemptId,
+            runId = attemptId, processId = com.jarvys.agent.crew.CrewProcessIdentity.ID,
         )
     }
 
     private fun finishEvidence(action: TaskPendingAction, attemptId: String, outcome: String,
-                               state: String, actionStatus: String? = null) {
+                               state: String, actionStatus: String? = null, authorization: String? = null) {
         ChatDatabaseBridge.getInstance(context).personalAgentFinishEpisodeToolEvidenceSync(
             WorkspaceIdentity.CENTRAL_SESSION,
             attemptId,
             outcome,
             evidenceFacts(action, attemptId, state, actionStatus),
+            attemptId, runId = attemptId, authorization = authorization,
         )
     }
 

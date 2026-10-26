@@ -237,6 +237,7 @@ private class ModuleConnectorRuntime(
     private val manifest: ModuleManifest,
     private val moduleRuntime: ModuleRuntime,
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
 
@@ -269,7 +270,7 @@ private class ModuleConnectorRuntime(
         preparation: ConnectorWritePreparation,
         token: CancellationToken,
         context: ConnectorInvocationContext,
-    ): JSONObject = execute(operation, arguments, token, context)
+    ): JSONObject = execute(operation, arguments, token, context, preparation)
 
     override fun invokeReadPreparedWithContext(
         operation: String,
@@ -277,13 +278,14 @@ private class ModuleConnectorRuntime(
         preparation: ConnectorWritePreparation,
         token: CancellationToken,
         context: ConnectorInvocationContext,
-    ): JSONObject = execute(operation, arguments, token, context)
+    ): JSONObject = execute(operation, arguments, token, context, preparation)
 
     private fun execute(
         operation: String,
         arguments: JSONObject,
         token: CancellationToken,
         context: ConnectorInvocationContext,
+        preparation: ConnectorWritePreparation? = null,
     ): JSONObject {
         token.throwIfCancelled()
         val tool = manifest.tools.firstOrNull { it.name == operation }
@@ -295,9 +297,17 @@ private class ModuleConnectorRuntime(
             conversationId = context.conversationId,
             requester = context.requester,
             requesterColorKey = context.requesterColorKey,
+            authorizeHandler = preparation?.authorizeEffect,
         )
         val progress = context.progress?.let { listener -> CoreTool.ProgressListener { message -> listener(message) } }
+        if (tool.access == ModuleToolAccess.WRITE) {
+            (preparation?.authorizeWriteEffect ?: preparation?.authorizeEffect)?.invoke()
+        }
         val result = moduleRuntime.execute(request, token, progress)
+        context.effectOutcome.toolResult = result
+        // A handler's success flag is not proof of a completed external effect.
+        if (tool.access == ModuleToolAccess.WRITE) preparation?.reportWriteOutcome?.invoke(
+            com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN)
         return JSONObject()
             .put(MODULE_TOOL_RESULT_KEY, JSONObject()
                 .put("success", result.success)

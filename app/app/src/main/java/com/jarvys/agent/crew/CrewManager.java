@@ -614,8 +614,10 @@ public final class CrewManager implements AutoCloseable {
 
     private CrewMessage sendBotConversationMessage(Bot sender, CrewMessage.Type type, String text,
             List<String> refs) {
-        CrewMessage message = bus.enqueueFresh(new CrewMessage(conversationId, sender.id, "chief", type,
-                text, refs, System.currentTimeMillis()));
+        CrewMessage proposed = new CrewMessage(conversationId, sender.id, "chief", type,
+                text, refs, System.currentTimeMillis());
+        if (type == CrewMessage.Type.RESULT) proposed = proposed.withResultCycle(sender.cycleId());
+        CrewMessage message = bus.enqueueFresh(proposed);
         publishBotConversationMessage(sender, message);
         return message;
     }
@@ -2180,9 +2182,12 @@ public final class CrewManager implements AutoCloseable {
             List<String> refs, boolean explicitUser, CrewMessage receipt,
             CancellationToken expectedToken, Runnable finalAdmission, boolean requireDurableAdmission) {
         if (recipient == null) {
-            CrewMessage message = bus.enqueueFresh(new CrewMessage(conversationId, from, to, type,
-                    text, refs, System.currentTimeMillis()));
             Bot sender = bots.get(from);
+            CrewMessage proposed = new CrewMessage(conversationId, from, to, type,
+                    text, refs, System.currentTimeMillis());
+            if (sender != null && type == CrewMessage.Type.RESULT)
+                proposed = proposed.withResultCycle(sender.cycleId());
+            CrewMessage message = bus.enqueueFresh(proposed);
             if (sender != null) publishBotConversationMessage(sender, message);
             return message;
         }

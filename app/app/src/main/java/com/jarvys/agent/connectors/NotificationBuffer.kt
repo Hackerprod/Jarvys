@@ -218,8 +218,7 @@ class JarvysNotificationListenerService : NotificationListenerService() {
                 )
             }
         }
-        val prefs = getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("connected_${NotificationsConnector.ID}", false)) return
+        if (!ConnectionAccess.isLocallySelected(this, NotificationsConnector.ID)) return
         if (!NotificationListenerAccess.isEnabled(this)) return
         if (sbn.packageName == packageName || NotificationFilter.isRestrictedTelephonyNotification(this, sbn)) return
         val notification = sbn.notification

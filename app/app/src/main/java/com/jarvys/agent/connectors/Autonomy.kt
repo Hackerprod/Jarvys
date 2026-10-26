@@ -11,21 +11,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.jarvys.agent.R
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.UUID
 
 enum class AutonomyPolicy { ASK, ALLOW, DENY }
 
-data class AutonomyAuditRecord(
-    val id: String = UUID.randomUUID().toString(),
-    val timestampMillis: Long,
-    val connectorId: String,
-    val connectorName: String,
-    val operationName: String,
-    val operationLabel: String,
-    val summary: String,
-)
 
 interface ConnectorAutonomyStore {
     fun policy(connectorId: String, operationName: String): AutonomyPolicy
@@ -162,6 +151,18 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     private val actionPolicies = PersistedActionPolicies(preferences, authorityScope)
     private val lock = actionPolicies.lock
     private val fallbackAudit = mutableListOf<AutonomyAuditRecord>()
+    private val migrationLock = migrationLocks.computeIfAbsent(authorityScope) { Any() }
+    private val migration = auditDatabase?.let { database -> AutonomyAuditMigration(
+        object : LegacyAutonomyAuditSource {
+            override fun migrated() = preferences.getBoolean(AUDIT_MIGRATED_KEY, false)
+            override fun original() = preferences.getString(AUDIT_KEY, null)
+            override fun complete(expectedOriginal: String?): Boolean {
+                check(original() == expectedOriginal) { "Legacy audit changed during import" }
+                // Room has already committed every row. Failure here is cleanup pending, not rollback.
+                return preferences.edit().remove(AUDIT_KEY).putBoolean(AUDIT_MIGRATED_KEY, true).commit()
+            }
+        }, AutonomyAuditMigrationTarget(database::importConnectorAuditSync), migrationLock,
+    ) }
 
     init {
         ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
@@ -170,7 +171,6 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
             listOf("email", "sms_draft").forEach { connectorId ->
                 runCatching { actionPolicies.clearPolicies(connectorId) }
             }
-            runCatching { migrateAuditToRoom() }
         }
     }
 
@@ -190,55 +190,33 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     override fun appendAudit(record: AutonomyAuditRecord) {
         val bounded = record.bounded()
         val database = auditDatabase
-        if (database != null) database.appendConnectorAuditSync(bounded)
-        else synchronized(lock) { fallbackAudit.add(bounded) }
+        if (database != null) {
+            // Legacy corruption must not misreport a successfully persisted NEW audit row as lost.
+            try { migration?.migrate() }
+            catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                android.util.Log.w("ConnectorAudit", "Legacy audit migration pending; source content not logged")
+            }
+            database.appendConnectorAuditSync(bounded)
+        } else synchronized(lock) { fallbackAudit.add(bounded) }
     }
 
-    override fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord> = synchronized(lock) {
+    override fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord> {
         val database = auditDatabase
-        if (database != null) database.recentConnectorAuditSync(connectorId, limit.coerceAtLeast(0))
-        else fallbackAudit.asReversed().filter { it.connectorId == connectorId }.take(limit.coerceAtLeast(0))
-    }
-
-    private fun migrateAuditToRoom() {
-        val database = auditDatabase ?: return
-        if (preferences.getBoolean(AUDIT_MIGRATED_KEY, false)) return
-        readAudit().filterNot { it.connectorId in RETIRED_CONNECTOR_IDS }.forEach(database::appendConnectorAuditSync)
-        preferences.edit().remove(AUDIT_KEY).putBoolean(AUDIT_MIGRATED_KEY, true).commit()
-    }
-
-    private fun readAudit(): List<AutonomyAuditRecord> = runCatching {
-        val array = JSONArray(preferences.getString(AUDIT_KEY, "[]"))
-        (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toAuditRecord() }
-    }.getOrDefault(emptyList())
-
-    private fun removeRetiredConnectorAudit() {
-        val current = JSONArray(preferences.getString(AUDIT_KEY, "[]") ?: "[]")
-        val retained = JSONArray()
-        var removed = false
-        for (index in 0 until current.length()) {
-            val record = current.opt(index)
-            if (record is JSONObject && record.optString("connectorId") in RETIRED_CONNECTOR_IDS) removed = true
-            else retained.put(record)
+        if (database != null) {
+            // Off-main API: a failed migration is not an apparently complete empty history.
+            migration?.migrate()
+            return database.recentConnectorAuditSync(connectorId, limit.coerceAtLeast(0))
         }
-        if (removed) preferences.edit().putString(AUDIT_KEY, retained.toString()).commit()
+        return synchronized(lock) {
+            fallbackAudit.asReversed().filter { it.connectorId == connectorId }.take(limit.coerceAtLeast(0))
+        }
     }
-
-    private fun AutonomyAuditRecord.toJson() = JSONObject()
-        .put("id", id).put("timestampMillis", timestampMillis).put("connectorId", connectorId)
-        .put("connectorName", connectorName).put("operationName", operationName)
-        .put("operationLabel", operationLabel).put("summary", summary)
-
-    private fun JSONObject.toAuditRecord() = AutonomyAuditRecord(
-        id = optString("id"), timestampMillis = optLong("timestampMillis"), connectorId = optString("connectorId"),
-        connectorName = optString("connectorName"), operationName = optString("operationName"),
-        operationLabel = optString("operationLabel"), summary = optString("summary"),
-    )
 
     companion object {
         private const val AUDIT_KEY = "autonomy_audit"
         private const val AUDIT_MIGRATED_KEY = "autonomy_audit_room_migrated"
-        private val RETIRED_CONNECTOR_IDS = setOf("email", "sms_draft")
+        private val migrationLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
     }
 }
 

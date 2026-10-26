@@ -74,7 +74,14 @@ class BotAndroidConnectorScopeTest {
         assertEquals(listOf(nativeName), tools.onDeviceConnectorToolNames())
         assertTrue(CrewRoleTemplates.all(tools).single { it.id == CrewRoleTemplates.OPERATOR }.tools.contains(cloudName))
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val agent = CoreAgentRuntime(context, "android-scope-test", emptyList())
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val agent = try {
+            worker.submit<CoreAgentRuntime> {
+                CoreAgentRuntime(context, "android-scope-test", emptyList())
+            }.get(10, java.util.concurrent.TimeUnit.SECONDS)
+        } finally {
+            worker.shutdownNow()
+        }
         val role = agent.resolveCrewProfile(tools.names(), tools.onDeviceConnectorToolNames(), CrewRoleTemplates.ANDROID_USE)
         assertTrue(role.tools.contains(nativeName))
         assertFalse(role.tools.contains(cloudName))

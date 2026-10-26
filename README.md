@@ -1,6 +1,24 @@
+## Rama de desarrollo: sesión única — 26-10-2026
+
+La continuación vigente parte de `feat/single-session` (`42560900`), no del estado v96 histórico descrito abajo. S1–S5 constan terminados en el traspaso; S6 sigue **WIP**, con captura de evidencia y admisión por invocación en revisión. S7/S8 y la paridad funcional interna con Engram requieren validación posterior independiente.
+
+En el checkpoint inicial con SDK autorizado, compilaron Full/Play Java/Kotlin y KSP exportó Room 5. Los 38 selectores afectados pasan: 477 ejecuciones Full y 277 Play, cero skips; regresiones relacionadas completadas: total 1.088 ejecuciones PASS (60 clases), cero skips. No son una suite global ni prueban paridad Engram. **No es una entrega operativa ni hay APK nuevo.** Véase [continuidad](Continue.md), [reporte verificable](docs/continue/single-validate/stage-S6-cloud-report.md), [contratos de admisión](docs/continue/single-validate/S6-admission-contract.md) e [inventario de herramientas](docs/continue/single-validate/S6-tool-inventory.md).
+
+El checkpoint posterior acota la consulta del narrador y añade gate compartido de escritura automática de memoria: tickets por fase, invalidación OFF→ON y exclusión hasta commit/rollback. Validación focal: 1.010 ejecuciones PASS, 970 casos únicos contando flavor (485 métodos, 57 clases), cero skips; el manifiesto distingue regresiones anteriores al último ajuste de factory. No es una suite global ni cierre S6. En ese checkpoint seguían pendientes conexión/outbox, Coding asíncrono y otros productores. [Contrato y límites](docs/continue/single-validate/S6-memory-write-gate-contract.md) · [Resultados](docs/continue/single-validate/S6-memory-gate-test-results.json).
+
+El bloque posterior de conexión añade destino Room real, fence de instancia, proyección exacta, poda acreditada y bootstrap independiente de Room. Full y Play pasan 140 casos por sabor (138 métodos nominales, nueve clases; boundary SDK24/34 incluido), cero skips; schema 6 generado y migración real validada. Ese checkpoint era aislado; su integración posterior se describe a continuación. [Resultados focales](docs/continue/single-validate/S6-connection-projection-test-results.json).
+
+El cutover posterior ya integra Registry/UI/readers, callbacks capturados y observación causal exacta. Validación final: **544 Full + 411 Play PASS**, 955 ejecuciones (51/45 clases), cero skips; no suite global ni cierre S6. DEFAULT espera bootstrap sin resucitar una baja. Una dependencia de orden en el fixture de tasks se reprodujo en aislación y corrigió siguiendo el worker real, sin cambiar sus datos/asertos. Pendientes Coding asíncrono e inventario de productores. [Resultados y límites](docs/continue/single-validate/S6-connection-cutover-test-results.json).
+
+Foundation posterior Coding/recibos locales: 169 Full + 165 Play PASS (334 ejecuciones, cero skips), metadatos/codec aislados y semántica de aceptación local sin afirmar misión terminada. Todavía sin producer/ASYNC opt-in ni prueba de commit durable. [Resultados y límites](docs/continue/single-validate/S6-coding-foundation-test-results.json).
+
+El respaldo remoto sigue pendiente; blobs cargados no equivalen a rama publicada. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
+
+---
+
 <div align="center">
 
-## En desarrollo: recuperación y animaciones v96
+## Antecedente histórico: recuperación y animaciones v96
 
 Este corte reconstruye de forma explícita las fuentes v94/v95 que no sobrevivieron al reinicio del entorno, desde el respaldo remoto v93 y el APK v95 firmado conservado. No se afirma identidad de fuente con las entregas anteriores. Recupera los acuses, el mapa de mascota, la fila Agente/Agent y la lista propia de Workspaces; añade correcciones de descarga, rutas canónicas, levitación con Rive y ausencia de flash al pulsar. Validación integrada, APK, firma y entrega de v96 pendientes. [Contrato y procedencia](docs/RECOVERY_ANIMATIONS_V96.md).
 
@@ -415,3 +433,22 @@ Jarvys is an independent project. Names and logos of connected services identify
 <div align="center">
   <sub>Built for useful work. Designed around explicit scope, visible progress and honest evidence.</sub>
 </div>
+
+
+<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->
+## Respaldo WIP recuperable — 26-10-2026
+
+Este árbol de respaldo **no es build-ready tal cual**: conserva sin retransmitir un fixture de pruebas
+exactamente como estaba en la rama base remota. Los cambios locales de helpers/regresiones se guardan
+en un patch mínimo sin datos del fixture. No se eliminaron asertos ni se publicaron valores bloqueados.
+
+En un checkout limpio de esta rama, ejecuta `python3 docs/continue/backup/restore-s6.py`.
+El script exige árbol limpio, verifica hashes, aplica el patch, retira sólo estos auxiliares de backup
+y el aviso, y comprueba el árbol Git exacto del snapshot local validado. Deja la restauración staged,
+sin crear commits ni modificar historia. No ejecuta builds, red ni servicios.
+
+Snapshot local: `e9c937f01a40e093bb5aa38224c614f49a963915`. Validaciones recientes: cutover conexión
+544 Full/411 Play y foundation aislada 169 Full/165 Play, cero fallos/skips en sus runs finales.
+No son suite global, PASS S6, paridad Engram ni entrega APK. Continue.md permanece igual al remoto.
+Detalles de integridad: `docs/continue/backup/manifest.json`.
+<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->

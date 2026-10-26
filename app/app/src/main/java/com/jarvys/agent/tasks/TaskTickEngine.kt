@@ -74,24 +74,31 @@ class TaskTickEngine(
                 val task = tasks.get(snapshot.id) ?: continue
                 if (task.state != TaskState.Active) continue
                 if (pendingActions?.stateForTask(task.id, task.revision, task.state) == TaskState.AwaitingUser) continue
-                if (task.validUntil != null && now >= task.validUntil) {
+                val scheduledRuns = runs.forTask(task.id).filter { it.manualOccurrenceId == null }
+                // Project a claimed/finished occurrence before advancing or expiring the schedule.
+                // The process can stop after either ledger append but before the task snapshot.
+                val unprojected = scheduledRuns.lastOrNull {
+                    it.runId != task.lastRun?.runId && it.status !in RETRYABLE_STATES &&
+                        (it.status == "STARTED" || task.nextRunAt == null || it.scheduledFor >= task.nextRunAt)
+                }
+                if (task.validUntil != null && now >= task.validUntil && unprojected == null) {
                     updateTask(task, task.copy(state = TaskState.Done, nextRunAt = null))
                     continue
                 }
-                val at = task.nextRunAt ?: continue
+                val at = task.nextRunAt ?: unprojected?.scheduledFor ?: continue
                 val latestDue = calculator.latestDueAtOrBefore(task, now) ?: at
                 val skip = task.catchUp == TaskCatchUp.SKIP_MISSED && now > at
                 val previousTaskRetry = task.lastRun?.takeIf { it.status == "RETRYABLE" || it.status == "INTERRUPTED" }
-                val previousLedgerRetry = runs.forTask(task.id)
-                    .lastOrNull { it.status == "RETRYABLE" || it.status == "INTERRUPTED" }
-                val scheduledFor = previousTaskRetry?.scheduledFor ?: previousLedgerRetry?.scheduledFor ?: latestDue
+                val previousLedgerRetry = scheduledRuns.lastOrNull { it.status in RETRYABLE_STATES }
+                val scheduledFor = unprojected?.scheduledFor ?: previousTaskRetry?.scheduledFor
+                    ?: previousLedgerRetry?.scheduledFor ?: latestDue
                 val startedAt = clock.millis()
                 val outcome = runs.withOccurrenceLock {
                     if (isGloballyPaused()) null else {
                         val existing = runs.find(task.id, scheduledFor)
-                        if (existing != null && existing.status !in RETRYABLE_STATES) {
-                            if (existing.status == "STARTED") {
-                                val interrupted = existing.copy(finishedAt = now, status = "INTERRUPTED",
+                        if (existing != null && (existing.status !in RETRYABLE_STATES || existing.toolsCalled.any { it.mayHaveWritten() })) {
+                            if (existing.status == "STARTED" || existing.status in RETRYABLE_STATES) {
+                                val interrupted = existing.copy(finishedAt = now, status = "PARTIAL",
                                     deliveryStatus = "UNKNOWN", reason = null, skipReason = null, errorCause = null,
                                     causeCode = TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED)
                                 runs.saveSnapshot(interrupted)
@@ -99,19 +106,25 @@ class TaskTickEngine(
                             } else TickOccurrence.Existing(existing)
                         } else {
                             val runId = UUID.randomUUID().toString()
+                            val claim = TaskRunRecord(task.id, runId, scheduledFor, startedAt)
+                            if (!runs.claim(claim)) {
+                                return@withOccurrenceLock TickOccurrence.Existing(
+                                    requireNotNull(runs.find(task.id, scheduledFor)))
+                            }
                             started++
                             val result = if (skip) TaskExecutionResult("SKIPPED", "NOT_APPLICABLE",
                                 causeCode = TaskRunCause.MISSED_OCCURRENCE)
                                 else try { executor.execute(task, scheduledFor, startedAt, runId, token) }
                                 catch (_: java.util.concurrent.CancellationException) {
-                                    TaskExecutionResult("INTERRUPTED", "NOT_APPLICABLE",
-                                        causeCode = TaskRunCause.INTERRUPTED)
+                                    // An escaped cancellation has no trustworthy per-tool completion receipt.
+                                    TaskExecutionResult("PARTIAL", "UNKNOWN",
+                                        causeCode = TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED)
                                 }
-                                catch (failure: Exception) { TaskExecutionResult("ERROR", "NOT_APPLICABLE",
-                                    causeCode = TaskRunCause.EXECUTION_FAILED,
+                                catch (failure: Exception) { TaskExecutionResult("PARTIAL", "UNKNOWN",
+                                    causeCode = TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED,
                                     causeDetail = failure.message?.takeIf(String::isNotBlank) ?: failure.javaClass.simpleName) }
                             val finishedAt = clock.millis()
-                            val writeMayHaveRun = result.toolsCalled.any { it.write }
+                            val writeMayHaveRun = result.toolsCalled.any { it.mayHaveWritten() }
                             val status = if (result.status in RETRYABLE_STATES && writeMayHaveRun) "PARTIAL" else result.status
                             val record = TaskRunRecord(task.id, runId, scheduledFor, startedAt, finishedAt, status,
                                 result.deliveryStatus, null,
@@ -124,16 +137,11 @@ class TaskTickEngine(
                                     result.causeCode ?: TaskRunCause.fromLegacy(result.errorCause ?: result.skipReason ?: result.reason)),
                                 deliveredResult = result.deliveredResult,
                                 conversationMessageId = result.conversationMessageId)
+                            // A durable terminal receipt is required even when a no-effect retry is safe.
+                            // Otherwise a restart cannot distinguish that retry from an interrupted dispatch.
+                            runs.saveSnapshot(record)
                             if (status in RETRYABLE_STATES && !writeMayHaveRun) TickOccurrence.Retry(record)
-                            else {
-                                val saved = if (existing == null) {
-                                    if (runs.appendIfAbsent(record)) record else runs.find(task.id, scheduledFor) ?: record
-                                } else {
-                                    runs.saveSnapshot(record)
-                                    record
-                                }
-                                TickOccurrence.Completed(saved)
-                            }
+                            else TickOccurrence.Completed(record)
                         }
                     }
                 }

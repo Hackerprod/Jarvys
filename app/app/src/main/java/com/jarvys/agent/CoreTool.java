@@ -52,6 +52,8 @@ public interface CoreTool {
   /** Argument-sensitive effects are used by tools whose one declaration supports reads and writes. */
   default EffectClass effectClass(Map<String, Object> arguments) { return effectClass(); }
   default PersistenceEffect persistenceEffect() { return PersistenceEffect.NONE; }
+  /** Mixed workspace tools retain WRITE classification while excluding internal memory maintenance. */
+  default PersistenceEffect persistenceEffect(Map<String, Object> arguments) { return persistenceEffect(); }
 
   /**
    * Tools keep ReAct's original call order unless their implementation explicitly opts into
@@ -129,4 +131,23 @@ public interface CoreTool {
       Map<String, Object> arguments, CancellationToken token, ProgressListener progress) {
     return execute(arguments, token);
   }
+  /** True only when this adapter covers every actual effect dispatch with the invocation context. */
+  default boolean hasCompleteEffectAdmissionCoverage() {
+    return !isConnectorTool() && !isMcpTool() && !(this instanceof PolicyGatedTool);
+  }
+
+  /** Explicit invocation transport. Legacy gated adapters fail closed instead of inventing ALLOW. */
+  default CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+      ProgressListener progress, EffectInvocation invocation) {
+    if (invocation == null || effectClass(arguments) != EffectClass.WRITE || persistenceEffect(arguments) == PersistenceEffect.MEMORY)
+      return execute(arguments, token, progress);
+    if (!hasCompleteEffectAdmissionCoverage())
+      throw new IllegalStateException("Effect admission context is not supported by this adapter");
+    token.throwIfCancelled();
+    invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
+        "native", declaration().name, null, "native_contract"));
+    // A legacy success flag is not a completion receipt. Producers must explicitly describe their effect.
+    return execute(arguments, token, progress);
+  }
+
 }

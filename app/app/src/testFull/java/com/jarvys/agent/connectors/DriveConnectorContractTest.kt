@@ -29,7 +29,7 @@ class DriveConnectorContractTest {
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse =
             error("Connector must use cancellable transport")
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
+                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse {
             token.throwIfCancelled()
             beforeAcquire?.invoke()
             check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == epoch) { "Authorization epoch changed" }
@@ -40,7 +40,7 @@ class DriveConnectorContractTest {
             return text.removeFirst()
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
+                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleBinaryResponse {
             token.throwIfCancelled()
             beforeAcquire?.invoke()
             check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == epoch) { "Authorization epoch changed" }

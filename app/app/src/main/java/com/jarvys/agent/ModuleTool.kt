@@ -47,6 +47,7 @@ class ModuleTool internal constructor(
         CoreTool.AccessClassification.READ else CoreTool.AccessClassification.WRITE
 
     override fun isConnectorTool(): Boolean = true
+    override fun hasCompleteEffectAdmissionCoverage() = true
 
     override fun effectiveAutonomyPolicy(): AutonomyPolicy =
         connectorRegistry.configuredAutonomyPolicy(connectorDefinition, operation)
@@ -69,7 +70,10 @@ class ModuleTool internal constructor(
         arguments: Map<String, Any?>?,
         token: CancellationToken,
         progress: CoreTool.ProgressListener?,
-    ): CoreToolResult {
+    ): CoreToolResult = execute(arguments, token, progress, null)
+
+    override fun execute(arguments: Map<String, Any?>?, token: CancellationToken,
+                         progress: CoreTool.ProgressListener?, invocation: EffectInvocation?): CoreToolResult {
         val validated = ToolArgumentValidator.coerceAndValidate(
             arguments?.mapValues { it.value as Any? }, inputSchema,
         )
@@ -79,6 +83,7 @@ class ModuleTool internal constructor(
             requesterColorKey = requesterColorKey,
             conversationId = conversationId,
             progress = progress?.let { listener -> { message -> listener.onProgress(message) } },
+            effectInvocation = invocation,
         )
         val response = connectorRegistry.invoke(
             connectorDefinition,
@@ -87,14 +92,7 @@ class ModuleTool internal constructor(
             token,
             invocationContext,
         )
-        val envelope = response.optJSONObject(MODULE_TOOL_RESULT_KEY)
-            ?: return CoreToolResult.failure(response.toString())
-        val content = envelope.optString("content", "")
-        if (!envelope.optBoolean("success", false)) return CoreToolResult.failure(content)
-        if (envelope.optBoolean("finishRun", false)) return CoreToolResult.finish(content)
-        if (envelope.optBoolean("completeContentRequired", false)) return CoreToolResult.complete(content)
-        val previewId = envelope.optString("previewId").takeIf(String::isNotBlank)
-        return if (previewId != null) CoreToolResult.preview(content, previewId) else CoreToolResult.success(content)
+        return decodeResult(response, invocationContext)
     }
 
     /** ASK still uses the durable approval queue; approved handlers wait for the app to be visible. */
@@ -103,14 +101,21 @@ class ModuleTool internal constructor(
         token: CancellationToken,
         approvedPendingAction: Boolean,
         deferAskWrite: java.util.function.Supplier<JSONObject>?,
-    ): CoreToolResult {
+    ): CoreToolResult = executeScheduledTask(arguments, token, approvedPendingAction, deferAskWrite, null)
+
+    override fun executeScheduledTask(arguments: Map<String, Any?>?, token: CancellationToken,
+        approvedPendingAction: Boolean, deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        invocation: EffectInvocation?): CoreToolResult {
         token.throwIfCancelled()
+        connectorRegistry.observeEffectPolicy(connectorDefinition, operation, invocation)
         if (effectiveAutonomyPolicy() == AutonomyPolicy.DENY) {
             return CoreToolResult.failure("This action is unavailable under its current policy.")
         }
         if (effectiveAutonomyPolicy() == AutonomyPolicy.ASK && !approvedPendingAction) {
             if (deferAskWrite == null) return CoreToolResult.failure("Pending action queue is unavailable")
-            return CoreToolResult.success(deferAskWrite.get().toString())
+            return CoreToolResult.success(deferAskWrite.get().toString()).let { result ->
+                if (invocation == null) result else result.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED))
+            }
         }
         if (!ModuleHostVisibility.isVisible()) {
             if (effectiveAutonomyPolicy() == AutonomyPolicy.ALLOW && !approvedPendingAction) {
@@ -121,14 +126,18 @@ class ModuleTool internal constructor(
                 }
                 val deferred = deferAskWrite.get()
                 return if (deferred.optString("status") == VISIBLE_APP_REQUIRED_STATUS) {
-                    CoreToolResult.success(deferred.toString())
+                    CoreToolResult.success(deferred.toString()).let { result ->
+                        if (invocation == null) result else result.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.DEFERRED))
+                    }
                 } else {
                     CoreToolResult.failure(
                         "This scheduled action could not be deferred until the app is visible.",
                     )
                 }
             }
-            return visibleAppRequiredResult()
+            return visibleAppRequiredResult().let { result ->
+                if (invocation == null) result else result.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.DEFERRED))
+            }
         }
         val validated = ToolArgumentValidator.coerceAndValidate(
             arguments?.mapValues { it.value as Any? }, inputSchema,
@@ -138,6 +147,7 @@ class ModuleTool internal constructor(
             requester = requester,
             requesterColorKey = requesterColorKey,
             conversationId = conversationId,
+            effectInvocation = invocation,
         )
         val response = connectorRegistry.invokeForScheduledTask(
             connectorDefinition,
@@ -150,15 +160,29 @@ class ModuleTool internal constructor(
             deferAskWrite,
             invocationContext,
         )
+        return decodeResult(response, invocationContext)
+    }
+
+    private fun decodeResult(response: JSONObject, context: ConnectorInvocationContext): CoreToolResult {
         val envelope = response.optJSONObject(MODULE_TOOL_RESULT_KEY)
-            ?: return if (response.has("status")) CoreToolResult.success(response.toString())
-            else CoreToolResult.failure(response.toString())
-        val content = envelope.optString("content", "")
-        if (!envelope.optBoolean("success", false)) return CoreToolResult.failure(content)
-        if (envelope.optBoolean("finishRun", false)) return CoreToolResult.finish(content)
-        if (envelope.optBoolean("completeContentRequired", false)) return CoreToolResult.complete(content)
-        val previewId = envelope.optString("previewId").takeIf(String::isNotBlank)
-        return if (previewId != null) CoreToolResult.preview(content, previewId) else CoreToolResult.success(content)
+        val result = context.effectOutcome.toolResult ?: if (envelope == null) {
+            if (response.has("status")) CoreToolResult.success(response.toString()) else CoreToolResult.failure(response.toString())
+        } else {
+            val content = envelope.optString("content", "")
+            when {
+                !envelope.optBoolean("success", false) -> CoreToolResult.failure(content)
+                envelope.optBoolean("finishRun", false) -> CoreToolResult.finish(content)
+                envelope.optBoolean("completeContentRequired", false) -> CoreToolResult.complete(content)
+                !envelope.optString("previewId").isNullOrBlank() -> CoreToolResult.preview(content, envelope.getString("previewId"))
+                else -> CoreToolResult.success(content)
+            }
+        }
+        val invocation = context.effectInvocation ?: return result
+        if (moduleTool.access != ModuleToolAccess.WRITE) {
+            return if (result.success && result.effectReceipt == null && result.administrativeReceipt == null)
+                result.withAdministrativeReceipt(invocation.readCompleted()) else result
+        }
+        return result.withEffectReceipt(context.effectOutcome.receipt ?: invocation.resolveFailure(true))
     }
 
     private fun visibleAppRequiredResult() = CoreToolResult.success(JSONObject()

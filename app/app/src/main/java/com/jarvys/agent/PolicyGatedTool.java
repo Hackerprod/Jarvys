@@ -24,4 +24,9 @@ public interface PolicyGatedTool extends CoreTool {
       CancellationToken token,
       boolean approvedPendingAction,
       Supplier<JSONObject> deferAskWrite);
+  default CoreToolResult executeScheduledTask(Map<String, Object> arguments, CancellationToken token,
+      boolean approvedPendingAction, Supplier<JSONObject> deferAskWrite, EffectInvocation invocation) {
+    if (invocation != null) throw new IllegalStateException("Scheduled gated effect context is unsupported");
+    return executeScheduledTask(arguments, token, approvedPendingAction, deferAskWrite);
+  }
 }

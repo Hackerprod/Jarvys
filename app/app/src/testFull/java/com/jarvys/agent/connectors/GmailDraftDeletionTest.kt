@@ -43,16 +43,16 @@ class GmailDraftDeletionTest {
             return account
         }
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-            token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
+            token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse {
             expectedEpochs += expectedAuthorizationEpoch
             if (method == "DELETE") preDispatch?.invoke()
-            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-            token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
+            token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleBinaryResponse {
             expectedEpochs += expectedAuthorizationEpoch
             bounds += maxResponseBytes
-            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         }
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
             check(scope in grants)

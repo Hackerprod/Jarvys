@@ -21,6 +21,7 @@ class NotificationsConnector(
     private val gateway: NotificationGateway,
     private val accessGranted: () -> Boolean,
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) {
         NotificationListenerRuntime.buffer.clear()
         NotificationListenerRuntime.listener?.captureCurrentNotifications()
@@ -102,16 +103,17 @@ class NotificationsConnector(
         token.throwIfCancelled()
         val key = preparation.executionArguments.optString("key")
         when (operation) {
-            DISMISS -> { preparation.authorizeEffect?.invoke(); gateway.dismiss(key) }
-            OPEN -> { preparation.authorizeEffect?.invoke(); gateway.open(key) }
+            DISMISS -> { (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke(); gateway.dismiss(key) }
+            OPEN -> { (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke(); gateway.open(key) }
             REPLY -> {
                 val text = preparation.executionArguments.optString("replyText")
                 require(text.isNotBlank() && text.length <= MAX_REPLY_CHARS) { "replyText is invalid" }
-                preparation.authorizeEffect?.invoke()
+                (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke()
                 gateway.reply(key, text)
             }
             else -> error("Unknown notification write operation: $operation")
         }
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         return JSONObject().put("untrusted_content", true).put("source", SOURCE)
             .put("status", "notification_action_completed")
     }

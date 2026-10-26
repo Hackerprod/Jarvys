@@ -759,7 +759,6 @@ class ProactiveAgentProcessorTest {
 
     private fun fakeConnectedRegistry(): ConnectorRegistry {
         val preferences = ConnectionPreferences()
-        val registry = ConnectorRegistry.createForTests(preferences, { true }, ApprovalGate.INSTANCE)
         val definitions = listOf(
             definition("contacts", listOf(op("search"), op("get_contact_detail"), op("create_contact", true))),
             definition("calendar", listOf(op("search_events"), op("create_event", true))),
@@ -768,10 +767,9 @@ class ProactiveAgentProcessorTest {
             definition("call_log", listOf(op("list_calls"))),
             definition("unlisted", listOf(op("read_private_data"))),
         )
-        definitions.forEach { definition ->
-            registry.register(definition)
-            preferences.setConnected(definition.id, true)
-        }
+        val registry = ConnectorRegistry.createForTests(preferences, { true }, ApprovalGate.INSTANCE,
+            initialChoices = definitions.associate { it.id to true })
+        definitions.forEach { definition -> registry.register(definition) }
         registry.refreshStates()
         return registry
     }

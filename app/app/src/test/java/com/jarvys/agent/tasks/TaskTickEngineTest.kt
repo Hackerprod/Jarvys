@@ -79,7 +79,7 @@ class TaskTickEngineTest {
         val first = TaskTickEngine(store, ledger, calculator(now), executor, clock).tick()
         assertEquals(1, first.started)
         assertTrue(first.retryWork)
-        assertTrue(ledger.read().runs.isEmpty())
+        assertEquals("RETRYABLE", ledger.read().runs.single().status)
         assertEquals("RETRYABLE", store.get(task.id)?.lastRun?.status)
         assertEquals(TaskState.Active, store.get(task.id)?.state)
         assertNull(store.get(task.id)?.openIncidentCause)
@@ -138,7 +138,7 @@ class TaskTickEngineTest {
         assertEquals(TaskState.NeedsAttention(TaskRunCause.TOOL_SCOPE_UNAVAILABLE.code), failed.state)
     }
 
-    @Test fun stoppedTickRecordsInterruptionRearmsAndLeavesOccurrenceUnclaimedForSafeRetry() {
+    @Test fun stoppedTickRecordsInterruptionAndDurableNoEffectReceiptForSafeRetry() {
         val root = Files.createTempDirectory("st0-worker-stopped").toFile()
         val store = TaskStore(File(root, "tasks.jsonl"))
         val ledger = TaskRunLedger(File(root, "runs.jsonl"))
@@ -158,7 +158,7 @@ class TaskTickEngineTest {
         assertEquals(1, rearmed)
         assertEquals("INTERRUPTED", store.get(task.id)?.lastRun?.status)
         assertEquals(now - 1L, store.get(task.id)?.nextRunAt)
-        assertTrue(ledger.read().runs.isEmpty())
+        assertEquals("INTERRUPTED", ledger.read().runs.single().status)
     }
 
     @Test fun atRunsOnceAndMovesToDoneAndExpiredValidUntilMovesToDoneWithoutExecution() {
@@ -275,6 +275,230 @@ class TaskTickEngineTest {
         assertEquals(TaskState.Active, store.get(due.last().id)?.state)
         assertEquals(1, rearmed)
     }
+
+    @Test fun claimIsDurableBeforeDispatchAndCrashDuringEffectNeverReplaysOccurrence() {
+        val root = Files.createTempDirectory("task-crash-during-effect").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledgerFile = File(root, "runs.jsonl")
+        val ledger = TaskRunLedger(ledgerFile)
+        val at = 100_000L
+        val interval = 900_000L
+        val task = store.create(task("crash", TaskSchedule.Every(interval, at), nextRunAt = at))
+        var effects = 0
+        val executor = TaskExecutor { current, scheduledFor, _, runId, _ ->
+            val claim = requireNotNull(TaskRunLedger(ledgerFile).find(current.id, scheduledFor))
+            assertEquals("STARTED", claim.status)
+            assertEquals(runId, claim.runId)
+            effects++
+            throw SimulatedProcessDeath()
+        }
+        val first = runCatching { TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick() }
+        assertTrue(first.exceptionOrNull() is SimulatedProcessDeath)
+        assertEquals("STARTED", ledger.find(task.id, at)?.status)
+        assertNull(store.get(task.id)?.lastRun)
+
+        // A later restart must reconcile the old claim, not advance to another due interval first.
+        val later = at + interval * 2
+        val recovered = TaskTickEngine(store, TaskRunLedger(ledgerFile), calculator(later),
+            TaskExecutor { _, _, _, _, _ -> effects++; TaskExecutionResult() }, fixedClock(later)).tick()
+        assertEquals(0, recovered.started)
+        assertEquals(1, effects)
+        assertEquals("PARTIAL", ledger.find(task.id, at)?.status)
+        assertEquals(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED, ledger.find(task.id, at)?.causeCode)
+        assertEquals(TaskState.NeedsAttention(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED.code), store.get(task.id)?.state)
+        assertFalse(ledger.claim(TaskRunRecord(task.id, "new-attempt", at, later)))
+    }
+
+    @Test fun expiryAfterCrashDoesNotHideAnUncertainOccurrence() {
+        val root = Files.createTempDirectory("task-expired-crash").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val task = store.create(task("expires after effect", TaskSchedule.Every(900_000L, at),
+            nextRunAt = at, validUntil = at + 1))
+        val first = runCatching {
+            TaskTickEngine(store, ledger, calculator(at), TaskExecutor { _, _, _, _, _ ->
+                throw SimulatedProcessDeath()
+            }, fixedClock(at)).tick()
+        }
+        assertTrue(first.exceptionOrNull() is SimulatedProcessDeath)
+        val effects = AtomicInteger()
+        val expiredAt = at + 2
+        val result = TaskTickEngine(store, ledger, calculator(expiredAt), TaskExecutor { _, _, _, _, _ ->
+            effects.incrementAndGet(); TaskExecutionResult()
+        }, fixedClock(expiredAt)).tick()
+        assertEquals(0, result.started)
+        assertEquals(0, effects.get())
+        assertEquals("PARTIAL", ledger.find(task.id, at)?.status)
+        assertEquals(TaskState.NeedsAttention(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED.code), store.get(task.id)?.state)
+    }
+
+    @Test fun crashAfterExecutorReturnsBeforeFinalReceiptAlsoNeverReplays() {
+        val root = Files.createTempDirectory("task-crash-after-effect").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val task = store.create(task("result gap", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        var effects = 0
+        val executor = TaskExecutor { _, _, _, _, _ -> effects++; TaskExecutionResult("OK", "DELIVERED") }
+        val interruptedClock = object : Clock() {
+            var reads = 0
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): Clock = this
+            override fun instant(): Instant = Instant.ofEpochMilli(millis())
+            override fun millis(): Long {
+                if (++reads == 3) throw SimulatedProcessDeath()
+                return at
+            }
+        }
+        assertTrue(runCatching {
+            TaskTickEngine(store, ledger, calculator(at), executor, interruptedClock).tick()
+        }.exceptionOrNull() is SimulatedProcessDeath)
+        assertEquals("STARTED", ledger.find(task.id, at)?.status)
+        TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+        assertEquals(1, effects)
+        assertEquals("PARTIAL", ledger.find(task.id, at)?.status)
+    }
+
+    @Test fun escapedCancellationIsUncertainRatherThanAProofThatNoWriteOccurred() {
+        val root = Files.createTempDirectory("task-escaped-cancellation").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val task = store.create(task("cancel after effect", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        var effects = 0
+        val executor = TaskExecutor { _, _, _, _, _ ->
+            effects++
+            throw java.util.concurrent.CancellationException("cancelled after dispatch")
+        }
+        val result = TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+        assertFalse(result.retryWork)
+        TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+        assertEquals(1, effects)
+        assertEquals("PARTIAL", ledger.find(task.id, at)?.status)
+        assertEquals("UNKNOWN", ledger.find(task.id, at)?.deliveryStatus)
+    }
+
+    @Test fun explicitNoDispatchReceiptsPreserveExistingRetryWithoutRepeatingAWrite() {
+        for (outcome in listOf("NOT_EXECUTED", "PENDING")) {
+            val root = Files.createTempDirectory("task-proven-no-dispatch").toFile()
+            val store = TaskStore(File(root, "tasks.jsonl"))
+            val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+            val at = 100_000L
+            val task = store.create(task("no dispatch", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+            val attempts = AtomicInteger()
+            val executor = TaskExecutor { _, _, _, _, _ ->
+                if (attempts.incrementAndGet() == 1) TaskExecutionResult("RETRYABLE",
+                    toolsCalled = listOf(TaskToolCallRecord("write", true, outcome, noDispatchVerified = true)))
+                else TaskExecutionResult("OK")
+            }
+            assertTrue(TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick().retryWork)
+            assertFalse(TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick().retryWork)
+            assertEquals(2, attempts.get())
+            assertEquals("OK", ledger.find(task.id, at)?.status)
+            assertEquals(1, ledger.read().runs.size)
+        }
+    }
+
+    @Test fun onlyExplicitNoDispatchLabelsPermitWriteRetry() {
+        for (outcome in listOf("UNKNOWN", "ERROR", "WAITING_VISIBLE_APP", "OK", "", "not_executed"))
+            assertTrue(TaskToolCallRecord("write", true, outcome).mayHaveWritten())
+        assertFalse(TaskToolCallRecord("write", true, "NOT_EXECUTED", noDispatchVerified = true).mayHaveWritten())
+        assertFalse(TaskToolCallRecord("write", true, "PENDING", noDispatchVerified = true).mayHaveWritten())
+        assertTrue(TaskToolCallRecord("write", true, "NOT_EXECUTED").mayHaveWritten())
+        assertTrue(TaskToolCallRecord("write", true, "PENDING").mayHaveWritten())
+        assertFalse(TaskToolCallRecord("read", false, "ERROR").mayHaveWritten())
+    }
+
+    @Test fun interruptedReceiptWithWriteCannotBecomeAnAutomaticRetry() {
+        val root = Files.createTempDirectory("task-interrupted-write-receipt").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val task = store.create(task("write receipt", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        val effects = AtomicInteger()
+        val executor = TaskExecutor { _, _, _, _, _ ->
+            effects.incrementAndGet()
+            TaskExecutionResult("RETRYABLE", toolsCalled = listOf(TaskToolCallRecord("write", true, "UNKNOWN")))
+        }
+        val first = TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+        assertFalse(first.retryWork)
+        TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+        assertEquals(1, effects.get())
+        assertEquals("PARTIAL", ledger.find(task.id, at)?.status)
+    }
+
+    @Test fun terminalUncertaintyIsProjectedAfterCrashBeforeTaskSnapshotUpdate() {
+        val root = Files.createTempDirectory("task-unprojected-uncertainty").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val task = store.create(task("recovery gap", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        val claim = TaskRunRecord(task.id, "original-run", at, at)
+        assertTrue(ledger.claim(claim))
+        ledger.saveSnapshot(claim.copy(status = "PARTIAL", finishedAt = at + 1,
+            causeCode = TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED, deliveryStatus = "UNKNOWN"))
+        val effects = AtomicInteger()
+        val later = at + 2 * 900_000L
+        val result = TaskTickEngine(store, ledger, calculator(later), TaskExecutor { _, _, _, _, _ ->
+            effects.incrementAndGet(); TaskExecutionResult()
+        }, fixedClock(later)).tick()
+        assertEquals(0, result.started)
+        assertEquals(0, effects.get())
+        assertEquals("original-run", store.get(task.id)?.lastRun?.runId)
+        assertEquals(TaskState.NeedsAttention(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED.code), store.get(task.id)?.state)
+    }
+
+    @Test fun concurrentDuplicateTicksRunAnOccurrenceOnlyOnce() {
+        val root = Files.createTempDirectory("task-concurrent-claim").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledgerFile = File(root, "runs.jsonl")
+        val at = 100_000L
+        store.create(task("concurrent", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        val effects = AtomicInteger()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val executor = TaskExecutor { _, _, _, _, _ ->
+            effects.incrementAndGet()
+            entered.countDown()
+            assertTrue(release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            TaskExecutionResult()
+        }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            fun tick() = TaskTickEngine(store, TaskRunLedger(ledgerFile), calculator(at), executor, fixedClock(at)).tick()
+            val first = pool.submit<TaskTickResult> { tick() }
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val second = pool.submit<TaskTickResult> { tick() }
+            release.countDown()
+            first.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            second.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(1, effects.get())
+            assertEquals("OK", TaskRunLedger(ledgerFile).read().runs.single().status)
+        } finally {
+            release.countDown()
+            pool.shutdownNow()
+        }
+    }
+
+    @Test fun unavailableDurableLedgerNeverInvokesExecutor() {
+        val root = Files.createTempDirectory("task-claim-storage-failure").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val notDirectory = File(root, "not-a-directory").apply { writeText("unavailable ledger parent") }
+        val ledger = TaskRunLedger(File(notDirectory, "runs.jsonl"))
+        val at = 100_000L
+        store.create(task("claim failure", TaskSchedule.Every(900_000L, at), nextRunAt = at))
+        val effects = AtomicInteger()
+        val failure = runCatching {
+            TaskTickEngine(store, ledger, calculator(at), TaskExecutor { _, _, _, _, _ ->
+                effects.incrementAndGet(); TaskExecutionResult()
+            }, fixedClock(at)).tick()
+        }.exceptionOrNull()
+        assertTrue("Unavailable durable storage must stop the tick", failure != null)
+        assertEquals(0, effects.get())
+    }
+
+    private class SimulatedProcessDeath : Error()
 
     private fun task(
         name: String,

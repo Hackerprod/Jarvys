@@ -71,10 +71,10 @@ class GmailManagementContractTest {
             return actual
         }
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
+                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse {
             epochs += expectedAuthorizationEpoch
             beforeLease?.also { beforeLease = null }?.invoke()
-            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         }
         fun add(id: String, thread: String = "thread_$id", labelIds: List<String> = listOf("INBOX", "UNREAD"),
                 text: String = "Ordinary message"): JSONObject {

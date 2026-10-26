@@ -88,6 +88,9 @@ import kotlin.coroutines.ContinuationInterceptor
         UserDirective::class,
         MemoryEntry::class,
         MemoryEvidence::class,
+        MissionEpisodeInput::class,
+        CompactionCoverageSource::class,
+        CompactionFlushBinding::class,
         MemoryLink::class,
         TranscriptArtifactRef::class,
         MemoryRevision::class,
@@ -96,7 +99,7 @@ import kotlin.coroutines.ContinuationInterceptor
         ConnectorAutonomyAudit::class,
         ConnectorStateEvent::class,
     ],
-    version = 4,
+    version = 6,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -158,6 +161,9 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "user_directives",
             "memory_entries",
             "memory_evidence",
+            "mission_episode_inputs",
+            "compaction_coverage_sources",
+            "compaction_flush",
             "memory_links",
             "transcript_artifact_refs",
             "memory_revisions",
@@ -171,7 +177,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
 
 /** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 4
+    private const val DATABASE_VERSION = 6
     private const val DATABASE_NAME = "jarvys-chat-v3.db"
     private const val DATABASE_DIRECTORY = "jarvys"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
@@ -179,6 +185,24 @@ internal object JarvysChatDatabaseProvider {
     private const val JOURNAL_SIZE_LIMIT_BYTES = 16_777_216
 
     private val instances = mutableMapOf<String, JarvysChatDatabase>()
+    private val projectionAnchors = mutableMapOf<String, ConnectionProjectionAnchor>()
+
+    private fun projectionAnchor(file: File): ConnectionProjectionAnchor {
+        val key = file.canonicalPath
+        return synchronized(projectionAnchors) {
+            projectionAnchors.getOrPut(key) { ConnectionProjectionAnchor() }
+        }
+    }
+
+    internal fun connectionProjectionAnchor(context: Context): ConnectionProjectionAnchor {
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "Connection destination identity must be obtained off the main thread"
+        }
+        return projectionAnchor(File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME))
+    }
+
+    internal fun connectionProjectionAnchor(database: JarvysChatDatabase): ConnectionProjectionAnchor =
+        projectionAnchor(databaseFileForRawQuery(database))
 
     private val databaseExecutors = IdentityHashMap<JarvysChatDatabase, List<ExecutorService>>()
     private val queryDispatchers = IdentityHashMap<JarvysChatDatabase, ExecutorCoroutineDispatcher>()
@@ -193,14 +217,19 @@ internal object JarvysChatDatabaseProvider {
     /** Call off the main thread. Room opens on first use; version preflight is dispatched to the read pool. */
     @JvmStatic
     fun getInstance(context: Context): JarvysChatDatabase {
+        check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
+            "Database lifecycle cannot be entered from an active database lease"
+        }
         com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.applicationContext.filesDir)
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "JarvysChatDatabaseProvider.getInstance must be called off the main thread"
         }
         val databaseFile = File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME)
         val key = databaseFile.canonicalPath
-        return synchronized(this) {
+        val anchor = projectionAnchor(databaseFile)
+        return anchor.fenced { synchronized(this) {
             instances[key] ?: run {
+            anchor.opening()
             databaseFile.parentFile?.mkdirs()
             check(databaseFile.parentFile?.isDirectory == true) {
                 "Could not create Jarvys chat database directory: ${databaseFile.parentFile}"
@@ -228,22 +257,25 @@ internal object JarvysChatDatabaseProvider {
                 synchronized(queryDispatchers) { queryDispatchers[it] = executorSet[0].asCoroutineDispatcher() }
                 synchronized(writerDispatchers) { writerDispatchers[it] = executorSet[1].asCoroutineDispatcher() }
                 synchronized(readPools) { readPools[it] = checkNotNull(readPool) }
+                anchor.opened(it)
                 instances[key] = it
             }
             }
-        }
+        } }
     }
 
     /**
      * Opens an isolated file for schema tests while applying the production future-version gate and
      * connection PRAGMAs. It is internal so production callers use only the process singleton.
      */
-    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase {
+    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase =
+        projectionAnchor(databaseFile).fenced {
+        projectionAnchor(databaseFile).opening()
         databaseFile.parentFile?.mkdirs()
         val executorSet = createExecutors()
         var openedDatabase: JarvysChatDatabase? = null
         var readPool: ReadDatabasePool? = null
-        return try {
+        try {
             buildDatabase(context.applicationContext, databaseFile, executorSet).also { database ->
                 openedDatabase = database
                 kotlinx.coroutines.runBlocking { database.useWriterConnection { } }
@@ -254,6 +286,7 @@ internal object JarvysChatDatabaseProvider {
                 synchronized(applicationFiles) { applicationFiles[database] = context.applicationContext.filesDir }
                 synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
                 synchronized(readPools) { readPools[database] = checkNotNull(readPool) }
+                projectionAnchor(databaseFile).opened(database)
             }
         } catch (error: Throwable) {
             runCatching { readPool?.close() }
@@ -265,6 +298,15 @@ internal object JarvysChatDatabaseProvider {
 
     /** Closes provider-owned handles and executors together with their Room database. */
     internal fun closeDatabase(database: JarvysChatDatabase) {
+        val file = synchronized(databaseFiles) { databaseFiles[database] } ?: return
+        val anchor = projectionAnchor(file)
+        anchor.fenced {
+            anchor.invalidate(database)
+            try { closeDatabaseUnderFence(database) } finally { anchor.closed(database) }
+        }
+    }
+
+    private fun closeDatabaseUnderFence(database: JarvysChatDatabase) {
         val readPool = synchronized(readPools) { readPools[database] }
         try {
             // Mark the pool closed and wake blocked acquisitions before Room waits for its own
@@ -292,7 +334,11 @@ internal object JarvysChatDatabaseProvider {
     }
 
     /** Closes every database opened by this process when the owning application is shutting down. */
-    internal fun closeInstance() = synchronized(this) { instances.values.toList().forEach(::closeDatabase) }
+    internal fun closeInstance() {
+        // Never wait for a file fence while holding the provider monitor (open uses fence -> monitor).
+        val opened = synchronized(this) { instances.values.toList() }
+        opened.forEach(::closeDatabase)
+    }
 
     /** Closes an isolated database opened for tests, with a bounded and diagnostic Room close. */
     internal fun closeDatabaseFileForTests(database: JarvysChatDatabase) {

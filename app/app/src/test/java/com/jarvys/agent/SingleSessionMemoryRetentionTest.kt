@@ -246,7 +246,7 @@ class SingleSessionMemoryRetentionTest {
                 it.moveToFirst(); it.getString(0) to it.getLong(1)
             }
         }
-        assertEquals(AgentDocDefaults.CORE_RULES_V3, migrated.first)
+        assertEquals(AgentDocDefaults.CORE_RULES_V4, migrated.first)
         assertEquals(8L, migrated.second)
         assertTrue(migrated.first.contains("raise the conflict with the user in your next response"))
 
@@ -260,7 +260,7 @@ class SingleSessionMemoryRetentionTest {
                 it.moveToFirst(); it.getString(0) to it.getLong(1)
             }
         }
-        assertEquals(AgentDocDefaults.CORE_RULES_V3, fromHead.first)
+        assertEquals(AgentDocDefaults.CORE_RULES_V4, fromHead.first)
         assertEquals(12L, fromHead.second)
         f.bridge.personalAgentBrowse()
         assertEquals(fromHead.second, f.read { sql ->

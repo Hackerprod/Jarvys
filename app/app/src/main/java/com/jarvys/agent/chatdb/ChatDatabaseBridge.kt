@@ -6,10 +6,14 @@ import com.jarvys.agent.AgentErrorReporter
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ConversationReader
 import com.jarvys.agent.ConversationTurn
+import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.MemoryWriteGate
+import com.jarvys.agent.MemoryWritePolicy
 import com.jarvys.agent.proactive.ProactiveReplyClaim
 import com.jarvys.agent.crew.CrewCoordinationEvidence as CrewCoordinationJournalEvidence
 import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewResultEvidence as CrewResultJournalEvidence
+import com.jarvys.agent.connectors.ConnectionStateCoordinator
 import com.jarvys.agent.connectors.AutonomyAuditRecord
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReply as WorkspaceCoordinationReplyJournal
@@ -92,6 +96,11 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     companion object {
         private val instances = mutableMapOf<String, ChatDatabaseBridge>()
+
+        /** Stable destination issuer/fence; no database opening or reset wait. Worker-only. */
+        @JvmStatic
+        fun connectionProjectionAnchor(context: Context): ConnectionProjectionAnchor =
+            JarvysChatDatabaseProvider.connectionProjectionAnchor(context)
 
         /** Test-only: Robolectric runs UI tests ON the main looper; production keeps the guard on. */
         @Volatile @JvmField internal var mainThreadGuardDisabledForTests = false
@@ -180,7 +189,17 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                     PersonalAgentRepository(database),
                     MessageHistoryRepository(database),
                     ArtifactRetentionRepository(database),
-                ).also { repositories = it }
+                ).also { opened ->
+                    // Before admitting this process's writers, close only effects owned by an earlier process.
+                    runBlocking { opened.agentMemory.reconcileForeignEpisodeProcesses(
+                        com.jarvys.agent.crew.CrewProcessIdentity.ID) }
+                    // Recovery must succeed before the fast path can expose this repository set.
+                    // It uses repositories directly (never bridge callbacks), so cannot re-enter open.
+                    val wakeMissions = runBlocking { MissionEpisodeRepository(database).recoverPending() }
+                    repositories = opened
+                    // Wake outside the recovery lease, after publication; enqueue never calls this bridge.
+                    if (wakeMissions) wakeMissionNarration()
+                }
             } catch (failure: Exception) {
                 // A corrupt or inaccessible database must not trigger an open/retry loop. Keep the
                 // original files intact, record one sanitized diagnostic, and fail later requests
@@ -200,15 +219,64 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         throw IllegalStateException("Could not $operation in the personal agent database", failure)
     }
 
+    // Runtime-only automatic entrypoints: tickets never originate in model arguments. Human UI
+    // editing uses the existing explicit methods; causal evidence is intentionally not gated.
+    fun personalAgentSetDirectiveAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        section: String, directive: String, sourceMessageId: String?, evidence: String,
+        supersedesId: String?, conversationId: String?): PersonalMemoryReceipt =
+        executeAutomatic(ticket, token) { it.agentMemory.setDirective(section, directive, sourceMessageId,
+            evidence, supersedesId, conversationId) }
+
+    fun personalAgentSaveMemoryAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        text: String, layer: String, category: String?, importance: Double, sourceRef: String?,
+        options: MemorySaveOptions): PersonalMemoryReceipt =
+        executeAutomatic(ticket, token) { it.agentMemory.saveMemory(text, layer, category, importance, sourceRef, options) }
+
+    fun personalAgentForgetAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String): PersonalMemoryReceipt = executeAutomatic(ticket, token) { it.agentMemory.forget(id) }
+
+    fun personalAgentCorrectAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, text: String): PersonalMemoryReceipt = executeAutomatic(ticket, token) { it.agentMemory.correct(id, text) }
+
+    fun personalAgentConsolidateAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        sourceIds: List<String>, summary: String): PersonalMemoryReceipt =
+        executeAutomatic(ticket, token) { it.agentMemory.consolidateDailyNotes(sourceIds, summary) }
+
+    fun personalAgentSetEpisodeNarrationAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, state: String, title: String?, text: String?) =
+        executeAutomatic(ticket, token) { it.agentMemory.setEpisodeNarration(id, state, title, text) }
+
+    fun personalAgentCommitEpisodeNarrationAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, expected: EpisodeNarrationInput, state: String, title: String?, text: String?): Boolean =
+        executeAutomatic(ticket, token) { it.agentMemory.commitEpisodeNarration(id, expected, state, title, text) }
+
+    fun personalAgentAdvanceExtractionCursorAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        conversationId: String, throughSeq: Long) =
+        executeAutomatic(ticket, token) { it.agentMemory.advanceExtractionCursor(conversationId, throughSeq) }
+
     fun personalAgentNameSync(): String? = withAgentMemory("read agent name") { it.agentName() }
 
-    fun appendConnectorAuditSync(record: AutonomyAuditRecord) = execute { repositories ->
+    fun appendConnectorAuditSync(record: AutonomyAuditRecord) = importConnectorAuditSync(listOf(record))
+
+    /** Atomic legacy import and idempotent append. Conflicting reuse of an ID is not a replay. */
+    fun importConnectorAuditSync(records: List<AutonomyAuditRecord>) = execute { repositories ->
         repositories.database.withChatWriteTransaction {
-            repositories.database.chatSql.execSQL(
-                "INSERT OR IGNORE INTO connector_autonomy_audit(id,timestamp_millis,connector_id,connector_name,operation_name,operation_label,summary) VALUES(?,?,?,?,?,?,?)",
-                arrayOf(record.id, record.timestampMillis, record.connectorId, record.connectorName,
-                    record.operationName, record.operationLabel, record.summary),
-            )
+            val sql = repositories.database.chatSql
+            records.forEach { record ->
+                require(record.id.isNotBlank()) { "Audit ID must be nonempty" }
+                val existing = sql.query(
+                    "SELECT timestamp_millis,connector_id,connector_name,operation_name,operation_label,summary FROM connector_autonomy_audit WHERE id=?",
+                    arrayOf(record.id),
+                ).use { cursor -> if (cursor.moveToFirst()) AutonomyAuditRecord(record.id,
+                    cursor.getLong(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
+                    cursor.getString(4), cursor.getString(5)) else null }
+                check(existing == null || existing == record) { "Audit identity conflict; original source preserved" }
+                if (existing == null) sql.execSQL(
+                    "INSERT INTO connector_autonomy_audit(id,timestamp_millis,connector_id,connector_name,operation_name,operation_label,summary) VALUES(?,?,?,?,?,?,?)",
+                    arrayOf(record.id, record.timestampMillis, record.connectorId, record.connectorName,
+                        record.operationName, record.operationLabel, record.summary),
+                )
+            }
         }
     }
 
@@ -237,32 +305,62 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    fun readEpisodeToolSourceSync(conversationId: String, batchId: String, callId: String): EpisodeToolSource? =
+        execute { it.transcript.readEpisodeToolSource(conversationId, batchId, callId) }
+
     fun personalAgentRecordEpisodeToolStartedSync(conversationId: String, sourceMessageId: String, callId: String,
         toolName: String, connector: String?, authorization: String?, factsJson: String, outcome: String,
-        actionId: String? = null, attemptId: String? = null): String =
+        actionId: String? = null, attemptId: String? = null, sourceBatchId: String? = null,
+        runId: String? = null, processId: String? = null): String =
         withAgentMemory("record episode evidence") {
             it.recordEpisodeToolStarted(conversationId, sourceMessageId, callId, toolName, connector, authorization,
-                factsJson, outcome, actionId, attemptId)
+                factsJson, outcome, actionId, attemptId, sourceBatchId, runId, processId)
         }
 
-    fun personalAgentFinishEpisodeToolEvidenceSync(conversationId: String, callId: String, outcome: String, factsJson: String) =
-        withAgentMemory("finish episode evidence") { it.finishEpisodeToolEvidence(conversationId, callId, outcome, factsJson) }
+    @JvmOverloads
+    fun personalAgentFinishEpisodeToolEvidenceSync(conversationId: String, callId: String, outcome: String,
+        factsJson: String, attemptId: String? = null, sourceBatchId: String? = null, runId: String? = null,
+        authorization: String? = null) =
+        withAgentMemory("finish episode evidence") {
+            it.finishEpisodeToolEvidence(conversationId, callId, outcome, factsJson, attemptId, sourceBatchId, runId, authorization)
+        }
+
+    @JvmOverloads
+    fun personalAgentAdmitEpisodeToolEvidenceSync(conversationId: String, callId: String, authorization: String,
+        factsJson: String, attemptId: String? = null, sourceBatchId: String? = null, runId: String? = null,
+        connectionObservation: com.jarvys.agent.connectors.ConnectionStateCoordinator.Observation? = null) =
+        withAgentMemory("admit exact effect evidence") {
+            it.admitEpisodeToolEvidence(conversationId, callId, authorization, factsJson, attemptId, sourceBatchId, runId, connectionObservation)
+        }
 
     fun personalAgentEnsureTaskAttemptEvidenceSync(conversationId: String, sourceMessageId: String, actionId: String,
-        attemptId: String, toolName: String, authorization: String, outcome: String, factsJson: String) =
+        attemptId: String, toolName: String, authorization: String?, outcome: String, factsJson: String) =
         withAgentMemory("reconcile task action evidence") {
             it.ensureTaskAttemptEvidence(conversationId, sourceMessageId, actionId, attemptId, toolName,
                 authorization, outcome, factsJson)
         }
 
-    fun personalAgentReconcileEpisodeEvidenceSync(conversationId: String? = null) =
-        withAgentMemory("reconcile episode evidence") { it.reconcileEpisodeEvidence(conversationId) }
+    fun personalAgentReconcileEpisodeRunSync(runId: String) =
+        withAgentMemory("reconcile episode run") { it.reconcileEpisodeRun(runId) }
+
+    fun personalAgentReconcileForeignEpisodeProcessesSync(processId: String) =
+        withAgentMemory("reconcile abandoned episode runs") { it.reconcileForeignEpisodeProcesses(processId) }
 
     fun personalAgentPendingEpisodeNarrationsSync(conversationId: String): List<PersonalMemoryHit> =
-        withAgentMemory("read episode narration queue") { it.pendingEpisodeNarrations(conversationId) }
+        personalAgentPendingEpisodeNarrationsSync(conversationId, null)
+
+    fun personalAgentPendingEpisodeNarrationsSync(conversationId: String, episodeIds: Collection<String>?): List<PersonalMemoryHit> {
+        val selected = episodeIds?.distinct()
+        if (selected != null && selected.isEmpty()) return emptyList()
+        return withAgentMemory("read episode narration queue") { it.pendingEpisodeNarrations(conversationId, selected) }
+    }
 
     fun personalAgentEpisodeNarrationInputSync(id: String): EpisodeNarrationInput? =
         withAgentMemory("read episode narration evidence") { it.episodeNarrationInput(id) }
+
+    fun personalAgentCommitEpisodeNarrationSync(id: String, expected: EpisodeNarrationInput,
+        state: String, title: String?, text: String?): Boolean =
+        withAgentMemory("commit episode narration") { it.commitEpisodeNarration(id, expected, state, title, text) }
 
     fun personalAgentEpisodesForSourceMessagesSync(conversationId: String, messageIds: List<String>): List<EpisodeReference> =
         withAgentMemory("read compacted episode references") { it.episodesForSourceMessages(conversationId, messageIds) }
@@ -270,11 +368,11 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentSetEpisodeNarrationSync(id: String, state: String, title: String?, text: String?) =
         withAgentMemory("update episode narration") { it.setEpisodeNarration(id, state, title, text) }
 
-    fun personalAgentNarrationCursorSync(conversationId: String): Long =
-        withAgentMemory("read narration cursor") { it.narrationCursor(conversationId) }
+    fun personalAgentExtractionCursorSync(conversationId: String): Long =
+        withAgentMemory("read extraction cursor") { it.extractionCursor(conversationId) }
 
-    fun personalAgentAdvanceNarrationCursorSync(conversationId: String, throughSeq: Long) =
-        withAgentMemory("advance narration cursor") { it.advanceNarrationCursor(conversationId, throughSeq) }
+    fun personalAgentAdvanceExtractionCursorSync(conversationId: String, throughSeq: Long) =
+        withAgentMemory("advance extraction cursor") { it.advanceExtractionCursor(conversationId, throughSeq) }
 
     fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean): PersonalAgentPromptContext =
         personalAgentPromptContext(conversationId, memoryEnabled, "principal")
@@ -356,7 +454,49 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentRetryJob(id: String, owner: String, error: String, availableAt: Long): Boolean =
         withAgentMemory("retry memory maintenance") { it.retryJob(id, owner, error, availableAt) }
 
-    private fun <T> execute(block: suspend (Repositories) -> T): T {
+    /** Read real durable identity, release the Room lease/fence, then let the caller bind purely. */
+    fun connectionProjectionEvidenceSync(): ConnectionStateCoordinator.DestinationEvidence = executeOnWorker { repos ->
+        val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            try {
+                val generation = runBlocking { ConnectionProjectionRepository(repos.database).generation() }
+                anchor.attest(repos.database, generation)
+            } catch (failure: Throwable) {
+                anchor.invalidate(repos.database)
+                throw failure
+            }
+        }
+    }
+
+    /** ACK is returned only after the exact immutable batch transaction commits. No Prefs callback. */
+    fun projectConnectionStateSync(batch: ConnectionStateCoordinator.ProjectionBatch): ConnectionStateCoordinator.Ack =
+        executeOnWorker { repos ->
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                check(anchor.accepts(batch.binding.evidence(), repos.database)) { "Stale connection projection binding" }
+                try {
+                    runBlocking { ConnectionProjectionRepository(repos.database).project(batch) }
+                } catch (failure: Throwable) {
+                    // Outcome may be uncertain. Preserve the source outbox and require fresh evidence.
+                    anchor.invalidate(repos.database)
+                    throw failure
+                }
+            }
+        }
+
+    private fun <T> execute(block: suspend (Repositories) -> T): T =
+        executeOnWorker { repos -> runBlocking { block(repos) } }
+
+    /** Gate ownership stays on this callable's thread across the structured Room transaction. */
+    private fun <T> executeAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        block: suspend (Repositories) -> T): T = executeOnWorker { repos ->
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, {
+            token.throwIfCancelled()
+            true
+        }, Callable { runBlocking { block(repos) } })
+    }
+
+    private fun <T> executeOnWorker(block: (Repositories) -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
         check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
             "ChatDatabaseBridge cannot be called inside an active chat database lease"
@@ -373,7 +513,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 check(!closingForTests) { "ChatDatabaseBridge test instance is closed" }
                 executor.submit(Callable {
                     val repos = repositories()
-                    runBlocking { block(repos) }
+                    block(repos)
                 })
             }
             pending.get()
@@ -570,7 +710,32 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         execute { it.conversations.pendingInterruptRequests(conversationId) }
 
     fun markInputStateSync(conversationId: String, messageIds: List<String>, state: String): ChatDbResult<List<String>> =
-        execute { it.conversations.markInputState(conversationId, messageIds, state) }
+        executeMissionWrite { it.conversations.markInputState(conversationId, messageIds, state) }
+
+    internal fun bindMissionEpisodeInputSync(input: MissionEpisodeInput) = executeMissionWrite {
+        MissionEpisodeRepository(it.database).bind(input)
+    }
+
+    /** Publish the wake only after the receipt and episode transaction commits. */
+    private fun <T> executeMissionWrite(block: suspend (Repositories) -> T): T {
+        val (result, materialized) = execute { repositories ->
+            // Do not wrap result-returning repositories in another writer transaction: they
+            // catch their own aborts only after their transaction has rolled back.
+            val missions = MissionEpisodeRepository(repositories.database)
+            val before = missions.pendingIds()
+            val value = block(repositories)
+            value to (missions.pendingIds() - before).isNotEmpty()
+        }
+        if (materialized) wakeMissionNarration()
+        return result
+    }
+
+    private fun wakeMissionNarration() {
+        // A failure never rolls back a successful source write. Startup replays the durable receipt.
+        runCatching { com.jarvys.agent.PersonalMemoryExtractionWorker.enqueueNarration(
+            applicationContext, com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION) }
+            .onFailure { AgentErrorReporter.reportBackgroundFailure(applicationContext, it) }
+    }
 
     fun appendDecisionRequestSync(
         conversationId: String,
@@ -614,6 +779,9 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun readModelArtifactRowsSync(conversationId: String): List<JSONObject> =
         execute { it.transcript.readArtifactRows(conversationId) }
+
+    fun readModelArtifactRowsSync(conversationId: String, artifactIds: List<String>): List<JSONObject> =
+        execute { it.transcript.readArtifactRows(conversationId, artifactIds) }
 
     fun readToolResultSourceSync(conversationId: String, callId: String): JSONObject? =
         execute { it.transcript.readToolResultSource(conversationId, callId) }
@@ -779,7 +947,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     /** Commits tool-call, result, provider-output, error, and optional incorporated-input rows atomically. */
     fun appendModelTurnSync(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> =
-        execute { it.modelTurnWriter.append(input) }
+        executeMissionWrite { it.modelTurnWriter.append(input) }
 
     fun setCallLifecycleSync(conversationId: String, batchId: String, callId: String, lifecycle: String): ChatDbResult<Long> =
         execute { it.transcript.setCallLifecycle(conversationId, batchId, callId, lifecycle) }
@@ -866,6 +1034,25 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun unreferencedFileRefsSync(): List<FileRef> = execute { it.reader.unreferencedFileRefs() }
 
     // Compaction, reflection, and crew snapshot writes.
+    fun prepareCompactionCoverageSync(conversationId: String, sources: List<ConversationTurn.Source>): CompactionCoverage? =
+        execute { CompactionMemoryRepository(it.database).prepare(conversationId, sources) }
+
+    fun appendCompactionPreparedSync(input: CompactionInput, coverage: CompactionCoverage?,
+        prepared: PreparedCompactionFlush?, sessionKind: String): ChatDbResult<Compaction> =
+        executeOnWorker { repos ->
+            if (prepared == null) runBlocking { repos.memory.appendCompactionPrepared(input, coverage, null, sessionKind) }
+            else try {
+                MemoryWritePolicy.forContext(applicationContext).gate().commit(prepared.memoryTicket, prepared.canCommit,
+                    Callable { runBlocking { repos.memory.appendCompactionPrepared(input, coverage, prepared, sessionKind) } })
+            } catch (_: MemoryWriteGate.RejectedException) {
+                // OFF or a stale phase denies semantic memory, not safe structural compaction.
+                runBlocking { repos.memory.appendCompactionPrepared(input, coverage, null, sessionKind) }
+            }
+        }
+
+    fun readCompactionFlushStatusSync(conversationId: String, compactionId: String): String? =
+        execute { CompactionMemoryRepository(it.database).status(conversationId, compactionId) }
+
     fun appendCompactionSync(input: CompactionInput): ChatDbResult<Compaction> =
         execute { it.memory.appendCompaction(input) }
 
@@ -898,8 +1085,13 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun appendCrewResultEvidenceSync(
         evidence: CrewResultJournalEvidence,
         beforeWrite: BeforeChatWrite? = null,
-    ): ChatDbResult<CrewResultJournalEvidence> = execute {
-        it.strictJournals.appendCrewResultEvidence(evidence) { beforeWrite?.check() }
+    ): ChatDbResult<CrewResultJournalEvidence> = executeMissionWrite { repositories ->
+        repositories.database.withChatWriteTransaction {
+            val result = repositories.strictJournals.appendCrewResultEvidence(evidence) { beforeWrite?.check() }
+            if (result is ChatDbResult.Success)
+                MissionEpisodeRepository(repositories.database).reconcileEvidence(result.value)
+            result
+        }
     }
 
     fun readCrewResultEvidenceSync(executionSessionId: String, evidenceId: String): ChatDbResult<CrewResultJournalEvidence?> =

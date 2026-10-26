@@ -39,6 +39,10 @@ import com.jarvys.agent.connectors.AutonomyPolicyRow
 import com.jarvys.agent.connectors.ConnectorDefinition
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorState
+import com.jarvys.agent.connectors.ConnectionStateCoordinator
+import com.jarvys.agent.connectors.ConnectorUiObserver
+import com.jarvys.agent.connectors.ConnectorSettingsWork
+import com.jarvys.agent.connectors.connectionTransitionMessage
 import java.util.Locale
 
 /** Settings surface for bundled modules. The connector registry remains their execution and policy store. */
@@ -51,12 +55,18 @@ fun ModulesScreen(moduleRegistry: ModuleRegistry, connectorRegistry: ConnectorRe
     val definitions by connectorRegistry.definitions.collectAsState()
     val states by connectorRegistry.states.collectAsState()
 
+    val observer = remember(moduleRegistry, connectorRegistry) { ConnectorUiObserver(context) }
+    androidx.compose.runtime.DisposableEffect(observer) { onDispose { observer.close() } }
+    var initializationFailed by remember(moduleRegistry, connectorRegistry) { mutableStateOf(false) }
     LaunchedEffect(moduleRegistry, connectorRegistry) {
-        moduleRegistry.installAndConnectUnselected(connectorRegistry, WebViewModuleRuntime(context))
-        connectorRegistry.refreshStates()
+        observer.observe(ConnectorSettingsWork.submit {
+            moduleRegistry.installAndConnectUnselected(connectorRegistry, WebViewModuleRuntime(context.applicationContext))
+            connectorRegistry.refreshStates()
+        }) { _, failed -> initializationFailed = failed }
     }
 
     Column(Modifier.fillMaxSize().testTag("modules-screen")) {
+        if (initializationFailed) Text(stringResource(R.string.connector_transition_failed), color = MaterialTheme.colorScheme.error)
         if (manifests.isEmpty()) {
             JarvysEmptyState(
                 icon = LucideIcons.Layers2,
@@ -95,6 +105,19 @@ private fun ModuleSettingsCard(
     val noneLabel = stringResource(R.string.modules_none)
     var errorText by remember(manifest.id) { mutableStateOf<String?>(null) }
     val enabled = state == ConnectorState.CONNECTED
+    val connectionReady by connectorRegistry.connectionReady.collectAsState()
+    val observer = remember(connectorRegistry, manifest.id) { ConnectorUiObserver(context) }
+    androidx.compose.runtime.DisposableEffect(observer) { onDispose { observer.close() } }
+    fun change(turnOn: Boolean) {
+        val target = definition ?: return
+        val request = connectorRegistry.captureConnectionRequest(target.id,
+            if (turnOn) ConnectionStateCoordinator.Kind.CONNECT else ConnectionStateCoordinator.Kind.DISCONNECT)
+        observer.observe(connectorRegistry.submitConnectionRequest(request)) { result, failed ->
+            if (request.status == ConnectorRegistry.ConnectionRequest.Status.ACCEPTED &&
+                !connectorRegistry.isConnectionRequestCurrent(request)) return@observe
+            errorText = connectionTransitionMessage(result, failed)?.let(context::getString)
+        }
+    }
 
     JarvysGroup(
         modifier = Modifier.fillMaxWidth().testTag("module-${manifest.id}"),
@@ -128,18 +151,8 @@ private fun ModuleSettingsCard(
             }
             Switch(
                 checked = enabled,
-                enabled = definition != null,
-                onCheckedChange = { turnOn ->
-                    definition?.let { target ->
-                        errorText = runCatching {
-                            if (turnOn) connectorRegistry.connect(target.id) else connectorRegistry.disconnect(target.id)
-                            connectorRegistry.refreshStates()
-                            null
-                        }.getOrElse { failure ->
-                            failure.message?.takeIf(String::isNotBlank) ?: context.getString(R.string.modules_toggle_failed)
-                        }
-                    }
-                },
+                enabled = definition != null && (enabled || connectionReady),
+                onCheckedChange = ::change,
                 modifier = Modifier.testTag("module-${manifest.id}-enabled").semantics {
                     contentDescription = context.getString(
                         if (enabled) R.string.modules_toggle_disable_accessibility else R.string.modules_toggle_enable_accessibility,
@@ -149,6 +162,9 @@ private fun ModuleSettingsCard(
             )
         }
 
+        if (!enabled && definition != null) androidx.compose.material3.TextButton(onClick = { change(false) }) {
+            Text(stringResource(R.string.connector_disconnect))
+        }
         Spacer(Modifier.height(10.dp))
         ModuleMetadataLine(
             title = stringResource(R.string.modules_declared_tools),

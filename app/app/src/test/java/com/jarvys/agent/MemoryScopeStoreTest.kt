@@ -53,8 +53,8 @@ class MemoryScopeStoreTest {
         denied { root.listRevisions(null, null) }
         denied { root.write("new.md", note("bad"), MemoryStore.Actor.AGENT, "alpha") }
         denied { root.beginReflectionGroup("bad", "alpha") }
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         assertFalse(alpha.compileSystemPromptProjection().contains("PROJECT_ALPHA"))
         assertFalse(beta.searchDocuments().any { it.content.contains("PERSONAL_TEA") })
         assertArrayEquals(bytes, legacy.readBytes())
@@ -63,8 +63,8 @@ class MemoryScopeStoreTest {
 
     @Test fun localReadWriteListSearchProjectionAndRestartAreConversationBound() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         alpha.write("project.md", note("PROJECT_ALPHA_ONLY"), MemoryStore.Actor.AGENT, "alpha")
         beta.write("project.md", note("PROJECT_BETA_ONLY"), MemoryStore.Actor.AGENT, "beta")
         assertTrue(alpha.read("project.md").contains("PROJECT_ALPHA_ONLY"))
@@ -72,11 +72,11 @@ class MemoryScopeStoreTest {
         assertTrue(beta.searchDocuments().any { it.content.contains("PROJECT_BETA_ONLY") })
         assertFalse(beta.searchDocuments().any { it.content.contains("PROJECT_ALPHA_ONLY") })
         assertFalse(beta.compileSystemPromptProjection().contains("PROJECT_ALPHA_ONLY"))
-        val gamma = root.forConversation("gamma")
+        val gamma = root.forConversation("gamma").bindAutomaticWritesForToolset()
         assertFalse(gamma.list("/memory/").any { it.contains("project.md") })
         denied { gamma.read("project.md") }
-        assertSame(alpha, alpha.forConversation("alpha"))
-        denied { alpha.forConversation("beta") }
+        assertSame(alpha, alpha.forConversation("alpha").bindAutomaticWritesForToolset())
+        denied { alpha.forConversation("beta").bindAutomaticWritesForToolset() }
         denied { alpha.write("steal.md", note("bad"), MemoryStore.Actor.AGENT, "beta") }
         denied { alpha.write("steal.md", note("bad"), MemoryStore.Actor.REFLECTION, null) }
         denied { alpha.write("steal.md", note("bad"), MemoryStore.Actor.USER, "beta") }
@@ -85,8 +85,8 @@ class MemoryScopeStoreTest {
         denied { alpha.read("../project.md") }
         denied { alpha.write(".memory-initialized.md", note("bad"), MemoryStore.Actor.AGENT, "alpha") }
         val reopened = MemoryStore(root.rootDirectory(), true, testMemorySeedProvider())
-        assertTrue(reopened.forConversation("alpha").read("project.md").contains("PROJECT_ALPHA_ONLY"))
-        assertTrue(reopened.forConversation("beta").read("project.md").contains("PROJECT_BETA_ONLY"))
+        assertTrue(reopened.forConversation("alpha").bindAutomaticWritesForToolset().read("project.md").contains("PROJECT_ALPHA_ONLY"))
+        assertTrue(reopened.forConversation("beta").bindAutomaticWritesForToolset().read("project.md").contains("PROJECT_BETA_ONLY"))
         assertTrue(alpha.listRevisions(null, null).all { it.conversationId == "alpha" })
         val digest = MessageDigest.getInstance("SHA-256").digest("alpha".toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
@@ -95,8 +95,8 @@ class MemoryScopeStoreTest {
 
     @Test fun exactExplicitPersonalApprovalCreatesOpaqueImmutableSnapshotAndSurvivesRestart() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         val content = note("I prefer SYNTHETIC_JASMINE_TEA")
         alpha.write("private-name.md", content, MemoryStore.Actor.AGENT, "alpha")
         assertFalse(beta.compileSystemPromptProjection().contains("SYNTHETIC_JASMINE_TEA"))
@@ -118,7 +118,7 @@ class MemoryScopeStoreTest {
         assertFalse(beta.compileSystemPromptProjection().contains("private-name.md"))
         assertTrue(beta.searchDocuments().any { it.path == grant.path && it.content == content })
         assertEquals(grant.id, alpha.approveSharedPersonal(review).id)
-        val restarted = MemoryStore(root.rootDirectory(), true, testMemorySeedProvider()).forConversation("beta")
+        val restarted = MemoryStore(root.rootDirectory(), true, testMemorySeedProvider()).forConversation("beta").bindAutomaticWritesForToolset()
         assertEquals(content, restarted.read(grant.path))
         denied { beta.write(grant.path, note("replaced"), MemoryStore.Actor.AGENT, "beta") }
         denied { beta.edit(grant.path, "JASMINE", "GREEN", MemoryStore.Actor.REFLECTION, "beta") }
@@ -129,8 +129,8 @@ class MemoryScopeStoreTest {
 
     @Test fun changedSourceRejectsOldReviewAndNeverBroadcastsOrResurrectsNewBytes() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         val first = note("PREFERENCE_FIRST")
         alpha.write("choice.md", first, MemoryStore.Actor.USER, "alpha")
         val oldReview = alpha.reviewForSharing("choice.md")
@@ -152,7 +152,7 @@ class MemoryScopeStoreTest {
         denied { beta.read(replacement.path) }
         assertEquals("REVOKED", beta.listSharedPersonalForUser().first { it.id == replacement.id }.status)
         assertEquals(first, root.readSharedPersonalForUser(replacement.id))
-        val restarted = MemoryStore(root.rootDirectory(), true, testMemorySeedProvider()).forConversation("beta")
+        val restarted = MemoryStore(root.rootDirectory(), true, testMemorySeedProvider()).forConversation("beta").bindAutomaticWritesForToolset()
         denied { restarted.read(replacement.path) }
     }
 
@@ -162,7 +162,7 @@ class MemoryScopeStoreTest {
             val bytes = "LEGACY_MIXED_PROJECT_A_AND_PERSONAL_B\r\n".toByteArray()
             File(root.rootDirectory(), "mixed.md").writeBytes(bytes)
             if (audit != null) File(root.rootDirectory(), MemoryConstants.JOURNAL_FILE).writeText(audit)
-            val alpha = root.forConversation("guessed-last-conversation")
+            val alpha = root.forConversation("guessed-last-conversation").bindAutomaticWritesForToolset()
             assertFalse(alpha.compileSystemPromptProjection().contains("LEGACY_MIXED"))
             val review = root.reviewForSharing("mixed.md")
             assertTrue(review.legacy)
@@ -178,8 +178,8 @@ class MemoryScopeStoreTest {
 
     @Test fun missingAndCorruptGrantMetadataFailClosedWithoutMutatingLegacyOrSource() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         alpha.write("choice.md", note("PERSONAL_FIXTURE"), MemoryStore.Actor.USER, "alpha")
         val grant = alpha.approveSharedPersonal(alpha.reviewForSharing("choice.md"))
         val metadata = File(root.rootDirectory(), ".shared-personal/${grant.id}.json")
@@ -199,8 +199,8 @@ class MemoryScopeStoreTest {
 
     @Test fun sameContentExternalEditAndClearCannotReuseTheReviewedVersion() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         alpha.write("choice.md", note("SOURCE_ORIGINAL"), MemoryStore.Actor.USER, "alpha")
         val review = alpha.reviewForSharing("choice.md")
         val grant = alpha.approveSharedPersonal(review)
@@ -218,8 +218,8 @@ class MemoryScopeStoreTest {
 
     @Test fun globalListenersOnlyInvalidateAndNeverReceiveScopedRevisionBytes() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         alpha.ensureInitialized(); beta.ensureInitialized()
         val global = mutableListOf<MemoryStore.Revision>()
         val local = mutableListOf<MemoryStore.Revision>()
@@ -249,8 +249,8 @@ class MemoryScopeStoreTest {
 
     @Test fun concurrentIndependentScopesAndApprovalAgainstSourceMutationRemainSafe() {
         val root = root()
-        val alpha = root.forConversation("alpha")
-        val beta = root.forConversation("beta")
+        val alpha = root.forConversation("alpha").bindAutomaticWritesForToolset()
+        val beta = root.forConversation("beta").bindAutomaticWritesForToolset()
         val started = CountDownLatch(1)
         val executor = Executors.newFixedThreadPool(3)
         try {

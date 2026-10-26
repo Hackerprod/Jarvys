@@ -1095,4 +1095,159 @@ class GoogleAuthorizationManagerTest {
         assertEquals(listOf(setOf(scope, GoogleOAuthProtocol.GMAIL_LABELS)), identity.requestedScopes)
         assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS))
     }
+    @Test fun asyncLocalDisconnectDeniesBeforeWorkerAndBusyNeverCapturesOn() {
+        val manager = manager(Identity())
+        seedGrant()
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = GoogleOAuthManager::class.java.getDeclaredField("localExecutor").apply { isAccessible = true }
+            .get(manager) as java.util.concurrent.ExecutorService
+        executor.execute { started.countDown(); release.await(3, TimeUnit.SECONDS) }
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+        var offCaptured = false
+        var disconnected = false
+        manager.requestLocalChange(GoogleOAuthManager.LocalChange.Disconnect,
+            { offCaptured = true }, {}, { assertTrue(it.result.isSuccess); disconnected = true })
+        assertTrue(offCaptured)
+        assertFalse(manager.isScopeGranted(scope))
+        var onCaptures = 0
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val rejected = manager.requestAuthorization(activity, scope, { onCaptures++ }, {}, { _, _ -> fail("No callback") })
+        assertEquals(GoogleUiAdmission.Submission.Rejected(GoogleUiAdmission.Rejection.BUSY), rejected)
+        assertEquals(0, onCaptures)
+        release.countDown()
+        waitUntil { disconnected }
+        assertFalse(manager.isScopeGranted(scope))
+        var authorized = false
+        manager.requestAuthorization(activity, scope, { "captured-request" }, {}, { request, result ->
+            assertEquals("captured-request", request)
+            assertTrue(result.result.isSuccess)
+            assertEquals(Looper.getMainLooper(), Looper.myLooper())
+            authorized = true
+        })
+        waitUntil { authorized }
+        assertTrue(manager.isScopeGranted(scope))
+    }
+
+    @Test fun queuedLocalChangeInvalidatesOldOAuthBeforeCleanupAndNeverRepersistsGrant() {
+        val consentStarted = CountDownLatch(1)
+        val releaseConsent = CountDownLatch(1)
+        val identity = Identity().apply { beforeGrant = { consentStarted.countDown(); releaseConsent.await(3, TimeUnit.SECONDS) } }
+        val manager = manager(identity)
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        // Legacy entry also receives the external UI epoch fence.
+        var callbacks = 0
+        manager.authorize(activity, scope) { callbacks++ }
+        assertTrue(consentStarted.await(2, TimeUnit.SECONDS))
+        var disconnected = false
+        manager.requestLocalChange(GoogleOAuthManager.LocalChange.Disconnect, {}, {}, {
+            assertTrue(it.result.isSuccess); disconnected = true
+        })
+        waitUntil { disconnected }
+        val completedRevision = manager.stateRevision.value
+        releaseConsent.countDown()
+        waitUntil { manager.stateRevision.value > completedRevision }
+        assertFalse(manager.isAuthorizationInProgress())
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0, callbacks)
+        assertFalse(manager.isScopeGranted(scope))
+        assertEquals("", app.getSharedPreferences("jarvys_full_oauth_config", Context.MODE_PRIVATE)
+            .getString("google_identity_granted_scopes", ""))
+    }
+
+    @Test fun authorizationCallbackDoesNotHoldSessionPersistenceLock() {
+        val manager = manager(Identity())
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        var completed = false
+        manager.authorize(activity, scope) { result ->
+            assertTrue(result.isSuccess)
+            val disconnected = CountDownLatch(1)
+            Thread { manager.disconnectLocal(); disconnected.countDown() }.start()
+            assertTrue("UI callback must not retain the session lock", disconnected.await(2, TimeUnit.SECONDS))
+            completed = true
+        }
+        waitUntil { completed }
+        assertFalse(manager.isScopeGranted(scope))
+    }
+
+    @Test fun asyncRevocationKeepsBusyUntilRemoteTerminalAndNeverCapturesOn() {
+        val remoteStarted = CountDownLatch(1)
+        val releaseRemote = CountDownLatch(1)
+        val identity = Identity().apply { revokeAction = {
+            assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
+            remoteStarted.countDown(); releaseRemote.await(3, TimeUnit.SECONDS)
+        } }
+        val manager = manager(identity)
+        seedGrant()
+        var complete = false
+        manager.requestLocalChange(GoogleOAuthManager.LocalChange.Revoke, {}, {}, {
+            assertTrue(it.result.isSuccess)
+            assertEquals(Looper.getMainLooper(), Looper.myLooper())
+            complete = true
+        })
+        assertTrue(remoteStarted.await(2, TimeUnit.SECONDS))
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        assertTrue(manager.requestAuthorization(activity, scope, { fail("No ON while revocation pending") }, {}, { _, _ -> })
+            is GoogleUiAdmission.Submission.Rejected)
+        assertFalse(manager.isScopeGranted(scope))
+        releaseRemote.countDown()
+        waitUntil { complete }
+        assertEquals(GoogleRevocationState.VERIFIED, manager.revocationState())
+    }
+
+    @Test fun externalOffAfterCaptureBeforeWorkerDoesNotLaunchOAuthAndReturnsOriginalRequest() {
+        val identity = Identity()
+        val manager = manager(identity)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = GoogleOAuthManager::class.java.getDeclaredField("localExecutor").apply { isAccessible = true }
+            .get(manager) as java.util.concurrent.ExecutorService
+        executor.execute { started.countDown(); release.await(3, TimeUnit.SECONDS) }
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val current = java.util.concurrent.atomic.AtomicBoolean(true)
+        var completion: GoogleOAuthManager.AuthorizationResult? = null
+        val request = Any()
+        manager.requestAuthorization(activity, scope, { request }, {}, { current.get() }) { captured, result ->
+            assertSame(request, captured)
+            completion = result
+        }
+        current.set(false) // Registry choice changed, without a manager local command/UI epoch change.
+        release.countDown()
+        waitUntil { completion != null }
+        assertTrue(completion!!.result.exceptionOrNull() is GoogleOAuthManager.ObsoleteConnectionRequestException)
+        assertEquals(0, identity.authorizeCalls)
+        assertFalse(manager.isAuthorizationInProgress())
+    }
+
+    @Test fun destroyedActivitySettlesCapturedRequestExactlyOnceWithoutSuccess() {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val identity = Identity().apply { beforeGrant = { started.countDown(); release.await(3, TimeUnit.SECONDS) } }
+        val manager = manager(identity)
+        val executor = GoogleOAuthManager::class.java.getDeclaredField("localExecutor").apply { isAccessible = true }
+            .get(manager) as java.util.concurrent.ExecutorService
+        val ready = CountDownLatch(1)
+        executor.execute { ready.countDown() }
+        assertTrue(ready.await(2, TimeUnit.SECONDS))
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val original = Any()
+        var callbacks = 0
+        var aborted = false
+        val submission = manager.requestAuthorization(controller.get(), scope, { original }, {}, { captured, result ->
+            assertSame(original, captured)
+            callbacks++
+            assertTrue(result.result.exceptionOrNull() is java.util.concurrent.CancellationException)
+            aborted = true // Process owner aborts the original prepared Registry request.
+        })
+        assertTrue(submission is GoogleUiAdmission.Submission.Accepted)
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+        controller.pause().stop().destroy()
+        release.countDown()
+        waitUntil { aborted }
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, callbacks)
+        assertFalse(manager.isScopeGranted(scope))
+    }
+
 }

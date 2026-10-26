@@ -148,7 +148,8 @@ class PersonalAgentBehaviorTest {
             CancellationToken.uncancellable(), null,
         )
         assertNotNull(compacted)
-        assertEquals(true, flushOutcome)
+        assertEquals("Synthetic turns without durable source bindings cannot certify a flush", false, flushOutcome)
+        assertTrue(bridge.personalAgentNeedsMemoryFlush(session))
         val prompt = assembledPrompt("compacted-session")
 
         assertTrue(prompt.contains("The user is a developer."))
@@ -204,6 +205,82 @@ class PersonalAgentBehaviorTest {
         } finally {
             preferences.edit().putBoolean(MemoryConstants.ENABLED_KEY, memoryWasEnabled).commit()
         }
+    }
+
+    @Test fun actualRequestModelReloadsRoomExcludesLegacyAndFreshRuntimeHonorsOff() {
+        val session = ordinarySession("room-provider-boundary")
+        val legacyLocal = "LegacyLocalProviderCanary"
+        val legacyShared = "LegacySharedProviderCanary"
+        val legacyRoot = MemoryStore(context, testMemorySeedProvider())
+        val legacy = legacyRoot.forConversation(session)
+        val donor = legacyRoot.forConversation("legacy-provider-donor")
+        fun note(value: String) = "---\nname: Note\ndescription: Synthetic note.\n---\n$value\n"
+        legacy.write("local.md", note(legacyLocal), MemoryStore.Actor.USER, session)
+        donor.write("shared.md", note(legacyShared), MemoryStore.Actor.USER, "legacy-provider-donor")
+        donor.approveSharedPersonal(donor.reviewForSharing("shared.md"))
+        val firstText = "The user prefers concise synthetic reports."
+        val secondText = "The user prefers detailed synthetic reports."
+        val first = bridge.personalAgentSetDirective("style", firstText, "synthetic-first", "explicit")
+        val declarations = listOf(ToolSpec("provider_probe", "test", "Synthetic provider probe", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList()))
+        val token = CancellationToken.uncancellable()
+        val prompts = ArrayList<String>()
+        val provider = object : ModelProviderClient {
+            override fun complete(systemPrompt: String, userPrompt: String,
+                images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>,
+                sessionId: String, currentToken: CancellationToken): ModelReply =
+                error("Conversation completion is expected")
+            override fun completeConversation(systemPrompt: String, history: List<ConversationTurn>,
+                userPrompt: String, images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>,
+                sessionId: String, currentToken: CancellationToken): ModelReply {
+                assertEquals(session, sessionId)
+                assertEquals("Synthetic continuation", userPrompt)
+                org.junit.Assert.assertSame(declarations, tools)
+                org.junit.Assert.assertSame(token, currentToken)
+                assertTrue(history.isEmpty())
+                assertTrue(images.isEmpty())
+                assertFalse(systemPrompt.contains(legacyLocal))
+                assertFalse(systemPrompt.contains(legacyShared))
+                prompts += systemPrompt
+                return ModelReply("Synthetic reply", emptyList())
+            }
+        }
+        val model = CoreAgentModel(provider, session)
+        fun requestRuntime(): CoreAgentLoop.Model {
+            val runtime = CoreAgentRuntime(context, session, emptyList(), CorePromptBudget.standard(), provider)
+            // The same app/session has real legacy files and an active shared grant, but runtime reads Room only.
+            return runtime.requestModel(model, CoreToolRegistry(emptyList()), true, null)
+        }
+        fun next(adapter: CoreAgentLoop.Model): String {
+            val before = prompts.size
+            assertEquals("Synthetic reply", adapter.complete(emptyList(), "Synthetic continuation",
+                declarations, token).text)
+            assertEquals(before + 1, prompts.size)
+            return prompts.last()
+        }
+        val current = requestRuntime()
+        assertEquals(model.contextWindow(token), current.contextWindow(token))
+        assertTrue(next(current).contains(firstText))
+        bridge.personalAgentSetDirective("style", secondText, "synthetic-second", "explicit", first.id)
+        val updated = next(current)
+        assertTrue(updated.contains(secondText))
+        assertFalse(updated.contains(firstText))
+        val policy = MemoryWritePolicy.forContext(context)
+        val wasEnabled = policy.isEnabled()
+        val settingsWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            settingsWorker.submit { policy.setEnabledBlocking(false) }.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            val off = next(requestRuntime()) // OFF applies to the new runtime, not a changed mid-run read contract.
+            assertFalse(off.contains(firstText))
+            assertFalse(off.contains(secondText))
+        } finally {
+            settingsWorker.submit { policy.setEnabledBlocking(wasEnabled) }.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            settingsWorker.shutdownNow()
+        }
+        assertEquals(3, prompts.size)
+        assertTrue("Earlier provider input is immutable", prompts[0].contains(firstText))
+        assertFalse(prompts[0].contains(secondText))
+        assertTrue(prompts[1].contains(secondText))
     }
 
     @Test fun taskAndProactiveReceiveProfileButNoPrivateNotesAndSubagentGetsNoUserMemory() {
@@ -422,7 +499,8 @@ class PersonalAgentBehaviorTest {
         val noOp = PersonalMemoryFlush(context, noOpSession, "principal",
             CoreAgentModel(context, provider { _, _, _, _, _, _ -> ModelReply("NO_REPLY", emptyList()) }, noOpSession))
         assertTrue(noOp.run(emptyList(), CancellationToken.uncancellable()))
-        assertFalse(bridge.personalAgentNeedsMemoryFlush(noOpSession))
+        assertTrue("A facts-only pass cannot certify a compaction that has not committed",
+            bridge.personalAgentNeedsMemoryFlush(noOpSession))
 
         val unsupportedSession = ordinarySession("unsupported-flush")
         val unsupported = PersonalMemoryFlush(context, unsupportedSession, "principal",

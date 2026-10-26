@@ -39,4 +39,53 @@ public class ScheduledTaskBoundToolTest {
         assertTrue(wrapped.isCompleteResult(Collections.emptyMap(), "complete result"));
         assertEquals("Already visible.", wrapped.completeResultAlreadyVisibleMessage());
     }
+    @Test public void transportsTheSameInvocationAndPreservesCompletionMetadata() {
+        java.util.concurrent.atomic.AtomicInteger persisted = new java.util.concurrent.atomic.AtomicInteger();
+        EffectInvocation invocation = new EffectInvocation(admission -> persisted.incrementAndGet());
+        CoreTool delegate = new CoreTool() {
+            @Override public ToolSpec declaration() {
+                return new ToolSpec("native_write", "test", "Test", "test", ToolSpec.Status.IMPLEMENTED,
+                        Collections.emptyMap(), Collections.emptyList());
+            }
+            @Override public EffectClass effectClass() { return EffectClass.WRITE; }
+            @Override public CoreToolResult execute(Map<String, Object> args, CancellationToken token) {
+                throw new AssertionError("Explicit context must not be dropped");
+            }
+            @Override public CoreToolResult execute(Map<String, Object> args, CancellationToken token,
+                    ProgressListener progress, EffectInvocation received) {
+                org.junit.Assert.assertSame(invocation, received);
+                received.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
+                        "test", "native_write", null, "test"));
+                assertEquals(1, persisted.get());
+                return CoreToolResult.preview("completed", "preview-id")
+                        .withEffectReceipt(received.receipt(EffectInvocation.Outcome.OK));
+            }
+        };
+        CoreTool wrapped = new CoreAgentRuntime.ScheduledTaskBoundTool(delegate, true, false, null);
+        CoreToolResult result = wrapped.execute(Collections.emptyMap(), CancellationToken.cancellable(), null, invocation);
+        assertEquals("preview-id", result.previewId);
+        assertEquals(EffectInvocation.Outcome.OK, invocation.resolve(result, true).outcome);
+        assertEquals(1, persisted.get());
+    }
+
+    @Test public void deferredTaskWriteHasTypedPendingDecisionWithoutAdmission() {
+        CoreTool delegate = new CoreTool() {
+            @Override public ToolSpec declaration() {
+                return new ToolSpec("native_write", "test", "Test", "test", ToolSpec.Status.IMPLEMENTED,
+                        Collections.emptyMap(), Collections.emptyList());
+            }
+            @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.WRITE; }
+            @Override public CoreToolResult execute(Map<String, Object> args, CancellationToken token) {
+                throw new AssertionError("Pending writes must not execute");
+            }
+        };
+        EffectInvocation invocation = new EffectInvocation(admission -> { throw new AssertionError("No dispatch"); });
+        CoreTool wrapped = new CoreAgentRuntime.ScheduledTaskBoundTool(delegate, false, false,
+                (name, args, token) -> CoreToolResult.success("localized queue acknowledgement"));
+        CoreToolResult result = wrapped.execute(Collections.emptyMap(), CancellationToken.cancellable(), null, invocation);
+        assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, result.effectReceipt.outcome);
+        assertEquals(EffectInvocation.Authorization.ASK_PENDING, result.effectReceipt.admission.authorization);
+        org.junit.Assert.assertFalse(invocation.admitted());
+    }
+
 }

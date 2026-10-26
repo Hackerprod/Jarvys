@@ -3,12 +3,17 @@ package com.jarvys.agent
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Synthetic memory only. Native memory tools run directly while keeping their real state boundaries. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], manifest = Config.NONE)
 class NativeMemoryActionRuntimeTest {
     @get:Rule val temporary = TemporaryFolder()
     private val token = CancellationToken.uncancellable()
@@ -22,7 +27,7 @@ class NativeMemoryActionRuntimeTest {
         val root = root()
         val workspace = workspace(root)
         val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
-        val selected = root.forConversation("session")
+        val selected = root.forConversation("session").bindAutomaticWritesForToolset()
 
         val write = tools.invoke("write", mapOf("path" to "/memory/new.md", "content" to note("first")), token)
         assertTrue(write.content, write.success)
@@ -36,8 +41,8 @@ class NativeMemoryActionRuntimeTest {
         assertTrue(delete.content, delete.success)
         assertFalse(File(selected.rootDirectory(), "new.md").exists())
 
-        workspace.write("/ordinary.txt", "ordinary")
-        assertEquals("ordinary", workspace.read("/ordinary.txt"))
+        workspace.write("ordinary.txt", "ordinary")
+        assertEquals("ordinary", workspace.read("ordinary.txt"))
     }
 
     @Test fun disabledMemoryRemainsUnavailableWhileOrdinaryWorkspaceWritesWork() {
@@ -45,8 +50,8 @@ class NativeMemoryActionRuntimeTest {
         val workspace = workspace(root, enabled = false)
         val tools = CoreToolRegistry(WorkspaceTools.createWithSearchForTests(workspace, null))
         assertFalse(tools.invoke("write", mapOf("path" to "/memory/new.md", "content" to note("no")), token).success)
-        workspace.write("/ordinary.txt", "still available")
-        assertEquals("still available", workspace.read("/ordinary.txt"))
+        workspace.write("ordinary.txt", "still available")
+        assertEquals("still available", workspace.read("ordinary.txt"))
     }
 
     @Test fun exactToolArgumentsAreCapturedOnceBeforeTheSharedEffect() {
@@ -69,13 +74,14 @@ class NativeMemoryActionRuntimeTest {
     }
 
     @Test fun compoundNativeMutationCompletesAndCancelledActionDoesNotRun() {
-        val store = root().forConversation("session")
+        val store = root().forConversation("session").bindAutomaticWritesForToolset()
         val actions = MemoryNativeActions.forTool(store)
         val changes = AtomicInteger()
         val listener = object : MemoryStore.MemoryChangeListener {
             override fun onMemoryChanged(revision: MemoryStore.Revision) { changes.incrementAndGet() }
             override fun onMemoryCleared() = Unit
         }
+        store.ensureInitialized()
         store.addChangeListener(listener)
         try {
             actions.run(store, token) { store.createDirectoryForUser("two/levels", "session") }
@@ -91,7 +97,7 @@ class NativeMemoryActionRuntimeTest {
     }
 
     @Test fun memoryViewStateChangeInvalidatesPreparedActionWithoutPartialEffect() {
-        val store = root().forConversation("session")
+        val store = root().forConversation("session").bindAutomaticWritesForToolset()
         val actions = MemoryNativeActions.forTool(store)
         val prepared = actions.prepare(store, token)
         store.write("changed.md", note("new state"), MemoryStore.Actor.USER, "session")
@@ -103,7 +109,7 @@ class NativeMemoryActionRuntimeTest {
     }
 
     @Test fun reflectionRestoreCompletesAllUndoRevisions() {
-        val store = root().forConversation("session").also { it.ensureInitialized() }
+        val store = root().forConversation("session").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
         val beforeHuman = store.read("human.md"); val beforePersona = store.read("persona.md")
         store.beginReflectionGroup("group", "session")
         store.write("human.md", note("new human"), MemoryStore.Actor.REFLECTION, "session", "group")

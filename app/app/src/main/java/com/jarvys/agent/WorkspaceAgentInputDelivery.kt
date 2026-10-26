@@ -67,13 +67,26 @@ internal object WorkspaceAgentInputDelivery {
                 prior != null && sameSourceInput(input, prior)
             }.getOrDefault(false)
             if (!same) nonDeliverable(context, "stable worker message identity conflicts with stored input")
+            else bindResultInput(context, message, assignment, existing.getString("messageId"))
             return
         }
         val storedId = store.appendConversationInput(input)
+        bindResultInput(context, message, assignment, storedId)
         com.jarvys.agent.workspaces.WorkspaceChanges.changed()
         AgentForegroundService.startRealAgentFromStoredChatMessage(
             context.applicationContext, WorkspaceIdentity.CENTRAL_SESSION, storedId,
         )
+    }
+
+    private fun bindResultInput(context: Context, message: CrewMessage,
+        assignment: com.jarvys.agent.workspaces.WorkspaceAssignment, storedId: String) {
+        // Legacy checkpoints have no result cycle. Never substitute the bot's current cycle.
+        if (message.type != CrewMessage.Type.RESULT || message.resultCycleId.isEmpty()) return
+        com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context).bindMissionEpisodeInputSync(
+            com.jarvys.agent.chatdb.MissionEpisodeInput(WorkspaceIdentity.CENTRAL_SESSION, storedId,
+                message.conversationId, WorkspaceIdentity.workspaceId(message.conversationId),
+                assignment.assignmentId, assignment.missionId, requireNotNull(assignment.botId), message.resultCycleId,
+                com.jarvys.agent.chatdb.MissionEpisodeRepository.textHash(message.text)))
     }
 
     private fun input(message: CrewMessage, workspaceId: String, assignmentId: String,
@@ -93,7 +106,8 @@ internal object WorkspaceAgentInputDelivery {
             reference?.cycleId ?: botCycleId(message)),
     )
 
-    private fun botCycleId(message: CrewMessage): String = message.coordination?.cycleId.orEmpty()
+    private fun botCycleId(message: CrewMessage): String =
+        message.coordination?.cycleId ?: message.resultCycleId
 
     private fun sameSourceInput(expected: ConversationInput, actual: ConversationInput): Boolean {
         val left = expected.provenance ?: return false

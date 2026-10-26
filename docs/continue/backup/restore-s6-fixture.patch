@@ -1,0 +1,68 @@
+diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
+index 479805d3..b47617c4 100644
+--- a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
+@@ -67 +67 @@ class ScheduledTaskProcessorTest {
+-    @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
++    @get:Rule val chatTestStore = com.jarvys.agent.ChatTestStore(registerApplicationFilesDirectory = true)
+@@ -78 +78 @@ class ScheduledTaskProcessorTest {
+-        // The test body runs on the main looper: let the single-session startup finish before any store opens.
++        // Match TaskTickWorker: toolset discovery and task execution run off the main looper.
+@@ -244 +244 @@ class ScheduledTaskProcessorTest {
+-                TaskPendingActionExecutor { _, approvedTask, queued ->
++                contextAwareExecutor { _, approvedTask, queued, invocation ->
+@@ -247 +247 @@ class ScheduledTaskProcessorTest {
+-                        CancellationToken.cancellable(), connectorRegistry, modules, taskStore,
++                        CancellationToken.cancellable(), connectorRegistry, modules, taskStore, invocation,
+@@ -336 +336 @@ class ScheduledTaskProcessorTest {
+-            ).execute(action.id, persistedTask.id, TaskPendingActionExecutor { _, approvedTask, queued ->
++            ).execute(action.id, persistedTask.id, contextAwareExecutor { _, approvedTask, queued, invocation ->
+@@ -339 +339 @@ class ScheduledTaskProcessorTest {
+-                    CancellationToken.cancellable(), connectorRegistry, modules, taskStore,
++                    CancellationToken.cancellable(), connectorRegistry, modules, taskStore, invocation,
+@@ -756 +756,2 @@ class ScheduledTaskProcessorTest {
+-        assertEquals(1, java.io.File(taskStoreRoot, "runs.jsonl").readLines().size)
++        assertEquals(listOf("STARTED", "OK"), java.io.File(taskStoreRoot, "runs.jsonl")
++            .readLines().map { JSONObject(it).getString("status") })
+@@ -822,0 +824 @@ class ScheduledTaskProcessorTest {
++            override fun hasCompleteWriteAdmissionCoverage() = true
+@@ -828,0 +831 @@ class ScheduledTaskProcessorTest {
++                requireNotNull(preparation.authorizeWriteEffect).invoke()
+@@ -829,0 +833 @@ class ScheduledTaskProcessorTest {
++                requireNotNull(preparation.reportWriteOutcome).invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
+@@ -904,0 +909,35 @@ class ScheduledTaskProcessorTest {
++    @Test fun argumentSensitiveWriteCannotDisappearBehindReadUnattendedMetadata() {
++        val calls = mutableListOf<TaskToolCallRecord>()
++        var effects = 0
++        val delegate = object : com.jarvys.agent.CoreTool {
++            override fun declaration() = ToolSpec("mixed_tool", "test", "Mixed", "test",
++                ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
++            override fun unattendedAccess() = com.jarvys.agent.CoreTool.UnattendedAccess.READ
++            override fun effectClass(arguments: Map<String, Any>) =
++                if (arguments["write"] == true) com.jarvys.agent.CoreTool.EffectClass.WRITE
++                else com.jarvys.agent.CoreTool.EffectClass.READ
++            override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
++                effects++
++                return CoreToolResult.success("legacy result without completion proof")
++            }
++        }
++        val wrapper = ScheduledTaskProcessor.TaskTrackedTool(delegate, false, calls, false,
++            sourceMessageId = "mixed-tool-source", episodeRunId = "mixed-tool-run", context = context)
++        wrapper.execute(mapOf("write" to true), CancellationToken.cancellable(), null,
++            com.jarvys.agent.EffectInvocation { })
++        assertEquals(1, effects)
++        assertTrue(calls.single().write)
++        assertEquals("UNKNOWN", calls.single().outcome)
++        assertTrue(calls.single().mayHaveWritten())
++    }
++
++    private fun contextAwareExecutor(block: (Context, ScheduledTask, TaskPendingAction,
++                                             com.jarvys.agent.EffectInvocation) -> com.jarvys.agent.CoreToolResult) =
++        object : TaskPendingActionExecutor {
++            override fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreToolResult =
++                error("Explicit invocation context required")
++            override fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction,
++                                 invocation: com.jarvys.agent.EffectInvocation) = block(context, task, action, invocation)
++            override fun hasCompleteEffectAdmissionCoverage() = true
++        }
++

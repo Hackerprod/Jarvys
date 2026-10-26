@@ -26,6 +26,7 @@ class GmailConnector(
     private val writeJournal: GoogleWorkspaceWriteJournal = GoogleWorkspaceWriteJournals.inMemory(),
     private val managementStore: GmailManagementStore = GmailManagementStores.inMemory(),
 ) : ConnectorRuntime, AgentRunScopedConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     constructor(oauth: GoogleRestAuthorization, contacts: ContactsGateway, contactsPermission: () -> Boolean,
                 contactsConnected: () -> Boolean, artifactSink: GoogleWorkspaceArtifactSink = GoogleWorkspaceArtifacts,
                 writeJournal: GoogleWorkspaceWriteJournal = GoogleWorkspaceWriteJournals.inMemory(),
@@ -281,7 +282,7 @@ class GmailConnector(
         val response = try {
             oauth.requestCancellable(scope, if (operation == UPDATE_DRAFT) "PUT" else "POST",
                 GoogleRestEndpoints.GMAIL + endpoint, writePayload(reviewed), token = token,
-                expectedAuthorizationEpoch = reviewed.authorizationEpoch)
+                expectedAuthorizationEpoch = reviewed.authorizationEpoch, beforeMutation = preparation.authorizeWriteEffect)
         } catch (failure: Exception) {
             if (failure is GooglePreDispatchAuthorizationException) { writeJournal.resolve(reviewed.intentHash); throw failure }
             if (failure is java.util.concurrent.CancellationException) throw failure
@@ -309,6 +310,7 @@ class GmailConnector(
         token.throwIfCancelled()
         val result = GmailContent.envelope("gmail.$operation", JSONArray().put(item), 1)
         if (!writeJournal.resolve(reviewed.intentHash)) result.put("safety_warning", "Google accepted the action but its local safety marker could not be cleared. Do not retry; verify in Gmail.")
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         return result
     }
 
@@ -669,11 +671,10 @@ class GmailConnector(
 
         fun definition(context: Context): ConnectorDefinition {
             val app = context.applicationContext
-            val prefs = app.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
             val contacts = ContactsContractGateway(app)
             val runtime = GmailConnector({ GoogleOAuthManager.get(app) }, contacts,
                 { ContextCompat.checkSelfPermission(app, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED },
-                { prefs.getBoolean("connected_${ContactsConnector.ID}", false) },
+                { ConnectionAccess.isLocallySelected(app, ContactsConnector.ID) },
                 writeJournal = GoogleWorkspaceWriteJournals.persistent(app), managementStore = GmailManagementStores.persistent(app))
             return definition(runtime)
         }

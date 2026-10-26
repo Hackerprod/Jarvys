@@ -10,6 +10,7 @@ import com.jarvys.agent.CoreConnectorTool
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolRegistry
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.PolicyGatedTool
 import com.jarvys.agent.ModuleTool
@@ -103,9 +104,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             registered.set(registryList)
             registryList.forEach { it.beginAgentRun(token.generation(), task.instruction, emptyList()) }
             val systemPrompt = buildString {
-                val memoryEnabled = app.getSharedPreferences(
-                    com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
-                ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
+                val memoryEnabled = com.jarvys.agent.MemoryWritePolicy.forContext(app).isEnabled()
                 // The task run reads the profile for its kind and leaves Central's session state untouched.
                 val context = ChatDatabaseBridge.getInstance(app)
                     .personalAgentPromptContext("", memoryEnabled, RunKind.TASK.memoryKind())
@@ -120,11 +119,15 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 }) append("\n\n").append(WebSearchTools.citationPrompt())
             }
             val userPrompt = userRequest(task)
-            val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
+            val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token, runId)
             token.throwIfCancelled()
             if (toolCalls.any { it.outcome == "WAITING_VISIBLE_APP" }) return permanentFailure(
                 task, scheduledFor, TaskRunCause.VISIBLE_APP_REQUIRED,
                 TaskRunCause.VISIBLE_APP_REQUIRED.localized(localized), toolCalls, currentModel(), occurrenceId,
+            )
+            if (toolCalls.any { it.write && it.outcome == "UNKNOWN" }) return TaskExecutionResult(
+                "PARTIAL", "UNKNOWN", toolsCalled = toolCalls.toList(), model = currentModel(),
+                causeCode = TaskRunCause.EXECUTION_FAILED,
             )
             val failedConnectorCall = toolCalls.firstOrNull { it.name in scope.connectorNames && it.outcome == "ERROR" }
             if (failedConnectorCall != null) return permanentFailure(task, scheduledFor,
@@ -172,13 +175,13 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             }, toolsCalled = toolCalls.toList(), notified = notified || recoveredNotice,
                 model = currentModel(), deliveredResult = committedBody, conversationMessageId = messageId)
         } catch (cancelled: CancellationException) {
-            val partial = toolCalls.any { it.write && it.outcome != "PENDING" }
+            val partial = toolCalls.any { it.mayHaveWritten() }
             return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
                 toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
                 else TaskRunCause.INTERRUPTED, model = currentModel())
         } catch (failure: RuntimeException) {
             if (token.isCancelled) {
-                val partial = toolCalls.any { it.write && it.outcome != "PENDING" }
+                val partial = toolCalls.any { it.mayHaveWritten() }
                 return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
                     toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
                     else TaskRunCause.INTERRUPTED, model = currentModel())
@@ -189,6 +192,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val (cause, detail) = normalizedCause(failure)
             return permanentFailure(task, scheduledFor, cause, detail, toolCalls, currentModel(), occurrenceId)
         } finally {
+            runCatching { ChatDatabaseBridge.getInstance(app).personalAgentReconcileEpisodeRunSync(runId) }
             registered.get().forEach { it.endAgentRun(token.generation()) }
             cancelWorkerRun.run()
             BackgroundRunController.finish(BackgroundRunKind.TASK, token)
@@ -285,6 +289,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 calls,
                 redactOutput = tool.isConnectorTool() || tool.isMcpTool() || isWebRead,
                 sourceMessageId = "task:${task.id}:$occurrenceId",
+                episodeRunId = runId,
                 context = app)
         }
         val respondent = TaskRespondTool()
@@ -297,8 +302,8 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         emptyList(), emptySet(), reason)
 
     private fun runLoop(sessionId: String, tools: CoreToolRegistry, system: String, request: String,
-                        history: List<com.jarvys.agent.ConversationTurn>, token: CancellationToken): CoreAgentLoop.Result {
-        val result = loopFactory.createLoop(localized, sessionId, tools, system).run(request, history, token, null)
+                        history: List<com.jarvys.agent.ConversationTurn>, token: CancellationToken, runId: String): CoreAgentLoop.Result {
+        val result = loopFactory.createLoop(localized, sessionId, tools, system).run(request, history, emptyList(), token, null, null, runId)
         token.throwIfCancelled()
         // Preserve existing provider and transport transient classification for task capabilities.
         result.throwIfProviderUnavailable()
@@ -417,12 +422,13 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             ?: error.javaClass.simpleName.takeIf(String::isNotBlank))
     }
 
-    private class TaskTrackedTool(
+    internal class TaskTrackedTool(
         private val delegate: CoreTool,
         private val isWrite: Boolean,
         private val calls: MutableList<TaskToolCallRecord>,
         private val redactOutput: Boolean,
         private val sourceMessageId: String? = null,
+        private val episodeRunId: String? = null,
         private val context: Context,
     ) : CoreTool {
         override fun declaration(): ToolSpec = delegate.declaration()
@@ -435,6 +441,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()
         override fun accessClassification() = delegate.accessClassification()
         override fun persistenceEffect() = delegate.persistenceEffect()
+        override fun persistenceEffect(arguments: Map<String, Any>) = delegate.persistenceEffect(arguments)
         override fun executionMode() = delegate.executionMode()
         override fun responseCallPolicy() = delegate.responseCallPolicy()
         override fun additionalCallNotStartedMessage() = delegate.additionalCallNotStartedMessage()
@@ -451,88 +458,78 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         override fun activitySkillId(arguments: Map<String, Any>) = delegate.activitySkillId(arguments)
         override fun activitySkillName(arguments: Map<String, Any>) = delegate.activitySkillName(arguments)
 
-        override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+        override fun hasCompleteEffectAdmissionCoverage() = delegate.hasCompleteEffectAdmissionCoverage()
+
+        override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
+            execute(arguments, token, null, EffectInvocation { /* Evidence writer attached below. */ })
+
+        override fun execute(arguments: Map<String, Any>, token: CancellationToken,
+                             progress: CoreTool.ProgressListener?, suppliedInvocation: EffectInvocation?): CoreToolResult {
+            val invocation = suppliedInvocation ?: EffectInvocation { /* No outer effect observer. */ }
             val name = delegate.declaration().name
-            val evidenceCallId = if (recordsEpisode()) java.util.UUID.randomUUID().toString() else null
+            val potentiallyWrites = isWrite || delegate.effectClass(arguments) == CoreTool.EffectClass.WRITE
+            val writeEffect = recordsEpisode(arguments)
+            val evidenceCallId = if (writeEffect) java.util.UUID.randomUUID().toString() else null
             val database = if (evidenceCallId != null) ChatDatabaseBridge.getInstance(context) else null
-            var dispatchStarted = false
             if (evidenceCallId != null) {
                 database!!.personalAgentRecordEpisodeToolStartedSync(
-                    WorkspaceIdentity.CENTRAL_SESSION,
-                    sourceMessageId!!,
-                    evidenceCallId,
-                    name,
-                    episodeConnector(),
-                    episodeAuthorization(),
-                    episodeFacts(name, evidenceCallId, "intent"),
-                    "intent",
+                    WorkspaceIdentity.CENTRAL_SESSION, sourceMessageId!!, evidenceCallId, name,
+                    episodeConnector(), null, episodeFacts(name, evidenceCallId, "intent"), "intent",
+                    runId = episodeRunId, processId = com.jarvys.agent.crew.CrewProcessIdentity.ID,
+                )
+                invocation.addAdmissionWriter { admission ->
+                    database.personalAgentAdmitEpisodeToolEvidenceSync(
+                        WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId,
+                        admission.authorization.name.lowercase(java.util.Locale.ROOT),
+                        episodeFacts(name, evidenceCallId, "started"), runId = episodeRunId,
+                        connectionObservation = admission.connectionObservation,
+                    )
+                }
+            }
+            fun finish(receipt: EffectInvocation.Receipt, state: String) {
+                if (evidenceCallId != null) database!!.personalAgentFinishEpisodeToolEvidenceSync(
+                    WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId,
+                    receipt.outcome.name.lowercase(java.util.Locale.ROOT),
+                    episodeFacts(name, evidenceCallId, state), runId = episodeRunId,
+                    authorization = receipt.admission?.authorization?.takeUnless { it == EffectInvocation.Authorization.UNSPECIFIED }?.name?.lowercase(java.util.Locale.ROOT),
                 )
             }
             try {
                 token.throwIfCancelled()
-                if (evidenceCallId != null) {
-                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
-                        WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId, "started",
-                        episodeFacts(name, evidenceCallId, "started"),
-                    )
+                val result = delegate.execute(arguments, token, progress, invocation)
+                val receipt = invocation.resolve(result, delegate.hasCompleteEffectAdmissionCoverage())
+                val outcome = if (!writeEffect && result.effectReceipt == null) {
+                    if (result.success) "OK" else "ERROR"
+                } else when (receipt.outcome) {
+                    EffectInvocation.Outcome.OK -> "OK"
+                    EffectInvocation.Outcome.ERROR -> "ERROR"
+                    EffectInvocation.Outcome.UNCERTAIN -> "UNKNOWN"
+                    EffectInvocation.Outcome.DEFERRED -> "WAITING_VISIBLE_APP"
+                    EffectInvocation.Outcome.NOT_EXECUTED -> if (receipt.admission?.authorization ==
+                        EffectInvocation.Authorization.ASK_PENDING) "PENDING" else "NOT_EXECUTED"
                 }
-                dispatchStarted = true
-                val result = delegate.execute(arguments, token)
-                val resultStatus = runCatching { JSONObject(result.content).optString("status") }.getOrDefault("")
-                val outcome = when {
-                    !result.success -> "ERROR"
-                    resultStatus == "pending_user_approval" -> "PENDING"
-                    resultStatus == "deferred_visible_app_required" -> "WAITING_VISIBLE_APP"
-                    else -> "OK"
-                }
-                if (evidenceCallId != null) {
-                    val normalizedOutcome = when (outcome) {
-                        "PENDING" -> "not_executed"
-                        "WAITING_VISIBLE_APP" -> "deferred"
-                        "OK" -> "ok"
-                        else -> "error"
-                    }
-                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
-                        WorkspaceIdentity.CENTRAL_SESSION, evidenceCallId, normalizedOutcome,
-                        episodeFacts(name, evidenceCallId, normalizedOutcome),
-                    )
-                }
-                synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, outcome) }
+                finish(receipt, outcome)
+                synchronized(calls) { calls += TaskToolCallRecord(name, potentiallyWrites, outcome,
+                    noDispatchVerified = writeEffect && receipt.outcome == EffectInvocation.Outcome.NOT_EXECUTED) }
                 val body = if (redactOutput)
                     com.jarvys.agent.proactive.ProactiveToolOutputRedactor.redactJsonTextFields(result.content)
                 else result.content
-                return when {
-                    result.finishRun -> CoreToolResult.finish(body)
-                    result.completeContentRequired -> CoreToolResult.complete(body)
-                    result.previewId != null -> CoreToolResult.preview(body, result.previewId)
-                    result.success -> CoreToolResult.success(body)
-                    else -> CoreToolResult.failure(body)
-                }
-            } catch (cancelled: CancellationException) {
-                evidenceCallId?.let {
-                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
-                        WorkspaceIdentity.CENTRAL_SESSION, it,
-                        if (dispatchStarted) "uncertain" else "not_executed",
-                        episodeFacts(name, it, if (dispatchStarted) "cancelled" else "cancelled_before_dispatch"),
-                    )
-                }
-                synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, "INTERRUPTED") }
-                throw cancelled
+                val normalized = if (writeEffect || result.effectReceipt != null) result.withEffectReceipt(receipt) else result
+                return normalized.withContent(body)
             } catch (failure: RuntimeException) {
-                evidenceCallId?.let {
-                    database!!.personalAgentFinishEpisodeToolEvidenceSync(
-                        WorkspaceIdentity.CENTRAL_SESSION, it,
-                        if (dispatchStarted) "uncertain" else "not_executed",
-                        episodeFacts(name, it, if (dispatchStarted) "threw" else "failed_before_dispatch"),
-                    )
+                val receipt = invocation.resolveFailure(delegate.hasCompleteEffectAdmissionCoverage())
+                finish(receipt, if (failure is CancellationException) "cancelled" else "threw")
+                synchronized(calls) {
+                    calls += TaskToolCallRecord(name, potentiallyWrites,
+                        if (receipt.outcome == EffectInvocation.Outcome.NOT_EXECUTED) "NOT_EXECUTED" else "UNKNOWN",
+                        noDispatchVerified = writeEffect && receipt.outcome == EffectInvocation.Outcome.NOT_EXECUTED)
                 }
-                synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, "ERROR") }
                 throw failure
             }
         }
 
-        private fun recordsEpisode(): Boolean = delegate.effectClass() == CoreTool.EffectClass.WRITE &&
-            delegate.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY
+        private fun recordsEpisode(arguments: Map<String, Any>): Boolean = delegate.effectClass(arguments) == CoreTool.EffectClass.WRITE &&
+            delegate.persistenceEffect(arguments) != CoreTool.PersistenceEffect.MEMORY
 
         private fun episodeConnector(): String? {
             val category = delegate.declaration().category
@@ -543,18 +540,8 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             return null
         }
 
-        private fun episodeAuthorization(): String = when {
-            delegate is PolicyGatedTool -> when (delegate.effectiveAutonomyPolicy()) {
-                AutonomyPolicy.ALLOW -> "allow"
-                AutonomyPolicy.DENY -> "deny"
-                AutonomyPolicy.ASK -> "ask_pending"
-            }
-            else -> "allow"
-        }
-
         private fun episodeFacts(name: String, callId: String, state: String): String = JSONObject()
             .put("classification", "WRITE")
-            .put("policy", episodeAuthorization())
             .put("task_id", sourceMessageId?.substringAfter("task:")?.substringBefore(':'))
             .put("call_id", callId)
             .put("tool", name)

@@ -81,7 +81,15 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
      * Adds one summary at its timeline position. The persisted ID includes the append timestamp and
      * count of existing timeline rows so readers can recover its summary boundary deterministically.
      */
-    suspend fun appendCompaction(input: CompactionInput): ChatDbResult<Compaction> = transaction {
+    suspend fun appendCompaction(input: CompactionInput): ChatDbResult<Compaction> =
+        appendCompactionInternal(input, null, null, null)
+
+    suspend fun appendCompactionPrepared(input: CompactionInput, coverage: CompactionCoverage?,
+        prepared: PreparedCompactionFlush?, sessionKind: String): ChatDbResult<Compaction> =
+        appendCompactionInternal(input, coverage, prepared, sessionKind)
+
+    private suspend fun appendCompactionInternal(input: CompactionInput, coverage: CompactionCoverage?,
+        prepared: PreparedCompactionFlush?, sessionKind: String?): ChatDbResult<Compaction> = transaction {
         if (input.conversationId.isBlank() || input.summary.isBlank() || input.summary.trim().isEmpty())
             return@transaction ChatDbResult.Invalid("compaction summary and conversation are required")
         ensureConversationExists(input.conversationId)
@@ -105,7 +113,9 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
                 arrayOf(input.conversationId, "compaction", id, artifactId),
             )
         }
-        ChatDbResult.Success(readCompaction(input.conversationId, id)!!)
+        val saved = readCompaction(input.conversationId, id)!!
+        if (sessionKind != null) CompactionMemoryRepository(database).bind(saved, coverage, prepared, sessionKind)
+        ChatDbResult.Success(saved)
     }
 
     /**

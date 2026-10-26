@@ -63,6 +63,7 @@ class CalendarConnector(
     private val clock: () -> Long = System::currentTimeMillis,
     private val timeZone: () -> TimeZone = TimeZone::getDefault,
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
 
@@ -119,8 +120,9 @@ class CalendarConnector(
             it.id == draft.calendarId && it.visible && it.syncEvents && it.accessLevel >= MIN_WRITE_ACCESS
         }) { "El calendario aprobado ya no está disponible para escritura; revisá la acción e intentá de nuevo" }
         token.throwIfCancelled()
-        preparation.authorizeEffect?.invoke()
+        (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke()
         val eventId = gateway.insert(draft)
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         return JSONObject().put("untrusted_content", true).put("source", "android.calendar")
             .put("eventId", eventId).put("calendarName", draft.calendarName.take(200))
     }

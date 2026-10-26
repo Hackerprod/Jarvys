@@ -29,6 +29,46 @@ public final class ConversationTurn {
   /** Durable source message id when this MESSAGE came from the conversation store. */
   public final String durableMessageId;
 
+  /** Durable provenance only; never inferred from text, call IDs alone, or message indexes. */
+  public static final class Source {
+    public enum Kind { MESSAGE, BATCH, BATCH_RESULT, COMPACTION }
+    public final Kind kind;
+    public final String conversationId, sourceId, callId;
+    public Source(Kind kind, String conversationId, String sourceId, String callId) {
+      this.kind = java.util.Objects.requireNonNull(kind);
+      if (conversationId == null || conversationId.isBlank() || sourceId == null || sourceId.isBlank())
+        throw new IllegalArgumentException("Durable source identity is required");
+      this.conversationId = conversationId; this.sourceId = sourceId;
+      this.callId = callId == null ? "" : callId;
+      if ((kind == Kind.BATCH_RESULT) != !this.callId.isEmpty())
+        throw new IllegalArgumentException("Only batch results require a call identity");
+    }
+    @Override public boolean equals(Object other) {
+      if (!(other instanceof Source)) return false;
+      Source that = (Source) other;
+      return kind == that.kind && conversationId.equals(that.conversationId)
+          && sourceId.equals(that.sourceId) && callId.equals(that.callId);
+    }
+    @Override public int hashCode() { return java.util.Objects.hash(kind, conversationId, sourceId, callId); }
+  }
+  private static final class SourceBinding { Source value; }
+  private SourceBinding sourceBinding = new SourceBinding();
+  public Source source() { synchronized (sourceBinding) { return sourceBinding.value; } }
+  /** Called only after a durable commit or while restoring its exact typed row. */
+  public void bindSource(Source source) {
+    java.util.Objects.requireNonNull(source);
+    boolean matches = (kind == Kind.MESSAGE && source.kind == Source.Kind.MESSAGE)
+        || (kind == Kind.TOOL_CALLS && source.kind == Source.Kind.BATCH)
+        || (kind == Kind.TOOL_RESULT && source.kind == Source.Kind.BATCH_RESULT && toolCallId.equals(source.callId))
+        || (kind == Kind.COMPACTION_SUMMARY && source.kind == Source.Kind.COMPACTION);
+    if (!matches) throw new IllegalArgumentException("Source does not match turn kind");
+    synchronized (sourceBinding) {
+      if (sourceBinding.value != null && !sourceBinding.value.equals(source))
+        throw new IllegalStateException("Durable turn source cannot be rebound");
+      sourceBinding.value = source;
+    }
+  }
+
   public enum Kind {
     MESSAGE,
     COMPACTION_SUMMARY,
@@ -294,6 +334,7 @@ public final class ConversationTurn {
   }
 
   private ConversationTurn(ConversationTurn raw, String modelContent, List<Image> images, String durableMessageId) {
+    this.sourceBinding = raw.sourceBinding;
     this.kind = raw.kind;
     this.role = raw.role;
     this.content = raw.content;
@@ -485,18 +526,12 @@ public final class ConversationTurn {
   }
 
   public ConversationTurn withoutAttachments() {
-    return (this.attachments.isEmpty()
-            && this.images.isEmpty()
-            && this.modelContent.equals(this.content))
-        ? this
-        : new ConversationTurn(
-            this.role,
-            this.content,
-            this.originalMessageIndex,
-            this.thinking,
-            0,
-            Collections.emptyList(),
-            this.incomingMetadata).withDurableMessageIdIfPresent(this.durableMessageId);
+    if (this.attachments.isEmpty() && this.images.isEmpty() && this.modelContent.equals(this.content)) return this;
+    ConversationTurn copy = new ConversationTurn(this.role, this.content, this.originalMessageIndex,
+        this.thinking, 0, Collections.emptyList(), this.incomingMetadata)
+        .withDurableMessageIdIfPresent(this.durableMessageId);
+    copy.sourceBinding = this.sourceBinding;
+    return copy;
   }
 
   private ConversationTurn withDurableMessageIdIfPresent(String messageId) {

@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.connectors.*
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -15,6 +16,12 @@ import java.util.UUID
 @Config(sdk = [34], shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class ConnectorArtifactScopeTest {
     @get:org.junit.Rule val chatTestStore = ChatTestStore(runTestOnWorker = false, registerApplicationFilesDirectory = true)
+    @Before fun awaitStorageReady() {
+        chatTestStore.onDatabaseWorker {
+            SingleSessionReset.awaitReadyBlocking(ApplicationProvider.getApplicationContext<Context>().filesDir)
+        }
+    }
+
     private fun tool(): CoreConnectorTool {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "connector-scope-${UUID.randomUUID()}"

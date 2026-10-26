@@ -9,6 +9,9 @@ public final class CoreToolResult {
     public final boolean finishRun;
     /** Durable receipt returned by memory writes and checked by memory maintenance. */
     public final String persistenceEvidence;
+    /** Optional typed local effect evidence; independent of the presentation success flag. */
+    public final EffectInvocation.Receipt effectReceipt;
+    public final EffectInvocation.AdministrativeReceipt administrativeReceipt;
 
     private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
                            boolean finishRun) {
@@ -17,12 +20,41 @@ public final class CoreToolResult {
 
     private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
                            boolean finishRun, String persistenceEvidence) {
+        this(success, content, completeContentRequired, previewId, finishRun, persistenceEvidence, null);
+    }
+
+    private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
+                           boolean finishRun, String persistenceEvidence, EffectInvocation.Receipt effectReceipt) {
+        this(success, content, completeContentRequired, previewId, finishRun, persistenceEvidence, effectReceipt, null);
+    }
+
+    private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
+                           boolean finishRun, String persistenceEvidence, EffectInvocation.Receipt effectReceipt,
+                           EffectInvocation.AdministrativeReceipt administrativeReceipt) {
+        this.administrativeReceipt = administrativeReceipt;
+        this.effectReceipt = effectReceipt;
         this.persistenceEvidence = persistenceEvidence;
         this.success = success;
         this.content = content == null ? "" : content;
         this.completeContentRequired = completeContentRequired;
         this.previewId = previewId;
         this.finishRun = finishRun;
+    }
+
+    /** Preserve all execution metadata when a wrapper redacts or reformats presentation content. */
+    public CoreToolResult withContent(String content) {
+        return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
+                persistenceEvidence, effectReceipt, administrativeReceipt);
+    }
+
+    public CoreToolResult withEffectReceipt(EffectInvocation.Receipt receipt) {
+        return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
+                persistenceEvidence, receipt, administrativeReceipt);
+    }
+
+    public CoreToolResult withAdministrativeReceipt(EffectInvocation.AdministrativeReceipt receipt) {
+        return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
+                persistenceEvidence, effectReceipt, receipt);
     }
 
     public static CoreToolResult success(String content) { return new CoreToolResult(true, content, false, null, false); }

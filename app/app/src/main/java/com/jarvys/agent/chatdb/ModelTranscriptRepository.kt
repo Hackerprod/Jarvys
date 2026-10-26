@@ -65,6 +65,11 @@ sealed interface ModelTranscriptEntry {
     data class Artifact(override val seq: Long, override val sortSeq: Long, override val sortSub: Int, val value: ModelArtifact) : ModelTranscriptEntry
 }
 
+/** Exact indexed source behind an episode; absent results remain absent, never inferred as success. */
+data class EpisodeToolSource(val conversationId: String, val batchId: String, val callId: String,
+    val toolName: String, val argumentsJson: String, val output: String?, val lifecycle: String?,
+    val artifactIds: List<String>)
+
 data class ModelTranscriptSnapshot(
     val conversationId: String,
     /** Logical ledger order after assistant-before-steering sorting, as seen by `loadConversationContext`. */
@@ -335,6 +340,18 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         ChatDbResult.Success(readModelArtifact(conversationId, artifactId)!!)
     }
 
+    suspend fun readEpisodeToolSource(conversationId: String, batchId: String, callId: String): EpisodeToolSource? =
+        database.withChatReadTransaction {
+            val call = readCall(conversationId, batchId, callId) ?: return@withChatReadTransaction null
+            val result = readToolResult(conversationId, batchId, callId)
+            val artifacts = sql.query(
+                "SELECT DISTINCT artifact_id FROM transcript_artifact_refs WHERE conversation_id=? AND batch_id=? AND (call_id=? OR call_id IS NULL) ORDER BY artifact_id",
+                arrayOf(conversationId, batchId, callId),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            EpisodeToolSource(conversationId, batchId, callId, call.name, call.arguments_json,
+                result?.output, result?.lifecycle, artifacts)
+        }
+
     private fun requireOwnedArtifacts(conversationId: String, artifactIds: List<String>) {
         artifactIds.forEach { id ->
             val owned = sql.query("SELECT EXISTS(SELECT 1 FROM model_artifacts WHERE conversation_id=? AND artifact_id=?)", arrayOf(conversationId, id))
@@ -438,6 +455,21 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                     .put("artifact", org.json.JSONObject().put("path", c.getString(1)).put("sha256", c.getString(2))
                         .put("chars", c.getLong(3)).put("bytes", c.getLong(4)).put("state", c.getString(5))
                         .put("stateReason", c.getStringOrNullM1b("state_reason") ?: org.json.JSONObject.NULL))) } }
+        } }
+
+    /** Metadata lookup limited to the exact source's artifact IDs, never the entire conversation. */
+    suspend fun readArtifactRows(conversationId: String, artifactIds: List<String>): List<org.json.JSONObject> =
+        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction {
+            buildList {
+                for (id in artifactIds.distinct()) {
+                    sql.query("SELECT artifact_id,path,sha256,chars,bytes,state,state_reason FROM model_artifacts WHERE conversation_id=? AND artifact_id=?",
+                        arrayOf(conversationId, id)).use { c -> if (c.moveToFirst()) add(org.json.JSONObject()
+                        .put("type", "model_artifact").put("artifactId", c.getString(0))
+                        .put("artifact", org.json.JSONObject().put("path", c.getString(1)).put("sha256", c.getString(2))
+                            .put("chars", c.getLong(3)).put("bytes", c.getLong(4)).put("state", c.getString(5))
+                            .put("stateReason", c.getStringOrNullM1b("state_reason") ?: org.json.JSONObject.NULL))) }
+                }
+            }
         } }
 
     /** The stored result of one call and the artifacts that hold its archived output; null when no result exists. */

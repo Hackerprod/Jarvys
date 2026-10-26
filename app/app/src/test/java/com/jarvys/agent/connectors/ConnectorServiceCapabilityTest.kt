@@ -42,6 +42,12 @@ class ConnectorServiceCapabilityTest {
         registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
         val stale = op.copy(write = false, autonomyAllowed = true)
         assertTrue(runCatching { registry.invoke(definition, stale, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
+        // A stale tool cannot silently adopt the catalog action, even to request approval.
+        assertNull(summary)
+        assertEquals(0, runtime.effects)
+        assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(definition, op))
+        // The exact current action still follows the saved ASK policy and its original summary.
+        assertTrue(runCatching { registry.invoke(definition, op, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
         assertNotNull(summary); assertTrue(summary!!.allowAlwaysAvailable); assertEquals(0, runtime.effects)
         assertEquals("Permanent action", summary!!.title)
         assertEquals(definition.id, summary!!.autonomyConnectorId)

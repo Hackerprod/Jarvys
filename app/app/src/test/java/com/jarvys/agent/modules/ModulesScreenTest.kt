@@ -42,6 +42,9 @@ class ModulesScreenTest {
         }, { true })
 
         compose.setContent { MaterialTheme { ModulesScreen(moduleRegistry, connectors) } }
+        compose.waitUntil(timeoutMillis = 10_000) {
+            connectors.state("fixture.module") == com.jarvys.agent.connectors.ConnectorState.CONNECTED
+        }
         compose.waitForIdle()
 
         compose.onNodeWithText("Fixture module").assertIsDisplayed()
@@ -50,7 +53,15 @@ class ModulesScreenTest {
         compose.onNodeWithText("application/x-fixture").performScrollTo().assertIsDisplayed()
 
         val enabledSwitch = compose.onNodeWithTag("module-fixture.module-enabled").performScrollTo()
-        enabledSwitch.assertIsOn().performClick().assertIsOff().performClick().assertIsOn()
+        enabledSwitch.assertIsOn().performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            connectors.state("fixture.module") == com.jarvys.agent.connectors.ConnectorState.DISCONNECTED
+        }
+        enabledSwitch.assertIsOff().performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            connectors.state("fixture.module") == com.jarvys.agent.connectors.ConnectorState.CONNECTED
+        }
+        enabledSwitch.assertIsOn()
 
         val policy = compose.onNodeWithTag("connector-policy-fixture_tool-control").performScrollTo()
         policy.performClick()

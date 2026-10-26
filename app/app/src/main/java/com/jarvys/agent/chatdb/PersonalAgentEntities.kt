@@ -54,6 +54,7 @@ data class UserDirective(
         Index(name = "idx_memory_entries_deleted", value = ["deleted_at"]),
         Index(name = "idx_memory_entries_kind_event", value = ["kind", "event_at"]),
         Index(name = "idx_memory_entries_source_message", value = ["source_message_id"]),
+        Index(name = "idx_memory_entries_topic_key", value = ["topic_key"]),
     ],
 )
 data class MemoryEntry(
@@ -136,6 +137,9 @@ data class MemoryJob(
     Index(name = "idx_memory_evidence_ref", value = ["ref_conversation_id", "ref_id"]),
     Index(name = "idx_memory_evidence_tool", value = ["tool_name", "outcome"]),
     Index(name = "idx_memory_evidence_connector", value = ["connector"]),
+    Index(name = "idx_memory_evidence_batch", value = ["ref_conversation_id", "source_batch_id", "ref_id"]),
+    Index(name = "idx_memory_evidence_run", value = ["run_id", "outcome"]),
+    Index(name = "idx_memory_evidence_pending_process", value = ["outcome", "process_id"]),
 ])
 data class MemoryEvidence(
     val entry_id: String,
@@ -152,6 +156,9 @@ data class MemoryEvidence(
     val facts_json: String,
     /** Connector or MCP server id of the call, so a structured search can filter on it without parsing JSON. */
     val connector: String? = null,
+    val source_batch_id: String? = null,
+    val run_id: String? = null,
+    val process_id: String? = null,
 )
 
 @Entity(tableName = "memory_links", primaryKeys = ["from_id", "to_id", "relation"], foreignKeys = [
@@ -189,10 +196,21 @@ data class ConnectorAutonomyAudit(
     val summary: String,
 )
 
-@Entity(tableName = "connector_state_events", indices = [Index(value = ["connector_id", "connected_at_ms"])])
+@Entity(tableName = "connector_state_events", indices = [
+    Index(value = ["connector_id", "connected_at_ms"]),
+    Index(value = ["store_epoch", "sequence"], unique = true),
+])
 data class ConnectorStateEvent(
     @androidx.room.PrimaryKey val id: String,
     val connector_id: String,
     val connected: Boolean,
     val connected_at_ms: Long,
+    // Legacy rows retain NULL metadata: timestamps and UUIDs never establish protocol ordering.
+    val store_epoch: String? = null,
+    val sequence: Long? = null,
+    val previous_choice: Boolean? = null,
+    val reason: String? = null,
+    val operation_id: String? = null,
+    val parent_operation_id: String? = null,
+    val payload_version: Int? = null,
 )

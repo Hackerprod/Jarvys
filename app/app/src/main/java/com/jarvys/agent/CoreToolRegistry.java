@@ -13,6 +13,9 @@ public final class CoreToolRegistry {
   public interface InvocationObserver {
     void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments);
     void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure);
+    default void onEffectAdmission(CoreTool tool, String callId, EffectInvocation.Admission admission) {}
+    default void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure,
+        EffectInvocation.Receipt receipt) { afterDispatch(tool, callId, result, failure); }
   }
   private final Runnable invocationGuard;
   private final InvocationObserver invocationObserver;
@@ -251,37 +254,57 @@ public final class CoreToolRegistry {
 
   public CoreToolResult invoke(String name, Map<String, Object> arguments, CancellationToken token,
       CoreTool.ProgressListener progress, String callId) {
+    return invoke(name, arguments, token, progress, callId, null);
+  }
+
+  public CoreToolResult invoke(String name, Map<String, Object> arguments, CancellationToken token,
+      CoreTool.ProgressListener progress, String callId, EffectInvocation suppliedInvocation) {
     CoreTool tool = this.tools.get(name);
-    if (tool == null) {
-      return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
+    if (tool == null) return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
+    Map<String, Object> safeArguments = arguments == null ? Collections.emptyMap() : arguments;
+    boolean recordsEffect = tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
+        && tool.persistenceEffect(safeArguments) != CoreTool.PersistenceEffect.MEMORY;
+    EffectInvocation invocation = suppliedInvocation;
+    if (invocation == null) invocation = new EffectInvocation(admission -> {});
+    if (!recordsEffect) invocation.addAdmissionWriter(admission -> {
+      throw new IllegalStateException("A read or memory-only invocation cannot dispatch an external write");
+    });
+    if (recordsEffect && this.invocationObserver != null) {
+      invocation.addAdmissionWriter(admission -> this.invocationObserver.onEffectAdmission(tool, callId, admission));
     }
-    token.throwIfCancelled();
+    boolean observerPrepared = false;
+    boolean observerFinished = false;
     try {
-      if (this.invocationGuard != null) {
-        this.invocationGuard.run();
-      }
-      Map<String, Object> safeArguments = arguments == null ? Collections.emptyMap() : arguments;
-      if (this.invocationObserver != null && tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
-          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
+      token.throwIfCancelled();
+      if (this.invocationGuard != null) this.invocationGuard.run();
+      if (recordsEffect && this.invocationObserver != null) {
         this.invocationObserver.beforeDispatch(tool, callId, safeArguments);
-      CoreToolResult result = progress == null ? tool.execute(safeArguments, token)
-          : tool.execute(safeArguments, token, progress);
-      if (this.invocationObserver != null && tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
-          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
-        this.invocationObserver.afterDispatch(tool, callId, result, null);
+        observerPrepared = true;
+      }
+      CoreToolResult result = tool.execute(safeArguments, token, progress, invocation);
+      EffectInvocation.Receipt receipt = recordsEffect || result != null && result.effectReceipt != null
+          ? invocation.resolve(result, tool.hasCompleteEffectAdmissionCoverage()) : null;
+      if (receipt != null && result != null) result = result.withEffectReceipt(receipt);
+      if (invocation != null) invocation.seal();
+      if (observerPrepared) {
+        observerFinished = true;
+        this.invocationObserver.afterDispatch(tool, callId, result, null, receipt);
+      }
       return result;
     } catch (CancellationException cancelled) {
-      if (this.invocationObserver != null && tool.effectClass(arguments == null ? Collections.emptyMap() : arguments) == CoreTool.EffectClass.WRITE
-          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
-        this.invocationObserver.afterDispatch(tool, callId, null, cancelled);
+      if (invocation != null) invocation.seal();
+      if (observerPrepared && !observerFinished)
+        this.invocationObserver.afterDispatch(tool, callId, null, cancelled,
+            invocation.resolveFailure(tool.hasCompleteEffectAdmissionCoverage()));
       throw cancelled;
     } catch (RuntimeException failure) {
-      if (this.invocationObserver != null && tool.effectClass(arguments == null ? Collections.emptyMap() : arguments) == CoreTool.EffectClass.WRITE
-          && tool.persistenceEffect() != CoreTool.PersistenceEffect.MEMORY)
-        this.invocationObserver.afterDispatch(tool, callId, null, failure);
-      String detail =
-          failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
-      return CoreToolResult.failure(detail);
+      EffectInvocation.Receipt receipt = recordsEffect
+          ? invocation.resolveFailure(tool.hasCompleteEffectAdmissionCoverage()) : null;
+      if (invocation != null) invocation.seal();
+      if (observerPrepared && !observerFinished)
+        this.invocationObserver.afterDispatch(tool, callId, null, failure, receipt);
+      String detail = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+      return CoreToolResult.failure(detail).withEffectReceipt(receipt);
     }
   }
 

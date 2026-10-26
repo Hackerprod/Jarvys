@@ -1644,11 +1644,12 @@ public final class LocalRunStore {
         return id == null ? "" : id;
     }
 
-    File filesDirectory() { return filesDirectory; }
-    List<com.jarvys.agent.chatdb.EpisodeReference> episodesForSourceMessages(String sessionId, List<String> messageIds) {
-        if (chatDatabaseBridge == null) return Collections.emptyList();
-        return chatDatabaseBridge.personalAgentEpisodesForSourceMessagesSync(sessionId, messageIds);
+    com.jarvys.agent.chatdb.EpisodeToolSource readEpisodeToolSource(String sessionId, String batchId, String callId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readEpisodeToolSourceSync(sessionId, batchId, callId);
     }
+
+    File filesDirectory() { return filesDirectory; }
     List<com.jarvys.agent.chatdb.EpisodeReference> episodesForSourceMessages(String sessionId, List<String> messageIds) {
         if (chatDatabaseBridge == null) return Collections.emptyList();
         return chatDatabaseBridge.personalAgentEpisodesForSourceMessagesSync(sessionId, messageIds);
@@ -1669,6 +1670,11 @@ public final class LocalRunStore {
     synchronized List<JSONObject> readModelArtifactRows(String sessionId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return chatDatabaseBridge.readModelArtifactRowsSync(sessionId);
+    }
+
+    synchronized List<JSONObject> readModelArtifactRows(String sessionId, List<String> artifactIds) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readModelArtifactRowsSync(sessionId, artifactIds);
     }
 
     synchronized List<JSONObject> readModelTranscriptRows(String sessionId) {
@@ -2193,6 +2199,25 @@ public final class LocalRunStore {
                         Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0,
                         sourceArtifactIds == null ? Collections.emptyList() : new ArrayList<>(sourceArtifactIds))),
                 "append compaction");
+    }
+
+    public synchronized com.jarvys.agent.chatdb.Compaction appendCompactionPrepared(String sessionId,
+            String summary, int firstKept, String trigger, String mode, int summarizedMessages,
+            List<String> sourceArtifactIds, com.jarvys.agent.chatdb.CompactionCoverage coverage,
+            com.jarvys.agent.chatdb.PreparedCompactionFlush prepared, String sessionKind) {
+        if (summary == null || summary.trim().isEmpty()) throw new IllegalArgumentException("Compaction summary is empty");
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return requireChatDbSuccess(chatDatabaseBridge.appendCompactionPreparedSync(
+                new com.jarvys.agent.chatdb.CompactionInput(sessionId, summary, Math.max(0, firstKept),
+                        trigger == null ? "manual" : trigger, mode == null ? "all" : mode,
+                        Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0,
+                        sourceArtifactIds == null ? Collections.emptyList() : new ArrayList<>(sourceArtifactIds)),
+                coverage, prepared, sessionKind), "append compaction with exact flush binding");
+    }
+
+    public synchronized boolean compactionFlushCompleted(String sessionId, String compactionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return "complete".equals(chatDatabaseBridge.readCompactionFlushStatusSync(sessionId, compactionId));
     }
 
     /** Free-space signal used by the artifact retention policy; a store without a context never reports pressure. */

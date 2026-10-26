@@ -54,7 +54,7 @@ class ConnectorRegistryTest {
 
     @Test fun bootstrapReinstallsConnectorDefinitionsAroundPersistedConnectionState() {
         val preferences = Preferences().apply { setConnected("calendar", true) }
-        val registry = ConnectorRegistry.createForTests(preferences, permissionGranted = { it == "READ_CALENDAR" })
+        val registry = ConnectorRegistry.createForTests(preferences, permissionGranted = { it == "READ_CALENDAR" }, initialChoices = mapOf("calendar" to true))
         val definition = ConnectorDefinition(
             id = "calendar", name = "Calendar", version = "1", description = "Calendar",
             readPermissions = listOf("READ_CALENDAR"), runtime = Runtime(),

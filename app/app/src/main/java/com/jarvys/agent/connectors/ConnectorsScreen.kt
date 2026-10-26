@@ -50,6 +50,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -128,26 +131,73 @@ internal fun ConnectorsDeviceDetailScreen(
     val context = LocalContext.current
     val definitions by registry.definitions.collectAsState()
     val states by registry.states.collectAsState()
+    val connectionReady by registry.connectionReady.collectAsState()
     val autonomyRevision by registry.autonomyRevision.collectAsState()
     val definition = definitions.firstOrNull { it.id == connectorId }
-    var connectAfterPermission by remember(connectorId) { mutableStateOf<ConnectorDefinition?>(null) }
+    val observer = remember(registry, connectorId) { ConnectorUiObserver(context) }
+    val preLaunchRequest = remember(registry, connectorId) {
+        java.util.concurrent.atomic.AtomicReference<ConnectorRegistry.ConnectionRequest?>()
+    }
+    var connectAfterPermission by androidx.compose.runtime.saveable.rememberSaveable(connectorId) { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.DisposableEffect(observer) { onDispose {
+        observer.close()
+        // Permission preparation is not an accepted activation. Navigation abandons that untouched
+        // request; configuration recreation preserves the exact ID already owned by the OS launcher.
+        val preparing = preLaunchRequest.getAndSet(null)
+        preparing?.let(registry::abortConnectionRequest)
+        if (connectionActivity(context)?.isChangingConfigurations != true) {
+            connectAfterPermission?.takeIf { it != preparing?.requestId }
+                ?.let(registry::resolvePendingRequest)?.let(registry::abortConnectionRequest)
+        }
+    } }
+    var submittedRequest by remember(connectorId) { mutableStateOf<String?>(null) }
     var permissionMessage by remember(connectorId) { mutableStateOf<ConnectorUiText?>(null) }
     var permissionMessageAction by remember(connectorId) { mutableStateOf(ConnectorNoticeAction.APP_SETTINGS) }
     fun showPermissionMessage(text: ConnectorUiText, action: ConnectorNoticeAction = ConnectorNoticeAction.APP_SETTINGS) {
         permissionMessage = text
         permissionMessageAction = action
     }
+    fun showTransition(result: ConnectorRegistry.ConnectorTransitionResult?, failed: Boolean) {
+        connectionTransitionMessage(result, failed)?.let { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show() }
+    }
+    fun submit(request: ConnectorRegistry.ConnectionRequest, settings: Boolean = false, disconnect: Boolean = false) {
+        preLaunchRequest.compareAndSet(request, null)
+        submittedRequest = request.requestId
+        observer.observe(registry.submitConnectionRequest(request)) { result, failed ->
+            if (submittedRequest == request.requestId) submittedRequest = null
+            if (request.status == ConnectorRegistry.ConnectionRequest.Status.ACCEPTED &&
+                !registry.isConnectionRequestCurrent(request)) return@observe
+            showTransition(result, failed)
+            if (connectionTransitionPersisted(result)) {
+                if (disconnect) onDisconnected()
+                else if (settings && registry.state(request.connectorId) != ConnectorState.CONNECTED) {
+                    runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                        .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_notification_settings_failed,
+                            fallback = ""), ConnectorNoticeAction.NOTIFICATION_LISTENER) }
+                }
+            }
+        }
+    }
+    fun abort(request: ConnectorRegistry.ConnectionRequest) {
+        preLaunchRequest.compareAndSet(request, null)
+        observer.observe(registry.abortConnectionRequest(request)) { result, failed ->
+            if (!registry.isConnectionRequestCurrent(request)) return@observe
+            if (failed || result?.status != ConnectorRegistry.ConnectorTransitionResult.Status.ABORTED) showTransition(result, failed)
+        }
+    }
     LaunchedEffect(registry) { registry.refreshStates() }
     LaunchedEffect(connectorId, definition) { if (definition == null) onMissingConnector() }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        val pending = connectAfterPermission
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        val pending = connectAfterPermission?.let(registry::resolvePendingRequest)
         connectAfterPermission = null
-        if (pending != null && registry.canConnect(pending)) {
-            registry.connect(pending.id)
-            registry.refreshStates()
-        } else if (pending != null) {
+        val current = pending?.let { registry.get(it.connectorId) }
+        if (pending == null || current == null || !registry.isConnectionRequestCurrent(pending)) {
+            android.widget.Toast.makeText(context, R.string.connector_transition_obsolete, android.widget.Toast.LENGTH_LONG).show()
+        } else if (registry.canConnect(current)) submit(pending)
+        else {
+            abort(pending)
             showPermissionMessage(ConnectorUiText(R.string.connector_permission_denied,
-                listOf(pending.localizedNameText()), "${pending.name} access was denied. Jarvys cannot use this connector until you allow it."))
+                listOf(current.localizedNameText()), fallback = ""))
         }
     }
     if (definition != null) {
@@ -157,41 +207,60 @@ internal fun ConnectorsDeviceDetailScreen(
                 state = states[definition.id] ?: registry.state(definition),
                 registry = registry,
                 autonomyRevision = autonomyRevision,
+                connectionActionEnabled = connectionReady && submittedRequest == null && connectAfterPermission == null,
                 onConnect = {
-                if (definition.connectionFlow == ConnectorConnectionFlow.NOTIFICATION_LISTENER_SETTINGS) {
-                    registry.connectFromSystemSettings(definition.id)
-                    registry.refreshStates()
-                    if (registry.state(definition) != ConnectorState.CONNECTED) {
-                        runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                            .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_notification_settings_failed,
-                                fallback = ""), ConnectorNoticeAction.NOTIFICATION_LISTENER) }
-                    }
-                } else {
-                    val missing = definition.connectionPermissions.filter {
-                        ContextCompat.checkSelfPermission(context, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
-                    }
-                    if (missing.isEmpty()) { registry.connect(definition.id); registry.refreshStates() }
+                    val settings = definition.connectionFlow == ConnectorConnectionFlow.NOTIFICATION_LISTENER_SETTINGS
+                    val request = registry.captureConnectionRequest(definition.id,
+                        if (settings) ConnectionStateCoordinator.Kind.SETTINGS_CONNECT else ConnectionStateCoordinator.Kind.CONNECT)
+                    if (request.status != ConnectorRegistry.ConnectionRequest.Status.ACCEPTED) submit(request)
+                    else if (settings) submit(request, settings = true)
                     else {
-                        val activity = context as? Activity
-                        val prefs = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, 0)
-                        val askedBefore = prefs.getBoolean("permission_asked_${definition.id}", false)
-                        val permanentlyDenied = missing.any { permission ->
-                            activity != null && !activity.shouldShowRequestPermissionRationale(permission)
+                        val missing = definition.connectionPermissions.filter {
+                            ContextCompat.checkSelfPermission(context, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
                         }
-                        if (askedBefore && permanentlyDenied && registry.canConnect(definition)) {
-                            registry.connect(definition.id); registry.refreshStates()
-                        } else if (askedBefore && permanentlyDenied) {
-                            showPermissionMessage(ConnectorUiText(R.string.connector_permission_blocked,
-                                listOf(definition.localizedNameText()), fallback = ""))
-                        } else {
-                            prefs.edit().putBoolean("permission_asked_${definition.id}", true).apply()
-                            connectAfterPermission = definition
-                            permissionLauncher.launch(missing.toTypedArray())
+                        if (missing.isEmpty()) submit(request)
+                        else {
+                            preLaunchRequest.set(request)
+                            val activity = connectionActivity(context)
+                            val permanentlyDenied = missing.any { permission ->
+                                activity != null && !activity.shouldShowRequestPermissionRationale(permission)
+                            }
+                            observer.observe(ConnectorSettingsWork.submit {
+                                context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, 0)
+                                    .getBoolean("permission_asked_${definition.id}", false)
+                            }) { askedBefore, failed ->
+                                if (!registry.isConnectionRequestCurrent(request)) return@observe
+                                if (failed) {
+                                    abort(request); showTransition(null, true)
+                                } else if (askedBefore == true && permanentlyDenied && registry.canConnect(definition)) submit(request)
+                                else if (askedBefore == true && permanentlyDenied) {
+                                    abort(request)
+                                    showPermissionMessage(ConnectorUiText(R.string.connector_permission_blocked,
+                                        listOf(definition.localizedNameText()), fallback = ""))
+                                } else {
+                                    observer.observe(ConnectorSettingsWork.submit {
+                                        context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, 0)
+                                            .edit().putBoolean("permission_asked_${definition.id}", true).apply()
+                                    }) { _, markingFailed ->
+                                        if (!registry.isConnectionRequestCurrent(request)) return@observe
+                                        if (markingFailed) { abort(request); showTransition(null, true) }
+                                        else {
+                                            connectAfterPermission = request.requestId
+                                            preLaunchRequest.compareAndSet(request, null)
+                                            runCatching { permissionLauncher.launch(missing.toTypedArray()) }.onFailure {
+                                                connectAfterPermission = null; abort(request); showTransition(null, true)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                }
                 },
-                onDisconnect = { registry.disconnect(definition.id); registry.refreshStates(); onDisconnected() },
+                onDisconnect = {
+                    connectAfterPermission = null
+                    submit(registry.captureConnectionRequest(definition.id, ConnectionStateCoordinator.Kind.DISCONNECT), disconnect = true)
+                },
                 openSettings = { openConnectorSettings(context, definition) },
             )
         }
@@ -309,10 +378,21 @@ internal fun ConnectorDeviceDetailPage(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     openSettings: () -> Unit,
+    connectionActionEnabled: Boolean = true,
 ) {
     val context = LocalContext.current
     val connected = state == ConnectorState.CONNECTED
-    val recentActions = remember(definition.id, autonomyRevision) { registry.recentAutonomyActions(definition.id, 10) }
+    var auditRetry by remember(definition.id) { mutableStateOf(0) }
+    val recentAudit by produceState<Result<List<AutonomyAuditRecord>>?>(null,
+        registry, definition.id, autonomyRevision to auditRetry) {
+        value = null
+        value = withContext(Dispatchers.IO) {
+            try { Result.success(registry.recentAutonomyActions(definition.id, 10)) }
+            catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
+            catch (_: Exception) { Result.failure(IllegalStateException("Audit history unavailable")) }
+        }
+    }
+    val recentActions = recentAudit?.getOrNull().orEmpty()
     val subtitle = when (state) {
         ConnectorState.CONNECTED -> context.getString(R.string.connector_on_device)
         ConnectorState.PERMISSION_REVOKED -> context.getString(R.string.connector_status_permission_pending)
@@ -324,6 +404,8 @@ internal fun ConnectorDeviceDetailPage(
         connected = connected,
         summary = definition.localizedDescriptionText().resolve(context),
         primaryActionLabel = context.getString(if (state == ConnectorState.PERMISSION_REVOKED) R.string.connector_reconnect else R.string.connector_connect),
+        primaryActionEnabled = connectionActionEnabled,
+        showDisconnectWhenUnavailable = true,
         onPrimaryAction = onConnect,
         disconnectLabel = context.getString(R.string.connector_disconnect),
         disconnectExplanation = context.getString(R.string.connector_disconnect_explanation),
@@ -360,6 +442,12 @@ internal fun ConnectorDeviceDetailPage(
                 TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) {
                     Text(stringResource(R.string.connector_location_settings))
                 }
+            }
+            if (recentAudit == null) {
+                Text(stringResource(R.string.connector_audit_loading))
+            } else if (recentAudit?.isFailure == true) {
+                Text(stringResource(R.string.connector_audit_incomplete), color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { auditRetry += 1 }) { Text(stringResource(R.string.chat_history_load_retry)) }
             }
             if (recentActions.isNotEmpty()) {
                 Text(stringResource(R.string.connector_recent_autonomous_actions), fontWeight = FontWeight.SemiBold)

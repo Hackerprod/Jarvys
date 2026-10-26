@@ -72,6 +72,14 @@ public final class MemoryReflectionCoordinator {
 
     public static Outcome run(Context context, String sessionId, String trigger, boolean manual,
                               String throughMessageId, CancellationToken token) {
+        return run(context, sessionId, trigger, manual, throughMessageId, token,
+                MemoryWritePolicy.forContext(context).captureTicket());
+    }
+
+    /** Async callers capture the immutable ticket before enqueueing, not on the worker thread. */
+    public static Outcome run(Context context, String sessionId, String trigger, boolean manual,
+                              String throughMessageId, CancellationToken token,
+                              MemoryWriteGate.Ticket memoryTicket) {
         Context app = context.getApplicationContext();
         MemoryReflectionPreferences preferences = new MemoryReflectionPreferences(app);
         LocalRunStore conversation = new LocalRunStore(app);
@@ -120,7 +128,7 @@ public final class MemoryReflectionCoordinator {
         String reflectionId = UUID.randomUUID().toString();
         try {
             MemoryReflectionWorker worker = new MemoryReflectionWorker(app, sessionId, reflectionId,
-                    new CoreAgentModel(app, sessionId + "-reflection"), authority);
+                    new CoreAgentModel(app, sessionId + "-reflection"), authority, memoryTicket);
             MemoryReflectionWorker.Result result = worker.run(payload.text, token);
             token.throwIfCancelled();
             List<Long> revisionIds = ids(result.revisions);

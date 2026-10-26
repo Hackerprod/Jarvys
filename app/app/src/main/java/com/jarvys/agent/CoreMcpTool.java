@@ -52,26 +52,59 @@ final class CoreMcpTool implements PolicyGatedTool {
     @Override public String policyDisplayName() { return CoreToolRegistry.humanizeToolName(definition.getWireName()); }
     @Override public String policyReflectionSource() { return "mcp"; }
 
+    @Override public boolean hasCompleteEffectAdmissionCoverage() { return true; }
+
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+        return execute(arguments, token, null, null);
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+        ProgressListener progress, EffectInvocation invocation) {
         JSONObject response = connections.callTool(definition.getServerId(), definition.getWireName(),
-                new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token, requester, requesterColorKey);
-        JSONObject envelope = McpToolSecurity.INSTANCE.boundedUntrustedResult(
-                definition.getServerAlias(), definition.getWireName(), response);
-        return envelope.optBoolean("isError", false)
-                ? CoreToolResult.failure(envelope.toString()) : CoreToolResult.success(envelope.toString());
+                new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token, requester,
+                requesterColorKey, invocation);
+        return result(response, invocation);
     }
 
     @Override public CoreToolResult executeScheduledTask(Map<String, Object> arguments, CancellationToken token,
-                                                         boolean approvedPendingAction,
-                                                         java.util.function.Supplier<JSONObject> deferAskWrite) {
+        boolean approvedPendingAction, java.util.function.Supplier<JSONObject> deferAskWrite) {
+        return executeScheduledTask(arguments, token, approvedPendingAction, deferAskWrite, null);
+    }
+
+    @Override public CoreToolResult executeScheduledTask(Map<String, Object> arguments, CancellationToken token,
+        boolean approvedPendingAction, java.util.function.Supplier<JSONObject> deferAskWrite,
+        EffectInvocation invocation) {
+        java.util.concurrent.atomic.AtomicBoolean queued = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.function.Supplier<JSONObject> deferred = deferAskWrite == null ? null : () -> {
+            JSONObject receipt = deferAskWrite.get();
+            queued.set(true);
+            return receipt;
+        };
         JSONObject response = connections.callToolForScheduledTask(definition.getServerId(),
                 definition.getWireName(), new JSONObject(arguments == null ? Collections.emptyMap() : arguments),
-                token, approvedPendingAction, deferAskWrite);
-        if ("pending_user_approval".equals(response.optString("status")))
-            return CoreToolResult.success(response.toString());
+                token, approvedPendingAction, deferred, invocation);
+        if (queued.get()) {
+            CoreToolResult result = CoreToolResult.success(response.toString());
+            return invocation == null ? result : result.withEffectReceipt(
+                invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED));
+        }
+        return result(response, invocation);
+    }
+
+    private CoreToolResult result(JSONObject response, EffectInvocation invocation) {
         JSONObject envelope = McpToolSecurity.INSTANCE.boundedUntrustedResult(
                 definition.getServerAlias(), definition.getWireName(), response);
-        return envelope.optBoolean("isError", false)
+        CoreToolResult result = envelope.optBoolean("isError", false)
                 ? CoreToolResult.failure(envelope.toString()) : CoreToolResult.success(envelope.toString());
+        if (invocation == null) return result;
+        JSONObject protocolResult = response.optJSONObject("result");
+        boolean valid = protocolResult != null && protocolResult.optJSONArray("content") != null
+                && (!protocolResult.has("isError") || protocolResult.opt("isError") instanceof Boolean);
+        if (!valid) result = CoreToolResult.failure(envelope.toString());
+        if (!isWriteOperation()) return valid && result.success
+                ? result.withAdministrativeReceipt(invocation.readCompleted()) : result;
+        EffectInvocation.Outcome outcome = !invocation.admitted() ? EffectInvocation.Outcome.NOT_EXECUTED
+                : !valid || !result.success ? EffectInvocation.Outcome.UNCERTAIN : EffectInvocation.Outcome.OK;
+        return result.withEffectReceipt(invocation.receipt(outcome));
     }
 }

@@ -6,6 +6,8 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.runBlocking
+import org.junit.Before
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,7 +20,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class CodexImageGenerationToolScopeTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
+    @get:Rule val chatTestStore = ChatTestStore(registerApplicationFilesDirectory = true)
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    @Before
+    fun awaitStorageReady() = runBlocking { SingleSessionReset.awaitReady(context) }
 
     @After
     fun resetCodexSelection() {
@@ -68,7 +74,7 @@ class CodexImageGenerationToolScopeTest {
         assertTrue(imageTool.declaration().description.contains("quota"))
 
         val memory = MemoryStore(File(temporaryFolder.root, "reflection-memory"), true, testMemorySeedProvider())
-            .forConversation("reflection-session")
+            .forConversation("reflection-session").bindAutomaticWritesForToolset()
         memory.ensureInitialized()
         val reflectionWorkspace = WorkspaceStore(File(temporaryFolder.root, "reflection-workspaces"),
             "a".repeat(24), null, null, memory, "reflection-session", true,

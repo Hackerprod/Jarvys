@@ -50,32 +50,50 @@ final class PersonalMemoryTools {
   }
 
   static List<CoreTool> createForExtraction(Context context, String conversationId) {
-    return create(context, "", conversationId, false, CorePromptBudget.standard().toolResultsPerTurnChars);
+    if (context == null) return Collections.emptyList();
+    return createForExtraction(context, conversationId, MemoryWritePolicy.forContext(context).captureTicket());
+  }
+
+  static List<CoreTool> createForExtraction(Context context, String conversationId, MemoryWriteGate.Ticket ticket) {
+    return create(context, "", conversationId, false, CorePromptBudget.standard().toolResultsPerTurnChars, ticket);
   }
 
   static List<CoreTool> createForConsolidation(Context context, List<String> sourceIds) {
     if (context == null) return Collections.emptyList();
+    return createForConsolidation(context, sourceIds, MemoryWritePolicy.forContext(context).captureTicket());
+  }
+
+  static List<CoreTool> createForConsolidation(Context context, List<String> sourceIds,
+      MemoryWriteGate.Ticket ticket) {
+    if (context == null) return Collections.emptyList();
     return Collections.singletonList(new MemoryTool(context,
         ChatDatabaseBridge.getInstance(context), "", null, "memory_consolidate", sourceIds,
-        CorePromptBudget.standard().toolResultsPerTurnChars));
+        CorePromptBudget.standard().toolResultsPerTurnChars, ticket));
   }
 
   private static List<CoreTool> create(Context context, String sourceMessageId, String conversationId,
                                        boolean allowDestructive, int resultChars) {
     if (context == null) return Collections.emptyList();
+    return create(context, sourceMessageId, conversationId, allowDestructive, resultChars,
+        MemoryWritePolicy.forContext(context).captureTicket());
+  }
+
+  private static List<CoreTool> create(Context context, String sourceMessageId, String conversationId,
+      boolean allowDestructive, int resultChars, MemoryWriteGate.Ticket ticket) {
+    if (context == null) return Collections.emptyList();
     ChatDatabaseBridge bridge = ChatDatabaseBridge.getInstance(context);
     List<CoreTool> result = new ArrayList<>();
     for (String name : Arrays.asList("user_profile_set", "memory_save", "memory_search", "memory_get")) {
-      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, name, Collections.emptyList(), resultChars));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, name, Collections.emptyList(), resultChars, ticket));
     }
     if (allowDestructive) {
-      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_forget", Collections.emptyList(), resultChars));
-      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_correct", Collections.emptyList(), resultChars));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_forget", Collections.emptyList(), resultChars, ticket));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_correct", Collections.emptyList(), resultChars, ticket));
     }
     // The stored conversation is searchable only from inside a conversation; the runtime fixes which one.
     if (allowDestructive && conversationId != null && !conversationId.isEmpty()) {
-      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "history_search", Collections.emptyList(), resultChars));
-      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "history_read", Collections.emptyList(), resultChars));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "history_search", Collections.emptyList(), resultChars, ticket));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "history_read", Collections.emptyList(), resultChars, ticket));
     }
     return result;
   }
@@ -89,10 +107,12 @@ final class PersonalMemoryTools {
     private final List<String> expectedSourceIds;
     private final int resultChars;
     private final ToolSpec declaration;
+    private final MemoryWriteGate.Ticket memoryTicket;
 
     MemoryTool(Context context, ChatDatabaseBridge bridge, String sourceMessageId, String conversationId, String name,
-               List<String> expectedSourceIds, int resultChars) {
+               List<String> expectedSourceIds, int resultChars, MemoryWriteGate.Ticket memoryTicket) {
       this.context = context;
+      this.memoryTicket = memoryTicket;
       this.bridge = bridge;
       this.sourceMessageId = sourceMessageId == null ? "" : sourceMessageId;
       this.conversationId = conversationId;
@@ -176,12 +196,12 @@ final class PersonalMemoryTools {
         switch (name) {
           case "user_profile_set": {
             String section = stringArg(args, "section");
-            PersonalMemoryReceipt receipt = bridge.personalAgentSetDirective(section, stringArg(args, "directive"), sourceMessageId,
+            PersonalMemoryReceipt receipt = bridge.personalAgentSetDirectiveAutomatic(memoryTicket, token, section, stringArg(args, "directive"), sourceMessageId,
                 "User explicitly stated this in the current conversation.", optionalString(args, "supersedes_id"), conversationId);
             return writeResult(receipt);
           }
           case "memory_save":
-            return save(args);
+            return save(args, token);
           case "memory_search":
             return search(args);
           case "memory_get":
@@ -190,16 +210,16 @@ final class PersonalMemoryTools {
             List<String> sourceIds = readIds(args.get("source_ids"));
             if (sourceIds.isEmpty() || !new HashSet<>(sourceIds).equals(new HashSet<>(expectedSourceIds)))
               throw new IllegalArgumentException("consolidation_sources_must_match_persisted_input");
-            return writeResult(bridge.personalAgentConsolidateDailyNotes(sourceIds, stringArg(args, "summary")));
+            return writeResult(bridge.personalAgentConsolidateAutomatic(memoryTicket, token, sourceIds, stringArg(args, "summary")));
           }
           case "memory_forget":
-            return writeResult(bridge.personalAgentForget(stringArg(args, "id")));
+            return writeResult(bridge.personalAgentForgetAutomatic(memoryTicket, token, stringArg(args, "id")));
           case "history_search":
             return historySearch(args);
           case "history_read":
             return historyRead(args);
           default:
-            return writeResult(bridge.personalAgentCorrect(stringArg(args, "id"), stringArg(args, "new_text")));
+            return writeResult(bridge.personalAgentCorrectAutomatic(memoryTicket, token, stringArg(args, "id"), stringArg(args, "new_text")));
         }
       } catch (RuntimeException failure) {
         token.throwIfCancelled();
@@ -210,7 +230,7 @@ final class PersonalMemoryTools {
       }
     }
 
-    private CoreToolResult save(Map<String, Object> args) {
+    private CoreToolResult save(Map<String, Object> args, CancellationToken token) {
       String layer = optionalString(args, "layer");
       double importance = args.get("importance") instanceof Number ? ((Number) args.get("importance")).doubleValue() : 0.5d;
       String kind = optionalString(args, "kind");
@@ -221,7 +241,7 @@ final class PersonalMemoryTools {
           eventAt, optionalString(args, "supersedes_id"), readIds(args.get("related_ids")),
           optionalString(args, "relation") == null ? "related" : optionalString(args, "relation"),
           conversationId, sourceMessageId.isEmpty() ? null : sourceMessageId, "agent");
-      PersonalMemoryReceipt receipt = bridge.personalAgentSaveMemory(stringArg(args, "text"), layer == null ? "curated" : layer,
+      PersonalMemoryReceipt receipt = bridge.personalAgentSaveMemoryAutomatic(memoryTicket, token, stringArg(args, "text"), layer == null ? "curated" : layer,
           optionalString(args, "category"), importance, sourceMessageId, options);
       return writeResult(receipt);
     }

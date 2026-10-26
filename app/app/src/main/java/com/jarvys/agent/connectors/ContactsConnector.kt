@@ -30,6 +30,7 @@ class ContactsConnector(
     private val gateway: ContactsGateway,
     private val permissionGranted: () -> Boolean,
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
 

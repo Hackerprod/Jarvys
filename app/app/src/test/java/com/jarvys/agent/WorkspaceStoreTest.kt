@@ -37,7 +37,7 @@ class WorkspaceStoreTest {
 
         val board = WorkspaceStore.forCrewBoard(app, session)
         board.write("notes/guide.md", "Production Context path follows the filesDir alias.")
-        val physicalWorkspace = File(realFiles, "jarvys/workspaces/$projectId/notes/guide.md")
+        val physicalWorkspace = File(realFiles, "jarvys/${StorageGeneration.NAME}/workspaces/$projectId/notes/guide.md")
         assertTrue(physicalWorkspace.isFile)
         assertEquals("Production Context path follows the filesDir alias.", board.read("notes/guide.md"))
 

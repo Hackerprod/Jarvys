@@ -964,6 +964,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             }
             changed += id
         }
+        if (state == INPUT_INCORPORATED) MissionEpisodeRepository(database).reconcileInputs(conversationId, messageIds)
         ChatDbResult.Success(changed)
     }
 

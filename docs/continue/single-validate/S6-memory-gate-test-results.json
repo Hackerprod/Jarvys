@@ -1,0 +1,604 @@
+{
+  "runs": [
+    {
+      "run": "Full-memory_gate_new-4",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.MemoryAutomaticWriteTicketTest.xml",
+          "sha256": "6fc5debcd148100c693efa178eeb951703f71ffb868eb388a967b2b4ecb479c3"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWriteGateTest.xml",
+          "sha256": "831a3ddd4cc9618376e15b26c5c8de0362ea46895d245db6a7fbb9e4d3e72bc3"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWriteIntegrationTest.xml",
+          "sha256": "7f037937b42b80cbabaccbd01bf987c438b9c1b7044137f19eb6844f6a81dacc"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWritePolicyTest.xml",
+          "sha256": "8597eff6baf766cbd98d648d2d190bb8648b2da03ae881583991edf4d42b6ae3"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalMemoryConsolidationGateTest.xml",
+          "sha256": "ec844cc54351f2ed89999979b2734f62cf2c72bf54ecbae075dbfec2ccd50c6a"
+        }
+      ]
+    },
+    {
+      "run": "Full-core_memory-gate-3",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.CompactionFlushPersistenceTest.xml",
+          "sha256": "13379781ab92ce16ee7b980f6db849bdb05e3e0736715e927acdf0bb01f74737"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CompactionMemoryFlushTest.xml",
+          "sha256": "b3727d41f1a1101e50bf12d737c52cb22e23baf7c83707f9413f9eb5d135aac1"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EffectInvocationTest.xml",
+          "sha256": "ca2e0a790f8a6789608a34aaa7e202768d64cf4b4b0698dca26e96c672486c0d"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeEvidencePersistenceTest.xml",
+          "sha256": "506f84dbe8b3217d3deacde2517146c7101f54ef23e485d15b174238bbbcefea"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeNarrationPayloadTest.xml",
+          "sha256": "37e1383c0a6f0ff93636828beff6b477eaa799bc3ebcaca72343847da604a523"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeNarrationTest.xml",
+          "sha256": "09c1c9b3c559d8c9f847130b95770263267216b95d08526a24cfe27b3ffcf6bd"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeRecorderTest.xml",
+          "sha256": "dcf39a9395fec9ae070c0a031b80743b45e02e64427a2dc1294e63b515373151"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeRunIdentityTest.xml",
+          "sha256": "98e3135db82951ea2a13d28dd4218d3cbb5dd46f86b679fdb0b8556dc6886904"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MissionEpisodeCaptureTest.xml",
+          "sha256": "e0596bedfad8696a8d250570f0022a8da9e21b884255e5dcf7314a6f35d0e606"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalAgentBehaviorTest.xml",
+          "sha256": "a7e86141900d81dfb3bb761915b4eda540d1e11fee35295de54b7d14d6455f71"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalMemoryIncrementalExtractionTest.xml",
+          "sha256": "29ac0cfec111e36a271bfdf41a190f80c8e11eb6d434bd08d1581bb05a5ef9f1"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.SingleSessionMemoryRetentionTest.xml",
+          "sha256": "043782db49f8ffcb9896e50345d320ba38df83480c4ac8bf15fa7969871e74eb"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml",
+          "sha256": "9def0ffc8428d5843bf67877820c6af11189f9af3d746b7db1bef9f460c5db5e"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.chatdb.EpisodeIdentityMigrationTest.xml",
+          "sha256": "9bb5a26077a840d515dad469434a10ac1be123ca72190cf9c682c7a5324cf7bb"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test.xml",
+          "sha256": "2dbc6a69de77337adb2c1b638531e2e54fecd19641088f4a9ba2f39ce3da2498"
+        }
+      ]
+    },
+    {
+      "run": "Full-tasks-gate-2",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 66,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.ScheduledTaskBoundToolTest.xml",
+          "sha256": "a9333dcae0d396690037c538467c255d0a00553b4640b572fe4f511cc0dff847"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.ScheduledTaskProcessorTest.xml",
+          "sha256": "442ab14ad37c45f1d9675cc437db8bd4f37c16809bc846d56fffcf574dfb6566"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskMemoryAdmissionTest.xml",
+          "sha256": "5eb194db4199287364e8429c87d3576464355606b5ce62e727765aadd8e76148"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskPendingActionExecutionTest.xml",
+          "sha256": "feea54be7185f9e3a511ac3a5966b4cc0d722d4191c142f2097d3546f8431fe5"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskTickEngineTest.xml",
+          "sha256": "588f62b8e3bbaceef25ad7bf6866759fc45e3d740333faef80ecd604a3b44bea"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskWorkManagerTest.xml",
+          "sha256": "3142ad2278b5a9edfd2a05fae0cf457c49d8ce89f4491dba317bd5144e46574f"
+        }
+      ]
+    },
+    {
+      "run": "Full-memory_gate_regression-2",
+      "before_last_scheduled_factory_delta": true,
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.AgentModelTurnLimitTest.xml",
+          "sha256": "4d8b5a5a44cdac61d93556e745f39860511728a2e16135eeea082eda751ead01"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryLanguageQ2Test.xml",
+          "sha256": "97856c7e61ede1c23771a31222728d251197affa7c448f7cd9ecb8580e343366"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryReflectionPreferencesMigrationTest.xml",
+          "sha256": "1025207242857938af3069efe11e11ffbd80b35ae9edff7576da3be3520aa9f6"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryExportOwnershipTest.xml",
+          "sha256": "6ab383c9f7cf370cb57b5ec571146698efa37d65685bdf94de72e9d8f97da8ab"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryViewGuardTest.xml",
+          "sha256": "ed89fd9912f8f2de154c8d61960d89140800cbe596d2f6d6a35061782091473d"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeReflectionDispatchTest.xml",
+          "sha256": "d33ab2e095298a3622162cba4ab4d65aeabe2b5c045afbf525f51c08907d3ed8"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.UserDecisionToolTest.xml",
+          "sha256": "32135d40baf3227b4f924982d78976c7f1448793da1677c833e7f48f0e71e93e"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceStoreTest.xml",
+          "sha256": "f513c4249c50b74b6a75fba440bd8d8e07fed76c0bb783096f4984cce346164d"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.proactive.ProactiveAgentProcessorTest.xml",
+          "sha256": "03b172c17cab3a8baa290afb40a676c2f2ba94cf2f2b183ac2b955ac129d6817"
+        }
+      ]
+    },
+    {
+      "run": "Full-regression_main-gate-1",
+      "before_last_scheduled_factory_delta": true,
+      "tests": 121,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.ConversationCompactionTest.xml",
+          "sha256": "fd8c9777875e0cce514ed15ae9e3a4aa8c59fa273789ebd89fe49eb8c96d32b4"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopBatchSemanticsTest.xml",
+          "sha256": "a3d989c9158330ed7836c4c2bf81ac9fd98fba54a16c1e78f00308142f1ad6a2"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopCheckpointRecoveryTest.xml",
+          "sha256": "7480431e5e3f03ed259bd10790f104bcc94cef4ce8cab7882195b3e3a9a6034b"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopCompactionBehaviorTest.xml",
+          "sha256": "5f38ffba92d2152743816139b0e9e4253e449961a185d5ccdb64c94045184310"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopFailureRecoveryTest.xml",
+          "sha256": "8ae8a4b9658a97a6d502f732f8bdbf4d2e117079fcd3cda252f3389a01fe25ea"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopProviderCompactionRecoveryTest.xml",
+          "sha256": "28f74184ce4ffbf13112038ba3c3f7c414a7fe7a1a03b2d5f221f6d5951bb9cd"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopTest.xml",
+          "sha256": "bb6ea5168d2768a92ebe9261c3edc26ab69e8a8f806db2c1874691943c13e338"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopToolAdmissionTest.xml",
+          "sha256": "6ada0f080105771dc1f839af6d3a542fbe7cecf4e2bd1e2bf88fde28d32a172b"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CrewConversationCompactionRecoveryTest.xml",
+          "sha256": "0787353fcd48f954b1ed6dc83942702653e03230f2e1d1228dba0b1d4b1ca591"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MainChatToolContinuityTest.xml",
+          "sha256": "d62e5587f369515b4213e36bea75ea46b4e167567b99d17d9415dfff83257c32"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MainChatTurnContextProviderTest.xml",
+          "sha256": "a909ba8d4ebf862f2941193518a860258f9f0b55f7e941cf838330b705b0cbe5"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.AutonomyPolicyTest.xml",
+          "sha256": "b68bb8346b741078168283898e202907d94bbe2b26e6888c5003441ed3ec8454"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.AutonomySavedPolicyTest.xml",
+          "sha256": "06f85983be24fbc6ee95e9a12a897048d2063595870e4d8b3538fb200fcb9277"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.RemovedConnectorStateCleanupTest.xml",
+          "sha256": "9527d082e6cfa114d8e4203dd2898781f8b222268726a27316a148f7fba7c325"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.modules.ModuleToolTest.xml",
+          "sha256": "dad7fc33b4307320e2702c9d031f27dffb9e5b46f0a00688900205ba9cccea2f"
+        }
+      ]
+    },
+    {
+      "run": "Full-memory_gate_legacy-4",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 72,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.CodexImageGenerationToolScopeTest.xml",
+          "sha256": "3763376534ec4552c2cf9da88c9c7b0538c5703a8e581ad15bf5cbd8ed740b5a"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CompactionFlushPersistenceTest.xml",
+          "sha256": "3db7663099d3467817517cda30e74b261a48acf46ce5b40652d3a4a42e7b9099"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryScopeRuntimeTest.xml",
+          "sha256": "15482efa80d262da613745dceef32b35a48924dba69912aaba22c64c32d3c7ae"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryScopeStoreTest.xml",
+          "sha256": "39f11675c594da93436c96cc28d107aa2c671a381360ee0bc77acbe08410628b"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemorySearchIndexTest.xml",
+          "sha256": "3484ff30f169ab2e9fbcd8199c0675871727f829deab8c97c24a77215a8cef32"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemorySearchToolTest.xml",
+          "sha256": "8b320b85df684a2aea06f975f1d2f72d292a07c3db735efe7a05e2e4e12cf0c0"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryStoreTest.xml",
+          "sha256": "8e41eb831f82d00deab23e56856574524f3967cf9416e5475569939e95972926"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryActionRuntimeTest.xml",
+          "sha256": "271166c712c808bc21cbb0e1b2a3c622d514971650ae54a40788ff3c2ed29c70"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml",
+          "sha256": "3e833b7aeb7e4821341ba8e672b692a5e535d2ec136408558aa7b3a7cddf3383"
+        }
+      ]
+    },
+    {
+      "run": "Play-memory_gate_new-4",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.MemoryAutomaticWriteTicketTest.xml",
+          "sha256": "686a7dd0f7005f2fae256cd6d2fc8cea52447ddb35f18173005f60f8c00cf0f0"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWriteGateTest.xml",
+          "sha256": "4d16b1e8db39f33a6e572fd03db04db6d83296a24cb07b4575613a7227a98a30"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWriteIntegrationTest.xml",
+          "sha256": "417882f0400a54b13dba2bbc8ac9ee118f649c584cc42af4bca7f0db3d1b0395"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryWritePolicyTest.xml",
+          "sha256": "84aeb7a592f8ba29162e848eee099bbb17148b483da25be88ad4508716ba01b4"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalMemoryConsolidationGateTest.xml",
+          "sha256": "b90ee6b03a538dc6572ed5a6194488808ab2557f9d74947d60806a082f0a36d2"
+        }
+      ]
+    },
+    {
+      "run": "Play-core_memory-gate-3",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.CompactionFlushPersistenceTest.xml",
+          "sha256": "184c87c6d08f7a29880ce497cea05c4aa337ab0f9891e5eba2d26ee49c7c2362"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CompactionMemoryFlushTest.xml",
+          "sha256": "71f5feec68ce5be759567d8d477c634b36b484e55b52ced982424169d7c6563c"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EffectInvocationTest.xml",
+          "sha256": "f1d92e3e9fe961072f00de0a5df85070dfbcffed506d2bbc66f3978b1d0db1c6"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeEvidencePersistenceTest.xml",
+          "sha256": "2d052c679eb4955a65b9385c5d17bd8d709ca41d294abf407c76ed3e2729c091"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeNarrationPayloadTest.xml",
+          "sha256": "ee93e18612fecaeb711256101fd4a6a448c5af99bab95567671ce95f359d4f33"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeNarrationTest.xml",
+          "sha256": "0f90f2b08195b07088bb32e91c5b91d2a5ab1a69a673f95df18979822fa03ebb"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeRecorderTest.xml",
+          "sha256": "7ab4ad8624b2a6158a503675910cde176e2be910dc942cd3ae58bb750d120116"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.EpisodeRunIdentityTest.xml",
+          "sha256": "80cd0eecbfe9defd573a788d82e67f896452b5a60e8e21e1af1002bc974a8ae5"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MissionEpisodeCaptureTest.xml",
+          "sha256": "5c8e48e81a89d25ba100349263be2c791b326da187cf6177f17d379371940a7d"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalAgentBehaviorTest.xml",
+          "sha256": "208c4d955e14a4f5778fee6470cf23227ddaa80ec51472a7482f05357ddf5aac"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.PersonalMemoryIncrementalExtractionTest.xml",
+          "sha256": "b5c55a61099ab3be5287bcd4d96eff64111e895442b9d0e1af70c6280f170303"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.SingleSessionMemoryRetentionTest.xml",
+          "sha256": "978dd93e4592efb021f4d15a063fc67c0d248b93c3d200f23c6a6d44ec422361"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml",
+          "sha256": "a4ef8be3d938d110ad7d3e113ef12777d60b4f7ab755cc021b45fd12e89cee44"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.chatdb.EpisodeIdentityMigrationTest.xml",
+          "sha256": "e9711c72db9b8f4cf1d5bac21481bc7ecaeadff5df44223ff0254fd4e694685d"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test.xml",
+          "sha256": "3431bc75657cf057a163e8a10f68fe76fa68cc1b34676f0627f00ee974f853c1"
+        }
+      ]
+    },
+    {
+      "run": "Play-tasks-gate-2",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 66,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.ScheduledTaskBoundToolTest.xml",
+          "sha256": "3c70a363fcf833671282926aa55b740d78d2f0299a4f193c602af8c6ee82c733"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.ScheduledTaskProcessorTest.xml",
+          "sha256": "7d137feedef1f8f40532d6c9403f0e43ff7c9133563d489fbcb418b94cb1d897"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskMemoryAdmissionTest.xml",
+          "sha256": "0bef7a0ed173089275157e021220a68a2be61a48ccd6b914dcd383cb8df8699f"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskPendingActionExecutionTest.xml",
+          "sha256": "d622ef0b2a8d57065d89783dd02423ae456f04c719e2dd178e2d346bfb1eabae"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskTickEngineTest.xml",
+          "sha256": "3e36e4160644d0078637c5d2750380c5358e4537bb6b4246b7f9f5266628cf51"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.tasks.TaskWorkManagerTest.xml",
+          "sha256": "279aaf911cfb6c7c39bb0791fd8adbc89644c7af75ebf615ed904211e7049f25"
+        }
+      ]
+    },
+    {
+      "run": "Play-memory_gate_regression-1",
+      "before_last_scheduled_factory_delta": true,
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.AgentModelTurnLimitTest.xml",
+          "sha256": "d54e1e494f1891b9d80bdc2764d40e0f6f41cca3febdf9aab3f44afc291e9c75"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryLanguageQ2Test.xml",
+          "sha256": "fa66b74daca7295d4a6a9aee509fde319f1d237af2d49f3bf5550325f293cc1f"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryReflectionPreferencesMigrationTest.xml",
+          "sha256": "f49e955dab8cb3de3a2b79d89214a419f3b39d7e0434deb98008b9d11499992b"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryExportOwnershipTest.xml",
+          "sha256": "3bd9fa659fd46b57daa81412ca439d73864eb7ad44226d1140a69ad00f94f28a"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryViewGuardTest.xml",
+          "sha256": "b0b2c91c5fc97184f259992ab353ad7b8ddd1c38b36ca24119970ce15c4d3bbd"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeReflectionDispatchTest.xml",
+          "sha256": "c5a2105db3b2643fd77936b1bdad2841766c1ce517ea32f81d5dbc81c6b5208f"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.UserDecisionToolTest.xml",
+          "sha256": "64e24064917ce12c5538d3df0d5bcb22c033232414feafb29f708c08e830b494"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceStoreTest.xml",
+          "sha256": "f5a31453e104236ba3da6261e9293bc6a66dad32617b107f13278de3b2c7bd7c"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.proactive.ProactiveAgentProcessorTest.xml",
+          "sha256": "7adf194e4ba2d46027a3d0a5e96405ff7058e73bd68b6fbc33d36192b3db119d"
+        }
+      ]
+    },
+    {
+      "run": "Play-regression_main-gate-1",
+      "before_last_scheduled_factory_delta": true,
+      "tests": 121,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.ConversationCompactionTest.xml",
+          "sha256": "451e86c46a08c4336aa8f784c4b76f72ea1c250a7656f3ab8e5ff55f6713f75a"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopBatchSemanticsTest.xml",
+          "sha256": "9e1a17fbe357f7def03f44273655ecc33c7b3c9a03c0cf49408b32a4bd497419"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopCheckpointRecoveryTest.xml",
+          "sha256": "4e217ca5fcc09aac26feee2f58dc7578df84b2c360962caaf51ec5df23cbd4cd"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopCompactionBehaviorTest.xml",
+          "sha256": "937c9a7d9e662ecd0d6738da2c09093fa11cf2a6b54f70f21e14f0f32d842b6e"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopFailureRecoveryTest.xml",
+          "sha256": "59afb42d946d53b79b711054b033e9f4f96fcbdb633a740f6be5e74f3639f6ea"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopProviderCompactionRecoveryTest.xml",
+          "sha256": "94b575665131030450d9e86b8e6c53df277ee669716679c8b8105978a121bf40"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopTest.xml",
+          "sha256": "08928824e29c7de7f4c2c65720c64f8b84d26d15ac80fa18daa1e279e5953031"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CoreAgentLoopToolAdmissionTest.xml",
+          "sha256": "3d261986e8eeb569f00e6fea3a8e4c988aedf77e765344036a429e0bf1c41478"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CrewConversationCompactionRecoveryTest.xml",
+          "sha256": "1ed951e83bad78204d7d5c1c6ef58a10cb4ea04fc30f59c7359cd7ad28208e63"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MainChatToolContinuityTest.xml",
+          "sha256": "09a2ddde46f4c1a2e2994ad641ca5ac983e19b3e2ad7da96ebbb2d5415224b07"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MainChatTurnContextProviderTest.xml",
+          "sha256": "3b6ba38886b7461d3dff81e0ad873f6fdb71c4247decc7a977e9e335398a3489"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.AutonomyPolicyTest.xml",
+          "sha256": "d9bda6fd3ffd836ba89bd5a618cc4d48e63c58030fcc2392383d79ad78b3bf7b"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.AutonomySavedPolicyTest.xml",
+          "sha256": "339c6ffa85c98af1f437f2fee494f007006507df15ab4b17fe15b3027db0c196"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.RemovedConnectorStateCleanupTest.xml",
+          "sha256": "e6468ff35a31416add95a09e7500fdd2ec8ea80894c1afa375458f6ea8b33b1e"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.modules.ModuleToolTest.xml",
+          "sha256": "ea4ef0a6dfa0eeebc7a0e8d1bc3038b84bb74fc68afdedf14f0e360075e4d51b"
+        }
+      ]
+    },
+    {
+      "run": "Play-memory_gate_legacy-1",
+      "before_last_scheduled_factory_delta": false,
+      "tests": 72,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.CodexImageGenerationToolScopeTest.xml",
+          "sha256": "aeb414e2ebebfe6a58e6242c2453a528207bfab03acb7fe01fc3c958baa2bab2"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.CompactionFlushPersistenceTest.xml",
+          "sha256": "2d42bf33dabaa3461d601663801c928555743e362a1848f1699f56b3274b6fe1"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryScopeRuntimeTest.xml",
+          "sha256": "05c5fdb656855b48eeba74d965e1db2c7e5ac0992e0dbbd3698be980daf6d089"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryScopeStoreTest.xml",
+          "sha256": "48a78120c048ac887c4608ab879de3c13bd5f18744922360de3daef1b64641ff"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemorySearchIndexTest.xml",
+          "sha256": "cf26caa20f2dd6c5a6d94100d6b95bfffc3b9dfb34b1840d7cb1451c64bcacbc"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemorySearchToolTest.xml",
+          "sha256": "68caf21e03ef3e47a1be6b77f2b19ce1770e0cc1648a1edd6392f220228e204e"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.MemoryStoreTest.xml",
+          "sha256": "218bceac2300921c6c7a32241940d2fc0dc25e3e5f16f149790079090d3cd2aa"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.NativeMemoryActionRuntimeTest.xml",
+          "sha256": "7b61226d671e6ee86ff5929b0a34a19dbde00dad0c683e77b2e28d9e3225354a"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml",
+          "sha256": "77da5587ec2c4da056ba413e790865828ab5c1c7a80f510caee6c17bcfa8ad18"
+        }
+      ]
+    }
+  ],
+  "group_test_executions": 1010,
+  "unique_flavor_class_method_cases": 970,
+  "unique_class_method_cases": 485,
+  "unique_classes": 57,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "scope": "Memory gate affected and selected regressions only; not entire suite; flagged regression runs precede final scheduled factory delta, other groups rerun after it. Historical1088 excluded."
+}

@@ -55,4 +55,19 @@ class GoogleAuthorizationSessionTest {
         assertNotEquals(epoch, session.currentEpoch())
         assertNotEquals(session.currentEpoch(), GoogleAuthorizationSession().currentEpoch())
     }
+    @Test fun externalUiEpochAndDenyInvalidateLeaseWithoutAcquiringSessionOrRunningCallbacks() {
+        val epoch = java.util.concurrent.atomic.AtomicLong()
+        val deny = java.util.concurrent.atomic.AtomicBoolean()
+        val session = GoogleAuthorizationSession(epoch::get, deny::get)
+        val lease = session.acquire()
+        epoch.incrementAndGet()
+        deny.set(true)
+        assertFalse(session.isCurrent(lease))
+        assertTrue(runCatching { session.acquire() }.isFailure)
+        assertTrue(runCatching { session.withCurrent(lease) { fail("No persistence") } }.isFailure)
+        deny.set(false)
+        assertFalse(session.isCurrent(lease))
+        assertTrue(session.isCurrent(session.acquire()))
+    }
+
 }

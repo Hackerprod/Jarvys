@@ -145,7 +145,7 @@ class TaskWorkManagerTest {
         assertEquals(1, activeTickWork().size)
     }
 
-    @Test fun retryUsesWorkManagerRetryAndRepeatsTheSameOccurrenceUntilOneFinalLedgerRow() {
+    @Test fun retryUsesWorkManagerRetryAndRetainsDurableClaimsAndTerminalReceipts() {
         val now = Instant.parse("2025-02-01T10:00:00Z").toEpochMilli()
         val clock = Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC)
         val store = TaskStore(taskFile)
@@ -173,12 +173,13 @@ class TaskWorkManagerTest {
 
         assertTrue(runWorker() is ListenableWorker.Result.Retry)
         assertEquals("RETRYABLE", store.get(due.id)?.lastRun?.status)
-        assertTrue(ledger.read().runs.isEmpty())
+        assertEquals("RETRYABLE", ledger.read().runs.single().status)
         assertEquals(0, rearmed)
         assertTrue(runWorker() is ListenableWorker.Result.Success)
         assertEquals(listOf(now - 1L, now - 1L), scheduled)
         assertEquals(1, ledger.read().runs.size)
-        assertEquals(1, runFile.readLines().size)
+        assertEquals(listOf("STARTED", "RETRYABLE", "STARTED", "OK"),
+            runFile.readLines().map { org.json.JSONObject(it).getString("status") })
         assertEquals("OK", store.get(due.id)?.lastRun?.status)
         assertEquals(1, rearmed)
     }

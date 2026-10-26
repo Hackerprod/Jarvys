@@ -356,7 +356,8 @@ class MainActivity : ComponentActivity() {
     private var timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
     private var captureContextRequested by mutableStateOf(false)
     private var selectedSkillIds by mutableStateOf<Set<String>>(emptySet())
-    private var memoryEnabled by mutableStateOf(true)
+    private var memoryEnabled by mutableStateOf(false)
+    private var memorySettingRequest = 0L
     private var memoryCoreCharacters by mutableIntStateOf(0)
     private var showMemoryDisclosure by mutableStateOf(false)
     private var reflectionEnabled by mutableStateOf(true)
@@ -486,8 +487,7 @@ class MainActivity : ComponentActivity() {
         )
         reflectionPreferences = MemoryReflectionPreferences(this)
         val memoryPreferences = getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE)
-        memoryEnabled = memoryPreferences.getBoolean(MemoryConstants.ENABLED_KEY, true)
-        PersonalMemoryConsolidationWorker.refreshSchedule(this)
+        refreshMemoryEnabledState()
         showMemoryDisclosure = memoryEnabled && !memoryPreferences.getBoolean(MemoryConstants.DISCLOSURE_SHOWN_KEY, false)
         refreshReflectionUiState(conversationSessionId)
         showReflectionDisclosure = false // Action policy owns any required reflection review.
@@ -704,6 +704,7 @@ class MainActivity : ComponentActivity() {
         if (::connectorRegistry.isInitialized) connectorRegistry.refreshStates()
         if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
         if (::proactivePreferences.isInitialized) refreshProactiveStatus()
+        refreshMemoryEnabledState()
     }
 
     override fun onStart() {
@@ -910,14 +911,50 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateMemoryEnabled(enabled: Boolean) {
-        getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE).edit()
-            .putBoolean(MemoryConstants.ENABLED_KEY, enabled).apply()
-        memoryEnabled = enabled
-        PersonalMemoryConsolidationWorker.refreshSchedule(this)
-        if (!enabled) PersonalMemoryExtractionWorker.cancelAll(this)
-        if (enabled && !getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE)
+        val app = applicationContext
+        val request = ++memorySettingRequest
+        val result = MemoryWritePolicy.forContext(app).requestSetEnabled(enabled) { effectiveEnabled ->
+            // Ordered runtime follow-up, after the preference gate was released; never capture Activity.
+            if (effectiveEnabled) PersonalMemoryConsolidationWorker.refreshSchedule(app)
+            else {
+                PersonalMemoryExtractionWorker.cancelAll(app)
+                PersonalMemoryConsolidationWorker.cancelSchedule(app)
+            }
+        }
+        lifecycleScope.launch {
+            val completed = withContext(Dispatchers.IO) { result.get() }
+            if (request != memorySettingRequest) return@launch
+            applyMemorySettingResult(completed)
+        }
+    }
+
+    private fun refreshMemoryEnabledState() {
+        val request = ++memorySettingRequest
+        val app = applicationContext
+        val result = MemoryWritePolicy.forContext(app).readStateAsync { effectiveEnabled ->
+            if (effectiveEnabled) PersonalMemoryConsolidationWorker.refreshSchedule(app)
+            else {
+                PersonalMemoryExtractionWorker.cancelAll(app)
+                PersonalMemoryConsolidationWorker.cancelSchedule(app)
+            }
+        }
+        lifecycleScope.launch {
+            val completed = withContext(Dispatchers.IO) { result.get() }
+            if (request != memorySettingRequest) return@launch
+            applyMemorySettingResult(completed)
+        }
+    }
+
+    private fun applyMemorySettingResult(result: MemoryWritePolicy.SettingResult) {
+        memoryEnabled = result.effectiveEnabled
+        if (!result.confirmed) toast(getString(R.string.memory_setting_save_failed), Toast.LENGTH_LONG)
+        else if (!result.followUpSucceeded) toast(getString(R.string.memory_setting_follow_up_failed), Toast.LENGTH_LONG)
+        if (memoryEnabled && !getSharedPreferences(MemoryConstants.PREFERENCES_FILE, MODE_PRIVATE)
                 .getBoolean(MemoryConstants.DISCLOSURE_SHOWN_KEY, false)) showMemoryDisclosure = true
-        if (!enabled) showReflectionDisclosure = false
+        if (!memoryEnabled) {
+            showMemoryDisclosure = false
+            showReflectionDisclosure = false
+        }
     }
 
     private fun dismissMemoryDisclosure() {

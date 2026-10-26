@@ -39,7 +39,9 @@ class GoogleOAuthManager internal constructor(
     private val secrets = SecretStore.get(appContext)
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val identityAuthorization = identityClient ?: GooglePlayServicesAuthorizationClient(appContext)
-    private val session = GoogleAuthorizationSession()
+    private val localExecutor = Executors.newSingleThreadExecutor { Thread(it, "JarvysGoogleLocal").apply { isDaemon = true } }
+    private val uiAdmission = GoogleUiAdmission(localExecutor)
+    private val session = GoogleAuthorizationSession(uiAdmission::epoch, uiAdmission::isLocallyDenied)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val revision = AtomicLong()
     private val _stateRevision = MutableStateFlow(0L)
@@ -54,6 +56,10 @@ class GoogleOAuthManager internal constructor(
     }
 
     init {
+        localExecutor.execute {
+            uiAdmission.initialize(revokeState == GoogleRevocationState.PENDING || pendingLegacyOwner() != null)
+            mainHandler.post { changed() }
+        }
         (appContext as? Application)?.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityDestroyed(activity: Activity) {
                 if (activeActivity?.get() === activity) cancelAuthorization()
@@ -65,6 +71,96 @@ class GoogleOAuthManager internal constructor(
             override fun onActivityStopped(activity: Activity) = Unit
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         })
+    }
+
+    sealed class LocalChange {
+        data object Disconnect : LocalChange()
+        data class DisableScope(val scope: String) : LocalChange()
+        data object UseIdentity : LocalChange()
+        // Deliberately not a data class: secrets must never appear in generated toString().
+        class Configure(val clientId: String, val clientSecret: String, val accountLabel: String) : LocalChange()
+        data object Revoke : LocalChange()
+        data object ForgetPending : LocalChange()
+    }
+    class ObsoleteConnectionRequestException : IllegalStateException("Google connection request is no longer current")
+    data class LocalResult(val ticket: GoogleUiAdmission.Ticket, val result: Result<Unit>)
+    data class AuthorizationResult(val ticket: GoogleUiAdmission.Ticket, val result: Result<Unit>)
+
+    /** Capture is strictly memory-only/silent. Publication and completion are outside all locks. */
+    fun <O> requestLocalChange(change: LocalChange, captureOffSilently: () -> O,
+                              onCaptured: (O) -> Unit, onComplete: (LocalResult) -> Unit): GoogleUiAdmission.Submission =
+        uiAdmission.local(captureOffSilently, onCaptured) { ticket, done ->
+            fun complete(result: Result<Unit>) {
+                done(result.isSuccess)
+                mainHandler.post { onComplete(LocalResult(ticket, result)) }
+            }
+            if (change === LocalChange.Revoke) {
+                runCatching {
+                    synchronized(this) {
+                        check(revokeState != GoogleRevocationState.PENDING) { "Google revocation is already pending" }
+                        revokeAndClear { complete(it) }
+                    }
+                }.onFailure { complete(Result.failure(it)) }
+            } else {
+                val result = runCatching {
+                    when (change) {
+                        LocalChange.Disconnect -> disconnectLocal()
+                        is LocalChange.DisableScope -> disableScope(change.scope)
+                        LocalChange.UseIdentity -> useIdentityMode()
+                        is LocalChange.Configure -> configure(change.clientId, change.clientSecret, change.accountLabel)
+                        LocalChange.ForgetPending -> forgetPendingRevocationLocally()
+                        LocalChange.Revoke -> error("Handled asynchronously")
+                    }
+                }
+                complete(result)
+            }
+        }
+
+    fun <C> requestAuthorization(activity: Activity, scope: String, captureOnSilently: () -> C,
+                                 onCaptured: (C) -> Unit,
+                                 onComplete: (C, AuthorizationResult) -> Unit): GoogleUiAdmission.Submission =
+        requestAuthorization(activity, scope, captureOnSilently, onCaptured, { true }, onComplete)
+
+    fun <C> requestAuthorization(activity: Activity, scope: String, captureOnSilently: () -> C,
+                                 onCaptured: (C) -> Unit, validateCaptured: (C) -> Boolean,
+                                 onComplete: (C, AuthorizationResult) -> Unit): GoogleUiAdmission.Submission {
+        validateScope(scope)
+        return uiAdmission.authorize(captureOnSilently, onCaptured) { ticket, captured ->
+            val delivered = java.util.concurrent.atomic.AtomicBoolean()
+            fun complete(result: Result<Unit>) {
+                if (!delivered.compareAndSet(false, true)) return
+                uiAdmission.finishAuthorization(ticket)
+                deliverOnMain {
+                    // Process cleanup must run even if its screen/activity has disappeared.
+                    // Only a current request may ever receive success.
+                    val currentResult = if (result.isSuccess &&
+                        (!uiAdmission.isCurrent(ticket) || !runCatching { validateCaptured(captured) }.getOrDefault(false)))
+                        Result.failure(ObsoleteConnectionRequestException()) else result
+                    onComplete(captured, AuthorizationResult(ticket, currentResult))
+                }
+            }
+            if (!uiAdmission.isCurrent(ticket)) {
+                complete(Result.failure(java.util.concurrent.CancellationException("Google authorization request was superseded")))
+            } else {
+                runCatching {
+                    if (activity.isDestroyed || activity.isFinishing)
+                        throw java.util.concurrent.CancellationException("Google authorization activity is no longer available")
+                    if (!validateCaptured(captured)) throw ObsoleteConnectionRequestException()
+                    authorizeWithGuard(activity, scope,
+                        onSettled = { complete(Result.failure(java.util.concurrent.CancellationException("Google authorization ended without a current result"))) },
+                        requestIsCurrent = { uiAdmission.isCurrent(ticket) && validateCaptured(captured) },
+                        onComplete = ::complete)
+                }.onFailure { complete(Result.failure(it)) }
+            }
+        }
+    }
+
+    fun isUiAdmissionReady(): Boolean = uiAdmission.isReady()
+
+    fun isCurrentUiRequest(ticket: GoogleUiAdmission.Ticket): Boolean = uiAdmission.isCurrent(ticket)
+
+    private fun deliverOnMain(callback: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) callback() else mainHandler.post { callback() }
     }
 
     private fun changed() = synchronized(_stateRevision) { _stateRevision.value = revision.incrementAndGet() }
@@ -128,7 +224,7 @@ class GoogleOAuthManager internal constructor(
     /** Exact known Google grants that are usable locally, without capability expansion. */
     fun grantedScopes(): Set<String> {
         // The encrypted pending marker itself is authoritative across a crash before the preference write.
-        if (hasPendingLegacyRevocation() || preferences.getBoolean(KEY_LOCALLY_DISABLED, false)) return emptySet()
+        if (uiAdmission.isLocallyDenied() || hasPendingLegacyRevocation() || preferences.getBoolean(KEY_LOCALLY_DISABLED, false)) return emptySet()
         if (isIdentityMode()) return identityGrantedScopes()
         val owner = currentOwnerId() ?: return emptySet()
         return legacyGrants(owner).flatMapTo(linkedSetOf()) { it.scopes }
@@ -264,20 +360,30 @@ class GoogleOAuthManager internal constructor(
         finally { unlink.run(); session.release(lease) }
     }
 
-    fun authorize(activity: Activity, scope: String, onComplete: (Result<Unit>) -> Unit) {
+    fun authorize(activity: Activity, scope: String, onComplete: (Result<Unit>) -> Unit) =
+        authorizeWithGuard(activity, scope, onComplete = onComplete)
+
+    private fun authorizeWithGuard(activity: Activity, scope: String, onSettled: () -> Unit = {},
+                                   requestIsCurrent: () -> Boolean = { true }, onComplete: (Result<Unit>) -> Unit) {
         validateScope(scope)
         val lease = synchronized(this) {
-            if (revokeState == GoogleRevocationState.PENDING || pendingLegacyOwner() != null || isAuthorizationInProgress()) {
-                onComplete(Result.failure(GoogleIdentityAuthorizationException(GoogleIdentityFailure.OTHER,
-                    "Finish or retry the pending Google connection operation before reconnecting")))
-                return
+            if (uiAdmission.isLocallyDenied() || revokeState == GoogleRevocationState.PENDING || pendingLegacyOwner() != null || isAuthorizationInProgress()) null
+            else session.acquire(interactive = true).also { activeActivity = WeakReference(activity); changed() }
+        }
+        if (lease == null) {
+            deliverOnMain {
+                try { onComplete(Result.failure(GoogleIdentityAuthorizationException(GoogleIdentityFailure.OTHER,
+                    "Finish or retry the pending Google connection operation before reconnecting"))) }
+                finally { onSettled() }
             }
-            session.acquire(interactive = true).also { activeActivity = WeakReference(activity); changed() }
+            return
         }
         OAUTH_EXECUTOR.execute {
             val result = runCatching {
-                if (isIdentityMode()) authorizeIdentity(scope, lease, allowResolution = true)
-                else authorizeBlocking(activity, scope, lease)
+                if (!requestIsCurrent()) throw ObsoleteConnectionRequestException()
+                if (isIdentityMode()) authorizeIdentity(scope, lease, allowResolution = true, requestIsCurrent = requestIsCurrent)
+                else authorizeBlocking(activity, scope, lease, requestIsCurrent)
+                if (!requestIsCurrent()) throw ObsoleteConnectionRequestException()
                 session.withCurrent(lease) {
                     check(preferences.edit().putBoolean(KEY_LOCALLY_DISABLED, false)
                         .remove(KEY_REVOKE_SCOPES).remove(KEY_REVOKE_EMAIL).commit()) { "Could not enable Google connection" }
@@ -286,27 +392,32 @@ class GoogleOAuthManager internal constructor(
                 Unit
             }
             mainHandler.post {
-                // The check and UI callback share the generation lock with disconnect/account changes.
+                // Never call UI/Registry while holding the session persistence lock.
+                // UI entry points additionally carry their immutable captured connection request.
                 try {
                     if (!activity.isDestroyed && !activity.isFinishing && session.isCurrent(lease)) {
-                        session.withCurrent(lease) { onComplete(result) }
+                        onComplete(result)
                     }
                 } finally {
                     session.release(lease)
                     if (activeActivity?.get() === activity && !isAuthorizationInProgress()) activeActivity = null
+                    onSettled()
                     changed()
                 }
             }
         }
     }
 
-    private fun authorizeIdentity(scope: String, lease: GoogleAuthorizationSession.Lease, allowResolution: Boolean): GoogleIdentityGrant {
+    private fun authorizeIdentity(scope: String, lease: GoogleAuthorizationSession.Lease, allowResolution: Boolean,
+                                  requestIsCurrent: () -> Boolean = { true }): GoogleIdentityGrant {
         val previousEmail = identityAccountEmail()
         val previousScopes = identityGrantedScopes()
         // Only a user click can expand the persisted grant set. Background requests ask Google for
         // the least already-granted scope accepted by this endpoint, never its broader siblings.
         val requested = if (allowResolution) previousScopes +
             (GoogleOAuthProtocol.effectiveGrantedScope(scope, previousScopes) ?: scope) else setOf(scope)
+        if (!requestIsCurrent()) throw ObsoleteConnectionRequestException()
+        session.withCurrent(lease) { Unit }
         val grant = try { identityAuthorization.authorizeCancellable(requested, previousEmail, lease.token, allowResolution) }
         catch (error: GoogleIdentityAuthorizationException) {
             if (!allowResolution && error.reason == GoogleIdentityFailure.SCOPE_NOT_GRANTED) session.withCurrent(lease) {
@@ -317,6 +428,7 @@ class GoogleOAuthManager internal constructor(
             // A refused/cancelled expansion does not revoke previously working permissions.
             throw error
         }
+        if (!requestIsCurrent()) throw ObsoleteConnectionRequestException()
         session.withCurrent(lease) {
             val email = grant.accountEmail?.takeIf(String::isNotBlank)
             if (!allowResolution && email != null && previousEmail != null && !email.equals(previousEmail, ignoreCase = true)) {
@@ -392,7 +504,8 @@ class GoogleOAuthManager internal constructor(
         changed()
     }
 
-    private fun authorizeBlocking(activity: Activity, scope: String, lease: GoogleAuthorizationSession.Lease) {
+    private fun authorizeBlocking(activity: Activity, scope: String, lease: GoogleAuthorizationSession.Lease,
+                                  requestIsCurrent: () -> Boolean = { true }) {
         val owner = currentOwnerId() ?: error("Configure your own Google OAuth client first")
         val clientId = configuredClientId()
         val secret = secrets.getConnectorSecret(owner, CLIENT_SECRET).orEmpty()
@@ -404,10 +517,10 @@ class GoogleOAuthManager internal constructor(
                 val uri = Uri.parse(GoogleOAuthProtocol.authorizationUrl(clientId, callback.redirectUri, scope,
                     state, GoogleOAuthProtocol.pkceS256(verifier)))
                 activity.runOnUiThread {
-                    if (session.isCurrent(lease) && !activity.isDestroyed && !activity.isFinishing) {
+                    if (requestIsCurrent() && session.isCurrent(lease) && !activity.isDestroyed && !activity.isFinishing) {
                         runCatching { CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(activity, uri) }
                             .onFailure { activity.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-                    }
+                    } else callback.close()
                 }
                 val code = try { callback.awaitCode(state, OAUTH_TIMEOUT_MS) } catch (error: IllegalStateException) {
                     lease.token.throwIfCancelled()
@@ -416,12 +529,14 @@ class GoogleOAuthManager internal constructor(
                     throw GoogleOAuthException("callback_timeout")
                 }
                 lease.token.throwIfCancelled()
+                session.withCurrent(lease) { Unit }
                 val response = tokenRequest(GoogleOAuthProtocol.authorizationCodeForm(clientId, secret, code, verifier, callback.redirectUri), lease.token)
                 val access = response.optString("access_token")
                 val refresh = response.optString("refresh_token")
                 require(access.isNotBlank() && refresh.isNotBlank()) { "Google OAuth did not return access and refresh tokens" }
                 val granted = response.optString("scope").split(' ').filter(String::isNotBlank).toSet().ifEmpty { setOf(scope) }
                 require(GoogleOAuthProtocol.effectiveGrantedScope(scope, granted) != null) { "Google did not grant the requested feature scope" }
+                if (!requestIsCurrent()) throw ObsoleteConnectionRequestException()
                 session.withCurrent(lease) { saveGrant(owner, scopeKey(scope), access, refresh, expiry(response), GoogleIdentityPolicy.normalizeScopes(granted)) }
             } finally { unregister.run() }
         }
@@ -432,16 +547,16 @@ class GoogleOAuthManager internal constructor(
 
     override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
                                     token: CancellationToken, requestHeaders: Map<String, String>,
-                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
+                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse {
         body?.let { GoogleHttpPolicy.requireSize(it.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_TRANSFER_BYTES) }
         val response = requestBytes(scope, method, url, body?.toByteArray(Charsets.UTF_8), contentType, token,
-            GoogleApiLimits.MAX_RESPONSE_BYTES, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            GoogleApiLimits.MAX_RESPONSE_BYTES, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         return GoogleHttpResponse(response.status, response.body.toString(Charsets.UTF_8), response.headers)
     }
 
     override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
                               token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>,
-                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
+                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleBinaryResponse {
         validateScope(scope)
         GoogleHttpPolicy.validateEndpoint(method, url, scope)
         token.throwIfCancelled()
@@ -474,7 +589,12 @@ class GoogleOAuthManager internal constructor(
                         // not erase its journal reservation or imply that the whole write was unsent.
                         throw IllegalStateException("Google authorization changed after a rejected write attempt; fresh review is required", error)
                     }
-                }, repeatedUnauthorized = { clearAccess(access, lease) }, beforeDispatch = beforeDispatch).also { response ->
+                }, repeatedUnauthorized = { clearAccess(access, lease) }, beforeDispatch = {
+                    // Generic proof/refresh guards never receive this producer-marked mutation hook.
+                    session.withCurrent(lease) { Unit }
+                    beforeDispatch?.invoke()
+                    beforeMutation?.invoke()
+                }).also { response ->
                     session.withCurrent(lease) { Unit }
                     // Management's explicit profile reads also pin its exact selected token's identity.
                     if (scope in GMAIL_CAPABILITIES && method == "GET" && url == GMAIL_PROFILE_ENDPOINT && response.status in 200..299) {
@@ -568,6 +688,7 @@ class GoogleOAuthManager internal constructor(
 
     private fun setRevocationState(state: GoogleRevocationState) {
         revokeState = state
+        uiAdmission.updateRevocationBlocked(state == GoogleRevocationState.PENDING || pendingLegacyOwner() != null)
         preferences.edit().putString(KEY_REVOCATION_STATE, state.name).apply()
         changed()
     }
@@ -583,6 +704,7 @@ class GoogleOAuthManager internal constructor(
     private fun refresh(owner: String, grant: String, scope: String, lease: GoogleAuthorizationSession.Lease): String {
         val refresh = secrets.getConnectorSecret(owner, "grant_${grant}_refresh")
             ?: error("Google refresh credential is missing; authorize this feature again")
+        session.withCurrent(lease) { Unit }
         val response = try { tokenRequest(GoogleOAuthProtocol.refreshForm(configuredClientId(),
             secrets.getConnectorSecret(owner, CLIENT_SECRET).orEmpty(), refresh), lease.token) }
         catch (error: GoogleOAuthException) {

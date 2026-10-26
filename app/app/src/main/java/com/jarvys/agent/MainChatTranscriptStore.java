@@ -58,6 +58,19 @@ final class MainChatTranscriptStore {
     private final JSONObject ownership = new JSONObject();
     private final ThreadLocal<List<JSONObject>> pendingCheckpointRows = new ThreadLocal<>();
     private boolean storageWarningChecked;
+    private final Map<String, CallBinding> committedCalls = new java.util.concurrent.ConcurrentHashMap<>();
+
+    static final class CallBinding {
+        final String batchId;
+        final String callId;
+        CallBinding(String batchId, String callId) { this.batchId = batchId; this.callId = callId; }
+    }
+
+    CallBinding committedCall(String callId) {
+        CallBinding binding = committedCalls.get(callId);
+        if (binding == null) throw new IllegalStateException("Tool dispatch has no committed transcript binding");
+        return binding;
+    }
 
     MainChatTranscriptStore(File files, String sessionId, LocalRunStore store) {
         this.store = store;
@@ -99,6 +112,7 @@ final class MainChatTranscriptStore {
     }
 
     void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory, String turnOwnerId) {
+        committedCalls.clear();
         Set<ConversationTurn> historical = Collections.newSetFromMap(new IdentityHashMap<>());
         if (priorHistory != null) historical.addAll(priorHistory);
         Map<ConversationTurn, String> batches = new IdentityHashMap<>();
@@ -119,6 +133,7 @@ final class MainChatTranscriptStore {
                 // would let another producer expel a file before the pending row is published.
                 synchronized (archiveLock) {
                     List<JSONObject> checkpointRows = new ArrayList<>();
+                    Map<ConversationTurn, ConversationTurn.Source> sourceBindings = new IdentityHashMap<>();
                     pendingCheckpointRows.set(checkpointRows);
                     try {
                         String batch = null;
@@ -175,6 +190,8 @@ final class MainChatTranscriptStore {
                                     }
                                 }
                             } else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && batch != null) {
+                                sourceBindings.put(turn, new ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH_RESULT,
+                                        sessionId, batch, turn.toolCallId));
                                 String key = batch + ":" + turn.toolCallId;
                                 // Persist every result delivered to the model, including preflight errors
                                 // and interruption placeholders. Lifecycle remains separate evidence for UI.
@@ -199,6 +216,19 @@ final class MainChatTranscriptStore {
                         if (stagedHook != null) stagedHook.accept(checkpointRows);
                         store.appendModelTranscriptCheckpoint(sessionId, checkpointRows,
                                 new java.util.ArrayList<>(checkpoint.appliedIncomingIds));
+                        // Publish bindings only after the complete checkpoint transaction succeeds.
+                        for (Map.Entry<ConversationTurn, ConversationTurn.Source> source : sourceBindings.entrySet())
+                            source.getKey().bindSource(source.getValue());
+                        for (ConversationTurn turn : checkpoint.transcript)
+                            if (turn.kind == ConversationTurn.Kind.MESSAGE && !turn.durableMessageId.isEmpty())
+                                turn.bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE,
+                                        sessionId, turn.durableMessageId, ""));
+                        for (Map.Entry<ConversationTurn, String> bound : batches.entrySet()) {
+                            bound.getKey().bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH,
+                                    sessionId, bound.getValue(), ""));
+                            for (ModelReply.Call call : bound.getKey().toolCalls)
+                                committedCalls.put(call.id, new CallBinding(bound.getValue(), call.id));
+                        }
                     } finally {
                         pendingCheckpointRows.remove();
                     }
@@ -336,17 +366,38 @@ final class MainChatTranscriptStore {
      */
     JSONObject readSource(String callId, int maxChars) {
         synchronized (archiveLock) {
-            JSONObject result = store.readToolResultSource(sessionId, callId);
+            return describeSource(callId, store.readToolResultSource(sessionId, callId), maxChars);
+        }
+    }
+
+    JSONObject readSource(String batchId, String callId, int maxChars) {
+        synchronized (archiveLock) {
+            com.jarvys.agent.chatdb.EpisodeToolSource source = store.readEpisodeToolSource(sessionId, batchId, callId);
+            if (source == null || source.getOutput() == null) return null;
+            try {
+                JSONObject result = new JSONObject().put("toolName", source.getToolName())
+                        .put("output", source.getOutput()).put("lifecycle", source.getLifecycle())
+                        .put("artifactIds", new JSONArray(source.getArtifactIds()));
+                return describeSource(callId, result, maxChars);
+            } catch (org.json.JSONException failure) { throw new IllegalStateException("Could not describe exact episode source", failure); }
+        }
+    }
+
+    private JSONObject describeSource(String callId, JSONObject result, int maxChars) {
             if (result == null) return null;
             try {
-                refreshOwnership();
                 JSONArray described = new JSONArray();
                 JSONArray ids = result.optJSONArray("artifactIds");
+                List<String> sourceIds = new ArrayList<>();
+                for (int index = 0; ids != null && index < ids.length(); index++) sourceIds.add(ids.getString(index));
+                JSONObject sourceOwnership = new JSONObject();
+                for (JSONObject row : store.readModelArtifactRows(sessionId, sourceIds))
+                    sourceOwnership.put(row.getString("artifactId"), row.getJSONObject("artifact"));
                 int textBudget = Math.max(0, maxChars);
                 int perTextBudget = textBudget / (1 + (ids == null ? 0 : ids.length()));
                 for (int index = 0; ids != null && index < ids.length(); index++) {
                     String id = ids.getString(index);
-                    JSONObject metadata = ownership.optJSONObject(id);
+                    JSONObject metadata = sourceOwnership.optJSONObject(id);
                     String state = metadata == null ? ModelArtifactState.UNAVAILABLE : metadata.optString("state", ModelArtifactState.RETAINED);
                     JSONObject entry = new JSONObject().put("artifact_id", id).put("state", state);
                     if (metadata != null && !metadata.isNull("stateReason")) entry.put("reason", metadata.optString("stateReason"));
@@ -365,7 +416,6 @@ final class MainChatTranscriptStore {
                         .put("output", shortTextWithinBudget(result.optString("output"), perTextBudget))
                         .put("artifacts", described);
             } catch (org.json.JSONException failure) { throw new IllegalStateException("Could not describe the stored result", failure); }
-        }
     }
 
     CoreTool recoveryTool() {

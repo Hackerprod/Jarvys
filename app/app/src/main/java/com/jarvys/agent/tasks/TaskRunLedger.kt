@@ -38,7 +38,11 @@ data class TaskRunRecord(
     val idempotencyKey: String get() = occurrenceId
 }
 
-data class TaskToolCallRecord(val name: String, val write: Boolean, val outcome: String)
+data class TaskToolCallRecord(val name: String, val write: Boolean, val outcome: String,
+                              val noDispatchVerified: Boolean = false) {
+    /** Only explicit producer proof of no dispatch permits the existing retry policy to proceed. */
+    fun mayHaveWritten(): Boolean = write && !(noDispatchVerified && outcome in setOf("NOT_EXECUTED", "PENDING"))
+}
 
 data class TaskRunLedgerReadResult(val runs: List<TaskRunRecord>, val ignoredCorruptRows: Int)
 
@@ -61,7 +65,7 @@ class TaskRunLedger(private val ledger: File) {
         val latest = readLatestLocked().runs
         val previous = latest[record.idempotencyKey]
         if (previous != null && (previous.status !in RETRYABLE_STATES
-                || previous.toolsCalled.any { it.write })) {
+                || previous.toolsCalled.any { it.mayHaveWritten() })) {
             return@withLock false
         }
         appendLocked(encode(record.copy(status = "STARTED", finishedAt = null, reason = null,
@@ -154,7 +158,7 @@ class TaskRunLedger(private val ledger: File) {
         .put("notified", record.notified)
         .put("toolsCalled", org.json.JSONArray().apply {
             record.toolsCalled.forEach { tool -> put(JSONObject().put("name", tool.name)
-                .put("write", tool.write).put("outcome", tool.outcome)) }
+                .put("write", tool.write).put("outcome", tool.outcome).put("noDispatchVerified", tool.noDispatchVerified)) }
         })
         .putNullableString("errorCause", record.errorCause)
         .putNullableString("causeCode", record.causeCode?.code)
@@ -179,7 +183,7 @@ class TaskRunLedger(private val ledger: File) {
         val calls = row.optJSONArray("toolsCalled")
         val tools = if (calls == null) emptyList() else (0 until calls.length()).mapNotNull { index ->
             calls.optJSONObject(index)?.let { item -> TaskToolCallRecord(item.getString("name"),
-                item.optBoolean("write", false), item.getString("outcome")) }
+                item.optBoolean("write", false), item.getString("outcome"), item.optBoolean("noDispatchVerified", false)) }
         }
         val record = TaskRunRecord(
             taskId = row.getString("taskId"), runId = row.getString("runId"),

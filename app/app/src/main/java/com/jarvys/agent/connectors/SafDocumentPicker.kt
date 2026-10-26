@@ -196,6 +196,7 @@ class AndroidSafDocumentGateway(context: Context) : SafDocumentGateway {
 
 /** Play-safe user-picked file access. No directory scans, storage permissions or content caching. */
 class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
 
@@ -244,9 +245,13 @@ class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorR
         val name = validateName(arguments.optString("name"))
         val mime = SafDocumentPolicy.validateMime(arguments.optString("mime"))
         val bytes = arguments.optString("content").toByteArray(Charsets.UTF_8)
+        // The picker invokes its final authority guard on the UI thread. Persist admission here,
+        // on the calling worker before dispatching the picker; never cross Room from that UI guard.
+        (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke()
         val stream = gateway.createAuthorized(name, mime, token) { token.throwIfCancelled(); preparation.authorizeEffect?.invoke() } ?: return JSONObject()
             .put("source", "android.saf").put("untrusted_content", false).put("status", "cancelled")
-        stream.use { token.throwIfCancelled(); preparation.authorizeEffect?.invoke(); it.write(bytes) }
+        stream.use { token.throwIfCancelled(); (preparation.authorizeWriteEffect ?: preparation.authorizeEffect)?.invoke(); it.write(bytes) }
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         return JSONObject().put("source", "android.saf").put("untrusted_content", false)
             .put("status", "document_created").put("name", name).put("mimeType", mime)
             .put("bytesWritten", bytes.size).put("message", "The text document was saved to the location selected by the user.")

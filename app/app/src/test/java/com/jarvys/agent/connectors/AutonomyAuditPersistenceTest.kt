@@ -1,7 +1,7 @@
 package com.jarvys.agent.connectors
 
 import androidx.test.core.app.ApplicationProvider
-import org.junit.Assert.assertEquals
+import org.junit.Assert.*
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -43,4 +43,38 @@ class AutonomyAuditPersistenceTest {
         assertEquals("Recorded event 0", all.last().summary)
         assertEquals(25, reloaded.recentAudit("calendar", 25).size)
     }
+
+    @Test fun corruptLegacyDoesNotEraseSourceOrBlockANewDurableAudit() {
+        val original = "[invalid legacy audit"
+        preferences.edit().putString("autonomy_audit", original).commit()
+        val store = SharedPreferencesConnectorAutonomyStore(context)
+        val connector = "audit-corrupt-fixture"
+        store.appendAudit(AutonomyAuditRecord(timestampMillis = 9L, connectorId = connector,
+            connectorName = "Fixture", operationName = "save", operationLabel = "Save", summary = "New local event"))
+        assertEquals(original, preferences.getString("autonomy_audit", null))
+        assertFalse(preferences.getBoolean("autonomy_audit_room_migrated", false))
+        val bridge = com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+        assertEquals(1, bridge.recentConnectorAuditSync(connector, 10).size)
+        try { store.recentAudit(connector, 10); fail("Incomplete history must be reported") }
+        catch (_: IllegalStateException) { }
+    }
+
+    @Test fun batchConflictRollsBackEarlierRowsAndIdenticalReplayIsIdempotent() {
+        val bridge = com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+        val connector = "audit-transaction-fixture"
+        val original = AutonomyAuditRecord(id = "fixture-existing", timestampMillis = 12L,
+            connectorId = connector, connectorName = "Fixture", operationName = "save",
+            operationLabel = "Save", summary = "Original local event")
+        bridge.appendConnectorAuditSync(original)
+        val newRow = original.copy(id = "fixture-new")
+        try {
+            bridge.importConnectorAuditSync(listOf(newRow, original.copy(summary = "Conflicting event")))
+            fail("Conflicting identity must reject the batch")
+        } catch (_: IllegalStateException) { }
+        assertEquals(listOf(original), bridge.recentConnectorAuditSync(connector, 10))
+        bridge.importConnectorAuditSync(listOf(original, newRow))
+        bridge.importConnectorAuditSync(listOf(original, newRow))
+        assertEquals(2, bridge.recentConnectorAuditSync(connector, 10).size)
+    }
+
 }

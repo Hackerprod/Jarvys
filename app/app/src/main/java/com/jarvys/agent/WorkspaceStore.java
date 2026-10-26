@@ -147,9 +147,13 @@ public final class WorkspaceStore {
         root = new File(workspacesRoot, projectId);
         this.skillsRoot = skillsRoot;
         this.skillWorkspaceObserver = skillWorkspaceObserver;
-        this.memoryStore = memoryStore != null
+        MemoryStore scopedMemory = memoryStore != null
                 && conversationId != null && !conversationId.trim().isEmpty()
                 ? memoryStore.forConversation(conversationId) : null;
+        // Construction is the toolset boundary, never an execution-time ticket refresh.
+        this.memoryStore = scopedMemory != null && memoryAccessAllowed
+                && memoryActor != MemoryStore.Actor.USER
+                ? scopedMemory.bindAutomaticWritesForToolset() : scopedMemory;
         this.conversationId = conversationId;
         this.memoryAccessAllowed = memoryAccessAllowed;
         this.memoryActor = memoryActor == null ? MemoryStore.Actor.AGENT : memoryActor;
@@ -682,14 +686,18 @@ public final class WorkspaceStore {
     }
 
     public MemoryStore.Revision writeWithRevision(String relativePath, String content) {
-        synchronized (projectLock) { return writeWithRevisionLocked(relativePath, content); }
+        return writeWithRevision(relativePath, content, null);
     }
 
-    private MemoryStore.Revision writeWithRevisionLocked(String relativePath, String content) {
+    public MemoryStore.Revision writeWithRevision(String relativePath, String content, CancellationToken token) {
+        synchronized (projectLock) { return writeWithRevisionLocked(relativePath, content, token); }
+    }
+
+    private MemoryStore.Revision writeWithRevisionLocked(String relativePath, String content, CancellationToken token) {
         String normalized = normalizePath(relativePath);
         String memoryRelative = memoryRelativePath(normalized);
         if (memoryRelative != null) {
-            return requireMemoryStore().write(memoryRelative, content, memoryActor, conversationId, reflectionGroupId);
+            return memoryForMutation(token).write(memoryRelative, content, memoryActor, conversationId, reflectionGroupId);
         }
         requireAllowedWorkspacePath(memoryRelative);
         byte[] bytes = (content == null ? "" : content).getBytes(StandardCharsets.UTF_8);
@@ -716,15 +724,19 @@ public final class WorkspaceStore {
     }
 
     public String edit(String relativePath, String oldText, String newText) {
-        synchronized (projectLock) { return editLocked(relativePath, oldText, newText); }
+        return edit(relativePath, oldText, newText, null);
     }
 
-    private String editLocked(String relativePath, String oldText, String newText) {
+    public String edit(String relativePath, String oldText, String newText, CancellationToken token) {
+        synchronized (projectLock) { return editLocked(relativePath, oldText, newText, token); }
+    }
+
+    private String editLocked(String relativePath, String oldText, String newText, CancellationToken token) {
         if (oldText == null || oldText.isEmpty()) throw new IllegalArgumentException("old_text must not be empty");
         String normalizedPath = normalizePath(relativePath);
         String memoryRelative = memoryRelativePath(normalizedPath);
         if (memoryRelative != null) {
-            MemoryStore.Revision revision = requireMemoryStore().edit(memoryRelative, oldText, newText,
+            MemoryStore.Revision revision = memoryForMutation(token).edit(memoryRelative, oldText, newText,
                     memoryActor, conversationId, reflectionGroupId);
             return "Updated /memory/" + revision.path + " (revision " + revision.id + ")";
         }
@@ -743,12 +755,16 @@ public final class WorkspaceStore {
 
     /** Deletes only a file inside the explicit /memory/ zone; workspace and skills are never deletable by this tool. */
     public String deleteMemoryFile(String path) {
+        return deleteMemoryFile(path, null);
+    }
+
+    public String deleteMemoryFile(String path, CancellationToken token) {
         String normalized = normalizePath(path);
         String memoryRelative = memoryRelativePath(normalized);
         if (memoryRelative == null || memoryRelative.isEmpty()) {
             throw new IllegalArgumentException("delete accepts only a file path below /memory/");
         }
-        MemoryStore.Revision revision = requireMemoryStore().delete(memoryRelative, memoryActor, conversationId, reflectionGroupId);
+        MemoryStore.Revision revision = memoryForMutation(token).delete(memoryRelative, memoryActor, conversationId, reflectionGroupId);
         return "Deleted /memory/" + revision.path + " (revision " + revision.id + ")";
     }
 
@@ -853,6 +869,11 @@ public final class WorkspaceStore {
 
     public MemoryStore memoryStore() {
         return requireMemoryStore();
+    }
+
+    private MemoryStore memoryForMutation(CancellationToken token) {
+        MemoryStore store = requireMemoryStore();
+        return token == null ? store : store.withAutomaticCancellation(token);
     }
 
     private MemoryStore requireMemoryStore() {

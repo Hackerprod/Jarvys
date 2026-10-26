@@ -18,7 +18,6 @@ import com.jarvys.agent.tasks.TaskPendingActionHandlerProvider
 import com.jarvys.agent.tasks.TaskPendingActionExecutor
 import com.jarvys.agent.tasks.TaskPendingActionWork
 import com.jarvys.agent.coding.ProjectScope
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -397,7 +396,14 @@ internal class FactoryInstallCoordinator(
 }
 
 /** Restores family-local outcome and resource journals at application startup. */
-class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvider, androidx.work.Configuration.Provider {
+class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvider, androidx.work.Configuration.Provider,
+    com.jarvys.agent.connectors.ConnectionAccessProvider {
+    // One early-deny ledger for the real Application; construction performs no storage/Room IO.
+    private val connectorConnectionAccess by lazy {
+        com.jarvys.agent.connectors.ConnectionAccess.createForApplication(this)
+    }
+    override fun connectionAccess(): com.jarvys.agent.connectors.ConnectionAccess = connectorConnectionAccess
+
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
         com.jarvys.agent.SingleSessionReset.register(base.filesDir)
@@ -410,14 +416,29 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
         TaskPendingActionHandler { context, action -> TaskPendingActionWork.enqueue(context, action) }
 
     override fun taskPendingActionExecutor(): TaskPendingActionExecutor =
-        TaskPendingActionExecutor { context, task, action ->
-            CoreAgentRuntime.executeScheduledTaskAction(context, task, action.toolName,
-                JSONObject(action.argumentsJson), CancellationToken.uncancellable())
+        object : TaskPendingActionExecutor {
+            override fun execute(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
+                                 action: com.jarvys.agent.tasks.TaskPendingAction) =
+                CoreAgentRuntime.executeScheduledTaskAction(context, task, action.toolName,
+                    JSONObject(action.argumentsJson), CancellationToken.uncancellable())
+            override fun execute(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
+                                 action: com.jarvys.agent.tasks.TaskPendingAction,
+                                 invocation: com.jarvys.agent.EffectInvocation) =
+                CoreAgentRuntime.executeScheduledTaskAction(context, task, action.toolName,
+                    JSONObject(action.argumentsJson), CancellationToken.uncancellable(), invocation)
+            override fun hasCompleteEffectAdmissionCoverage() = true
+            override fun effectClassification(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
+                                              action: com.jarvys.agent.tasks.TaskPendingAction) =
+                CoreAgentRuntime.scheduledTaskActionEffectClass(context, task, action.toolName, JSONObject(action.argumentsJson))
+            override fun actionEffectClassification(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
+                                                    action: com.jarvys.agent.tasks.TaskPendingAction) =
+                CoreAgentRuntime.scheduledTaskActionClassification(context, task, action.toolName, JSONObject(action.argumentsJson))
         }
 
     override fun onCreate() {
         super.onCreate()
         com.jarvys.agent.SingleSessionReset.start(this)
+        connectionAccess().initializeAsync() // Process-owned local bootstrap; does not await Room.
         com.jarvys.agent.modules.ModuleHostVisibility.install(this) {
             com.jarvys.agent.tasks.TaskPendingActionWork.resumeWaitingForVisibleApp(this)
         }
@@ -452,16 +473,8 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
                 editor.remove(key); changed = true
             }
         }
-        val audit = values["autonomy_audit"] as? String
-        if (audit != null) runCatching {
-            val saved = JSONArray(audit)
-            val retained = JSONArray()
-            for (index in 0 until saved.length()) {
-                val record = saved.optJSONObject(index) ?: continue
-                if (record.optString("connectorId") != "native") retained.put(record)
-            }
-            if (retained.length() != saved.length()) { editor.putString("autonomy_audit", retained.toString()); changed = true }
-        }
+        // Legacy audit belongs to the strict, off-main Room migration. Never rewrite a partially
+        // parsed array here: doing so could discard records before that migration can preserve them.
         if (changed) runCatching { editor.commit() }
     }
 }

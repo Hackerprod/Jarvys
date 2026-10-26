@@ -18,6 +18,7 @@ class DriveConnector(
     private val artifacts: GoogleWorkspaceArtifactSink = GoogleWorkspaceArtifacts,
     private val writeJournal: GoogleWorkspaceWriteJournal = GoogleWorkspaceWriteJournals.inMemory(),
 ) : ConnectorRuntime {
+    override fun hasCompleteWriteAdmissionCoverage() = true
     constructor(oauth: GoogleRestAuthorization, artifacts: GoogleWorkspaceArtifactSink = GoogleWorkspaceArtifacts,
                 writeJournal: GoogleWorkspaceWriteJournal = GoogleWorkspaceWriteJournals.inMemory()) : this({ oauth }, artifacts, writeJournal)
     private val oauth by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { GoogleDispatchAuthorization(oauthProvider()) }
@@ -195,7 +196,8 @@ class DriveConnector(
             if (operation == CREATE_FOLDER) {
                 val response = oauth.requestCancellable(GoogleOAuthProtocol.DRIVE_FILE, "POST",
                     "${GoogleRestEndpoints.DRIVE}/files?fields=${enc(WRITE_FIELDS)}&supportsAllDrives=${frozen.shared}",
-                    frozen.metadata, token = token, expectedAuthorizationEpoch = frozen.authorizationEpoch)
+                    frozen.metadata, token = token, expectedAuthorizationEpoch = frozen.authorizationEpoch,
+                    beforeMutation = preparation.authorizeWriteEffect)
                 if (response.status in 400..499 && response.status != 408) writeJournal.resolve(frozen.intentHash)
                 requireWriteSuccess(response.status) { GoogleRestEndpoints.safeError(response) }
                 resultFile = JSONObject(response.body)
@@ -207,7 +209,7 @@ class DriveConnector(
                     "$UPLOAD/files$path?uploadType=multipart&fields=${enc(WRITE_FIELDS)}&supportsAllDrives=${frozen.shared}",
                     upload.bytes, upload.contentType, token, GoogleApiLimits.MAX_RESPONSE_BYTES,
                     requestHeaders = frozen.target?.etag?.let { mapOf("If-Match" to it) } ?: emptyMap(),
-                    expectedAuthorizationEpoch = frozen.authorizationEpoch)
+                    expectedAuthorizationEpoch = frozen.authorizationEpoch, beforeMutation = preparation.authorizeWriteEffect)
                 if (response.status in 400..499 && response.status != 408) writeJournal.resolve(frozen.intentHash)
                 requireWriteSuccess(response.status) { GoogleRestEndpoints.safeError(response) }
                 resultFile = JSONObject(strictUtf8(response.body))
@@ -220,6 +222,7 @@ class DriveConnector(
         token.throwIfCancelled()
         require(Regex("[A-Za-z0-9_-]{1,256}").matches(resultFile.optString("id"))) { "Drive write returned no valid file id; check Drive before retrying" }
         require(frozen.target == null || resultFile.optString("id") == frozen.target.id) { "Drive update returned an unexpected file id; check Drive before retrying" }
+        preparation.reportWriteOutcome?.invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
         val journalResolved = writeJournal.resolve(frozen.intentHash)
         val row = metadataRow(resultFile).put("content_sha256", frozen.contentHash)
         if (operation == UPDATE_FILE) row.put("concurrency_protection",

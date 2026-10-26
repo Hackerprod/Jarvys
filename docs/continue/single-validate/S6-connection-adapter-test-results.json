@@ -1,0 +1,67 @@
+{
+  "runs": [
+    {
+      "run": "Full-connection_adapter-2",
+      "tests": 67,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionBootstrapTest.xml",
+          "sha256": "b4e66055730abad88f3ceb4f8636a7eae54ddeff98c73060b1541b16ed4c1c04"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferenceAndroidTest.xml",
+          "sha256": "8748077988774a0d26b8ccb6eb44d4f1a1e63c20980a0805b3df4bb457396161"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferenceStorageTest.xml",
+          "sha256": "c6d379a01f01cf2638fbb83ef9891ca7ba3c2d6b8f8c7747f520f650fa8b7ae7"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferencesOwnerTest.xml",
+          "sha256": "4c56b7a7a0f9a7ef16f3b86f446cec083c5f67cc46bd2c82e9a989cf496adf1c"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionStateCoordinatorTest.xml",
+          "sha256": "7d3dce1a8a8807ea1b37a315dbee2b7cfc83e3e0ed1be7f1ba45787d5106200b"
+        }
+      ]
+    },
+    {
+      "run": "Play-connection_adapter-1",
+      "tests": 67,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_files": [
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionBootstrapTest.xml",
+          "sha256": "5abfafabf5ce0be7c23689aeda86952b02b2f1479b1c1255f171ed8be8c28719"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferenceAndroidTest.xml",
+          "sha256": "a6e954233a15f9878a0cd9165c8cee6b14984b19e3deba120db3a91ad4ad26d6"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferenceStorageTest.xml",
+          "sha256": "0fbc161e8e6d26561af3dc8f84a1e112b982204404351104b996e844c8e1c205"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionPreferencesOwnerTest.xml",
+          "sha256": "54f1a8cd149f5350577df55a643f4f19368ab366127e8279cff0f00db3aad4cb"
+        },
+        {
+          "name": "TEST-com.jarvys.agent.connectors.ConnectionStateCoordinatorTest.xml",
+          "sha256": "da50483bc11c48be3ce48c39cc725599c05bd61baee7183c28fb51370ac33d59"
+        }
+      ]
+    }
+  ],
+  "total_executions": 134,
+  "unique_methods": 67,
+  "compile": "Full/Play main+tests successful",
+  "scope": "Foundation/bootstrap/preferences adapter isolated; no product wiring or complete S6 validation",
+  "diagnostic_prior_run": "Full-connection_adapter-1:51 tests,1 failure,missing bootstrap selector; preserved separately"
+}

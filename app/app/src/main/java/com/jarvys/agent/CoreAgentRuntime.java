@@ -237,9 +237,7 @@ public final class CoreAgentRuntime {
     this.depth = depth;
     this.budget = budget;
     this.memoryStore = null;
-    this.memoryEnabled = this.context == null || this.context
-        .getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
-        .getBoolean(MemoryConstants.ENABLED_KEY, true);
+    this.memoryEnabled = this.context == null || MemoryWritePolicy.forContext(this.context).isEnabled();
     this.webSearchEnabledForConversation = webSearchEnabledForConversation;
     this.modelProviderOverride = modelProviderOverride;
   }
@@ -307,10 +305,7 @@ public final class CoreAgentRuntime {
       final boolean mainChat,
       final CancellationToken token,
       CoreAgentLoop.ProgressListener listener) {
-    if (context != null && depth == 0 && mainChat) {
-      try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
-          .personalAgentReconcileEpisodeEvidenceSync(sessionId); } catch (RuntimeException ignored) { }
-    }
+    final String runId = java.util.UUID.randomUUID().toString();
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
@@ -375,7 +370,7 @@ public final class CoreAgentRuntime {
               : null;
       if (mainChat && depth == 0 && context != null && !currentTurnOwnerMessageId.isBlank()) {
         toolRegistry = toolRegistry.withInvocationObserver(
-            new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId));
+            new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId, runId, transcriptStore));
       }
       final CoreToolRegistry observedToolRegistry = toolRegistry;
       final String runInstructions = instructions(observedToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
@@ -388,7 +383,7 @@ public final class CoreAgentRuntime {
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
       if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId);
       CoreAgentLoop.Result result = AgentResultPresentation.localize(context,
-          loop.run(request, history, attachments, token, listener, currentUserMessageId));
+          loop.run(request, history, attachments, token, listener, currentUserMessageId, runId));
       if (crewManager != null) {
         crewManager.finishMission(crewMissionId, result.text, result.interruptionReason == CoreAgentLoop.InterruptionReason.DEADLINE ? "TIMED_OUT" : result.outcome);
         if ("COMPLETED".equals(result.outcome))
@@ -408,7 +403,7 @@ public final class CoreAgentRuntime {
     } finally {
       if (context != null && depth == 0 && mainChat) {
         try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
-            .personalAgentReconcileEpisodeEvidenceSync(sessionId); } catch (RuntimeException ignored) { }
+            .personalAgentReconcileEpisodeRunSync(runId); } catch (RuntimeException ignored) { }
       }
       for (ConnectorRegistry registry : registries) registry.endAgentRun(token.generation());
     }
@@ -1569,23 +1564,28 @@ public final class CoreAgentRuntime {
   }
 
   ConversationCompactor.MemoryFlush compactionMemoryLifecycle(CoreAgentModel model) {
-    if (context == null || depth != 0 || !memoryEnabled) return null;
+    if (context == null || depth != 0) return null;
+    // Source coverage belongs to transcript history even while automatic memory is disabled.
     final String kind = runKind().memoryKind();
+    final PersonalMemoryFlush phase = new PersonalMemoryFlush(context, sessionId, kind, model);
     return new ConversationCompactor.MemoryFlush() {
       @Override public boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token) {
-        return new PersonalMemoryFlush(context, sessionId, kind, model)
-            .run(transcript, token);
+        return phase.run(transcript, token);
       }
 
-      @Override public void onCompacted(boolean memoryFlushCompleted) {
-        try {
-          com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
-              .personalAgentMarkCompacted(sessionId, kind, memoryFlushCompleted);
-        } catch (RuntimeException ignored) {
-          // The bridge reports its durable database failure; the conversation compaction itself
-          // is already committed and must not be represented as rolled back.
-        }
+      @Override public com.jarvys.agent.chatdb.CompactionCoverage coverage(
+          List<ConversationTurn> transcript, CancellationToken token) {
+        return phase.coverage(transcript, token);
       }
+
+      @Override public com.jarvys.agent.chatdb.PreparedCompactionFlush prepare(
+          List<ConversationTurn> transcript, com.jarvys.agent.chatdb.CompactionCoverage coverage,
+          CancellationToken token) {
+        return phase.prepare(transcript, coverage, token);
+      }
+
+      @Override public String sessionKind() { return kind; }
+      // Completion and counters are bound atomically by appendCompactionPrepared, never here.
     };
   }
 
@@ -1675,6 +1675,15 @@ public final class CoreAgentRuntime {
       Map<String, Object> arguments, CancellationToken token,
       ConnectorRegistry connectorRegistry, ModuleRegistry moduleRegistry,
       com.jarvys.agent.tasks.TaskStore taskStore) {
+    return executeScheduledTaskAction(context, currentTask, toolName, arguments, token,
+        connectorRegistry, moduleRegistry, taskStore, null);
+  }
+
+  public static CoreToolResult executeScheduledTaskAction(
+      Context context, ScheduledTask currentTask, String toolName,
+      Map<String, Object> arguments, CancellationToken token,
+      ConnectorRegistry connectorRegistry, ModuleRegistry moduleRegistry,
+      com.jarvys.agent.tasks.TaskStore taskStore, EffectInvocation invocation) {
     Context appContext = context.getApplicationContext();
     ScheduledTask latestTask = taskStore.get(currentTask.getId());
     if (latestTask == null || latestTask.getRevision() != currentTask.getRevision()) {
@@ -1697,13 +1706,60 @@ public final class CoreAgentRuntime {
         || !beforeDispatch.getCreatorToolNames().equals(currentTask.getCreatorToolNames())) {
       return CoreToolResult.failure("Scheduled task changed after this action was approved");
     }
-    return registry.invoke(toolName, arguments, token);
+    CoreTool classifiedTool = registry.tool(toolName);
+    CoreTool.EffectClass classification = classifiedTool.effectClass(arguments);
+    CoreTool.PersistenceEffect persistence = classifiedTool.persistenceEffect(arguments);
+    CoreToolResult result = registry.invoke(toolName, arguments, token, null, null, invocation);
+    if (invocation != null && result.success && result.effectReceipt == null && result.administrativeReceipt == null) {
+      if (persistence == CoreTool.PersistenceEffect.MEMORY) {
+        if (result.persistenceEvidence != null && !result.persistenceEvidence.trim().isEmpty())
+          return result.withAdministrativeReceipt(invocation.memoryCompleted());
+      } else if (classification == CoreTool.EffectClass.READ) {
+        return result.withAdministrativeReceipt(invocation.readCompleted());
+      }
+    }
+    return result;
   }
 
   public static CoreToolResult executeScheduledTaskAction(
       Context context, ScheduledTask currentTask, String toolName,
       JSONObject arguments, CancellationToken token) {
     return executeScheduledTaskAction(context, currentTask, toolName, jsonMap(arguments), token);
+  }
+
+  public static CoreToolResult executeScheduledTaskAction(
+      Context context, ScheduledTask currentTask, String toolName,
+      JSONObject arguments, CancellationToken token, EffectInvocation invocation) {
+    Context app = context.getApplicationContext();
+    return executeScheduledTaskAction(context, currentTask, toolName, jsonMap(arguments), token,
+        ConnectorRegistry.Companion.get(app), ModuleRegistry.get(app),
+        new com.jarvys.agent.tasks.TaskStore(app), invocation);
+  }
+
+  /** Current catalog classification only; a later WRITE still requires its own durable intent/admission. */
+  public static CoreTool.EffectClass scheduledTaskActionEffectClass(
+      Context context, ScheduledTask task, String toolName, JSONObject arguments) {
+    Context app = context.getApplicationContext();
+    CoreToolRegistry registry = createScheduledTaskTools(context, task, "scheduled-task:" + task.getId(),
+        ConnectorRegistry.Companion.get(app), null, true, ModuleRegistry.get(app));
+    CoreTool tool = registry.tool(toolName);
+    return tool == null ? null : tool.effectClass(jsonMap(arguments));
+  }
+
+  /** Memory exclusion is argument-sensitive and must be captured before an approval claim. */
+  public static com.jarvys.agent.tasks.TaskActionEffectClassification scheduledTaskActionClassification(
+      Context context, ScheduledTask task, String toolName, JSONObject arguments) {
+    Context app = context.getApplicationContext();
+    CoreToolRegistry registry = createScheduledTaskTools(context, task, "scheduled-task:" + task.getId(),
+        ConnectorRegistry.Companion.get(app), null, true, ModuleRegistry.get(app));
+    CoreTool tool = registry.tool(toolName);
+    if (tool == null) return null;
+    Map<String, Object> mapped = jsonMap(arguments);
+    if (tool.persistenceEffect(mapped) == CoreTool.PersistenceEffect.MEMORY)
+      return com.jarvys.agent.tasks.TaskActionEffectClassification.MEMORY;
+    return tool.effectClass(mapped) == CoreTool.EffectClass.READ
+        ? com.jarvys.agent.tasks.TaskActionEffectClassification.READ
+        : com.jarvys.agent.tasks.TaskActionEffectClassification.WRITE;
   }
 
   private static boolean unattendedCapabilityAllowed(CoreTool tool) {
@@ -1773,6 +1829,9 @@ public final class CoreAgentRuntime {
     @Override public EffectClass effectClass() { return delegate.effectClass(); }
     @Override public EffectClass effectClass(Map<String, Object> arguments) { return delegate.effectClass(arguments); }
     @Override public PersistenceEffect persistenceEffect() { return delegate.persistenceEffect(); }
+    @Override public PersistenceEffect persistenceEffect(Map<String, Object> arguments) {
+      return delegate.persistenceEffect(arguments);
+    }
     @Override public ExecutionMode executionMode() { return delegate.executionMode(); }
     @Override public ResponseCallPolicy responseCallPolicy() { return delegate.responseCallPolicy(); }
     @Override public String additionalCallNotStartedMessage() { return delegate.additionalCallNotStartedMessage(); }
@@ -1803,32 +1862,48 @@ public final class CoreAgentRuntime {
     @Override public boolean isConnectorTool() { return delegate.isConnectorTool(); }
     @Override public boolean isMcpTool() { return delegate.isMcpTool(); }
 
+    @Override public boolean hasCompleteEffectAdmissionCoverage() {
+      return delegate.hasCompleteEffectAdmissionCoverage();
+    }
+
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+      return execute(arguments, token, null, null);
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+        ProgressListener progress, EffectInvocation invocation) {
       if (delegate.unattendedAccess() == UnattendedAccess.WRITE && !approvedPendingAction) {
         if ((delegate instanceof CoreConnectorTool
                 && ((CoreConnectorTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)
             || (delegate instanceof PolicyGatedTool
                 && ((PolicyGatedTool) delegate).effectiveAutonomyPolicy() == AutonomyPolicy.DENY)) {
-          return CoreToolResult.failure("Operation is unavailable under current policy");
+          if (invocation != null) invocation.noteDecision(new EffectInvocation.Admission(
+              EffectInvocation.Authorization.DENY, "scheduled_task_scope", declaration().name, null, "task"));
+          CoreToolResult denied = CoreToolResult.failure("Operation is unavailable under current policy");
+          return invocation == null ? denied : denied.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED));
         }
-        if (!writesAllowed) return defer(arguments, token);
+        if (!writesAllowed) return defer(arguments, token, invocation);
       }
       if (delegate instanceof CoreConnectorTool)
         return ((CoreConnectorTool) delegate).executeScheduledTask(arguments, token,
-            approvedPendingAction, () -> deferredJson(arguments, token));
+            approvedPendingAction, () -> deferredJson(arguments, token, invocation), invocation);
       if (delegate instanceof PolicyGatedTool)
         return ((PolicyGatedTool) delegate).executeScheduledTask(arguments, token,
-            approvedPendingAction, () -> deferredJson(arguments, token));
-      return delegate.execute(arguments, token);
+            approvedPendingAction, () -> deferredJson(arguments, token, invocation), invocation);
+      return invocation == null ? delegate.execute(arguments, token, progress)
+          : delegate.execute(arguments, token, progress, invocation);
     }
 
-    private CoreToolResult defer(Map<String, Object> arguments, CancellationToken token) {
-      if (deferrer == null) return CoreToolResult.failure("Pending action queue is unavailable");
-      return deferrer.defer(declaration().name, arguments == null ? Collections.emptyMap() : arguments, token);
+    private CoreToolResult defer(Map<String, Object> arguments, CancellationToken token, EffectInvocation invocation) {
+      if (invocation != null) invocation.noteDecision(new EffectInvocation.Admission(
+          EffectInvocation.Authorization.ASK_PENDING, "scheduled_task_scope", declaration().name, null, "task"));
+      CoreToolResult queued = deferrer == null ? CoreToolResult.failure("Pending action queue is unavailable")
+          : deferrer.defer(declaration().name, arguments == null ? Collections.emptyMap() : arguments, token);
+      return invocation == null ? queued : queued.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED));
     }
 
-    private JSONObject deferredJson(Map<String, Object> arguments, CancellationToken token) {
-      CoreToolResult queued = defer(arguments, token);
+    private JSONObject deferredJson(Map<String, Object> arguments, CancellationToken token, EffectInvocation invocation) {
+      CoreToolResult queued = defer(arguments, token, invocation);
       if (!queued.success) throw new IllegalStateException("Could not queue pending action");
       try { return new JSONObject(queued.content); }
       catch (org.json.JSONException invalid) { throw new IllegalStateException("Pending action result is not valid JSON", invalid); }

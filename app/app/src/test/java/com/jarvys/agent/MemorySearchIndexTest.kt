@@ -5,6 +5,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.FileOutputStream
@@ -13,6 +16,8 @@ import java.util.Random
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipInputStream
 
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
 class MemorySearchIndexTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
@@ -151,7 +156,7 @@ class MemorySearchIndexTest {
             writeText("private derived cache")
         }
         val store = MemoryStore(memoryRoot, true, testMemorySeedProvider())
-            .forConversation("export-session").also { it.ensureInitialized() }
+            .forConversation("export-session").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
         val zip = ByteArrayOutputStream().also { store.exportZip(it, true) }.toByteArray()
         val names = ArrayList<String>()
         ZipInputStream(zip.inputStream()).use { input ->
@@ -168,7 +173,7 @@ class MemorySearchIndexTest {
     @Test
     fun freshScopedSearchTracksWriteEditDeleteUndoRestoreClearAndReflectionUndoWithoutCachingMemory() {
         val root = temporaryFolder.newFolder("memory-source")
-        val store = MemoryStore(root, true, testMemorySeedProvider()).forConversation("memory-test")
+        val store = MemoryStore(root, true, testMemorySeedProvider()).forConversation("memory-test").bindAutomaticWritesForToolset()
         val workspace = WorkspaceStore(temporaryFolder.newFolder("memory-workspaces"),
             WorkspaceStore.projectIdForSession("memory-test"), null, null, store, "memory-test")
         val persistedMemoryIndex = File(File(root.parentFile, "index"), "workspace-test-m.bin")
@@ -218,8 +223,8 @@ class MemorySearchIndexTest {
     @Test
     fun memoryChangesStayInOwningChatAndNeverEnterAnotherPersistedIndex() {
         val owner = MemoryStore(temporaryFolder.newFolder("isolated-memory"), true, testMemorySeedProvider())
-        val first = owner.forConversation("chat-a").also { it.ensureInitialized() }
-        val second = owner.forConversation("chat-b").also { it.ensureInitialized() }
+        val first = owner.forConversation("chat-a").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
+        val second = owner.forConversation("chat-b").bindAutomaticWritesForToolset().also { it.ensureInitialized() }
         val workspaces = temporaryFolder.newFolder("isolated-workspaces")
         val workspaceA = WorkspaceStore(workspaces, WorkspaceStore.projectIdForSession("chat-a"),
             null, null, first, "chat-a")

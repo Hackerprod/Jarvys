@@ -15,7 +15,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class RemovedConnectorStateCleanupTest {
-    @Test fun startupRemovesRetiredConnectionPoliciesAndAuditButKeepsOtherConnectorState() {
+    @Test fun startupExcludesRetiredChoicesWithoutRewritingLegacyBytesAndKeepsOtherConnectorState() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
         preferences.edit().clear()
@@ -36,8 +36,15 @@ class RemovedConnectorStateCleanupTest {
         ConnectorStateStore(context)
         val reloaded = SharedPreferencesConnectorAutonomyStore(context)
 
-        assertFalse(preferences.getBoolean("connected_email", false))
-        assertFalse(preferences.getBoolean("connected_sms_draft", false))
+        // Retired choice bytes are not imported or rewritten by a constructor; operational access remains excluded.
+        assertTrue(preferences.getBoolean("connected_email", false))
+        assertTrue(preferences.getBoolean("connected_sms_draft", false))
+        val access = ConnectionAccess.forTests(mapOf("email" to true, "sms_draft" to true, "phone" to true))
+        assertTrue(access.captureChoice("email").excluded)
+        assertTrue(access.captureChoice("sms_draft").excluded)
+        assertFalse(access.captureChoice("email").selected)
+        assertFalse(access.captureChoice("sms_draft").selected)
+        assertTrue(access.captureChoice("phone").selected)
         assertTrue(preferences.getBoolean("connected_phone", false))
         assertFalse(preferences.contains("autonomy_email_compose_email"))
         assertFalse(preferences.contains("autonomy_sms_draft_send_sms"))

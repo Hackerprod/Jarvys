@@ -2,6 +2,7 @@ package com.jarvys.agent.mcp
 
 import android.content.Context
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.R
 import com.jarvys.agent.connectors.ActionPolicySnapshot
 import com.jarvys.agent.connectors.AndroidAutonomyActionNotifier
@@ -60,14 +61,20 @@ class McpWriteApprovalCoordinator(
         token: CancellationToken,
         requester: String?,
         requesterColorKey: String?,
+        effectInvocation: EffectInvocation? = null,
         action: (McpActionAdmission) -> JSONObject,
     ): JSONObject {
         token.throwIfCancelled()
         val decision = snapshot(tool)
+        effectInvocation?.noteDecision(effectAdmission(decision, false))
         if (decision.policy == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote action is denied by its saved policy")
         val approvedAsk = decision.policy == AutonomyPolicy.ASK
-        if (approvedAsk) requestApproval(tool, arguments, token, requester, requesterColorKey)
-        val admission = McpActionAdmission(autonomyStore, decision, token, approvedAsk)
+        if (approvedAsk) requestApproval(tool, arguments, token, requester, requesterColorKey) {
+            effectInvocation?.noteDecision(EffectInvocation.Admission(EffectInvocation.Authorization.DENY,
+                decision.connectorId, decision.operationName, decision.revision.toString(),
+                decision.origin.name + ":user_denied"))
+        }
+        val admission = McpActionAdmission(autonomyStore, decision, token, approvedAsk, effectInvocation)
         val result = action(admission)
         if (decision.policy == AutonomyPolicy.ALLOW && tool.access == McpToolAccess.WRITE) auditAndNotify(tool, result)
         return result
@@ -80,10 +87,12 @@ class McpWriteApprovalCoordinator(
         token: CancellationToken,
         approvedPendingAction: Boolean,
         deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        effectInvocation: EffectInvocation? = null,
         action: (McpActionAdmission) -> JSONObject,
     ): JSONObject {
         token.throwIfCancelled()
         val decision = snapshot(tool)
+        effectInvocation?.noteDecision(effectAdmission(decision, false))
         if (decision.policy == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote action is denied by its saved policy")
         if (decision.policy == AutonomyPolicy.ASK && !approvedPendingAction) {
             return requireNotNull(deferAskWrite) {
@@ -91,14 +100,14 @@ class McpWriteApprovalCoordinator(
             }.get()
         }
         val admission = McpActionAdmission(autonomyStore, decision, token,
-            approvedAsk = decision.policy == AutonomyPolicy.ASK)
+            approvedAsk = decision.policy == AutonomyPolicy.ASK, effectInvocation = effectInvocation)
         val result = action(admission)
         if (decision.policy == AutonomyPolicy.ALLOW && tool.access == McpToolAccess.WRITE) auditAndNotify(tool, result)
         return result
     }
 
     private fun requestApproval(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
-                                requester: String?, requesterColorKey: String?) {
+                                requester: String?, requesterColorKey: String?, onDenied: () -> Unit = {}) {
         val title = tool.annotations?.title?.takeIf(String::isNotBlank) ?: tool.wireName
         val args = if (tool.catalogServiceId == "github") emptyList() else McpToolSecurity.approvalArgumentSummary(arguments)
         val localizedLines = buildList {
@@ -121,7 +130,10 @@ class McpWriteApprovalCoordinator(
         )
         when (approvalGate.request(summary, token)) {
             ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_ALWAYS, ApprovalDecision.APPROVED_ALLOW_FAILED -> Unit
-            ApprovalDecision.DENIED -> throw McpWriteDeniedException("The user denied this remote service action; do not retry without a new explicit request")
+            ApprovalDecision.DENIED -> {
+                onDenied()
+                throw McpWriteDeniedException("The user denied this remote service action; do not retry without a new explicit request")
+            }
             ApprovalDecision.EXPIRED -> throw McpWriteDeniedException("Remote service approval expired")
             ApprovalDecision.CANCELLED -> throw java.util.concurrent.CancellationException("Remote service approval was cancelled")
             else -> throw McpWriteDeniedException("Remote service action was not approved")
@@ -161,15 +173,17 @@ internal class McpActionAdmission(
     private val baseline: ActionPolicySnapshot,
     private val token: CancellationToken,
     private val approvedAsk: Boolean,
+    private val effectInvocation: EffectInvocation? = null,
 ) {
     fun checkCurrent() { store.snapshotMatching(baseline) }
 
-    fun admit(validate: () -> Unit = {}) {
+    fun admit(mutation: Boolean = true, validate: () -> Unit = {}) {
         val candidate = store.snapshotMatching(baseline)
         if (!token.runIfActive {
             store.admit(candidate, approvedAsk = approvedAsk) {
                 token.throwIfCancelled()
                 validate()
+                if (mutation) effectInvocation?.admit(effectAdmission(candidate, approvedAsk))
             }
         }) {
             token.throwIfCancelled()
@@ -179,3 +193,11 @@ internal class McpActionAdmission(
 }
 
 class McpWriteDeniedException(message: String) : IllegalStateException(message)
+
+/** Typed local snapshot only; raw provenance tokens and provider arguments never enter evidence. */
+private fun effectAdmission(snapshot: ActionPolicySnapshot, approvedAsk: Boolean): EffectInvocation.Admission =
+    EffectInvocation.Admission(when (snapshot.policy) {
+        AutonomyPolicy.ALLOW -> EffectInvocation.Authorization.ALLOW
+        AutonomyPolicy.DENY -> EffectInvocation.Authorization.DENY
+        AutonomyPolicy.ASK -> if (approvedAsk) EffectInvocation.Authorization.ASK_APPROVED else EffectInvocation.Authorization.ASK_PENDING
+    }, snapshot.connectorId, snapshot.operationName, snapshot.revision.toString(), snapshot.origin.name)

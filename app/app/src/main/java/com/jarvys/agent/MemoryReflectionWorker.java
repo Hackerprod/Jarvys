@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -50,12 +51,13 @@ public final class MemoryReflectionWorker {
     private final List<CoreTool> injectedTools;
     private final MemoryReflectionAuthority authority;
 
-    MemoryReflectionWorker(Context context, String sessionId, String reflectionId, CoreAgentModel model, MemoryReflectionAuthority authority) {
+    MemoryReflectionWorker(Context context, String sessionId, String reflectionId, CoreAgentModel model, MemoryReflectionAuthority authority,
+                           MemoryWriteGate.Ticket ticket) {
         this.context = context.getApplicationContext();
         this.sessionId = sessionId;
         this.reflectionId = reflectionId;
         this.model = model;
-        this.memoryStore = new MemoryStore(this.context).forConversation(sessionId);
+        this.memoryStore = new MemoryStore(this.context).forConversation(sessionId).withAutomaticWriteTicket(ticket);
         this.injectedTools = null;
         this.authority = java.util.Objects.requireNonNull(authority);
     }
@@ -66,12 +68,13 @@ public final class MemoryReflectionWorker {
         this.sessionId = sessionId;
         this.reflectionId = reflectionId;
         this.model = model;
-        this.memoryStore = memoryStore.forConversation(sessionId);
+        this.memoryStore = memoryStore.forConversation(sessionId).bindAutomaticWritesForToolset();
         this.injectedTools = new ArrayList<>(injectedTools);
         this.authority = null; // Explicit package-private test seam, never a production context route.
     }
 
     public Result run(String transcriptPayload, CancellationToken token) {
+        MemoryStore memoryStore = this.memoryStore.withAutomaticCancellation(token);
         if (!memoryStore.isEnabled()) throw new IllegalStateException("Memory is disabled in Settings");
         if (transcriptPayload == null || transcriptPayload.trim().isEmpty()) throw new IllegalArgumentException("Reflection transcript is empty");
         boolean groupStarted = false;
@@ -87,12 +90,18 @@ public final class MemoryReflectionWorker {
             for (CoreTool original : memoryTools) guardedTools.add(new CoreTool() {
                 @Override public ToolSpec declaration() { return original.declaration(); }
                 @Override public boolean canDelegate() { return original.canDelegate(); }
+                @Override public boolean hasCompleteEffectAdmissionCoverage() {
+                    return original.hasCompleteEffectAdmissionCoverage();
+                }
                 @Override public UnattendedAccess unattendedAccess() { return original.unattendedAccess(); }
                 @Override public boolean isConnectorTool() { return original.isConnectorTool(); }
                 @Override public boolean isMcpTool() { return original.isMcpTool(); }
                 @Override public boolean requiresMemoryScopeForScheduledTask() { return original.requiresMemoryScopeForScheduledTask(); }
                 @Override public AccessClassification accessClassification() { return original.accessClassification(); }
                 @Override public PersistenceEffect persistenceEffect() { return original.persistenceEffect(); }
+                @Override public PersistenceEffect persistenceEffect(Map<String, Object> arguments) {
+                    return original.persistenceEffect(arguments);
+                }
                 @Override public EffectClass effectClass() { return original.effectClass(); }
                 @Override public EffectClass effectClass(Map<String, Object> arguments) { return original.effectClass(arguments); }
                 @Override public ExecutionMode executionMode() { return original.executionMode(); }
@@ -128,6 +137,11 @@ public final class MemoryReflectionWorker {
                 @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active, ProgressListener progress) {
                     if (authority != null) authority.admit();
                     return original.execute(args, active, progress);
+                }
+                @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active,
+                        ProgressListener progress, EffectInvocation invocation) {
+                    if (authority != null) authority.admit();
+                    return original.execute(args, active, progress, invocation);
                 }
             });
             CoreToolRegistry registry = new CoreToolRegistry(guardedTools);

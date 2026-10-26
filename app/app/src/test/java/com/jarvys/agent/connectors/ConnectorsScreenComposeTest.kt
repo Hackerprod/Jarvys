@@ -66,7 +66,8 @@ class ConnectorsScreenComposeTest {
     private fun registry(context: Context, connectedId: String? = null): ConnectorRegistry {
         val stateStore = MemoryConnectionPreferences()
         connectedId?.let { stateStore.setConnected(it, true) }
-        return ConnectorRegistry.createForTests(stateStore, { true }).also {
+        return ConnectorRegistry.createForTests(stateStore, { true },
+            initialChoices = connectedId?.let { mapOf(it to true) }.orEmpty()).also {
             it.registerBuiltInDefinitions(ConnectorRegistry.deviceDefinitions(context))
         }
     }
@@ -201,6 +202,10 @@ class ConnectorsScreenComposeTest {
         compose.waitForIdle()
         compose.onNodeWithText(context.getString(R.string.connector_disconnect_confirm_title, title)).assertIsDisplayed()
         compose.onAllNodesWithText(disconnect).get(1).performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.waitForIdle() // Drain the process-owned operation's main callback.
+            navigation.get().currentDestination?.route == AppNavigationBackPolicy.CONNECTORS
+        }
         compose.waitForIdle()
         compose.onNodeWithTag("connectors-list-screen").assertIsDisplayed()
         assertEquals(ConnectorState.DISCONNECTED, registry.state(definition))

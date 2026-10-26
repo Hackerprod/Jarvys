@@ -138,11 +138,15 @@ public final class MemoryStore {
     private final File initializedMarker;
     private final ReentrantLock lock;
     private final SharedPreferences preferences;
+    private final MemoryWritePolicy memoryWritePolicy;
+    private final MemoryWriteGate memoryWriteGate;
     private final MemorySeedTextProvider seedTextProvider;
     private volatile boolean testEnabled;
     private final MemoryStore owner;
     private final String scopeConversationId;
     private final String scopeKey;
+    private final MemoryWriteGate.Ticket automaticWriteTicket;
+    private final java.util.function.BooleanSupplier automaticCommitCheck;
 
     public MemoryStore(Context context) {
         this(context, MemorySeedTextProvider.fromAppLanguage(context));
@@ -152,9 +156,13 @@ public final class MemoryStore {
         Context app = context.getApplicationContext();
         this.root = canonicalMemoryRoot(new StorageGeneration(app).directory(MemoryConstants.MEMORY_DIRECTORY));
         this.owner = this;
+        this.automaticWriteTicket = null;
+        this.automaticCommitCheck = () -> true;
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = app.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE);
+        this.memoryWritePolicy = MemoryWritePolicy.forContext(app);
+        this.memoryWriteGate = memoryWritePolicy.gate();
         this.seedTextProvider = seedTextProvider;
         this.testEnabled = true;
         this.canonicalRoot = this.root.getPath();
@@ -167,19 +175,29 @@ public final class MemoryStore {
     MemoryStore(File root, boolean enabled, MemorySeedTextProvider seedTextProvider) {
         this.root = canonicalMemoryRoot(root);
         this.owner = this;
+        this.automaticWriteTicket = null;
+        this.automaticCommitCheck = () -> true;
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = null;
         this.seedTextProvider = seedTextProvider;
         this.testEnabled = enabled;
+        this.memoryWritePolicy = null;
+        this.memoryWriteGate = new MemoryWriteGate(new MemoryWriteGate.Settings() {
+            @Override public boolean readEnabled() { return MemoryStore.this.testEnabled; }
+            @Override public boolean commitEnabled(boolean value) { MemoryStore.this.testEnabled = value; return true; }
+        });
         this.canonicalRoot = this.root.getPath();
         this.journalFile = new File(this.root, MemoryConstants.JOURNAL_FILE);
         this.initializedMarker = new File(this.root, MemoryConstants.INITIALIZED_FILE);
         this.lock = LOCKS.computeIfAbsent(canonicalRoot, ignored -> new ReentrantLock());
     }
 
-    private MemoryStore(MemoryStore owner, String conversationId) {
+    private MemoryStore(MemoryStore owner, String conversationId, MemoryWriteGate.Ticket ticket,
+                        java.util.function.BooleanSupplier check) {
         this.owner = owner;
+        this.automaticWriteTicket = ticket;
+        this.automaticCommitCheck = check;
         this.scopeConversationId = conversationId;
         this.scopeKey = sha256(conversationId.getBytes(StandardCharsets.UTF_8));
         File scopes = new File(owner.root, SCOPE_DIRECTORY);
@@ -189,10 +207,60 @@ public final class MemoryStore {
         this.journalFile = new File(this.root, MemoryConstants.JOURNAL_FILE);
         this.initializedMarker = new File(this.root, MemoryConstants.INITIALIZED_FILE);
         this.preferences = owner.preferences;
+        this.memoryWritePolicy = owner.memoryWritePolicy;
+        this.memoryWriteGate = owner.memoryWriteGate;
         this.seedTextProvider = owner.seedTextProvider;
         this.testEnabled = owner.testEnabled;
         // A family lock serializes local writes, review checks, grants and revocation.
         this.lock = owner.lock;
+    }
+
+    private MemoryStore(MemoryStore source, MemoryWriteGate.Ticket ticket,
+                        java.util.function.BooleanSupplier check) {
+        this.owner = source.owner;
+        this.root = source.root;
+        this.canonicalRoot = source.canonicalRoot;
+        this.journalFile = source.journalFile;
+        this.initializedMarker = source.initializedMarker;
+        this.preferences = source.preferences;
+        this.memoryWritePolicy = source.memoryWritePolicy;
+        this.memoryWriteGate = source.memoryWriteGate;
+        this.seedTextProvider = source.seedTextProvider;
+        this.testEnabled = source.testEnabled;
+        this.scopeConversationId = source.scopeConversationId;
+        this.scopeKey = source.scopeKey;
+        this.lock = source.lock;
+        this.automaticWriteTicket = ticket;
+        this.automaticCommitCheck = java.util.Objects.requireNonNull(check);
+    }
+
+    /** Bind once before automatic work. An existing run cannot refresh its authorization epoch. */
+    public MemoryStore withAutomaticWriteTicket(MemoryWriteGate.Ticket ticket) {
+        java.util.Objects.requireNonNull(ticket);
+        if (automaticWriteTicket != null) {
+            if (automaticWriteTicket != ticket) throw new IllegalStateException("Memory run ticket is already bound");
+            return this;
+        }
+        return new MemoryStore(this, ticket, automaticCommitCheck);
+    }
+
+    /** Toolset construction only; mutations must never invoke this method. */
+    MemoryStore bindAutomaticWritesForToolset() {
+        return automaticWriteTicket == null ? withAutomaticWriteTicket(memoryWriteGate.capture()) : this;
+    }
+
+    /** Per-invocation pure cancellation view; never captures or refreshes the run's ticket. */
+    MemoryStore withAutomaticCancellation(CancellationToken token) {
+        java.util.Objects.requireNonNull(token);
+        return new MemoryStore(this, automaticWriteTicket,
+                () -> automaticCommitCheck.getAsBoolean() && !token.isCancelled());
+    }
+
+    private <T> T commitAutomatic(boolean automatic, java.util.concurrent.Callable<T> effect) {
+        try {
+            return automatic ? memoryWriteGate.commit(automaticWriteTicket, automaticCommitCheck, effect) : effect.call();
+        } catch (RuntimeException failure) { throw failure; }
+        catch (Exception failure) { throw new IllegalStateException("Memory transaction failed", failure); }
     }
 
     /** Trusted app routing only. Never expose scope selection as an agent tool argument. */
@@ -207,7 +275,7 @@ public final class MemoryStore {
             }
             return this;
         }
-        return new MemoryStore(this, conversationId);
+        return new MemoryStore(owner, conversationId, automaticWriteTicket, automaticCommitCheck);
     }
 
     /** Opaque trusted native scope identity; never an agent-selectable path. */
@@ -267,18 +335,15 @@ public final class MemoryStore {
     public String conversationId() { return scopeConversationId; }
     public File rootDirectory() { return root; }
 
+    MemoryWriteGate writeGate() { return memoryWriteGate; }
+
     public boolean isEnabled() {
-        return preferences == null
-                ? owner.testEnabled
-                : preferences.getBoolean(MemoryConstants.ENABLED_KEY, true);
+        return memoryWritePolicy == null ? memoryWriteGate.isEnabled() : memoryWritePolicy.isEnabled();
     }
 
     public void setEnabled(boolean enabled) {
-        if (preferences == null) {
-            owner.testEnabled = enabled;
-        } else {
-            preferences.edit().putBoolean(MemoryConstants.ENABLED_KEY, enabled).apply();
-        }
+        if (memoryWritePolicy == null) memoryWriteGate.setEnabled(enabled);
+        else memoryWritePolicy.setEnabledBlocking(enabled);
     }
 
     public boolean hasShownDisclosure() {
@@ -756,8 +821,12 @@ public final class MemoryStore {
             jsonPut(group, "startRevisionId", Math.max(0L, journal.optLong("nextId", 1L) - 1L));
             jsonPut(groups, reflectionGroupId, group);
             jsonPut(journal, "reflectionGroups", groups);
-            writeAtomic(journalFile, journal.toString().getBytes(StandardCharsets.UTF_8));
-            ACTIVE_REFLECTION_GROUPS.add(reflectionGroupKey(reflectionGroupId));
+            NativeEffectDispatchScope.beforeDispatch();
+            commitAutomatic(true, () -> {
+                writeAtomic(journalFile, journal.toString().getBytes(StandardCharsets.UTF_8));
+                ACTIVE_REFLECTION_GROUPS.add(reflectionGroupKey(reflectionGroupId));
+                return null;
+            });
         } finally { lock.unlock(); }
     }
 
@@ -1175,34 +1244,36 @@ public final class MemoryStore {
         byte[] preparedJournal = document.toString().getBytes(StandardCharsets.UTF_8);
         // An admission boundary is before the atomic transaction, never inside rollback/cleanup.
         if (!"SEED".equals(operation)) NativeEffectDispatchScope.beforeDispatch();
-        writeAtomic(journalFile, preparedJournal);
-        try {
-            applyFileState(target, exists, nextContent);
-            if (isConversationScoped()) validateTreeLocked();
-            JSONObject committed = journalLocked();
-            JSONArray rows = committed.optJSONArray("revisions");
-            if (rows == null) rows = new JSONArray();
-            jsonArrayPut(rows, pending);
-            jsonPut(committed, "revisions", rows);
-            jsonPut(committed, "pending", JSONObject.NULL);
-            jsonPut(committed, "nextId", id + 1);
-            trimJournal(committed);
-            writeAtomic(journalFile, committed.toString().getBytes(StandardCharsets.UTF_8));
-            Revision revision = revisionFromJson(pending);
-            publishChange(revision);
-            return revision;
-        } catch (RuntimeException failure) {
+        Revision revision = commitAutomatic(actor != Actor.USER && !"SEED".equals(operation), () -> {
+            writeAtomic(journalFile, preparedJournal);
             try {
-                applyFileState(target, previousExists, previous);
-                pruneEmptyParentDirectories(target.getParentFile());
-                JSONObject rolledBack = journalLocked();
-                jsonPut(rolledBack, "pending", JSONObject.NULL);
-                writeAtomic(journalFile, rolledBack.toString().getBytes(StandardCharsets.UTF_8));
-            } catch (RuntimeException rollbackFailure) {
-                failure.addSuppressed(rollbackFailure);
+                applyFileState(target, exists, nextContent);
+                if (isConversationScoped()) validateTreeLocked();
+                JSONObject committed = journalLocked();
+                JSONArray rows = committed.optJSONArray("revisions");
+                if (rows == null) rows = new JSONArray();
+                jsonArrayPut(rows, pending);
+                jsonPut(committed, "revisions", rows);
+                jsonPut(committed, "pending", JSONObject.NULL);
+                jsonPut(committed, "nextId", id + 1);
+                trimJournal(committed);
+                writeAtomic(journalFile, committed.toString().getBytes(StandardCharsets.UTF_8));
+                return revisionFromJson(pending);
+            } catch (RuntimeException failure) {
+                try {
+                    applyFileState(target, previousExists, previous);
+                    pruneEmptyParentDirectories(target.getParentFile());
+                    JSONObject rolledBack = journalLocked();
+                    jsonPut(rolledBack, "pending", JSONObject.NULL);
+                    writeAtomic(journalFile, rolledBack.toString().getBytes(StandardCharsets.UTF_8));
+                } catch (RuntimeException rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
+                }
+                throw failure;
             }
-            throw failure;
-        }
+        });
+        publishChange(revision);
+        return revision;
     }
 
     private void writeIfMissingLocked(String path, String content, Actor actor,

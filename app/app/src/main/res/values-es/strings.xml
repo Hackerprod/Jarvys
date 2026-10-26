@@ -1493,4 +1493,15 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="memory_episode_label">Episodio · %1$s</string>
     <string name="memory_episode_narration_pending">Resumen pendiente</string>
     <string name="memory_episode_narration_failed">No se pudo escribir el resumen</string>
+    <string name="connector_audit_loading">Cargando historial de auditoría…</string>
+    <string name="connector_audit_incomplete">No se pudo cargar todo el historial de auditoría. No se han descartado registros guardados. Reintenta o consulta el diagnóstico local.</string>
+    <string name="memory_setting_save_failed">No se pudo confirmar el ajuste de memoria. Las escrituras automáticas están desactivadas por ahora. Reintenta.</string>
+    <string name="memory_setting_follow_up_failed">El ajuste de memoria se guardó, pero no se pudo actualizar su programación en segundo plano. Reintenta.</string>
+    <string name="connector_transition_loading">El estado de conexión todavía está cargando. Volvé a intentarlo cuando esté listo.</string>
+    <string name="connector_transition_failed">No se pudo confirmar el cambio de conexión. Revisá su estado antes de reintentar.</string>
+    <string name="connector_transition_uncertain">No se confirmó que el cambio de conexión quedara guardado. Revisá su estado antes de reintentar.</string>
+    <string name="connector_transition_obsolete">Esta solicitud de conexión ya no está vigente. Revisá el estado actual de la conexión.</string>
+    <string name="connector_transition_permission_denied">No se concedió acceso. Revisá los permisos del conector.</string>
+    <string name="connector_transition_runtime_failed">El conector no terminó de iniciarse. Revisá su estado antes de volver a intentarlo.</string>
+    <string name="connector_transition_cleanup_failed">No se pudo confirmar la limpieza del conector. Revisá el estado actual de la conexión.</string>
 </resources>

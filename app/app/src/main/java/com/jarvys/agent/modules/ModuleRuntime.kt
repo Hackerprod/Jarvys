@@ -20,4 +20,6 @@ data class ModuleExecutionRequest(
     val conversationId: String?,
     val requester: String?,
     val requesterColorKey: String?,
+    /** Authority-only final check; never performs durable evidence writes on the UI thread. */
+    val authorizeHandler: (() -> Unit)? = null,
 )

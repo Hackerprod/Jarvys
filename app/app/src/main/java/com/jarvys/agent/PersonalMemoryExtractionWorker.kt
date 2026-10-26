@@ -41,13 +41,11 @@ class PersonalMemoryExtractionWorker(
         if (type !in setOf(TYPE_EXTRACT, TYPE_SNAPSHOT, TYPE_NARRATE) || !MessageReactionTool.isOrdinaryChat(conversationId)) {
             return@withContext Result.success()
         }
-        val preferences = applicationContext.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE)
-        if (!preferences.getBoolean(MemoryConstants.ENABLED_KEY, true)
+        if (!MemoryWritePolicy.forContext(applicationContext).isEnabled()
             || !manual && !MemoryReflectionPreferences(applicationContext).enabled()) {
             return@withContext Result.success()
         }
 
-        val runStore = LocalRunStore(applicationContext)
         val bridge = ChatDatabaseBridge.getInstance(applicationContext)
         var jobId: String? = null
         val owner = UUID.randomUUID().toString()
@@ -69,11 +67,9 @@ class PersonalMemoryExtractionWorker(
             try {
                 val model = CoreAgentModel(applicationContext, "$conversationId-memory-maintenance")
                 val completed = if (job.type == TYPE_NARRATE) {
-                    narrateEpisodes(conversationId, bridge, model, token)
+                    EpisodeNarrator(applicationContext, conversationId, model).narratePending(token)
                 } else {
-                    val transcript = runStore.loadConversationContext(conversationId)
-                    PersonalMemoryFlush(applicationContext, conversationId, "principal", model)
-                        .runOffline(transcript, token, job.type == TYPE_SNAPSHOT)
+                    extractIncrementally(conversationId, bridge, model, token, job.type == TYPE_SNAPSHOT)
                 }
                 token.throwIfCancelled()
                 if (!completed) throw IllegalStateException("memory_maintenance_failed")
@@ -97,15 +93,24 @@ class PersonalMemoryExtractionWorker(
         }
     }
 
-    private fun narrateEpisodes(conversationId: String, bridge: ChatDatabaseBridge,
-                                model: CoreAgentModel, token: CancellationToken): Boolean {
-        val cursor = bridge.personalAgentNarrationCursorSync(conversationId)
+    internal fun extractIncrementally(conversationId: String, bridge: ChatDatabaseBridge,
+                                     model: CoreAgentModel, token: CancellationToken, snapshot: Boolean): Boolean {
+        val policy = MemoryWritePolicy.forContext(applicationContext)
+        fun memoryEnabled() = policy.isEnabled()
+        if (!memoryEnabled()) return false
+        val ticket = policy.captureTicket()
+        // Narration is driven by durable evidence, not this cursor. Advancing it there would skip user facts.
+        val cursor = bridge.personalAgentExtractionCursorSync(conversationId)
         val messages = bridge.readInputsAfterSync(conversationId, cursor)
         val throughSeq = messages.maxOfOrNull { it.seq } ?: cursor
-        val byId = messages.associateBy { it.messageId }
-        val completed = EpisodeNarrator(applicationContext, conversationId, model).narratePending(token)
-        if (!completed) return false
-        if (throughSeq > cursor) bridge.personalAgentAdvanceNarrationCursorSync(conversationId, throughSeq)
+        val transcript = messages.filter { it.role == "user" }.map {
+            ConversationTurn("user", it.text).withDurableMessageId(it.messageId)
+        }
+        val completed = transcript.isEmpty() || PersonalMemoryFlush(applicationContext, conversationId, "principal", model, ticket)
+            .runOffline(transcript, token, snapshot)
+        token.throwIfCancelled()
+        if (!completed || !memoryEnabled()) return false
+        if (throughSeq > cursor) bridge.personalAgentAdvanceExtractionCursorAutomatic(ticket, token, conversationId, throughSeq)
         return true
     }
 

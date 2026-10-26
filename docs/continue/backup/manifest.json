@@ -1,0 +1,20 @@
+{
+  "source_commit": "e9c937f01a40e093bb5aa38224c614f49a963915",
+  "source_tree": "0db19ebc6fc9a1c364771523aa585c702e12942e",
+  "remote_parent": "42560900aa81c5a3c46b483052219d7b2ef2d936",
+  "fixture_path": "app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt",
+  "fixture_remote_blob": "479805d3425a333090e4e734da9975a5cd7a1773",
+  "fixture_remote_sha256": "4cfa48f3cdfbd1db215e834b4d47391d319b99115b346083162aa642b508a4c5",
+  "fixture_restored_sha256": "643c9d4e9f911b2c9b19e9c41883cf9fa0c71a1e450bf153fc7e77e470756db9",
+  "patch_sha256": "41d558779982f301b3728c688133be63a73c632414a0ba576a5ed78110d7a361",
+  "readme_source_sha256": "7dee14e649522842c00ecfb3b8f9ba3aec68b34db41d6625c7effc4e8987aec7",
+  "readme_backup_sha256": "b74cd62a7918ff5c0488527be9249e560620cc3a22d4ac4223d190356dae8edd",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — 26-10-2026\n\nEste árbol de respaldo **no es build-ready tal cual**: conserva sin retransmitir un fixture de pruebas\nexactamente como estaba en la rama base remota. Los cambios locales de helpers/regresiones se guardan\nen un patch mínimo sin datos del fixture. No se eliminaron asertos ni se publicaron valores bloqueados.\n\nEn un checkout limpio de esta rama, ejecuta `python3 docs/continue/backup/restore-s6.py`.\nEl script exige árbol limpio, verifica hashes, aplica el patch, retira sólo estos auxiliares de backup\ny el aviso, y comprueba el árbol Git exacto del snapshot local validado. Deja la restauración staged,\nsin crear commits ni modificar historia. No ejecuta builds, red ni servicios.\n\nSnapshot local: `e9c937f01a40e093bb5aa38224c614f49a963915`. Validaciones recientes: cutover conexión\n544 Full/411 Play y foundation aislada 169 Full/165 Play, cero fallos/skips en sus runs finales.\nNo son suite global, PASS S6, paridad Engram ni entrega APK. Continue.md permanece igual al remoto.\nDetalles de integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "backup_only_paths": [
+    "docs/continue/backup/manifest.json",
+    "docs/continue/backup/restore-s6-fixture.patch",
+    "docs/continue/backup/restore-s6.py"
+  ],
+  "continue_blob_unchanged": "f81bfbe0b33bf63cb0f52b091811d3c462c1eacf",
+  "warning": "Backup tree is not build-ready until restoration; no denied fixture data is included in the patch."
+}

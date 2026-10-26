@@ -5,11 +5,19 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreConnectorTool
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.R
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
+import android.os.Looper
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import com.jarvys.agent.connectors.ConnectionStateCoordinator as ConnectionCore
 
 data class ConnectorField(val key: String, val label: String, val secret: Boolean = false)
 
@@ -95,6 +103,8 @@ enum class ConnectorConnectionFlow { PERMISSIONS, NOTIFICATION_LISTENER_SETTINGS
 enum class ConnectorPresentationGroup { ON_DEVICE, SERVICES }
 
 interface ConnectorRuntime {
+    /** Opt in only after every WRITE boundary carries the explicit callback. */
+    fun hasCompleteWriteAdmissionCoverage(): Boolean = false
     fun connect(configuration: Map<String, String>, secrets: Map<String, String>)
     fun disconnect()
     fun prepareRead(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation =
@@ -116,11 +126,19 @@ interface ConnectorRuntime {
 }
 
 /** Invocation context forwarded only to runtimes that need conversation-scoped host access. */
-data class ConnectorInvocationContext(
+class ConnectorEffectOutcome {
+    @Volatile var receipt: EffectInvocation.Receipt? = null
+    /** Local runtime result, never reconstructed from provider JSON; preserves flags and evidence. */
+    @Volatile var toolResult: com.jarvys.agent.CoreToolResult? = null
+}
+
+data class ConnectorInvocationContext @JvmOverloads constructor(
     val requester: String? = null,
     val requesterColorKey: String? = null,
     val conversationId: String? = null,
     val progress: ((String) -> Unit)? = null,
+    val effectInvocation: EffectInvocation? = null,
+    val effectOutcome: ConnectorEffectOutcome = ConnectorEffectOutcome(),
 )
 
 /** Optional run-scoped context for high-risk connectors that bind data reads to later writes. */
@@ -143,6 +161,9 @@ data class ConnectorWritePreparation(
     val permissionDeniedFallback: Boolean = false,
     /** Fresh, exact-operation admission immediately before each provider effect or batch mutation. */
     val authorizeEffect: (() -> Unit)? = null,
+    /** WRITE dispatch only, distinct from preflight reads and generic authority checks. */
+    val authorizeWriteEffect: (() -> Unit)? = null,
+    val reportWriteOutcome: ((EffectInvocation.Outcome) -> Unit)? = null,
 )
 
 enum class ConnectorState { DISCONNECTED, CONNECTED, PERMISSION_REVOKED }
@@ -154,39 +175,63 @@ interface ConnectorConnectionPreferences {
     fun hasConnectionChoice(id: String): Boolean = true
 }
 
-class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
-    private val app = context.applicationContext
-    private val preferences = app.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-
-    init {
-        ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
-        preferences.edit().remove("connected_email").remove("connected_sms_draft").apply()
-    }
-
-    override fun isConnected(id: String): Boolean = preferences.getBoolean("connected_$id", false)
-    override fun hasConnectionChoice(id: String): Boolean = preferences.contains("connected_$id")
-    override fun setConnected(id: String, connected: Boolean) {
-        val wasConnected = isConnected(id)
-        preferences.edit().putBoolean("connected_$id", connected).apply()
-        if (connected && !wasConnected) {
-            com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app)
-                .recordConnectorStateEventSync(id, true)
-        }
-    }
-
+/** Compatibility policy binding only. Connection selection is owned exclusively by ConnectionAccess. */
+class ConnectorStateStore(context: Context) {
+    init { ActionPolicyDefaults.bindDefaultPolicyPreferences(context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)) }
     companion object { const val PREFERENCES = "jarvys_connectors" }
 }
 
 /** Permission and connection state is checked at the point of display and again for every invocation. */
 class ConnectorRegistry private constructor(
-    private val stateStore: ConnectorConnectionPreferences,
+    private val connectionAccess: ConnectionAccess,
     private val permissionGranted: (String) -> Boolean,
     private val approvalGate: ApprovalGate,
     private val autonomyStore: ConnectorAutonomyStore,
     private val autonomyNotifier: AutonomyActionNotifier,
     private val clock: () -> Long = System::currentTimeMillis,
     private val launchIntent: (ApprovalIntentSpec) -> Unit = { error("Native intent dispatcher unavailable") },
+    private val enforceWorker: Boolean = true,
 ) {
+    class ConnectorTransitionResult internal constructor(
+        val status: Status,
+        val disposition: ConnectionCore.Disposition? = null,
+        val choiceOutcome: ConnectionCore.Outcome = ConnectionCore.Outcome.NOT_ATTEMPTED,
+        val proofOutcome: ConnectionCore.Outcome = ConnectionCore.Outcome.NOT_ATTEMPTED,
+        val activation: ConnectionCore.Activation = ConnectionCore.Activation.NOT_REQUESTED,
+        val cleanup: Cleanup = Cleanup.NOT_REQUIRED,
+    ) {
+        enum class Status { COMPLETED, PENDING, ABORTED, NOT_READY, MISSING, SUPERSEDED, CONFLICT, PERMISSION_DENIED,
+            PERSISTENCE_UNCERTAIN, RUNTIME_FAILED, CLEANUP_FAILED, ABORT_REJECTED }
+        enum class Cleanup { NOT_REQUIRED, DONE, FAILED }
+        val persistenceConfirmed: Boolean get() = choiceOutcome == ConnectionCore.Outcome.CONFIRMED && proofOutcome == ConnectionCore.Outcome.CONFIRMED
+        val cleanupCompleted: Boolean get() = cleanup != Cleanup.FAILED
+    }
+    internal class DefinitionHandle(val definition: ConnectorDefinition, val generation: String = UUID.randomUUID().toString())
+    internal class CleanupObligation(val handle: DefinitionHandle, val stamp: Long) {
+        val completion = CompletableFuture<ConnectorTransitionResult.Cleanup>()
+    }
+    class ConnectionRequest internal constructor(
+        val requestId: String, val connectorId: String, val kind: ConnectionCore.Kind, val status: Status,
+        internal val owner: ConnectorRegistry, internal val handle: DefinitionHandle?, internal val accessRequest: ConnectionAccess.Request?,
+    ) {
+        enum class Status { ACCEPTED, NOT_READY, MISSING, SUPERSEDED, CONFLICT }
+        internal var submitted: CompletableFuture<ConnectorTransitionResult>? = null
+        @Volatile internal var terminal: ConnectorTransitionResult? = null
+        @Volatile internal var terminalEpoch: String? = null
+        @Volatile internal var terminalIntent: Long? = null
+        internal var cleanupObligation: CleanupObligation? = null
+        internal val published = java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+    private class LifecycleLane {
+        val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "JarvysConnectorLifecycle").apply { isDaemon = true } }
+        val cleanup = java.util.TreeMap<Long, CleanupObligation>()
+        var active: Pair<DefinitionHandle, Long>? = null
+    }
+    private val handles = mutableMapOf<String, DefinitionHandle>()
+    private val latestRequests = mutableMapOf<String, ConnectionRequest>()
+    private val lanes = mutableMapOf<String, LifecycleLane>()
+    private val _connectionReady = MutableStateFlow(connectionAccess.isReady())
+    val connectionReady: StateFlow<Boolean> = _connectionReady.asStateFlow()
     private val lock = Any()
     private val _definitions = MutableStateFlow<List<ConnectorDefinition>>(emptyList())
     private val _states = MutableStateFlow<Map<String, ConnectorState>>(emptyMap())
@@ -194,6 +239,11 @@ class ConnectorRegistry private constructor(
     val definitions: StateFlow<List<ConnectorDefinition>> = _definitions.asStateFlow()
     val states: StateFlow<Map<String, ConnectorState>> = _states.asStateFlow()
     val autonomyRevision: StateFlow<Long> = _autonomyRevision.asStateFlow()
+
+    private val connectionListener = connectionAccess.addListener(Runnable {
+        _connectionReady.value = connectionAccess.isReady()
+        refreshStates()
+    })
 
     fun get(id: String): ConnectorDefinition? = definitions.value.firstOrNull { it.id == id }
 
@@ -309,6 +359,7 @@ class ConnectorRegistry private constructor(
         }
         require(toolNames.distinct().size == toolNames.size) { "Connector operation names collide after tool-name normalization" }
         require(_definitions.value.none { it.id == definition.id }) { "Connector is already registered: ${definition.id}" }
+        handles[definition.id] = DefinitionHandle(definition)
         _definitions.value = _definitions.value + definition
         refreshStates()
     }
@@ -320,50 +371,255 @@ class ConnectorRegistry private constructor(
         }
     }
 
-    fun connect(id: String) {
-        val definition = get(id) ?: return
-        require(definition.readPermissions.all(permissionGranted)) { "The required connector permission has not been granted" }
-        activate(definition)
-    }
+    /** Capture is memory-only and precedes any permission/settings UI. */
+    fun captureConnectionRequest(id: String, kind: ConnectionCore.Kind): ConnectionRequest =
+        captureConnectionRequestSilently(id, kind).also(::publishConnectionRequest)
 
-    fun connectFromSystemSettings(id: String) {
-        val definition = get(id) ?: return
-        require(definition.connectionFlow == ConnectorConnectionFlow.NOTIFICATION_LISTENER_SETTINGS) {
-            "This connector does not use system notification settings"
+    /** Only memory operations: safe inside a caller's short admission lock. */
+    fun captureConnectionRequestSilently(id: String, kind: ConnectionCore.Kind): ConnectionRequest = synchronized(lock) {
+        val handle = handles[id]
+        if (kind == ConnectionCore.Kind.DISCONNECT_AFTER_PERMISSION_ABORT)
+            return@synchronized ConnectionRequest(UUID.randomUUID().toString(), id, kind, ConnectionRequest.Status.CONFLICT, this, handle, null)
+        if (handle == null) return@synchronized ConnectionRequest(UUID.randomUUID().toString(), id, kind, ConnectionRequest.Status.MISSING, this, null, null)
+        if (kind == ConnectionCore.Kind.SETTINGS_CONNECT && handle.definition.connectionFlow != ConnectorConnectionFlow.NOTIFICATION_LISTENER_SETTINGS)
+            return@synchronized ConnectionRequest(UUID.randomUUID().toString(), id, kind, ConnectionRequest.Status.CONFLICT, this, handle, null)
+        val captured = connectionAccess.beginRequestSilently(id, handle.generation, kind)
+        val status = when (captured.status.name) {
+            "ACCEPTED" -> ConnectionRequest.Status.ACCEPTED
+            "NOT_READY" -> ConnectionRequest.Status.NOT_READY
+            "SUPERSEDED" -> ConnectionRequest.Status.SUPERSEDED
+            else -> ConnectionRequest.Status.CONFLICT
         }
-        activate(definition)
+        val request = ConnectionRequest(captured.opId, id, kind, status, this, handle, captured)
+        if (status == ConnectionRequest.Status.ACCEPTED) {
+            latestRequests[id] = request
+            if (!isConnect(kind)) {
+                val obligation = CleanupObligation(handle, captured.stamp)
+                request.cleanupObligation = obligation
+                lane(id).cleanup[captured.stamp] = obligation
+            }
+        }
+        request
     }
-
-    private fun activate(definition: ConnectorDefinition) {
-        stateStore.setConnected(definition.id, true)
+    fun publishConnectionRequest(request: ConnectionRequest) {
+        if (request.owner !== this || !request.published.compareAndSet(false, true)) return
+        request.accessRequest?.let(connectionAccess::publishRequest)
+        refreshStates()
+    }
+    fun resolvePendingRequest(requestId: String): ConnectionRequest? = synchronized(lock) {
+        latestRequests.values.firstOrNull { it.requestId == requestId && it.terminal == null && isConnectionRequestCurrent(it) }
+    }
+    fun isConnectionRequestCurrent(request: ConnectionRequest): Boolean = synchronized(lock) {
+        val captured = request.accessRequest ?: return@synchronized false
+        if (request.owner !== this || latestRequests[request.connectorId] !== request || handles[request.connectorId] !== request.handle)
+            return@synchronized false
+        val choice = connectionAccess.captureChoice(request.connectorId)
+        if (choice.stamp != captured.stamp) return@synchronized false
+        // A provisional OFF has no observed core snapshot yet, but its exact local deny intent is still current.
+        if (request.terminal?.status == ConnectorTransitionResult.Status.PENDING)
+            return@synchronized connectionAccess.isCurrent(captured)
+        if (request.terminal != null) {
+            val view = choice.coreView ?: return@synchronized false
+            return@synchronized view.storeEpoch == request.terminalEpoch && view.intentEpoch(request.connectorId) == request.terminalIntent
+        }
+        connectionAccess.isCurrent(captured)
+    }
+    fun submitConnectionRequest(request: ConnectionRequest): CompletableFuture<ConnectorTransitionResult> = synchronized(request) {
+        if (request.owner !== this) return@synchronized CompletableFuture.completedFuture(ConnectorTransitionResult(ConnectorTransitionResult.Status.CONFLICT))
+        publishConnectionRequest(request)
+        request.submitted?.let { return@synchronized it.thenApply { value -> value } }
+        val future = CompletableFuture<ConnectorTransitionResult>(); request.submitted = future
+        if (request.owner !== this || request.status != ConnectionRequest.Status.ACCEPTED || request.accessRequest == null) {
+            finish(request, future, ConnectorTransitionResult(when (request.status) {
+                ConnectionRequest.Status.NOT_READY -> ConnectorTransitionResult.Status.NOT_READY
+                ConnectionRequest.Status.MISSING -> ConnectorTransitionResult.Status.MISSING
+                ConnectionRequest.Status.SUPERSEDED -> ConnectorTransitionResult.Status.SUPERSEDED
+                else -> ConnectorTransitionResult.Status.CONFLICT
+            }))
+        } else if (isConnect(request.kind)) {
+            synchronized(lock) { lane(request.connectorId) }.worker.execute { runConnect(request, future) }
+        } else {
+            // Persistence never waits for a blocked runtime or Room projection.
+            val persisted = connectionAccess.persist(request.accessRequest)
+            val cleanup = requireNotNull(request.cleanupObligation).completion
+            synchronized(lock) { lane(request.connectorId) }.worker.execute { drainCleanup(request.connectorId, request.accessRequest.stamp) }
+            persisted.handle { result, failure -> result to failure }.thenCombine(cleanup) { pair, cleaned ->
+                val failed = pair.second?.let(::unavailable)
+                val result = if (failed != null) ConnectorTransitionResult(failed.status, failed.disposition, failed.choiceOutcome, failed.proofOutcome, failed.activation, cleaned)
+                    else transition(requireNotNull(pair.first), cleaned)
+                if (cleaned == ConnectorTransitionResult.Cleanup.FAILED && result.status == ConnectorTransitionResult.Status.COMPLETED)
+                    ConnectorTransitionResult(ConnectorTransitionResult.Status.CLEANUP_FAILED, result.disposition, result.choiceOutcome, result.proofOutcome, result.activation, cleaned)
+                else result
+            }.whenComplete { result, failure -> finish(request, future, if (failure == null) result else unavailable(failure)) }
+        }
+        future.thenApply { value -> value }
+    }
+    fun abortConnectionRequest(request: ConnectionRequest): CompletableFuture<ConnectorTransitionResult> = synchronized(request) {
+        if (request.owner !== this || request.accessRequest == null || request.submitted != null)
+            return@synchronized CompletableFuture.completedFuture(ConnectorTransitionResult(ConnectorTransitionResult.Status.ABORT_REJECTED))
+        val future = CompletableFuture<ConnectorTransitionResult>(); request.submitted = future
+        connectionAccess.abortBeforeSelection(request.accessRequest).whenComplete { aborted, failure ->
+            finish(request, future, if (failure != null) unavailable(failure) else ConnectorTransitionResult(when (aborted.disposition) {
+                ConnectionCore.AbortDisposition.ABORTED -> ConnectorTransitionResult.Status.ABORTED
+                ConnectionCore.AbortDisposition.SUPERSEDED -> ConnectorTransitionResult.Status.SUPERSEDED
+                else -> ConnectorTransitionResult.Status.ABORT_REJECTED
+            }))
+        }
+        future.thenApply { value -> value }
+    }
+    private fun lane(id: String): LifecycleLane = lanes.getOrPut(id) { LifecycleLane() }
+    private fun isConnect(kind: ConnectionCore.Kind): Boolean = kind == ConnectionCore.Kind.CONNECT ||
+        kind == ConnectionCore.Kind.SETTINGS_CONNECT || kind == ConnectionCore.Kind.DEFAULT_CONNECT
+    private fun handleCurrent(request: ConnectionRequest): Boolean = synchronized(lock) {
+        request.owner === this && handles[request.connectorId] === request.handle &&
+            request.accessRequest?.let(connectionAccess::isCurrent) == true
+    }
+    private fun drainCleanup(id: String, through: Long): ConnectorTransitionResult.Cleanup {
+        val work = synchronized(lock) { lane(id).cleanup.values.filter { it.stamp <= through }.toList() }
+        var failed = false
+        work.forEach { obligation ->
+            val active = synchronized(lock) { lane(id).active }
+            val result = if (active != null && active.second > obligation.stamp) ConnectorTransitionResult.Cleanup.NOT_REQUIRED
+                else try { obligation.handle.definition.runtime?.disconnect(); ConnectorTransitionResult.Cleanup.DONE }
+                catch (_: RuntimeException) { failed = true; ConnectorTransitionResult.Cleanup.FAILED }
+            if (result != ConnectorTransitionResult.Cleanup.FAILED) synchronized(lock) {
+                if (lane(id).cleanup[obligation.stamp] === obligation) lane(id).cleanup.remove(obligation.stamp)
+                if (result == ConnectorTransitionResult.Cleanup.DONE && lane(id).active == active) lane(id).active = null
+            }
+            obligation.completion.complete(result)
+        }
+        return if (failed) ConnectorTransitionResult.Cleanup.FAILED else ConnectorTransitionResult.Cleanup.DONE
+    }
+    private fun cleanupActivation(request: ConnectionRequest): ConnectorTransitionResult.Cleanup {
+        val obligation = CleanupObligation(requireNotNull(request.handle), requireNotNull(request.accessRequest).stamp)
+        synchronized(lock) { lane(request.connectorId).cleanup.putIfAbsent(obligation.stamp, obligation) }
+        return drainCleanup(request.connectorId, obligation.stamp)
+    }
+    private fun runConnect(request: ConnectionRequest, future: CompletableFuture<ConnectorTransitionResult>) {
+        val captured = requireNotNull(request.accessRequest); val definition = requireNotNull(request.handle).definition
+        var runtimeStarted = false
+        var runtimeReturned = false
         try {
-            definition.runtime?.connect(emptyMap(), emptyMap())
-        } catch (failure: RuntimeException) {
-            stateStore.setConnected(definition.id, false)
-            refreshStates()
-            throw failure
+            if (!handleCurrent(request)) { finish(request, future, ConnectorTransitionResult(ConnectorTransitionResult.Status.SUPERSEDED)); return }
+            if (request.kind != ConnectionCore.Kind.SETTINGS_CONNECT && !definition.readPermissions.all(permissionGranted)) {
+                connectionAccess.abortBeforeSelection(captured).get()
+                finish(request, future, ConnectorTransitionResult(ConnectorTransitionResult.Status.PERMISSION_DENIED)); return
+            }
+            val cleaned = drainCleanup(request.connectorId, captured.stamp - 1)
+            if (cleaned == ConnectorTransitionResult.Cleanup.FAILED) {
+                finish(request, future, ConnectorTransitionResult(ConnectorTransitionResult.Status.CLEANUP_FAILED, cleanup = cleaned)); return
+            }
+            val selected = connectionAccess.persist(captured).get()
+            val permit = selected.permit
+            if (permit == null) { finish(request, future, transition(selected)); return }
+            if (!handleCurrent(request) || (request.kind != ConnectionCore.Kind.SETTINGS_CONNECT && !definition.readPermissions.all(permissionGranted))) {
+                val stopped = connectionAccess.activationNotStarted(captured, permit).get()
+                finish(request, future, transition(stopped, status = if (stopped.disposition == ConnectionCore.Disposition.SUPERSEDED)
+                    ConnectorTransitionResult.Status.SUPERSEDED else ConnectorTransitionResult.Status.PERMISSION_DENIED)); return
+            }
+            val previous = synchronized(lock) { lane(request.connectorId).active }
+            if (previous != null && previous.second != captured.stamp) {
+                synchronized(lock) { lane(request.connectorId).cleanup.putIfAbsent(previous.second, CleanupObligation(previous.first, previous.second)) }
+                if (drainCleanup(request.connectorId, captured.stamp - 1) == ConnectorTransitionResult.Cleanup.FAILED) {
+                    val stopped = connectionAccess.activationNotStarted(captured, permit).get()
+                    finish(request, future, transition(stopped, ConnectorTransitionResult.Cleanup.FAILED, ConnectorTransitionResult.Status.CLEANUP_FAILED)); return
+                }
+            }
+            if (!handleCurrent(request) || (request.kind != ConnectionCore.Kind.SETTINGS_CONNECT && !definition.readPermissions.all(permissionGranted))) {
+                val stopped = connectionAccess.activationNotStarted(captured, permit).get()
+                finish(request, future, transition(stopped, status = if (stopped.disposition == ConnectionCore.Disposition.SUPERSEDED)
+                    ConnectorTransitionResult.Status.SUPERSEDED else ConnectorTransitionResult.Status.PERMISSION_DENIED)); return
+            }
+            // This lane owns the exact runtime incarnation; any late cleanup finishes before another start.
+            synchronized(lock) { lane(request.connectorId).active = requireNotNull(request.handle) to captured.stamp }
+            runtimeStarted = true
+            try { definition.runtime?.connect(emptyMap(), emptyMap()) }
+            catch (_: RuntimeException) {
+                val cleanup = cleanupActivation(request)
+                val failed = connectionAccess.activationFailed(captured, permit).get()
+                finish(request, future, transition(failed, cleanup, ConnectorTransitionResult.Status.RUNTIME_FAILED)); return
+            }
+            runtimeReturned = true
+            val returned = connectionAccess.activationReturned(captured, permit).get()
+            val cleanup = if (returned.cleanupRequired || !handleCurrent(request)) cleanupActivation(request) else ConnectorTransitionResult.Cleanup.NOT_REQUIRED
+            finish(request, future, transition(returned, cleanup))
+        } catch (failure: Exception) {
+            val cleanup = if (runtimeStarted) cleanupActivation(request) else ConnectorTransitionResult.Cleanup.NOT_REQUIRED
+            val failed = unavailable(failure)
+            finish(request, future, ConnectorTransitionResult(failed.status, failed.disposition, failed.choiceOutcome, failed.proofOutcome,
+                if (runtimeReturned) ConnectionCore.Activation.RETURNED else if (runtimeStarted) ConnectionCore.Activation.FAILED else ConnectionCore.Activation.NOT_STARTED, cleanup))
         }
-        refreshStates()
+    }
+    private fun transition(result: ConnectionCore.Result, cleanup: ConnectorTransitionResult.Cleanup = ConnectorTransitionResult.Cleanup.NOT_REQUIRED,
+                           status: ConnectorTransitionResult.Status? = null): ConnectorTransitionResult {
+        val actual = status ?: when {
+            result.provisional -> ConnectorTransitionResult.Status.PENDING
+            result.disposition == ConnectionCore.Disposition.SUPERSEDED -> ConnectorTransitionResult.Status.SUPERSEDED
+            result.disposition == ConnectionCore.Disposition.CONFLICT -> ConnectorTransitionResult.Status.CONFLICT
+            result.persistence.choice != ConnectionCore.Outcome.CONFIRMED || result.persistence.proof != ConnectionCore.Outcome.CONFIRMED -> ConnectorTransitionResult.Status.PERSISTENCE_UNCERTAIN
+            cleanup == ConnectorTransitionResult.Cleanup.FAILED -> ConnectorTransitionResult.Status.CLEANUP_FAILED
+            else -> ConnectorTransitionResult.Status.COMPLETED
+        }
+        return ConnectorTransitionResult(actual, result.disposition, result.persistence.choice, result.persistence.proof, result.activation, cleanup)
+    }
+    private fun unavailable(failure: Throwable): ConnectorTransitionResult {
+        var cause = failure
+        while ((cause is CompletionException || cause is ExecutionException) && cause.cause != null) cause = cause.cause!!
+        val status = if (cause is ConnectionAccess.RequestUnavailableException) when (cause.status.name) {
+            "NOT_READY" -> ConnectorTransitionResult.Status.NOT_READY
+            "SUPERSEDED" -> ConnectorTransitionResult.Status.SUPERSEDED
+            else -> ConnectorTransitionResult.Status.CONFLICT
+        } else ConnectorTransitionResult.Status.PERSISTENCE_UNCERTAIN
+        return ConnectorTransitionResult(status)
+    }
+    private fun finish(request: ConnectionRequest, future: CompletableFuture<ConnectorTransitionResult>, result: ConnectorTransitionResult) {
+        val choice = connectionAccess.captureChoice(request.connectorId)
+        request.terminalEpoch = choice.coreView?.storeEpoch; request.terminalIntent = choice.coreView?.intentEpoch(request.connectorId)
+        request.terminal = result
+        refreshStates(); future.complete(result)
+    }
+    private fun requireWorker() {
+        check(!enforceWorker || Looper.myLooper() != Looper.getMainLooper()) { "Connection mutations require a worker; UI must capture/submit asynchronously" }
+    }
+    private fun blocking(id: String, kind: ConnectionCore.Kind): ConnectorTransitionResult {
+        requireWorker(); return submitConnectionRequest(captureConnectionRequest(id, kind)).get()
+    }
+    fun connect(id: String): ConnectorTransitionResult = blocking(id, ConnectionCore.Kind.CONNECT)
+    fun connectFromSystemSettings(id: String): ConnectorTransitionResult = blocking(id, ConnectionCore.Kind.SETTINGS_CONNECT)
+    fun disconnect(id: String): ConnectorTransitionResult = blocking(id, ConnectionCore.Kind.DISCONNECT)
+    fun connectIfUnselected(id: String): ConnectorTransitionResult {
+        requireWorker()
+        // Defaults need a known absence, never an uninitialized preferences view. Await one
+        // local bootstrap attempt outside Registry/lifecycle locks; early OFF remains immediate.
+        try {
+            if (!connectionAccess.isReady()) connectionAccess.initializeAsync().get()
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return ConnectorTransitionResult(ConnectorTransitionResult.Status.NOT_READY)
+        } catch (_: java.util.concurrent.ExecutionException) {
+            return ConnectorTransitionResult(ConnectorTransitionResult.Status.NOT_READY)
+        }
+        return blocking(id, ConnectionCore.Kind.DEFAULT_CONNECT)
+    }
+    fun unregister(id: String): ConnectorTransitionResult {
+        requireWorker()
+        val request = captureConnectionRequest(id, ConnectionCore.Kind.UNREGISTER)
+        if (request.status == ConnectionRequest.Status.ACCEPTED) synchronized(lock) {
+            if (handles[id] === request.handle) { handles.remove(id); _definitions.value = _definitions.value.filterNot { it.id == id } }
+        }
+        return submitConnectionRequest(request).get()
     }
 
-    fun disconnect(id: String) {
-        val definition = get(id) ?: return
-        stateStore.setConnected(id, false)
-        runCatching { definition.runtime?.disconnect() }
-        refreshStates()
-    }
-
-    /** Applies a default connection only before the user has made a choice for this connector. */
-    fun connectIfUnselected(id: String) {
-        if (!stateStore.hasConnectionChoice(id)) connect(id)
-    }
-
-    fun unregister(id: String) = synchronized(lock) {
-        val current = get(id) ?: return@synchronized
-        stateStore.setConnected(id, false)
-        runCatching { current.runtime?.disconnect() }
-        _definitions.value = _definitions.value.filterNot { it.id == id }
-        refreshStates()
+    /** Observation only; final dispatch still uses its own exact gate snapshot and revalidation. */
+    fun observeEffectPolicy(definition: ConnectorDefinition, operation: ConnectorOperation,
+                            invocation: EffectInvocation?): AutonomyPolicy {
+        val snapshot = autonomyStore.snapshot(definition.id, operation.name)
+        invocation?.noteDecision(EffectInvocation.Admission(when (snapshot.policy) {
+            AutonomyPolicy.ALLOW -> EffectInvocation.Authorization.ALLOW
+            AutonomyPolicy.ASK -> EffectInvocation.Authorization.ASK_PENDING
+            AutonomyPolicy.DENY -> EffectInvocation.Authorization.DENY
+        }, "connector:${definition.id}", operation.name, snapshot.revision.toString(), snapshot.origin.name))
+        return snapshot.policy
     }
 
     fun invoke(definition: ConnectorDefinition, operation: ConnectorOperation,
@@ -435,10 +691,14 @@ class ConnectorRegistry private constructor(
         val current = get(definition.id) ?: error("El conector ${definition.name} ya no está disponible")
         val selectedOperation = current.operations.firstOrNull { it.name == operation.name }
             ?: error("Connector operation is no longer available")
+        check(current === definition && selectedOperation === operation) {
+            "Connector definition or action changed before invocation"
+        }
         check(current.operationAccessGranted?.invoke(selectedOperation.name) != false) {
             "Enable and authorize this operation's service permission in Conectores before using it. No write was sent."
         }
-        val currentState = state(current)
+        val connectionChoice = connectionAccess.captureChoice(current.id)
+        val currentState = calculateState(current, connectionChoice)
         if (currentState != ConnectorState.CONNECTED) {
             refreshStates()
             if (currentState == ConnectorState.PERMISSION_REVOKED) {
@@ -446,18 +706,34 @@ class ConnectorRegistry private constructor(
             }
             error("${current.name} está desconectado; conectalo de nuevo en Conectores")
         }
+        val connectionPin = captureConnectionPin(current, connectionChoice)
         val permissions = if (selectedOperation.write) writePermissions(current, selectedOperation) else readPermissions(current, selectedOperation)
         token.throwIfCancelled()
         val runtime = requireNotNull(current.runtime) { "El conector ${current.name} no tiene runtime" }
         val executionArguments = JSONObject(arguments.toString())
         val schema = selectedOperation.inputSchema.toString()
+        val effect = invocationContext.effectInvocation
+        check(effect == null || !selectedOperation.write || runtime.hasCompleteWriteAdmissionCoverage()) {
+            "Connector does not yet cover every write admission boundary"
+        }
         var snapshot = autonomyStore.snapshot(current.id, selectedOperation.name)
+        fun decision(approved: Boolean) = EffectInvocation.Admission(
+            when (snapshot.policy) {
+                AutonomyPolicy.ALLOW -> EffectInvocation.Authorization.ALLOW
+                AutonomyPolicy.DENY -> EffectInvocation.Authorization.DENY
+                AutonomyPolicy.ASK -> if (approved) EffectInvocation.Authorization.ASK_APPROVED else EffectInvocation.Authorization.ASK_PENDING
+            }, "connector:${current.id}", selectedOperation.name, snapshot.revision.toString(), snapshot.origin.name, connectionPin.observation)
+        effect?.noteDecision(decision(false))
         check(snapshot.policy != AutonomyPolicy.DENY) { "This action is denied by its saved policy" }
         var approvedAsk = false
         if (snapshot.policy == AutonomyPolicy.ASK && unattended) {
-            if (!approvedPendingAction) return requireNotNull(deferAskWrite) {
-                "A pending-action queue is required for ASK operations in a scheduled task"
-            }.get()
+            if (!approvedPendingAction) {
+                val deferred = requireNotNull(deferAskWrite) {
+                    "A pending-action queue is required for ASK operations in a scheduled task"
+                }.get()
+                invocationContext.effectOutcome.receipt = effect?.receipt(EffectInvocation.Outcome.NOT_EXECUTED)
+                return deferred
+            }
             approvedAsk = true
         }
         val preparation = if (selectedOperation.write) runtime.prepareWrite(selectedOperation.name, executionArguments, token)
@@ -488,13 +764,18 @@ class ConnectorRegistry private constructor(
                     permissionDeniedFallback = true
                 }
                 ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED -> error("Legacy UI effect receipt cannot authorize another dispatch")
-                ApprovalDecision.DENIED -> error("The user denied this action; do not retry automatically")
+                ApprovalDecision.DENIED -> {
+                    effect?.noteDecision(EffectInvocation.Admission(EffectInvocation.Authorization.DENY,
+                        "connector:${current.id}", selectedOperation.name, snapshot.revision.toString(),
+                        snapshot.origin.name + ":user_denied"))
+                    error("The user denied this action; do not retry automatically")
+                }
                 ApprovalDecision.ACTION_FAILED -> error("Android could not complete the permission request")
                 ApprovalDecision.EXPIRED -> error("Approval expired")
                 ApprovalDecision.CANCELLED -> throw java.util.concurrent.CancellationException("Approval cancelled")
             }
         }
-        fun validateCurrent() {
+        fun validateCurrent(): ConnectionPin {
             token.throwIfCancelled()
             check(preparation.executionArguments.toString() == preparedArguments) { "Prepared action arguments changed" }
             if (selectedOperation.write) (runtime as? AgentRunScopedConnectorRuntime)?.validateAutonomousWrite(
@@ -502,28 +783,46 @@ class ConnectorRegistry private constructor(
             check(get(current.id) === current && current.runtime === runtime &&
                 current.operations.firstOrNull { it.name == selectedOperation.name } === selectedOperation &&
                 selectedOperation.inputSchema.toString() == schema) { "Connector action changed before dispatch" }
-            check(state(current) == ConnectorState.CONNECTED) { "Connector access was revoked" }
+            val validated = validateConnectionPin(connectionPin)
+            check(calculateState(current, validated.choice) == ConnectorState.CONNECTED) { "Connector access was revoked" }
             check(current.operationAccessGranted?.invoke(selectedOperation.name) != false) { "Service permission was revoked" }
             check(permissionDeniedFallback || permissions.all(permissionGranted)) { "Android permission is unavailable; grant it in connector settings" }
+            return validated
         }
         // Admission is the linearization boundary. Later revocation blocks the next admission,
         // but cannot undo an effect already dispatched to Android or a provider.
-        fun authorizeEffect() {
+        fun authorizeEffect(): ConnectionPin {
             val fresh = autonomyStore.snapshotMatching(snapshot)
-            check(token.runIfActive { autonomyStore.admit(fresh, approvedAsk, ::validateCurrent) }) { "Action cancelled before admission" }
+            var validated: ConnectionPin? = null
+            check(token.runIfActive { autonomyStore.admit(fresh, approvedAsk) { validated = validateCurrent() } }) { "Action cancelled before admission" }
+            return requireNotNull(validated)
         }
-        check(token.runIfActive { autonomyStore.admit(snapshot, approvedAsk, ::validateCurrent) }) { "Action cancelled before admission" }
+        fun authorizeWriteEffect() {
+            val admittedConnection = authorizeEffect()
+            check(admittedConnection.observation == connectionPin.observation)
+            // No policy/STOP lock is held while persistence crosses the Room executor.
+            effect?.admit(decision(approvedAsk))
+            // The persisted fact is not authority. Revalidate after the durable callback.
+            authorizeEffect()
+        }
+        fun reportWriteOutcome(outcome: EffectInvocation.Outcome) {
+            invocationContext.effectOutcome.receipt = effect?.receipt(outcome)
+        }
+        effect?.noteDecision(decision(approvedAsk))
+        check(token.runIfActive { autonomyStore.admit(snapshot, approvedAsk) { validateCurrent(); Unit } }) { "Action cancelled before admission" }
         val intent = if (permissionDeniedFallback) preparation.approval.permissionDeniedIntent else preparation.approval.activityIntent
         if (intent != null) {
-            authorizeEffect()
+            if (selectedOperation.write) authorizeWriteEffect() else authorizeEffect()
             launchIntent(intent)
+            if (selectedOperation.write) reportWriteOutcome(EffectInvocation.Outcome.OK) // Launch only, never saved contact/call.
         }
         val result = if (selectedOperation.write) runtime.invokePreparedWithContext(
             selectedOperation.name, preparation.executionArguments,
-            preparation.copy(permissionDeniedFallback = permissionDeniedFallback, authorizeEffect = ::authorizeEffect), token,
+            preparation.copy(permissionDeniedFallback = permissionDeniedFallback, authorizeEffect = { authorizeEffect(); Unit },
+                authorizeWriteEffect = ::authorizeWriteEffect, reportWriteOutcome = ::reportWriteOutcome), token,
             invocationContext,
         ) else runtime.invokeReadPreparedWithContext(selectedOperation.name, preparation.executionArguments,
-            preparation.copy(authorizeEffect = ::authorizeEffect), token, invocationContext)
+            preparation.copy(authorizeEffect = { authorizeEffect(); Unit }), token, invocationContext)
         if (autonomous) {
             val record = AutonomyAuditRecord(
                 timestampMillis = clock(),
@@ -562,8 +861,31 @@ class ConnectorRegistry private constructor(
 
     fun hasPermission(permission: String): Boolean = permissionGranted(permission)
 
-    private fun calculateState(definition: ConnectorDefinition): ConnectorState {
-        if (!stateStore.isConnected(definition.id)) return ConnectorState.DISCONNECTED
+    private data class ConnectionPin(
+        val handle: DefinitionHandle, val choice: ConnectionAccess.ChoiceSnapshot,
+        val epoch: String, val intent: Long, val mutation: ConnectionCore.Mutation,
+        val stamp: Long, val observation: ConnectionCore.Observation,
+    )
+    private fun captureConnectionPin(definition: ConnectorDefinition, choice: ConnectionAccess.ChoiceSnapshot): ConnectionPin {
+        val handle = synchronized(lock) { handles[definition.id] }
+        check(handle?.definition === definition && choice.ready && choice.selected && !choice.denied && !choice.excluded) { "Connector selection is unavailable" }
+        val view = requireNotNull(choice.coreView)
+        return ConnectionPin(requireNotNull(handle), choice, view.storeEpoch, view.intentEpoch(definition.id),
+            requireNotNull(view.factualCurrent[definition.id]), choice.stamp, requireNotNull(choice.observation))
+    }
+    private fun validateConnectionPin(pin: ConnectionPin): ConnectionPin {
+        val id = pin.handle.definition.id
+        val choice = connectionAccess.captureChoice(id)
+        val current = captureConnectionPin(pin.handle.definition, choice)
+        check(current.handle === pin.handle && current.epoch == pin.epoch && current.intent == pin.intent &&
+            current.mutation == pin.mutation && current.stamp == pin.stamp && current.observation == pin.observation) {
+            "Connector choice changed before dispatch"
+        }
+        return current
+    }
+
+    private fun calculateState(definition: ConnectorDefinition, choice: ConnectionAccess.ChoiceSnapshot = connectionAccess.captureChoice(definition.id)): ConnectorState {
+        if (!choice.ready || !choice.selected || choice.denied || choice.excluded) return ConnectorState.DISCONNECTED
         val permissionsGranted = definition.readPermissions.all(permissionGranted)
         val extraAccessGranted = runCatching { definition.connectionAccessGranted?.invoke() ?: true }.getOrDefault(false)
         return if (permissionsGranted && extraAccessGranted) ConnectorState.CONNECTED
@@ -578,7 +900,7 @@ class ConnectorRegistry private constructor(
         fun get(context: Context): ConnectorRegistry = instance ?: synchronized(this) {
             val appContext = context.applicationContext
             instance ?: ConnectorRegistry(
-                ConnectorStateStore(appContext),
+                requireNotNull(ConnectionAccess.find(appContext)) { "Application connection owner is unavailable" },
                 { permission -> ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED },
                 ApprovalGate.INSTANCE,
                 SharedPreferencesConnectorAutonomyStore(appContext),
@@ -600,14 +922,21 @@ class ConnectorRegistry private constructor(
         ) + FlavorDeviceConnectorDefinitions.definitions(context)
 
         /** Allows isolated JVM tests to exercise the same registry policy without Android globals. */
+        @JvmOverloads
         fun createForTests(
             stateStore: ConnectorConnectionPreferences,
             permissionGranted: (String) -> Boolean,
             approvalGate: ApprovalGate = ApprovalGate.INSTANCE,
+            initialChoices: Map<String, Boolean> = emptyMap(),
         ): ConnectorRegistry = ConnectorRegistry(
-            stateStore, permissionGranted, approvalGate,
-            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier,
+            ConnectionAccess.forTests(initialChoices, stateStore::setConnected), permissionGranted, approvalGate,
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, enforceWorker = false,
         )
+        fun createForTests(
+            access: ConnectionAccess, permissionGranted: (String) -> Boolean,
+            approvalGate: ApprovalGate = ApprovalGate.INSTANCE,
+        ): ConnectorRegistry = ConnectorRegistry(access, permissionGranted, approvalGate,
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, enforceWorker = false)
 
         fun createForTestsWithAutonomy(
             stateStore: ConnectorConnectionPreferences,
@@ -617,8 +946,10 @@ class ConnectorRegistry private constructor(
             autonomyNotifier: AutonomyActionNotifier,
             clock: () -> Long = System::currentTimeMillis,
             launchIntent: (ApprovalIntentSpec) -> Unit = { error("Native intent dispatcher unavailable") },
+            initialChoices: Map<String, Boolean> = emptyMap(),
         ): ConnectorRegistry = ConnectorRegistry(
-            stateStore, permissionGranted, approvalGate, autonomyStore, autonomyNotifier, clock, launchIntent,
+            ConnectionAccess.forTests(initialChoices, stateStore::setConnected), permissionGranted, approvalGate,
+            autonomyStore, autonomyNotifier, clock, launchIntent, enforceWorker = false,
         )
 
     }

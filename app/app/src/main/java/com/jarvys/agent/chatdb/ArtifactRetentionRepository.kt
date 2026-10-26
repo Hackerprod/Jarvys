@@ -23,9 +23,9 @@ internal object RetentionSql {
      * batch that made it and, once that batch was summarized, the compaction artifact that covers it.
      */
     const val PROTECTED_IDS =
-        "WITH p AS (SELECT DISTINCT e.ref_conversation_id AS conv, COALESCE(c.batch_id,e.ref_id) AS batch, c.call_id AS call " +
+        "WITH p AS (SELECT DISTINCT e.ref_conversation_id AS conv, COALESCE(e.source_batch_id,c.batch_id,e.ref_id) AS batch, c.call_id AS call " +
             "FROM memory_evidence e " +
-            "LEFT JOIN tool_calls c ON c.conversation_id=e.ref_conversation_id AND c.call_id=e.ref_id " +
+            "LEFT JOIN tool_calls c ON c.conversation_id=e.ref_conversation_id AND c.call_id=e.ref_id AND (e.source_batch_id IS NULL OR c.batch_id=e.source_batch_id) " +
             "WHERE e.ref_conversation_id=? AND e.ref_kind IN ('tool_call','tool_result')) " +
             "SELECT r.artifact_id FROM transcript_artifact_refs r JOIN p ON r.conversation_id=p.conv AND r.batch_id=p.batch " +
             "AND (r.call_id IS NULL OR p.call IS NULL OR r.call_id=p.call) WHERE r.owner_kind<>'compaction' " +

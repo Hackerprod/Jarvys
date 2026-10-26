@@ -71,7 +71,7 @@ internal class GmailDraftDeletion(
         catch (failure: Exception) { journal.resolve(reviewed.intent); throw failure }
         val response = try {
             oauth.requestCancellable(GoogleOAuthProtocol.GMAIL_COMPOSE, "DELETE", endpoint(reviewed.id),
-                token = token, expectedAuthorizationEpoch = reviewed.epoch)
+                token = token, expectedAuthorizationEpoch = reviewed.epoch, beforeMutation = preparation.authorizeWriteEffect)
         } catch (failure: Exception) {
             if (failure is GooglePreDispatchAuthorizationException) {
                 journal.resolve(reviewed.intent)
@@ -112,6 +112,8 @@ internal class GmailDraftDeletion(
             .put("account", reviewed.account).put("status", "delete_accepted")
             .put("verification", verification).put("deletion_causation_verified", false)
             .put("retry_blocked", !resolved)
+        preparation.reportWriteOutcome?.invoke(if (verification == "observed_absent")
+            com.jarvys.agent.EffectInvocation.Outcome.OK else com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN)
         return GmailContent.envelope("gmail.$OPERATION", JSONArray().put(item), 1).also {
             if (!resolved) it.put("safety_warning", "Gmail accepted draft deletion, but verification or local safety state is unresolved. Do not retry; inspect the draft in Gmail.")
         }

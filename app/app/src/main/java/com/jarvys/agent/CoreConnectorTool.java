@@ -92,6 +92,44 @@ public final class CoreConnectorTool implements CoreTool {
         return CoreToolResult.success(result.toString());
     }
 
+    @Override public boolean hasCompleteEffectAdmissionCoverage() {
+        return definition.getRuntime() != null && definition.getRuntime().hasCompleteWriteAdmissionCoverage();
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+            ProgressListener progress, EffectInvocation invocation) {
+        if (invocation == null) return execute(arguments, token);
+        if (!operation.getWrite()) return completedRead(execute(arguments, token), invocation);
+        com.jarvys.agent.connectors.ConnectorInvocationContext call =
+            new com.jarvys.agent.connectors.ConnectorInvocationContext(requester, requesterColorKey, session, null, invocation);
+        JSONObject result = ConnectorArtifactAccess.invoke(context, session, () -> registry.invoke(definition, operation,
+            new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token, call));
+        CoreToolResult value = result.has("next_page_token") ? CoreToolResult.complete(result.toString())
+            : CoreToolResult.success(result.toString());
+        return value.withEffectReceipt(call.getEffectOutcome().getReceipt() != null
+            ? call.getEffectOutcome().getReceipt() : invocation.resolveFailure(hasCompleteEffectAdmissionCoverage()));
+    }
+
+    CoreToolResult executeScheduledTask(Map<String, Object> arguments, CancellationToken token,
+            boolean approvedPendingAction, java.util.function.Supplier<JSONObject> deferAskWrite,
+            EffectInvocation invocation) {
+        if (invocation == null) return executeScheduledTask(arguments, token, approvedPendingAction, deferAskWrite);
+        com.jarvys.agent.connectors.ConnectorInvocationContext call =
+            new com.jarvys.agent.connectors.ConnectorInvocationContext(requester, requesterColorKey, session, null, invocation);
+        JSONObject result = registry.invokeForScheduledTask(definition, operation,
+            new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token,
+            requester, requesterColorKey, approvedPendingAction, deferAskWrite, call);
+        CoreToolResult value = CoreToolResult.success(result.toString());
+        if (call.getEffectOutcome().getReceipt() != null) return value.withEffectReceipt(call.getEffectOutcome().getReceipt());
+        return !operation.getWrite() ? completedRead(value, invocation)
+            : value.withEffectReceipt(invocation.resolveFailure(hasCompleteEffectAdmissionCoverage()));
+    }
+
+    private static CoreToolResult completedRead(CoreToolResult result, EffectInvocation invocation) {
+        return result.success && result.effectReceipt == null && result.administrativeReceipt == null
+            ? result.withAdministrativeReceipt(invocation.readCompleted()) : result;
+    }
+
     public static String toolName(String connectorId, String operationName) {
         String raw = (connectorId + "_" + operationName).replaceAll("[^A-Za-z0-9_]", "_")
                 .replaceAll("_+", "_").toLowerCase(java.util.Locale.ROOT);

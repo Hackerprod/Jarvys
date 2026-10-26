@@ -21,16 +21,16 @@ class GmailApiContractTest {
         val expectedEpochs = mutableListOf<Long?>()
         override fun currentAuthorizationEpoch() = epoch
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
+                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse {
             expectedEpochs += expectedAuthorizationEpoch
             beforeLease?.also { beforeLease = null }?.invoke()
-            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
+                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleBinaryResponse {
             expectedEpochs += expectedAuthorizationEpoch
             beforeLease?.also { beforeLease = null }?.invoke()
-            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
+            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch, beforeMutation)
         }
         fun respond(value: JSONObject, status: Int = 200) { replies += { GoogleHttpResponse(status, value.toString()) } }
         override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long, beforeDispatch: (() -> Unit)?): String {

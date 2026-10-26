@@ -89,9 +89,22 @@ internal class ConversationReader(
         val providerItems = MainChatTranscriptStore.restoreProviderOutputItems(
             modelJsonRows, firstKept.toInt(), compactionRow,
         )
+        val durableResultSources = modelRows.filter { it.source?.kind == ConversationTurn.Source.Kind.BATCH_RESULT }
+            .associateBy { requireNotNull(it.source).let { source -> source.sourceId to source.callId } }
         val groupsByPosition = groups.mapNotNull { (rowIndex, turns) ->
             val row = modelRows.getOrNull(rowIndex) ?: return@mapNotNull null
             val visible = turns.filter { it.kind != ConversationTurn.Kind.MODEL_ERROR }
+            visible.forEach { turn ->
+                val source = row.source
+                if (source?.kind == ConversationTurn.Source.Kind.BATCH) {
+                    if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) turn.bindSource(source)
+                    else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) {
+                        durableResultSources[source.sourceId to turn.toolCallId]?.takeIf {
+                            it.row.optString("toolName") == turn.toolName
+                        }?.source?.let { turn.bindSource(it) }
+                    }
+                }
+            }
             if (visible.isEmpty()) null else ContextPart(
                 row.position.sortSeq, row.position.sortSub, row.position.seq, null, visible,
             )
@@ -107,7 +120,9 @@ internal class ConversationReader(
         }
         val context = ArrayList<ConversationTurn>()
         if (compaction != null && compaction.summary.isNotEmpty()) {
-            context += ConversationTurn.compactionSummary(compaction.summary, compaction.summarized_messages.toInt())
+            context += ConversationTurn.compactionSummary(compaction.summary, compaction.summarized_messages.toInt()).also {
+                it.bindSource(ConversationTurn.Source(ConversationTurn.Source.Kind.COMPACTION, conversationId, compaction.compaction_id, ""))
+            }
         }
         (messageParts + groupsByPosition).sortedWith(compareBy<ContextPart>({ it.sortSeq }, { it.sortSub }, { it.seq }))
             .forEach { part ->
@@ -132,6 +147,7 @@ internal class ConversationReader(
                         message.attachments.map(::toChatAttachment),
                     )
                 }
+                context.last().bindSource(ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE, conversationId, message.messageId, ""))
                 if (message.role == "user") {
                     val last = context.last()
                     context[context.lastIndex] = last.withDurableMessageId(message.messageId)
@@ -1255,7 +1271,12 @@ internal class ConversationReader(
     ): List<ModelProjectionRow> {
         val rows = snapshot.entries.mapNotNull { entry ->
             val json = entry.toModelRestoreRow() ?: return@mapNotNull null
-            ModelProjectionRow(SortPosition(entry.sortSeq, entry.sortSub, entry.seq), json)
+            val source = when (entry) {
+                is ModelTranscriptEntry.Batch -> ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH, conversationId, entry.value.batch.batch_id, "")
+                is ModelTranscriptEntry.ResultActivity -> ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH_RESULT, conversationId, entry.batchId, entry.callId)
+                else -> null
+            }
+            ModelProjectionRow(SortPosition(entry.sortSeq, entry.sortSub, entry.seq), json, source)
         }.toMutableList()
         database.chatSql.query(
             "SELECT r.seq,i.sort_seq,i.sort_sub,r.owner_user_message_id,r.batch_id,r.call_id,r.tool_name,r.source,r.stage,r.marker " +
@@ -1394,7 +1415,7 @@ internal class ConversationReader(
             SortPosition::sortSeq, SortPosition::sortSub, SortPosition::seq)
     }
 
-    private data class ModelProjectionRow(val position: SortPosition, val row: JSONObject)
+    private data class ModelProjectionRow(val position: SortPosition, val row: JSONObject, val source: ConversationTurn.Source? = null)
     private data class ContextPart(
         val sortSeq: Long,
         val sortSub: Int,

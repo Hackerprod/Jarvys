@@ -1,6 +1,7 @@
 package com.jarvys.agent.mcp
 
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.connectors.ApprovalDecision
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.ApprovalPresenter
@@ -46,6 +47,96 @@ class McpWriteApprovalCoordinatorTest {
         annotations = McpToolAnnotations(readOnlyHint = false, destructiveHint = destructive, title = "Create item"),
         access = McpToolAccess.WRITE,
     )
+
+    @Test fun preflightDoesNotRecordWriteAndDurableAdmissionPrecedesMutation() {
+        val store = InMemoryConnectorAutonomyStore()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+        val tool = writeTool()
+        coordinator.setPolicy(tool, AutonomyPolicy.ALLOW)
+        val events = mutableListOf<String>()
+        val invocation = EffectInvocation { decision ->
+            assertEquals(EffectInvocation.Authorization.ALLOW, decision.authorization)
+            assertEquals("mcp:catalog_github", decision.authority)
+            events += "durable"
+        }
+        coordinator.executeWithAdmission(tool, JSONObject(), CancellationToken.uncancellable(), null, null, invocation) { admission ->
+            admission.admit(mutation = false) { events += "read validation" }
+            assertFalse(invocation.admitted())
+            events += "read"
+            admission.admit(mutation = true) { events += "write validation" }
+            assertTrue(invocation.admitted())
+            events += "effect"
+            admission.admit(mutation = true)
+            JSONObject()
+        }
+        assertEquals(listOf("read validation", "read", "write validation", "durable", "effect"), events)
+    }
+
+    @Test fun admissionPersistenceFailureBlocksDispatchAndCrossThreadContextIsExplicit() {
+        val store = InMemoryConnectorAutonomyStore()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+        val calls = AtomicInteger()
+        val writerAttempts = AtomicInteger()
+        coordinator.setPolicy(writeTool(), AutonomyPolicy.ALLOW)
+        val invocation = EffectInvocation { writerAttempts.incrementAndGet(); throw IllegalStateException("simulated durable write failure") }
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val future = executor.submit<Unit> {
+                coordinator.executeWithAdmission(writeTool(), JSONObject(), CancellationToken.uncancellable(), null, null, invocation) { admission ->
+                    admission.admit()
+                    calls.incrementAndGet()
+                    JSONObject()
+                }
+            }
+            assertThrows(ExecutionException::class.java) { future.get(2, TimeUnit.SECONDS) }
+            assertEquals(0, calls.get())
+            assertEquals(1, writerAttempts.get())
+            assertFalse(invocation.admitted())
+        } finally { executor.shutdownNow() }
+    }
+
+    @Test fun scheduledAskPendingAndApprovedUseTheActualSnapshot() {
+        val store = InMemoryConnectorAutonomyStore()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+        val tool = writeTool()
+        coordinator.setPolicy(tool, AutonomyPolicy.ASK)
+        val pending = EffectInvocation { error("Unapproved task must never admit") }
+        coordinator.executeForScheduledTask(tool, JSONObject(), CancellationToken.uncancellable(), false,
+            java.util.function.Supplier { JSONObject().put("queued", true) }, pending) { error("No dispatch") }
+        assertEquals(EffectInvocation.Authorization.ASK_PENDING, pending.decision().authorization)
+        assertFalse(pending.admitted())
+        val approved = EffectInvocation { decision -> assertEquals(EffectInvocation.Authorization.ASK_APPROVED, decision.authorization) }
+        coordinator.executeForScheduledTask(tool, JSONObject(), CancellationToken.uncancellable(), true, null, approved) {
+            it.admit()
+            JSONObject()
+        }
+        assertTrue(approved.admitted())
+    }
+
+    @Test fun explicitUserRejectionIsNotLeftAsPendingApproval() {
+        val store = InMemoryConnectorAutonomyStore()
+        val presenter = Presenter()
+        val gate = ApprovalGate(2_000, presenter)
+        val coordinator = McpWriteApprovalCoordinator(store, gate, Notifier())
+        val tool = writeTool()
+        coordinator.setPolicy(tool, AutonomyPolicy.ASK)
+        val invocation = EffectInvocation { error("Rejected action cannot dispatch") }
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val pending = executor.submit<JSONObject> {
+                coordinator.executeWithAdmission(tool, JSONObject(), CancellationToken.uncancellable(), null, null, invocation) {
+                    error("Rejected action cannot reach its transport")
+                }
+            }
+            val (requestId, _) = presenter.shown.poll(2, TimeUnit.SECONDS) ?: error("Approval was not shown")
+            gate.resolve(requestId, ApprovalDecision.DENIED)
+            assertThrows(ExecutionException::class.java) { pending.get(2, TimeUnit.SECONDS) }
+            assertFalse(invocation.admitted())
+            assertEquals(EffectInvocation.Authorization.DENY, invocation.decision().authorization)
+            assertTrue(invocation.decision().origin.endsWith(":user_denied"))
+            assertEquals(AutonomyPolicy.ASK, coordinator.policy(tool))
+        } finally { executor.shutdownNow() }
+    }
 
     @Test fun askShowsBoundedSummaryAndDeniedWriteNeverCallsRemoteTool() {
         val store = InMemoryConnectorAutonomyStore()

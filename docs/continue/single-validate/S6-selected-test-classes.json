@@ -1,0 +1,74 @@
+{
+  "core_memory": [
+    "com.jarvys.agent.CompactionFlushPersistenceTest",
+    "com.jarvys.agent.CompactionMemoryFlushTest",
+    "com.jarvys.agent.EffectInvocationTest",
+    "com.jarvys.agent.EpisodeEvidencePersistenceTest",
+    "com.jarvys.agent.EpisodeNarrationPayloadTest",
+    "com.jarvys.agent.EpisodeNarrationTest",
+    "com.jarvys.agent.EpisodeRecorderTest",
+    "com.jarvys.agent.EpisodeRunIdentityTest",
+    "com.jarvys.agent.MissionEpisodeCaptureTest",
+    "com.jarvys.agent.PersonalAgentBehaviorTest",
+    "com.jarvys.agent.PersonalMemoryIncrementalExtractionTest",
+    "com.jarvys.agent.SingleSessionMemoryRetentionTest",
+    "com.jarvys.agent.WorkspaceEffectReceiptTest",
+    "com.jarvys.agent.chatdb.EpisodeIdentityMigrationTest",
+    "com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test"
+  ],
+  "tasks": [
+    "com.jarvys.agent.ScheduledTaskBoundToolTest",
+    "com.jarvys.agent.tasks.ScheduledTaskProcessorTest",
+    "com.jarvys.agent.tasks.TaskMemoryAdmissionTest",
+    "com.jarvys.agent.tasks.TaskPendingActionExecutionTest",
+    "com.jarvys.agent.tasks.TaskTickEngineTest",
+    "com.jarvys.agent.tasks.TaskWorkManagerTest"
+  ],
+  "connectors_audit": [
+    "com.jarvys.agent.ConnectorScheduledReadReceiptTest",
+    "com.jarvys.agent.CoreMcpEpisodeIntegrationTest",
+    "com.jarvys.agent.apkfactory.FactoryRetiredAuditPreservationTest",
+    "com.jarvys.agent.connectors.AutonomyAuditMigrationTest",
+    "com.jarvys.agent.connectors.AutonomyAuditPersistenceTest",
+    "com.jarvys.agent.connectors.AutonomyAuditThreadingTest",
+    "com.jarvys.agent.connectors.ConnectorAuditHistoryUiTest",
+    "com.jarvys.agent.connectors.ConnectorEffectAdmissionTest",
+    "com.jarvys.agent.mcp.McpWriteApprovalCoordinatorTest",
+    "com.jarvys.agent.modules.ModuleEffectAdmissionTest"
+  ],
+  "full_google_linux": [
+    "com.jarvys.agent.GmailEpisodeAdmissionTest",
+    "com.jarvys.agent.GoogleMutationAdmissionTest",
+    "com.jarvys.agent.connectors.DriveConnectorContractTest",
+    "com.jarvys.agent.connectors.GmailApiContractTest",
+    "com.jarvys.agent.connectors.GmailDraftDeletionTest",
+    "com.jarvys.agent.connectors.GmailManagementContractTest",
+    "com.jarvys.agent.flavor.LinuxToolsTest"
+  ],
+  "regression_main": [
+    "com.jarvys.agent.ConversationCompactionTest",
+    "com.jarvys.agent.CoreAgentLoopBatchSemanticsTest",
+    "com.jarvys.agent.CoreAgentLoopCheckpointRecoveryTest",
+    "com.jarvys.agent.CoreAgentLoopCompactionBehaviorTest",
+    "com.jarvys.agent.CoreAgentLoopFailureRecoveryTest",
+    "com.jarvys.agent.CoreAgentLoopProviderCompactionRecoveryTest",
+    "com.jarvys.agent.CoreAgentLoopTest",
+    "com.jarvys.agent.CoreAgentLoopToolAdmissionTest",
+    "com.jarvys.agent.CrewConversationCompactionRecoveryTest",
+    "com.jarvys.agent.MainChatToolContinuityTest",
+    "com.jarvys.agent.MainChatTurnContextProviderTest",
+    "com.jarvys.agent.connectors.AutonomyPolicyTest",
+    "com.jarvys.agent.connectors.AutonomySavedPolicyTest",
+    "com.jarvys.agent.modules.ModuleToolTest",
+    "com.jarvys.agent.connectors.RemovedConnectorStateCleanupTest"
+  ],
+  "regression_full": [
+    "com.jarvys.agent.linux.LinuxExecAutonomyTest",
+    "com.jarvys.agent.GoogleAuthorizationManagerTest",
+    "com.jarvys.agent.connectors.GoogleAuthorizationSessionTest",
+    "com.jarvys.agent.connectors.GoogleOAuthProtocolTest",
+    "com.jarvys.agent.connectors.GoogleWorkspaceConnectorTest",
+    "com.jarvys.agent.connectors.GoogleWorkspaceWriteJournalTest",
+    "com.jarvys.agent.connectors.GoogleIdentityAuthorizationTest"
+  ]
+}

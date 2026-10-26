@@ -35,6 +35,7 @@ data class TaskPendingAction(
     internal val claimOwner: String? = null,
     internal val approvalAttemptId: String? = null,
     val occurrenceId: String = runId,
+    internal val approvalEffectClassification: String? = null,
 ) {
     fun isCurrentFor(task: ScheduledTask): Boolean = task.id == taskId && task.revision == taskRevision &&
         taskBinding == TaskPendingActionStore.taskBindingFor(task, runId, toolName, argumentsJson)
@@ -59,10 +60,10 @@ class TaskPendingActionStore private constructor(
         context.applicationContext,
     )
 
-    internal constructor(ledger: File, testProcessToken: String, forTesting: Boolean) : this(
+    internal constructor(ledger: File, testProcessToken: String, forTesting: Boolean, testContext: Context? = null) : this(
         ledger,
         if (forTesting) testProcessToken else CURRENT_PROCESS_TOKEN,
-        null,
+        testContext?.applicationContext,
     )
 
     fun enqueue(
@@ -122,7 +123,8 @@ class TaskPendingActionStore private constructor(
     }
 
     /** Persists CLAIMED before execution. A repeated click cannot claim a second time. */
-    fun claim(id: String, currentTask: ScheduledTask?, attemptId: String? = null): TaskPendingActionClaim = withLock {
+    fun claim(id: String, currentTask: ScheduledTask?, attemptId: String? = null, effectClassification: String? = null): TaskPendingActionClaim = withLock {
+        require(effectClassification == null || effectClassification in setOf("READ", "MEMORY", "WRITE"))
         recoverForeignClaimsLocked()
         val current = readLatestLocked()[id] ?: return@withLock TaskPendingActionClaim.NotPending(null)
         if (current.status !in setOf(TaskPendingActionStatus.PENDING, TaskPendingActionStatus.WAITING_VISIBLE_APP)) {
@@ -135,7 +137,7 @@ class TaskPendingActionStore private constructor(
         }
         val wasWaitingForVisibleApp = current.status == TaskPendingActionStatus.WAITING_VISIBLE_APP
         val claimed = current.copy(status = TaskPendingActionStatus.CLAIMED, claimOwner = processToken,
-            approvalAttemptId = attemptId)
+            approvalAttemptId = attemptId, approvalEffectClassification = effectClassification)
         appendLocked(claimed)
         TaskPendingActionClaim.Claimed(claimed, wasWaitingForVisibleApp)
     }
@@ -218,12 +220,21 @@ class TaskPendingActionStore private constructor(
 
     private fun reconcileEpisodeEvidence(action: TaskPendingAction) {
         val attemptId = action.approvalAttemptId ?: return
-        val outcome = when (action.status) {
-            TaskPendingActionStatus.EXECUTED -> "ok"
-            TaskPendingActionStatus.WAITING_VISIBLE_APP -> "deferred"
-            TaskPendingActionStatus.INTERRUPTED_UNCERTAIN -> "uncertain"
-            else -> return
+        if (action.approvalEffectClassification in setOf("READ", "MEMORY")) return
+        if (action.status !in setOf(TaskPendingActionStatus.EXECUTED, TaskPendingActionStatus.WAITING_VISIBLE_APP,
+                TaskPendingActionStatus.INTERRUPTED_UNCERTAIN)) return
+        val receipt = runCatching { JSONObject(action.resultJson.orEmpty()) }.getOrNull()
+            ?.takeIf { it.optInt("admission_receipt_version") == 1 }
+        val reportedOutcome = receipt?.optString("effect_outcome")
+        val outcome = when (reportedOutcome) {
+            "OK" -> if (action.status == TaskPendingActionStatus.EXECUTED) "ok" else "uncertain"
+            "DEFERRED" -> if (action.status == TaskPendingActionStatus.WAITING_VISIBLE_APP) "deferred" else "uncertain"
+            "ERROR" -> "error"
+            "NOT_EXECUTED" -> "not_executed"
+            else -> "uncertain"
         }
+        val authorization = receipt?.optString("authorization")?.lowercase(java.util.Locale.ROOT)
+            ?.takeIf { it in setOf("allow", "ask_approved", "ask_pending", "deny") }
         val app = appContext ?: return
         runCatching {
             val facts = JSONObject().put("action_id", action.id).put("attempt_id", attemptId)
@@ -237,7 +248,7 @@ class TaskPendingActionStore private constructor(
                 action.id,
                 attemptId,
                 action.toolName,
-                "ask_approved",
+                authorization,
                 outcome,
                 facts,
             )
@@ -246,6 +257,7 @@ class TaskPendingActionStore private constructor(
                 attemptId,
                 outcome,
                 facts,
+                attemptId, runId = attemptId, authorization = authorization,
             )
         }
     }
@@ -293,6 +305,7 @@ class TaskPendingActionStore private constructor(
         .put("resultJson", action.resultJson ?: JSONObject.NULL)
         .put("claimOwner", action.claimOwner ?: JSONObject.NULL)
         .put("approvalAttemptId", action.approvalAttemptId ?: JSONObject.NULL)
+        .put("approvalEffectClassification", action.approvalEffectClassification ?: JSONObject.NULL)
         .toString()
 
     private fun decode(row: JSONObject): TaskPendingAction {
@@ -306,6 +319,7 @@ class TaskPendingActionStore private constructor(
             status = TaskPendingActionStatus.valueOf(row.getString("status")),
             resultJson = row.optNullableString("resultJson"), claimOwner = row.optNullableString("claimOwner"),
             approvalAttemptId = row.optNullableString("approvalAttemptId"),
+            approvalEffectClassification = row.optNullableString("approvalEffectClassification")?.takeIf { it in setOf("READ", "MEMORY", "WRITE") },
             occurrenceId = row.optString("occurrenceId", row.getString("runId")),
         )
         require(result.taskRevision > 0L && result.runId.isNotBlank() && result.toolName.isNotBlank())

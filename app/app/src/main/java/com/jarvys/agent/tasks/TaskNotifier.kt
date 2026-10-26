@@ -320,6 +320,19 @@ fun interface TaskPendingActionHandler {
 fun interface TaskPendingActionExecutor {
     /** Invoke the already-approved registered tool directly; this must not start a model run. */
     fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreToolResult
+    /** Legacy callers keep execute3, but a context-aware approval must never silently bypass evidence. */
+    fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction,
+                invocation: com.jarvys.agent.EffectInvocation): com.jarvys.agent.CoreToolResult =
+        throw IllegalStateException("Task action executor does not support durable effect admission")
+    fun hasCompleteEffectAdmissionCoverage(): Boolean = false
+    fun effectClassification(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreTool.EffectClass? = null
+    /** Compatibility bridge preserves unknown legacy metadata; memory-aware providers override this. */
+    fun actionEffectClassification(context: Context, task: ScheduledTask, action: TaskPendingAction): TaskActionEffectClassification? =
+        when (effectClassification(context, task, action)) {
+            com.jarvys.agent.CoreTool.EffectClass.READ -> TaskActionEffectClassification.READ
+            com.jarvys.agent.CoreTool.EffectClass.WRITE -> TaskActionEffectClassification.WRITE
+            null -> null
+        }
 }
 
 /** Implemented by the process Application so notification broadcasts work after a cold start. */

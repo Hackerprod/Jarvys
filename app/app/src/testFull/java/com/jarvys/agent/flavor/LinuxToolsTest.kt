@@ -2,8 +2,16 @@ package com.jarvys.agent.flavor
 
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.ChatTestStore
+import com.jarvys.agent.SingleSessionReset
+import kotlinx.coroutines.runBlocking
+import org.junit.Before
+import org.junit.Rule
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreTool
+import com.jarvys.agent.EffectInvocation
+import com.jarvys.agent.connectors.ConnectorAutonomyStore
+import com.jarvys.agent.connectors.AutonomyAuditRecord
 import com.jarvys.agent.R
 import com.jarvys.agent.UserDecisionGate
 import com.jarvys.agent.UserDecisionOption
@@ -38,8 +46,193 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class LinuxToolsTest {
+    @get:Rule val fixture = ChatTestStore(registerApplicationFilesDirectory = true)
+
+    @Before fun awaitStorageStartup() = runBlocking { SingleSessionReset.awaitReady(context) }
+
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val budget = CorePromptBudget(4096, 256, 1, 256, 4096)
+
+    @Test fun maintenanceExplicitNegativeChoiceRecordsDenialWithoutChangingPolicy() {
+        for (setup in listOf(false, true)) {
+            for (policy in listOf(AutonomyPolicy.ASK, AutonomyPolicy.ALLOW)) {
+                // Setup under ALLOW has no card; uninstall with missing choice does, even under ALLOW.
+                if (setup && policy == AutonomyPolicy.ALLOW) continue
+                val runtime = FakeLinuxRuntime(ready = true)
+                val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+                val operation = if (setup) LinuxExecAutonomy.SETUP_OPERATION_NAME else LinuxExecAutonomy.UNINSTALL_OPERATION_NAME
+                autonomy.setMaintenancePolicyFromUi(operation, policy)
+                val pair = decisionPresenter(if (setup) "later" else "cancel")
+                val invocation = EffectInvocation { error("Negative choice must not admit") }
+                val result = create(runtime, autonomy = autonomy, decisionGate = pair.first,
+                    decisionPresenter = pair.second).getValue(if (setup) "linux_setup" else "linux_uninstall")
+                    .execute(emptyMap(), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+                val receipt = invocation.resolve(result, true)
+                assertFalse(result.success)
+                assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, receipt.outcome)
+                assertEquals(EffectInvocation.Authorization.DENY, receipt.admission.authorization)
+                assertTrue(receipt.admission.origin.endsWith(":user_denied"))
+                assertEquals(policy, autonomy.maintenanceAuthorization(operation).policy)
+                assertEquals(0, runtime.probeCalls)
+                assertEquals(0, runtime.uninstallCalls)
+            }
+        }
+    }
+
+    @Test fun protectedMaintenanceRejectsDismissalAndCancellationDoesNotInventUserDenial() {
+        for (setup in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            val operation = if (setup) LinuxExecAutonomy.SETUP_OPERATION_NAME else LinuxExecAutonomy.UNINSTALL_OPERATION_NAME
+            autonomy.setMaintenancePolicyFromUi(operation, AutonomyPolicy.ASK)
+            val pair = decisionPresenter(null)
+            val invocation = EffectInvocation { error("Dismissal must not admit") }
+            val result = create(runtime, autonomy = autonomy, decisionGate = pair.first, decisionPresenter = pair.second)
+                .getValue(if (setup) "linux_setup" else "linux_uninstall")
+                .execute(emptyMap(), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+            assertEquals(EffectInvocation.Authorization.ASK_PENDING, invocation.resolve(result, true).admission.authorization)
+            assertEquals(0, runtime.probeCalls)
+            assertEquals(0, runtime.uninstallCalls)
+        }
+    }
+
+    @Test fun exactAskDecisionAndTypedProcessOutcomeDoNotUseSuccessFlag() {
+        for (decision in listOf(ApprovalDecision.APPROVED, ApprovalDecision.DENIED)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
+            var admissions = 0
+            val invocation = EffectInvocation { snapshot ->
+                assertEquals(EffectInvocation.Authorization.ASK_APPROVED, snapshot.authorization)
+                admissions++
+            }
+            val result = create(runtime, autonomy = autonomy, approvalGate = approvalGate(decision))
+                .getValue("linux_exec").execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable(),
+                    CoreTool.ProgressListener { }, invocation)
+            val receipt = invocation.resolve(result, true)
+            if (decision == ApprovalDecision.APPROVED) {
+                assertTrue(result.success) // Legacy presentation success; process actually exits 7.
+                assertEquals(1, admissions)
+                assertEquals(EffectInvocation.Outcome.ERROR, receipt.outcome)
+                assertEquals(EffectInvocation.Authorization.ASK_APPROVED, receipt.admission.authorization)
+            } else {
+                assertEquals(0, admissions)
+                assertEquals(0, runtime.execPreparationCalls)
+                assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, receipt.outcome)
+                assertEquals(EffectInvocation.Authorization.DENY, receipt.admission.authorization)
+            }
+        }
+    }
+
+    @Test fun uninstallRevocationAfterRootfsNeverClaimsNoEffectOrCompletion() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        runtime.afterUninstall = {
+            autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME, AutonomyPolicy.DENY)
+        }
+        val invocation = EffectInvocation { }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_uninstall").execute(
+            mapOf("delete_workspace" to true), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+        assertFalse(result.success)
+        assertEquals(1, runtime.uninstallCalls)
+        assertEquals(0, runtime.workspaceDeleteCalls)
+        assertEquals(EffectInvocation.Outcome.UNCERTAIN, invocation.resolve(result, true).outcome)
+    }
+
+    @Test fun durableWriterFailurePreventsEvenExecPreparation() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        val invocation = EffectInvocation { error("Evidence unavailable") }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_exec")
+            .execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+        assertFalse(result.success)
+        assertEquals(0, runtime.execPreparationCalls)
+        assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, invocation.resolve(result, true).outcome)
+    }
+
+    @Test fun automaticAuditFailureDoesNotAdmitPreparation() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val delegate = InMemoryConnectorAutonomyStore()
+        val store = object : ConnectorAutonomyStore by delegate {
+            override fun appendAudit(record: AutonomyAuditRecord) { error("Audit unavailable") }
+        }
+        val autonomy = LinuxExecAutonomy(store, { true })
+        var admissions = 0
+        val invocation = EffectInvocation { admissions++ }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_exec")
+            .execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+        assertFalse(result.success)
+        assertEquals(0, admissions)
+        assertEquals(0, runtime.execPreparationCalls)
+    }
+
+    @Test fun revokeAfterDurableAdmissionPreventsPreparationButRemainsUncertain() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        val invocation = EffectInvocation { autonomy.setPolicyFromUi(AutonomyPolicy.DENY) }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_exec")
+            .execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+        assertFalse(result.success)
+        assertEquals(0, runtime.execPreparationCalls)
+        assertEquals(EffectInvocation.Outcome.UNCERTAIN, invocation.resolve(result, true).outcome)
+    }
+
+    @Test fun alreadyReadySetupAdmitsBeforeProbeAndRecordsVerifiedReadiness() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        var admissions = 0
+        val invocation = EffectInvocation { snapshot ->
+            assertEquals(0, runtime.probeCalls)
+            assertEquals("linux:${LinuxExecAutonomy.CONNECTOR_ID}", snapshot.authority)
+            assertEquals(LinuxExecAutonomy.SETUP_OPERATION_NAME, snapshot.actionId)
+            admissions++
+        }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_setup")
+            .execute(emptyMap(), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+        assertTrue(result.content, result.success)
+        assertEquals(1, admissions)
+        assertEquals(1, runtime.probeCalls)
+        assertEquals(0, runtime.installCalls)
+        assertEquals(EffectInvocation.Outcome.OK, invocation.resolve(result, true).outcome)
+    }
+
+    @Test fun setupWriterFailurePreventsInstalledProbeAndInstallPreparation() {
+        for (ready in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime(ready = ready)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { ready })
+            var enteredInstaller = false
+            runtime.beforeInstallEffect = { enteredInstaller = true }
+            val result = create(runtime, autonomy = autonomy).getValue("linux_setup").execute(emptyMap(),
+                CancellationToken.cancellable(), CoreTool.ProgressListener { }, EffectInvocation { error("Evidence unavailable") })
+            assertFalse(result.success)
+            assertFalse(enteredInstaller)
+            assertEquals(0, runtime.installCalls)
+            assertEquals(0, runtime.probeCalls)
+        }
+    }
+
+    @Test fun uninstallUsesNewGenerationOwnerAndDurableFailurePreventsRuntime() {
+        for (failWriter in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            val old = autonomy.authorization()
+            var admissions = 0
+            var enteredRuntime = false
+            runtime.beforeUninstallEffect = { enteredRuntime = true; assertEquals(1, admissions) }
+            val invocation = EffectInvocation {
+                assertTrue(runCatching { autonomy.admit(old, false, CancellationToken.cancellable()) }.isFailure)
+                admissions++
+                if (failWriter) error("Evidence unavailable")
+            }
+            val result = create(runtime, autonomy = autonomy).getValue("linux_uninstall").execute(
+                mapOf("delete_workspace" to false), CancellationToken.cancellable(), CoreTool.ProgressListener { }, invocation)
+            assertEquals(!failWriter, result.success)
+            assertEquals(!failWriter, enteredRuntime)
+            assertEquals(if (failWriter) 0 else 1, runtime.uninstallCalls)
+            assertEquals(if (failWriter) EffectInvocation.Outcome.NOT_EXECUTED else EffectInvocation.Outcome.OK,
+                invocation.resolve(result, true).outcome)
+        }
+    }
 
     @Test fun freshPrincipalAllowExecutesWithoutAsking() {
         val runtime = FakeLinuxRuntime(ready = true)
@@ -494,7 +687,14 @@ class LinuxToolsTest {
             override fun isAvailable() = true
             override fun show(id: String, spec: UserDecisionSpec) {
                 when (optionId) {
-                    null -> gate.resolve(id, UserDecisionResult.Dismissed)
+                    null -> {
+                        assertFalse("Protected maintenance cannot be dismissed", spec.allowDismiss)
+                        assertFalse(gate.resolve(id, UserDecisionResult.Dismissed))
+                        assertTrue(gate.isPending(id))
+                        // End this no-selection scenario through explicit cancellation, not an
+                        // unsupported dismissal or a timeout that could conceal an active request.
+                        assertTrue(gate.resolve(id, UserDecisionResult.Cancelled))
+                    }
                     "__cancel__" -> gate.resolve(id, UserDecisionResult.Cancelled)
                     else -> gate.resolve(id, UserDecisionResult.Selected(spec.options.first { it.id == optionId }))
                 }
@@ -526,6 +726,7 @@ class LinuxToolsTest {
         var probeCalls = 0
         var probeMarkedReady = false
         var execCalls = 0
+        var execPreparationCalls = 0
         var uninstallCalls = 0
         var workspaceDeleteCalls = 0
         var lastCommand = ""
@@ -547,6 +748,7 @@ class LinuxToolsTest {
 
         override fun execAdmitted(command: String, cwd: String, timeoutMillis: Long?, callback: LinuxOutputCallback,
                                   token: CancellationToken, beforeLaunch: () -> Unit): LinuxExecResult {
+            execPreparationCalls++
             beforeAdmittedLaunch(); beforeLaunch()
             return exec(command, cwd, timeoutMillis, callback, token)
         }

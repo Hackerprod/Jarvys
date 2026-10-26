@@ -3,12 +3,17 @@ package com.jarvys.agent
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /** Synthetic only: exercises the actual tool boundary and durable search coordinator. */
+@RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE)
 class MemoryScopeRuntimeTest {
     @get:Rule val temporary = TemporaryFolder()
     private val marker = "PulsoUniqueProjectCanaryV64"
@@ -50,9 +55,9 @@ class MemoryScopeRuntimeTest {
             runCatching { b.deleteMemoryFile("/memory/project.md") } // A missing local file may be a no-op.
             assertEquals(original, a.read("/memory/project.md"))
             assertFalse(b.searchDocuments(setOf("memory")).any { it.content.contains(marker) || it.path.contains(marker) })
-            val prompt = CoreAgentRuntime.withMemoryInstructions("captain", root.forConversation("chat-B"), CorePromptBudget.standard())
+            val prompt = CoreAgentRuntime.withMemoryInstructions("captain", root.forConversation("chat-B").bindAutomaticWritesForToolset(), CorePromptBudget.standard())
             assertFalse(prompt.contains(marker)); assertFalse(prompt.contains(preference))
-            assertTrue(CoreAgentRuntime.withMemoryInstructions("captain", root.forConversation("chat-A"), CorePromptBudget.standard()).contains(marker))
+            assertTrue(CoreAgentRuntime.withMemoryInstructions("captain", root.forConversation("chat-A").bindAutomaticWritesForToolset(), CorePromptBudget.standard()).contains(marker))
         } finally { first.disposeForTests() }
         val reopened = coordinator("chat-B")
         try {
@@ -68,7 +73,7 @@ class MemoryScopeRuntimeTest {
         durable.replaceAll(listOf(SearchDocument("memory", "foreign.md", marker, 1L)))
         val b = workspace("chat-B")
         val search = MemorySearchIndexCoordinator(durable, true)
-        val a = root().forConversation("chat-A")
+        val a = root().forConversation("chat-A").bindAutomaticWritesForToolset()
         val start = CountDownLatch(1)
         val finished = CountDownLatch(1)
         val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
@@ -92,7 +97,7 @@ class MemoryScopeRuntimeTest {
 
     @Test fun explicitSharingRevocationAndEditedSourceAreCheckedOnEveryCachedSearch() {
         val root = root()
-        val a = root.forConversation("chat-A")
+        val a = root.forConversation("chat-A").bindAutomaticWritesForToolset()
         a.write("preference.md", note("Preference", preference), MemoryStore.Actor.AGENT, "chat-A")
         val b = workspace("chat-B", root)
         val search = coordinator("shared")
@@ -100,12 +105,12 @@ class MemoryScopeRuntimeTest {
             assertTrue(search.search(b, "PersonalPreferenceCanaryV64", setOf("memory"), null).isEmpty())
             val grant = a.approveSharedPersonal(a.reviewForSharing("preference.md"))
             assertEquals(1, search.search(b, "PersonalPreferenceCanaryV64", setOf("memory"), null).size)
-            assertTrue(root.forConversation("chat-B").compileSystemPromptProjection().contains(preference))
+            assertTrue(root.forConversation("chat-B").bindAutomaticWritesForToolset().compileSystemPromptProjection().contains(preference))
             a.write("preference.md", note(marker, marker), MemoryStore.Actor.AGENT, "chat-A")
             assertTrue(search.search(b, "PersonalPreferenceCanaryV64", setOf("memory"), null).isEmpty())
             assertTrue(search.search(b, marker, setOf("memory"), null).isEmpty())
             a.revokeSharedPersonal(grant.id)
-            assertFalse(root.forConversation("chat-B").compileSystemPromptProjection().contains(marker))
+            assertFalse(root.forConversation("chat-B").bindAutomaticWritesForToolset().compileSystemPromptProjection().contains(marker))
             a.write("preference.md", note("Preference", preference), MemoryStore.Actor.AGENT, "chat-A")
             val next = a.approveSharedPersonal(a.reviewForSharing("preference.md"))
             assertEquals(1, search.search(b, "PersonalPreferenceCanaryV64", setOf("memory"), null).size)
@@ -114,21 +119,14 @@ class MemoryScopeRuntimeTest {
         } finally { search.disposeForTests() }
     }
 
-    @Test fun actualRuntimeModelRequestsRecompileSharedMemoryAfterNativeRevokeAndSourceEdit() {
+    @Test fun legacyScopedProjectionIsRecompiledForEachProviderRequest() {
         val owner = root()
-        val donor = owner.forConversation("chat-A")
+        val donor = owner.forConversation("chat-A").bindAutomaticWritesForToolset()
         val recipientId = "tool-assembly-test"
-        val recipient = owner.forConversation(recipientId)
+        val recipient = owner.forConversation(recipientId).bindAutomaticWritesForToolset()
         val localMarker = "RecipientOnlyCanaryV64"
         donor.write("preference.md", note("Preference", preference), MemoryStore.Actor.AGENT, "chat-A")
         recipient.write("local.md", note("Recipient", localMarker), MemoryStore.Actor.AGENT, recipientId)
-        val runtime = CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
-        // Use the existing constructor without account/provider discovery; only synthetic memory is injected.
-        CoreAgentRuntime::class.java.getDeclaredField("memoryStore").apply {
-            isAccessible = true
-            set(runtime, recipient)
-            assertSame(recipient, get(runtime))
-        }
         val declarations = listOf(ToolSpec("scope_probe", "test", "Synthetic scope probe", "test",
             ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList()))
         val token = CancellationToken.uncancellable()
@@ -152,7 +150,14 @@ class MemoryScopeRuntimeTest {
             }
         }
         val model = CoreAgentModel(provider, recipientId)
-        val requestModel = runtime.requestModel(model, CoreToolRegistry(emptyList()), true, null)
+        // Explicit legacy projection harness, not the single-session runtime (which reads Room).
+        val requestModel = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                tools: List<ToolSpec>, runToken: CancellationToken): ModelReply =
+                model.complete(CoreAgentRuntime.withMemoryInstructions("Legacy projection harness", recipient,
+                    CorePromptBudget.standard()), transcript, prompt, tools, runToken)
+            override fun contextWindow(runToken: CancellationToken) = model.contextWindow(runToken)
+        }
         assertEquals(model.contextWindow(token), requestModel.contextWindow(token))
         fun nextPrompt(): String {
             val before = prompts.size
@@ -180,7 +185,7 @@ class MemoryScopeRuntimeTest {
 
     @Test fun reflectionAndCompactionWritesAreLocalAndNoMemoryWorkspaceRemainsUnavailable() {
         val root = root()
-        val a = root.forConversation("chat-A")
+        val a = root.forConversation("chat-A").bindAutomaticWritesForToolset()
         a.beginReflectionGroup("compaction-reflection", "chat-A")
         val reflection = WorkspaceStore(File(temporary.root, "workspaces"), WorkspaceStore.projectIdForSession("chat-A"),
             null, null, root, "chat-A", true, MemoryStore.Actor.REFLECTION, "compaction-reflection", true)
@@ -189,11 +194,11 @@ class MemoryScopeRuntimeTest {
         assertTrue(write.content, write.success)
         a.finishReflectionGroup("compaction-reflection", "completed")
         assertTrue(a.read("project.md").contains(marker))
-        assertFalse(root.forConversation("chat-B").compileSystemPromptProjection().contains(marker))
+        assertFalse(root.forConversation("chat-B").bindAutomaticWritesForToolset().compileSystemPromptProjection().contains(marker))
         assertFalse(workspace("chat-B", root).searchDocuments(setOf("memory")).any { it.content.contains(marker) })
         a.undoReflectionGroup("compaction-reflection", "chat-A")
         assertTrue(runCatching { a.read("project.md") }.isFailure)
-        assertFalse(root.forConversation("chat-B").compileSystemPromptProjection().contains(marker))
+        assertFalse(root.forConversation("chat-B").bindAutomaticWritesForToolset().compileSystemPromptProjection().contains(marker))
         val denied = WorkspaceStore(File(temporary.root, "workspaces"), WorkspaceStore.projectIdForSession("chat-C"), null, null, root, "chat-C", false)
         assertFalse(denied.memoryEnabled())
         assertTrue(runCatching { denied.read("/memory/project.md") }.isFailure)
@@ -201,8 +206,8 @@ class MemoryScopeRuntimeTest {
 
     @Test(timeout = 20_000) fun captainAndActualCrewMissionPromptsExcludeAnotherProjectsMemory() {
         val root = root()
-        root.forConversation("chat-A").write("project.md", note(marker, marker), MemoryStore.Actor.AGENT, "chat-A")
-        val b = root.forConversation("chat-B")
+        root.forConversation("chat-A").bindAutomaticWritesForToolset().write("project.md", note(marker, marker), MemoryStore.Actor.AGENT, "chat-A")
+        val b = root.forConversation("chat-B").bindAutomaticWritesForToolset()
         val empty = CoreToolRegistry(emptyList())
         val captured = java.util.concurrent.atomic.AtomicReference<String>()
         val complete = CountDownLatch(1)

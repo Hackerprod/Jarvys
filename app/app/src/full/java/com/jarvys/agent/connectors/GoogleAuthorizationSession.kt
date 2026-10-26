@@ -5,16 +5,20 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
 
 /** Monotonic session ownership serializes persistence with disconnect/account changes. */
-internal class GoogleAuthorizationSession {
-    class Lease internal constructor(val generation: Long, val token: CancellationToken, val interactive: Boolean)
+internal class GoogleAuthorizationSession(
+    private val externalEpoch: () -> Long = { 0L },
+    private val unavailable: () -> Boolean = { false },
+) {
+    class Lease internal constructor(val generation: Long, val token: CancellationToken, val interactive: Boolean, internal val externalEpoch: Long)
     private var generation = epochs.incrementAndGet()
     private val leases = mutableSetOf<Lease>()
     @Synchronized fun currentEpoch(): Long = generation
     @Synchronized fun acquire(interactive: Boolean = false, expectedEpoch: Long? = null): Lease {
+        check(!unavailable()) { "Google local connection change is pending" }
         check(expectedEpoch == null || expectedEpoch == generation) { "Google connection changed; prepare and approve this operation again" }
         check(!interactive || leases.none { it.interactive }) { "Google authorization is already in progress" }
         if (interactive) invalidate()
-        return Lease(generation, CancellationToken.cancellable(), interactive).also(leases::add)
+        return Lease(generation, CancellationToken.cancellable(), interactive, externalEpoch()).also(leases::add)
     }
     @Synchronized fun hasInteractive(): Boolean = leases.any { it.interactive && !it.token.isCancellationRequested }
     @Synchronized fun invalidate() {
@@ -22,7 +26,7 @@ internal class GoogleAuthorizationSession {
         leases.toList().forEach { it.token.cancel() }
         leases.clear()
     }
-    @Synchronized fun isCurrent(lease: Lease): Boolean = generation == lease.generation && !lease.token.isCancellationRequested
+    @Synchronized fun isCurrent(lease: Lease): Boolean = generation == lease.generation && lease.externalEpoch == externalEpoch() && !unavailable() && !lease.token.isCancellationRequested
     @Synchronized fun <T> withCurrent(lease: Lease, block: () -> T): T {
         if (!isCurrent(lease)) throw CancellationException("Google connection changed; retry from the current account")
         lease.token.throwIfCancelled()

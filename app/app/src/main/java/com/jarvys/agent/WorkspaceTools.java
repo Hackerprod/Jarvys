@@ -114,7 +114,14 @@ public final class WorkspaceTools {
       throw new IllegalArgumentException("Scheduled task file tools require a memory-only scope");
     }
     List<CoreTool> tools = new ArrayList<>();
-    if (workspace.memoryEnabled()) tools.addAll(create(workspace, coordinator));
+    if (workspace.memoryEnabled()) {
+      // Memory-only scheduled scopes never expose the interactive conversation preview surface.
+      tools.add(new ListFiles(workspace, coordinator));
+      tools.add(new ReadFile(workspace, coordinator));
+      tools.add(new WriteFile(workspace, coordinator));
+      tools.add(new EditFile(workspace, coordinator));
+      tools.add(new DeleteMemoryFile(workspace, coordinator));
+    }
     tools.add(new SearchFiles(workspace, coordinator, true, savedSkillIds));
     return Collections.unmodifiableList(tools);
   }
@@ -299,6 +306,34 @@ public final class WorkspaceTools {
         throw new IllegalArgumentException(key + " must be a string");
       }
       return (String) value;
+    }
+
+    PersistenceEffect mutationPersistenceEffect(Map<String, Object> arguments) {
+      if (workspace.memoryOnly()) return PersistenceEffect.MEMORY;
+      Object path = arguments == null ? null : arguments.get("path");
+      if (!(path instanceof String)) return PersistenceEffect.NONE;
+      try {
+        return workspace.isMemoryPath((String) path) ? PersistenceEffect.MEMORY : PersistenceEffect.NONE;
+      } catch (IllegalArgumentException invalidPath) {
+        // Execution owns path validation; classification must not bypass registry error handling.
+        return PersistenceEffect.NONE;
+      }
+    }
+
+    void admitMutation(Map<String, Object> arguments, CancellationToken token, EffectInvocation invocation) {
+      if (invocation == null || mutationPersistenceEffect(arguments) == PersistenceEffect.MEMORY) return;
+      token.throwIfCancelled();
+      invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
+          "native", declaration.name, null, "native_contract"));
+      token.throwIfCancelled();
+    }
+
+    CoreToolResult completedMutation(CoreToolResult result, Map<String, Object> arguments,
+        EffectInvocation invocation) {
+      if (invocation == null) return result;
+      return mutationPersistenceEffect(arguments) == PersistenceEffect.MEMORY
+          ? result.withAdministrativeReceipt(invocation.memoryCompleted())
+          : result.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.OK));
     }
 
     void refreshSearchDocument(String path) {
@@ -498,30 +533,46 @@ public final class WorkspaceTools {
 
     @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.WRITE; }
     @Override public boolean requiresMemoryScopeForScheduledTask() { return true; }
+    @Override public EffectClass effectClass(Map<String, Object> arguments) {
+      return arguments != null && arguments.get("result_cursor") instanceof String ? EffectClass.READ : EffectClass.WRITE;
+    }
+    @Override public PersistenceEffect persistenceEffect() {
+      return workspace.memoryOnly() ? PersistenceEffect.MEMORY : PersistenceEffect.NONE;
+    }
+    @Override public PersistenceEffect persistenceEffect(Map<String, Object> arguments) {
+      return mutationPersistenceEffect(arguments);
+    }
+
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+      return execute(arguments, token, null, null);
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+        ProgressListener progress, EffectInvocation invocation) {
       token.throwIfCancelled();
-      CoreToolResult coding = this.codingRouter.invoke("write", arguments, token);
+      CoreToolResult coding = this.codingRouter.invoke("write", arguments, token, progress, invocation);
       if (coding != null) {
         return coding;
       }
       String path = string(arguments, "path");
       String content = string(arguments, "content");
+      admitMutation(arguments, token, invocation);
       MemoryStore.Revision revision =
           MemoryToolActions.run(this.workspace, path, token,
-              () -> this.workspace.writeWithRevision(path, content));
+              () -> this.workspace.writeWithRevision(path, content, token));
       refreshSearchDocument(path);
       String link = this.workspace.skillLinkForPath(path);
       String revisionNote =
           revision == null
               ? ""
               : "\nMemory revision " + revision.id + " recorded as " + revision.actor + ".";
-      return CoreToolResult.success(
+      return completedMutation(CoreToolResult.success(
           "Wrote "
               + path
               + revisionNote
-              + (link != null ? "\nInstalled skill entrypoint: [SKILL.md](" + link + ")" : ""));
+              + (link != null ? "\nInstalled skill entrypoint: [SKILL.md](" + link + ")" : "")), arguments, invocation);
     }
   }
 
@@ -565,24 +616,40 @@ public final class WorkspaceTools {
 
     @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.WRITE; }
     @Override public boolean requiresMemoryScopeForScheduledTask() { return true; }
+    @Override public EffectClass effectClass(Map<String, Object> arguments) {
+      return arguments != null && arguments.get("result_cursor") instanceof String ? EffectClass.READ : EffectClass.WRITE;
+    }
+    @Override public PersistenceEffect persistenceEffect() {
+      return workspace.memoryOnly() ? PersistenceEffect.MEMORY : PersistenceEffect.NONE;
+    }
+    @Override public PersistenceEffect persistenceEffect(Map<String, Object> arguments) {
+      return mutationPersistenceEffect(arguments);
+    }
+
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+      return execute(arguments, token, null, null);
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+        ProgressListener progress, EffectInvocation invocation) {
       token.throwIfCancelled();
-      CoreToolResult coding = this.codingRouter.invoke("edit", arguments, token);
+      CoreToolResult coding = this.codingRouter.invoke("edit", arguments, token, progress, invocation);
       if (coding != null) {
         return coding;
       }
       String path = string(arguments, "path");
       String oldText = string(arguments, "old_text");
       String newText = string(arguments, "new_text");
+      admitMutation(arguments, token, invocation);
       String result =
           MemoryToolActions.run(this.workspace, path, token,
-              () -> this.workspace.edit(path, oldText, newText));
+              () -> this.workspace.edit(path, oldText, newText, token));
       refreshSearchDocument(path);
       String link = this.workspace.skillLinkForPath(path);
-      return CoreToolResult.success(
-          result + (link == null ? "" : "\nInstalled skill entrypoint: [SKILL.md](" + link + ")"));
+      return completedMutation(CoreToolResult.success(
+          result + (link == null ? "" : "\nInstalled skill entrypoint: [SKILL.md](" + link + ")")), arguments, invocation);
     }
   }
 
@@ -605,15 +672,22 @@ public final class WorkspaceTools {
           Collections.singletonList("path"));
     }
 
+    @Override public PersistenceEffect persistenceEffect() { return PersistenceEffect.MEMORY; }
     @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.WRITE; }
     @Override public boolean requiresMemoryScopeForScheduledTask() { return true; }
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+      return execute(arguments, token, null, null);
+    }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+        ProgressListener progress, EffectInvocation invocation) {
       token.throwIfCancelled();
       String path = string(arguments, "path");
-      return CoreToolResult.success(MemoryToolActions.run(this.workspace, path, token,
-          () -> this.workspace.deleteMemoryFile(path)));
+      CoreToolResult result = CoreToolResult.success(MemoryToolActions.run(this.workspace, path, token,
+          () -> this.workspace.deleteMemoryFile(path, token)));
+      return invocation == null ? result : result.withAdministrativeReceipt(invocation.memoryCompleted());
     }
   }
 

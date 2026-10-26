@@ -13,6 +13,7 @@ import com.jarvys.agent.connectors.GitHubNativeFailure
 import com.jarvys.agent.connectors.GitHubWriteJournal
 import com.jarvys.agent.connectors.GitHubWriteJournals
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.EffectInvocation
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -131,8 +132,9 @@ class McpConnectionManager internal constructor(
     fun callTool(serverId: String, wireName: String, arguments: JSONObject, token: CancellationToken,
                  requester: String?): JSONObject = callTool(serverId, wireName, arguments, token, requester, null)
 
+    @JvmOverloads
     fun callTool(serverId: String, wireName: String, arguments: JSONObject, token: CancellationToken,
-                 requester: String?, requesterColorKey: String?): JSONObject {
+                 requester: String?, requesterColorKey: String?, effectInvocation: EffectInvocation? = null): JSONObject {
         val session = sessions[serverId] ?: throw IllegalStateException("MCP server is not connected")
         val config = repository.get(serverId) ?: throw IllegalStateException("MCP server was removed")
         val tool = repository.exposedTools().firstOrNull { it.serverId == serverId && it.wireName == wireName }
@@ -151,12 +153,13 @@ class McpConnectionManager internal constructor(
             throw IllegalStateException("GitHub write outcome is unresolved; verify the existing action before requesting another approval")
         }
         return try {
-            writeApproval.executeWithAdmission(tool, prepared, token, requester, requesterColorKey) { admission ->
+            writeApproval.executeWithAdmission(tool, prepared, token, requester, requesterColorKey,
+                effectInvocation) { admission ->
                 if (config.catalogServiceId == "github") executeGitHub(config, session, tool, prepared,
                     expectedEpoch!!, expectedGeneration, expectedRevision, token, admission)
                 else callToolWithSingleRefresh(config, session, tool.wireName, prepared, token,
-                    beforeDispatch = { dispatchSession, _ ->
-                        admission.admit { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
+                    beforeDispatch = { dispatchSession, kind ->
+                        admission.admit(mutation = tool.access == McpToolAccess.WRITE && kind == McpDispatchKind.TOOL_CALL) { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
                             expectedRevision, token, dispatchSession) }
                     },
                     beforeRequest = {
@@ -185,6 +188,7 @@ class McpConnectionManager internal constructor(
     }
 
     /** The task path preserves MCP admission while routing ASK writes to its durable action queue. */
+    @JvmOverloads
     fun callToolForScheduledTask(
         serverId: String,
         wireName: String,
@@ -192,6 +196,7 @@ class McpConnectionManager internal constructor(
         token: CancellationToken,
         approvedPendingAction: Boolean,
         deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        effectInvocation: EffectInvocation? = null,
     ): JSONObject {
         val session = sessions[serverId] ?: throw IllegalStateException("MCP server is not connected")
         val config = repository.get(serverId) ?: throw IllegalStateException("MCP server was removed")
@@ -211,12 +216,13 @@ class McpConnectionManager internal constructor(
             throw IllegalStateException("GitHub write outcome is unresolved; verify the existing action before requesting another approval")
         }
         return try {
-            writeApproval.executeForScheduledTask(tool, prepared, token, approvedPendingAction, deferAskWrite) { admission ->
+            writeApproval.executeForScheduledTask(tool, prepared, token, approvedPendingAction, deferAskWrite,
+                effectInvocation) { admission ->
                 if (config.catalogServiceId == "github") executeGitHub(config, session, tool, prepared,
                     expectedEpoch!!, expectedGeneration, expectedRevision, token, admission)
                 else callToolWithSingleRefresh(config, session, tool.wireName, prepared, token,
-                    beforeDispatch = { dispatchSession, _ ->
-                        admission.admit { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
+                    beforeDispatch = { dispatchSession, kind ->
+                        admission.admit(mutation = tool.access == McpToolAccess.WRITE && kind == McpDispatchKind.TOOL_CALL) { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
                             expectedRevision, token, dispatchSession) }
                     },
                     beforeRequest = {
@@ -418,7 +424,7 @@ class McpConnectionManager internal constructor(
             // Reserve durably BEFORE admission, but clear a reservation if nothing was dispatched.
             if (mutation) reserveMutation()
             try {
-                admission.admit { requireMcpLease(config, tool, epoch, expectedGeneration,
+                admission.admit(mutation = mutation) { requireMcpLease(config, tool, epoch, expectedGeneration,
                     expectedRevision, token, dispatchSession) }
             } catch (failure: Exception) {
                 if (mutation && reserved) {

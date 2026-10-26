@@ -1,0 +1,476 @@
+# S6 — contrato B: submission y ejecución durable de Coding separadas
+
+Estado: **propuesta de diseño local, pendiente de revisión independiente; no implementación**.
+Fecha: 2026-10-26. Lectura: árbol de trabajo actual de `continue/s6-cloud`.
+Normativa: `docs/SINGLE_SESSION.md` §§7.3–7.5, B3/B4; `S6-admission-contract.md`;
+`S6-linux-coding-admission-contract.md` §5, alternativa B.
+
+## 1. Decisión propuesta y límites
+
+Mantener `project_exec` no bloqueante. Su retorno prueba **aceptación durable de una solicitud**,
+no lanzamiento, terminación, éxito del comando ni cumplimiento del objetivo del usuario.
+La ejecución tiene un productor y una identidad propios por `jobId`; su duración no pertenece al
+run que presentó la solicitud. No se transporta al worker una `EffectInvocation` que el registro sellará.
+
+Una solicitud y su ejecución pueden aparecer en el **mismo episodio de la petición original**,
+pero son dos clases distintas de evidencia, no dos comandos. `project_jobs read/list/wait` solo
+leen el job existente; no crean una nueva ejecución ni trasladan su éxito al run del poll.
+La cancelación es otra llamada/decisión causal, no reemplaza al job ni acredita que se terminó.
+
+Este documento no cambia permisos, scopes, gates, políticas, timeouts, presupuestos ni retención de
+contenido privado. No instala/ejecuta servicios, comandos o SDK. La aprobación del diseño no es
+prueba de ejecución ni PASS de S6. Los otros productores de S6 siguen sujetos a B3/B4/B5.
+
+## 2. Contraste con el código real
+
+Rutas Full bajo `app/app/src/full/java/com/jarvys/agent/`:
+
+- `flavor/CodingExecutionTools.kt:executeCommand`: valida argumentos, scope WRITE, versión,
+  capacidad activa, toolchain y autorización Coding. ASK/ALLOW_ALWAYS conservan su recibo exacto.
+  `jobs.start(..., ::admitLaunch) { completed(...) }` retorna un `Snapshot` y un `CoreToolResult.success`
+  cuyo texto indica job aceptado. Ese `success` no es un recibo de ejecución.
+- `linux/CodingJobManager.kt:start`: obtiene writer lease, genera UUID, persiste `LAUNCH_INTENT`,
+  registra cancelación y despacha el executor. El worker puede correr/terminar antes del retorno.
+  Hoy el journal **no** guarda source message, batch/call/run causal ni enlace a evidencia Room.
+- `run`: valida antes del backend. En `beforeLaunch`, bajo `job.lock`, persiste `RUNNING` y después
+  pone `launchAttempted=true`; todavía revalida antes de que `ProcessBuilder.start` ocurra.
+  Por tanto `RUNNING`/`startedAt` prueban una intención de lanzamiento persistida, no por sí solos un
+  proceso creado. Los efectos de preparación Linux anteriores a ese callback requieren la frontera
+  adicional descrita en el contrato Linux (§2).
+- `finish`: mantiene el writer lease hasta reconciliar versión y cleanup. Si falla `persist`, cambia
+  **solo el Snapshot en memoria** a `UNCERTAIN`; el journal puede seguir en RUNNING. Finalmente llama
+  `runCatching { completion(snapshot) }`. Ni la presencia del callback ni su Snapshot prueban un terminal
+  durable; tampoco su ausencia prueba que no terminó el comando.
+- `persist`: fichero temporal, `fd.sync()`, rename y sincronización del directorio; schemas actuales
+  1/2. El journal conserva identidad de proyecto, owner, conversación y estado. Es privado y está fuera
+  del proyecto editable. No es una transacción atómica conjunta con Room.
+- `restoreRecord`: valida ruta/UUID/schema/identidad/log; terminales se recuperan, no terminales se
+  presentan como INTERRUPTED/UNCERTAIN, y **nunca se relanzan ni se señalizan procesos restaurados**.
+  `reconcile(scope)` puede actualizar la versión del proyecto bajo writer lease; esto no es reejecución.
+- `CodingJobConversationGuard`: impide acceso al journal de una conversación eliminada. La proyección
+  de memoria debe respetar también este guard y no resucitar un episodio olvidado/eliminado.
+
+Rutas Main:
+
+- `CoreToolRegistry.invoke` sella el contexto y llama `EpisodeRecorder.afterDispatch` al retornar.
+- `EpisodeRecorder` obtiene el batch exacto mediante `committedCall(callId)` y escribe evidencia por
+  conversación/batch/call/run. Esa identidad debe conservarse, no sustituirse por un lookup del último job.
+- `PersonalAgentRepository.reconcileEpisodeRun` cierra intent/started por `run_id`; el reconciliador de
+  procesos hace lo propio por proceso ajeno. Ambos deben distinguir explícitamente los jobs durables.
+- La cola de narración hoy reconoce `tool_call`/`crew_result` OK. La nueva evidencia de job necesita
+  inclusión explícita; no basta con agregar filas y asumir que ya serán narradas.
+
+## 3. Identidades y esquema propuestos
+
+### 3.1 Origen inmutable
+
+`JobEvidenceOrigin` se construye localmente desde el checkpoint comprometido, antes de invocar
+el productor. Campos: storage generation; conversación origen; source message; batch; call;
+run causal; proceso causal; nombre de herramienta. Para tareas: task/occurrence/attempt cuando aplique,
+con el mismo contrato de binding exacto, sin adivinar campos a partir de texto.
+
+`jobId` lo sigue asignando **CodingJobManager**, una sola vez. El journal preserva además los campos
+existentes owner, scopeId y durableIdentity. El binding es la tupla `(storageGeneration, jobId)`;
+la atribución exige que el origen completo coincida. Un call distinto no puede adoptar el job.
+Ningún campo de origen contiene comando, argumentos, rutas privadas, stdout/stderr o credenciales.
+Los campos privados ya existentes del journal no se copian a `facts_json`.
+
+### 3.2 Journal schema 3
+
+Añadir, sin alterar el significado de los estados de UI actuales:
+
+- `evidenceOrigin` completo e inmutable, `submissionId`, `evidenceMode = ENABLED | DISABLED`;
+- `ownerProcessId` (UUID de instancia, no solo PID) y `managerInstanceId`, también en la reserva Room;
+- `journalRevision` monotónica por job y `effectPhase` tipada;
+- snapshot de autorización real usado para admitir preparación/ejecución, sin secretos;
+- `submissionCommitted` y resultado terminal tipado dentro de la revisión persistida.
+
+`persist` devuelve un `DurableJobCommit` interno **solo después** de fsync/rename/fsync de directorio.
+Un commit identifica job, revisión, origen y estado ya persistidos; no se construye desde JSON de una
+herramienta ni desde un Snapshot mutable. La recuperación produce el equivalente solo al validar
+el fichero completo y su identidad. `finish` no publica un commit terminal cuando persistir falló.
+
+Schemas 1/2 se siguen leyendo para UI/recuperación existente. Sin origen exacto no se crean episodios
+atribuidos a un mensaje mediante búsquedas por nombre, comando, owner reciente o última llamada.
+El diagnóstico de legado conserva incertidumbre y no habilita replay.
+
+### 3.3 Room: relación explícita, no JSON usado como clave
+
+Nueva tabla propuesta `coding_job_evidence_links` (migration por fijar durante implementación):
+
+- PK `(storage_generation, submission_id)`, UUID asignado por el recorder antes de los gates;
+- `job_id` nullable hasta que el manager lo asigna, con índice UNIQUE parcial
+  `(storage_generation, job_id) WHERE job_id IS NOT NULL`;
+- origen completo: conversación, source message, batch/call, `origin_run_id`, `origin_process_id`;
+- identidad del owner/scope durable necesaria para comprobar binding, sin copiar projectRoot;
+- `entry_id`, `submission_ordinal`, `execution_ordinal` con unicidad por job/rol;
+- `submission_state`: RESERVED / ACCEPTED / REJECTED / UNCERTAIN;
+- `owner_process_id`, `manager_instance_id`, `job_process_id`, revisión de journal proyectada,
+  estado/phase observado, terminal proyectado;
+- estado de proyección y exclusión/tombstone para memoria desactivada o entrada retirada.
+
+La reserva existe con `job_id=NULL`. El binding hace CAS `job_id IS NULL -> UUID` sobre submissionId y
+origen exactos; reintentar el mismo UUID es idempotente, otro UUID se rechaza. Tras binding, toda operación
+del worker exige ambos IDs y el índice único impide compartir un job entre reservas.
+Una invocación `project_exec` admite como máximo un job: constraint único sobre el origen completo
+con call/batch, con NULLs tratados explícitamente para tareas. Una colisión con otro origen es error
+fail-closed, no upsert silencioso. Un retry de **proyección** es idempotente; no es un retry de ejecución.
+
+Filas `memory_evidence`:
+
+| Rol | `ref_kind` / `ref_id` | Semántica |
+|---|---|---|
+| Solicitud | `coding_job_submission` / jobId; hasta asignarlo, ID exacto de invocation en el link reservado | Hecho administrativo; `outcome=NULL`, estado tipado en link/facts. ACCEPTED **no** es `ok` de comando. |
+| Ejecución | `coding_job_execution` / jobId | Un único intent→started→terminal normalizado por job. `tool_name=project_exec`, `classification=WRITE`. |
+
+El vínculo guarda el run **causal**. La fila de ejecución no usa el `run_id` de la llamada como dueño
+de su ciclo de vida: `run_id=NULL`, owner durable en el link. Conserva el proceso real del job para
+recovery. No se oculta un job colgante simplemente borrando runId: la tabla y reconciliador de jobs
+son obligatorios y comprobados por tests. El schema existente permite outcome nulo, pero los nuevos
+métodos deben validar esta semántica por rol; no ampliar los outcomes externos con “accepted”.
+
+## 4. Protocolo de submission: dos almacenes, sin transacción distribuida ficticia
+
+1. El registro/recorder asigna submissionId y prepara el origen exacto y una reserva con jobId nulo
+   antes de gates/enqueue.
+   No genera `started` del comando. Una denegación local se registra como submission rechazada;
+   no produce fila de ejecución exitosa ni espera aprobación nueva inventada por el recorder.
+2. Se ejecutan los gates existentes, incluyendo versión/scope/STOP y recibos ASK/ALLOW_ALWAYS.
+   Aceptar el job no sustituye las revalidaciones posteriores del worker.
+3. `CodingJobManager.start` obtiene el writer lease y asigna UUID como hoy. Un hook local de binding
+   enlaza ese UUID con la reserva Room **antes** de persistir el primer journal. No se expone un callback
+   que ejecute el comando ni un token de autoridad nuevo.
+4. Se persiste journal schema3 LAUNCH_INTENT con origen. Un commit durable permite una transacción Room
+   que marca submission ACCEPTED y crea la **única** fila `coding_job_execution(intent)` pendiente.
+   Si la escritura Room falla, no se entrega al executor. Se registra fallo conservador en journal cuando
+   sea posible y se libera lease. Un journal aceptado sin worker nunca autoriza lanzarlo al recuperar.
+5. Solo tras esos compromisos se registra cancelación/enqueue, manteniendo la comprobación STOP.
+   El orden exacto debe impedir un callback de cancelación reentrante que publique un estado contradictorio.
+6. El retorno transporta `JobSubmissionReceipt(jobId, committedRevision, origin)` ligado al owner de la
+   invocación. Si el worker ya terminó, sigue siendo recibo de submission; su terminal lo proyecta el job.
+
+Fallo de enqueue después de aceptación: submission sigue describiendo que la solicitud se registró;
+la ejecución se cierra con NOT_EXECUTED si el manager prueba que el worker nunca comenzó. Si la API del
+executor permite ejecutar y luego lanzar excepción, no basta una excepción de enqueue para afirmar eso:
+se necesita claim del worker y se conserva UNCERTAIN ante ambigüedad. No crear un segundo job como retry.
+
+Los hooks Room operan fuera de `job.lock`, locks de STOP/política, `CodingJobConversationGuard` y
+`ProotLauncher.launchLock`. El writer lease de proyecto puede seguir retenido como hoy. Ninguna
+transacción Room abarca UI, red, ejecución ni espera de finalización de un job.
+
+## 5. Productor worker y frontera fail-closed
+
+El worker recibe un `JobEvidenceHandle` inmutable por job/origen, no la `EffectInvocation` de submission.
+Es un identificador de persistencia, **no** una concesión de autoridad. Un claim durable/in-memory
+coherente del worker impide dos dispatches incluso ante un executor de pruebas reentrante; tras restart
+el manager conserva la prohibición actual de relanzar journals.
+
+Antes de cualquier efecto de preparación Linux:
+
+1. Revalidar los gates existentes y obtener el snapshot de autorización exacto.
+2. Persistir journal de intención de efecto con phase `PREPARATION_INTENT` y ese snapshot.
+3. Proyectar `coding_job_execution.started` y autorización por CAS de job/origen, o fallar cerrado.
+4. Revalidar scope/lease/STOP/política de nuevo y entrar a la preparación real.
+
+El backend necesita un seam `beforePreparationEffects` además de `beforeLaunch`: certificados,
+temporales y cambios de modo ocurren antes del último callback actual. Instrumentar solo beforeLaunch
+no satisface este contrato. Las revalidaciones finales dentro del launch lock se conservan; no se
+introduce Room bajo ese lock. El callback de launch persiste el estado RUNNING como hoy y verifica el
+mismo binding; se describe como **launch intent**, no como PID observado.
+
+Admisiones repetidas del mismo job/snapshot son idempotentes y no duplican evidencia. Si cambia la
+política/snapshot, no fusionar decisiones en una autorización ficticia: rechazar el dispatch adicional
+con incertidumbre conservadora si ya hubo preparación. Ningún error borra el hecho de admisión previa.
+
+## 6. Terminal durable y reconciliación
+
+`finish` conserva writer lease hasta reap/cleanup y reconciliación de versión. Después de persistir un
+terminal produce `DurableJobCommit`; fuera de locks solicita su proyección a Room. Si falla la
+proyección, el terminal permanece en journal y un reconciliador vuelve a **leer/proyectar**, nunca ejecutar.
+No depender exclusivamente del callback `completion`, actualmente envuelto en `runCatching`.
+
+| Evidencia tipada persistida | Resultado de ejecución |
+|---|---|
+| SUCCEEDED, exitCode 0, sin cancelación/timeout/incertidumbre | `ok` del proceso terminado, no “build/tests/objetivo aprobado”. |
+| FAILED con salida no cero conocida | `error`; no implica ausencia de modificaciones parciales. |
+| NOT_STARTED y prueba completa de ausencia de preparación/dispatch | `not_executed`. |
+| NOT_STARTED sin cobertura de preparación, CANCELLED/TIMED_OUT después de posible efecto | `uncertain`. |
+| INTERRUPTED/UNCERTAIN, journal ilegible o terminal no persistido | `uncertain`; nunca replay. |
+| LAUNCH_INTENT/RUNNING/CANCELLING de owner vivo | Seguir pendiente; nunca OK ni DEFERRED por ser asíncrono. |
+
+El log faltante/incompleto se marca como fuente no disponible. Un terminal auténtico de proceso no
+prueba el contenido del log ni el éxito de un objetivo semántico. Un journal corrupto no es un terminal
+auténtico aunque quede una fila de `tool_results` o un texto de “éxito”.
+
+### Liveness y concurrencia de creación/recovery
+
+El journal schema3 y la reserva contienen el ownerProcessId/managerInstanceId que poseen la operación.
+“No es mi UUID” no prueba que otro proceso esté muerto. El manager mantiene un lease de liveness
+interproceso (lock de fichero privado por instancia), además de su mapa local
+de submissions/jobs activos. Recovery ajeno solo declara owner muerto tras adquirir ese lease en
+exclusiva; PID aislado, timeout, ausencia de `jobs[id]` en otro manager o retraso de IO no son prueba.
+Esto no permite enviar señales ni recuperar autoridad sobre el proceso: solo serializa reconciliación.
+La vida del lease cubre todos los productores, preparaciones, workers y procesos hijos hasta reap y
+terminal/cleanup, o muerte real del owner. `manager.close()` no puede liberarlo si quedan efectos vivos;
+no se hace unlink/recreación del lockfile mientras un owner lo retiene (evitar dos inodos con locks
+independientes). El cierre ordenado espera/coordina los mecanismos actuales, sin añadir señales nuevas.
+El orden de adquisición debe evitar cualquier espera de Room bajo ese lock.
+
+Un escaneo concurrente con reserva/binding/persist/enqueue ve un owner vivo y mantiene pending. En el
+mismo proceso, la transición de creación pertenece a su submissionId hasta enqueue o fallo confirmado;
+se consulta ese estado bajo un lock corto y se proyecta fuera del lock. Si no se obtiene una prueba
+concluyente de terminal/fallo, el reconciliador no fabrica un cierre. Un fallo persistente se reporta;
+una repetición de IO/proyección no vuelve a llamar al executor. Un commit terminal válido sí puede
+proyectarse aun con owner vivo, porque su revisión terminal es inmutable.
+
+### Orden de recovery
+
+- Reconciliar journal schema3 y links por identidad exacta antes de cerrar filas de jobs por proceso.
+- Terminal durable válido: proyectar por CAS una sola vez. Revisión repetida no hace nada; revisión vieja
+  no pisa una más nueva. Los terminales son inmutables; un commit contradictorio se reporta como conflicto,
+  no sustituye silenciosamente un OK por otro resultado ni reabre el job.
+- Journal no terminal de proceso demostrado muerto mediante el lease: proyectar UNCERTAIN sin ejecución. Incluso si startedAt falta,
+  no inferir ausencia de preparaciones solo a partir del schema viejo.
+- Reserva/link sin journal válido: mientras el owner está vivo o la creación está en curso, mantener
+  pending; nunca enqueue/reconstruir comando. Tras muerte comprobada, submission UNCERTAIN y ejecución
+  pendiente, si existe, UNCERTAIN. Con prueba durable de rechazo antes de enqueue puede ser NOT_EXECUTED.
+- Journal válido sin proyección: reconstruir únicamente el vínculo ya contenido en ese journal; verificar
+  generación, conversación activa, source/batch/call comprometidos y tombstones antes de escribir.
+- Journal ilegible + link existente: con owner vivo se reporta y reintenta lectura, sin cerrar un job
+  potencialmente activo. Tras muerte comprobada, cerrar incertidumbre de ese job exacto y preservar diagnóstico privado.
+  Ilegible sin binding confiable: diagnóstico sin atribuirlo a una petición inventada.
+- `reconcileEpisodeRun(originRunId)` cierra submissions no resueltas según su link, **no** ejecuciones de
+  jobs. `reconcileForeignEpisodeProcesses` excluye explícitamente `coding_job_execution` y delega al
+  reconciliador de jobs. Los jobs no quedan excluidos del recovery, solo de la regla equivocada de run.
+
+Arranque, cierre de run y finalización de job invocan el mismo reconciliador idempotente; también el
+worker de mantenimiento puede reparar proyecciones sin requerir el chat abierto. No depende de que el
+usuario haga poll. Si todos los almacenes fallan, no se afirma evidencia durable: se conserva error
+operativo y se evita nuevo efecto; al recuperar se usa lo efectivamente persistido.
+
+## 7. Privacidad, memoria desactivada, narración y doble conteo
+
+`evidenceMode` se fija en submission según la preferencia vigente. Con memoria desactivada no se crean
+links/episodios de memoria: el journal operativo conserva su ciclo de vida y la ejecución sigue sus
+permisos existentes. No activar backfill retrospectivo al habilitar memoria. Si se desactiva después,
+no guardar nuevas narraciones; la política de reparación de filas ya existentes debe seguir la misma
+regla de memoria del repositorio, sin usar esta extensión para revivir memoria eliminada.
+
+Fuentes: puntero al resultado de submission exacto y `coding-job:<id>/log`; expansión por API de lectura
+owner/scope existente y sus presupuestos/redacción. Nunca copiar comando, cwd, projectRoot o logs a facts.
+La relación origin/job no concede a otro bot acceso a logs recuperados: mantiene `bindRecoveredOwners`
+y las comprobaciones de identidad durable ya existentes.
+
+Narrador/search:
+
+- `coding_job_submission` se etiqueta como aceptación administrativa y no cuenta como comando ejecutado.
+- `coding_job_execution` es la unidad de conteo de proceso: DISTINCT jobId, no número de polls, callbacks,
+  fases de preparación ni revisiones de journal.
+- Un episodio con job pendiente no puede narrarse como completado. Al terminal, la fila de ejecución
+  invalida el snapshot de narración por la CAS existente y vuelve elegible el episodio conforme al outcome.
+- Incluir explícitamente `coding_job_execution` en selección de evidencia normalizada y fuentes. No tratar
+  `submission_state=ACCEPTED` como el predicado `outcome=ok` que habilita narración de efectos exitosos.
+- Una llamada `cancel` puede aportar evidencia de solicitud de cancelación como efecto distinto, con
+  `causes_cancel_of=jobId`, pero no incrementa el contador de comandos ni reemplaza su terminal.
+
+## 8. API mínima propuesta y ownership de cambios
+
+Nombres orientativos, pendientes de revisión; no están implementados:
+
+1. `CoreTool.completionMode(arguments)`: SYNC por defecto, ASYNC_JOB_SUBMISSION para `project_exec`;
+   wrappers propagan sin cambiar scope ni clasificarlo como READ.
+2. `InvocationObserver.prepareJobSubmission(...) -> JobEvidenceOrigin` y
+   `afterJobSubmission(origin, receipt, failure)`; recorder mantiene su binding comprometido.
+3. `EffectInvocation` guarda el origen y valida `JobSubmissionReceipt` owner-bound. Ese receipt es
+   administrativo separado, no `Outcome.OK`, no `Outcome.DEFERRED` y no MEMORY/READ_COMPLETED.
+4. `CoreToolResult.jobSubmissionReceipt` opcional; todas las copias preservan sus flags y metadatos.
+5. Registry ramifica **solo** ASYNC_JOB_SUBMISSION: reserva antes de llamar al tool, impide `admit` síncrono
+   accidental y sella al retornar como hoy; finaliza submission por link/receipt comprometidos. No llama
+   al finalizador síncrono del comando. En excepción consulta el link exacto: un fallo de presentación no
+   puede convertir un job ya aceptado/activo en “no ejecutado”.
+6. `CodingJobManager.start` agrega binding/observador durable y devuelve prueba de submission; su backend
+   agrega seam de preparación. `persist` devuelve commit tipado; finalización/proyección no usa Snapshot
+   como única prueba. Una ruta que no soporte el contrato falla cerrado para captura habilitada.
+7. Repository/bridge agregan reserva/binding/aceptación/admisión/proyección CAS, tabla link y reconciliador
+   de jobs. Migración compatible, retención/tombstones y Full/Play explícitos. Play no inventa jobs ni
+   handlers nuevos: conserva capability unavailable.
+
+No mantener un contexto mutable global/ThreadLocal; no cambiar seal para permitir callbacks tardíos;
+no asignar owner por nombre de herramienta; no mapear submission a `ok` por texto. El handle del worker
+solo opera sobre su job y debe rechazar cierres/admisiones tras terminal o con origen diferente.
+
+### 8.1 Wrappers, tareas y límites del primer slice
+
+El primer slice habilita evidencia asíncrona únicamente en los contextos Coding donde `project_exec`
+ya está disponible. Verificación del código leído: `CodingExecutionTools.Tool` no sobreescribe
+`unattendedAccess()` y hereda EXCLUDED; `CoreAgentRuntime.unattendedCapabilityAllowed` excluye ese
+valor y `createScheduledTaskToolRegistry` lo filtra. `FlavorLinuxTools` crea las herramientas para el
+bot/scope Coding seleccionado. **No cambiar EXCLUDED para conseguir que el recorder vea WRITE**:
+`effectClass=WRITE` y `completionMode=ASYNC_JOB_SUBMISSION` son independientes de la elegibilidad
+unattended. No se habilita project_exec programado/aprobado como parte de este diseño.
+
+Esto debe comprobarse por contrato del registro, no solo por inspección. `ScheduledTaskBoundTool`,
+wrappers de Coding, proactivo y reflexión propagan completionMode. `TaskTrackedTool` y el ejecutor de
+acciones aprobadas **no pueden simplemente heredar la finalización síncrona** si llega ASYNC: antes de
+crear intent síncrono/claim/dispatch rechazan esa combinación mientras no tengan un finalizador de
+submission propio. El registro de tareas vigente debe continuar sin project_exec; una acción legacy
+con ese nombre se rechaza por scope/catálogo actual, no se lanza ni se reinterpreta como nativa.
+Esta restricción preserva disponibilidad actual y deja explícito el soporte asíncrono pendiente para
+cualquier herramienta futura que sí sea elegible unattended; no se presenta como soporte B4 asíncrono.
+
+Antes de habilitar alguna capacidad ASYNC en tareas, es obligatorio un bloque separado coherente:
+
+- `TaskTrackedTool` reserva el **mismo** origen de submission task/occurrence/call/run, añade su writer
+  administrativo al contexto y finaliza solo submission; no crea otro `tool_call` intent/started de
+  comando ni llama `resolve` síncrono para convertir aceptación en efecto terminal.
+- `TaskPendingActionExecution` captura completionMode antes del claim, persiste submissionId/jobId en
+  el recibo del intento dueño, y usa un estado administrativo de aceptación separado de EXECUTED del
+  comando. Repetir aprobación nunca crea otro job; resultado pendiente no vuelve a solicitar aprobación.
+- `TaskPendingActionStore` recovery proyecta el vínculo por intento/job, no maps accepted→ok ni vuelve a
+  ejecutar. `TaskRunLedger` distingue “submission aceptada” de “efecto terminado”: noDispatchVerified
+  nunca es true después de transferir un job que puede arrancar; la política existente de retry no
+  puede repetir submission por un timeout o fin del run.
+- El worker Coding sigue siendo el único productor de `coding_job_execution`; los finalizadores de
+  task/approval solo actualizan su submission, para evitar doble evidencia y doble conteo.
+
+No implementar la mitad de esas ramas para hacer pasar un test sintético. El gate de cierre del primer
+slice incluye demostrar la exclusión vigente de scheduled/pending y que ningún wrapper deja escapar
+ASYNC hacia el finalizador síncrono. B4 actual de tareas síncronas permanece exigible e independiente.
+
+## 9. Pruebas exigidas antes de implementación aceptada
+
+Además de mantener `CodingJobRecoveryTest` y gates existentes:
+
+1. Real `CodingExecutionTools` + `CodingJobManager`, backend fake con latches: retorno de submission
+   durable, cero command-OK mientras pendiente; worker empieza antes/después del retorno indistintamente.
+2. Loop/checkpoint real + recorder con batch/run: binding exacto; dos runs con mismo callId no se mezclan;
+   callback/commit de otro job/owner no modifica filas. Poll repetido no crea comandos/episodios extra.
+3. Dentro del primer efecto fake de preparación: journal de admisión y Room started ya durables; fallo
+   en cada escritura evita el efecto. STOP/política revocados entre escritura y dispatch siguen bloqueando.
+4. Muerte inyectada en cada frontera: reserva, journal inicial, aceptación Room, enqueue/claim worker,
+   journal preparación, Room started, launch intent, proceso, terminal journal, proyección Room.
+   Reapertura nunca ejecuta ni señaliza un job; el run terminado no cierra su ejecución viva.
+   Usar latches entre reserva/binding/journal/enqueue y lanzar reconciliador concurrente: jobId nulo
+   válido, binding único y ninguna transición terminal mientras el owner vivo crea el job. Verificar
+   dos managers/procesos con lease vivo y muerto, sin decidir liveness por mero UUID/PID diferente.
+   Inyectar `manager.close()` concurrente con preparación/proceso vivo: lease no liberado ni lockfile
+   reemplazado antes del reap; el scanner no marca abandoned por el mero retorno de close.
+5. Terminal journal persistido y callback perdido/fallido: recovery reproduce exactamente un terminal.
+   Persist terminal fallido: Snapshot SUCCEEDED previo no acredita OK; journal pendiente queda incierto.
+6. Log ausente, journal corrupto, schema1/2, identidad durable cambiada, conversación eliminada, entrada
+   olvidada, storage generation distinta: sin éxito inventado, sin nueva atribución ni resurrección.
+7. ASK aprobado/ALLOW_ALWAYS/DENY/STOP y preparación antes de launch; snapshot real, sin permiso nuevo.
+8. Cancelación propia/repetida/terminal/recuperada: política actual preservada, cancel request distinto
+   de command terminal; no doble conteo ni claim sobre jobs de otro owner.
+9. Registro real de tareas excluye project_exec como antes; wrappers preservan completionMode y
+   cualquier entrada ASYNC no soportada falla antes de claim/dispatch. Ningún ledger marca command-OK
+   ni noDispatchVerified por recibir aceptación. No ampliar capacidades para ejecutar este test.
+10. Memoria desactivada y activada durante job: no backfill oculto ni contenido privado en facts; journal
+   operativo suficiente para no relanzar. Filtro/narración/retención distinguen ambos ref_kind.
+
+Mutaciones focales: submission→OK comando; cerrar job por originRun; quitar fsync/commit proof;
+aceptar callback Snapshot sin journal terminal; omitir preparación; lookup por último call/job;
+replay en restore; contar polls como ejecuciones. Cada una debe romper su prueba correspondiente.
+
+**Criterio de salida:** diseño revisado + parche acotado implementado + Full/Play compilados y pruebas
+reales/mutaciones pertinentes ejecutadas cuando SDK esté autorizado. Este documento solo cubre diseño.
+
+## 10. Adenda de cutover: el productor real es Crew, no el batch del capitán
+
+Estado de esta adenda: diseño para revisión; **sin opt-in ni implementación de producción**.
+La ejecución Full/Play del bloque de conexiones no valida este protocolo de jobs.
+
+### 10.1 Hallazgos que corrigen el supuesto de origen de §§3/8
+
+- `FlavorLinuxTools.createProfileForRuntime` añade `project_exec` al scope del bot Coding.
+  `CoreAgentRuntime.runInternal` captura el catálogo del capitán para configurar Crew antes de
+  instalar su `EpisodeRecorder`. El observer del chat no es un recorder del checkpoint del bot.
+- `CoreAgentLoop.startPreparedTool` fija `toolLifecycle[callId]=STARTED` y actualiza el checkpoint
+  antes de `registry.invoke(...,callId)`. Este STARTED prueba intención del call, no ejecución.
+- `CrewManager` fija `checkpointScope(cycleId)` y persiste mediante
+  `retainCheckpointForRun`, validando loop/token/cycle exactos. `CrewCheckpointStore.confirmDurable`
+  entrega `ConfirmedSnapshot` con digest de payload, conversación, bot, scope, metadata y loop.
+  No contiene un `MainChatTranscriptStore.CallBinding` ni un batch Room del capitán intercambiable.
+- `WorkspaceRegistry.prepareAssignment` conserva `request_id`, `original_user_request`, misión,
+  assignment y bot, pero **no** source message/batch/call del chat. El requestId recibido de
+  `CoreAgentRuntime` es un ID de ejecución generado localmente, no un messageId. El texto copiado
+  no es una llave de atribución. No existe hoy el binding central completo requerido por §3.
+
+Por ello, un codec o una tabla que requieran siempre un batch central como si fuera el batch del
+comando estarían modelando una identidad inexistente. Tampoco basta observar el último checkpoint.
+
+### 10.2 Fuente discriminada y dos identidades causales
+
+Separar el origen **del comando** de su eventual atribución **a la petición central**:
+
+1. `CREW_CHECKPOINT`: storage generation, executionSessionId, botId, missionId, cycleId,
+   scopeIdentity durable, checkpointPayloadSha256, callId y toolName. Todos se contrastan con el
+   checkpoint confirmado, su call exacto pendiente/STARTED y el ciclo/owner de la invocación.
+   Un cambio posterior del checkpoint no cambia este origen ya capturado. El digest es una prueba
+   del contenido observado, no una autorización ni un orden monotónico.
+2. Binding workspace opcional y completo: workspaceId, assignmentId y requestId; contrastar el
+   registro de assignment, executionSessionId, misión, bot y scope. El Coding legado sin assignment
+   no obtiene uno inventado. La ausencia explícita no se sustituye por el assignment más reciente.
+3. Atribución central opcional **verificada**: centralConversationId, sourceMessageId,
+   sourceBatchId, sourceCallId, sourceRunId, sourceProcessId y binding persistido al assignment.
+   Es el call de delegación original, no el `callId` de `project_exec`. Ambos se conservan separados.
+
+El batch del comando Crew queda ausente, no un UUID sintético que aparenta un batch comprometido.
+Las variantes se validan completas: no aceptar media tupla central/workspace. Un decode de journal
+produce un registro validado, nunca por sí mismo un `DurableJobCommit` ni una concesión de permisos.
+
+Un origen Crew exacto sin binding central es **operacional no atribuido**, distinto de un journal
+schema1/2 sin origen. El envelope distingue captura central habilitada, memoria OFF y ausencia de
+binding central (por ejemplo modo OPERATIONAL_ONLY con motivo tipado); ausencia de binding no es
+prueba de que el usuario desactivó memoria ni se trata automáticamente como corrupción. Conserva las capacidades existentes y la prohibición de replay, pero no crea
+un episodio central ni recupera atribución por texto/tiempo. Para nuevas delegaciones instrumentadas,
+la captura habilitada exige el binding exacto; no anunciar cobertura de atribución hasta implementarlo.
+
+### 10.3 Seam nuevo obligatorio: call central → assignment, antes de spawn
+
+El diseño concreto queda en [S6-central-workspace-causal-contract.md](S6-central-workspace-causal-contract.md).
+Corrige dos supuestos: CentralWorkspace hoy sólo tiene execute2 y el fallback nativo admite antes de
+sus guardas (no posee receipt productor); además el origen del call puede ser operacional aunque
+memoria esté OFF. Hace falta execute4 explícito con admisión/backend receipt y fuente inmutable.
+
+La solución mínima propuesta no reserva primero en Room: minting de `CentralInvocationSource` desde
+checkpoint exacto antes de dispatch, transporte por EffectInvocation y parámetro tipado al backend,
+y migración aditiva WorkspaceRegistry v1→2 para guardar fuente + assignment atómicamente en su
+mismo SQLite. No Room bajo locks workspace/Crew/STOP, ni source fabricado desde requestId/texto.
+La fuente se conserva en retries sin apropiación por otro call. Proyección a memoria es separada y
+opcional, nunca condición para guardar procedencia operacional cuando OFF. Véanse las fronteras,
+semántica de aceptación local y tests exigidos en el contrato enlazado.
+
+### 10.4 Retirada, memoria OFF y conservación de identidad
+
+El vínculo central debe verificar storage generation, fuente original y entry dueño activos. Una
+fuente/episodio borrado, un assignment retirado o una conversación eliminada no se reconstruyen al
+recuperar un journal. Respetar las protecciones de retirada/exclusión existentes por identidad, sin
+introducir un subsistema universal de tombstones en este slice; un nuevo entry con el mismo título no es el anterior. La proyección no crea por defecto un
+entry ausente usando el source pointer guardado en el journal.
+
+Se fija el modo de evidencia al admitir submission; un job iniciado sin captura no hace backfill al
+habilitar memoria. Transportar el ticket de memoria capturado en su fase, sin recapturarlo al terminar
+ni mantener el lock del gate durante bridge/worker/lifecycle. La reparación estructural de evidencia
+ya admitida no equivale a una narración nueva: OFF debe bloquear nuevas narraciones, y la resolución
+conservadora de un job ya registrado debe preservar la política de bookkeeping del repositorio sin
+revivir filas retiradas. El parche debe probar separadamente ambas rutas, no usar un booleano de UI
+como permiso para volver a crear memorias.
+
+### 10.5 Orden mínimo de implementación y pruebas adicionales
+
+1. Tipos puros discriminados/codec/protocolo de revisiones y owner receipts, sin habilitar ASYNC en
+   herramientas. Journal validado y commit fsynced son tipos distintos.
+2. Slice CentralWorkspace de admisión/recibos backend explícitos y origen central→assignment;
+   después proveedor de origen Crew confirmado, con tests de identidad y fallos entre reserva,
+   preparación, binding y spawn. No claims de terminal Coding. El shape definitivo del codec no se
+   congela antes de revisar este seam; los tipos puros previos no habilitan comportamiento.
+3. Slice coherente de manager/backend/Room/registry: aceptación durable, preparación admitida,
+   terminal fsynced, proyección/recovery, narrador y exclusiones de wrappers. Sólo entonces opt-in.
+
+Pruebas adicionales a §9: callId reutilizado en otro cycle/bot/checkpoint no se mezcla; comando de
+bot usa su checkpoint y no el batch del capitán; assignment legado no obtiene source central por
+texto; retorno duplicado de delegación no roba binding; OFF/forget/reemplazo de generación entre
+submission y terminal no recrean episode; callback tardío del job conserva ambas identidades causales.
+No hay una decisión pendiente de permisos o producto: estas son garantías de procedencia y
+persistencia que deben quedar revisadas antes de activar la implementación.

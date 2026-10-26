@@ -6,6 +6,7 @@ import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreTool
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.R
 import com.jarvys.agent.ToolSpec
@@ -63,6 +64,25 @@ private fun unavailable(context: Context) = CoreToolResult.failure(
 private fun safeFailure(context: Context, sanitizer: LinuxOutputSanitizer, failure: Throwable): CoreToolResult =
     CoreToolResult.failure(sanitizer.scrub(failure.message ?: failure.javaClass.simpleName))
 
+/** Evidence projection only. Authority remains the exact Linux store snapshot and its live gates. */
+private fun LinuxExecAutonomy.Authorization.effectAdmission(approvedAsk: Boolean = false) =
+    EffectInvocation.Admission(when (policy) {
+        AutonomyPolicy.ALLOW -> EffectInvocation.Authorization.ALLOW
+        AutonomyPolicy.DENY -> EffectInvocation.Authorization.DENY
+        AutonomyPolicy.ASK -> if (approvedAsk) EffectInvocation.Authorization.ASK_APPROVED
+            else EffectInvocation.Authorization.ASK_PENDING
+    }, "linux:${snapshot.connectorId}", snapshot.operationName, snapshot.revision.toString(),
+        snapshot.origin.name + ":preparation")
+
+private fun EffectInvocation?.linuxUserDenied(authorization: LinuxExecAutonomy.Authorization) {
+    val observed = authorization.effectAdmission()
+    this?.noteDecision(EffectInvocation.Admission(EffectInvocation.Authorization.DENY,
+        observed.authority, observed.actionId, observed.revision, observed.origin + ":user_denied"))
+}
+
+private fun CoreToolResult.linuxReceipt(invocation: EffectInvocation?, outcome: EffectInvocation.Outcome): CoreToolResult =
+    if (invocation == null) this else withEffectReceipt(invocation.receipt(outcome))
+
 /** Only real maintenance reviews/choices protect the visible card from automated device input. */
 private fun protectedLinuxDecision(request: () -> UserDecisionResult): UserDecisionResult {
     val protection = com.jarvys.agent.MemoryUiAutomationGuard.enterProtectedSurface()
@@ -95,7 +115,8 @@ internal class LinuxStatusTool(
     private val sanitizer: LinuxOutputSanitizer,
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
-    // This only reads installation/probe state; the modifying Linux tools remain sequential.
+    // Probe also prepares runtime files. No complete effect coverage is claimed for this legacy surface.
+    override fun hasCompleteEffectAdmissionCoverage() = false
     override fun executionMode() = CoreTool.ExecutionMode.PARALLEL
 
     override fun declaration() = linuxSpec(LINUX_STATUS_NAME,
@@ -163,6 +184,9 @@ internal class LinuxSetupTool(
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
     private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
+    override fun accessClassification() = CoreTool.AccessClassification.WRITE
+    override fun hasCompleteEffectAdmissionCoverage() = true
+
     override fun declaration() = linuxSpec(LINUX_SETUP_NAME,
         "Install the pinned Ubuntu Base release and verify PRoot under the Linux setup ALLOW/ASK/DENY policy.",
         emptyObjectSchema())
@@ -171,13 +195,17 @@ internal class LinuxSetupTool(
         execute(arguments, token, CoreTool.ProgressListener { })
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken,
-                         progress: CoreTool.ProgressListener): CoreToolResult {
+                         progress: CoreTool.ProgressListener): CoreToolResult = execute(arguments, token, progress, null)
+
+    override fun execute(arguments: Map<String, Any>, token: CancellationToken,
+                         progress: CoreTool.ProgressListener, invocation: EffectInvocation?): CoreToolResult {
         try {
             requireNoArguments(arguments)
             token.throwIfCancelled()
             if (!ensureAvailable()) return unavailable(context)
             if (!runtime.supportsArm64()) return CoreToolResult.failure(linuxText(context, R.string.full_linux_unsupported_abi))
             val authorization = autonomy.maintenanceAuthorization(LinuxExecAutonomy.SETUP_OPERATION_NAME)
+            invocation?.noteDecision(authorization.effectAdmission())
             if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(
                 linuxText(context, R.string.full_linux_maintenance_denied))
             val existing = runtime.state()
@@ -187,7 +215,10 @@ internal class LinuxSetupTool(
             if (authorization.policy == AutonomyPolicy.ASK) {
                 when (val decision = requestDecision(setupDecisionSpec(rootfs, workspace, existing), token)) {
                     is UserDecisionResult.Selected -> if (decision.option.id == OPTION_INSTALL) approvedAsk = true
-                        else return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
+                        else {
+                            invocation.linuxUserDenied(authorization)
+                            return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
+                        }
                     UserDecisionResult.Dismissed, UserDecisionResult.Cancelled ->
                         return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
                     UserDecisionResult.Unavailable ->
@@ -206,6 +237,11 @@ internal class LinuxSetupTool(
                 }
                 initialStateVerified = true
             }
+            // Durable evidence is outside installer/policy/launch locks and covers preparation too.
+            admitEffect()
+            invocation?.admit(authorization.effectAdmission(approvedAsk))
+            check(runtime.state() == existing) { "Linux installation state changed during evidence persistence" }
+            admitEffect()
             if (existing.phase == LinuxInstallPhase.READY) {
                 progress.onProgress(linuxText(context, R.string.full_linux_progress_probe))
                 val probe = runtime.probeAdmitted(token, ::admitEffect)
@@ -214,6 +250,7 @@ internal class LinuxSetupTool(
                     return CoreToolResult.success(JSONObject().put("status", "already_ready")
                         .put("message", linuxText(context, R.string.full_linux_setup_already_ready))
                         .put("probe", linuxProbeJson(probe, sanitizer)).toString())
+                        .linuxReceipt(invocation, EffectInvocation.Outcome.OK)
                 }
                 val detail = LinuxFailureDiagnostics.probe(probe, sanitizer::scrub)
                 runtime.markProbeFailureAdmitted(probe.status.name.lowercase(Locale.ROOT), detail, ::admitEffect)
@@ -238,6 +275,7 @@ internal class LinuxSetupTool(
                 .put("version", installed.version).put("architecture", installed.arch)
                 .put("size_bytes", installed.sizeBytes).put("probe", linuxProbeJson(probe, sanitizer))
                 .put("message", linuxText(context, R.string.full_linux_progress_ready)).toString())
+                .linuxReceipt(invocation, EffectInvocation.Outcome.OK)
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (failure: RuntimeException) {
@@ -322,6 +360,9 @@ internal class LinuxExecTool(
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
     private val perStreamChars = (budget.toolResultsPerTurnChars / 4).coerceAtLeast(1)
 
+    override fun accessClassification() = CoreTool.AccessClassification.WRITE
+    override fun hasCompleteEffectAdmissionCoverage() = true
+
     override fun declaration(): ToolSpec = linuxSpec(LINUX_EXEC_NAME,
         "Run a command inside optional PRoot Ubuntu according to the explicit Linux ASK/ALLOW/DENY policy.", execSchema())
 
@@ -329,7 +370,10 @@ internal class LinuxExecTool(
         execute(arguments, token, CoreTool.ProgressListener { })
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken,
-                         progress: CoreTool.ProgressListener): CoreToolResult {
+                         progress: CoreTool.ProgressListener): CoreToolResult = execute(arguments, token, progress, null)
+
+    override fun execute(arguments: Map<String, Any>, token: CancellationToken,
+                         progress: CoreTool.ProgressListener, invocation: EffectInvocation?): CoreToolResult {
         try {
             val unknown = arguments.keys - setOf("command", "cwd", "timeout_seconds")
             require(unknown.isEmpty()) { "Unexpected parameter(s): ${unknown.sorted().joinToString()}" }
@@ -344,6 +388,7 @@ internal class LinuxExecTool(
                 return CoreToolResult.failure(linuxText(context, R.string.full_linux_exec_not_installed))
             }
             var authorization = autonomy.authorization()
+            invocation?.noteDecision(authorization.effectAdmission())
             if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
             var approvedAsk = false
             if (authorization.policy == AutonomyPolicy.ASK) {
@@ -356,7 +401,12 @@ internal class LinuxExecTool(
                     ApprovalDecision.APPROVED_ALLOW_ALWAYS -> authorization = requireNotNull(alwaysReceipt) {
                         "The exact Linux Allow policy receipt is missing; command not launched"
                     }
-                    else -> return CoreToolResult.failure(approvalResultMessage(decision))
+                    else -> {
+                        if (decision == ApprovalDecision.DENIED) {
+                            invocation.linuxUserDenied(authorization)
+                        }
+                        return CoreToolResult.failure(approvalResultMessage(decision))
+                    }
                 }
             }
             fun admitCommand() {
@@ -381,6 +431,10 @@ internal class LinuxExecTool(
             })
             val started = android.os.SystemClock.elapsedRealtime()
             token.throwIfCancelled()
+            // Covers certificates/workspace/temp/chmod before ProcessBuilder; started is not launched.
+            admitCommand()
+            invocation?.admit(authorization.effectAdmission(approvedAsk))
+            admitCommand()
             val execution = runtime.execAdmitted(command, cwd, timeoutMillis, LinuxOutputCallback { stream, text ->
                 val message = if (stream == LinuxOutputStream.STDOUT) {
                     stdout.append(text)
@@ -400,7 +454,11 @@ internal class LinuxExecTool(
                 .put("cancelled", execution.cancelled)
                 .put("truncated", stdoutResult.truncated || stderrResult.truncated)
                 .put("duration_ms", (android.os.SystemClock.elapsedRealtime() - started).coerceAtLeast(0L))
-            return CoreToolResult.success(output.toString())
+            return CoreToolResult.success(output.toString()).linuxReceipt(invocation, when {
+                execution.timedOut || execution.cancelled -> EffectInvocation.Outcome.UNCERTAIN
+                execution.exitCode == 0 -> EffectInvocation.Outcome.OK
+                else -> EffectInvocation.Outcome.ERROR
+            })
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (failure: RuntimeException) {
@@ -469,11 +527,18 @@ internal class LinuxUninstallTool(
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
     private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
+    override fun accessClassification() = CoreTool.AccessClassification.WRITE
+    override fun hasCompleteEffectAdmissionCoverage() = true
+
     override fun declaration() = linuxSpec(LINUX_UNINSTALL_NAME,
         "Remove the private Linux rootfs under its ALLOW/ASK/DENY policy. Set delete_workspace explicitly or ask the user to choose.",
         strictSchema(mapOf("delete_workspace" to mapOf("type" to "boolean")), emptyList()))
 
-    override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+    override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
+        execute(arguments, token, CoreTool.ProgressListener { }, null)
+
+    override fun execute(arguments: Map<String, Any>, token: CancellationToken,
+                         progress: CoreTool.ProgressListener, invocation: EffectInvocation?): CoreToolResult {
         var rootfsRemoved = false
         return try {
             require((arguments.keys - setOf("delete_workspace")).isEmpty()) { "Unexpected uninstall parameter" }
@@ -483,6 +548,7 @@ internal class LinuxUninstallTool(
             token.throwIfCancelled()
             if (!ensureAvailable()) return unavailable(context)
             val authorization = autonomy.maintenanceAuthorization(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME)
+            invocation?.noteDecision(authorization.effectAdmission())
             if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(
                 linuxText(context, R.string.full_linux_maintenance_denied))
             val rootfs = runtime.rootfsPath()
@@ -497,7 +563,10 @@ internal class LinuxUninstallTool(
                     is UserDecisionResult.Selected -> when (decision.option.id) {
                         OPTION_KEEP_WORKSPACE -> { deleteWorkspace = false; approvedAsk = authorization.policy == AutonomyPolicy.ASK }
                         OPTION_DELETE_WORKSPACE -> { deleteWorkspace = true; approvedAsk = authorization.policy == AutonomyPolicy.ASK }
-                        else -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
+                        else -> {
+                            invocation.linuxUserDenied(authorization)
+                            return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
+                        }
                     }
                     UserDecisionResult.Unavailable -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_unavailable))
                     else -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
@@ -519,12 +588,17 @@ internal class LinuxUninstallTool(
                     if (!rootfsRemoved) check(runtime.state() == existing) { "Linux environment changed before removal" }
                     admitPolicy()
                 }
+                // This callback validates the removal's NEW owner/generation. Never use admitMaintenance here.
+                admitEffect()
+                invocation?.admit(authorization.effectAdmission(approvedAsk))
+                admitEffect()
                 runtime.uninstallAdmitted(::admitEffect)
                 rootfsRemoved = true
                 if (removeWorkspace) runtime.deleteWorkspaceAdmitted(::admitEffect)
             }
             CoreToolResult.success(linuxText(context, if (removeWorkspace) R.string.full_linux_uninstall_done_all
                 else R.string.full_linux_uninstall_done_keep))
+                .linuxReceipt(invocation, EffectInvocation.Outcome.OK)
         } catch (cancelled: java.util.concurrent.CancellationException) {
             if (rootfsRemoved) throw java.util.concurrent.CancellationException(
                 linuxText(context, R.string.full_linux_uninstall_partial, "STOP")).apply { initCause(cancelled) }

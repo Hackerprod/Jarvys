@@ -1,0 +1,386 @@
+{
+  "scope": "Isolated Coding provenance metadata/strict codec and typed local completion semantics; no producer or async opt-in",
+  "source_base": "0f2f9e92aa69667078375fefbbe3aee6683a4d2b",
+  "source_files_sha256": {
+    "app/app/src/main/java/com/jarvys/agent/CentralInvocationSource.java": "f6c9822d6e1976d16acdbba829cba7f9a0a145497c47f505b46a04460989bca6",
+    "app/app/src/main/java/com/jarvys/agent/EffectInvocation.java": "d4f0c8e2eed8ff726d037a40f3de3a4d5a933da01cd49535cfde31b8ab8f2057",
+    "app/app/src/main/java/com/jarvys/agent/EpisodeNarrator.kt": "97832b5458ecf38ed515669b3a574f4da10d244130bc3f97ac9cf65548883d0e",
+    "app/app/src/main/java/com/jarvys/agent/EpisodeRecorder.java": "c1ba1ca7b8d5687e5a1dfcdacb17632e09eaf3cac91da09b67f2098478dd1aba",
+    "app/app/src/main/java/com/jarvys/agent/coding/CodingJobEvidence.java": "3461d1a5f72ca6e324b149f9cd5efc7b393f5dad0dde51f3e605674624be26ef",
+    "app/app/src/main/java/com/jarvys/agent/coding/CodingJobEvidenceCodec.java": "0f1a8ff1848d6e66d3bf40a7ff27ed7ca83fe72e66b8a95a144e1a9c6ff81493",
+    "app/app/src/test/java/com/jarvys/agent/EffectReceiptSemanticsTest.java": "1cf30e77d0f98e20a1986547fa61190fd9cea7e69bde8f0b490b5b1474e0c2a2",
+    "app/app/src/test/java/com/jarvys/agent/EpisodeCompletionSemanticsTest.kt": "1a72c63bd0581a3bc85742336b10bf051dc3a558a1e01be985bcb8e58c0fb68d",
+    "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java": "f10b396e6818353023f194667890dbae17c561d4ff9adc8a9222189bb245f2f2"
+  },
+  "runs": [
+    {
+      "label": "Full-coding_foundation-2",
+      "tests": 169,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "classes": [
+        {
+          "name": "com.jarvys.agent.ConnectionCausalEvidenceTest",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.CoreMcpEpisodeIntegrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EffectInvocationTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EffectReceiptSemanticsTest",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeCompletionSemanticsTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeEvidencePersistenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeNarrationPayloadTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeNarrationTest",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeRecorderTest",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.GmailEpisodeAdmissionTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.MissionEpisodeCaptureTest",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.ScheduledTaskBoundToolTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.WorkspaceEffectReceiptTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.connectors.ConnectorEffectAdmissionTest",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.ScheduledTaskProcessorTest",
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.TaskMemoryAdmissionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.TaskPendingActionExecutionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        }
+      ],
+      "xml_sha256": {
+        "TEST-com.jarvys.agent.ConnectionCausalEvidenceTest.xml": "962bdbed553ee130eba862ff6564578e1ddd51990babe503eecc87ec596170f5",
+        "TEST-com.jarvys.agent.CoreMcpEpisodeIntegrationTest.xml": "916aa39f42dd5bcf888a7d398b4f6c67efa66ed51b373f1e6d56a287870bb33a",
+        "TEST-com.jarvys.agent.EffectInvocationTest.xml": "37eb1e301d75d222d0ce20601ea07f5498009da174ecd1af14f078014d502fd0",
+        "TEST-com.jarvys.agent.EffectReceiptSemanticsTest.xml": "185ae83d1acf12a02557e12501ae6c9ccb87f0404babeacaed1eda25309a97db",
+        "TEST-com.jarvys.agent.EpisodeCompletionSemanticsTest.xml": "144ec86502898a094a2ef3f28f0ae8d80c73557d315d397d26f08e108db2c5da",
+        "TEST-com.jarvys.agent.EpisodeEvidencePersistenceTest.xml": "4328b4e333e502b8039647b9b2a01d93aa02f9b731eb1c9eeee5d8fd434432fe",
+        "TEST-com.jarvys.agent.EpisodeNarrationPayloadTest.xml": "ad42b867a2d9c931b7ed402d2e15ef94fba1d1f35b8ad2d1b4882651f77bcf17",
+        "TEST-com.jarvys.agent.EpisodeNarrationTest.xml": "83ead836e23304247e4f5979d19ec3cc3cb27ef27389e6258083825cd4df7450",
+        "TEST-com.jarvys.agent.EpisodeRecorderTest.xml": "4e67ee6a7983dd22e958efb2dae8d5b0a656d84bb00dd380b37ba9a78685936d",
+        "TEST-com.jarvys.agent.GmailEpisodeAdmissionTest.xml": "00f61c2c699fa7b69e0bd32091ce659736ec7ca1b74f581c455a707bb9e66220",
+        "TEST-com.jarvys.agent.MissionEpisodeCaptureTest.xml": "5da9918a80f378bee89ade76de5a2e9e505e84a08a6bde8e34a1c53355d337fb",
+        "TEST-com.jarvys.agent.ScheduledTaskBoundToolTest.xml": "c0f1014da7e45e093585786e9768ed518bbb67161b6b8321812075ad0afaf08d",
+        "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml": "6aa002609bd12bdf4b5f693607ec1e89a4440353486071927449ef65472a481f",
+        "TEST-com.jarvys.agent.coding.CodingJobEvidenceTest.xml": "4cad7fb2db9a3adaccb434c3f8c8b278e76959759d3971b57614cd829923086d",
+        "TEST-com.jarvys.agent.connectors.ConnectorEffectAdmissionTest.xml": "659ecc25d2fc546e40b84b486a2cd2ea0409490094b4b30942954e019bc97bd0",
+        "TEST-com.jarvys.agent.tasks.ScheduledTaskProcessorTest.xml": "53fcb5f3049c2c0eb8ee602af3daac25bbc96e2efb358fbfdc936619c0f940a0",
+        "TEST-com.jarvys.agent.tasks.TaskMemoryAdmissionTest.xml": "e64850baf6da18b09cc636bd3c0e8ed7daea4fa2698ebb6efe6dc55a2708e8b7",
+        "TEST-com.jarvys.agent.tasks.TaskPendingActionExecutionTest.xml": "eff133feaacac2605addd891ec2098d5240729d2a602db31c07337278f04d8f1"
+      }
+    },
+    {
+      "label": "Play-coding_foundation-1",
+      "tests": 165,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "classes": [
+        {
+          "name": "com.jarvys.agent.ConnectionCausalEvidenceTest",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.CoreMcpEpisodeIntegrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EffectInvocationTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EffectReceiptSemanticsTest",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeCompletionSemanticsTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeEvidencePersistenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeNarrationPayloadTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeNarrationTest",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.EpisodeRecorderTest",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.MissionEpisodeCaptureTest",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.ScheduledTaskBoundToolTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.WorkspaceEffectReceiptTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.connectors.ConnectorEffectAdmissionTest",
+          "tests": 12,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.ScheduledTaskProcessorTest",
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.TaskMemoryAdmissionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        },
+        {
+          "name": "com.jarvys.agent.tasks.TaskPendingActionExecutionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "failed_methods": []
+        }
+      ],
+      "xml_sha256": {
+        "TEST-com.jarvys.agent.ConnectionCausalEvidenceTest.xml": "10da14626ddbe77ac50488812508e76140aa2399eff50112b5264b4af2f9b5ff",
+        "TEST-com.jarvys.agent.CoreMcpEpisodeIntegrationTest.xml": "d22a8729394666a49ddbde8a46b5673da355ed50e2c4f391f1613e5b407d02f5",
+        "TEST-com.jarvys.agent.EffectInvocationTest.xml": "0e259f398b12da61b9f8b2ff22838e03b2f0ed9311aea83f33193c16dfa6e693",
+        "TEST-com.jarvys.agent.EffectReceiptSemanticsTest.xml": "0e5e6ffd3f8f1ada15184b0ec8f9155b24fe3506ebdd28d28ef271c83e1b9e34",
+        "TEST-com.jarvys.agent.EpisodeCompletionSemanticsTest.xml": "5570c7ea8f8b849ac1b9ec3261be499bf7ea589e10a0138c2eb3bf5a11f6a8c7",
+        "TEST-com.jarvys.agent.EpisodeEvidencePersistenceTest.xml": "f9cce97206a2c641ab87e0e3d7387f66911bfa7e7c9384fca4be5c4e27b522f8",
+        "TEST-com.jarvys.agent.EpisodeNarrationPayloadTest.xml": "4e106a10d8aa54aeb473c4617086accee9ea22f520c75c732a2a38b9f1765c42",
+        "TEST-com.jarvys.agent.EpisodeNarrationTest.xml": "6125396b354fc776e519e7bce67813187f1a9a6dda800bbc31efaaaa52c7f916",
+        "TEST-com.jarvys.agent.EpisodeRecorderTest.xml": "a90e3b00827e3aebd8c0c4b3c77bbd09a0d0a9ab81b4baa1275c173395369be0",
+        "TEST-com.jarvys.agent.MissionEpisodeCaptureTest.xml": "5879f8364302eb2ae9c997252b71267dea80818aa255b1f79a78970e1705fcc3",
+        "TEST-com.jarvys.agent.ScheduledTaskBoundToolTest.xml": "bee843405af78fb2b1dc1d508ebfda6e6f53a7efb64d8e4505c1bebe14f32da2",
+        "TEST-com.jarvys.agent.WorkspaceEffectReceiptTest.xml": "55327b4f28b437319742dae47e3b9bf276b2ca65dd020170f58bff01702a46f8",
+        "TEST-com.jarvys.agent.coding.CodingJobEvidenceTest.xml": "1997de1d33a5d4f8725f73017253930cdadafbbf60ffd8b8a8e082f11ca07e8d",
+        "TEST-com.jarvys.agent.connectors.ConnectorEffectAdmissionTest.xml": "11beb4e0ef4eb2741200a2c9bbf7c57f64e03ac2df8d91f5160fb4a4cb2aaa4f",
+        "TEST-com.jarvys.agent.tasks.ScheduledTaskProcessorTest.xml": "35f1a75d3d603a23a81880aba664f6a0fa4c9b13967c040da10403e01fff937b",
+        "TEST-com.jarvys.agent.tasks.TaskMemoryAdmissionTest.xml": "7310f9dcf1446ea99788c264adc4139a45e1285c9ecc538d3095bc2a5a02a182",
+        "TEST-com.jarvys.agent.tasks.TaskPendingActionExecutionTest.xml": "33550c5f96f8f9e9ef3f43b98be1c54b3c0addde0a43bd8b8e58f661cd3c8090"
+      }
+    }
+  ],
+  "final_flavor_executions": 334,
+  "pure_runs": {
+    "coding": 17,
+    "receipt_including_existing": 27,
+    "failures": 0
+  },
+  "local_log_sha256": {
+    "coding_final_pure17": "eaa2672ad1473b7a7e71e82b98438c915e685b2e340d44f35b838a1097123e9f",
+    "receipt_final_pure27": "89f617fe20d2e3e5500c2ffc7389f01ad9e553bba1ce6d669659b25197c7f076",
+    "coding_mutant_binding": "58394ab496682144c70b0a0d9c0d9d715d0ec39f9c931984769428218c441326",
+    "coding_mutant_terminal": "860bfb6856c5763700ff707ffa80890d389a576cf60db006cf041b73b0690899",
+    "coding_mutant_duplicate": "3ca3265c7fa4172790ed37ea71f189bf33ca2a044d9769aa36554f3e94f1eb9c",
+    "coding_mutant_integer-coercion": "6d95598e3c582c8741bde1ebc8f4f59f5ce0b6ba60c59c7bd198a8fb83f4c5b9",
+    "receipt_mutant_drop_semantics": "fafe3a0aba399009a1d6c951c430719c5e2c9bc87496eb59faba24f010e426c1",
+    "receipt_mutant_foreign_owner": "5a66f571900b14007e9a58c41b9ef838599ea6145ca2a91b19d7cdd85c3f36fe"
+  },
+  "mutation_scope": {
+    "coding": "4 mutants each detected by one failure among 16 tests; snapshot before final phase/exit/control guards, not final full mutation coverage",
+    "receipt": "2 mutants detected by 4 and 2 failures among 9 tests; snapshot before reference-bound hardening, not final full mutation coverage"
+  },
+  "prior_attempt": {
+    "label": "Full-coding_foundation-1",
+    "tests": 169,
+    "failures": 1,
+    "cause": "Kotlin apply receiver shadowed test decision helper with null invocation getter; changed to also, assertions intact"
+  },
+  "limitations": [
+    "Metadata validation is not durable commit evidence, authority or an owner-bound source witness",
+    "No manager/journal runtime integration, preparation seam, projection/recovery or ASYNC opt-in",
+    "CentralWorkspace receipt producer and atomic source binding remain design work",
+    "Global suite/lint/APK/remote publication and S6/S7/S8/Engram acceptance remain pending"
+  ]
+}

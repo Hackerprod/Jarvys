@@ -58,17 +58,20 @@ interface GoogleRestAuthorization {
                            epoch: Long, beforeDispatch: (() -> Unit)? = null): String = error("Gmail account verification is unavailable")
     fun request(scope: String, method: String, url: String, body: String? = null,
                 contentType: String = "application/json"): GoogleHttpResponse
+    /** beforeMutation is supplied only by a known mutation producer and reaches only its target
+     * transport. Account proofs/refreshes must never receive it; it is not inferred from an HTTP verb.
+     */
     fun requestCancellable(scope: String, method: String, url: String, body: String? = null,
                            contentType: String = "application/json", token: CancellationToken,
                            requestHeaders: Map<String, String> = emptyMap(),
-                           expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null): GoogleHttpResponse {
+                           expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null, beforeMutation: (() -> Unit)? = null): GoogleHttpResponse {
         token.throwIfCancelled()
         check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == currentAuthorizationEpoch()) {
             "Google connection changed; prepare and approve this operation again"
         }
         GoogleHttpPolicy.validateAdditionalHeaders(requestHeaders)
         body?.let { GoogleHttpPolicy.requireSize(it.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_TRANSFER_BYTES) }
-        admitGoogleDispatch(beforeDispatch)
+        admitGoogleDispatch { beforeDispatch?.invoke(); beforeMutation?.invoke() }
         val response = request(scope, method, url, body, contentType)
         token.throwIfCancelled()
         GoogleHttpPolicy.requireSize(response.body.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_RESPONSE_BYTES)
@@ -78,7 +81,7 @@ interface GoogleRestAuthorization {
                      contentType: String = "application/octet-stream", token: CancellationToken,
                      maxResponseBytes: Int = GoogleApiLimits.MAX_TRANSFER_BYTES,
                      requestHeaders: Map<String, String> = emptyMap(),
-                     expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null): GoogleBinaryResponse {
+                     expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null, beforeMutation: (() -> Unit)? = null): GoogleBinaryResponse {
         token.throwIfCancelled()
         check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == currentAuthorizationEpoch()) {
             "Google connection changed; prepare and approve this operation again"
@@ -89,7 +92,7 @@ interface GoogleRestAuthorization {
         // Compatibility seam for text-only fake implementations; real binary uploads must override it.
         val textBody = body?.toString(Charsets.UTF_8)
         require(body == null || body.contentEquals(textBody!!.toByteArray(Charsets.UTF_8))) { "Binary request transport is unavailable" }
-        admitGoogleDispatch(beforeDispatch)
+        admitGoogleDispatch { beforeDispatch?.invoke(); beforeMutation?.invoke() }
         val response = request(scope, method, url, textBody, contentType)
         token.throwIfCancelled()
         val bytes = response.body.toByteArray(Charsets.UTF_8)
@@ -123,15 +126,15 @@ internal class GoogleDispatchAuthorization(private val delegate: GoogleRestAutho
 
     override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
                                     token: CancellationToken, requestHeaders: Map<String, String>,
-                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse =
+                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleHttpResponse =
         delegate.requestCancellable(scope, method, url, body, contentType, token, requestHeaders,
-            expectedAuthorizationEpoch, dispatchHook(beforeDispatch))
+            expectedAuthorizationEpoch, dispatchHook(beforeDispatch), beforeMutation)
 
     override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
                               token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>,
-                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse =
+                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?, beforeMutation: (() -> Unit)?): GoogleBinaryResponse =
         delegate.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders,
-            expectedAuthorizationEpoch, dispatchHook(beforeDispatch))
+            expectedAuthorizationEpoch, dispatchHook(beforeDispatch), beforeMutation)
 }
 
 /** Only a callback rejected before the transport starts may clear an uncertain-write reservation. */

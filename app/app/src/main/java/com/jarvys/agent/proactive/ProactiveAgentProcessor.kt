@@ -132,6 +132,7 @@ object ProactiveReadOnlyToolFactory {
 
 /** Connector output is also redacted before becoming a model tool-result turn. */
 private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : CoreTool {
+    override fun hasCompleteEffectAdmissionCoverage() = delegate.hasCompleteEffectAdmissionCoverage()
     override fun declaration(): ToolSpec = delegate.declaration()
     override fun canDelegate() = delegate.canDelegate()
     override fun unattendedAccess() = delegate.unattendedAccess()
@@ -142,6 +143,7 @@ private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : 
     override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()
     override fun accessClassification() = delegate.accessClassification()
     override fun persistenceEffect() = delegate.persistenceEffect()
+    override fun persistenceEffect(arguments: Map<String, Any>) = delegate.persistenceEffect(arguments)
     override fun executionMode() = delegate.executionMode()
     override fun responseCallPolicy() = delegate.responseCallPolicy()
     override fun additionalCallNotStartedMessage() = delegate.additionalCallNotStartedMessage()
@@ -160,7 +162,13 @@ private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         val result = delegate.execute(arguments, token)
         if (!result.success) return result
-        return CoreToolResult.success(ProactiveToolOutputRedactor.redactJsonTextFields(result.content))
+        return result.withContent(ProactiveToolOutputRedactor.redactJsonTextFields(result.content))
+    }
+
+    override fun execute(arguments: Map<String, Any>, token: CancellationToken,
+                         progress: CoreTool.ProgressListener?, invocation: com.jarvys.agent.EffectInvocation?): CoreToolResult {
+        val result = delegate.execute(arguments, token, progress, invocation)
+        return result.withContent(ProactiveToolOutputRedactor.redactJsonTextFields(result.content))
     }
 }
 
@@ -278,9 +286,7 @@ class ProactiveAgentProcessor(
         }
         val tools = readOnlyTools(localized, sink)
         val sessionId = "proactive-$decisionId"
-        val memoryEnabled = localized.getSharedPreferences(
-            com.jarvys.agent.MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE,
-        ).getBoolean(com.jarvys.agent.MemoryConstants.ENABLED_KEY, true)
+        val memoryEnabled = com.jarvys.agent.MemoryWritePolicy.forContext(localized).isEnabled()
         // The decision loop is a run of its own: it reads the profile for its kind and records nothing on Central.
         val memoryContext = ChatDatabaseBridge.getInstance(localized)
             .personalAgentPromptContext("", memoryEnabled, RunKind.PROACTIVE.memoryKind())

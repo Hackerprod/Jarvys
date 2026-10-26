@@ -204,6 +204,8 @@ class WebViewModuleRuntime @JvmOverloads constructor(
                     diagnostics.recordHttpError(request?.url, errorResponse?.statusCode ?: 0, request?.isForMainFrame)
                 }
             }
+            token.throwIfCancelled()
+            request.authorizeHandler?.invoke()
             loadDataWithBaseURL(baseUrl, bootstrapHtml(handlerPath, exportName, request.arguments), "text/html", "UTF-8", null)
         }
     }
