@@ -65,16 +65,39 @@ class WorkspaceCoordinator internal constructor(context: Context,
     constructor(context: Context) : this(context,
         { session -> CoreAgentRuntime.prepareWorkspaceCrew(context.applicationContext, session) },
         { AgentForegroundService.ensureCrewKeepalive(context.applicationContext) })
+    override fun hasCompleteMutationAdmissionCoverage() = true
+
     private val app = context.applicationContext
     private fun registry() = WorkspaceRegistry(app)
     private fun lock(workspaceId: String): Any = locks.getOrPut(WorkspaceIdentity.requireWorkspaceId(workspaceId)) { Any() }
     private fun workspace(store: WorkspaceRegistry, id: String) = requireNotNull(store.getWorkspace(id)) { "Unknown workspace" }
 
     override fun create(key: String, title: String, requestId: String, originalUserRequest: String, admission: Runnable): JSONObject =
+        createInternal(key, title, admission, null)
+
+    override fun create(key: String, title: String, requestId: String, originalUserRequest: String,
+                        admission: Runnable, context: WorkspaceMutationContext): JSONObject =
+        createInternal(key, title, admission, context)
+
+    private fun createInternal(key: String, title: String, admission: Runnable, context: WorkspaceMutationContext?): JSONObject =
         registry().use { store ->
-            val record = store.createWorkspace(key, title, admission)
+            if (context == null) {
+                val legacy = store.createWorkspace(key, title, admission)
+                WorkspaceChanges.changed()
+                return@use workspaceJson(legacy)
+            }
+            admission.run()
+            store.existingWorkspace(key, title)?.let { existing ->
+                admission.run()
+                context?.existing(EffectInvocation.EffectReferenceKind.WORKSPACE, existing.workspaceId, existing.workspaceId)
+                return@use workspaceJson(existing)
+            }
+            context?.admitMutation() // Outside the registry transaction/monitor.
+            val outcome = store.createWorkspaceOutcome(key, title, admission)
+            if (outcome.created) context?.createdWorkspace(outcome.record.workspaceId)
+            else context?.existing(EffectInvocation.EffectReferenceKind.WORKSPACE, outcome.record.workspaceId, outcome.record.workspaceId)
             WorkspaceChanges.changed()
-            workspaceJson(record)
+            workspaceJson(outcome.record)
         }
 
     override fun results(workspaceId: String, limit: Int, afterResultId: String?, admission: Runnable): JSONObject =
@@ -112,6 +135,23 @@ class WorkspaceCoordinator internal constructor(context: Context,
                          token: CancellationToken, admission: Runnable): JSONObject =
         WorkspaceArtifactDelivery(app).deliver(workspaceId, path, expectedSha256, filename, token, admission)
 
+    override fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
+                       expectedAssignmentRevision: Long, requestId: String, originalUserRequest: String,
+                       token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject =
+        WorkspaceCoordinationDelivery(app).reply(workspaceId, messageId, expectedSha256, key, text,
+            expectedAssignmentRevision, requestId, originalUserRequest, token, admission, context)
+
+    override fun message(workspaceId: String, assignmentId: String, botId: String,
+                         expectedAssignmentRevision: Long, key: String, text: String, correlationMessageId: String?,
+                         requestId: String, originalUserRequest: String, token: CancellationToken,
+                         admission: Runnable, context: WorkspaceMutationContext): JSONObject =
+        WorkspaceCoordinationDelivery(app, LocalRunStore(app), managerFor).message(workspaceId, assignmentId, botId,
+            expectedAssignmentRevision, key, text, correlationMessageId, requestId, originalUserRequest, token, admission, context)
+
+    override fun deliver(workspaceId: String, path: String, expectedSha256: String, filename: String?,
+                         token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject =
+        WorkspaceArtifactDelivery(app).deliver(workspaceId, path, expectedSha256, filename, token, admission, context)
+
     override fun list(limit: Int, afterWorkspaceId: String?, admission: Runnable): JSONObject = registry().use { store ->
         admission.run()
         val rows = store.listWorkspaces(limit, afterWorkspaceId)
@@ -121,57 +161,105 @@ class WorkspaceCoordinator internal constructor(context: Context,
 
     override fun delegate(workspaceId: String, key: String, role: String, mission: String, tools: List<String>?,
                           name: String?, missionAccess: String, requestId: String, originalUserRequest: String,
-                          token: CancellationToken, admission: Runnable): JSONObject = synchronized(lock(workspaceId)) {
-        registry().use { store ->
-            val scope = workspace(store, workspaceId)
-            val prepared = store.prepareAssignment(workspaceId, key, requestId, originalUserRequest,
-                role, mission, tools, name, CrewMissionAccess.parse(missionAccess), admission)
-            // A duplicate request returns the original receipt. STARTED is not proof of failed spawning.
-            if (prepared.state != WorkspaceAssignmentState.PREPARED) return@use assignmentJson(prepared, null, 2000)
-            if (!CrewMode.read(app).enabled())
-                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.CREW_DISABLED)
-            val manager = managerFor(scope.executionSessionId)
-            // Only this explicitly non-mutating preflight can report NOT_STARTED. A later
-            // revocation/race or arbitrary spawn failure remains uncertain and is never replayed.
+                          token: CancellationToken, admission: Runnable): JSONObject =
+        delegateInternal(workspaceId, key, role, mission, tools, name, missionAccess, requestId, originalUserRequest, token, admission, null)
+
+    override fun delegate(workspaceId: String, key: String, role: String, mission: String, tools: List<String>?,
+                          name: String?, missionAccess: String, requestId: String, originalUserRequest: String,
+                          token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject =
+        delegateInternal(workspaceId, key, role, mission, tools, name, missionAccess, requestId, originalUserRequest, token, admission, context)
+
+    private fun delegateInternal(workspaceId: String, key: String, role: String, mission: String, tools: List<String>?,
+                          name: String?, missionAccess: String, requestId: String, originalUserRequest: String,
+                          token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext?): JSONObject {
+        var sourcePrepared: WorkspaceAssignment? = null
+        if (context != null) {
             admission.run()
-            try {
-                manager.validateSpawnForMission(prepared.missionId, prepared.originalUserRequest,
-                    prepared.role, prepared.missionText, prepared.tools, prepared.name, prepared.missionAccess)
-            } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
-            catch (rejected: IllegalArgumentException) {
-                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
-            } catch (rejected: IllegalStateException) {
-                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
+            val existing = registry().use { store ->
+                store.existingAssignment(workspaceId, key, requestId, originalUserRequest, role, mission, tools, name,
+                    CrewMissionAccess.parse(missionAccess))
             }
-            val started = store.markStarted(workspaceId, prepared.assignmentId, prepared.revision,
-                CrewProcessIdentity.ID, admission)
-            WorkspaceChanges.changed()
-            val admittedBot = AtomicReference<Pair<CrewManager.Bot, CancellationToken>?>()
-            val unregister = token.registerCancelAction { admittedBot.get()?.let { manager.stopExact(it.first.id, it.second) } }
-            try {
-                lateinit var bot: CrewManager.Bot
-                if (!token.runIfActive {
+            if (existing != null && existing.state != WorkspaceAssignmentState.PREPARED) {
+                admission.run()
+                context?.existing(EffectInvocation.EffectReferenceKind.ASSIGNMENT, workspaceId, existing.assignmentId)
+                return assignmentJson(existing, null, 2000)
+            }
+            context.admitMutation() // PREPARED retry may still spawn: it is not a no-effect fastpath.
+            sourcePrepared = context.withCurrentWorkspaceTransaction {
+                synchronized(lock(workspaceId)) {
+                    registry().use { store ->
                         admission.run()
-                        bot = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
-                            started.role, started.missionText, started.tools, started.name, started.missionAccess,
-                            scope.title, started)
-                        admittedBot.set(bot to bot.token)
-                    }) throw java.util.concurrent.CancellationException("Workspace delegation stopped before spawning")
-                if (token.isCancellationRequested) manager.stopExact(bot.id, admittedBot.get()!!.second)
-                val bound = store.bindBot(workspaceId, started.assignmentId, started.revision, bot.id)
-                if (!token.isCancellationRequested) manager.startPreparedForMission(bot)
-                WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
-                WorkspaceMissionCards.delegated(app, scope, bound)
+                        context.requireInsideCurrentLease()
+                        store.prepareAssignment(workspaceId, key, requestId, originalUserRequest,
+                            role, mission, tools, name, CrewMissionAccess.parse(missionAccess), Runnable {
+                                admission.run(); context.requireInsideCurrentLease()
+                            }, context.rootSource)
+                    }
+                }
+            }
+        }
+        // The source lease ends before any Crew/Room/listener work. Another caller may win
+        // dispatch in this gap; re-read the exact row and never replay STARTED/BOUND.
+        return synchronized(lock(workspaceId)) {
+            registry().use { store ->
+                val scope = workspace(store, workspaceId)
+                if (context != null) admission.run()
+                val prepared = sourcePrepared?.let { inserted ->
+                    requireNotNull(store.getAssignment(workspaceId, inserted.assignmentId)) { "Prepared assignment is unavailable" }
+                } ?: store.prepareAssignment(workspaceId, key, requestId, originalUserRequest,
+                    role, mission, tools, name, CrewMissionAccess.parse(missionAccess), admission)
+                // A duplicate request returns the original receipt. STARTED is not proof of failed spawning.
+                if (prepared.state != WorkspaceAssignmentState.PREPARED) {
+                    if (context != null) admission.run()
+                    context?.existing(EffectInvocation.EffectReferenceKind.ASSIGNMENT, workspaceId, prepared.assignmentId)
+                    return@use assignmentJson(prepared, null, 2000)
+                }
+                if (!CrewMode.read(app).enabled())
+                    throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.CREW_DISABLED)
+                val manager = managerFor(scope.executionSessionId)
+                // Only this explicitly non-mutating preflight can report NOT_STARTED. A later
+                // revocation/race or arbitrary spawn failure remains uncertain and is never replayed.
+                admission.run()
+                try {
+                    manager.validateSpawnForMission(prepared.missionId, prepared.originalUserRequest,
+                        prepared.role, prepared.missionText, prepared.tools, prepared.name, prepared.missionAccess)
+                } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
+                catch (rejected: IllegalArgumentException) {
+                    throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
+                } catch (rejected: IllegalStateException) {
+                    throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
+                }
+                val started = store.markStarted(workspaceId, prepared.assignmentId, prepared.revision,
+                    CrewProcessIdentity.ID, admission)
                 WorkspaceChanges.changed()
-                keepalive()
-                cleanup.execute { try { bot.awaitTermination() } finally { unregister.run(); WorkspaceChanges.changed() } }
-                assignmentJson(bound, null, 2000)
-            } catch (failure: RuntimeException) {
-                admittedBot.get()?.let { runCatching { manager.stopExact(it.first.id, it.second) } }
-                unregister.run()
-                runCatching { store.markUncertain(workspaceId, started.assignmentId, started.revision) }
-                WorkspaceChanges.changed()
-                throw failure
+                val admittedBot = AtomicReference<Pair<CrewManager.Bot, CancellationToken>?>()
+                val unregister = token.registerCancelAction { admittedBot.get()?.let { manager.stopExact(it.first.id, it.second) } }
+                try {
+                    lateinit var bot: CrewManager.Bot
+                    if (!token.runIfActive {
+                            admission.run()
+                            bot = manager.spawnForMissionDeferred(started.missionId, started.originalUserRequest,
+                                started.role, started.missionText, started.tools, started.name, started.missionAccess,
+                                scope.title, started)
+                            admittedBot.set(bot to bot.token)
+                        }) throw java.util.concurrent.CancellationException("Workspace delegation stopped before spawning")
+                    if (token.isCancellationRequested) manager.stopExact(bot.id, admittedBot.get()!!.second)
+                    val bound = store.bindBot(workspaceId, started.assignmentId, started.revision, bot.id)
+                    context?.acceptedAssignment(workspaceId, bound.assignmentId) // Local proof only, no Room/listener.
+                    if (!token.isCancellationRequested) manager.startPreparedForMission(bot)
+                    WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
+                    WorkspaceMissionCards.delegated(app, scope, bound)
+                    WorkspaceChanges.changed()
+                    keepalive()
+                    cleanup.execute { try { bot.awaitTermination() } finally { unregister.run(); WorkspaceChanges.changed() } }
+                    assignmentJson(bound, null, 2000)
+                } catch (failure: RuntimeException) {
+                    admittedBot.get()?.let { runCatching { manager.stopExact(it.first.id, it.second) } }
+                    unregister.run()
+                    runCatching { store.markUncertain(workspaceId, started.assignmentId, started.revision) }
+                    WorkspaceChanges.changed()
+                    throw failure
+                }
             }
         }
     }

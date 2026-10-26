@@ -132,6 +132,13 @@ public final class LocalRunStore {
         ensureDirectory(notes);
     }
 
+    com.jarvys.agent.chatdb.CentralInvocationCheckpoint captureCentralInvocation(String sessionId,
+            String ownerMessageId, String batchId, String callId, String toolName, String runId, String processId) {
+        if (chatDatabaseBridge == null) throw new IllegalStateException("A committed chat database is required");
+        return chatDatabaseBridge.captureCentralInvocationSync(sessionId, ownerMessageId, batchId,
+                callId, toolName, runId, processId);
+    }
+
     private boolean isConversationAvailable(String sessionId) {
         if (sessionId == null || sessionId.isEmpty() || chatDatabaseBridge == null) return false;
         ConversationMetadataValue metadata = chatDatabaseBridge.readConversationMetadataSync(sessionId);
@@ -983,6 +990,19 @@ public final class LocalRunStore {
     public String appendDeliveredModuleArtifact(String sessionId, ChatAttachment artifact, String artifactType,
                                     String moduleId, String manifestJson, String title,
                                     DeliveredArtifactStore.ThumbnailFile thumbnail) {
+        return appendDeliveredArtifactWithReceipt(sessionId, artifact, artifactType, moduleId,
+                manifestJson, title, thumbnail).getArtifact().getThumbnail_ref();
+    }
+
+    /** Exact local commit receipt; duplicate/new is determined atomically, never by a prior lookup. */
+    public com.jarvys.agent.chatdb.DeliveredArtifactCommit appendDeliveredFileWithReceipt(
+            String sessionId, ChatAttachment artifact) {
+        return appendDeliveredArtifactWithReceipt(sessionId, artifact, null, null, null, null, null);
+    }
+
+    private com.jarvys.agent.chatdb.DeliveredArtifactCommit appendDeliveredArtifactWithReceipt(
+            String sessionId, ChatAttachment artifact, String artifactType, String moduleId,
+            String manifestJson, String title, DeliveredArtifactStore.ThumbnailFile thumbnail) {
         DeliveredArtifactStore store = new DeliveredArtifactStore(filesDirectory);
         store.resolve(sessionId, artifact);
         if (chatDatabaseBridge == null) throw noChatDatabase();
@@ -993,7 +1013,7 @@ public final class LocalRunStore {
                     : com.jarvys.agent.modules.ModuleRegistry.get(appContext).artifactModuleForType(effectiveType);
             String effectiveModuleId = moduleId == null && owner != null ? owner.getId() : moduleId;
             String effectiveManifest = manifestJson == null && owner != null ? owner.getManifestJson() : manifestJson;
-            com.jarvys.agent.chatdb.ConversationArtifact persisted = requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactSync(
+            com.jarvys.agent.chatdb.DeliveredArtifactCommit persisted = requireChatDbSuccess(chatDatabaseBridge.appendDeliveredArtifactWithReceiptSync(
                     new com.jarvys.agent.chatdb.DeliveredArtifactInput(sessionId, artifact.id, artifact.name,
                             artifact.mimeType, artifact.sizeBytes, artifact.kind.name(), artifact.relativePath,
                             store.sha256(sessionId, artifact), effectiveType, effectiveModuleId, effectiveManifest,
@@ -1003,7 +1023,7 @@ public final class LocalRunStore {
                             thumbnail == null ? null : thumbnail.sizeBytes,
                             thumbnail == null ? null : thumbnail.mimeType,
                             System.currentTimeMillis() / 1000.0)), "append delivered artifact");
-            return persisted.getThumbnail_ref();
+            return persisted;
         } catch (IOException error) { throw new IllegalStateException("Could not verify delivered artifact", error); }
     }
 

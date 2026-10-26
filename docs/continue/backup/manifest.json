@@ -1,20 +1,126 @@
 {
-  "source_commit": "e9c937f01a40e093bb5aa38224c614f49a963915",
-  "source_tree": "0db19ebc6fc9a1c364771523aa585c702e12942e",
-  "remote_parent": "42560900aa81c5a3c46b483052219d7b2ef2d936",
-  "fixture_path": "app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt",
-  "fixture_remote_blob": "479805d3425a333090e4e734da9975a5cd7a1773",
-  "fixture_remote_sha256": "4cfa48f3cdfbd1db215e834b4d47391d319b99115b346083162aa642b508a4c5",
-  "fixture_restored_sha256": "643c9d4e9f911b2c9b19e9c41883cf9fa0c71a1e450bf153fc7e77e470756db9",
-  "patch_sha256": "41d558779982f301b3728c688133be63a73c632414a0ba576a5ed78110d7a361",
-  "readme_source_sha256": "7dee14e649522842c00ecfb3b8f9ba3aec68b34db41d6625c7effc4e8987aec7",
-  "readme_backup_sha256": "b74cd62a7918ff5c0488527be9249e560620cc3a22d4ac4223d190356dae8edd",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — 26-10-2026\n\nEste árbol de respaldo **no es build-ready tal cual**: conserva sin retransmitir un fixture de pruebas\nexactamente como estaba en la rama base remota. Los cambios locales de helpers/regresiones se guardan\nen un patch mínimo sin datos del fixture. No se eliminaron asertos ni se publicaron valores bloqueados.\n\nEn un checkout limpio de esta rama, ejecuta `python3 docs/continue/backup/restore-s6.py`.\nEl script exige árbol limpio, verifica hashes, aplica el patch, retira sólo estos auxiliares de backup\ny el aviso, y comprueba el árbol Git exacto del snapshot local validado. Deja la restauración staged,\nsin crear commits ni modificar historia. No ejecuta builds, red ni servicios.\n\nSnapshot local: `e9c937f01a40e093bb5aa38224c614f49a963915`. Validaciones recientes: cutover conexión\n544 Full/411 Play y foundation aislada 169 Full/165 Play, cero fallos/skips en sus runs finales.\nNo son suite global, PASS S6, paridad Engram ni entrega APK. Continue.md permanece igual al remoto.\nDetalles de integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "source_commit": "7fd04efd6ab2b29819b8a8fbea76af82cc2d7d6c",
+  "source_tree": "e6512b90c260333e1453b620de811974d012afa3",
+  "remote_parent": "860517646d925b699720340610a02f237a37af08",
+  "fixtures": [
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
+      "remote_blob": "7c278f49340d1d25f99634d622273e8fbace6a6d",
+      "remote_sha256": "5333d1f5ac3a7b2703028b4e62b7a5512ce39f787643251bb674fbdeac30b669",
+      "restored_sha256": "97a2f9f245ce19970392a79531e185bde887b5e21bfe5c73313b5ca3f8e7156d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt",
+      "remote_blob": "f5e3687667a59e32970c41109883119060c95415",
+      "remote_sha256": "3be235001e1c31e52a938e5f1550e9bc148dd9dc33b71c139e11d0eb5106ffda",
+      "restored_sha256": "01df918d0247cfc0f5a17a0fdc5d27d593e692682e2e4268b65f590d09716f8a"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CompactionMemoryFlushTest.kt",
+      "remote_blob": "8dd8ac3bac3c1ac2686b7369e7702b06e120ed42",
+      "remote_sha256": "b50faac12eb838270117efd65bc9a3fb9c89d758c1ba29f81a3f3fb88cd8854c",
+      "restored_sha256": "bb635806d713cc473b746f3a9cd830c9f9bb40cb7a489a67cb3ea9fe241c0be0"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt",
+      "remote_blob": "fa0730bf9c53085aaae6b2f14a6c981c517f94c3",
+      "remote_sha256": "5675cf340cbcbe51394ecf097c3c1292cea5b68e42f99b22e657389871d26a73",
+      "restored_sha256": "49020cebc304845522decd150b60d758fdcd53449fcb61f9640ad0fbc785ee01"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt",
+      "remote_blob": "605efb38ffee9c119b32841f57b0005e3a3367cb",
+      "remote_sha256": "afd0b549d23e2ffbde6c4f2deac39b6e9d90ef90e0b0f59f5d86625509877151",
+      "restored_sha256": "2ae92112bdd4f9d90509db68b5869ea630523a7d71f36750cedb13335faec7f9"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java",
+      "remote_blob": "dcf33fb1dd0651b3700679719d2f0f9659b1aafa",
+      "remote_sha256": "1410f1b0628d06271b10702948be25ac74ba33f4ede7616d0f8376581c14a334",
+      "restored_sha256": "3390ddf8ba35356c55580b3e1958e780208df857c8e10fa394ef3757162f9f10"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationDeliveryTest.kt",
+      "remote_blob": "9e10493247760c33b2073066c902c2b4ad2ace42",
+      "remote_sha256": "f04083fd6dd851126a94787ab88bfccb87ecff9d997fe61f6f34e0e13243c8ee",
+      "restored_sha256": "cbd282bd280a166a7a32d2f7676cd7247fbd1ecebafa0928340395d69be78e62"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java",
+      "remote_blob": "da84fcef7ec913860650aff0f6aa2df02dac8c55",
+      "remote_sha256": "170608e57bf13c90f51ce2f8a7c8bc0896b3ab99738b85069d1e6a555b8028ca",
+      "restored_sha256": "4016ca46b7f876d879bce0413f17b3e632a258deec24c3051b5c4d838cb0b409"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceInputIncorporationLedgerTest.java",
+      "remote_blob": "893ad6cc5abdbfa28ca35bc35bab276611351606",
+      "remote_sha256": "d4f580ee1706384e52ebe4a98efbe5797ca2b93d0893f0c5784deb6c62c2807c",
+      "restored_sha256": "516aee6d4ffd505bb82a27212088a00282852df0ecb51308b8352a8c3fa45622"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java",
+      "remote_blob": "477277fe9751f624398b1472ef526b68d7b4aa8b",
+      "remote_sha256": "d2380ca65a9fe150075c8e0db786d5cbaf06b3c49411103fc5b404e90f4d729a",
+      "restored_sha256": "25f3d1d8c2209a51a501a9b5f20a1b684360b8751c08c4e1c0bda5a91b824a9b"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt",
+      "remote_blob": "082cf0e753f11515663b113d7360a905ba684429",
+      "remote_sha256": "7ce2ee4c78c956b22fa9b00c2c64d4c504253600e0fa0288ab7db6c20fdb8790",
+      "restored_sha256": "b0d0b8d89e4cf1db060bded7bc4eba09e6a7cf181540b816d84eef750117a6e5"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt",
+      "remote_blob": "2b526d9a84313951164c8e686d81cd755385521b",
+      "remote_sha256": "c650a2d197bee62a853f024ea7127fcf6427f78537f80306da00167637417826",
+      "restored_sha256": "5366c9c0ff910233cffe4085bad6449ec6beb8dd98a50f7721e49c7fa72cf7a2"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt",
+      "remote_blob": "4707ec5ea916d22d87aba3adef2f4ccb164694f8",
+      "remote_sha256": "fbc101e0ca7e249fb2e3283e9e15bdda1a0bdc6a38140acd2122ea96aac6da3b",
+      "restored_sha256": "cb7909e324b134ba66b56cbe32ad649f00820447174f9121e7fab18c6175ee4d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt",
+      "remote_blob": "479805d3425a333090e4e734da9975a5cd7a1773",
+      "remote_sha256": "4cfa48f3cdfbd1db215e834b4d47391d319b99115b346083162aa642b508a4c5",
+      "restored_sha256": "643c9d4e9f911b2c9b19e9c41883cf9fa0c71a1e450bf153fc7e77e470756db9"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt",
+      "remote_blob": "8fc843d6e05fba379ffa9933fe192ffdca83b0ce",
+      "remote_sha256": "a883cebfa58613df124a89c0ace790a3bb6f7063dfe6507d4d8b51d0ca40157e",
+      "restored_sha256": "80ca15e29c722a4838785c498b98c3419fc19128f2197a6146e4d57a001ead5e"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt",
+      "remote_blob": "01e30db80182f2af1b1fa7cd63f76f906b9f6f69",
+      "remote_sha256": "29b8ead935d0b4e251ed417b21dbb487d0749bfeb2d8b57b4c8f256ed5d7b42a",
+      "restored_sha256": "3c935aba443cbc500fd5d57e642da4b0858570f97a70b0b0ec88c06f353a7197"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt",
+      "remote_blob": "df5644f272a6e891da73e971afc2e00770004f94",
+      "remote_sha256": "b217b3b9c6be599dca9af205d5103188c410cdcf49d934c2169a9401be674cb0",
+      "restored_sha256": "9ac50acd4e62600256f4e07d6deb8c89f569767ae1c6f926757aece4bbdc4b02"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceRegistryTest.kt",
+      "remote_blob": "254dd08b9d2c95a81f9e42299a38d4e57cc427ef",
+      "remote_sha256": "4cc20deded5be7fdef35e7d77d1712d545f09afda02e6591d8767d62019170db",
+      "restored_sha256": "12277fe94e7833af5de28aca01cb93564577c0b63636067cba222146c8417ff5"
+    }
+  ],
+  "patch_sha256": "85da29b3444db53ed367ae27062bd242efd47fcb7f69f63569c5ccf44ce31ddf",
+  "readme_source_sha256": "49af67be59b738c65f02217d2616434ec46fcacdc99d0257b7e16a910c508bde",
+  "readme_backup_sha256": "4f74c8f7a68e58398fbcecae61a633d14b0c27d132319a839a021d6190f9e3af",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — CentralWorkspace\n\nEste árbol **no es build-ready tal cual**. Los 18 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `7fd04efd6ab2b29819b8a8fbea76af82cc2d7d6c`. Validación focal independiente: 677 Full + 673 Play PASS,\n1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",
     "docs/continue/backup/restore-s6.py"
   ],
   "continue_blob_unchanged": "f81bfbe0b33bf63cb0f52b091811d3c462c1eacf",
-  "warning": "Backup tree is not build-ready until restoration; no denied fixture data is included in the patch."
+  "warning": "Not build-ready until exact restoration; do not publish restored restricted fixtures without authorization."
 }

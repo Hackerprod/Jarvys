@@ -13,10 +13,16 @@ public final class CoreToolRegistry {
   public interface InvocationObserver {
     void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments);
     void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure);
+    default void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments,
+        EffectInvocation invocation) { beforeDispatch(tool, callId, arguments); }
     default void onEffectAdmission(CoreTool tool, String callId, EffectInvocation.Admission admission) {}
     default void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure,
         EffectInvocation.Receipt receipt) { afterDispatch(tool, callId, result, failure); }
   }
+  interface InvocationSourceProvider {
+    void bind(CoreTool tool, String callId, EffectInvocation invocation);
+  }
+  private final InvocationSourceProvider invocationSourceProvider;
   private final Runnable invocationGuard;
   private final InvocationObserver invocationObserver;
   private final Map<String, CoreTool> tools;
@@ -30,6 +36,12 @@ public final class CoreToolRegistry {
   }
 
   private CoreToolRegistry(Collection<? extends CoreTool> tools, Runnable invocationGuard, InvocationObserver invocationObserver) {
+    this(tools, invocationGuard, invocationObserver, null);
+  }
+
+  private CoreToolRegistry(Collection<? extends CoreTool> tools, Runnable invocationGuard,
+      InvocationObserver invocationObserver, InvocationSourceProvider sourceProvider) {
+    this.invocationSourceProvider = sourceProvider;
     this.invocationGuard = invocationGuard;
     this.invocationObserver = invocationObserver;
     Map<String, CoreTool> indexed = new LinkedHashMap<>();
@@ -57,7 +69,7 @@ public final class CoreToolRegistry {
         delegable.add(tool);
       }
     }
-    return new CoreToolRegistry(WorkspaceTools.forDelegatedAgent(delegable), this.invocationGuard, this.invocationObserver)
+    return new CoreToolRegistry(WorkspaceTools.forDelegatedAgent(delegable), this.invocationGuard, this.invocationObserver, null)
         .rebindDelegation();
   }
 
@@ -67,7 +79,7 @@ public final class CoreToolRegistry {
       scoped.add(
           tool instanceof DelegateSubtaskTool ? ((DelegateSubtaskTool) tool).forScope(this) : tool);
     }
-    return new CoreToolRegistry(scoped, this.invocationGuard, this.invocationObserver);
+    return new CoreToolRegistry(scoped, this.invocationGuard, this.invocationObserver, this.invocationSourceProvider);
   }
 
   CoreToolRegistry withInvocationGuard(final Runnable guard) {
@@ -81,11 +93,16 @@ public final class CoreToolRegistry {
               this.invocationGuard.run();
               guard.run();
             };
-    return new CoreToolRegistry(this.tools.values(), combined, this.invocationObserver).rebindDelegation();
+    return new CoreToolRegistry(this.tools.values(), combined, this.invocationObserver, this.invocationSourceProvider).rebindDelegation();
   }
 
   public CoreToolRegistry withInvocationObserver(InvocationObserver observer) {
-    return new CoreToolRegistry(this.tools.values(), this.invocationGuard, observer).rebindDelegation();
+    return new CoreToolRegistry(this.tools.values(), this.invocationGuard, observer, this.invocationSourceProvider).rebindDelegation();
+  }
+
+  CoreToolRegistry withInvocationSourceProvider(InvocationSourceProvider provider) {
+    return new CoreToolRegistry(this.tools.values(), this.invocationGuard, this.invocationObserver,
+        java.util.Objects.requireNonNull(provider)).rebindDelegation();
   }
 
   void runCombinedGuard(Runnable guard) {
@@ -99,7 +116,7 @@ public final class CoreToolRegistry {
         throw new IllegalArgumentException("Replacement exceeds the selected capability scope");
       }
     }
-    return new CoreToolRegistry(handlers, this.invocationGuard, this.invocationObserver).rebindDelegation();
+    return new CoreToolRegistry(handlers, this.invocationGuard, this.invocationObserver, this.invocationSourceProvider).rebindDelegation();
   }
 
   public List<ToolSpec> declarations() {
@@ -121,7 +138,7 @@ public final class CoreToolRegistry {
   CoreToolRegistry withoutAttachments() {
     return new CoreToolRegistry(
         WorkspaceTools.withoutAttachments(new ArrayList<>(this.tools.values())),
-        this.invocationGuard, this.invocationObserver);
+        this.invocationGuard, this.invocationObserver, this.invocationSourceProvider);
   }
 
   public List<String> connectorToolNames() {
@@ -160,7 +177,7 @@ public final class CoreToolRegistry {
   public CoreToolRegistry with(Collection<? extends CoreTool> additional) {
     List<CoreTool> combined = new ArrayList<>(this.tools.values());
     combined.addAll(additional);
-    return new CoreToolRegistry(combined, this.invocationGuard, this.invocationObserver);
+    return new CoreToolRegistry(combined, this.invocationGuard, this.invocationObserver, this.invocationSourceProvider);
   }
 
   public CoreToolRegistry forRequester(String requester) {
@@ -178,7 +195,7 @@ public final class CoreToolRegistry {
         requested.add(tool);
       }
     }
-    return new CoreToolRegistry(requested, this.invocationGuard, this.invocationObserver).rebindDelegation();
+    return new CoreToolRegistry(requested, this.invocationGuard, this.invocationObserver, this.invocationSourceProvider).rebindDelegation();
   }
 
   public String displayName(String name) {
@@ -277,8 +294,9 @@ public final class CoreToolRegistry {
     try {
       token.throwIfCancelled();
       if (this.invocationGuard != null) this.invocationGuard.run();
+      if (this.invocationSourceProvider != null) this.invocationSourceProvider.bind(tool, callId, invocation);
       if (recordsEffect && this.invocationObserver != null) {
-        this.invocationObserver.beforeDispatch(tool, callId, safeArguments);
+        this.invocationObserver.beforeDispatch(tool, callId, safeArguments, invocation);
         observerPrepared = true;
       }
       CoreToolResult result = tool.execute(safeArguments, token, progress, invocation);
@@ -320,6 +338,6 @@ public final class CoreToolRegistry {
         selected.add(tool);
       }
     }
-    return new CoreToolRegistry(selected, this.invocationGuard, this.invocationObserver);
+    return new CoreToolRegistry(selected, this.invocationGuard, this.invocationObserver, this.invocationSourceProvider);
   }
 }

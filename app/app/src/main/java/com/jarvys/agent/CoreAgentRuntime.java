@@ -368,6 +368,11 @@ public final class CoreAgentRuntime {
               ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat,
                   compactionMemoryLifecycle(model))
               : null;
+      if (mainChat && depth == 0 && context != null
+          && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
+        toolRegistry = toolRegistry.withInvocationSourceProvider(
+            transcriptStore.centralSourceProvider(currentTurnOwnerMessageId, runId));
+      }
       if (mainChat && depth == 0 && context != null && !currentTurnOwnerMessageId.isBlank()) {
         toolRegistry = toolRegistry.withInvocationObserver(
             new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId, runId, transcriptStore));
@@ -381,7 +386,7 @@ public final class CoreAgentRuntime {
           new CoreAgentLoop(
               scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
-      if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId);
+      if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
       CoreAgentLoop.Result result = AgentResultPresentation.localize(context,
           loop.run(request, history, attachments, token, listener, currentUserMessageId, runId));
       if (crewManager != null) {

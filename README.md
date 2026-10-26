@@ -12,7 +12,9 @@ El cutover posterior ya integra Registry/UI/readers, callbacks capturados y obse
 
 Foundation posterior Coding/recibos locales: 169 Full + 165 Play PASS (334 ejecuciones, cero skips), metadatos/codec aislados y semántica de aceptación local sin afirmar misión terminada. Todavía sin producer/ASYNC opt-in ni prueba de commit durable. [Resultados y límites](docs/continue/single-validate/S6-coding-foundation-test-results.json).
 
-El respaldo remoto sigue pendiente; blobs cargados no equivalen a rama publicada. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
+CentralWorkspace ya integra admisión explícita de cinco productores, recibos locales tipados y fuente Central→assignment atómica. Validación final focal **677 Full + 673 Play PASS** (1.350 ejecuciones, 57/56 clases, cero skips), con revisión independiente; aún sin Coding ASYNC ni cierre S6. La prueba real del runtime con memoria OFF conserva auditoría causal técnica, no narración/semántica automática: OFF no significa borrar el ledger técnico. [Resultados y límites](docs/continue/single-validate/S6-central-workspace-test-results.json).
+
+El respaldo remoto anterior está confirmado en `continue/s6-cloud` (`8605176`): conserva el archivo de prueba restringido como en remoto y un patch mínimo limpio permite reconstruir exactamente el source `e9c937f0`. El árbol de respaldo requiere ejecutar sus instrucciones de restauración antes de compilar; no subir directamente el archivo restaurado sin autorización de publicación. Los cambios posteriores se validan y respaldan por checkpoints, sin sobrescribir historial. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
 
 ---
 
@@ -436,19 +438,18 @@ Jarvys is an independent project. Names and logos of connected services identify
 
 
 <!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->
-## Respaldo WIP recuperable — 26-10-2026
+## Respaldo WIP recuperable — CentralWorkspace
 
-Este árbol de respaldo **no es build-ready tal cual**: conserva sin retransmitir un fixture de pruebas
-exactamente como estaba en la rama base remota. Los cambios locales de helpers/regresiones se guardan
-en un patch mínimo sin datos del fixture. No se eliminaron asertos ni se publicaron valores bloqueados.
+Este árbol **no es build-ready tal cual**. Los 18 tests existentes modificados se conservan
+exactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver
+a transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se
+eliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.
 
-En un checkout limpio de esta rama, ejecuta `python3 docs/continue/backup/restore-s6.py`.
-El script exige árbol limpio, verifica hashes, aplica el patch, retira sólo estos auxiliares de backup
-y el aviso, y comprueba el árbol Git exacto del snapshot local validado. Deja la restauración staged,
-sin crear commits ni modificar historia. No ejecuta builds, red ni servicios.
+En un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,
+el patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,
+commits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**
 
-Snapshot local: `e9c937f01a40e093bb5aa38224c614f49a963915`. Validaciones recientes: cutover conexión
-544 Full/411 Play y foundation aislada 169 Full/165 Play, cero fallos/skips en sus runs finales.
-No son suite global, PASS S6, paridad Engram ni entrega APK. Continue.md permanece igual al remoto.
-Detalles de integridad: `docs/continue/backup/manifest.json`.
+Source: `7fd04efd6ab2b29819b8a8fbea76af82cc2d7d6c`. Validación focal independiente: 677 Full + 673 Play PASS,
+1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
+paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.
 <!-- JARVYS_SAFE_BACKUP_NOTICE_END -->

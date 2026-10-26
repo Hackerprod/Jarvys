@@ -5,6 +5,7 @@ import com.jarvys.agent.coding.ArtifactSnapshotIO;
 import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceRecord;
 import com.jarvys.agent.workspaces.WorkspaceRegistry;
+import com.jarvys.agent.workspaces.WorkspaceMutationContext;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,11 @@ public final class WorkspaceArtifactDelivery {
 
     public JSONObject deliver(String workspaceId, String path, String expectedSha256, String filename,
             CancellationToken token, Runnable admission) throws IOException {
+        return deliver(workspaceId, path, expectedSha256, filename, token, admission, null);
+    }
+
+    public JSONObject deliver(String workspaceId, String path, String expectedSha256, String filename,
+            CancellationToken token, Runnable admission, WorkspaceMutationContext mutation) throws IOException {
         if (token == null || admission == null) throw new IllegalArgumentException("Cancellation and policy admission are required");
         token.throwIfCancelled();
         if (token.isCrewRun()) throw new IllegalArgumentException("Only the central owner can request workspace file delivery");
@@ -48,9 +54,9 @@ public final class WorkspaceArtifactDelivery {
         admission.run();
         token.throwIfCancelled();
         if (testRegistry != null) return deliver(testRegistry, testFiles, workspaceId, path, expectedSha256,
-                filename, token, admission);
+                filename, token, admission, mutation);
         try (WorkspaceRegistry registry = new WorkspaceRegistry(context)) {
-            return deliver(registry, context.getFilesDir(), workspaceId, path, expectedSha256, filename, token, admission);
+            return deliver(registry, context.getFilesDir(), workspaceId, path, expectedSha256, filename, token, admission, mutation);
         }
     }
 
@@ -96,7 +102,11 @@ public final class WorkspaceArtifactDelivery {
     }
 
     private JSONObject deliver(WorkspaceRegistry registry, File files, String workspaceId, String path,
-            String expectedSha256, String filename, CancellationToken token, Runnable admission) throws IOException {
+            String expectedSha256, String filename, CancellationToken token, Runnable admission,
+            WorkspaceMutationContext mutation) throws IOException {
+        requireOwnedWorkspace(registry, workspaceId);
+        admission.run();
+        if (mutation != null) mutation.admitMutation();
         synchronized (DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
             SourceScope source = source(registry, files, workspaceId, token, admission);
             source.validate.run();
@@ -115,7 +125,12 @@ public final class WorkspaceArtifactDelivery {
             if (!token.runIfActive(() -> {
                 source.validate.run();
                 // Existing ledger verifies immutable bytes and coalesces retries before publishing a card.
-                conversations.appendDeliveredFile(WorkspaceIdentity.CENTRAL_SESSION, artifact);
+                com.jarvys.agent.chatdb.DeliveredArtifactCommit committed =
+                        conversations.appendDeliveredFileWithReceipt(WorkspaceIdentity.CENTRAL_SESSION, artifact);
+                if (mutation != null) {
+                    if (committed.getInserted()) mutation.delivered(workspaceId, artifact.id);
+                    else mutation.existing(EffectInvocation.EffectReferenceKind.DELIVERY, workspaceId, artifact.id);
+                }
                 source.validate.run();
                 AgentRunUiState.deliveredFileAdded(WorkspaceIdentity.CENTRAL_SESSION, artifact);
             })) throw new CancellationException("Workspace file delivery stopped before attachment");

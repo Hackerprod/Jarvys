@@ -261,3 +261,49 @@ operacional atómica con assignment; después origen Crew exacto y journal/prepa
 recovery Coding completos. La fuente original de assignment no debe confundirse con entradas
 posteriores de un ciclo: ese límite sigue en revisión antes del opt-in. No S6 PASS, suite global,
 lint, APK ni paridad Engram; respaldo seguro y limitaciones se documentan por separado.
+
+## CentralWorkspace — admisión de productores y raíz operacional
+
+Execute4 separa acceso puro, admisión persistente fuera de locks y confirmación tipada local de
+create/delegate/deliver/reply/message. Una aceptación local no acredita ejecución de misión ni
+consumo del modelo; referencias duplicadas no producen un segundo OK. La entrega diferencia
+inserción nueva de duplicado mediante el resultado de la misma transacción Room, no un lookup previo.
+
+El runtime Central instala un proveedor independiente de memoria que vincula owner, batch, call,
+run, proceso y generación física de DB al checkpoint STARTED comprometido. El witness pertenece a
+una sola invocación; copias ordinarias del registry lo conservan y la delegación no lo hereda.
+WorkspaceRegistry v1→v2 añade fuente nullable sin reescribir filas legacy; assignment + fuente
+se insertan en la misma transacción. El fence de lifecycle protege sólo esa atribución, con orden
+anchor→workspace→SQLite, sin bridge/listeners/spawn dentro. La segunda fase relee el assignment
+exacto y conserva CAS/no replay. La raíz es histórica, no el trigger exclusivo de comandos futuros.
+
+Los intentos fallidos quedan en el manifiesto. Dos ejecuciones del source anterior e9c937f0
+reprodujeron exactamente nueve y veintisiete fallos respectivamente: fixtures de contexto/lifecycle,
+API Central no borrable, ruta DB, esquema de acciones y constructor reflejado obsoletos. Se repararon
+los fixtures sin retirar asertos ni relajar guards de producción; se añadió comprobación explícita
+de que la API actual no borra Central. La ausencia/tombstone histórica se simula sólo en fixtures
+transaccionales, con restauración exacta del trigger. El nuevo test de cierre observaba un hilo
+redispatcher, no el closer real; se corrigió ese oráculo conservando fence, deadline y asertos.
+
+La integración runtime de memoria OFF usa una mutación local de fixture, no red. El requisito
+SINGLE_SESSION §7.5 A y el contrato del gate permiten audit causal técnico con OFF; B/R2 separan
+la narración automática. Un aserto nuevo de cero episodios resultó no sustentado por ese contrato:
+se reemplaza por pruebas más precisas del episodio/evidencia exactos, título/texto vacíos,
+narration=none y ausencia de nuevas memorias semánticas/digest. No se cambia producto para esconder
+el hallazgo ni se promete ausencia total de auditoría con OFF. El primer intento
+READ mostró que CoreConnectorTool.execute4 delega esa ruta a execute2 y no transporta EffectInvocation
+al gateway: no se modificó producto para hacer pasar el test ni se afirma cubrir ese transporte READ.
+S6 continúa WIP: falta origen Crew/inputs exactos, journal/preparación/terminal/proyección/recovery de
+Coding ASYNC y el inventario restante; después S7/S8 y evaluación independiente de paridad Engram.
+Sin suite global, lint, APK, dispositivo físico ni despliegue en este checkpoint.
+
+Validación final del slice: **677 Full / 57 clases y 673 Play / 56 clases PASS**, 1.350 ejecuciones
+contando flavor, cero fallos/errores/skips, con `--rerun`. Main/tests Java/Kotlin de ambos sabores
+compilan. Contexto puro 9/9 PASS; fuente y resultados se revisan independientemente.
+[Manifiesto con hashes e intentos](S6-central-workspace-test-results.json) ·
+[Contrato](S6-central-workspace-causal-contract.md). No sumar runs previos como casos únicos.
+
+Respaldo seguro anterior confirmado en `continue/s6-cloud` (`8605176`, source restaurable `e9c937f0`).
+Los checkpoints posteriores usan el mismo método: archivo restringido idéntico al remoto + patch
+mínimo limpio, integridad/restauración exacta y rama sin force. El source restaurado no debe subirse
+con el fixture completo sin autorización. Continue.md permanece idéntico al remoto.

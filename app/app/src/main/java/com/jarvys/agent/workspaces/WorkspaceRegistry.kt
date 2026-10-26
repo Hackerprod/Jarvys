@@ -7,6 +7,7 @@ import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.jarvys.agent.crew.CrewMissionAccess
+import com.jarvys.agent.CentralInvocationSource
 import org.json.JSONArray
 import java.io.Closeable
 import java.nio.charset.StandardCharsets
@@ -25,18 +26,46 @@ class WorkspaceRegistry(context: Context) : Closeable {
         const val NATIVE_UI_ORIGIN = "NATIVE_UI"
         private val TRANSACTION_LOCK = Any()
         private const val MAX_PAGE = 100
+        private val SOURCE_COLUMNS = listOf("source_generation", "source_owner", "source_message", "source_batch",
+            "source_call", "source_run", "source_process")
         private val TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")
         private val DIGEST = Regex("[0-9a-f]{64}")
     }
 
     private val helper = Helper(context.applicationContext ?: context)
 
+    data class Creation(val record: WorkspaceRecord, val created: Boolean)
+
+    /** Read-only idempotency precheck; every writer repeats the comparison transactionally. */
+    internal fun existingWorkspace(key: String, title: String): WorkspaceRecord? {
+        token(key, "idempotencyKey")
+        val canonicalTitle = title.trim()
+        boundedText(canonicalTitle, "title", 640, 160)
+        return one(helper.readableDatabase, "workspace", "creation_key=?", arrayOf(key), ::workspace)?.also {
+            if (it.title != canonicalTitle) conflict("Workspace key has a different title")
+        }
+    }
+
+    internal fun existingAssignment(workspaceId: String, key: String, requestId: String, user: String,
+        role: String, mission: String, tools: List<String>?, name: String?, access: CrewMissionAccess): WorkspaceAssignment? {
+        workspaceId(workspaceId); token(key, "assignmentKey")
+        return one(helper.readableDatabase, "assignment", "workspace_id=? AND assignment_key=?",
+            arrayOf(workspaceId, key), ::assignment)?.also {
+            if (it.requestId != requestId || it.originalUserRequest != user || it.role != role ||
+                it.missionText != mission || it.tools != canonicalTools(tools) || it.name != name || it.missionAccess != access)
+                conflict("Assignment key has a different payload")
+        }
+    }
+
     internal fun openForReset() { helper.writableDatabase }
 
     fun nativeControls(): NativeWorkspaceControls = NativeWorkspaceControls(this)
 
     @JvmOverloads
-    fun createWorkspace(idempotencyKey: String, title: String, beforeWrite: Runnable = Runnable {}): WorkspaceRecord {
+    fun createWorkspace(idempotencyKey: String, title: String, beforeWrite: Runnable = Runnable {}): WorkspaceRecord =
+        createWorkspaceOutcome(idempotencyKey, title, beforeWrite).record
+
+    internal fun createWorkspaceOutcome(idempotencyKey: String, title: String, beforeWrite: Runnable): Creation {
         token(idempotencyKey, "idempotencyKey")
         val canonicalTitle = title.trim()
         boundedText(canonicalTitle, "title", 640, 160)
@@ -44,7 +73,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
             val existing = one(db, "workspace", "creation_key=?", arrayOf(idempotencyKey), ::workspace)
             if (existing != null) {
                 if (existing.title != canonicalTitle) conflict("Workspace key has a different title")
-                return@transaction existing
+                return@transaction Creation(existing, false)
             }
             val id = UUID.randomUUID().toString()
             val record = WorkspaceRecord(id, canonicalTitle, WorkspaceIdentity.executionSessionId(id),
@@ -54,7 +83,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 "workspace_id" to id, "creation_key" to idempotencyKey, "title" to canonicalTitle,
                 "execution_session_id" to record.executionSessionId, "owner_central_session_id" to record.ownerCentralSessionId,
                 "created_at" to record.createdAt))
-            record
+            Creation(record, true)
         }
     }
 
@@ -92,6 +121,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
         workspaceId: String, assignmentKey: String, requestId: String, originalUserRequest: String,
         role: String, missionText: String, tools: List<String>?, name: String?, missionAccess: CrewMissionAccess,
         beforeWrite: Runnable = Runnable {},
+        centralSource: CentralInvocationSource? = null,
     ): WorkspaceAssignment {
         workspaceId(workspaceId)
         token(assignmentKey, "assignmentKey")
@@ -128,6 +158,11 @@ class WorkspaceRegistry(context: Context) : Closeable {
             val id = UUID.randomUUID().toString()
             val timestamp = now()
             beforeWrite.run()
+            centralSource?.let {
+                require(it.ownerCentralSessionId == WorkspaceIdentity.CENTRAL_SESSION) {
+                    "Assignment source belongs to another central owner"
+                }
+            }
             db.insertOrThrow("assignment", null, values(
                 "workspace_id" to workspaceId, "assignment_id" to id, "assignment_key" to assignmentKey,
                 "request_id" to requestId, "original_user_request" to originalUserRequest,
@@ -135,7 +170,14 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 "tools_json" to canonicalTools?.let { JSONArray(it).toString() }, "name" to name,
                 "mission_access" to missionAccess.name, "revision" to 1L, "process_id" to null,
                 "state" to WorkspaceAssignmentState.PREPARED.name, "bot_id" to null,
-                "created_at" to timestamp, "updated_at" to timestamp))
+                "created_at" to timestamp, "updated_at" to timestamp,
+                "source_generation" to centralSource?.storageGeneration,
+                "source_owner" to centralSource?.ownerCentralSessionId,
+                "source_message" to centralSource?.sourceMessageId,
+                "source_batch" to centralSource?.sourceBatchId,
+                "source_call" to centralSource?.sourceCallId,
+                "source_run" to centralSource?.sourceRunId,
+                "source_process" to centralSource?.sourceProcessId))
             requireAssignment(db, workspaceId, id)
         }
     }
@@ -444,7 +486,16 @@ class WorkspaceRegistry(context: Context) : Closeable {
             c.string("role").also { token(it, "role") },
             c.string("mission_text").also { boundedText(it, "missionText", 65536) },
             decodeTools(c.optionalString("tools_json")), c.optionalString("name")?.also { boundedText(it, "name", 512, 128) },
-            CrewMissionAccess.valueOf(c.string("mission_access")), revision, process, state, bot, createdAt, updatedAt)
+            CrewMissionAccess.valueOf(c.string("mission_access")), revision, process, state, bot, createdAt, updatedAt, assignmentSource(c))
+    }
+
+    private fun assignmentSource(c: Cursor): CentralInvocationSource? {
+        val fields = SOURCE_COLUMNS.map { c.optionalString(it) }
+        if (fields.all { it == null }) return null
+        require(fields.all { it != null }) { "Incomplete assignment provenance" }
+        require(fields[1] == WorkspaceIdentity.CENTRAL_SESSION) { "Assignment source has a foreign central owner" }
+        return CentralInvocationSource(fields[0]!!, fields[1]!!, fields[2]!!, fields[3]!!,
+            fields[4]!!, fields[5]!!, fields[6]!!)
     }
 
     private fun userControl(c: Cursor): WorkspaceUserControl = decode("user_control") {
@@ -582,7 +633,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
         }
     }
 
-    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,
+    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 2,
         DatabaseErrorHandler { throw WorkspaceRegistryCorruptException("Workspace database is corrupt; preserved without deletion") }) {
         override fun getReadableDatabase(): SQLiteDatabase {
             com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir)
@@ -608,6 +659,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 created_at INTEGER NOT NULL CHECK(created_at>0), updated_at INTEGER NOT NULL CHECK(updated_at>0),
                 UNIQUE(workspace_id,assignment_key), UNIQUE(workspace_id,assignment_id),
                 FOREIGN KEY(workspace_id) REFERENCES workspace(workspace_id))""")
+            addSourceColumns(db)
             db.execSQL("CREATE INDEX assignment_request ON assignment(workspace_id,request_id)")
             db.execSQL("""CREATE TABLE user_control (
                 request_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL, assignment_id TEXT NOT NULL,
@@ -626,7 +678,11 @@ class WorkspaceRegistry(context: Context) : Closeable {
                 PRIMARY KEY(workspace_id,assignment_id,snapshot_digest),
                 FOREIGN KEY(workspace_id,assignment_id) REFERENCES assignment(workspace_id,assignment_id))""")
         }
+        private fun addSourceColumns(db: SQLiteDatabase) {
+            SOURCE_COLUMNS.forEach { db.execSQL("ALTER TABLE assignment ADD COLUMN $it TEXT") }
+        }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion == 1 && newVersion == 2) { addSourceColumns(db); return }
             throw WorkspaceRegistryCorruptException("Unsupported workspace registry upgrade $oldVersion to $newVersion")
         }
         override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {

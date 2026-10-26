@@ -3,6 +3,7 @@ package com.jarvys.agent.workspaces
 import android.content.Context
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreTool
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.ToolSpec
 import org.json.JSONArray
@@ -31,6 +32,7 @@ class CentralWorkspaceTool internal constructor(
      * Callbacks expire on return: asynchronous effects need their own STOP boundary.
      */
     interface Backend {
+        fun hasCompleteMutationAdmissionCoverage(): Boolean = false
         fun create(key: String, title: String, requestId: String, originalUserRequest: String,
                    admission: Runnable): JSONObject
         fun list(limit: Int, afterWorkspaceId: String?, admission: Runnable): JSONObject
@@ -73,8 +75,43 @@ class CentralWorkspaceTool internal constructor(
         fun deliver(workspaceId: String, path: String, expectedSha256: String, filename: String?,
                     token: CancellationToken, admission: Runnable): JSONObject =
             throw UnsupportedOperationException("Workspace delivery is unavailable")
+
+        fun create(key: String, title: String, requestId: String, originalUserRequest: String,
+                   admission: Runnable, context: WorkspaceMutationContext): JSONObject {
+            context.admitMutation()
+            return create(key, title, requestId, originalUserRequest, admission)
+        }
+        fun delegate(workspaceId: String, key: String, role: String, mission: String,
+                     tools: List<String>?, name: String?, missionAccess: String, requestId: String,
+                     originalUserRequest: String, token: CancellationToken, admission: Runnable,
+                     context: WorkspaceMutationContext): JSONObject {
+            context.admitMutation()
+            return delegate(workspaceId, key, role, mission, tools, name, missionAccess,
+                requestId, originalUserRequest, token, admission)
+        }
+        fun deliver(workspaceId: String, path: String, expectedSha256: String, filename: String?,
+                    token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject {
+            context.admitMutation()
+            return deliver(workspaceId, path, expectedSha256, filename, token, admission)
+        }
+        fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
+                  expectedAssignmentRevision: Long, requestId: String, originalUserRequest: String,
+                  token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject {
+            context.admitMutation()
+            return reply(workspaceId, messageId, expectedSha256, key, text, expectedAssignmentRevision,
+                requestId, originalUserRequest, token, admission)
+        }
+        fun message(workspaceId: String, assignmentId: String, botId: String, expectedAssignmentRevision: Long,
+                    key: String, text: String, correlationMessageId: String?, requestId: String,
+                    originalUserRequest: String, token: CancellationToken, admission: Runnable,
+                    context: WorkspaceMutationContext): JSONObject {
+            context.admitMutation()
+            return message(workspaceId, assignmentId, botId, expectedAssignmentRevision, key, text,
+                correlationMessageId, requestId, originalUserRequest, token, admission)
+        }
     }
 
+    override fun hasCompleteEffectAdmissionCoverage() = backend.hasCompleteMutationAdmissionCoverage()
     override fun canDelegate() = false
     override fun auditDetail(arguments: Map<String, Any>?) = "Coordinate durable workspaces from central"
 
@@ -158,7 +195,25 @@ class CentralWorkspaceTool internal constructor(
         if ((arguments["action"] as? String) in setOf("create", "delegate", "deliver", "reply", "message"))
             CoreTool.EffectClass.WRITE else CoreTool.EffectClass.READ
 
-    override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
+    override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult =
+        executeInternal(arguments, token, null, null)
+
+    override fun execute(arguments: Map<String, Any>?, token: CancellationToken,
+                         progress: CoreTool.ProgressListener?, invocation: EffectInvocation?): CoreToolResult {
+        if (invocation == null) return execute(arguments, token)
+        val holder = java.util.concurrent.atomic.AtomicReference<WorkspaceMutationContext?>()
+        try {
+            val result = executeInternal(arguments, token, invocation, holder)
+            holder.get()?.let { return it.finish(result) }
+            return if (effectClass(arguments ?: emptyMap()) == CoreTool.EffectClass.WRITE || !result.success)
+                result.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED))
+            else result.withAdministrativeReceipt(invocation.readCompleted())
+        } finally { holder.get()?.close() }
+    }
+
+    private fun executeInternal(arguments: Map<String, Any>?, token: CancellationToken,
+                                invocation: EffectInvocation?,
+                                holder: java.util.concurrent.atomic.AtomicReference<WorkspaceMutationContext?>?): CoreToolResult {
         token.throwIfCancelled()
         if (!isAvailableForSession(sessionId) || token.isCrewRun)
             return CoreToolResult.failure("Workspaces are available only in the central user chat.")
@@ -169,22 +224,33 @@ class CentralWorkspaceTool internal constructor(
                 require(TOKEN.matches(requestId)) { "Runtime request ID is required" }
                 validText(originalUserRequest, MAX_TEXT_BYTES, MAX_TEXT_BYTES, false)
             }
+                val sourceWitness = invocation?.centralSource()
                 val admission = Runnable {
                     check(admissionActive.get()) { "Workspace admission callback expired" }
                     token.throwIfCancelled()
                     check(isAvailableForSession(sessionId) && !token.isCrewRun)
+                    sourceWitness?.requireInvocationCurrent()
                 }
                 admission.run()
+                val mutation = if (payload.isMutation && invocation != null)
+                    WorkspaceMutationContext(payload.action, payload.optionalString("workspace_id"),
+                        sourceWitness, invocation, admission).also { holder?.set(it) }
+                    else null
                 val data = when (payload.action) {
-                    "create" -> backend.create(payload.string("key"), payload.string("title"),
-                        requestId, originalUserRequest, admission)
-                    "delegate" -> backend.delegate(payload.string("workspace_id"), payload.string("key"),
+                    "create" -> if (mutation == null) backend.create(payload.string("key"), payload.string("title"),
+                        requestId, originalUserRequest, admission) else backend.create(payload.string("key"),
+                        payload.string("title"), requestId, originalUserRequest, admission, mutation)
+                    "delegate" -> if (mutation == null) backend.delegate(payload.string("workspace_id"), payload.string("key"),
                         payload.string("role"), payload.string("mission"), payload.tools,
                         payload.optionalString("name"), payload.string("mission_access"),
-                        requestId, originalUserRequest, token, admission)
+                        requestId, originalUserRequest, token, admission) else backend.delegate(payload.string("workspace_id"), payload.string("key"),
+                        payload.string("role"), payload.string("mission"), payload.tools,
+                        payload.optionalString("name"), payload.string("mission_access"),
+                        requestId, originalUserRequest, token, admission, mutation)
                     "inspect_file" -> backend.inspect(payload.string("workspace_id"), payload.string("path"), token, admission)
-                    "deliver" -> backend.deliver(payload.string("workspace_id"), payload.string("path"),
-                        payload.string("expected_sha256"), payload.optionalString("filename"), token, admission)
+                    "deliver" -> if (mutation == null) backend.deliver(payload.string("workspace_id"), payload.string("path"),
+                        payload.string("expected_sha256"), payload.optionalString("filename"), token, admission) else backend.deliver(payload.string("workspace_id"), payload.string("path"),
+                        payload.string("expected_sha256"), payload.optionalString("filename"), token, admission, mutation)
                     "results" -> backend.results(payload.string("workspace_id"), payload.limit,
                         payload.optionalString("after_result_id"), admission)
                     "read_result" -> backend.readResult(payload.string("workspace_id"), payload.string("result_id"),
@@ -193,13 +259,18 @@ class CentralWorkspaceTool internal constructor(
                         payload.optionalString("after_message_id"), admission)
                     "read_message" -> backend.readMessage(payload.string("workspace_id"), payload.string("message_id"),
                         payload.string("expected_sha256"), payload.integer("offset"), token, admission)
-                    "reply" -> backend.reply(payload.string("workspace_id"), payload.string("message_id"),
+                    "reply" -> if (mutation == null) backend.reply(payload.string("workspace_id"), payload.string("message_id"),
                         payload.string("expected_sha256"), payload.string("key"), payload.string("text"),
-                        payload.long("expected_assignment_revision"), requestId, originalUserRequest, token, admission)
-                    "message" -> backend.message(payload.string("workspace_id"), payload.string("assignment_id"),
+                        payload.long("expected_assignment_revision"), requestId, originalUserRequest, token, admission) else backend.reply(payload.string("workspace_id"), payload.string("message_id"),
+                        payload.string("expected_sha256"), payload.string("key"), payload.string("text"),
+                        payload.long("expected_assignment_revision"), requestId, originalUserRequest, token, admission, mutation)
+                    "message" -> if (mutation == null) backend.message(payload.string("workspace_id"), payload.string("assignment_id"),
                         payload.string("bot_id"), payload.long("expected_assignment_revision"),
                         payload.string("key"), payload.string("text"), payload.optionalString("correlation_message_id"),
-                        requestId, originalUserRequest, token, admission)
+                        requestId, originalUserRequest, token, admission) else backend.message(payload.string("workspace_id"), payload.string("assignment_id"),
+                        payload.string("bot_id"), payload.long("expected_assignment_revision"),
+                        payload.string("key"), payload.string("text"), payload.optionalString("correlation_message_id"),
+                        requestId, originalUserRequest, token, admission, mutation)
                     "list" -> backend.list(payload.limit, payload.optionalString("after_workspace_id"), admission)
                     else -> backend.read(payload.string("workspace_id"), payload.optionalString("assignment_id"),
                         payload.limit, payload.optionalString("after_assignment_id"), admission)
@@ -224,6 +295,7 @@ class CentralWorkspaceTool internal constructor(
                 "An effect may already have started; read current state before retrying and reuse the same key and payload.")
         } finally {
             admissionActive.set(false)
+            holder?.get()?.close()
         }
     }
 

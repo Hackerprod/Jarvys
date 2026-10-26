@@ -25,6 +25,9 @@ data class DeliveredArtifactInput(
     val createdAtSeconds: Double? = null,
 )
 
+/** Returned only after the artifact transaction commits; inserted is decided inside that transaction. */
+data class DeliveredArtifactCommit(val artifact: ConversationArtifact, val inserted: Boolean)
+
 data class GeneratedImageInput(
     val conversationId: String,
     val prompt: String,
@@ -68,7 +71,16 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
     private data class FileRefContent(val id: String, val sha256: String, val bytes: Long, val mimeType: String?)
 
     /** Stores one generic artifact event; duplicate identity/content is idempotent, changed content conflicts. */
-    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> = transaction {
+    suspend fun appendDeliveredArtifact(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> =
+        when (val result = appendDeliveredArtifactWithReceipt(input)) {
+            is ChatDbResult.Success -> ChatDbResult.Success(result.value.artifact)
+            is ChatDbResult.Conflict -> result
+            is ChatDbResult.Invalid -> result
+            ChatDbResult.NotFound -> ChatDbResult.NotFound
+            ChatDbResult.Tombstoned -> ChatDbResult.Tombstoned
+        }
+
+    suspend fun appendDeliveredArtifactWithReceipt(input: DeliveredArtifactInput): ChatDbResult<DeliveredArtifactCommit> = transaction {
         if (input.conversationId.isBlank() || input.artifactId.isBlank() || input.name.isBlank() || input.relativePath.isBlank() ||
             input.sha256.isBlank() || input.sizeBytes < 0L || input.kind.isBlank())
             return@transaction ChatDbResult.Invalid("delivered artifact metadata is required")
@@ -99,7 +111,7 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
                 existing.kind == input.kind && existing.relative_path == input.relativePath && existing.sha256 == input.sha256 &&
                 existing.artifact_type == type && existing.module_id == input.moduleId && existing.manifest_json == input.manifestJson &&
                 existing.title == input.title && existing.thumbnail_ref == expectedThumbnailRef
-            return@transaction if (same) ChatDbResult.Success(existing) else ChatDbResult.Conflict("delivered artifact identity has different content")
+            return@transaction if (same) ChatDbResult.Success(DeliveredArtifactCommit(existing, false)) else ChatDbResult.Conflict("delivered artifact identity has different content")
         }
         if (input.thumbnailRef != null && !fileRefExists(input.thumbnailRef))
             return@transaction ChatDbResult.Conflict("artifact thumbnail file reference is missing")
@@ -117,7 +129,7 @@ internal class ConversationArtifactsRepository internal constructor(database: Ja
             arrayOf(input.conversationId, input.artifactId, seq, input.name, mime, input.sizeBytes, input.kind,
                 input.relativePath, input.sha256, fileRef, type, input.moduleId, input.manifestJson, input.title, thumbnailRef, timestamp),
         )
-        ChatDbResult.Success(readArtifact(input.conversationId, input.artifactId)!!)
+        ChatDbResult.Success(DeliveredArtifactCommit(readArtifact(input.conversationId, input.artifactId)!!, true))
     }
 
     /**

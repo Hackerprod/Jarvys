@@ -29,6 +29,21 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
       throw new IllegalArgumentException("A recorded chat run requires its transcript store");
   }
 
+  @Override public void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments,
+      EffectInvocation invocation) {
+    CentralInvocationWitness witness = invocation.centralSource();
+    if (witness != null) {
+      witness.requireInvocationCurrent();
+      CentralInvocationSource source = witness.source();
+      MainChatTranscriptStore.CallBinding binding = transcriptStore == null ? null : transcriptStore.committedCall(callId);
+      if (binding == null || !conversationId.equals(source.ownerCentralSessionId)
+          || !ownerMessageId.equals(source.sourceMessageId) || !java.util.Objects.equals(runId, source.sourceRunId)
+          || !binding.batchId.equals(source.sourceBatchId) || !callId.equals(source.sourceCallId))
+        throw new IllegalStateException("Effect recorder and operational source disagree");
+    }
+    beforeDispatch(tool, callId, arguments);
+  }
+
   @Override public void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments) {
     if (blank(callId) || blank(ownerMessageId)) throw new IllegalStateException("Durable call and owner identity are required for effect evidence");
     MainChatTranscriptStore.CallBinding binding = transcriptStore == null ? null : transcriptStore.committedCall(callId);

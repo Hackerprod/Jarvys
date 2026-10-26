@@ -32,6 +32,7 @@ class WorkspaceAssignment internal constructor(
     val botId: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    val centralSource: com.jarvys.agent.CentralInvocationSource? = null,
 ) {
     val tools: List<String>? = tools?.let { Collections.unmodifiableList(ArrayList(it)) }
     /** STARTED is never evidence that spawning failed; never replay it after reopening. */

@@ -60,10 +60,42 @@ final class MainChatTranscriptStore {
     private boolean storageWarningChecked;
     private final Map<String, CallBinding> committedCalls = new java.util.concurrent.ConcurrentHashMap<>();
 
+    private volatile Object attachmentIdentity = new Object();
     static final class CallBinding {
-        final String batchId;
-        final String callId;
-        CallBinding(String batchId, String callId) { this.batchId = batchId; this.callId = callId; }
+        final String batchId, callId, toolName, ownerMessageId, runId;
+        final Object attachment;
+        volatile boolean started;
+        final java.util.concurrent.atomic.AtomicReference<EffectInvocation> invocation = new java.util.concurrent.atomic.AtomicReference<>();
+        CallBinding(String batchId, ModelReply.Call call, String ownerMessageId, String runId, Object attachment) {
+            this.batchId = batchId; this.callId = call.id; this.toolName = call.name;
+            this.ownerMessageId = ownerMessageId; this.runId = runId; this.attachment = attachment;
+        }
+    }
+
+    CoreToolRegistry.InvocationSourceProvider centralSourceProvider(String expectedOwner, String expectedRun) {
+        if (!com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId))
+            throw new IllegalArgumentException("A Central source provider requires a Central conversation");
+        return (tool, callId, invocation) -> {
+            if (expectedOwner == null || expectedOwner.isBlank() || expectedRun == null || expectedRun.isBlank())
+                throw new IllegalStateException("An exact Central run and owner are required before dispatch");
+            CallBinding binding = committedCall(callId);
+            if (!binding.started || binding.attachment != attachmentIdentity
+                    || !expectedOwner.equals(binding.ownerMessageId) || !expectedRun.equals(binding.runId)
+                    || !tool.declaration().name.equals(binding.toolName))
+                throw new IllegalStateException("Central invocation does not match its committed checkpoint");
+            if (!binding.invocation.compareAndSet(null, invocation))
+                throw new IllegalStateException("Committed Central call already belongs to an invocation");
+            com.jarvys.agent.chatdb.CentralInvocationCheckpoint captured = store.captureCentralInvocation(
+                    sessionId, expectedOwner, binding.batchId, callId, binding.toolName, expectedRun,
+                    com.jarvys.agent.crew.CrewProcessIdentity.ID);
+            CentralInvocationWitness witness = new CentralInvocationWitness(captured.getSource(), invocation, () -> {
+                if (attachmentIdentity != binding.attachment || committedCalls.get(callId) != binding
+                        || binding.invocation.get() != invocation)
+                    throw new IllegalStateException("Central checkpoint owner was replaced");
+            }, captured.getLifecycle());
+            invocation.bindCentralSource(witness);
+            witness.requireInvocationCurrent();
+        };
     }
 
     CallBinding committedCall(String callId) {
@@ -112,6 +144,12 @@ final class MainChatTranscriptStore {
     }
 
     void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory, String turnOwnerId) {
+        attach(loop, priorHistory, turnOwnerId, null);
+    }
+
+    void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory, String turnOwnerId, String runId) {
+        final Object attachment = new Object();
+        attachmentIdentity = attachment;
         committedCalls.clear();
         Set<ConversationTurn> historical = Collections.newSetFromMap(new IdentityHashMap<>());
         if (priorHistory != null) historical.addAll(priorHistory);
@@ -128,6 +166,7 @@ final class MainChatTranscriptStore {
                 ? store.latestUserMessageIndex(sessionId) : store.conversationMessageIndex(sessionId, turnOwnerId);
         loop.setCheckpointListener(checkpoint -> {
             try {
+                if (attachmentIdentity != attachment) throw new IllegalStateException("Transcript attachment was replaced");
                 // Keep artifact files and their staged ownership rows ordered across producers.
                 // The rows commit together below, so releasing this lock after each archive() call
                 // would let another producer expel a file before the pending row is published.
@@ -226,8 +265,16 @@ final class MainChatTranscriptStore {
                         for (Map.Entry<ConversationTurn, String> bound : batches.entrySet()) {
                             bound.getKey().bindSource(new ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH,
                                     sessionId, bound.getValue(), ""));
-                            for (ModelReply.Call call : bound.getKey().toolCalls)
-                                committedCalls.put(call.id, new CallBinding(bound.getValue(), call.id));
+                            for (ModelReply.Call call : bound.getKey().toolCalls) {
+                                CallBinding binding = committedCalls.get(call.id);
+                                if (binding == null) {
+                                    binding = new CallBinding(bound.getValue(), call, userMessageId, runId, attachment);
+                                    committedCalls.put(call.id, binding);
+                                } else if (!binding.batchId.equals(bound.getValue()) || binding.attachment != attachment) {
+                                    throw new IllegalStateException("Committed call binding changed");
+                                }
+                                if ("STARTED".equals(checkpoint.toolLifecycle.get(call.id))) binding.started = true;
+                            }
                         }
                     } finally {
                         pendingCheckpointRows.remove();

@@ -1,6 +1,6 @@
 # S6 — CentralWorkspace: admisión explícita y origen operacional de assignments
 
-Estado: diseño local para revisión independiente; sin implementación/opt-in.
+Estado: slice implementado; Full677/Play673 focales PASS y revisión independiente. No cierre global S6 ni opt-in Coding ASYNC.
 Dependencia de `S6-coding-job-evidence-contract.md` §10. No cambia capacidades, permisos,
 políticas, acciones, límites de respuesta ni autoridad de controles nativos.
 
@@ -195,10 +195,62 @@ Antes de activar Coding async:
   no aceptación→misión terminada ni doble conteo de retry/poll.
 - Migración v1→2 conserva filas byte-significativas y legacy null; fuente+assignment atómicos;
   mismo key/payload no cambia owner; misma key con payload conflictivo sigue rechazada.
-- Dos llamadas/mensajes/runs con nombres iguales no comparten fuente; memoria OFF conserva sólo
-  procedencia operacional; ON posterior no hace backfill; forget/reset impiden recrear episodios.
+- Dos llamadas/mensajes/runs con nombres iguales no comparten fuente; memoria OFF conserva
+  procedencia operacional y audit causal técnico, sin narración/semántica automática. ON sin backfill
+  y ausencia de resurrección tras forget/reset siguen como requisitos del futuro opt-in Coding;
+  este slice no declara validación universal de esas rutas.
 - Crew exacto enlaza su call a la delegación original; checkpoint/cycle/bot ajeno se rechaza.
 
 Primero revisar este seam y semántica de receipts; luego implementarlo como slice coherente y
 probarlo. Los tipos Coding pueden prepararse aisladamente después del acuerdo, pero el opt-in
 ASYNC sólo ocurre con journal, frontera de preparación, recovery y proyección completos.
+
+
+## 8. Identidad física y frontera de la fuente (acuerdo de revisión)
+
+`StorageGeneration.NAME = g3` identifica el layout, no una encarnación de la base. La fuente nueva
+usa el UUID durable de identidad de la base actual y una evidencia privada del lifecycle del
+provider, capturados junto al checkpoint comprometido antes del dispatch. Reutilizar esa identidad
+no concede permisos de conexión ni convierte su evidencia en autorización de efectos.
+
+La validación de vigencia y la inserción atómica de assignment + fuente comparten el fence del
+provider, con orden de adquisición **lifecycle → workspace → SQLite operacional**. No ejecutar
+bridge Room, listeners, callbacks de admisión persistente ni spawn dentro de esa sección. Una
+comprobación de generación antes del lock, sin compartirlo con close/open, no cierra la carrera.
+Las pruebas deben cubrir reemplazo antes de la sección y close concurrente durante la inserción.
+
+El fence protege esa atribución operacional concreta, no todo el trabajo posterior. Una vez
+persistida, la fuente es histórica e inmutable; spawn, entrega y coordinación conservan sus
+fronteras de autoridad/cancelación existentes y sus estados inciertos, sin exigir que leer metadata
+histórica mantenga una lease viva. Separar la sección de persistencia de la de spawn no debe
+permitir replay: revalidar el estado/revisión bajo el lock y mantener el CAS de transición.
+
+`SingleSessionReset` prepara el layout nuevo al arrancar y retira únicamente el almacenamiento
+anterior; no implementa un reset destructivo en caliente de g3. No se afirma atomicidad global entre
+un reset inexistente y todos los efectos. Si se añade ese reset, deberá participar en el fence del
+provider e invalidar/cancelar owners, no limitarse a comparar la cadena g3.
+
+
+## 9. Precisiones de implementación del slice CentralWorkspace
+
+- `WorkspaceMutationContext` fija acción y workspace, conserva el witness operacional y separa
+  `admitMutation()` (writer durable fuera de locks) de confirmaciones locales sin IO. Estas últimas
+  pueden registrar metadata inmediatamente después del commit mientras el productor conserva su
+  monitor; **no invocan Room, listeners ni callbacks de admisión**. Registry finaliza evidencia después.
+- Backend legacy conserva su operación mediante sobrecarga conservadora: admite antes de entrar
+  al backend, sin inventar un completion receipt ni cobertura completa. Success legacy queda
+  UNCERTAIN. La ruta instrumentada valida argumentos y scope antes de admitir.
+- La entrega usa `DeliveredArtifactCommit.inserted`, decidido en la misma transacción Room que
+  inserta/coalesce el artefacto. No se infiere nuevo efecto mediante lookup previo o JSON. El retry
+  después de staging conserva referencia existente con UNCERTAIN, nunca segundo OK de entrega.
+- El witness usa identidad de instancia/generación Room real, no el nombre estático de directorio
+  `g3`. Su lease protege únicamente assignment + source INSERT: anchor → workspace → SQLite.
+  No se mantiene durante bridge, spawn o listeners, y no promete atomicidad global reset/efecto.
+  `requireInvocationCurrent()` es un guard local de invocación, no reemplaza ese lease.
+- El source guardado en assignment es **raíz histórica de delegación**, no causa exclusiva de todos
+  los comandos futuros. Replies, supervisor messages y native corrections pueden incorporarse
+  dentro de un mismo ciclo o reanimarlo. El checkpoint conserva incorporaciones históricas y otros
+  inputs con provenance; no hay actualmente un enlace causal por model-turn a cada TOOL_CALLS.
+  El futuro opt-in Coding debe conservar contexto de inputs exacto/plural del checkpoint y distinguir
+  esa raíz de las contribuciones posteriores. Ningún campo `requestId` se convierte en message ID,
+  ninguna corrección UI se atribuye a un mensaje Central inexistente y no se busca el último mensaje.

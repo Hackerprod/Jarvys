@@ -1,3 +1,286 @@
+diff --git a/app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java b/app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java
+index 7c278f49..f473240e 100644
+--- a/app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java
+@@ -14,0 +15 @@ import org.junit.Before;
++import org.junit.Rule;
+@@ -22,0 +24 @@ public class BotCatalogToolScopeTest {
++    @Rule public final ChatTestStore fixture = new ChatTestStore(true, true);
+@@ -93 +95 @@ public class BotCatalogToolScopeTest {
+-                int.class, CorePromptBudget.class, boolean.class, boolean.class);
++                int.class, CorePromptBudget.class, boolean.class, ModelProviderClient.class);
+@@ -96 +98 @@ public class BotCatalogToolScopeTest {
+-                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, false);
++                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, null);
+diff --git a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt b/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
+index f5e36876..314028ab 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
+@@ -52,2 +52,3 @@ class CompactionFlushPersistenceTest {
+-        JarvysChatDatabaseProvider.getInstance(context).withChatReadTransaction {
+-            JarvysChatDatabaseProvider.getInstance(context).chatSql.query(query).use { it.moveToFirst(); it.getLong(0) }
++        val database = JarvysChatDatabaseProvider.getInstance(context)
++        database.withChatReadTransaction {
++            database.chatSql.query(query).use { it.moveToFirst(); it.getLong(0) }
+diff --git a/app/app/src/test/java/com/jarvys/agent/CompactionMemoryFlushTest.kt b/app/app/src/test/java/com/jarvys/agent/CompactionMemoryFlushTest.kt
+index 8dd8ac3b..260c4a8f 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CompactionMemoryFlushTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CompactionMemoryFlushTest.kt
+@@ -27 +27,4 @@ class CompactionMemoryFlushTest {
+-    private fun context(files: File) = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
++    private fun context(files: File) = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()),
++        com.jarvys.agent.connectors.ConnectionAccessProvider {
++        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
++        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt b/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt
+index fa0730bf..5ef78335 100644
+--- a/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt
+@@ -544 +544,4 @@ class PersonalAgentBehaviorTest {
+-    private class TestFilesContext(base: Context, private val files: File) : ContextWrapper(base) {
++    private class TestFilesContext(base: Context, private val files: File) : ContextWrapper(base),
++        com.jarvys.agent.connectors.ConnectionAccessProvider {
++        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
++        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt b/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt
+index 605efb38..60d07d51 100644
+--- a/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt
+@@ -65 +65,2 @@ class SingleSessionMemoryRetentionTest {
+-        JarvysChatDatabaseProvider.onQueryExecutor(database) { database.withChatReadTransaction { block(database.chatSql) } }
++        val handle = database // Resolve lifecycle before entering the leased connection.
++        JarvysChatDatabaseProvider.onQueryExecutor(handle) { handle.withChatReadTransaction { block(handle.chatSql) } }
+@@ -69 +70,2 @@ class SingleSessionMemoryRetentionTest {
+-        database.withChatWriteTransaction { block(database.chatSql) }
++        val handle = database
++        handle.withChatWriteTransaction { block(handle.chatSql) }
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java b/app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java
+index dcf33fb1..ce2626ee 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceArtifactDeliveryTest.java
+@@ -131,0 +132,38 @@ public class WorkspaceArtifactDeliveryTest {
++    @Test public void typedDeliveryReceiptConfirmsNewCommitButDuplicateIsConservativeReference() throws Exception {
++        workspace.write("typed-report.txt", "first");
++        EffectInvocation invocation = new EffectInvocation(admission ->
++                assertFalse(Thread.holdsLock(DeliveredArtifactStore.DELIVERY_ACTION_LOCK)));
++        com.jarvys.agent.workspaces.WorkspaceMutationContext mutation =
++                com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create("deliver", source.getWorkspaceId(), invocation, () -> {});
++        service().deliver(source.getWorkspaceId(), "typed-report.txt", hash("first"), null,
++                CancellationToken.cancellable(), () -> {}, mutation);
++        EffectInvocation.Receipt first = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(mutation);
++        assertEquals(EffectInvocation.Outcome.OK, first.outcome);
++        assertEquals(EffectInvocation.CompletionSemantics.LOCAL_DELIVERY_CONFIRMED, first.completionSemantics);
++        assertEquals(attached().id, first.reference.id);
++        com.jarvys.agent.workspaces.WorkspaceMutationContext repeat =
++                com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create("deliver", source.getWorkspaceId(),
++                        new EffectInvocation(admission -> {}), () -> {});
++        service().deliver(source.getWorkspaceId(), "typed-report.txt", hash("first"), null,
++                CancellationToken.cancellable(), () -> {}, repeat);
++        EffectInvocation.Receipt duplicate = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(repeat);
++        assertEquals(EffectInvocation.Outcome.UNCERTAIN, duplicate.outcome);
++        assertEquals(EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, duplicate.completionSemantics);
++        assertEquals(first.reference, duplicate.reference);
++        assertEquals(1, count(CENTRAL));
++    }
++
++    @Test public void typedAdmissionFailurePreventsSnapshotAndDelivery() throws Exception {
++        workspace.write("typed-report.txt", "first");
++        AtomicInteger opened = new AtomicInteger();
++        ArtifactOsShadow.beforeOpen = opened::incrementAndGet;
++        com.jarvys.agent.workspaces.WorkspaceMutationContext mutation =
++                com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create("deliver", source.getWorkspaceId(),
++                        new EffectInvocation(admission -> { throw new IllegalStateException("Evidence unavailable"); }), () -> {});
++        assertThrows(IllegalStateException.class, () -> service().deliver(source.getWorkspaceId(),
++                "typed-report.txt", hash("first"), null, CancellationToken.cancellable(), () -> {}, mutation));
++        assertEquals(0, opened.get());
++        assertEquals(0, count(CENTRAL));
++        assertEquals(0, manifests());
++    }
++
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationDeliveryTest.kt b/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationDeliveryTest.kt
+index 9e104932..2f4c4a11 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationDeliveryTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationDeliveryTest.kt
+@@ -489,0 +490,78 @@ class WorkspaceCoordinationDeliveryTest {
++    @Test fun typedSupervisorMessageConfirmsNewMailboxButRetryKeepsOriginalReference() {
++        val worker = Parked().also { parked = it }
++        bind(worker.bot.id)
++        worker.manager.bindWorkspaceAssignmentId(worker.bot.id, target.assignmentId)
++        worker.manager.configureCheckpoints(object : CrewManager.CheckpointSupport {
++            override fun persist(bot: CrewManager.Bot, messages: List<CrewMessage>, pending: List<CrewMessage>) { }
++            override fun reconcile(bot: CrewManager.Bot): CrewManager.ResumePlan =
++                throw AssertionError("Supervisor input must not resume a worker")
++        })
++        worker.manager.sendFromWorker(worker.bot, worker.bot.token, "chief", CrewMessage.Type.STATUS,
++            "Checkpoint available", emptyList())
++        assertTrue(worker.bot.hasDurableCheckpoint())
++        val invocation = EffectInvocation {
++            assertFalse(Thread.holdsLock(com.jarvys.agent.workspaces.WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
++        }
++        val mutation = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create(
++            "message", scope.workspaceId, invocation, noAdmission)
++        val result = delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
++            "typed-input", "Synthetic steering", null, "central-request", "Synthetic task", freshToken, noAdmission, mutation)
++        val receipt = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(mutation)
++        assertEquals(EffectInvocation.Outcome.OK, receipt.outcome)
++        assertEquals(EffectInvocation.CompletionSemantics.COORDINATION_ACCEPTED, receipt.completionSemantics)
++        assertEquals(result.getString("worker_input_id"), receipt.reference.id)
++        val retry = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create(
++            "message", scope.workspaceId, EffectInvocation { }, noAdmission)
++        delivery.message(scope.workspaceId, target.assignmentId, worker.bot.id, target.revision,
++            "typed-input", "Synthetic steering", null, "central-request", "Synthetic task", freshToken, noAdmission, retry)
++        val repeated = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(retry)
++        assertEquals(EffectInvocation.Outcome.UNCERTAIN, repeated.outcome)
++        assertEquals(EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, repeated.completionSemantics)
++        assertEquals(receipt.reference, repeated.reference)
++        assertEquals(1, worker.manager.messageBus().snapshot().count { it.id == receipt.reference.id })
++    }
++
++    @Test fun typedReplyAdmissionWriterFailureLeavesNoPreparedReplyOrMailboxEffect() {
++        val (worker, r) = liveQuestion()
++        read(r)
++        val invocation = EffectInvocation { throw IllegalStateException("Evidence unavailable") }
++        val mutation = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create(
++            "reply", scope.workspaceId, invocation, noAdmission)
++        failure {
++            delivery.reply(scope.workspaceId, r.referenceId, r.contentSha256, "reply-key", "Untrusted chief answer",
++                r.observedAssignmentRevision, "central-request", "Synthetic user task", freshToken, noAdmission, mutation)
++        }
++        assertFalse(invocation.admitted())
++        assertNull(savedReply(r))
++        assertTrue(worker.answers().isEmpty())
++    }
++
++    @Test fun typedReplyProducerConfirmsOnlyLocalAcceptanceAndRetryIsExistingUncertain() {
++        val (worker, r) = liveQuestion()
++        read(r)
++        var admissionWrites = 0
++        val invocation = EffectInvocation {
++            assertFalse(Thread.holdsLock(com.jarvys.agent.workspaces.WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
++            admissionWrites++
++        }
++        val mutation = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create(
++            "reply", scope.workspaceId, invocation, noAdmission)
++        delivery.reply(scope.workspaceId, r.referenceId, r.contentSha256, "reply-key", "Untrusted chief answer",
++            r.observedAssignmentRevision, "central-request", "Synthetic user task", freshToken, noAdmission, mutation)
++        val receipt = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(mutation)
++        assertEquals(1, admissionWrites)
++        assertEquals(EffectInvocation.Outcome.OK, receipt.outcome)
++        assertEquals(EffectInvocation.CompletionSemantics.COORDINATION_ACCEPTED, receipt.completionSemantics)
++        assertEquals(requireNotNull(savedReply(r)).mailboxMessageId, receipt.reference.id)
++        assertEquals(1, worker.answers().size)
++        val retry = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.create(
++            "reply", scope.workspaceId, EffectInvocation { }, noAdmission)
++        delivery.reply(scope.workspaceId, r.referenceId, r.contentSha256, "reply-key", "Untrusted chief answer",
++            r.observedAssignmentRevision, "central-request", "Synthetic user task", freshToken, noAdmission, retry)
++        val repeated = com.jarvys.agent.workspaces.WorkspaceMutationTestSupport.receipt(retry)
++        assertEquals(EffectInvocation.Outcome.UNCERTAIN, repeated.outcome)
++        assertEquals(EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, repeated.completionSemantics)
++        assertEquals(receipt.reference, repeated.reference)
++        assertEquals(1, worker.answers().size)
++    }
++
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java b/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java
+index da84fcef..46bd806a 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceCoordinationLedgerTest.java
+@@ -234,0 +235,8 @@ public class WorkspaceCoordinationLedgerTest {
++    @Test public void currentApiRejectsCentralDeletionWithoutChangingItsMessagesOrTombstone() {
++        String before = store.readConversationMessages(CENTRAL).toString();
++        assertThrows(IllegalStateException.class, () -> store.deleteConversation(CENTRAL));
++        assertEquals(before, store.readConversationMessages(CENTRAL).toString());
++        assertFalse(ChatDatabaseBridge.getInstance(context).isTombstonedSync(CENTRAL));
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.assertCentralRowExists(context);
++    }
++
+@@ -237 +245 @@ public class WorkspaceCoordinationLedgerTest {
+-        assertTrue(store.deleteConversation(CENTRAL));
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.tombstoneAndRemove(context);
+@@ -489 +497 @@ public class WorkspaceCoordinationLedgerTest {
+-        File databaseFile = new File(new File(context.getFilesDir(), "jarvys"), "jarvys-chat.db");
++        File databaseFile = com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.databaseFile(context);
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceInputIncorporationLedgerTest.java b/app/app/src/test/java/com/jarvys/agent/WorkspaceInputIncorporationLedgerTest.java
+index 893ad6cc..996deb0f 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceInputIncorporationLedgerTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceInputIncorporationLedgerTest.java
+@@ -291,0 +292,2 @@ public class WorkspaceInputIncorporationLedgerTest {
++        // Current schema bootstraps Central. Simulate an explicitly absent legacy/corrupt row.
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.removeWithoutTombstone(context);
+@@ -297 +299 @@ public class WorkspaceInputIncorporationLedgerTest {
+-        assertTrue(store.deleteConversation(CENTRAL));
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.tombstoneAndRemove(context);
+@@ -316 +318 @@ public class WorkspaceInputIncorporationLedgerTest {
+-        assertTrue(store.deleteConversation(CENTRAL));
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.tombstoneAndRemove(context);
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java b/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java
+index 477277fe..20d823f8 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceResultLedgerTest.java
+@@ -377 +377 @@ public class WorkspaceResultLedgerTest {
+-        assertTrue(store.deleteConversation(CENTRAL));
++        com.jarvys.agent.chatdb.LegacyCentralStateTestFixture.tombstoneAndRemove(context);
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt b/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt
+index 082cf0e7..94fd5ad6 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceStoreTest.kt
+@@ -271 +271,4 @@ Read and verify the project files.
+-    private class FilesDirContext(base: Context, private val filesDirectory: File) : ContextWrapper(base) {
++    private class FilesDirContext(base: Context, private val filesDirectory: File) : ContextWrapper(base),
++        com.jarvys.agent.connectors.ConnectionAccessProvider {
++        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
++        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt b/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt
+index 2b526d9a..0a4a9741 100644
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceSupervisorMessagePipelineTest.kt
+@@ -373 +373,4 @@ class WorkspaceSupervisorMessagePipelineTest {
+-    private class IsolatedWorkspaceContext(base: Context, private val files: File) : ContextWrapper(base) {
++    private class IsolatedWorkspaceContext(base: Context, private val files: File) : ContextWrapper(base),
++        com.jarvys.agent.connectors.ConnectionAccessProvider {
++        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
++        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
+index 4707ec5e..451d83c1 100644
+--- a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
+@@ -10,0 +11,3 @@ import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.async
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.Dispatchers
+@@ -500,0 +504,33 @@ class M1bRepositoriesTest {
++    @Test fun typedDeliveryReceiptDecidesInsertAtomicallyUnderConcurrentDuplicate() = onDatabaseThread {
++        success(conversations.ensureConversation("typed-files"))
++        val input = DeliveredArtifactInput("typed-files", "typed-artifact", "report.txt", "text/plain", 4,
++            "FILE", "typed/report.txt", "c".repeat(64))
++        val results = coroutineScope {
++            val first = async(Dispatchers.IO) { success(artifacts.appendDeliveredArtifactWithReceipt(input)) }
++            val second = async(Dispatchers.IO) { success(artifacts.appendDeliveredArtifactWithReceipt(input)) }
++            listOf(first.await(), second.await())
++        }
++        assertEquals(1, results.count { it.inserted })
++        assertEquals(1, results.count { !it.inserted })
++        assertEquals(results[0].artifact, results[1].artifact)
++        assertEquals(1, artifacts.artifactsForConversation("typed-files").size)
++        assertTrue(artifacts.appendDeliveredArtifactWithReceipt(input.copy(name = "different.txt")) is ChatDbResult.Conflict)
++    }
++
++    @Test fun failedArtifactTransactionCannotReturnAnInsertedReceipt() = onDatabaseThread {
++        success(conversations.ensureConversation("typed-rollback"))
++        val input = DeliveredArtifactInput("typed-rollback", "rollback-artifact", "report.txt", "text/plain", 4,
++            "FILE", "typed/rollback.txt", "d".repeat(64))
++        database.testChatSql.execSQL("CREATE TRIGGER reject_typed_artifact BEFORE INSERT ON artifacts " +
++            "BEGIN SELECT RAISE(ABORT, 'synthetic artifact rejection'); END")
++        var failed = false
++        try { failed = artifacts.appendDeliveredArtifactWithReceipt(input) !is ChatDbResult.Success }
++        catch (_: Exception) { failed = true }
++        assertTrue(failed)
++        assertTrue(artifacts.artifactsForConversation("typed-rollback").isEmpty())
++        database.testChatSql.execSQL("DROP TRIGGER reject_typed_artifact")
++        val committed = success(artifacts.appendDeliveredArtifactWithReceipt(input))
++        assertTrue(committed.inserted)
++        assertFalse(success(artifacts.appendDeliveredArtifactWithReceipt(input)).inserted)
++    }
++
 diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
 index 479805d3..b47617c4 100644
 --- a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
@@ -65,4 +348,296 @@ index 479805d3..b47617c4 100644
 +                                 invocation: com.jarvys.agent.EffectInvocation) = block(context, task, action, invocation)
 +            override fun hasCompleteEffectAdmissionCoverage() = true
 +        }
++
+diff --git a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
+index 8fc843d6..1ca1c782 100644
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
+@@ -97 +97 @@ class CentralWorkspaceCoordinationToolTest {
+-            "inbox", "read_message", "reply"), (0 until enum.length()).map { enum.getString(it) })
++            "inbox", "read_message", "reply", "message"), (0 until enum.length()).map { enum.getString(it) })
+@@ -103 +103 @@ class CentralWorkspaceCoordinationToolTest {
+-        for (field in listOf("source_message_id", "request_id", "original_user_request", "session_id", "bot_id", "cycle_id",
++        for (field in listOf("source_message_id", "request_id", "original_user_request", "session_id", "cycle_id",
+@@ -105,0 +106 @@ class CentralWorkspaceCoordinationToolTest {
++        assertEquals("^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$", properties.getJSONObject("bot_id").getString("pattern"))
+@@ -107 +108 @@ class CentralWorkspaceCoordinationToolTest {
+-        for (word in listOf("chief/ANSWER", "never USER", "FINDING is read-only", "Accepted-local", "automatic polling"))
++        for (word in listOf("chief/ANSWER", "never USER", "FINDING is read-only", "Accepted-local", "do not poll inboxes"))
+diff --git a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
+index 01e30db8..8f91cbde 100644
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceToolTest.kt
+@@ -34,0 +35,32 @@ class CentralWorkspaceToolTest {
++    @Test fun contextualLegacyFallbackAdmitsButNeverClaimsProducerCompletion() {
++        val backend = Backend()
++        val invocation = com.jarvys.agent.EffectInvocation { }
++        val result = tool(backend).execute(create, CancellationToken.cancellable(), null, invocation)
++        assertTrue(result.success)
++        assertTrue(invocation.admitted())
++        assertEquals(1, backend.entries)
++        assertFalse(tool(backend).hasCompleteEffectAdmissionCoverage())
++        assertEquals(com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN, result.effectReceipt.outcome)
++    }
++
++    @Test fun contextualLegacyFallbackWriterFailureNeverCallsBackend() {
++        val backend = Backend()
++        val invocation = com.jarvys.agent.EffectInvocation { throw IllegalStateException("Unavailable") }
++        val result = tool(backend).execute(create, CancellationToken.cancellable(), null, invocation)
++        assertFalse(result.success)
++        assertFalse(invocation.admitted())
++        assertEquals(0, backend.entries)
++        assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED, result.effectReceipt.outcome)
++    }
++
++    @Test fun contextualInvalidArgumentsNeverAdmitOrCallBackend() {
++        val backend = Backend()
++        var writes = 0
++        val invocation = com.jarvys.agent.EffectInvocation { writes++ }
++        val result = tool(backend).execute(mapOf("action" to "create"), CancellationToken.cancellable(), null, invocation)
++        assertFalse(result.success)
++        assertEquals(0, writes)
++        assertEquals(0, backend.entries)
++        assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED, result.effectReceipt.outcome)
++    }
++
+diff --git a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+index df5644f2..324bd13f 100644
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+@@ -787,0 +788,125 @@ class WorkspaceCoordinatorIntegrationTest {
++    private fun centralSource(call: String = "call-one") = com.jarvys.agent.CentralInvocationSource(
++        "fixture-storage-epoch", WorkspaceIdentity.CENTRAL_SESSION,
++        "message-one", "batch-one", call, "run-one", "process-one")
++
++    @Test fun explicitCreateAdmissionIsOutsideSqliteLockAndFailurePreventsInsert() {
++        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
++        try {
++            val invocation = com.jarvys.agent.EffectInvocation {
++                pool.submit { WorkspaceRegistry(context).use { it.createWorkspace("other-key", "Other") } }.get(3, TimeUnit.SECONDS)
++                throw IllegalStateException("Synthetic admission failure")
++            }
++            val mutation = WorkspaceMutationContext("create", null, null, invocation, noAdmission)
++            assertThrows(IllegalStateException::class.java) {
++                coordinator.create("denied-key", "Denied", "request-one", "Synthetic request", noAdmission, mutation)
++            }
++            WorkspaceRegistry(context).use {
++                assertNull(it.existingWorkspace("denied-key", "Denied"))
++                assertNotNull(it.existingWorkspace("other-key", "Other"))
++            }
++        } finally { pool.shutdownNow() }
++    }
++
++    @Test fun createRaceReturnsExistingReferenceWithoutInventingSecondCreation() {
++        val invocation = com.jarvys.agent.EffectInvocation {
++            WorkspaceRegistry(context).use { it.createWorkspace("raced-key", "Raced") }
++        }
++        val mutation = WorkspaceMutationContext("create", null, null, invocation, noAdmission)
++        val json = coordinator.create("raced-key", "Raced", "request-one", "Synthetic request", noAdmission, mutation)
++        val result = mutation.finish(com.jarvys.agent.CoreToolResult.success(json.toString()))
++        assertEquals(com.jarvys.agent.EffectInvocation.Outcome.UNCERTAIN, result.effectReceipt.outcome)
++        assertEquals(com.jarvys.agent.EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, result.effectReceipt.completionSemantics)
++        assertEquals(json.getString("workspace_id"), result.effectReceipt.reference.id)
++        assertEquals(1, WorkspaceRegistry(context).use { it.listWorkspaces().size })
++        val duplicateInvocation = com.jarvys.agent.EffectInvocation { error("Existing workspace was newly admitted") }
++        val duplicate = WorkspaceMutationContext("create", null, null, duplicateInvocation, noAdmission)
++        val repeated = coordinator.create("raced-key", "Raced", "request-two", "Synthetic request", noAdmission, duplicate)
++        assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED,
++            duplicate.finish(com.jarvys.agent.CoreToolResult.success(repeated.toString())).effectReceipt.outcome)
++    }
++
++    @Test fun delegatePreparedRetryKeepsOriginalSourceAndBoundRetryNeverRespawns() {
++        val scope = workspace("source-delegate")
++        val original = centralSource()
++        val prepared = WorkspaceRegistry(context).use { it.prepareAssignment(scope.workspaceId,
++            "assignment", REQUEST_ID, ORIGINAL_REQUEST, "custom", MISSION, emptyList(), "Synthetic worker",
++            CrewMissionAccess.STANDARD, noAdmission, original) }
++        val writes = AtomicInteger()
++        val workspaceMonitor = WorkspaceCoordinator::class.java.getDeclaredMethod("lock", String::class.java)
++            .apply { isAccessible = true }.invoke(coordinator, scope.workspaceId)
++        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
++        try {
++            val invocation = com.jarvys.agent.EffectInvocation {
++                // Cross-thread acquisition proves admission holds neither workspace nor SQLite monitor.
++                pool.submit { synchronized(workspaceMonitor) {
++                    WorkspaceRegistry(context).use { it.getAssignment(scope.workspaceId, prepared.assignmentId) }
++                } }.get(3, TimeUnit.SECONDS)
++                writes.incrementAndGet()
++            }
++            val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, null, invocation, noAdmission)
++            val result = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
++                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission, mutation)
++            await(bot(scope, result))
++            val receipt = mutation.finish(com.jarvys.agent.CoreToolResult.success(result.toString())).effectReceipt
++            assertEquals(com.jarvys.agent.EffectInvocation.CompletionSemantics.COORDINATION_ACCEPTED, receipt.completionSemantics)
++            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK, receipt.outcome)
++            assertEquals(original, currentAssignment(scope, result).centralSource)
++            assertEquals(1, writes.get()); assertEquals(1, modelCalls.get())
++            val again = WorkspaceMutationContext("delegate", scope.workspaceId, null,
++                com.jarvys.agent.EffectInvocation { error("Bound assignment replayed") }, noAdmission)
++            val repeated = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
++                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission, again)
++            assertEquals(result.getString("assignment_id"), repeated.getString("assignment_id"))
++            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.NOT_EXECUTED,
++                again.finish(com.jarvys.agent.CoreToolResult.success(repeated.toString())).effectReceipt.outcome)
++            assertEquals(1, modelCalls.get())
++        } finally { pool.shutdownNow() }
++    }
++
++    @Test fun revocationAfterAdmissionBeforeAssignmentInsertPreventsSpawn() {
++        val scope = workspace("source-revoked")
++        val revoked = AtomicBoolean(false)
++        val guard = Runnable { check(!revoked.get()) { "Synthetic revoked source" } }
++        val invocation = com.jarvys.agent.EffectInvocation { revoked.set(true) }
++        val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, null, invocation, guard)
++        assertThrows(IllegalStateException::class.java) {
++            coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
++                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), guard, mutation)
++        }
++        assertTrue(WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).isEmpty() })
++        assertTrue(managerLookups.isEmpty()); assertEquals(0, modelCalls.get())
++    }
++
++    @Test fun committedCentralWitnessIsStoredAtomicallyAndLeaseEndsBeforeCrewSpawn() {
++        val scope = workspace("real-central-source")
++        val anchor = com.jarvys.agent.chatdb.ChatDatabaseBridge.connectionProjectionAnchor(context)
++        val originalFactory = managerFactory
++        val outsideLease = AtomicBoolean(false)
++        managerFactory = { session ->
++            check(!anchor.fence.isHeldByCurrentThread) { "Crew was entered while holding the source lifecycle lease" }
++            outsideLease.set(true)
++            originalFactory(session)
++        }
++        val row = AtomicReference<JSONObject>()
++        val committed = AtomicReference<com.jarvys.agent.CentralInvocationSource>()
++        val witness = com.jarvys.agent.CentralInvocationTestSource.runWithWitness(context) { invocation, source ->
++            val guard = Runnable { source.requireInvocationCurrent() }
++            val mutation = WorkspaceMutationContext("delegate", scope.workspaceId, source, invocation, guard)
++            val result = coordinator.delegate(scope.workspaceId, "assignment", "custom", MISSION, emptyList(), "Synthetic worker",
++                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), guard, mutation)
++            row.set(result)
++            committed.set(currentAssignment(scope, result).centralSource)
++            assertEquals(source.source(), committed.get())
++            assertEquals(com.jarvys.agent.EffectInvocation.Outcome.OK,
++                mutation.finish(com.jarvys.agent.CoreToolResult.success(result.toString())).effectReceipt.outcome)
++        }
++        val result = requireNotNull(row.get()) { "Real checkpoint dispatch did not complete the assignment" }
++        await(bot(scope, result))
++        assertTrue(outsideLease.get())
++        assertEquals(witness.source(), committed.get())
++        assertNotEquals(com.jarvys.agent.StorageGeneration.NAME, committed.get().storageGeneration)
++        assertEquals(1, modelCalls.get())
++        assertThrows(IllegalStateException::class.java) { witness.withCurrentWorkspaceTransaction { error("Sealed source reused") } }
++        assertEquals(witness.source(), currentAssignment(scope, result).centralSource)
++    }
++
+diff --git a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceRegistryTest.kt b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceRegistryTest.kt
+index 254dd08b..c99bc3cc 100644
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceRegistryTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceRegistryTest.kt
+@@ -597 +597 @@ class WorkspaceRegistryTest {
+-            SQLiteDatabase.OPEN_READWRITE).use { it.version = 2 }
++            SQLiteDatabase.OPEN_READWRITE).use { it.version = 3 }
+@@ -601 +601 @@ class WorkspaceRegistryTest {
+-            assertEquals(2, db.version)
++            assertEquals(3, db.version)
+@@ -606,0 +607,99 @@ class WorkspaceRegistryTest {
++    private fun source(call: String = "call-one", owner: String = WorkspaceIdentity.CENTRAL_SESSION) =
++        com.jarvys.agent.CentralInvocationSource("fixture-storage-epoch", owner,
++            "message-one", "batch-one", call, "run-one", "process-one")
++
++    @Test fun assignmentSourceCommitsAtomicallyAndDuplicateNeverRebinds() {
++        val scope = workspace()
++        val original = source()
++        val first = registry.prepareAssignment(scope.workspaceId, "source-key", "source-request", "Synthetic task",
++            "coding", "Synthetic mission", null, null, CrewMissionAccess.STANDARD, Runnable {}, original)
++        assertEquals(original, open().getAssignment(scope.workspaceId, first.assignmentId)!!.centralSource)
++        val duplicate = registry.prepareAssignment(scope.workspaceId, "source-key", "source-request", "Synthetic task",
++            "coding", "Synthetic mission", null, null, CrewMissionAccess.STANDARD, Runnable {}, source("later-call"))
++        assertEquals(first.assignmentId, duplicate.assignmentId)
++        assertEquals(original, duplicate.centralSource)
++        val started = registry.markStarted(scope.workspaceId, first.assignmentId, first.revision, "process-one")
++        assertEquals(original, registry.bindBot(scope.workspaceId, first.assignmentId, started.revision, "bot-one").centralSource)
++    }
++
++    @Test fun failedSourceWriteRollsBackAssignmentAndDoesNotConsumeKey() {
++        val scope = workspace()
++        mutate("CREATE TRIGGER reject_source BEFORE INSERT ON assignment WHEN NEW.source_call='call-one' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END", emptyArray())
++        fails<android.database.sqlite.SQLiteException> {
++            registry.prepareAssignment(scope.workspaceId, "source-key", "source-request", "Synthetic task",
++                "coding", "Synthetic mission", null, null, CrewMissionAccess.STANDARD, Runnable {}, source())
++        }
++        assertTrue(registry.listAssignments(scope.workspaceId).isEmpty())
++        mutate("DROP TRIGGER reject_source", emptyArray())
++        val retried = registry.prepareAssignment(scope.workspaceId, "source-key", "source-request", "Synthetic task",
++            "coding", "Synthetic mission", null, null, CrewMissionAccess.STANDARD, Runnable {}, source())
++        assertEquals(source(), retried.centralSource)
++        assertEquals(1, registry.listAssignments(scope.workspaceId).size)
++    }
++
++    @Test fun foreignOwnerRejectedAndPartialStoredSourcePreservedAsCorrupt() {
++        val scope = workspace()
++        fails<IllegalArgumentException> {
++            registry.prepareAssignment(scope.workspaceId, "source-key", "source-request", "Synthetic task",
++                "coding", "Synthetic mission", null, null, CrewMissionAccess.STANDARD, Runnable {}, source(owner = "foreign-owner"))
++        }
++        assertTrue(registry.listAssignments(scope.workspaceId).isEmpty())
++        val legacy = prepare(scope)
++        assertNull(legacy.centralSource)
++        mutate("UPDATE assignment SET source_call=? WHERE assignment_id=?", arrayOf("orphan-call", legacy.assignmentId))
++        fails<WorkspaceRegistryCorruptException> { open().getAssignment(scope.workspaceId, legacy.assignmentId) }
++        SQLiteDatabase.openDatabase(context.getDatabasePath(WorkspaceRegistry.DATABASE_NAME).path, null,
++            SQLiteDatabase.OPEN_READONLY).use { db ->
++            db.rawQuery("SELECT source_call,source_generation FROM assignment WHERE assignment_id=?", arrayOf(legacy.assignmentId)).use {
++                assertTrue(it.moveToFirst()); assertEquals("orphan-call", it.getString(0)); assertTrue(it.isNull(1))
++            }
++        }
++    }
++
++    @Test fun additiveV1MigrationPreservesAllRowsAndMarksLegacySourceAbsent() {
++        val scope = workspace()
++        val assignment = bound(scope)
++        val control = control(assignment)
++        registry.close()
++        val path = context.getDatabasePath(WorkspaceRegistry.DATABASE_NAME).path
++        // Rebuild an exact v1-shaped fixture from the existing schema, excluding only the seven additive columns.
++        val schemas = mutableListOf<String>()
++        val inserts = mutableListOf<Pair<String, Array<Any?>>>()
++        val sourceColumns = setOf("source_generation", "source_owner", "source_message", "source_batch", "source_call", "source_run", "source_process")
++        SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
++            db.rawQuery("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name!='android_metadata' ORDER BY rowid", null).use { tables ->
++                while (tables.moveToNext()) {
++                    val table = tables.getString(0)
++                    var sql = tables.getString(1)
++                    sourceColumns.forEach { sql = sql.replace(Regex(",\\s*" + it + " TEXT", RegexOption.IGNORE_CASE), "") }
++                    schemas += sql
++                    db.rawQuery("SELECT * FROM $table", null).use { rows ->
++                        val columns = rows.columnNames.filterNot { it in sourceColumns }
++                        while (rows.moveToNext()) {
++                            val values = columns.map<String, Any?> { column -> val index = rows.getColumnIndexOrThrow(column)
++                                when (rows.getType(index)) {
++                                    android.database.Cursor.FIELD_TYPE_NULL -> null
++                                    android.database.Cursor.FIELD_TYPE_INTEGER -> rows.getLong(index)
++                                    else -> rows.getString(index)
++                                }
++                            }.toTypedArray()
++                            inserts.add("INSERT INTO $table (${columns.joinToString(",")}) VALUES (${columns.joinToString(",") { "?" }})" to values)
++                        }
++                    }
++                }
++            }
++        }
++        context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
++        SQLiteDatabase.openOrCreateDatabase(path, null).use { db ->
++            schemas.forEach(db::execSQL)
++            inserts.forEach { (sql, args) -> db.execSQL(sql, args) }
++            db.version = 1
++        }
++        val migrated = open()
++        assertEquals(scope, migrated.getWorkspace(scope.workspaceId))
++        assertEquals(assignment.assignmentId, migrated.getAssignment(scope.workspaceId, assignment.assignmentId)!!.assignmentId)
++        assertNull(migrated.getAssignment(scope.workspaceId, assignment.assignmentId)!!.centralSource)
++        assertEquals(control.requestId, migrated.getPendingControl(scope.workspaceId, assignment.assignmentId, assignment.revision)!!.requestId)
++        SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY).use { assertEquals(2, it.version) }
++    }
 +

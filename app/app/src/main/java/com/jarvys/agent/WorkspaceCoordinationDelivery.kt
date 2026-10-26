@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import android.content.Context
+import com.jarvys.agent.workspaces.WorkspaceMutationContext
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewCoordinationEvidence
 import com.jarvys.agent.workspaces.*
@@ -162,7 +163,8 @@ class WorkspaceCoordinationDelivery internal constructor(
     /** Free supervisor-to-worker steering through the worker's ordinary durable input queue. */
     fun message(workspaceId: String, assignmentId: String, botId: String, expectedRevision: Long,
                 key: String, text: String, correlationMessageId: String?, requestId: String,
-                originalUserRequest: String, token: CancellationToken, admission: Runnable): JSONObject {
+                originalUserRequest: String, token: CancellationToken, admission: Runnable,
+                mutation: WorkspaceMutationContext? = null): JSONObject {
         token.throwIfCancelled(); admission.run()
         val scope = owner(workspaceId)
         val proposedAssignment = WorkspaceRegistry(app).use { registry ->
@@ -193,6 +195,8 @@ class WorkspaceCoordinationDelivery internal constructor(
             }
         }
 
+        // Durable effect admission must not wait for the assignment/native-control monitor.
+        mutation?.admitMutation()
         val ownerToken = WorkspaceControlOwners.registerLocalReceipt(assignmentId)
         val unlinkCancellation = token.registerCancelAction { ownerToken.cancel() }
         try {
@@ -220,6 +224,8 @@ class WorkspaceCoordinationDelivery internal constructor(
                     }
                 }
                 validate.run()
+                val priorIntent = WorkspaceConversationInputStore.hasSupervisorIntent(
+                    app, scope.executionSessionId, workspaceId, assignmentId, key)
                 val outbox = WorkspaceConversationInputStore.appendSupervisorIntent(
                     app, scope.executionSessionId, exact, botId, key, text, correlation)
                 val source = requireNotNull(outbox.provenance)
@@ -305,6 +311,11 @@ class WorkspaceCoordinationDelivery internal constructor(
                 }
                 check(admitted.id == source.messageId && admitted.from == "chief" && admitted.to == botId
                     && admitted.type == com.jarvys.agent.crew.CrewMessage.Type.MESSAGE && admitted.text == text)
+                // The outbox and mailbox protocol confirms local acceptance, not model consumption.
+                // A retry refers to its original intent even when it had to continue first admission.
+                if (priorIntent) mutation?.existing(EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT,
+                    workspaceId, source.messageId)
+                else mutation?.acceptedInput(workspaceId, source.messageId)
                 val state = when (ledger.readConversationInputState(scope.executionSessionId, rowId)) {
                     "incorporated" -> "INCORPORATED_IN_CHECKPOINT"
                     "resolved" -> "RESOLVED_BEFORE_INCORPORATION"
@@ -347,13 +358,15 @@ class WorkspaceCoordinationDelivery internal constructor(
     /** Called under the same per-assignment lock used by native controls. */
     fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
               expectedRevision: Long, requestId: String, originalUserRequest: String,
-              token: CancellationToken, admission: Runnable): JSONObject {
+              token: CancellationToken, admission: Runnable,
+              mutation: WorkspaceMutationContext? = null): JSONObject {
         token.throwIfCancelled(); admission.run()
         val scope = owner(workspaceId)
         val reference = requireNotNull(ledger.readWorkspaceCoordinationReference(scope.executionSessionId, messageId))
         check(reference.workspaceId == workspaceId && reference.contentSha256 == expectedSha256)
         check(expectedRevision == reference.observedAssignmentRevision) { "Reply revision does not match its source reference" }
         val proposed = WorkspaceCoordinationReply.create(reference, key, text, requestId, originalUserRequest, System.currentTimeMillis())
+        mutation?.admitMutation()
         return try { synchronized(WorkspaceCoordinator.controlDispatchLock(reference.assignmentId)) {
             token.throwIfCancelled(); admission.run()
             source(reference)
@@ -363,6 +376,8 @@ class WorkspaceCoordinationDelivery internal constructor(
                 // prepare validates identical key/payload/provenance, then returns the original state.
                 val existing = active(token) { ledger.prepareWorkspaceCoordinationReply(proposed, admission) }
                 admission.run()
+                mutation?.existing(EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT,
+                    workspaceId, existing.mailboxMessageId)
                 return@synchronized replyReceipt(existing, admission)
             }
             val evidence = source(reference)
@@ -387,8 +402,11 @@ class WorkspaceCoordinationDelivery internal constructor(
             validate.run()
             val dispatchAdmission = Runnable { token.throwIfCancelled(); admission.run() }
             val prepared = active(token) { ledger.prepareWorkspaceCoordinationReply(proposed, dispatchAdmission) }
-            if (prepared.state != WorkspaceCoordinationReply.State.PREPARED)
+            if (prepared.state != WorkspaceCoordinationReply.State.PREPARED) {
+                mutation?.existing(EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT,
+                    workspaceId, prepared.mailboxMessageId)
                 return@synchronized replyReceipt(prepared, admission)
+            }
             var accepted: WorkspaceCoordinationReply? = null
             if (!token.runIfActive {
                     validate.run()
@@ -401,6 +419,7 @@ class WorkspaceCoordinationDelivery internal constructor(
                     accepted = ledger.markWorkspaceCoordinationReplyAccepted(started, Runnable {
                         token.throwIfCancelled(); admission.run()
                     })
+                    mutation?.acceptedInput(workspaceId, requireNotNull(accepted).mailboxMessageId)
                 }) token.throwIfCancelled()
             WorkspaceChanges.changed()
             admission.run()

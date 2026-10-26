@@ -15,7 +15,10 @@ Contrato revisado antes de implementar. No declara garantía ya desplegada ni PA
 - Commit automático valida ticket/epoch/estado/cancelación bajo exclusión, mantenida hasta commit o
   rollback. No se mantiene gate durante modelo, red, UI, espera de consentimiento ni listeners.
 - USER explícito conserva edición/corrección/olvido con OFF. Audit causal y cierres de trabajos ya
-  admitidos no se bloquean. Compactación conserva resumen/cobertura estructural e incomplete con OFF,
+  admitidos no se bloquean. Esto incluye el contenedor técnico `episode` de §7.5 A y su evidencia
+  neutral (ids, política y resultado), incluso con OFF: no equivale a narración, hechos o digest.
+  Con OFF no se generan su título/texto semánticos; `narration=none` conserva el audit sin narrarlo.
+  Compactación conserva resumen/cobertura estructural e incomplete con OFF,
   sin digest, through_seq semántico ni contador de flush completado.
 
 ## Orden de locks

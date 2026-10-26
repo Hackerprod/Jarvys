@@ -454,6 +454,21 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentRetryJob(id: String, owner: String, error: String, availableAt: Long): Boolean =
         withAgentMemory("retry memory maintenance") { it.retryJob(id, owner, error, availableAt) }
 
+    /** Capture exact Central-call provenance and the SAME database lifecycle; release before returning. */
+    fun captureCentralInvocationSync(conversationId: String, ownerMessageId: String, batchId: String,
+                                    callId: String, toolName: String, runId: String, processId: String): CentralInvocationCheckpoint =
+        executeOnWorker { repos ->
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val source = runBlocking {
+                    val generation = ConnectionProjectionRepository(repos.database).generation()
+                    captureCentralInvocationSource(repos.database, generation, conversationId,
+                        ownerMessageId, batchId, callId, toolName, runId, processId)
+                }
+                CentralInvocationCheckpoint(source, anchor.attest(repos.database, source.storageGeneration))
+            }
+        }
+
     /** Read real durable identity, release the Room lease/fence, then let the caller bind purely. */
     fun connectionProjectionEvidenceSync(): ConnectionStateCoordinator.DestinationEvidence = executeOnWorker { repos ->
         val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
@@ -1012,6 +1027,9 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     // Attachments, generated images, and delivered artifacts remain file-backed; the DB owns their metadata.
     fun appendDeliveredArtifactSync(input: DeliveredArtifactInput): ChatDbResult<ConversationArtifact> =
         execute { it.artifacts.appendDeliveredArtifact(input) }
+
+    fun appendDeliveredArtifactWithReceiptSync(input: DeliveredArtifactInput): ChatDbResult<DeliveredArtifactCommit> =
+        execute { it.artifacts.appendDeliveredArtifactWithReceipt(input) }
 
     fun appendGeneratedImageSync(input: GeneratedImageInput): ChatDbResult<GeneratedImage> =
         execute { it.artifacts.appendGeneratedImage(input) }
