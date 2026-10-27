@@ -1,13 +1,14 @@
 package com.jarvys.agent.coding;
 
 import com.jarvys.agent.CentralInvocationSource;
+import com.jarvys.agent.CrewInputContext;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Pure schema-3 evidence-envelope metadata. No execution, storage, memory opt-in or authorization.
+ * Pure schema-3 / envelope-version-2 evidence metadata. No execution, storage, memory opt-in or authorization.
  * Neither a Record nor a ValidatedRecord proves fsync, attribution, process liveness or effects.
  * Durable journal witnesses must be minted separately by the eventual IO producer. In particular
  * submissionCommitted is a reported fact, never a receipt; terminal SUCCEEDED describes exit zero,
@@ -19,7 +20,13 @@ import java.util.UUID;
 public final class CodingJobEvidence {
     private CodingJobEvidence() { }
     public enum SourceKind { CREW_CHECKPOINT }
-    public enum CaptureMode { CENTRAL_ENABLED, MEMORY_DISABLED, CENTRAL_BINDING_ABSENT }
+    /**
+     * Immutable policy observed at submission, not live eligibility or a narration permit.
+     * ENABLED alone authorizes nothing: future semantic writes must recheck memory-off, reset and
+     * forget fences. DISABLED is not eligible for retrospective backfill. Neither value suppresses
+     * required technical audit; the captured value cannot change across producer revisions.
+     */
+    public enum SemanticCapture { ENABLED, DISABLED }
     public enum Phase { SUBMISSION_INTENT, PREPARATION_INTENT, LAUNCH_INTENT }
     public enum Authorization { ALLOW, ASK_APPROVED }
     public enum TerminalState { SUCCEEDED, FAILED, NOT_STARTED, CANCELLED, TIMED_OUT, INTERRUPTED, UNCERTAIN }
@@ -36,18 +43,24 @@ public final class CodingJobEvidence {
 
     public static final class CrewSource extends Value {
         public final SourceKind kind = SourceKind.CREW_CHECKPOINT;
-        public final String storageGeneration, executionSessionId, botId, missionId, cycleId,
+        public final String executionSessionId, botId, missionId, cycleId,
                 scopeIdentity, checkpointPayloadSha256, callId, toolName;
-        public CrewSource(String generation, String session, String bot, String mission, String cycle,
-                String scope, String digest, String call, String tool) {
-            storageGeneration = id(generation); executionSessionId = id(session); botId = id(bot);
+        public final CrewInputContext inputContext;
+        public CrewSource(String session, String bot, String mission, String cycle,
+                String scope, String digest, String call, String tool, CrewInputContext inputContext) {
+            executionSessionId = id(session); botId = id(bot);
             missionId = id(mission); cycleId = id(cycle); scopeIdentity = id(scope);
             if (digest == null || !digest.matches("[0-9a-f]{64}"))
                 throw new IllegalArgumentException("Invalid checkpoint digest");
             checkpointPayloadSha256 = digest; callId = id(call); toolName = id(tool);
+            this.inputContext = Objects.requireNonNull(inputContext);
+            for (CrewInputContext.Reference reference : inputContext.references) {
+                if (!executionSessionId.equals(reference.scope.executionSessionId))
+                    throw new IllegalArgumentException("Input context belongs to a different execution session");
+            }
         }
-        @Override List<?> values() { return Arrays.asList(kind, storageGeneration, executionSessionId,
-                botId, missionId, cycleId, scopeIdentity, checkpointPayloadSha256, callId, toolName); }
+        @Override List<?> values() { return Arrays.asList(kind, executionSessionId,
+                botId, missionId, cycleId, scopeIdentity, checkpointPayloadSha256, callId, toolName, inputContext); }
     }
     public static final class WorkspaceBinding extends Value {
         public final String workspaceId, assignmentId, requestId;
@@ -59,34 +72,34 @@ public final class CodingJobEvidence {
     public static final class Source extends Value {
         public final CrewSource crew;
         public final WorkspaceBinding workspace;
-        public final CentralInvocationSource central;
-        public Source(CrewSource crew, WorkspaceBinding workspace, CentralInvocationSource central) {
-            this.crew = Objects.requireNonNull(crew); this.workspace = workspace; this.central = central;
-            if (central != null && (workspace == null || !crew.storageGeneration.equals(central.storageGeneration)))
-                throw new IllegalArgumentException("Central attribution requires a same-generation workspace binding");
+        /** Historical root attribution; presence does not prove current Room/source eligibility. */
+        public final CentralInvocationSource rootCentral;
+        public Source(CrewSource crew, WorkspaceBinding workspace, CentralInvocationSource rootCentral) {
+            this.crew = Objects.requireNonNull(crew); this.workspace = workspace; this.rootCentral = rootCentral;
+            if (rootCentral != null && workspace == null)
+                throw new IllegalArgumentException("Historical Central root requires its workspace binding");
         }
-        @Override List<?> values() { return Arrays.asList(crew, workspace, central); }
+        @Override List<?> values() { return Arrays.asList(crew, workspace, rootCentral); }
     }
     public static final class Binding extends Value {
+        /** Future technical Room reservation identity, a value only: no reservation/proof is minted here. */
+        public final String technicalStoreGeneration;
         public final String jobId, submissionId, owner, scopeId, durableScopeIdentity,
                 ownerProcessId, managerInstanceId;
         public final Source source;
-        public final CaptureMode captureMode;
-        public Binding(String job, String submission, String owner, String scopeId, String scopeIdentity,
-                String process, String manager, Source source, CaptureMode mode) {
+        public final SemanticCapture semanticCapture;
+        public Binding(String technicalStoreGeneration, String job, String submission, String owner, String scopeId, String scopeIdentity,
+                String process, String manager, Source source, SemanticCapture semanticCapture) {
+            this.technicalStoreGeneration = uuid(technicalStoreGeneration);
             jobId = uuid(job); submissionId = uuid(submission); this.owner = id(owner);
             this.scopeId = id(scopeId); durableScopeIdentity = id(scopeIdentity);
             ownerProcessId = uuid(process); managerInstanceId = uuid(manager);
-            this.source = Objects.requireNonNull(source); captureMode = Objects.requireNonNull(mode);
+            this.source = Objects.requireNonNull(source); this.semanticCapture = Objects.requireNonNull(semanticCapture);
             if (!durableScopeIdentity.equals(source.crew.scopeIdentity))
                 throw new IllegalArgumentException("Scope identity mismatch");
-            if (mode == CaptureMode.CENTRAL_ENABLED && source.central == null)
-                throw new IllegalArgumentException("Central evidence requires exact attribution metadata");
-            if (mode == CaptureMode.CENTRAL_BINDING_ABSENT && source.central != null)
-                throw new IllegalArgumentException("Absent binding mode cannot contain central attribution");
         }
-        @Override List<?> values() { return Arrays.asList(jobId, submissionId, owner, scopeId,
-                durableScopeIdentity, ownerProcessId, managerInstanceId, source, captureMode); }
+        @Override List<?> values() { return Arrays.asList(technicalStoreGeneration, jobId, submissionId, owner, scopeId,
+                durableScopeIdentity, ownerProcessId, managerInstanceId, source, semanticCapture); }
     }
     public static final class AuthorizationSnapshot extends Value {
         public final Authorization authorization;

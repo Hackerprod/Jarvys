@@ -1,0 +1,122 @@
+{
+  "scope": "Coding envelope v2 metadata alignment only; no durable producer, ASYNC opt-in or complete S6",
+  "source_base": "2b719704c962aa838638252258c70731bd376fa2",
+  "source_files_sha256": {
+    "app/app/src/main/java/com/jarvys/agent/coding/CodingJobEvidence.java": "396fbb77b7b173fd84d9f79c290d9bf0c98d23b27c495960e3e59c4551a473b9",
+    "app/app/src/main/java/com/jarvys/agent/coding/CodingJobEvidenceCodec.java": "c672463dc9b6748a74ee337270f0b715debd4674d7c9ac528afdda6f593738f4",
+    "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java": "b73fa1799d2bdd77a700081b61ca8bac2c196eeefdd497149178d51b73300bde",
+    "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceAlignmentTest.java": "d91e071c3835b5b7207b08f7c9d68e62c5a34c1fa093839847a100c7a202cbaf",
+    "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceCodecV2Test.java": "0d8ae99b037fa3c7369b4720a7001dbadeec475c709a8178e4694ea808962e0e"
+  },
+  "compile": {
+    "Full": "PASS",
+    "Play": "PASS",
+    "tasks": 91,
+    "executed": 18,
+    "up_to_date": 73,
+    "test_actions_executed": false
+  },
+  "execution": "Fresh standalone offline JVM execution against exported Full/Play classpaths; calibrated harness retained unchanged",
+  "runs": [
+    {
+      "label": "Full-standalone-2",
+      "tests": 42,
+      "classes": [
+        {
+          "name": "com.jarvys.agent.CrewInputContextTest",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "49e3b9e85f7fca24e807dc1d835d032015305251c2be9845f33569ea6495052a"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceAlignmentTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "e59416163cd3518e8248dffe2ea506678f6c76de1982d957e10683b038f7b84d"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceCodecV2Test",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "a452d448531236be3501cd3eaf5d21a1327c1e6b0f59d92d9f8ea0e9a865d33b"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "16df62aea0478bebe011fad7c5c687d3de9b7b321ac6e61b7f336304e44c6729"
+        }
+      ]
+    },
+    {
+      "label": "Play-standalone-1",
+      "tests": 42,
+      "classes": [
+        {
+          "name": "com.jarvys.agent.CrewInputContextTest",
+          "tests": 9,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "2b1295a3624087f9c902901719fcb1abac39c807d1aaba05a1090b7823f392fa"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceAlignmentTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "ff6b69e53c0cc81dabd3fc9ba80815942f64890d922d5e6ca81d774704b57c4b"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceCodecV2Test",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "4bd63698e09f1d5579993d3b7fb69d43538e405bd35bed1677263e3814e4e86e"
+        },
+        {
+          "name": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xml_sha256": "7aefaab3774a2b1097917ade2827cdc245432281dafb141ca130bc568b0ec72c"
+        }
+      ]
+    }
+  ],
+  "pure_jvm": {
+    "tests": 42,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "separate_from_flavor_total": true
+  },
+  "flavor_execution_total": 84,
+  "prior_attempts": [
+    {
+      "label": "pure attempt1",
+      "tests": 41,
+      "result": "PASS before one added Unicode test; superseded"
+    },
+    {
+      "label": "Full standalone attempt1",
+      "result": "launcher failed before test execution: wrong optional-classpath metadata path; fixed path, new results directory"
+    }
+  ],
+  "limits": [
+    "JVM network/process guard, not OS/native sandbox",
+    "No live API, device, APK or journal IO validation",
+    "Independent read-only review conforms for this isolated metadata scope; 5 source hashes and 8 XML hashes/counts verified"
+  ]
+}

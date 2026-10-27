@@ -609,6 +609,95 @@ index 4707ec5e..451d83c1 100644
 +        assertFalse(success(artifacts.appendDeliveredArtifactWithReceipt(input)).inserted)
 +    }
 +
+diff --git a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java b/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
+index a06a2d8e..a3e78f2f 100644
+--- a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
+@@ -3,0 +4,2 @@ import com.jarvys.agent.CentralInvocationSource;
++import com.jarvys.agent.CrewInputContext;
++import java.util.Collections;
+@@ -9,0 +12 @@ public class CodingJobEvidenceTest {
++    private static final String GENERATION = "00000000-0000-0000-0000-000000000005";
+@@ -16 +19,2 @@ public class CodingJobEvidenceTest {
+-        return new CrewSource("g3", "workspace-execution", "bot", "mission", cycle, "scope-identity", DIGEST, call, "project_exec");
++        return new CrewSource("workspace-execution", "bot", "mission", cycle, "scope-identity", DIGEST, call, "project_exec",
++                CrewInputContext.resolve(Collections.emptyList(), Collections.emptyList()));
+@@ -21 +25 @@ public class CodingJobEvidenceTest {
+-    private static Binding binding(CaptureMode mode) {
++    private static Binding binding(SemanticCapture mode) {
+@@ -23 +27 @@ public class CodingJobEvidenceTest {
+-                mode == CaptureMode.CENTRAL_BINDING_ABSENT ? null : central("delegate-call"));
++                central("delegate-call"));
+@@ -26,2 +30,2 @@ public class CodingJobEvidenceTest {
+-    private static Binding bind(Source source, CaptureMode mode) {
+-        return new Binding(JOB, SUBMISSION, "owner", "scope", "scope-identity", PROCESS, MANAGER, source, mode);
++    private static Binding bind(Source source, SemanticCapture mode) {
++        return new Binding(GENERATION,JOB, SUBMISSION, "owner", "scope", "scope-identity", PROCESS, MANAGER, source, mode);
+@@ -33 +37 @@ public class CodingJobEvidenceTest {
+-        return new CodingJobEvidence.Record(binding(CaptureMode.CENTRAL_ENABLED), revision, phase, accepted,
++        return new CodingJobEvidence.Record(binding(SemanticCapture.ENABLED), revision, phase, accepted,
+@@ -55,3 +59,3 @@ public class CodingJobEvidenceTest {
+-        assertEquals("delegate-call", decoded.binding.source.central.sourceCallId);
+-        assertEquals("central-batch", decoded.binding.source.central.sourceBatchId);
+-        assertEquals(central("delegate-call"), decoded.binding.source.central);
++        assertEquals("delegate-call", decoded.binding.source.rootCentral.sourceCallId);
++        assertEquals("central-batch", decoded.binding.source.rootCentral.sourceBatchId);
++        assertEquals(central("delegate-call"), decoded.binding.source.rootCentral);
+@@ -60 +64 @@ public class CodingJobEvidenceTest {
+-    @Test public void missingCentralBindingIsDistinctFromMemoryDisabled() {
++    @Test public void semanticCaptureAndHistoricalRootPresenceAreIndependent() {
+@@ -62,6 +66,10 @@ public class CodingJobEvidenceTest {
+-        Binding absent = bind(operational, CaptureMode.CENTRAL_BINDING_ABSENT);
+-        Binding off = bind(operational, CaptureMode.MEMORY_DISABLED);
+-        assertNotEquals(absent, off);
+-        for (Binding b : new Binding[]{absent, off}) {
+-            CodingJobEvidence.Record r = new CodingJobEvidence.Record(b,1,Phase.SUBMISSION_INTENT,false,null,null);
+-            assertEquals(r, roundTrip(r));
++        Source attributed = binding(SemanticCapture.ENABLED).source;
++        assertNotEquals(bind(operational, SemanticCapture.ENABLED), bind(operational, SemanticCapture.DISABLED));
++        for (Source source : new Source[]{operational, attributed}) {
++            for (SemanticCapture mode : SemanticCapture.values()) {
++                Binding binding = bind(source, mode);
++                CodingJobEvidence.Record r = new CodingJobEvidence.Record(binding,1,Phase.SUBMISSION_INTENT,false,null,null);
++                assertEquals(r, roundTrip(r));
++                assertEquals(GENERATION, roundTrip(r).binding.technicalStoreGeneration);
++                assertEquals(mode, roundTrip(r).binding.semanticCapture);
++            }
+@@ -69 +76,0 @@ public class CodingJobEvidenceTest {
+-        reject(() -> bind(operational, CaptureMode.CENTRAL_ENABLED));
+@@ -71 +77,0 @@ public class CodingJobEvidenceTest {
+-        reject(() -> bind(binding(CaptureMode.CENTRAL_ENABLED).source, CaptureMode.CENTRAL_BINDING_ABSENT));
+@@ -73 +79 @@ public class CodingJobEvidenceTest {
+-    @Test public void partialOrDifferentGenerationAttributionIsRejected() {
++    @Test public void partialAttributionIsRejectedButHistoricalGenerationIsIndependent() {
+@@ -76,2 +82,7 @@ public class CodingJobEvidenceTest {
+-        CentralInvocationSource foreign = new CentralInvocationSource("g4","central","message","batch","call","run","process");
+-        reject(() -> new Source(crew("cycle","call"),new WorkspaceBinding("workspace","assignment","request"),foreign));
++        CentralInvocationSource historical = new CentralInvocationSource("historical-generation","central","message","batch","call","run","process");
++        Binding binding = bind(new Source(crew("cycle","call"),
++                new WorkspaceBinding("workspace","assignment","request"),historical), SemanticCapture.DISABLED);
++        CodingJobEvidence.Record decoded = roundTrip(new CodingJobEvidence.Record(binding,1,Phase.SUBMISSION_INTENT,false,null,null));
++        assertEquals(historical, decoded.binding.source.rootCentral);
++        assertEquals(GENERATION, decoded.binding.technicalStoreGeneration);
++        reject(() -> new Binding("g3",JOB,SUBMISSION,"owner","scope","scope-identity",PROCESS,MANAGER,binding.source,SemanticCapture.ENABLED));
+@@ -103,6 +114,8 @@ public class CodingJobEvidenceTest {
+-                new Binding(SUBMISSION,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
+-                new Binding(JOB,JOB,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
+-                new Binding(JOB,SUBMISSION,"other",b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
+-                new Binding(JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,MANAGER,PROCESS,b.source,b.captureMode),
+-                bind(new Source(crew("other-cycle","child-call"),b.source.workspace,b.source.central),b.captureMode),
+-                bind(new Source(crew("cycle","other-call"),b.source.workspace,b.source.central),b.captureMode)}) {
++                bind(b.source,SemanticCapture.DISABLED),
++                new Binding(PROCESS,JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
++                new Binding(GENERATION,SUBMISSION,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
++                new Binding(GENERATION,JOB,JOB,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
++                new Binding(GENERATION,JOB,SUBMISSION,"other",b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
++                new Binding(GENERATION,JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,MANAGER,PROCESS,b.source,b.semanticCapture),
++                bind(new Source(crew("other-cycle","child-call"),b.source.workspace,b.source.rootCentral),b.semanticCapture),
++                bind(new Source(crew("cycle","other-call"),b.source.workspace,b.source.rootCentral),b.semanticCapture)}) {
+@@ -191 +204 @@ public class CodingJobEvidenceTest {
+-        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),CaptureMode.CENTRAL_BINDING_ABSENT),1,Phase.SUBMISSION_INTENT,false,null,null);
++        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),SemanticCapture.ENABLED),1,Phase.SUBMISSION_INTENT,false,null,null);
 diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
 index 479805d3..b47617c4 100644
 --- a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt

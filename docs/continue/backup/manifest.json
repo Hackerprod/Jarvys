@@ -1,7 +1,7 @@
 {
-  "source_commit": "2b719704c962aa838638252258c70731bd376fa2",
-  "source_tree": "356b9098eb92b5649e2b7f14942bf3d8e05246fd",
-  "remote_parent": "6879289c502342401750daff21653166a11803aa",
+  "source_commit": "fd91c50bfa641a4752f4646a73b7cc10d5227f19",
+  "source_tree": "7ef61c2a8a344af706cb0dcbb44fedf2e015eec2",
+  "remote_parent": "a055631edde634a75ab1be45865215ad97e38695",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
@@ -106,6 +106,12 @@
       "restored_sha256": "cb7909e324b134ba66b56cbe32ad649f00820447174f9121e7fab18c6175ee4d"
     },
     {
+      "path": "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java",
+      "remote_blob": "a06a2d8ec82523488646c8751a5a8936a0bd02e1",
+      "remote_sha256": "f10b396e6818353023f194667890dbae17c561d4ff9adc8a9222189bb245f2f2",
+      "restored_sha256": "b73fa1799d2bdd77a700081b61ca8bac2c196eeefdd497149178d51b73300bde"
+    },
+    {
       "path": "app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt",
       "remote_blob": "479805d3425a333090e4e734da9975a5cd7a1773",
       "remote_sha256": "4cfa48f3cdfbd1db215e834b4d47391d319b99115b346083162aa642b508a4c5",
@@ -136,10 +142,10 @@
       "restored_sha256": "12277fe94e7833af5de28aca01cb93564577c0b63636067cba222146c8417ff5"
     }
   ],
-  "patch_sha256": "ca3367c4588859483a7a3706428d04fd4d1fcd9e11cb24316717d2b875c32935",
-  "readme_source_sha256": "e4fedc841e008cc0b5c25355c4a678bddfb9d0c5d7fdf86ef28d461ecb69cb23",
-  "readme_backup_sha256": "50e477f5e40a4827cf534d2d081034599c32239128848ac5ad36e526909bace5",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — procedencia Crew\n\nEste árbol **no es build-ready tal cual**. Los 22 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `2b719704c962aa838638252258c70731bd376fa2`. Validación focal independiente: 677 Full + 673 Play PASS,\n1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "patch_sha256": "9f03b2a1708c8ef0b1dac7f71a80ab89c8e72d5401014ab514b40bd84ddd9066",
+  "readme_source_sha256": "5cd82fde8eb656fa9e7f2f1df58f412634a75a0fa7e7c3708d874511b861fc35",
+  "readme_backup_sha256": "c6d7b9ea7fcd1510d6b9e383cb66530af544376a25644b0d85cfa9cd111ffd75",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — alineación Coding\n\nEste árbol **no es build-ready tal cual**. Los 23 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `fd91c50bfa641a4752f4646a73b7cc10d5227f19`. Validación focal independiente: 42 Full + 42 Play PASS,\n84 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",

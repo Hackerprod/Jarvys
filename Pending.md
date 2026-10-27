@@ -1,3 +1,9 @@
+## Checkpoint S6 — alineación Coding, 27-10-2026
+
+Envelope interno v2 alineado con Crew; Full/Play compilan y pasan 42 casos por sabor en runner offline, sin skips. Son metadatos: pendientes journal productor durable, liveness/claim, admisión antes de factory lazy, proyección técnica y recuperación sin replay (§11 del contrato Coding). No habilita ASYNC ni cierra S6/S7/S8 o paridad Engram. [Resultados](docs/continue/single-validate/S6-coding-alignment-test-results.json).
+
+Respaldo Crew confirmado: `a055631` reconstruye fuente `2b719704` mediante instrucciones del backup; esta alineación posterior aún no consta publicada. Se conserva la restricción de fixtures y el gap de decisión `linux_status`.
+
 # Pendientes de Jarvys
 
 - **Procedencia Crew / contexto de inputs:** snapshot preparado RAW/EFFECTIVE, confirmación durable del STARTED exacto y witness en la ruta real; root histórico separado de referencias plurales, con PARTIAL explícito. Ampliación standalone offline calibrada: **851 Full + 847 Play PASS** (1.698 ejecuciones, 79/78 clases, cero skips); focal Gradle y calibración standalone independiente de 21/21 por sabor. Revisión independiente conforme; código `113cd8de`. Pendientes journal, preparación antes de factoría, terminal durable y liveness/reconciliación Coding antes ASYNC. Sin generación Room inventada ni cierre S6/S7/S8/paridad. [Resultados y límites](docs/continue/single-validate/S6-crew-source-report.md).

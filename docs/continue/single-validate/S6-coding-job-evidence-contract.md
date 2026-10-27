@@ -611,3 +611,29 @@ Además de §9 y del origen Crew/input-context:
 
 Estos oráculos son requisitos pendientes, no resultados ejecutados. No se habilita ASYNC ni se cambia
 un permiso para hacerlos pasar; el futuro corte manager/backend/Room/registry debe cerrarlos coherentemente.
+
+
+## 12. Alineación del envelope aislado con la fuente Crew
+
+El envelope interno mantiene `schema: 3` y exige ahora `envelopeVersion: 2`.
+Esta versión corresponde a metadatos no conectados al journal operacional: no migra jobs
+operacionales schemas 1/2, no crea recibos durables ni activa ASYNC. El decoder rechaza
+explícitamente el shape anterior sin versión, en lugar de inventar procedencia.
+
+- Crew conserva el `CrewInputContext` exacto, plural y con cobertura PARTIAL explícita.
+  Las referencias deben apuntar a su sesión de ejecución; la procedencia histórica registrada
+  puede identificar otro bot (por ejemplo, el emisor peer) y no se reescribe.
+- `rootCentral` es raíz histórica, no causa exclusiva ni generación del almacenamiento técnico.
+  `technicalStoreGeneration` es un UUID obligatorio de binding, incluso con memoria OFF;
+  el futuro productor debe obtenerlo de la reserva Room real. El DTO no acredita esa reserva.
+- `SemanticCapture` y presencia de raíz son dimensiones independientes. El valor observado
+  en submission es inmutable entre revisiones, no permiso vivo: futuras escrituras deben
+  comprobar OFF, reset y olvido. DISABLED no habilita backfill retrospectivo ni suprime auditoría.
+- El codec exige arrays canónicos, identidades sin duplicados/solapamientos, campos específicos
+  por canal, cobertura coherente e enteros exactos. El presupuesto de caracteres lo proporciona
+  el llamador; la profundidad máxima deriva del shape, sin topes arbitrarios de inputs.
+- La prueba UTF-8 preserva unidades surrogate aisladas, pares y Unicode ordinario. El encoder
+  ya escapaba surrogates antes de este bloque: se añade cobertura, no se atribuye un bug corregido.
+
+La validación de esta alineación se registra por separado del productor pendiente de §11.
+Ni igualdad tras codec ni un terminal decodificado acreditan fsync, liveness o ejecución.

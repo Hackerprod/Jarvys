@@ -16,7 +16,9 @@ CentralWorkspace ya integra admisión explícita de cinco productores, recibos l
 
 Procedencia Crew integrada en la ruta real: snapshot RAW/EFFECTIVE preparado, confirmación durable del STARTED exacto y witness de owner/ciclo/llamada; contexto de inputs plural con PARTIAL explícito. La raíz del assignment es historia, no causa exclusiva del comando. Ampliación **standalone offline calibrada: 851 Full + 847 Play PASS** (1.698 ejecuciones, 79/78 clases, cero skips); focal Gradle y calibración independiente de 21/21 por sabor. Revisión independiente conforme; código `113cd8de`. Sin generación Room inventada, sin Coding ASYNC ni cierre S6. [Resultados y límites](docs/continue/single-validate/S6-crew-source-report.md).
 
-El respaldo remoto anterior está confirmado en `continue/s6-cloud` (`6879289`, fuente `7fd04efd`); aún no se afirma la publicación del nuevo checkpoint Crew. Conserva el archivo de prueba restringido como en remoto y un patch mínimo limpio permite reconstruir la fuente validada. El primer respaldo con este mecanismo fue `8605176` / fuente `e9c937f0`. El árbol de respaldo requiere ejecutar sus instrucciones de restauración antes de compilar; no subir directamente el archivo restaurado sin autorización de publicación. Los cambios posteriores se validan y respaldan por checkpoints, sin sobrescribir historial. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
+Alineación posterior del envelope Coding con Crew: contexto plural exacto, raíz Central histórica separada de generación técnica y política semántica independiente. Compilación Full/Play y **42 + 42 pruebas frescas offline PASS**, cero skips; metadatos solamente, sin journal durable conectado ni ASYNC. [Resultados y límites](docs/continue/single-validate/S6-coding-alignment-test-results.json).
+
+El respaldo Crew está confirmado en `continue/s6-cloud` (`a055631`, fuente `2b719704`, código `113cd8de`); la alineación posterior aún no se afirma publicada. Conserva pruebas existentes restringidas como en remoto y un patch mínimo limpio permite reconstruir la fuente validada exactamente. El árbol de respaldo requiere ejecutar sus instrucciones de restauración antes de compilar; no subir directamente los archivos restaurados sin autorización de publicación. Los checkpoints no sobrescriben historial. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
 
 ---
 
@@ -440,9 +442,9 @@ Jarvys is an independent project. Names and logos of connected services identify
 
 
 <!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->
-## Respaldo WIP recuperable — procedencia Crew
+## Respaldo WIP recuperable — alineación Coding
 
-Este árbol **no es build-ready tal cual**. Los 22 tests existentes modificados se conservan
+Este árbol **no es build-ready tal cual**. Los 23 tests existentes modificados se conservan
 exactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver
 a transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se
 eliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.
@@ -451,7 +453,7 @@ En un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: veri
 el patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,
 commits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**
 
-Source: `2b719704c962aa838638252258c70731bd376fa2`. Validación focal independiente: 677 Full + 673 Play PASS,
-1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
+Source: `fd91c50bfa641a4752f4646a73b7cc10d5227f19`. Validación focal independiente: 42 Full + 42 Play PASS,
+84 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
 paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.
 <!-- JARVYS_SAFE_BACKUP_NOTICE_END -->
