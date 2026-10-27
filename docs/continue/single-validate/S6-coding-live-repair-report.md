@@ -43,3 +43,26 @@ power-loss Android, cierre S6/S7/S8, equivalencia Engram ni APK.
 - [Manifiesto por clase, casos y hashes XML](S6-coding-live-repair-test-results.json).
 
 El juicio independiente revisa este checkpoint focal; no sustituye los gates todavía abiertos.
+
+## Tres oráculos adicionales, sin cambios de producto
+
+Sobre la producción de `025c0e31`, ambas compilaciones siguen PASS (26s) y **tres nuevos tests
+Full pasan juntos**, cero skips. No se suman a los 419 anteriores como si fueran una suite fresca.
+Play no se reejecuta: sólo se añadieron archivos testFull; conserva la evidencia del corte anterior.
+
+1. Reserva real comprometida, resultado retenido antes de entregar el Future: la interrupción no
+   pierde el job ni inventa aceptación; el pin de auditoría retiene el drain y release produce el
+   terminal restrictivo del mismo binding, sin enqueue/backend. No prueba una transacción aún pendiente.
+2. Backend sintético ejecuta una vez, observa LAUNCH_INTENT/rev3 e interrumpe su worker justo antes
+   de devolver exit0. El callback inmutable capturado por finish es UNCERTAIN y conserva el flag: prueba
+   del fallo de persistencia aunque la reparación avance antes de leerlo. La reparación termina en
+   rev4 SUCCEEDED/exit0, con Record Room/journal idéntico, un enqueue/backend y una versión de proyecto.
+   No se inspeccionan bytes antes de reparar ni se afirma haber capturado el stack del manager.
+
+3. Operación original retenida antes de ejecutar su callable: la interrupción no drena el pin.
+   Tras expirar naturalmente la invocación y liberar la cola, la operación rechaza esa fuente; el job
+   permanece PENDING sin reserva, journal, observaciones ni ejecución inventados. No es una prueba
+   de interrupción dentro de una transacción Room abierta.
+
+[Manifiesto separado](S6-coding-live-boundaries-test-results.json). Recovery, concurrencia del scanner
+y los otros gates generales siguen pendientes; tres fronteras focales no completan toda la matriz.

@@ -829,8 +829,8 @@ conservan su árbol y fecha propios; no se suman como una única suite final.
 | Claim local y preparación antes del primer efecto | Cerrado en pruebas focales | Manager real con backend/factory fake; no sustituye toda la matriz de revocaciones. |
 | Liveness y quiesce | Parcial | Lease entre dos JVM host probado; recovery/scanner concurrente del productor sigue pendiente. |
 | ACK post-commit/pre-entrega interrumpido | Cerrado en frontera específica | Mismo binding, cero enqueue/backend, pin hasta terminal real; no cubre pérdida de reserva previa. |
-| Reserva o primer journal inciertos | Parcial | Reserva entregada/primer journal UNKNOWN reparado en manager real; ACK no entregado/callable pendiente siguen abiertos. |
-| Terminal deseado y journal/proyección fallidos | Parcial | Store live repair exacto/CAS y manager preclaim probados; terminal deseado tras ejecución real y fallo final pendiente. |
+| Reserva o primer journal inciertos | Parcial | Reserva entregada/primer journal UNKNOWN, post-TX/pre-ACK y callable aún en cola probados; no interrupción dentro de TX abierta. |
+| Terminal deseado y journal/proyección fallidos | Parcial | Store exacto/CAS y manager con backend sintético ejecutado una vez+fallo terminal recuperado probados; no power-loss ni recovery extranjero. |
 | Recovery de otro owner/callback perdido | Pendiente | Muerte acreditada, terminal exacto, conflictos y cero replay/señales. |
 | STOP/ASK/policy/cancel y fallos en cada frontera | Parcial | Regresiones focales verdes; falta matriz integrada completa de §§9–11. |
 | Memoria OFF/olvido/generación y fuente semántica | Parcial | Consumidores sembrados y supresión probados; falta cadena con productor real hasta lectura/narración. |
@@ -840,3 +840,6 @@ conservan su árbol y fecha propios; no se suman como una única suite final.
 
 S7/S8, equivalencia Engram y APK tienen gates separados. Las decisiones de producto y publicación
 restringida pendientes no se consideran aprobadas por esta tabla.
+
+Adenda test-only: [tres oráculos Full](S6-coding-live-boundaries-test-results.json) posteriores al corte
+419, producción idéntica a `025c0e31`; son ejecuciones separadas, no una suite fresca combinada.

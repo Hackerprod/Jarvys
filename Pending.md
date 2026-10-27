@@ -1,3 +1,15 @@
+## Actualización test-only S6 — tres fronteras live, 27-10-2026
+
+Tres tests Full ejecutados juntos PASS, compilación ambos sabores PASS, sobre producción intacta `025c0e31`. Añaden ACK de reserva perdido, terminal después de backend ejecutado una vez/fallo de persistencia y operación original aún en cola. [Manifiesto separado](docs/continue/single-validate/S6-coding-live-boundaries-test-results.json). No es una suite fresca de 422 casos.
+
+Siguen abiertos recovery extranjero/scanner/Crew, matriz integrada restante (sin afirmar TX abierta), cadena semántica real y referencias externas de compaction. Último backup confirmado `634ccaad` restaura `025c0e31`; tres tests nuevos aún no se afirman publicados. Sin cierre S6 ni opt-in. Secciones siguientes históricas.
+
+## Actualización test-only S6 — dos fronteras live, 27-10-2026
+
+Dos tests Full adicionales PASS sobre producción intacta `025c0e31`, compilación Full/Play PASS: reserva comprometida con ACK perdido y terminal deseado después de backend sintético ejecutado una vez/fallo de persistencia. [Manifiesto separado](docs/continue/single-validate/S6-coding-live-boundaries-test-results.json). No es una suite fresca de 421 casos.
+
+Siguen pendientes operación original de reserva aún en curso, recovery extranjero/scanner/Crew, cadena semántica real y cobertura externa de compaction. Último backup confirmado `634ccaad` restaura `025c0e31`; estos tests nuevos aún no se afirman publicados. Sin cierre S6 ni opt-in.
+
 ## Estado actual S6 — reparación live acotada, 27-10-2026
 
 **234 Full + 185 Play = 419 casos frescos PASS**, ambos compilados, cero skips. La reserva entregada/primer journal incierto se repara sin inventar ACK, ejecución o roles; owner exacto, pin nuevo, quiesce y CAS tienen pruebas focales. [Reporte](docs/continue/single-validate/S6-coding-live-repair-report.md).

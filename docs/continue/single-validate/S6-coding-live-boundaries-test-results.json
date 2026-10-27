@@ -1,0 +1,84 @@
+{
+  "scope": "Three added Full-only boundary oracles; no production changes",
+  "baseCommit": "d13b3ed05fed74b24b77efc12ea00244eee61555",
+  "sourceFiles": [
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobDesiredTerminalRepairTest.kt",
+      "sha256": "1427e229763b6693197f4b786b2b6840a7b3e64410e385e187c588bcbaa06fa1"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobReservationBoundaryTest.kt",
+      "sha256": "707b766d60f14a8bf64db43263334a7cde6db0da51c2e9812fca91337b0d607f"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobPendingReservationOperationTest.kt",
+      "sha256": "d61b133743e3882a82fb7039a99b67fe1f1c10a017f563acb1cde7c254b6261f"
+    }
+  ],
+  "unchangedProductionSource": "025c0e31c8ee23e3faeb3ab502a88fa5fbebd34e",
+  "compilation": {
+    "Full": "PASS",
+    "Play": "PASS",
+    "elapsedSeconds": 26,
+    "tasks": 91,
+    "executed": 4,
+    "upToDate": 87
+  },
+  "results": [
+    {
+      "flavor": "Full",
+      "tests": 3,
+      "classes": [
+        {
+          "class": "com.jarvys.agent.linux.CodingJobDesiredTerminalRepairTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "43363cfd79704689538541de9a20a5adcabe6805f327137c15aba43ff7e9dcd3",
+          "cases": [
+            "interruptedTerminalWriteRepairsOriginalSuccessfulFactsWithoutRepeatingCommand"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobPendingReservationOperationTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "d08b69add0b11ffe37f4d666001fb13f65dc120a65dd3cd3695a1ce67903c706",
+          "cases": [
+            "queuedOriginalOperationRetainsPinUntilActualRejectionAndNeverInventsReservation"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobReservationBoundaryTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "8f5c51940b4071c64d409e99bdf73940f878234527a351e21ca7202d52aed261",
+          "cases": [
+            "committedReservationWithInterruptedWaiterAbandonsExactReservationWithoutAcceptanceOrDispatch"
+          ]
+        }
+      ],
+      "launcherFailures": [],
+      "outerExit": 0
+    }
+  ],
+  "playExecution": "Not rerun: additions exist only in testFull and production unchanged; prior 185 cases belong to previous419 checkpoint",
+  "notFreshCombinedSuite": true,
+  "runner": "Same reviewed offline-junit JVM global guard; no network or process allowances added",
+  "limits": [
+    "Both reservation boundary tests distinguish post-commit/pre-ACK from queued-before-call; no open-transaction interruption claim",
+    "Desired terminal IO failure observed via immutable completion snapshot; no manager stack or pre-repair byte observation claimed",
+    "Host JVM tests, not native Android/power-loss validation",
+    "No foreign recovery, semantic producer E2E, compaction external coverage, S6 or production opt-in claim"
+  ],
+  "priorFocusedRun": {
+    "sourceCommit": "d13b3ed05fed74b24b77efc12ea00244eee61555",
+    "tests": 2,
+    "status": "PASS; all two rerun together with the third test in current three-case result"
+  }
+}
