@@ -61,6 +61,7 @@ class CodingJobManager(
     private val recoveryLock = Any()
     private val restoreProblems = mutableListOf<String>()
     private val restoreProblemScopes = mutableMapOf<String, Int>()
+    private val journalWriter: CodingJobJournalWriter
     private val root: File
 
     init {
@@ -70,6 +71,7 @@ class CodingJobManager(
         root = com.jarvys.agent.StorageGeneration(anchor).directory("crew-context")
         verifyPath(root)
         require(!root.exists() || root.isDirectory) { "Coding job storage is not a directory" }
+        journalWriter = CodingJobJournalWriter(root)
         restore()
     }
 
@@ -368,14 +370,10 @@ class CodingJobManager(
             .put("exitCode", s.exitCode ?: JSONObject.NULL).put("error", s.error ?: JSONObject.NULL)
             .put("logBytes", s.logBytes).put("logComplete", s.logComplete)
         val target = File(destination, "${s.id}.json").also(::verifyPath)
-        val staged = File(destination, "${s.id}.${UUID.randomUUID()}.tmp").also(::verifyPath)
-        try {
-            FileOutputStream(staged).use { it.write(json.toString().toByteArray(Charsets.UTF_8)); it.fd.sync() }
-            verifyPath(target)
-            check(staged.renameTo(target)) { "Could not commit coding job journal" }
-            syncDirectory(destination)
-        } finally { if (staged.exists()) staged.delete() }
+        journalWriter.write(target, s.id, if (job.durableIdentity == null) 1 else 2,
+            json.toString().toByteArray(Charsets.UTF_8))
     }
+
     private fun restore() {
         if (!root.exists()) return
         verifyPath(root)

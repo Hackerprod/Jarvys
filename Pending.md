@@ -1,3 +1,9 @@
+## Checkpoint S6 — writer IO Coding, 27-10-2026
+
+Extracción usada por persist legacy, con candidatos exactos y fallo incierto sin replay. Full38 + Play6 PASS, compilación ambos flavors y revisión independiente conforme. [Reporte y límites](docs/continue/single-validate/S6-coding-journal-io-report.md). Pendientes claim de worker, owner lease durable, schema3/reserva Room, admisión de preparación y proyección técnica; sin ASYNC ni cierre S6.
+
+Respaldo anterior confirmado `76867431` reconstruye fuente `fd91c50b`; este bloque posterior aún no se afirma publicado. Fixtures restringidos siguen fuera del payload completo.
+
 ## Checkpoint S6 — alineación Coding, 27-10-2026
 
 Envelope interno v2 alineado con Crew; Full/Play compilan y pasan 42 casos por sabor en runner offline, sin skips. Son metadatos: pendientes journal productor durable, liveness/claim, admisión antes de factory lazy, proyección técnica y recuperación sin replay (§11 del contrato Coding). No habilita ASYNC ni cierra S6/S7/S8 o paridad Engram. [Resultados](docs/continue/single-validate/S6-coding-alignment-test-results.json).

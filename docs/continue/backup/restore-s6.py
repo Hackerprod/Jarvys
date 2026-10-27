@@ -15,7 +15,7 @@ require(sha(readme)==m['readme_backup_sha256'],'README integrity mismatch.')
 seen=set()
 for fixture in m['fixtures']:
     relative=fixture['path']; path=root/relative
-    require(relative.startswith('app/app/src/test/') and '..' not in Path(relative).parts and relative not in seen,'Invalid or duplicate fixture path.')
+    require(relative.startswith(('app/app/src/test/','app/app/src/testFull/','app/app/src/testPlay/')) and '..' not in Path(relative).parts and relative not in seen,'Invalid or duplicate fixture path.')
     seen.add(relative)
     require(sha(path)==fixture['remote_sha256'],'Fixture baseline mismatch: '+relative)
 footer=m['readme_footer'].encode(); original=readme.read_bytes()

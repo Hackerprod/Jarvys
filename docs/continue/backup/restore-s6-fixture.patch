@@ -1058,3 +1058,208 @@ index 254dd08b..c99bc3cc 100644
 +        SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY).use { assertEquals(2, it.version) }
 +    }
 +
+diff --git a/app/app/src/testFull/java/com/jarvys/agent/CodingExecutionAssemblyTest.kt b/app/app/src/testFull/java/com/jarvys/agent/CodingExecutionAssemblyTest.kt
+index f208e524..5d5b9a54 100644
+--- a/app/app/src/testFull/java/com/jarvys/agent/CodingExecutionAssemblyTest.kt
++++ b/app/app/src/testFull/java/com/jarvys/agent/CodingExecutionAssemblyTest.kt
+@@ -15,0 +16 @@ import org.junit.Before
++import org.junit.Rule
+@@ -20,0 +22,6 @@ import java.util.concurrent.Executor
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicInteger
++import java.util.concurrent.atomic.AtomicReference
++import java.lang.reflect.Proxy
++import java.lang.reflect.InvocationTargetException
+@@ -25,0 +33 @@ class CodingExecutionAssemblyTest {
++    @get:Rule val chat = ChatTestStore(true, true)
+@@ -27,0 +36,3 @@ class CodingExecutionAssemblyTest {
++    private var metadataModel = ""
++    private var oldWindow: Int? = null
++    private var oldFetched: Long? = null
+@@ -28,0 +40,6 @@ class CodingExecutionAssemblyTest {
++        val metadata = context.getSharedPreferences("provider_context_metadata", Context.MODE_PRIVATE)
++        metadataModel = ProviderSettings(context).model
++        oldWindow = if (metadata.contains("model_$metadataModel")) metadata.getInt("model_$metadataModel", 0) else null
++        oldFetched = if (metadata.contains("fetched_$metadataModel")) metadata.getLong("fetched_$metadataModel", 0) else null
++        assertTrue(metadata.edit().putInt("model_$metadataModel", ProviderContextWindowResolver.FALLBACK_CONTEXT_WINDOW)
++            .putLong("fetched_$metadataModel", System.currentTimeMillis()).commit())
+@@ -33,0 +51,4 @@ class CodingExecutionAssemblyTest {
++        val edit = context.getSharedPreferences("provider_context_metadata", Context.MODE_PRIVATE).edit()
++        oldWindow?.let { edit.putInt("model_$metadataModel", it) } ?: edit.remove("model_$metadataModel")
++        oldFetched?.let { edit.putLong("fetched_$metadataModel", it) } ?: edit.remove("fetched_$metadataModel")
++        assertTrue(edit.commit())
+@@ -36 +57,10 @@ class CodingExecutionAssemblyTest {
+-    private fun role(session: String): CrewRole = CoreAgentRuntime(context, session, emptyList())
++    private fun runtime(session: String) = CoreAgentRuntime(context, session, emptyList(), CorePromptBudget.standard(),
++        object : ModelProviderClient {
++            override fun complete(instructions: String, prompt: String, images: List<com.jarvys.agent.device.ScreenData>,
++                tools: List<ToolSpec>, sessionId: String, token: CancellationToken): ModelReply =
++                throw AssertionError("Only the scripted fixture model may run")
++            override fun completeConversation(instructions: String, history: List<ConversationTurn>, prompt: String,
++                images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>, sessionId: String,
++                token: CancellationToken): ModelReply = throw AssertionError("Only the scripted fixture model may run")
++        })
++    private fun role(session: String): CrewRole = runtime(session)
+@@ -68 +98 @@ class CodingExecutionAssemblyTest {
+-        val runtime = CoreAgentRuntime(context, session, emptyList())
++        val runtime = runtime(session)
+@@ -72,3 +102,7 @@ class CodingExecutionAssemblyTest {
+-        manager(session).use { crew ->
+-            val bot = restored(crew, selected)
+-            val registry = runtime.createCrewBotTools(context, session, CoreToolRegistry(emptyList()), bot, crew)
++        val observed = AtomicReference<CoreToolResult>()
++        val failure = AtomicReference<Throwable>()
++        val dispatched = CountDownLatch(1)
++        val turns = AtomicInteger()
++        val empty = CoreToolRegistry(emptyList())
++        CrewManager(session, empty, { bot, crew ->
++            val registry = runtime.createCrewBotTools(context, session, empty, bot, crew)
+@@ -77 +111,42 @@ class CodingExecutionAssemblyTest {
+-            val result = registry.invoke(CodingExecutionTools.STATUS, emptyMap(), bot.token)
++            val handlers = registry.handlers()
++            val index = handlers.indexOfFirst { it.declaration().name == CodingExecutionTools.STATUS }
++            check(index >= 0)
++            val original = handlers[index]
++            // Observe only: install before preparation and preserve all policy/declaration/context methods.
++            handlers[index] = Proxy.newProxyInstance(CoreTool::class.java.classLoader,
++                arrayOf(CoreTool::class.java)) { proxy, method, arguments ->
++                if (method.declaringClass == Any::class.java) {
++                    when (method.name) {
++                        "equals" -> proxy === arguments!![0]
++                        "hashCode" -> System.identityHashCode(proxy)
++                        else -> "Observed Coding status"
++                    }
++                } else try {
++                    val returned = method.invoke(original, *(arguments ?: emptyArray()))
++                    if (method.name == "execute" && method.parameterCount == 4) {
++                        try {
++                            assertNotNull((arguments!![3] as EffectInvocation).crewSource())
++                            observed.set(returned as CoreToolResult)
++                        } catch (error: Throwable) { failure.set(error); throw error }
++                        finally { dispatched.countDown() }
++                    }
++                    returned
++                } catch (error: InvocationTargetException) { throw error.cause!! }
++            } as CoreTool
++            registry.replaceSelectedHandlers(handlers)
++        }, { _, tools, incoming ->
++            CoreAgentLoop({ _, _, _, _ ->
++                if (turns.getAndIncrement() == 0) ModelReply("", listOf(
++                    ModelReply.Call("status-call", CodingExecutionTools.STATUS, emptyMap())))
++                else ModelReply("Done", emptyList())
++            }, tools, "", session, CorePromptBudget.standard(), null,
++                CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
++        }, null).use { crew ->
++            val capabilities = CoreAgentRuntime.profileCapabilities(context, session)
++            crew.configureProfiles({ selected }, capabilities)
++            crew.configureCheckpoints(CrewCheckpointCoordinator(context, session) { selected })
++            val bot = crew.spawn(selected.id, "Inspect local status", selected.tools, "Status fixture")
++            assertTrue("Real checkpointed status dispatch must complete", dispatched.await(15, TimeUnit.SECONDS))
++            crew.stop(bot.id); bot.awaitTermination()
++            failure.get()?.let { throw AssertionError(it) }
++            val result = requireNotNull(observed.get())
+diff --git a/app/app/src/testFull/java/com/jarvys/agent/flavor/CodingExecutionToolsTest.kt b/app/app/src/testFull/java/com/jarvys/agent/flavor/CodingExecutionToolsTest.kt
+index d4379e33..f0d95141 100644
+--- a/app/app/src/testFull/java/com/jarvys/agent/flavor/CodingExecutionToolsTest.kt
++++ b/app/app/src/testFull/java/com/jarvys/agent/flavor/CodingExecutionToolsTest.kt
+@@ -2,0 +3 @@ package com.jarvys.agent.flavor
++import com.jarvys.agent.ChatTestStore
+@@ -13 +13,0 @@ import org.junit.Test
+-import org.junit.rules.TemporaryFolder
+@@ -20 +20,3 @@ class CodingExecutionToolsTest {
+-    @get:Rule val folder = TemporaryFolder()
++    @get:Rule val chat = ChatTestStore(true)
++    // Production metadata access requires a real bridge for each isolated files directory.
++    private fun newFiles() = chat.newFilesDirectory().also { chat.localRunStore(it) }
+@@ -81 +83 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ALLOW)
++        val f = Fixture(newFiles(), AutonomyPolicy.ALLOW)
+@@ -88 +90 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ALLOW)
++        val f = Fixture(newFiles(), AutonomyPolicy.ALLOW)
+@@ -121 +123 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+@@ -131 +133 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+@@ -144 +146 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
++        val f = Fixture(newFiles()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
+@@ -150 +152 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
++        val f = Fixture(newFiles()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
+@@ -157 +159 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK); f.decision = ApprovalDecision.DENIED
++        val f = Fixture(newFiles(), AutonomyPolicy.ASK); f.decision = ApprovalDecision.DENIED
+@@ -164 +166 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
++        val f = Fixture(newFiles(), AutonomyPolicy.ASK)
+@@ -174 +176 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
++        val f = Fixture(newFiles(), AutonomyPolicy.ASK)
+@@ -184 +186 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
++        val f = Fixture(newFiles(), AutonomyPolicy.ASK)
+@@ -191 +193 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+@@ -201 +203 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
++        val f = Fixture(newFiles(), AutonomyPolicy.ASK)
+@@ -207 +209 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+@@ -220 +222 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+@@ -234 +236 @@ class CodingExecutionToolsTest {
+-            val f = Fixture(folder.newFolder(), executor = Executor { pending += it })
++            val f = Fixture(newFiles(), executor = Executor { pending += it })
+@@ -250 +252 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder(), executor = Executor { pending += it })
++        val f = Fixture(newFiles(), executor = Executor { pending += it })
+@@ -256 +258 @@ class CodingExecutionToolsTest {
+-        val g = Fixture(folder.newFolder())
++        val g = Fixture(newFiles())
+@@ -265 +267 @@ class CodingExecutionToolsTest {
+-        val f = Fixture(folder.newFolder())
++        val f = Fixture(newFiles())
+diff --git a/app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobRecoveryTest.kt b/app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobRecoveryTest.kt
+index 732cb449..35298601 100644
+--- a/app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobRecoveryTest.kt
++++ b/app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobRecoveryTest.kt
+@@ -2,0 +3 @@ package com.jarvys.agent.linux
++import com.jarvys.agent.ChatTestStore
+@@ -9 +9,0 @@ import org.junit.Test
+-import org.junit.rules.TemporaryFolder
+@@ -17 +17,3 @@ class CodingJobRecoveryTest {
+-    @get:Rule val folder = TemporaryFolder()
++    @get:Rule val chat = ChatTestStore(true)
++    // Production metadata access requires a real bridge for each isolated files directory.
++    private fun newFiles() = chat.newFilesDirectory().also { chat.localRunStore(it) }
+@@ -25 +27 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -34 +36 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -42 +44 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -65 +67 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scopes = ProjectScopeStore(files)
++        val files = newFiles(); val scopes = ProjectScopeStore(files)
+@@ -78 +80 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -93 +95 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -104 +106 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")
+@@ -120 +122 @@ class CodingJobRecoveryTest {
+-        val files = folder.newFolder(); val scope = ProjectScopeStore(files).open("chat")
++        val files = newFiles(); val scope = ProjectScopeStore(files).open("chat")

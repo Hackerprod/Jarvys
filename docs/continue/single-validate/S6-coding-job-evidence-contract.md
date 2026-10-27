@@ -1,6 +1,6 @@
 # S6 — contrato B: submission y ejecución durable de Coding separadas
 
-Estado: **propuesta de diseño local, pendiente de revisión independiente; no implementación**.
+Estado: **contrato revisado; metadatos aislados validados (§12), productor integrado pendiente (§11), extracción IO validada focalmente (§13)**.
 Fecha: 2026-10-26. Lectura: árbol de trabajo actual de `continue/s6-cloud`.
 Normativa: `docs/SINGLE_SESSION.md` §§7.3–7.5, B3/B4; `S6-admission-contract.md`;
 `S6-linux-coding-admission-contract.md` §5, alternativa B.
@@ -637,3 +637,36 @@ explícitamente el shape anterior sin versión, en lugar de inventar procedencia
 
 La validación de esta alineación se registra por separado del productor pendiente de §11.
 Ni igualdad tras codec ni un terminal decodificado acreditan fsync, liveness o ejecución.
+
+## 13. Siguiente corte: IO del journal operacional existente
+
+Contrato revisado antes de implementación. Este corte extrae el writer usado por `persist`
+del manager real; conserva JSON operacional schemas 1/2 y recuperación legacy. No escribe
+schema3, añade atribución, activa ASYNC ni transforma el Snapshot público en recibo durable.
+
+El manager congela una sola vez los bytes serializados bajo sus guardas actuales. El writer
+retiene un candidato opaco con destino canónico, job/schema, identidad de intento y copia
+exacta de bytes. Legacy no tiene revisión persistida: no inventarla con un contador del writer.
+El futuro productor v3 tendrá que aportar su revisión y binding exactos.
+
+La frontera positiva exige escribir el staged del mismo directorio, sincronizar fichero,
+cerrarlo, renombrar al destino y sincronizar el directorio. Sólo entonces puede emitirse un
+commit interno opaco asociado al candidato. Un decoder, Snapshot, existencia del fichero o
+relectura coincidente no acuñan ese commit. No implica persistencia física universal del hardware.
+
+El seam separa write/sync/close, rename y directory-sync para inyectar fallos verificables.
+Un error conserva candidato y fronteras intentada/confirmada sin afirmar ausencia de bytes:
+una excepción después de rename o de una sincronización puede dejar contenido persistido.
+La limpieza no oculta la excepción primaria. No hay API para reintentar un candidato antiguo
+ni replay automático; dos intentos se distinguen aunque sus bytes coincidan.
+
+La serialización interna por raíz canónica no sustituye lease de liveness entre procesos,
+CAS/revisión v3 ni protección de snapshots atrasados. Orden: job → conversación → writer;
+el writer no llama de vuelta a job/conversación/Room. Se mantienen validaciones de rutas y
+symlinks; el almacenamiento sigue fuera del proyecto editable.
+
+Oráculos ejecutados: OPEN con fallo previo; WRITE/SYNC/CLOSE/RENAME/DIRSYNC antes/después de operación real; copia defensiva, bytes exactos,
+orden sync/rename/dirsync, conservación del destino previo antes de rename, incertidumbre tras
+rename, cleanup y excepción primaria, rechazo de rutas desviadas y serialización local. Las
+pruebas de recuperación/assembly/tools afectados conservan contratos legacy. Lease, claim CAS,
+preparación antes de factory lazy y proyección Room siguen requisitos del corte integrado §11.

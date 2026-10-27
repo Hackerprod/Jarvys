@@ -1,7 +1,7 @@
 {
-  "source_commit": "fd91c50bfa641a4752f4646a73b7cc10d5227f19",
-  "source_tree": "7ef61c2a8a344af706cb0dcbb44fedf2e015eec2",
-  "remote_parent": "a055631edde634a75ab1be45865215ad97e38695",
+  "source_commit": "adb2e8358ca56db3f0f1b842e5c7c2a9bf8d49e2",
+  "source_tree": "fb9b4e94eb48890f0e5eec31a372b0f4f795b4fe",
+  "remote_parent": "76867431a0eee881f7a517d5be1cfd669bea46e6",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
@@ -140,12 +140,30 @@
       "remote_blob": "254dd08b9d2c95a81f9e42299a38d4e57cc427ef",
       "remote_sha256": "4cc20deded5be7fdef35e7d77d1712d545f09afda02e6591d8767d62019170db",
       "restored_sha256": "12277fe94e7833af5de28aca01cb93564577c0b63636067cba222146c8417ff5"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/CodingExecutionAssemblyTest.kt",
+      "remote_blob": "f208e524aa728f9fcb0e13bace2e3b84acd1ecfb",
+      "remote_sha256": "5798d1f876cc09231e081e0c603cf6947f22e7f478f174f65c9b69b45dc960d2",
+      "restored_sha256": "80f23a6feca6e4ba317e946118105ce26b659d3b19318f9e05c5e4f5a531bb33"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/flavor/CodingExecutionToolsTest.kt",
+      "remote_blob": "d4379e33318c7718df6cf364513665fcc5386cb6",
+      "remote_sha256": "735d40fab52f958b53c250ad67691608547ee3b5933d33235fe2c41d8e0313fd",
+      "restored_sha256": "b63c9a1fc2597cbcf61aa60b80715d689d47446ae0fd44195b8b230a64f40611"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobRecoveryTest.kt",
+      "remote_blob": "732cb44906a1c7b35000064b813d9cd6aa06dde0",
+      "remote_sha256": "cad0b07ad85b89a2d3171cab6520db4b195599bf76e91b1320025f196aa935ee",
+      "restored_sha256": "29b979acf9470e6ecf3697eb0fd2bdae02a47d032d421db8ed0dfb99d5d55904"
     }
   ],
-  "patch_sha256": "9f03b2a1708c8ef0b1dac7f71a80ab89c8e72d5401014ab514b40bd84ddd9066",
-  "readme_source_sha256": "5cd82fde8eb656fa9e7f2f1df58f412634a75a0fa7e7c3708d874511b861fc35",
-  "readme_backup_sha256": "c6d7b9ea7fcd1510d6b9e383cb66530af544376a25644b0d85cfa9cd111ffd75",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — alineación Coding\n\nEste árbol **no es build-ready tal cual**. Los 23 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `fd91c50bfa641a4752f4646a73b7cc10d5227f19`. Validación focal independiente: 42 Full + 42 Play PASS,\n84 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "patch_sha256": "0516361b6584f3b4b3b43c582007fd21b683d6637a185434b6017b57b8b5706c",
+  "readme_source_sha256": "4423a915fed90b6fec04934927065e09b76c65cd9dce297c15f4df0208fa19a7",
+  "readme_backup_sha256": "676fd9b2972f8d3d6345bdb3d546e429ccecd86999b25277a972d61fdf9f5f72",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — writer IO Coding\n\nEste árbol **no es build-ready tal cual**. Los 26 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `adb2e8358ca56db3f0f1b842e5c7c2a9bf8d49e2`. Validación focal independiente: 38 Full + 6 Play PASS,\n44 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",
