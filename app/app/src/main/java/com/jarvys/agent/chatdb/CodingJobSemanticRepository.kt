@@ -55,6 +55,9 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
             c.moveToFirst() && c.getString(0) == commit.payloadSha256() && c.getString(1) == CodingJobEvidenceCodec.encode(record)
         }
         check(exactTechnical) { "Semantic roles require the exact confirmed technical terminal" }
+        val accepted = sql.query("SELECT 1 FROM coding_job_observations WHERE job_id=? AND observation_kind='SUBMISSION_ACCEPTED' LIMIT 1",
+            arrayOf(record.binding.jobId)).use { it.moveToFirst() }
+        if (!accepted) { suppress(record.binding.jobId); return } // Restrictive abandonment is never an ACK.
         val link = sql.query("SELECT target_entry_id,target_fingerprint,status,admitted,terminal_confirmed FROM coding_job_semantic_links WHERE job_id=?",
             arrayOf(record.binding.jobId)).use { c ->
             if (!c.moveToFirst()) null else Link(if (c.isNull(0)) null else c.getString(0), if (c.isNull(1)) null else c.getString(1), c.getString(2), c.getInt(3) != 0, c.getInt(4) != 0)

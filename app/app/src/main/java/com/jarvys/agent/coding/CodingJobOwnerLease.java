@@ -54,16 +54,19 @@ public final class CodingJobOwnerLease {
     public File file(){return file;}
     public synchronized Pin pinSubmission() {
         if(quiescing||released||!lock.isValid())throw new IllegalStateException("Coding owner is quiescing");
-        pins++;return new Pin(this);
+        pins++;return new Pin(this,true);
     }
     public static final class Pin implements AutoCloseable {
         private final CodingJobOwnerLease owner;
         private boolean closed;
-        private Pin(CodingJobOwnerLease owner){this.owner=owner;}
+        private final boolean rootAdmission;
+        private Pin(CodingJobOwnerLease owner,boolean rootAdmission){this.owner=owner;this.rootAdmission=rootAdmission;}
+        CodingJobOwnerLease ownerIdentity(){return owner;}
+        boolean isRootAdmission(){return rootAdmission;}
         public String processId(){return owner.processId();}
         public String managerId(){return owner.managerId();}
         public void requireLive(){synchronized(owner){if(closed||owner.released||!owner.lock.isValid())throw new IllegalStateException("Coding owner pin is no longer live");}}
-        public Pin fork() { synchronized(owner) { requireLive(); owner.pins++; return new Pin(owner); } }
+        public Pin fork() { synchronized(owner) { requireLive(); owner.pins++; return new Pin(owner,false); } }
         @Override public void close(){
             boolean release;
             synchronized(owner){if(closed)return;closed=true;owner.pins--;release=owner.claimReleaseIfQuiescent();}

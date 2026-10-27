@@ -8,6 +8,7 @@ import com.jarvys.agent.CodingJobConversationGuard
 import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.MemoryWriteGate
 import com.jarvys.agent.coding.CodingJobEvidence
+import com.jarvys.agent.coding.CodingJobJournalCodec
 import com.jarvys.agent.coding.CodingJobJournalStore
 import com.jarvys.agent.coding.CodingJobOwnerLease
 import com.jarvys.agent.coding.CodingJobSnapshot
@@ -65,6 +66,11 @@ class CodingJobManager(
     private data class RecoveredAccess(val scopeId: String, val projectRoot: String, val durableIdentity: String, val owners: Set<String>)
     private class Job(var snapshot: Snapshot, val projectRoot: String, val conversationId: String, val durableIdentity: String?) {
         val lock = Any()
+        val initialSnapshot = snapshot
+        var desiredTerminal: Snapshot? = null
+        @Volatile var pendingTechnical: PendingTechnical? = null
+        @Volatile var projection = TechnicalProjection.NOT_APPLICABLE
+        val repairRunning = java.util.concurrent.atomic.AtomicBoolean()
         val claim = AtomicReference(WorkerClaim.RESERVED)
         val finished = CountDownLatch(if (snapshot.state.terminal) 0 else 1)
         val token = CancellationToken.cancellable()
@@ -74,32 +80,29 @@ class CodingJobManager(
         var needsReconciliation = false
         var technical: Technical? = null
     }
+    private class PendingTechnical(val submission: CodingJobSubmission, val bridge: ChatDatabaseBridge,
+        val pin: CodingJobOwnerLease.Pin, val authorization: CodingJobEvidence.AuthorizationSnapshot)
     private class Technical(val submission: CodingJobSubmission, val reservation: CodingJobReservation,
         val bridge: ChatDatabaseBridge, val pin: CodingJobOwnerLease.Pin,
         val authorization: CodingJobEvidence.AuthorizationSnapshot) {
         var phase = CodingJobEvidence.Phase.SUBMISSION_INTENT
         var latest: CodingJobJournalStore.Commit? = null
-        var desiredTerminal: Snapshot? = null
-        val reconciliationLock = Any()
-        @Volatile var projection = TechnicalProjection.PENDING
         @Volatile var abandonedAcceptance = false
-        @Volatile var acceptanceAttempted = false
-        var reconciliationReady = false
-        var reconciliationStarted = false
-        var terminalForReconciliation: CodingJobJournalStore.Commit? = null
-        fun persist(job: Job) {
-            val s = job.snapshot
+        fun persist(job: Job, value: Snapshot = job.snapshot) {
+            val pair = record(job,value,latest?.record()?.revision ?: 0L)
+            latest = submission.journal().write(reservation, pair.first.revision - 1, pair.first, pair.second)
+        }
+        fun record(job: Job, s: Snapshot, revision: Long): Pair<CodingJobEvidence.Record,CodingJobSnapshot> {
             val facts = if (!s.state.terminal) null else CodingJobEvidence.TerminalFacts(
                 CodingJobEvidence.TerminalState.valueOf(s.state.name), s.exitCode,
                 s.state == State.CANCELLED, s.state == State.TIMED_OUT, s.state == State.UNCERTAIN,
                 CodingJobEvidence.AbsenceCoverage.NOT_PROVEN)
-            val revision = latest?.record()?.revision ?: 0L
             val record = CodingJobEvidence.Record(reservation.binding(), Math.addExact(revision, 1L), phase,
                 true, authorization, facts)
             val snapshot = CodingJobSnapshot(s.id,s.owner,s.scopeId,s.cwd,s.redactedCommand,job.projectRoot,
                 job.conversationId, CodingJobSnapshot.State.valueOf(s.state.name),s.createdAt,s.startedAt,s.finishedAt,
                 s.exitCode,s.logArtifact,s.error,s.logBytes,s.logComplete)
-            latest = submission.journal().write(reservation,revision,record,snapshot)
+            return record to snapshot
         }
     }
     private data class InstrumentedStart(val invocation: EffectInvocation, val bridge: ChatDatabaseBridge,
@@ -181,18 +184,24 @@ class CodingJobManager(
                 val submission = CodingJobSubmission.capture(instrumented.invocation,id,UUID.randomUUID().toString(),
                     owner,scope.id(),requireNotNull(identity),pin,instrumented.ticket,CodingJobJournalStore.forFilesRoot(applicationFiles))
                 pendingSubmission = submission
+                job.pendingTechnical = PendingTechnical(submission,instrumented.bridge,pin,instrumented.authorization)
+                job.projection = TechnicalProjection.PENDING
+                jobs[id] = job
+                job.unregister = token.registerCancelAction { requestCancel(job) }
                 val reservation = instrumented.bridge.reserveCodingJobSync(submission)
                 submission.requireDispatchLive(); submission.requireFor(instrumented.invocation)
                 job.technical = Technical(submission,reservation,instrumented.bridge,pin,instrumented.authorization)
             }
-            val submissionCommit = synchronized(job.lock) { persist(job); job.technical?.latest }
-            // Visibility is not acceptance or permission to execute. Cancellation may now journal rev2,
-            // but the acceptance operation must always receive this exact original submission rev1.
-            jobs[id] = job
-            job.unregister = token.registerCancelAction { requestCancel(job) }
+            val submissionCommit = synchronized(job.lock) {
+                if (job.technical != null) job.technical!!.persist(job,job.initialSnapshot) else persist(job)
+                job.technical?.latest
+            }
+            // A pending instrumented job is observable before reserve/journal IO, never a legacy job.
+            if (jobs[id] !== job) {
+                jobs[id] = job
+                job.unregister = token.registerCancelAction { requestCancel(job) }
+            }
             job.technical?.let { technical ->
-                technical.submission.onAcceptanceCompleted { tryReconcileAbandonedAcceptance(technical) }
-                technical.acceptanceAttempted = true
                 val acceptance = technical.bridge.acceptCodingJobSync(requireNotNull(submissionCommit))
                 technical.submission.requireDispatchLive(); token.throwIfCancelled()
                 instrumented!!.invocation.bindAcceptedSubmission(acceptance)
@@ -207,10 +216,8 @@ class CodingJobManager(
                 pendingSubmission?.abandonDispatch()
                 try { lease.close() } finally { pendingPin?.close() }
             } else if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.REJECTED)) {
-                job.technical?.let {
-                    it.submission.abandonDispatch()
-                    it.abandonedAcceptance = true
-                }
+                job.pendingTechnical?.submission?.abandonBeforeWorkerClaim()
+                job.technical?.abandonedAcceptance = true
                 // Only absence of this manager's worker claim, not absence of all earlier preparation.
                 finish(job, lease, State.NOT_STARTED, null, "Job worker could not start", completion, false,
                     WorkerClaim.REJECTED)
@@ -415,13 +422,13 @@ class CodingJobManager(
             }
             job.snapshot = job.snapshot.copy(state = state, finishedAt = System.currentTimeMillis(), exitCode = exit,
                 error = detail, logComplete = logComplete)
-            job.technical?.desiredTerminal = job.snapshot
+            job.desiredTerminal = job.snapshot
             // A lost acceptance ACK restores the observer's interrupt flag. Only this audit-only
             // terminal write consumes that already-observed interrupt; no command/preparation or
             // callback runs with it cleared. A new interrupt during IO still fails conservatively.
-            val restoreObserverInterrupt = job.technical?.abandonedAcceptance == true && Thread.interrupted()
+            val restoreObserverInterrupt = job.pendingTechnical != null && expectedClaim == WorkerClaim.REJECTED && Thread.interrupted()
             try { persist(job) } catch (_: Exception) {
-                job.technical?.submission?.abandonDispatch()
+                job.pendingTechnical?.submission?.abandonDispatch()
                 job.snapshot = job.snapshot.copy(state = State.UNCERTAIN, exitCode = null, logComplete = false,
                     error = "Terminal result could not be durably recorded; do not automatically repeat the command")
             } finally {
@@ -437,7 +444,7 @@ class CodingJobManager(
                         technical.submission.abandonDispatch(); false
                     }
                     if (projected) {
-                        technical.projection = TechnicalProjection.CONFIRMED
+                        job.projection = TechnicalProjection.CONFIRMED
                         try { technical.bridge.linkCodingJobSemanticSync(commit) } catch (_: Exception) {
                             // Semantic eligibility/projection failure must not rewrite the technical process result.
                         }
@@ -448,17 +455,15 @@ class CodingJobManager(
             try { lease.close() } finally {
                 try { job.unregister.run() } finally {
                     job.unregister = Runnable { }
+                    var repairPin: CodingJobOwnerLease.Pin? = null
                     try {
-                        job.technical?.takeIf { !it.abandonedAcceptance }?.pin?.close()
+                        if(job.pendingTechnical != null && job.projection == TechnicalProjection.PENDING)
+                            repairPin = prepareAutomaticRepair(job)
                     } finally {
-                        job.claim.set(WorkerClaim.FINISHED)
-                        job.finished.countDown()
-                        job.technical?.takeIf { it.abandonedAcceptance }?.let { technical ->
-                            synchronized(technical.reconciliationLock) {
-                                technical.terminalForReconciliation = technical.latest?.takeIf { it.record().terminal != null }
-                                technical.reconciliationReady = true
-                            }
-                            tryReconcileAbandonedAcceptance(technical)
+                        try { job.pendingTechnical?.pin?.close() } finally {
+                            job.claim.set(WorkerClaim.FINISHED)
+                            job.finished.countDown()
+                            repairPin?.let { scheduleAfterOriginalDrain(job,it) }
                         }
                     }
                 }
@@ -467,49 +472,88 @@ class CodingJobManager(
         terminal?.let { try { completion(it) } catch (_: Exception) { /* Presentation failure is not execution failure. */ } }
     }
 
-    /** Only the exact original acceptance completion can unlock this audit-only continuation.
-     * It never invokes the command executor, binds an invocation, or changes terminal process facts.
-     */
-    private fun tryReconcileAbandonedAcceptance(technical: Technical) {
-        val outcome = technical.submission.acceptanceOutcome()
-        var closeWithoutProjection = false
-        val commit = synchronized(technical.reconciliationLock) {
-            if (!technical.abandonedAcceptance || !technical.reconciliationReady || technical.reconciliationStarted) return
-            val terminal = technical.terminalForReconciliation
-            if (terminal == null || !technical.acceptanceAttempted || outcome?.failed == true) {
-                technical.reconciliationStarted = true
-                closeWithoutProjection = true
-                null
-            } else {
-                if (outcome == null) return // Original callable still owns its outcome; no timeout/death inference.
-                check(outcome.acceptance.reservation() === technical.reservation) { "Foreign acceptance reconciliation" }
-                technical.reconciliationStarted = true
-                terminal
-            }
-        }
-        if (closeWithoutProjection) { technical.pin.close(); return }
-        val exactTerminal = requireNotNull(commit)
-        try {
-            Thread({
-                try {
-                    technical.bridge.projectCodingJobSync(exactTerminal)
-                    technical.projection = TechnicalProjection.CONFIRMED
-                    try { technical.bridge.linkCodingJobSemanticSync(exactTerminal) } catch (_: Exception) {
-                        // A suppressed/failed semantic link does not erase the confirmed technical terminal.
-                    }
-                } catch (_: Exception) {
-                    // Keep PENDING observable. No new DB identity, repeated acceptance, or command retry.
-                } finally { technical.pin.close() }
-            }, "jarvys-coding-terminal-audit").apply { isDaemon = true; start() }
+    private fun prepareAutomaticRepair(job: Job): CodingJobOwnerLease.Pin? {
+        if(!job.repairRunning.compareAndSet(false,true))return null
+        return try {
+            job.pendingTechnical!!.submission.abandonDispatch()
+            val pin=pinSubmission()
+            try { job.pendingTechnical!!.submission.requireRepairPin(pin); pin }
+            catch(failure: Throwable) { pin.close(); throw failure }
         } catch (failure: Throwable) {
-            technical.pin.close()
-            if (failure is Error) throw failure
-            // Scheduling failure is pending metadata, never a successfully repaired terminal.
+            job.repairRunning.set(false)
+            if(failure is Error)throw failure
+            null
         }
     }
-
+    private fun scheduleAfterOriginalDrain(job: Job, pin: CodingJobOwnerLease.Pin) {
+        val submission = job.pendingTechnical!!.submission
+        submission.onOriginalOperationsDrained {
+            // This observer can run on the Bridge worker: scheduling only, never blocking Room here.
+            try {
+                Thread({
+                    try { performTechnicalRepair(job,pin) }
+                    finally { try { pin.close() } finally { job.repairRunning.set(false) } }
+                }, "jarvys-coding-terminal-audit").apply { isDaemon=true; start() }
+            } catch (failure: Throwable) {
+                try { pin.close() } finally { job.repairRunning.set(false) }
+                if(failure is Error)throw failure
+            }
+        }
+    }
+    /** One explicit audit-only retry; status/list never trigger repairs or dispatch. */
+    internal fun repairTechnical(owner: String, scope: ProjectScope, id: String): TechnicalProjection {
+        val job=owned(owner,scope,id,allowRecoveredAccess=false)
+        if(job.pendingTechnical==null || job.projection==TechnicalProjection.CONFIRMED)return job.projection
+        check(job.claim.get()==WorkerClaim.FINISHED) { "Coding worker has not finalized" }
+        check(job.repairRunning.compareAndSet(false,true)) { "Coding repair is already running" }
+        try {
+            pinSubmission().use { pin -> performTechnicalRepair(job,pin) }
+        } finally { job.repairRunning.set(false) }
+        return job.projection
+    }
+    private fun performTechnicalRepair(job: Job, pin: CodingJobOwnerLease.Pin) {
+        val pending=job.pendingTechnical ?: return
+        try {
+            pending.submission.requireRepairPin(pin); pending.submission.requireRepairReady()
+            val reservation=pending.submission.reservationOutcome()?.reservation ?: return
+            val technical=job.technical ?: Technical(pending.submission,reservation,pending.bridge,pending.pin,pending.authorization)
+                .also { job.technical=it }
+            val terminal=synchronized(job.lock) {
+                val store=pending.submission.journal()
+                var head=store.repairHead(reservation,pin)
+                if(head==null) {
+                    val initial=technical.record(job,job.initialSnapshot,0)
+                    head=store.initializeAbandoned(reservation,initial.first,initial.second,pin)
+                }
+                technical.latest=head
+                technical.phase=head.record().highestEffectPhase
+                if(head.record().terminal==null) {
+                    val desired=job.desiredTerminal ?: return
+                    val next=technical.record(job,desired,head.record().revision)
+                    head=store.writeTerminalRepair(reservation,head.record().revision,next.first,next.second,pin)
+                    technical.latest=head
+                }
+                // A historical terminal cannot silently replace a different desired terminal.
+                job.desiredTerminal?.let { desired ->
+                    val expected=technical.record(job,desired,head.record().revision-1)
+                    check(java.util.Arrays.equals(head.copyPayload(),CodingJobJournalCodec.encode(expected.second,expected.first))) {
+                        "Repaired terminal does not match the exact desired facts"
+                    }
+                    job.snapshot=desired
+                }
+                head
+            }
+            pending.bridge.repairCodingJobTerminalSync(terminal,pin)
+            job.projection=TechnicalProjection.CONFIRMED
+            try { pending.bridge.linkCodingJobSemanticRepairSync(terminal,pin) } catch (_: Exception) {
+                // Original ticket/target only; suppressed semantics do not erase technical completion.
+            }
+        } catch (_: Exception) {
+            // Exact pending candidate/desired terminal remain observable. No loop or command retry.
+        }
+    }
     fun technicalProjection(owner: String, scope: ProjectScope, id: String): TechnicalProjection =
-        owned(owner, scope, id).technical?.projection ?: TechnicalProjection.NOT_APPLICABLE
+        owned(owner, scope, id).projection
 
     private fun requestCancel(job: Job) {
         synchronized(job.lock) {
@@ -589,6 +633,7 @@ class CodingJobManager(
     private fun persist(job: Job) {
         val technical = job.technical
         if (technical != null) { technical.persist(job); return }
+        if(job.pendingTechnical!=null)throw IOException("Coding reservation is still unresolved")
         persistLegacy(job)
     }
     private fun persistLegacy(job: Job) = conversations.active(job.conversationId) {

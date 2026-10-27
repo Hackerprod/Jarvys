@@ -813,3 +813,30 @@ sus límites: una raíz Central no acredita por sí sola la cobertura de todos l
 digest; esos episodios conservan cobertura estructural pero `episodesComplete=false` hasta resolver esa
 cobertura. La elegibilidad previa del narrador que exige evidencia OK no se transforma en una narración
 de éxito para jobs error-only. Estos límites no constituyen cierre de S6 ni habilitación ASYNC.
+
+
+## 16. Estado de los gates tras los checkpoints ACK y live repair (27-10-2026)
+
+Esta tabla es seguimiento del alcance ya definido en §§9, 11.6 y 15.5, no una ampliación
+ni un juicio global de S6. Último corte: reparación live sobre `7e37b5f7`; 234 Full + 185 Play casos frescos
+([manifiesto](S6-coding-live-repair-test-results.json)). Las evidencias de checkpoints anteriores
+conservan su árbol y fecha propios; no se suman como una única suite final.
+
+| Gate existente | Estado del checkpoint | Evidencia o cierre pendiente |
+|---|---|---|
+| ACK administrativo, wrappers y exclusión de tareas | Cerrado en pruebas focales | Registry real separa aceptación de command-OK; no se habilitan tareas ASYNC. |
+| Fuente Crew exacta y contexto plural | Integración focal probada | Same-save/source y binding; falta cerrar replay del loop ante STARTED sin respuesta. |
+| Claim local y preparación antes del primer efecto | Cerrado en pruebas focales | Manager real con backend/factory fake; no sustituye toda la matriz de revocaciones. |
+| Liveness y quiesce | Parcial | Lease entre dos JVM host probado; recovery/scanner concurrente del productor sigue pendiente. |
+| ACK post-commit/pre-entrega interrumpido | Cerrado en frontera específica | Mismo binding, cero enqueue/backend, pin hasta terminal real; no cubre pérdida de reserva previa. |
+| Reserva o primer journal inciertos | Parcial | Reserva entregada/primer journal UNKNOWN reparado en manager real; ACK no entregado/callable pendiente siguen abiertos. |
+| Terminal deseado y journal/proyección fallidos | Parcial | Store live repair exacto/CAS y manager preclaim probados; terminal deseado tras ejecución real y fallo final pendiente. |
+| Recovery de otro owner/callback perdido | Pendiente | Muerte acreditada, terminal exacto, conflictos y cero replay/señales. |
+| STOP/ASK/policy/cancel y fallos en cada frontera | Parcial | Regresiones focales verdes; falta matriz integrada completa de §§9–11. |
+| Memoria OFF/olvido/generación y fuente semántica | Parcial | Consumidores sembrados y supresión probados; falta cadena con productor real hasta lectura/narración. |
+| Narración/compaction pending y CAS | Cerrado en pruebas focales | Nuevo job o cambio invalida snapshot; omisiones no acreditan éxito global. |
+| Cobertura de referencias externas retenidas | Pendiente | Roles de job/contexto Crew no equivalen por sí solos a hojas Central cubiertas. |
+| Mutantes pertinentes y opt-in final | Pendiente | Sólo tras cerrar los gates anteriores y juicio independiente; catálogo permanece desactivado. |
+
+S7/S8, equivalencia Engram y APK tienen gates separados. Las decisiones de producto y publicación
+restringida pendientes no se consideran aprobadas por esta tabla.

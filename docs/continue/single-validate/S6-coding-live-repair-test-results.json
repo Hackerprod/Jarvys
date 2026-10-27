@@ -1,0 +1,1027 @@
+{
+  "scope": "Fresh bounded live-owner Coding journal repair; no production ASYNC opt-in or foreign recovery claim",
+  "baseCommit": "7e37b5f766cb9e85a3bfb1456c0605090f9b480a",
+  "sourceFiles": [
+    {
+      "path": "app/app/src/full/java/com/jarvys/agent/linux/CodingJobManager.kt",
+      "sha256": "bc3eea9920618ce1fdbfce9651c65d10e37b34d40aa0842414fb7d4c64e490d5"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
+      "sha256": "096179e54439319a9253a549cc753815283936e37a22df4e84a7fa11130292cd"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/CodingJobRepository.kt",
+      "sha256": "e22d5d23a28c6906d3af6b17c29cb54a0a7ce44aace323d3da3f1ab3e97d7d44"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/CodingJobSemanticRepository.kt",
+      "sha256": "d903d0b1d4c579794eb2490b53657e39ef36b5d3d78cc81330ae6a933c6e595e"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/coding/CodingJobJournalStore.java",
+      "sha256": "3418ab3473f8d546930fa949a3093369d8c79afc8470ac5889ddb7c69cfe6c8b"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/coding/CodingJobOwnerLease.java",
+      "sha256": "15047f789497f9ef98d11aa84fd7225b3805df8ec93efb3ea109bc3ba4a4d552"
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/coding/CodingJobSubmission.java",
+      "sha256": "b01f027cd0854eed5f3380bf4277f2b54962515afcf32600261e9ed778b5dec1"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CodingJobJournalRepairTest.kt",
+      "sha256": "9ea2fd64eeb434e068c14bd8d8b441889b580b9d7af4568b13b0685d806ba714"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CodingJobRepairBoundaryTest.kt",
+      "sha256": "05d2f9ff34c6b8768494cd759f3e9100196e5c9d51eb3c9b425f90b507f96bbd"
+    },
+    {
+      "path": "app/app/src/testFull/java/com/jarvys/agent/linux/CodingJobLiveRepairTest.kt",
+      "sha256": "ed02045b520c61269d53d6f77c35c58cb59b9fa10d6d05ee9365764d71684237"
+    }
+  ],
+  "compilation": {
+    "Full": "PASS",
+    "Play": "PASS",
+    "elapsedSeconds": 81,
+    "tasks": 91,
+    "executed": 18,
+    "upToDate": 73
+  },
+  "results": [
+    {
+      "flavor": "Full",
+      "tests": 234,
+      "classes": [
+        {
+          "class": "com.jarvys.agent.CodingAsyncRegistryTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "a9918cc5e77fa4a31bd4f8ca625febeed8d8df749d858f581b2ce7ec0285a599",
+          "cases": [
+            "presentationSuccessWithoutDurableAcceptanceIsNotAccepted",
+            "sealedAcceptedInvocationCannotLeakReceiptIntoAnotherCallOrPrecancelledCall",
+            "synchronousToolCannotReturnAnotherJobsAdministrativeReceipt",
+            "directInvocationWithoutPreparedSourceCannotDispatch",
+            "cancellationAfterAcceptancePreservesDurableJobIdentityWithoutCommandSuccess",
+            "foreignReceiptCannotBeAdoptedByAnotherLiveInvocation",
+            "actualPreparedSubmissionOwnsReceiptAndSkipsSynchronousFinalizers",
+            "missingCoverageRejectsBeforeProducerDespiteRealPreparedSource"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingEpisodeConsumerTest",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "ca5ceaa760390efe59e62fb878e0c2e317be8845f393d04754d8ef276a8f9694",
+          "cases": [
+            "pendingLinkBlocksOnlyItsCapturedTargetNotAnotherEpisode",
+            "confirmedSuppressedTerminalUnblocksOnlyVisibleEvidenceWithOmissionMarker",
+            "compactionMarksPendingTechnicalJobActiveEvenWithSuppressedSemantics",
+            "compactionRejectsNewPendingJobAfterCandidateWithoutChangingSourceLeaves",
+            "offDuringModelResponseCannotCommitNarrationAfterReenable",
+            "compactionSnapshotIncludesTerminalSemanticStatusEvenWhenNoRolesAreAdded",
+            "codingEvidenceSourceWithoutExactLiveLinkIsExplicitlyUnavailable",
+            "memoryGetAndNarratorConsumeCodingRoleWithoutInventingMissingSource",
+            "changedSourceIdentityIsNotBlockedByOldPendingTarget",
+            "pendingTechnicalJobBlocksNarrationEvenWhenSemanticStatusIsSuppressed",
+            "newPendingJobDuringModelResponseRejectsNarrationCommit"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingEpisodePayloadTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "fdb9f522759a7d6a0dee8be1a893aeeb891ab7ea64b5b605d25491fc50428a02",
+          "cases": [
+            "submissionAndExecutionCountAsOneJobNotTwoCommands",
+            "boundedAggregationPreservesRolesUniqueJobsAndNoGoalVerification",
+            "missingJobIdentityCannotBecomeAnAffectedItemCount",
+            "suppressedJobsRemainExplicitEvenWhenOnlyOtherEvidenceIsVisible"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingExecutionAssemblyTest",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "6d80000daa8379e208948a208ec6259f779b4cb605d5910f2072f899cd149756",
+          "cases": [
+            "disablingSelectedProfileWhileApprovalPendingBlocksLaunchInLiveResolver",
+            "noninteractiveAndPartialCeilingsDoNotInjectExecution",
+            "realEffectiveProfileHonorsAskAllowDenyAndKeepsCommandReceipt",
+            "customCopiesDoNotInheritExecutionButExplicitCustomSelectionsRemainValid",
+            "builtInActualRegistryExposesFullExecutionAndCannotForwardItToGenericChildren"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobJournalRepairTest",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "b2320fde2e8e8243af877268fa628138f18ba48ae4ea664daf7e13c26b64c381",
+          "cases": [
+            "admittedRepairPinSurvivesQuiesceButNewPinCannotBeIssued",
+            "uncertainTerminalRepairsSameRevisionWithoutInventingAnotherTransition",
+            "newPinMustBeFromExactOwnerAndClosedOriginalCannotAuthorizeRepair",
+            "uncertainInitialHeadRepairsExactBytesThenAppendsOneTerminalWithIdempotentCas",
+            "thirdBytesRejectRepairWithoutOverwriteAndExactCandidateRemainsRepairable",
+            "replacedProjectDirectoryRejectsConfirmedHeadEvenWhenPayloadIsUnchanged",
+            "noHeadInitializationRequiresAbandonmentAndOriginalOperationsToHaveDrained"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobRepairBoundaryTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "356a82b6d2ffc5845780016dbb8462949eb9fc5fb16a5417921e389da6f398fa",
+          "cases": [
+            "replacementGenerationCannotAdoptRestrictiveTerminal",
+            "completedRestrictiveRepairIsIdempotentAndDoesNotInventAcceptance",
+            "genericAbandonmentIsNotPreclaimProducerProvenance",
+            "genericProjectionCannotAcceptAnUnacceptedReservation"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobSemanticSourceTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "ae6a1f0d38db68b96a60dffa34c55de29af44b6227aeb689100fc9159aa0ea15",
+          "cases": [
+            "changedBindingCannotBeInferredFromLatestObservation",
+            "replacementDestinationCannotAdoptHistoricalTechnicalRecord",
+            "editedSourceMessageInvalidatesSource",
+            "wrongRoleOrdinalDoesNotExposeSourceByJobIdAlone",
+            "explicitMemoryRevisionInvalidatesSourceWithoutErasingTechnicalHistory",
+            "automaticNarrationKeepsExactHistoricalSource"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CompactionFlushPersistenceTest",
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "ba3434620c913d9e6e0d69e88a607dd20ebb0fbd3dbf39e5429a006115f6e9bb",
+          "cases": [
+            "partialEpisodeWithRetainedBatchCannotBecomeCompleteAndReusedCallIdsStayScoped",
+            "sourceSnapshotCarriesTrustAndDurableOrderingInsteadOfUuidOrder",
+            "concurrentEpisodeChangeRejectsDigestWithoutErasingSummaryOrEvidence",
+            "restoredProtocolGroupsBindExactBatchAndResultNotBareReusedCall",
+            "changedSourceRejectsDigestButStillAppendsIncompleteSummary",
+            "syntheticMissingResultNeverReceivesDurableResultProvenance",
+            "exactSelectedMessagesExcludeRetainedSourcesAndBindOnlyReturnedCompaction",
+            "turnCopiesSharePostCommitIdentityAndRejectRebinding",
+            "ancestorWrapperPreservesLeafIdentityButLegacySummaryIsIncomplete",
+            "sourceSnapshotUsesCurrentDurableTextAndRejectsHiddenMessages",
+            "missingForeignSourceNeverBecomesCompleteCoverage",
+            "failedAppendRollsBackDigestBindingAndCounters",
+            "disabledOrCancelledCandidateDoesNotSaveMemoryOrCompleteFlush",
+            "repeatedIdenticalLeafRangeReusesDigestWithoutAddingRevision"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CompactionMemoryFlushTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "38b54147f9f72988c920b042d86833b95ed08cd968b162b271c9919fd5f058b6",
+          "cases": [
+            "slidingFallbackExtractsOnlyOnceForTheFinalPlanAndReturnsBoundSummary",
+            "memoryOffCompactionRetainsOnlyStructuralCoverageForLaterEnabledPass",
+            "editedOrHiddenDurableInputNeverFeedsStaleTextToDigestOrFactExtraction",
+            "incompleteDigestStillExtractsAccreditedUserFactsExactlyOncePerPass",
+            "candidateDoesNotCompleteUntilExactCompactionCommitsAndNeverAdvancesExtractionCursor",
+            "missingSourceAndToggleDuringModelCannotProduceCompletionCandidate"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.ScheduledTaskBoundToolTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "7cce833d557d89788c926b615a48cda45c188a525f438134282e1f95f057d528",
+          "cases": [
+            "deferredTaskWriteHasTypedPendingDecisionWithoutAdmission",
+            "transportsTheSameInvocationAndPreservesCompletionMetadata",
+            "preservesResponseAdmissionAndVisibleResultMetadata",
+            "asyncMetadataIsForwardedButTasksRejectBeforeDeferralOrDispatch"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.CodingJobMigrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "8719414969a562297d5132df6f1753ee237963937dbdbf6b7cfbaf53870f6ab2",
+          "cases": [
+            "submissionAndRevisionIdentityConstraintsAreEnforcedWithoutCentralRows",
+            "semanticLinkMigrationPreservesExistingTechnicalJobsWithoutBackfillingTargets",
+            "additiveMigrationMatchesFreshRoomAndDoesNotFabricateJobsOrGeneration"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.ConnectionStateEventMigrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "ad6fbd3001bb32418413cd37a99a5808f9d754246719fa08e994dd8f2502befd",
+          "cases": [
+            "legacyRowsRemainIntactWithoutFabricatedOrderingOrProof",
+            "migratedTableMatchesFreshRoomColumnsKeysAndIndexes",
+            "epochSequenceIsUniqueWithoutCollapsingLegacyNullMetadata"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test",
+          "tests": 33,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "198d66b954d4535197f43a3d567102539047759c881166b53a37c3f6599d00c4",
+          "cases": [
+            "privacyColumnsAreNotPartOfTheSchema",
+            "strictJournalTextRoundTripsUnpairedUtf16CodeUnitsAsBlob",
+            "futureSchemaVersionIsRejectedWithoutChangingDatabaseBytes",
+            "exportedV5MigratesThroughProviderWithoutLosingLegacyEventsAndMatchesFreshV6",
+            "messagePartsHaveNoRevisionAndOrdinalIsUniqueWithinTheMessage",
+            "pendingInterruptIndexIsNonUniqueAndIncludesDispatchPosition",
+            "foreignKeysAreEnforcedOnASecondWriterConnection",
+            "ledgerCreatedAtColumnsAreRealAndRoundTripTheOriginalDouble",
+            "declaredPrimaryAndUniqueKeysRejectDuplicates",
+            "m1aDaosRemainInternal",
+            "deletingFileReferenceLeavesConversationHistoryAndPhysicalFileInPlace",
+            "crewMessageActivityBindingAndLosslessTextRoundTripAsTypedRows",
+            "exportedSchemaV6MatchesRealDatabaseAndPublishedFixturesRemainUnchanged",
+            "deletingConversationCascadesAcrossNormalizedChildTables",
+            "installedTriggerNamesExactlyMatchTheDatabaseTriggerContract",
+            "publishedV1DatabaseResetsAndSupportsNewChatAndPersonalMemory",
+            "entityInsertsDoNotUseReplaceConflictStrategy",
+            "newConversationAndTombstoneTriggersRejectRawSqlAndAfterDeletePersistsMillis",
+            "itemKeysetPagesCoverFiveHundredRowsWithoutGapsOrDuplicates",
+            "tombstonesRejectUpdateAndDelete",
+            "everyConversationChildCascadesAndOnlyGlobalStorageAndTombstoneRowsRemain",
+            "workspaceReplyAndEvidenceIdsAreUniqueWithinConversationOnly",
+            "activeGenerationRunKeysAreUniqueAndTerminalRunsReleaseTheKey",
+            "deletingConversationThatWasNeverCreatedLeavesPermanentTombstone",
+            "journalIdentityKeysAreScopedToConversationLedger",
+            "indexedTailReadStaysWithinHalfSecondAfterFiftyThousandMessages",
+            "databaseSupportsConcurrentReadersUnderWal",
+            "tombstonePreventsDuplicateInsertFromResurrectingConversation",
+            "onOpenRecreatesMissingDatabaseTriggers",
+            "createsEveryDeclaredEntityTableAndEnforcesPragmaContract",
+            "duplicateRowsAreRejectedForEveryStrictJournalTable",
+            "nestedContextElementsKeepWriterLeaseAndReadTheirOwnWrites",
+            "foreignKeyCheckIsEmptyAndEveryDeclaredForeignKeyRejectsAnOrphan"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.MigrationDriverParityTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "5cec680b3044203175ca23025d2102769d888f1fabbbdbc9b2db13e8fa0ceb57",
+          "cases": [
+            "everyRegisteredMigrationHasEquivalentDriverAndSupportEffects"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceAlignmentTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "fb077f746f84809e0c591c455cdd7039bb7fc60a874b8e8fca09adac60211e0c",
+          "cases": [
+            "disabledSemanticCaptureStillRequiresActualTechnicalGeneration",
+            "semanticCaptureAndHistoricalRootPresenceAreIndependentFourWayMatrix",
+            "completeMeansKnownReferencePerAppliedIdNotAllPossibleChannels",
+            "technicalDestinationChangeCannotBeIdempotentContinuation",
+            "contextDestinationMustMatchCrewButHistoricalPeerIdentityMayDiffer",
+            "pluralChannelsAndUnresolvedIdsRoundTripWithoutMergingHistoricalClaims"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceCodecV2Test",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "db755e14046fa2d5df01e759cb66ae5b1d2ee55d3c72eab42495b40362db27f2",
+          "cases": [
+            "rejectsDuplicateKeysIncludingEscapedEquivalentKey",
+            "callerBudgetAndStrictJsonBoundaries",
+            "requiresExplicitVersionAndRejectsLegacyShapeAndUnknownFields",
+            "utf8ByteRoundTripPreservesEverySurrogateUnitAndOrdinaryUnicode",
+            "rejectsDuplicateReorderedAndConflictingReferenceIdentities",
+            "exactLongsRejectOverflowDecimalsAndCoercion",
+            "maximumSchemaDepthAndCanonicalBothChannelsRoundTrip",
+            "rejectsUnresolvedDuplicatesOverlapOrderingAndFalseCoverage",
+            "schemaDepthRejectsOneExtraContainerBeforeDtoCoercion",
+            "rejectsChannelSpecificExtraFieldsAndWrongArrayTypes"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "a89ecaebcb58606a1b31b60f2628fdeac945e8ceccd2807b1c3a13afb36fdc02",
+          "cases": [
+            "phaseAcceptanceAndAuthorizationCannotRegress",
+            "notStartedDoesNotInferAbsenceFromMissingAuthorizationOrIntent",
+            "parserBudgetNestingAndIdentifierValidationFailClosed",
+            "numbersAndBooleansAreExactAndNeverCoerced",
+            "acceptanceAndLaunchIntentRemainNonterminalMetadata",
+            "contradictoryProcessExitFactsCannotClaimSuccessOrFailure",
+            "decoderRejectsUnknownMissingPartialAndLegacyFields",
+            "semanticCaptureAndHistoricalRootPresenceAreIndependent",
+            "escapedIdentifiersRoundTripWithoutMutableCollections",
+            "sourceValuesPreserveDistinctCentralAndCrewCallsWithoutSyntheticChildBatch",
+            "jobSubmissionOwnerAndCrewCycleCannotChangeAcrossRevisions",
+            "everyTerminalStateRoundTripsWithoutLosingHighestIntent",
+            "terminalCannotBeReopenedRevisedOrContradicted",
+            "identifierControlsAreRejectedWithoutInventingAnOpaqueIdLengthCap",
+            "exactRevisionReplayIsIdempotentButChangedPayloadAndGapsAreRejected",
+            "partialAttributionIsRejectedButHistoricalGenerationIsIndependent",
+            "decoderRejectsDuplicateKeysIncludingEscapedAliasesAndTrailingData"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.flavor.CodingExecutionEnqueueUncertainTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "8c4a4ff77609f0675b7d75088b2b9d73eea9bef4a0bbf2c40ce4a4c9a80e3250",
+          "cases": [
+            "toolPreservesJobIdentityAndFactualTerminalWithoutReportingEnqueueSuccess"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.flavor.CodingExecutionToolsTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "3cd251880841222e38ee31a5293dae400cc7778fda3ceb9e2ab1831678df7761",
+          "cases": [
+            "existingLinuxAllowAndDenyRemainEffectiveWithoutCodingOverride",
+            "allowAlwaysCannotHideRevocationOrPretendTheChoiceWasSaved",
+            "crossInstanceCodingPolicyAbaAtLaunchInvalidatesExactSnapshot",
+            "longCommandPreviewCannotConsumeTheBudgetNeededForJobLogsAndLifecycle",
+            "denialAndPolicyRevisionChangeDoNotLaunch",
+            "statusIsInspectionOnlyAndDisclosesTheEffectiveCodingPolicy",
+            "executionTimeoutIsFiniteByDefaultAndStrictlyBoundedBeforeApproval",
+            "allowStillRejectsUnpreparedRuntimeStaleScopeAndOccupiedWriterLease",
+            "revokedCapabilityMissingToolsAndInteractiveArgumentsFailClosed",
+            "absentPolicyAndExplicitAllowRunWithoutCardsAndKeepDurableReceipts",
+            "queuedAllowRevalidatesPolicyAndReleasesWriterLeaseWithoutLaunching",
+            "failedAlwaysPersistenceStillAllowsOnlyTheApprovedCommand",
+            "savedLegacyAskStillAsksAndExplicitCodingDenyBlocksEvenPrincipalAllow",
+            "explicitCodingAllowIgnoresUnrelatedPrincipalRevocationAtLaunch",
+            "allowStillHonorsStopAndLateCapabilityRevocation",
+            "oldScopeVersionInvalidatesApprovalAndToolsCannotDelegate",
+            "allowAlwaysApprovesThisCommandAndPersistsOnlyCodingPermission"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobAcceptanceBoundaryTest",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "51faec857f807909b4ec65fbfc6627fab9fc1afa38a5726c8acb128af40e712b",
+          "cases": [
+            "hostInterruptedWriterCannotMintCommitWhenDirectorySyncIsInterrupted",
+            "committedAcceptanceWithInterruptedWaiterProjectsSameJobTerminalWithoutEnqueueAndDrainsPinAfterProjection"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobJournalWriterTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "f65abe6b601cf51fbdd48f3f38154a946cd5c8394a892b5fe1fbc790077aff23",
+          "cases": [
+            "directorySyncFailureBeforeOrAfterCallCannotMintCommit",
+            "schemaIdentityOutsideRootAndSymlinkTargetsAreRejectedBeforeOpening",
+            "failuresBeforeRenameKeepOldTargetAndNeverReturnCommit",
+            "renameAppliedThenThrownIsUnconfirmedDespiteReadableNewBytes",
+            "realWriteReturnsExactDefensiveBytesOnlyAfterAllBoundaries",
+            "writeSyncOrCloseAppliedThenThrownDoesNotAdvanceConfirmationOrRename",
+            "separateWriterInstancesSerializeSameRootWithoutClaimingRevisionCas",
+            "cleanupFailureDoesNotHidePrimaryAndAttemptsHaveDistinctIdentity"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobLiveRepairTest",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "fa148cfe27fedfcd4367eded3c8072ad1cff8bed1a304cc4fc317e35a49d7be9",
+          "cases": [
+            "actualPendingFirstJournalRepairsAsReservationAbandonedWithoutInventingAcceptance",
+            "quiesceBeforeFirstJournalFailureBlocksFreshRepairPinAndPreservesExactPendingBytes"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobRecoveryTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "65184f35df9748bbf11c682d1fdc37c692f0482f092d1e81ba564224ee675126",
+          "cases": [
+            "projectVersionAndPreflightAreRecheckedAtActualLaunch",
+            "jobsAreBoundToConversationOwnerAndDurableIdentity",
+            "cancellationRemainsPendingUntilWorkerReapsAndTimeoutIsDistinct",
+            "failedLogJournalIsPreservedAndCounted",
+            "recoveryNeverExecutesAndDistinguishesUnstartedFromUnknown",
+            "completionHasRealExitCodeAndMutatesScopeOnce",
+            "paginationPreservesUtf8AndRejectsInteriorOffsets",
+            "noLaunchHookCannotClaimSuccess"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobTechnicalBoundaryTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "130380db2daf288ea301c74838d8e1bec1500d12f3e8a3cff4c1732b9ccd8864",
+          "cases": [
+            "queuedSubmissionWithMemoryOffCommitsBothPreparationProofsBeforeColdBackendAndNeverReplaysDuplicate",
+            "rejectedRoomPreparationNeverEntersEvenTheColdBackendFactory",
+            "quiescingBeforeFirstLazyOwnerPinRejectsWithoutReservationOrEnqueue",
+            "inlineWorkerThenExecutorThrowKeepsActualTerminalDistinctFromAcceptanceAndDispatchesOnce"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.linux.CodingJobWorkerClaimTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "2a71a518cb8126d34bb4592651ab6a1e84f04fbc7435bc79748c3be50108fca2",
+          "cases": [
+            "executorCancellationAfterInlineClaimIsTransportUncertaintyNotJobCancellation",
+            "cancellationBeforeClaimDoesNotDispatchAndDuplicateDoesNotRefinalize",
+            "completedCallbackMayReenterWithoutOldCatchReleasingNewJobLease",
+            "trueRejectionRejectsRetainedLateRunnablePermanently",
+            "fatalWorkerErrorStillFinalizesOnceAndIsRethrown",
+            "inlineRunThenThrowPreservesFactualSuccessAndSingleCompletion",
+            "liveClaimThenEnqueueThrowDoesNotFinalizeOrReleaseWorkerLease",
+            "duplicateRunnableDuringClaimAndAfterFinishDoesNotRunOrCleanUpTwice"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.proactive.ProactiveCompletionMetadataTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "34d7d0be0f7ef2252153d09aa21e992ba2b39daed62021b63dde0ddc3a0dafa9",
+          "cases": [
+            "redactingWrapperPreservesArgumentSensitiveAsyncMetadata"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.ScheduledTaskProcessorTest",
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "50314d15b65a0759581042bf9948a5c7ac8759a4f01f23329ca69483cc0fb316",
+          "cases": [
+            "successfulSilentRunClosesAnIncidentAndSendsOneRecoveryNotification",
+            "silentRunGetsExactReadOnlyScopeRedactsToolDataAndDeliversOnceToTaskConversation",
+            "askReadIsQueuedInsteadOfRunningInTheBackground",
+            "successfulTaskAfterAttentionSendsOneRecoveryNotice",
+            "runPromptContainsTaskDataAndNoDeliveryOrTerminalToolPolicy",
+            "aWriteWithoutTaskGrantIsQueuedAndDenyOrCreatorCeilingRemovesIt",
+            "stopObservedAlongsideProviderSetupFailureIsInterruptedRatherThanRetried",
+            "cancellationDuringModelTurnReturnsInterruptedAndStopsBackgroundLease",
+            "allowedModuleReadWaitsForVisibleAppAndExecutesWhenResumed",
+            "alwaysEmptyOrNoReplyRecordsNoVisibleResultAndNeverRetries",
+            "approvedModuleWriteWaitsForVisibleAppWithoutRequestingApprovalAgain",
+            "allowedWriteExecutesOnlyWhenTheTaskHasAnExplicitWriteGrant",
+            "foregroundRunBlocksTasksAndTaskRequestPreemptsProactiveWithoutStartingModel",
+            "argumentSensitiveWriteCannotDisappearBehindReadUnattendedMetadata",
+            "retryAfterMessageCommitButBeforeLedgerProducesOneMessageNotificationAndOccurrenceRow",
+            "wrappedHttpRequestTimeoutIsRetryableWithStructuredProviderCause",
+            "noProviderNeedsAttentionAndSilenceIsRecordedWithoutNotification",
+            "repeatedPermanentCauseNotifiesOnlyOnceUntilASuccessfulRunClosesTheIncident",
+            "finalTextIsDeliveredWithoutTaskRespondAndOnlyIfNotableNoReplyIsSilent",
+            "permanentConnectorLossNeedsAttentionAndTransientProviderFailureRetriesSameClassOfOccurrence",
+            "askWriteIsQueuedWithExactArgumentsAndNeverExecutesInTheUnattendedRun",
+            "toolOutputCannotGrantTaskManagementToolsToUnattendedRuns"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskAsyncExclusionTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "c9921501ba595b6e1f2d6bdae0ec082e48220461d133463565f97935866aa402",
+          "cases": [
+            "unknownCurrentDefinitionCannotDefaultToSynchronousClaim",
+            "trackedAsyncRejectsBeforeEvidenceAndPreservesArgumentSensitiveMetadata",
+            "currentAsyncDefinitionRejectsLegacyPendingBeforeClaimOrIntent"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskMemoryAdmissionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "0892cf9e18a4f32c3a7f53cda7aeb0106fc06850b552db6278eedfeabf8372db",
+          "cases": [
+            "genericMemorySuccessDoesNotProveCompletion",
+            "trackedWriteForwardsExactConnectionObservationAlongsideItsIntent",
+            "memoryClaimCrashKeepsExclusionWithoutReplayingOrInventingAnEpisode",
+            "pendingApprovalForwardsExactObservationWithoutGuessingConnectorFromToolName",
+            "foreignMemoryCompletionCannotMarkAnApprovalExecuted",
+            "memoryCompletionSurvivesRecoveryWithoutReadOrExternalWriteEvidence",
+            "trackedWrapperUsesArgumentSensitiveMemoryAndPreservesMemoryReceipt",
+            "memoryToExternalWriteDriftIsRejectedBeforeDispatch"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskPendingActionExecutionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "9ce9fe96dfaf02904444b841d1250daecaabdb759fe2f75019534473b04b2448",
+          "cases": [
+            "legacySuccessCannotInventAnEffectReceipt",
+            "readToWriteCatalogDriftFailsClosedBeforeEffectWithoutInventingWriteIntent",
+            "rejectionAndRevisionChangeNeverInvokeTheApprovedTool",
+            "failedExecutionIsMarkedUncertainAndARepeatedWorkerCannotReplayIt",
+            "classifiedReadCompletesAdministrativelyWithoutCreatingWriteEpisode",
+            "typedVisibleWaitDoesNotAdmitAnEffectAndIgnoresResponseText",
+            "approvalInvokesTheExactActionOnceAndPersistsItsReceipt",
+            "readClaimCrashRetainsClassificationAndRecoveryDoesNotCreateWriteEpisode"
+          ]
+        }
+      ],
+      "launcherFailures": [],
+      "outerExit": 0
+    },
+    {
+      "flavor": "Play",
+      "tests": 185,
+      "classes": [
+        {
+          "class": "com.jarvys.agent.CodingAsyncRegistryTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "848abad5daf387379369066ee94dce49a3ae63038fc220d13ffb4ca4a075ae20",
+          "cases": [
+            "presentationSuccessWithoutDurableAcceptanceIsNotAccepted",
+            "sealedAcceptedInvocationCannotLeakReceiptIntoAnotherCallOrPrecancelledCall",
+            "synchronousToolCannotReturnAnotherJobsAdministrativeReceipt",
+            "directInvocationWithoutPreparedSourceCannotDispatch",
+            "cancellationAfterAcceptancePreservesDurableJobIdentityWithoutCommandSuccess",
+            "foreignReceiptCannotBeAdoptedByAnotherLiveInvocation",
+            "actualPreparedSubmissionOwnsReceiptAndSkipsSynchronousFinalizers",
+            "missingCoverageRejectsBeforeProducerDespiteRealPreparedSource"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingEpisodeConsumerTest",
+          "tests": 11,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "7e54f3e4ff1bae47a62ac1fe2cb33d69fa97e4f1cc249d362e1de913f8eaa9d6",
+          "cases": [
+            "pendingLinkBlocksOnlyItsCapturedTargetNotAnotherEpisode",
+            "confirmedSuppressedTerminalUnblocksOnlyVisibleEvidenceWithOmissionMarker",
+            "compactionMarksPendingTechnicalJobActiveEvenWithSuppressedSemantics",
+            "compactionRejectsNewPendingJobAfterCandidateWithoutChangingSourceLeaves",
+            "offDuringModelResponseCannotCommitNarrationAfterReenable",
+            "compactionSnapshotIncludesTerminalSemanticStatusEvenWhenNoRolesAreAdded",
+            "codingEvidenceSourceWithoutExactLiveLinkIsExplicitlyUnavailable",
+            "memoryGetAndNarratorConsumeCodingRoleWithoutInventingMissingSource",
+            "changedSourceIdentityIsNotBlockedByOldPendingTarget",
+            "pendingTechnicalJobBlocksNarrationEvenWhenSemanticStatusIsSuppressed",
+            "newPendingJobDuringModelResponseRejectsNarrationCommit"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingEpisodePayloadTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "3aa35aff88ab7f69d34f8c34f2b00e388848c6db29cf7ed70045930bced5f6e4",
+          "cases": [
+            "submissionAndExecutionCountAsOneJobNotTwoCommands",
+            "boundedAggregationPreservesRolesUniqueJobsAndNoGoalVerification",
+            "missingJobIdentityCannotBecomeAnAffectedItemCount",
+            "suppressedJobsRemainExplicitEvenWhenOnlyOtherEvidenceIsVisible"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobJournalRepairTest",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "cde6d95492e63766e973574627f520314957872a4f63d09e7157bd4d3e588494",
+          "cases": [
+            "admittedRepairPinSurvivesQuiesceButNewPinCannotBeIssued",
+            "uncertainTerminalRepairsSameRevisionWithoutInventingAnotherTransition",
+            "newPinMustBeFromExactOwnerAndClosedOriginalCannotAuthorizeRepair",
+            "uncertainInitialHeadRepairsExactBytesThenAppendsOneTerminalWithIdempotentCas",
+            "thirdBytesRejectRepairWithoutOverwriteAndExactCandidateRemainsRepairable",
+            "replacedProjectDirectoryRejectsConfirmedHeadEvenWhenPayloadIsUnchanged",
+            "noHeadInitializationRequiresAbandonmentAndOriginalOperationsToHaveDrained"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobRepairBoundaryTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "af7fd985ca04e51132df5743f2e6c1d2fd294ee5b64e0e76ec278cd4dfb4dbea",
+          "cases": [
+            "replacementGenerationCannotAdoptRestrictiveTerminal",
+            "completedRestrictiveRepairIsIdempotentAndDoesNotInventAcceptance",
+            "genericAbandonmentIsNotPreclaimProducerProvenance",
+            "genericProjectionCannotAcceptAnUnacceptedReservation"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CodingJobSemanticSourceTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "4d35fe127173404766c3f2ff4cfbd14c22029ea703c5b804a1232a7816791299",
+          "cases": [
+            "changedBindingCannotBeInferredFromLatestObservation",
+            "replacementDestinationCannotAdoptHistoricalTechnicalRecord",
+            "editedSourceMessageInvalidatesSource",
+            "wrongRoleOrdinalDoesNotExposeSourceByJobIdAlone",
+            "explicitMemoryRevisionInvalidatesSourceWithoutErasingTechnicalHistory",
+            "automaticNarrationKeepsExactHistoricalSource"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CompactionFlushPersistenceTest",
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "6ff355cb53e4f4199cc71ea9f7a0731ebde9706a113d77f51c374933c6e5f75b",
+          "cases": [
+            "partialEpisodeWithRetainedBatchCannotBecomeCompleteAndReusedCallIdsStayScoped",
+            "sourceSnapshotCarriesTrustAndDurableOrderingInsteadOfUuidOrder",
+            "concurrentEpisodeChangeRejectsDigestWithoutErasingSummaryOrEvidence",
+            "restoredProtocolGroupsBindExactBatchAndResultNotBareReusedCall",
+            "changedSourceRejectsDigestButStillAppendsIncompleteSummary",
+            "syntheticMissingResultNeverReceivesDurableResultProvenance",
+            "exactSelectedMessagesExcludeRetainedSourcesAndBindOnlyReturnedCompaction",
+            "turnCopiesSharePostCommitIdentityAndRejectRebinding",
+            "ancestorWrapperPreservesLeafIdentityButLegacySummaryIsIncomplete",
+            "sourceSnapshotUsesCurrentDurableTextAndRejectsHiddenMessages",
+            "missingForeignSourceNeverBecomesCompleteCoverage",
+            "failedAppendRollsBackDigestBindingAndCounters",
+            "disabledOrCancelledCandidateDoesNotSaveMemoryOrCompleteFlush",
+            "repeatedIdenticalLeafRangeReusesDigestWithoutAddingRevision"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.CompactionMemoryFlushTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "6f90b99277cfea03f51cc01d9a9b48bc97580a1008929bcc27e3d837c28c71fa",
+          "cases": [
+            "slidingFallbackExtractsOnlyOnceForTheFinalPlanAndReturnsBoundSummary",
+            "memoryOffCompactionRetainsOnlyStructuralCoverageForLaterEnabledPass",
+            "editedOrHiddenDurableInputNeverFeedsStaleTextToDigestOrFactExtraction",
+            "incompleteDigestStillExtractsAccreditedUserFactsExactlyOncePerPass",
+            "candidateDoesNotCompleteUntilExactCompactionCommitsAndNeverAdvancesExtractionCursor",
+            "missingSourceAndToggleDuringModelCannotProduceCompletionCandidate"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.ScheduledTaskBoundToolTest",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "ae5cdd82efb5aeb69548d3cd4bf5bf7ec43d480816b6912715f1808cfb0fa22e",
+          "cases": [
+            "deferredTaskWriteHasTypedPendingDecisionWithoutAdmission",
+            "transportsTheSameInvocationAndPreservesCompletionMetadata",
+            "preservesResponseAdmissionAndVisibleResultMetadata",
+            "asyncMetadataIsForwardedButTasksRejectBeforeDeferralOrDispatch"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.CodingJobMigrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "7d3219f02279d3648edb8f9e5ac0d333fa4b87e45e939ada9528fb35ae42b8d1",
+          "cases": [
+            "submissionAndRevisionIdentityConstraintsAreEnforcedWithoutCentralRows",
+            "semanticLinkMigrationPreservesExistingTechnicalJobsWithoutBackfillingTargets",
+            "additiveMigrationMatchesFreshRoomAndDoesNotFabricateJobsOrGeneration"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.ConnectionStateEventMigrationTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "5b4088f9b82374b83325c032bc2fc8e703d0bedced57536418b9656c627a0f3b",
+          "cases": [
+            "legacyRowsRemainIntactWithoutFabricatedOrderingOrProof",
+            "migratedTableMatchesFreshRoomColumnsKeysAndIndexes",
+            "epochSequenceIsUniqueWithoutCollapsingLegacyNullMetadata"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.JarvysChatDatabaseM0Test",
+          "tests": 33,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "9b93a0ea7d011a9a1d33dcb21c3cdc0e186eb47a7681f3e9a5bd3c2126c6c617",
+          "cases": [
+            "privacyColumnsAreNotPartOfTheSchema",
+            "strictJournalTextRoundTripsUnpairedUtf16CodeUnitsAsBlob",
+            "futureSchemaVersionIsRejectedWithoutChangingDatabaseBytes",
+            "exportedV5MigratesThroughProviderWithoutLosingLegacyEventsAndMatchesFreshV6",
+            "messagePartsHaveNoRevisionAndOrdinalIsUniqueWithinTheMessage",
+            "pendingInterruptIndexIsNonUniqueAndIncludesDispatchPosition",
+            "foreignKeysAreEnforcedOnASecondWriterConnection",
+            "ledgerCreatedAtColumnsAreRealAndRoundTripTheOriginalDouble",
+            "declaredPrimaryAndUniqueKeysRejectDuplicates",
+            "m1aDaosRemainInternal",
+            "deletingFileReferenceLeavesConversationHistoryAndPhysicalFileInPlace",
+            "crewMessageActivityBindingAndLosslessTextRoundTripAsTypedRows",
+            "exportedSchemaV6MatchesRealDatabaseAndPublishedFixturesRemainUnchanged",
+            "deletingConversationCascadesAcrossNormalizedChildTables",
+            "installedTriggerNamesExactlyMatchTheDatabaseTriggerContract",
+            "publishedV1DatabaseResetsAndSupportsNewChatAndPersonalMemory",
+            "entityInsertsDoNotUseReplaceConflictStrategy",
+            "newConversationAndTombstoneTriggersRejectRawSqlAndAfterDeletePersistsMillis",
+            "itemKeysetPagesCoverFiveHundredRowsWithoutGapsOrDuplicates",
+            "tombstonesRejectUpdateAndDelete",
+            "everyConversationChildCascadesAndOnlyGlobalStorageAndTombstoneRowsRemain",
+            "workspaceReplyAndEvidenceIdsAreUniqueWithinConversationOnly",
+            "activeGenerationRunKeysAreUniqueAndTerminalRunsReleaseTheKey",
+            "deletingConversationThatWasNeverCreatedLeavesPermanentTombstone",
+            "journalIdentityKeysAreScopedToConversationLedger",
+            "indexedTailReadStaysWithinHalfSecondAfterFiftyThousandMessages",
+            "databaseSupportsConcurrentReadersUnderWal",
+            "tombstonePreventsDuplicateInsertFromResurrectingConversation",
+            "onOpenRecreatesMissingDatabaseTriggers",
+            "createsEveryDeclaredEntityTableAndEnforcesPragmaContract",
+            "duplicateRowsAreRejectedForEveryStrictJournalTable",
+            "nestedContextElementsKeepWriterLeaseAndReadTheirOwnWrites",
+            "foreignKeyCheckIsEmptyAndEveryDeclaredForeignKeyRejectsAnOrphan"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.chatdb.MigrationDriverParityTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "3e090277cd8bfc6ac6b0b1a1e1f2bf49f91350ce170a239f84d70f2f3a3856b0",
+          "cases": [
+            "everyRegisteredMigrationHasEquivalentDriverAndSupportEffects"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceAlignmentTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "44db15b4c332fa5f487787ee3d3e1aaf6e209aacad0e38cef1953be75ce84eed",
+          "cases": [
+            "disabledSemanticCaptureStillRequiresActualTechnicalGeneration",
+            "semanticCaptureAndHistoricalRootPresenceAreIndependentFourWayMatrix",
+            "completeMeansKnownReferencePerAppliedIdNotAllPossibleChannels",
+            "technicalDestinationChangeCannotBeIdempotentContinuation",
+            "contextDestinationMustMatchCrewButHistoricalPeerIdentityMayDiffer",
+            "pluralChannelsAndUnresolvedIdsRoundTripWithoutMergingHistoricalClaims"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceCodecV2Test",
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "802d393487cd32fb7a5db212643cbb0bfbca244b30ef080141971a0c11f99c55",
+          "cases": [
+            "rejectsDuplicateKeysIncludingEscapedEquivalentKey",
+            "callerBudgetAndStrictJsonBoundaries",
+            "requiresExplicitVersionAndRejectsLegacyShapeAndUnknownFields",
+            "utf8ByteRoundTripPreservesEverySurrogateUnitAndOrdinaryUnicode",
+            "rejectsDuplicateReorderedAndConflictingReferenceIdentities",
+            "exactLongsRejectOverflowDecimalsAndCoercion",
+            "maximumSchemaDepthAndCanonicalBothChannelsRoundTrip",
+            "rejectsUnresolvedDuplicatesOverlapOrderingAndFalseCoverage",
+            "schemaDepthRejectsOneExtraContainerBeforeDtoCoercion",
+            "rejectsChannelSpecificExtraFieldsAndWrongArrayTypes"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.coding.CodingJobEvidenceTest",
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "3bb9e23926d45f8e1836aacf659337d21eae80304f830c460cb48ef36f8e4e02",
+          "cases": [
+            "phaseAcceptanceAndAuthorizationCannotRegress",
+            "notStartedDoesNotInferAbsenceFromMissingAuthorizationOrIntent",
+            "parserBudgetNestingAndIdentifierValidationFailClosed",
+            "numbersAndBooleansAreExactAndNeverCoerced",
+            "acceptanceAndLaunchIntentRemainNonterminalMetadata",
+            "contradictoryProcessExitFactsCannotClaimSuccessOrFailure",
+            "decoderRejectsUnknownMissingPartialAndLegacyFields",
+            "semanticCaptureAndHistoricalRootPresenceAreIndependent",
+            "escapedIdentifiersRoundTripWithoutMutableCollections",
+            "sourceValuesPreserveDistinctCentralAndCrewCallsWithoutSyntheticChildBatch",
+            "jobSubmissionOwnerAndCrewCycleCannotChangeAcrossRevisions",
+            "everyTerminalStateRoundTripsWithoutLosingHighestIntent",
+            "terminalCannotBeReopenedRevisedOrContradicted",
+            "identifierControlsAreRejectedWithoutInventingAnOpaqueIdLengthCap",
+            "exactRevisionReplayIsIdempotentButChangedPayloadAndGapsAreRejected",
+            "partialAttributionIsRejectedButHistoricalGenerationIsIndependent",
+            "decoderRejectsDuplicateKeysIncludingEscapedAliasesAndTrailingData"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.flavor.PlayLinuxBoundaryTest",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "55f4747b589b2dc269c94c2fcbd3301044f885b183b1bfda3376a903180ccfa8",
+          "cases": [
+            "builtinCodingEffectiveRoleDoesNotAcquireExecutionInPlay",
+            "unavailableSelectedCapabilitiesRejectResume",
+            "playNeverAdvertisesLinuxOrProjectExecution",
+            "savedJobsRemainUnverifiableAndBlockResume",
+            "ownerlessFileCheckpointDoesNotClaimExecutionWasVerified",
+            "fullOnlyRuntimeClassesAreAbsent"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.proactive.ProactiveCompletionMetadataTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "f322bc8c744337e84a66b13a3835e33ede272d6dae7ebe4253c4c5b8974d466a",
+          "cases": [
+            "redactingWrapperPreservesArgumentSensitiveAsyncMetadata"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.ScheduledTaskProcessorTest",
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "6a90df4d055650abe9ed6ac5cd6745c76a575ba5da33da8480f8775c6458631e",
+          "cases": [
+            "successfulSilentRunClosesAnIncidentAndSendsOneRecoveryNotification",
+            "silentRunGetsExactReadOnlyScopeRedactsToolDataAndDeliversOnceToTaskConversation",
+            "askReadIsQueuedInsteadOfRunningInTheBackground",
+            "successfulTaskAfterAttentionSendsOneRecoveryNotice",
+            "runPromptContainsTaskDataAndNoDeliveryOrTerminalToolPolicy",
+            "aWriteWithoutTaskGrantIsQueuedAndDenyOrCreatorCeilingRemovesIt",
+            "stopObservedAlongsideProviderSetupFailureIsInterruptedRatherThanRetried",
+            "cancellationDuringModelTurnReturnsInterruptedAndStopsBackgroundLease",
+            "allowedModuleReadWaitsForVisibleAppAndExecutesWhenResumed",
+            "alwaysEmptyOrNoReplyRecordsNoVisibleResultAndNeverRetries",
+            "approvedModuleWriteWaitsForVisibleAppWithoutRequestingApprovalAgain",
+            "allowedWriteExecutesOnlyWhenTheTaskHasAnExplicitWriteGrant",
+            "foregroundRunBlocksTasksAndTaskRequestPreemptsProactiveWithoutStartingModel",
+            "argumentSensitiveWriteCannotDisappearBehindReadUnattendedMetadata",
+            "retryAfterMessageCommitButBeforeLedgerProducesOneMessageNotificationAndOccurrenceRow",
+            "wrappedHttpRequestTimeoutIsRetryableWithStructuredProviderCause",
+            "noProviderNeedsAttentionAndSilenceIsRecordedWithoutNotification",
+            "repeatedPermanentCauseNotifiesOnlyOnceUntilASuccessfulRunClosesTheIncident",
+            "finalTextIsDeliveredWithoutTaskRespondAndOnlyIfNotableNoReplyIsSilent",
+            "permanentConnectorLossNeedsAttentionAndTransientProviderFailureRetriesSameClassOfOccurrence",
+            "askWriteIsQueuedWithExactArgumentsAndNeverExecutesInTheUnattendedRun",
+            "toolOutputCannotGrantTaskManagementToolsToUnattendedRuns"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskAsyncExclusionTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "7361ea3d388618f31d3523338e04c6a55f193225fec0c9f3ad1cdc7e132b431b",
+          "cases": [
+            "unknownCurrentDefinitionCannotDefaultToSynchronousClaim",
+            "trackedAsyncRejectsBeforeEvidenceAndPreservesArgumentSensitiveMetadata",
+            "currentAsyncDefinitionRejectsLegacyPendingBeforeClaimOrIntent"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskMemoryAdmissionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "07e499242965b79edfd196f1e7a11ad36dd0b3df336d7961d9680106baa2d624",
+          "cases": [
+            "genericMemorySuccessDoesNotProveCompletion",
+            "trackedWriteForwardsExactConnectionObservationAlongsideItsIntent",
+            "memoryClaimCrashKeepsExclusionWithoutReplayingOrInventingAnEpisode",
+            "pendingApprovalForwardsExactObservationWithoutGuessingConnectorFromToolName",
+            "foreignMemoryCompletionCannotMarkAnApprovalExecuted",
+            "memoryCompletionSurvivesRecoveryWithoutReadOrExternalWriteEvidence",
+            "trackedWrapperUsesArgumentSensitiveMemoryAndPreservesMemoryReceipt",
+            "memoryToExternalWriteDriftIsRejectedBeforeDispatch"
+          ]
+        },
+        {
+          "class": "com.jarvys.agent.tasks.TaskPendingActionExecutionTest",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlSha256": "88f6082f2641b052fafd81e668eed6f3841ccbe7bad94c352b0b27458ebef16a",
+          "cases": [
+            "legacySuccessCannotInventAnEffectReceipt",
+            "readToWriteCatalogDriftFailsClosedBeforeEffectWithoutInventingWriteIntent",
+            "rejectionAndRevisionChangeNeverInvokeTheApprovedTool",
+            "failedExecutionIsMarkedUncertainAndARepeatedWorkerCannotReplayIt",
+            "classifiedReadCompletesAdministrativelyWithoutCreatingWriteEpisode",
+            "typedVisibleWaitDoesNotAdmitAnEffectAndIgnoresResponseText",
+            "approvalInvokesTheExactActionOnceAndPersistsItsReceipt",
+            "readClaimCrashRetainsClassificationAndRecoveryDoesNotCreateWriteEpisode"
+          ]
+        }
+      ],
+      "launcherFailures": [],
+      "outerExit": 0
+    }
+  ],
+  "totalTests": 419,
+  "totalFailures": 0,
+  "totalErrors": 0,
+  "totalSkipped": 0,
+  "freshSameFrozenSource": true,
+  "runner": "Reviewed offline-junit global JVM guard, one JVM per class; no new exceptions. Not an OS/native network sandbox.",
+  "limits": [
+    "Focal classes only, not global suite",
+    "Reservation delivered before interruption; lost pre-delivery reserve ACK remains unproved",
+    "Store-only no-head/third-bytes/terminal-CAS tests do not prove every manager boundary",
+    "Desired terminal after actual execution and final IO failure remains unproved",
+    "Foreign owner recovery, concurrent scanner and Crew STARTED replay integration remain pending",
+    "No native Android power-loss test",
+    "No semantic producer end-to-end or external compaction closure",
+    "No S6/S7/S8/Engram parity/APK PASS"
+  ]
+}

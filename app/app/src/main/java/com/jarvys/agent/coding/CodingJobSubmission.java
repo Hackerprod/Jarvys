@@ -21,8 +21,13 @@ public final class CodingJobSubmission {
     private final CodingJobEvidence.SemanticCapture semanticCapture;
     private final CodingJobJournalStore journal;
     private final CodingJobOwnerLease.Pin ownerPin;
+    private final CodingJobOwnerLease capturedOwner;
     private final MemoryWriteGate.Ticket semanticTicket;
     private final AtomicBoolean dispatchAbandoned = new AtomicBoolean();
+    private final AtomicBoolean preDispatchAbandoned = new AtomicBoolean();
+    private final Object operationsLock = new Object();
+    private int originalOperations, repairOperations;
+    private final List<Runnable> drainedObservers = new ArrayList<>();
     private final AtomicReference<ReservationOutcome> reservationOutcome = new AtomicReference<>();
     private final Object acceptanceLock = new Object();
     private AcceptanceOutcome acceptanceOutcome;
@@ -39,6 +44,7 @@ public final class CodingJobSubmission {
         this.owner = CodingJobEvidence.id(owner); scopeId = CodingJobEvidence.id(scope);
         durableScopeIdentity = CodingJobEvidence.id(identity);
         this.ownerPin = Objects.requireNonNull(ownerPin); ownerPin.requireLive();
+        this.capturedOwner = ownerPin.ownerIdentity();
         ownerProcessId = ownerPin.processId(); managerInstanceId = ownerPin.managerId();
         if (!crew.scopeIdentity.equals(identity) || !owner.startsWith(crew.executionSessionId + "/" + crew.botId + "/"))
             throw new IllegalArgumentException("Submission scope or owner does not match the live Crew source");
@@ -70,6 +76,29 @@ public final class CodingJobSubmission {
     }
     public void requireOwnerLive() { ownerPin.requireLive(); }
     public void abandonDispatch() { dispatchAbandoned.set(true); }
+    /** Trusted manager fact, called only after its RESERVED→REJECTED CAS; not a security boundary. */
+    public void abandonBeforeWorkerClaim() { preDispatchAbandoned.set(true); abandonDispatch(); }
+    public void requirePreDispatchAbandoned() {
+        if (!preDispatchAbandoned.get()) throw new IllegalStateException("No pre-dispatch abandonment fact");
+    }
+    public void requireRepairPin(CodingJobOwnerLease.Pin pin) {
+        Objects.requireNonNull(pin).requireLive();
+        if (pin == ownerPin || !pin.isRootAdmission() || pin.ownerIdentity() != capturedOwner)
+            throw new IllegalStateException("Coding repair requires a new pin from its exact owner");
+    }
+    public void requireRepairReady() {
+        synchronized (operationsLock) {
+            if (!dispatchAbandoned.get() || originalOperations != 0)
+                throw new IllegalStateException("Original Coding operations have not drained");
+        }
+    }
+    public void onOriginalOperationsDrained(Runnable observer) {
+        Objects.requireNonNull(observer);
+        synchronized (operationsLock) {
+            if (originalOperations != 0) { drainedObservers.add(observer); return; }
+        }
+        notifyAcceptanceObserver(observer);
+    }
     public void requireDispatchLive() {
         requireOwnerLive();
         if (dispatchAbandoned.get()) throw new IllegalStateException("This submission cannot resume dispatch after uncertainty");
@@ -120,14 +149,32 @@ public final class CodingJobSubmission {
             // The exact operation result remains observable; an observer is not its authority.
         }
     }
-    public RoomOperation beginRoomOperation() { return new RoomOperation(ownerPin.fork(), false); }
-    public RoomOperation beginAcceptanceOperation() { return new RoomOperation(ownerPin.fork(), true); }
+    public RoomOperation beginRoomOperation() { return beginOriginalOperation(false); }
+    public RoomOperation beginAcceptanceOperation() { return beginOriginalOperation(true); }
+    private RoomOperation beginOriginalOperation(boolean acceptance) {
+        synchronized (operationsLock) {
+            if (repairOperations != 0 || dispatchAbandoned.get())
+                throw new IllegalStateException("Original Coding operations cannot resume after abandonment");
+            CodingJobOwnerLease.Pin pin = ownerPin.fork();
+            originalOperations++;
+            return new RoomOperation(pin, acceptance, false);
+        }
+    }
+    public RoomOperation beginRepairOperation(CodingJobOwnerLease.Pin repairPin) {
+        synchronized (operationsLock) {
+            requireRepairPin(repairPin); requireRepairReady();
+            if (repairOperations != 0) throw new IllegalStateException("Terminal repair is already in progress");
+            CodingJobOwnerLease.Pin child = repairPin.fork();
+            repairOperations++;
+            return new RoomOperation(child, false, true);
+        }
+    }
     public final class RoomOperation implements AutoCloseable {
         private final CodingJobOwnerLease.Pin pin;
         private final AtomicBoolean finished = new AtomicBoolean();
-        private final boolean acceptance;
-        private RoomOperation(CodingJobOwnerLease.Pin pin, boolean acceptance) {
-            this.pin=pin; this.acceptance=acceptance;
+        private final boolean acceptance, repair;
+        private RoomOperation(CodingJobOwnerLease.Pin pin, boolean acceptance, boolean repair) {
+            this.pin=pin; this.acceptance=acceptance; this.repair=repair;
         }
         public void completeReservation(CodingJobReservation value) {
             if(value.submission()!=CodingJobSubmission.this)throw new IllegalStateException("Foreign reservation completion");
@@ -143,9 +190,19 @@ public final class CodingJobSubmission {
         }
         public void fail(Throwable ignored) {
             if (acceptance) publishAcceptance(new AcceptanceOutcome(null, true));
-            else reservationOutcome.compareAndSet(null,new ReservationOutcome(null,true));
+            else if (!repair) reservationOutcome.compareAndSet(null,new ReservationOutcome(null,true));
         }
-        @Override public void close() { if(finished.compareAndSet(false,true))pin.close(); }
+        @Override public void close() {
+            if (!finished.compareAndSet(false,true)) return;
+            List<Runnable> observers = new ArrayList<>();
+            try { pin.close(); } finally {
+                synchronized (operationsLock) {
+                    if (repair) repairOperations--; else originalOperations--;
+                    if (originalOperations == 0) { observers.addAll(drainedObservers); drainedObservers.clear(); }
+                }
+                for (Runnable observer : observers) notifyAcceptanceObserver(observer);
+            }
+        }
     }
     public String jobId() { return jobId; }
     public String submissionId() { return submissionId; }

@@ -495,6 +495,26 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         recordCodingCommit(commit, CodingJobRepository.Kind.JOURNAL_PROJECTION)
     }
 
+    /** Live-owner terminal repair only. This never admits or dispatches a command. */
+    fun repairCodingJobTerminalSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
+        pin: com.jarvys.agent.coding.CodingJobOwnerLease.Pin) {
+        val submission = commit.reservation().submission()
+        val operation = submission.beginRepairOperation(pin)
+        executeTrackedOnWorker(operation, null) { repos ->
+            val reservation = commit.reservation()
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            reservation.requireJournalOwner(journal)
+            commit.requireMintedBy(journal)
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                check(anchor.accepts(reservation.lifecycle(), repos.database)) { "Stale coding technical reservation" }
+                reservation.requireCurrentProjection()
+                submission.requireRepairReady()
+                runBlocking { CodingJobRepository(repos.database).repairTerminal(commit) }
+            }
+        }
+    }
+
     private fun recordCodingCommit(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
                                    kind: CodingJobRepository.Kind) = executeCodingOnWorker(commit.reservation().submission()) { repos, _ ->
         recordCodingCommitInWorker(repos, commit, kind)
@@ -516,7 +536,21 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     /** Optional semantic roles; technical terminal commit is a separate, already-completed operation. */
     fun linkCodingJobSemanticSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) =
-        executeCodingOnWorker(commit.reservation().submission()) { repos, _ ->
+        executeCodingOnWorker(commit.reservation().submission()) { repos, _ -> linkCodingJobSemanticInWorker(repos, commit) }
+
+    /** Optional semantic phase of live repair; the original runtime ticket is never reconstructed. */
+    fun linkCodingJobSemanticRepairSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
+        pin: com.jarvys.agent.coding.CodingJobOwnerLease.Pin) {
+        val submission = commit.reservation().submission()
+        val operation = submission.beginRepairOperation(pin)
+        executeTrackedOnWorker(operation, null) { repos ->
+            submission.requireRepairReady()
+            linkCodingJobSemanticInWorker(repos, commit)
+        }
+    }
+
+    private fun linkCodingJobSemanticInWorker(repos: Repositories,
+        commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) {
             val reservation = commit.reservation()
             val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
             reservation.requireJournalOwner(journal); commit.requireMintedBy(journal)
@@ -607,7 +641,10 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     private fun <T> executeCodingOnWorker(submission: com.jarvys.agent.coding.CodingJobSubmission,
         acceptance: Boolean = false,
         block: (Repositories, com.jarvys.agent.coding.CodingJobSubmission.RoomOperation) -> T): T {
-        val operation = if (acceptance) submission.beginAcceptanceOperation() else submission.beginRoomOperation()
+        val operation = when {
+            acceptance -> submission.beginAcceptanceOperation()
+            else -> submission.beginRoomOperation()
+        }
         return executeTrackedOnWorker(operation, { submission.abandonDispatch() }) { repos -> block(repos, operation) }
     }
 

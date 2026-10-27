@@ -82,9 +82,28 @@ public final class CodingJobJournalStore {
     }
     public Commit write(CodingJobReservation reservation,long expectedRevision,CodingJobEvidence.Record next,
             CodingJobSnapshot snapshot) throws IOException {
+        return writeInternal(reservation,expectedRevision,next,snapshot,null,false);
+    }
+    /** No new submission acceptance: recertifies the private producer's abandoned initial metadata. */
+    public Commit initializeAbandoned(CodingJobReservation reservation,CodingJobEvidence.Record record,
+            CodingJobSnapshot snapshot,CodingJobOwnerLease.Pin pin) throws IOException {
+        reservation.submission().requirePreDispatchAbandoned();
+        if(record.revision!=1 || record.terminal!=null || record.highestEffectPhase!=CodingJobEvidence.Phase.SUBMISSION_INTENT)
+            throw new IllegalArgumentException("Abandoned initialization must be original submission metadata");
+        return writeInternal(reservation,0,record,snapshot,pin,true);
+    }
+    /** Audit-only append after exact head repair. No phase, authorization or execution advance. */
+    public Commit writeTerminalRepair(CodingJobReservation reservation,long expectedRevision,CodingJobEvidence.Record record,
+            CodingJobSnapshot snapshot,CodingJobOwnerLease.Pin pin) throws IOException {
+        if(record.terminal==null)throw new IllegalArgumentException("Repair may append terminal facts only");
+        return writeInternal(reservation,expectedRevision,record,snapshot,pin,false);
+    }
+    private Commit writeInternal(CodingJobReservation reservation,long expectedRevision,CodingJobEvidence.Record next,
+            CodingJobSnapshot snapshot,CodingJobOwnerLease.Pin repairPin,boolean initialize) throws IOException {
         Objects.requireNonNull(reservation).requireJournalOwner(this);
         if (!reservation.binding().equals(next.binding)) throw new IllegalArgumentException("Journal binding changed");
-        reservation.submission().requireOwnerLive();
+        if(repairPin==null)reservation.submission().requireOwnerLive();
+        else {reservation.submission().requireRepairPin(repairPin);reservation.submission().requireRepairReady();}
         snapshot.requireMatches(next);
         byte[] bytes = CodingJobJournalCodec.encode(snapshot,next);
         Head head = heads.computeIfAbsent(next.binding.jobId,key -> new Head(reservation));
@@ -93,6 +112,12 @@ public final class CodingJobJournalStore {
             if (head.pending != null) throw new IllegalStateException("An exact uncertain revision must be repaired before advancing");
             long current = head.confirmed == null ? 0 : head.confirmed.record.revision;
             if (expectedRevision != current) throw new IllegalStateException("Journal compare-and-set revision changed");
+            if(repairPin!=null && !initialize) {
+                if(head.confirmed==null || next.highestEffectPhase!=head.confirmed.record.highestEffectPhase ||
+                        next.submissionCommitted!=head.confirmed.record.submissionCommitted ||
+                        !Objects.equals(next.authorization,head.confirmed.record.authorization))
+                    throw new IllegalArgumentException("Terminal repair cannot advance admission facts");
+            }
             if (head.confirmed == null) {
                 if (next.revision != 1 || next.highestEffectPhase != CodingJobEvidence.Phase.SUBMISSION_INTENT || next.terminal != null)
                     throw new IllegalArgumentException("First journal revision must be submission intent");
@@ -119,12 +144,32 @@ public final class CodingJobJournalStore {
     }
     /** Exact private-candidate durability repair only. It never resumes enqueue, preparation or execution. */
     public Commit repairPending(CodingJobReservation reservation) throws IOException {
-        reservation.requireJournalOwner(this);
         reservation.submission().requireOwnerLive();
+        return repairHeadInternal(reservation,false);
+    }
+    /** Returns the exact confirmed head, or null before any local journal candidate was reserved. */
+    public Commit repairHead(CodingJobReservation reservation,CodingJobOwnerLease.Pin pin) throws IOException {
+        reservation.submission().requireRepairPin(pin);reservation.submission().requireRepairReady();
+        return repairHeadInternal(reservation,true);
+    }
+    private Commit repairHeadInternal(CodingJobReservation reservation,boolean allowConfirmed) throws IOException {
+        reservation.requireJournalOwner(this);
         Head head = heads.get(reservation.binding().jobId);
+        if(head==null && allowConfirmed)return null;
         if (head == null || head.reservation != reservation) throw new IllegalStateException("No matching local journal head");
         synchronized (head) {
             Pending pending = head.pending;
+            if(pending==null && allowConfirmed) {
+                Commit confirmed=head.confirmed;
+                if(confirmed!=null) {
+                    verify(confirmed.target);
+                    requireExistingAnchor(root);requireExistingAnchor(confirmed.target.getParentFile().getParentFile());
+                    requireExistingAnchor(confirmed.target.getParentFile());requireExistingAnchor(new File(confirmed.snapshot.projectRoot));
+                    if(!Arrays.equals(readBounded(confirmed.target,confirmed.payload.length),confirmed.payload))
+                        throw new IllegalStateException("Confirmed repair head bytes changed");
+                }
+                return confirmed;
+            }
             if (pending == null) throw new IllegalStateException("No exact pending candidate");
             verify(pending.target);
             requireExistingAnchor(root);requireExistingAnchor(pending.target.getParentFile().getParentFile());

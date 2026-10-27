@@ -10,7 +10,7 @@ import java.util.UUID
 /** Deterministic technical facts only. No memory toggle, semantic insertion, command replay or runtime. */
 internal class CodingJobRepository(private val database: JarvysChatDatabase) {
     private val sql get() = database.chatSql
-    enum class Kind { SUBMISSION_ACCEPTED, PREPARATION_ADMITTED, JOURNAL_PROJECTION }
+    enum class Kind { SUBMISSION_ACCEPTED, PREPARATION_ADMITTED, JOURNAL_PROJECTION, RESERVATION_ABANDONED }
 
     suspend fun reserve(submission: CodingJobSubmission, source: CodingJobEvidence.Source): CodingJobEvidence.Binding =
         database.withChatWriteTransaction {
@@ -28,6 +28,21 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
         }
 
     suspend fun record(commit: CodingJobJournalStore.Commit, kind: Kind) = database.withChatWriteTransaction {
+        check(kind != Kind.RESERVATION_ABANDONED) { "Abandoned reservations require the restrictive repair entry point" }
+        recordInsideTransaction(commit, kind)
+    }
+
+    /** Never infer acceptance absence from a failed/interrupted observer: inspect the original DB. */
+    suspend fun repairTerminal(commit: CodingJobJournalStore.Commit) = database.withChatWriteTransaction {
+        commit.reservation().submission().requireRepairReady()
+        check(commit.record().terminal != null) { "Repair can only project an existing terminal journal" }
+        val kind = if (hasKind(commit.record().binding.jobId, Kind.SUBMISSION_ACCEPTED))
+            Kind.JOURNAL_PROJECTION else Kind.RESERVATION_ABANDONED
+        if (kind == Kind.RESERVATION_ABANDONED) commit.reservation().submission().requirePreDispatchAbandoned()
+        recordInsideTransaction(commit, kind)
+    }
+
+    private fun recordInsideTransaction(commit: CodingJobJournalStore.Commit, kind: Kind) {
         val reservation = commit.reservation()
         val record = commit.record()
         require(record.binding == reservation.binding()) { "Coding journal binding mismatch" }
@@ -46,7 +61,7 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
                 true
             }
         }
-        if (duplicate) return@withChatWriteTransaction
+        if (duplicate) return
         val accepted = hasKind(record.binding.jobId, Kind.SUBMISSION_ACCEPTED)
         when (kind) {
             Kind.SUBMISSION_ACCEPTED -> check(!accepted && record.revision == 1L && record.submissionCommitted && record.highestEffectPhase == CodingJobEvidence.Phase.SUBMISSION_INTENT && record.terminal == null) {
@@ -54,6 +69,16 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
             }
             Kind.PREPARATION_ADMITTED -> check(accepted && record.highestEffectPhase == CodingJobEvidence.Phase.PREPARATION_INTENT && record.terminal == null) {
                 "Preparation requires accepted submission and exact preparation intent"
+            }
+            Kind.RESERVATION_ABANDONED -> {
+                reservation.submission().requirePreDispatchAbandoned()
+                val terminal = record.terminal
+                check(!accepted && !hasKind(record.binding.jobId, Kind.PREPARATION_ADMITTED) &&
+                    record.highestEffectPhase == CodingJobEvidence.Phase.SUBMISSION_INTENT && terminal != null &&
+                    terminal.exitCode == null && terminal.absenceCoverage == CodingJobEvidence.AbsenceCoverage.NOT_PROVEN &&
+                    (terminal.state == CodingJobEvidence.TerminalState.NOT_STARTED || terminal.state == CodingJobEvidence.TerminalState.CANCELLED)) {
+                    "Restrictive repair cannot fabricate acceptance, preparation or execution"
+                }
             }
             Kind.JOURNAL_PROJECTION -> {
                 check(accepted) { "Coding projection has no accepted submission" }

@@ -1,3 +1,11 @@
+## Estado actual S6 — reparación live acotada, 27-10-2026
+
+**234 Full + 185 Play = 419 casos frescos PASS**, ambos compilados, cero skips. La reserva entregada/primer journal incierto se repara sin inventar ACK, ejecución o roles; owner exacto, pin nuevo, quiesce y CAS tienen pruebas focales. [Reporte](docs/continue/single-validate/S6-coding-live-repair-report.md).
+
+Pendientes: ACK de reserva antes de entrega/callable pendiente, terminal deseado tras ejecución real y fallo final, recovery extranjero y replay Crew, cadena semántica real, referencias externas de compaction y gates restantes. No opt-in ASYNC ni cierre S6/S7/S8/Engram/APK. [Matriz actual](docs/continue/single-validate/S6-coding-job-evidence-contract.md#16-estado-de-los-gates-tras-los-checkpoints-ack-y-live-repair-27-10-2026).
+
+Último respaldo confirmado: `a4189b95` reconstruye fuente `7e37b5f7`; este bloque posterior aún no se afirma publicado. Las secciones siguientes son checkpoints históricos.
+
 ## Estado actual S6 — ACK interrumpido y guards de compaction, 27-10-2026
 
 Full/Play compilan; **221 + 174 casos frescos PASS** (395, cero skips), con oráculo real de terminal Room y pin tras ACK interrumpido, lectores y guards de compaction/flush. [Reporte](docs/continue/single-validate/S6-coding-acceptance-report.md).
