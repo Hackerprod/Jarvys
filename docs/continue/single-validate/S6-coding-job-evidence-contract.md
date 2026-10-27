@@ -1,6 +1,6 @@
 # S6 — contrato B: submission y ejecución durable de Coding separadas
 
-Estado: **contrato revisado; metadatos aislados validados (§12), productor integrado pendiente (§11), extracción IO validada focalmente (§13)**.
+Estado: **contrato revisado; metadatos aislados validados (§12), productor integrado pendiente (§11), extracción IO y claim local validados focalmente (§§13–14)**.
 Fecha: 2026-10-26. Lectura: árbol de trabajo actual de `continue/s6-cloud`.
 Normativa: `docs/SINGLE_SESSION.md` §§7.3–7.5, B3/B4; `S6-admission-contract.md`;
 `S6-linux-coding-admission-contract.md` §5, alternativa B.
@@ -670,3 +670,33 @@ orden sync/rename/dirsync, conservación del destino previo antes de rename, inc
 rename, cleanup y excepción primaria, rechazo de rutas desviadas y serialización local. Las
 pruebas de recuperación/assembly/tools afectados conservan contratos legacy. Lease, claim CAS,
 preparación antes de factory lazy y proyección Room siguen requisitos del corte integrado §11.
+
+## 14. Claim local del worker y fallo de transporte del executor
+
+Contrato revisado antes de código. Corrige el caso real de un Executor que ejecuta el Runnable
+y después lanza excepción, sin activar ASYNC ni declarar lease durable o CAS de journal.
+
+Cada Job comienza RESERVED. El primer paso del Runnable gana RESERVED→CLAIMED; duplicados
+concurrentes o tardíos retornan sin backend, finalización, cierre de lease ni countdown. El catch
+de submission sólo puede finalizar como rechazado si gana RESERVED→REJECTED. Ese rechazo
+prueba que este backend no obtuvo el claim, no ausencia de preparación previa ajena al manager.
+
+La finalización tiene un único ganador desde CLAIMED o REJECTED hacia FINALIZING→FINISHED.
+Todo setup posterior al claim queda bajo el try/finally responsable. Cleanup con finally anidados
+intenta release/unregister y garantiza FINISHED/countdown aunque falle una de esas operaciones;
+el callback ocurre fuera de locks y después de cleanup. No se atribuye release exitoso si falló.
+Una llamada duplicada a finish no debe liberar recursos de otro productor.
+
+Si execute() lanza después de claim, el catch no toca el snapshot ni cierra recursos del worker.
+Devuelve por excepción tipada `EnqueueOutcomeUncertain` el jobId, estado observado y exitCode
+observado, sin comando ni texto libre del executor. La herramienta conserva esos datos en error
+estructurado, separando `submission_transport: uncertain` de `execution_state`. Un terminal ya
+conocido no se degrada a UNCERTAIN; tampoco se convierte el error de transporte en command-OK.
+La cancelación lanzada por el executor después de claim sigue esta misma distinción, no simula
+cancelación previa al dispatch. La identidad permite consultar el job sin repetir el comando.
+
+Oráculos ejecutados: reject-beforeclaim y Runnable retenido tardío, inline-run-then-throw,
+worker vivo bloqueado antes del throw, Runnable duplicado simultáneo y después de finish,
+cancelación antes de claim, callback reentrante que crea otro job. Comprobar estado real,
+versión de scope y exclusión del writer, además del número de dispatch/callbacks. No usar
+una espera negativa como única evidencia de una carrera ni ejecutar procesos/modelos reales.

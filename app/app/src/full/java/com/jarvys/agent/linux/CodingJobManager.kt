@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** Durable, owner-scoped jobs. Restoring a record never launches or signals a process. */
 class CodingJobManager(
@@ -36,6 +37,11 @@ class CodingJobManager(
         LAUNCH_INTENT(false), RUNNING(false), CANCELLING(false), SUCCEEDED(true), FAILED(true),
         NOT_STARTED(true), CANCELLED(true), TIMED_OUT(true), INTERRUPTED(true), UNCERTAIN(true)
     }
+    /** Executor reported failure after the worker claimed ownership; observed facts are historical, not a receipt. */
+    class EnqueueOutcomeUncertain internal constructor(val jobId: String, val observedState: State,
+        val observedExitCode: Int?, cause: Exception) : IOException(
+        "Job delivery outcome is uncertain; inspect project_jobs and do not repeat the command", cause)
+    private enum class WorkerClaim { RESERVED, CLAIMED, REJECTED, FINALIZING, FINISHED }
     data class Snapshot(val id: String, val owner: String, val scopeId: String, val cwd: String,
         val redactedCommand: String, val state: State, val createdAt: Long,
         val startedAt: Long? = null, val finishedAt: Long? = null, val exitCode: Int? = null,
@@ -48,6 +54,7 @@ class CodingJobManager(
     private data class RecoveredAccess(val scopeId: String, val projectRoot: String, val durableIdentity: String, val owners: Set<String>)
     private class Job(var snapshot: Snapshot, val projectRoot: String, val conversationId: String, val durableIdentity: String?) {
         val lock = Any()
+        val claim = AtomicReference(WorkerClaim.RESERVED)
         val finished = CountDownLatch(if (snapshot.state.terminal) 0 else 1)
         val token = CancellationToken.cancellable()
         var unregister = Runnable { }
@@ -97,11 +104,25 @@ class CodingJobManager(
             synchronized(job.lock) { persist(job) }
             jobs[id] = job
             job.unregister = token.registerCancelAction { requestCancel(job) }
-            executor.execute { run(job, scope, command, timeoutMillis, lease, preflight, completion) }
+            executor.execute {
+                if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.CLAIMED))
+                    run(job, scope, command, timeoutMillis, lease, preflight, completion)
+            }
             return snapshot(job)
-        } catch (failure: Exception) {
-            if (jobs[id] === job) finish(job, lease, State.NOT_STARTED, null, "Job worker could not start", completion, false)
-            else lease.close()
+        } catch (failure: Throwable) {
+            if (jobs[id] !== job) {
+                lease.close()
+            } else if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.REJECTED)) {
+                // Only absence of this manager's worker claim, not absence of all earlier preparation.
+                finish(job, lease, State.NOT_STARTED, null, "Job worker could not start", completion, false,
+                    WorkerClaim.REJECTED)
+            } else {
+                // A running/finished worker owns finalization, even if execute ran inline and then threw.
+                if (failure is Exception) {
+                    val observed = snapshot(job)
+                    throw EnqueueOutcomeUncertain(id, observed.state, observed.exitCode, failure)
+                }
+            }
             throw failure
         }
     }
@@ -213,16 +234,18 @@ class CodingJobManager(
 
     private fun run(job: Job, scope: ProjectScope, command: String, timeout: Long?, lease: ProjectScope.WriterLease,
                     preflight: () -> Unit, completion: (Snapshot) -> Unit) {
-        val output = CodingJobLog(::sanitize, redactionBufferChars) { append(job, it) }
+        var output: CodingJobLog? = null
         var state = State.NOT_STARTED
         var exit: Int? = null
         var error: String? = null
         var complete = true
         try {
+            val activeOutput = CodingJobLog(::sanitize, redactionBufferChars) { append(job, it) }
+            output = activeOutput
             job.token.throwIfCancelled(); validateCwd(scope, job.snapshot.cwd); lease.validate(); preflight()
             job.token.throwIfCancelled()
             val result = backend.execute(scope, command, job.snapshot.cwd, timeout, job.token,
-                LinuxOutputCallback { stream, text -> output.accept(stream, text) }) {
+                LinuxOutputCallback { stream, text -> activeOutput.accept(stream, text) }) {
                 preflight(); validateCwd(scope, job.snapshot.cwd); lease.validate()
                 synchronized(job.lock) {
                     job.token.throwIfCancelled()
@@ -252,17 +275,28 @@ class CodingJobManager(
             if (job.launchAttempted) complete = false
             error = if (job.launchAttempted) "Execution result is unknown; inspect project and log before any retry"
                     else "Command was not launched; environment, policy, or project validation failed"
+        } catch (fatal: Error) {
+            state = State.UNCERTAIN; exit = null; complete = false
+            error = "Execution interrupted by a fatal worker failure; do not repeat the command"
+            throw fatal
         } finally {
-            try { output.finish() } catch (_: Exception) {
+            try { output?.finish() } catch (_: Exception) {
                 if (job.launchAttempted && state != State.CANCELLED) state = State.UNCERTAIN
                 error = "Output could not be fully persisted; inspect the project before any retry"; complete = false
+            } catch (fatal: Error) {
+                state = State.UNCERTAIN; exit = null; complete = false
+                error = "Output interrupted by a fatal worker failure; do not repeat the command"
+                throw fatal
+            } finally {
+                finish(job, lease, state, exit, error, completion, complete)
             }
-            finish(job, lease, state, exit, error, completion, complete)
         }
     }
 
     private fun finish(job: Job, lease: ProjectScope.WriterLease, result: State, exit: Int?, error: String?,
-                       completion: (Snapshot) -> Unit, logComplete: Boolean) {
+                       completion: (Snapshot) -> Unit, logComplete: Boolean,
+                       expectedClaim: WorkerClaim = WorkerClaim.CLAIMED) {
+        if (!job.claim.compareAndSet(expectedClaim, WorkerClaim.FINALIZING)) return
         var terminal: Snapshot? = null
         try { synchronized(job.lock) {
             if (job.snapshot.state.terminal) return
@@ -279,9 +313,15 @@ class CodingJobManager(
             }
             terminal = job.snapshot
         } } finally {
-            lease.close(); job.unregister.run(); job.unregister = Runnable { }; job.finished.countDown()
+            try { lease.close() } finally {
+                try { job.unregister.run() } finally {
+                    job.unregister = Runnable { }
+                    job.claim.set(WorkerClaim.FINISHED)
+                    job.finished.countDown()
+                }
+            }
         }
-        terminal?.let { runCatching { completion(it) } }
+        terminal?.let { try { completion(it) } catch (_: Exception) { /* Presentation failure is not execution failure. */ } }
     }
 
     private fun requestCancel(job: Job) {

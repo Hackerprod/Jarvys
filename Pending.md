@@ -1,3 +1,9 @@
+## Checkpoint S6 — claim local Coding, 27-10-2026
+
+Claim único antes del worker y finalización one-shot; fallo posterior del executor conserva jobId y estado factual sin afirmar command-OK. Full47 + Play6 PASS, ambos flavors compilados y revisión independiente conforme. [Reporte](docs/continue/single-validate/S6-coding-worker-claim-report.md). Pendientes owner lease durable, schema3/reserva Room y admisión antes de preparación; sin ASYNC ni cierre S6.
+
+Respaldo anterior `9a0e736e` reconstruye fuente `adb2e835`; este bloque posterior aún no se afirma publicado. Se mantiene respaldo seguro sin fixtures completos restringidos.
+
 ## Checkpoint S6 — writer IO Coding, 27-10-2026
 
 Extracción usada por persist legacy, con candidatos exactos y fallo incierto sin replay. Full38 + Play6 PASS, compilación ambos flavors y revisión independiente conforme. [Reporte y límites](docs/continue/single-validate/S6-coding-journal-io-report.md). Pendientes claim de worker, owner lease durable, schema3/reserva Room, admisión de preparación y proyección técnica; sin ASYNC ni cierre S6.

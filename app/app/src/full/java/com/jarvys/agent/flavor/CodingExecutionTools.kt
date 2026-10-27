@@ -76,6 +76,12 @@ class CodingExecutionTools internal constructor(
             check(available(name, token)) { "This capability is no longer selected or this project bot is no longer interactive. Nothing was launched." }
             scope.validate()
             when (name) { EXEC -> executeCommand(arguments, token); JOBS -> jobOperation(arguments, token); else -> environmentStatus(arguments) }
+        } catch (uncertain: CodingJobManager.EnqueueOutcomeUncertain) {
+            CoreToolResult.failure(JSONObject().put("job_id", uncertain.jobId)
+                .put("submission_transport", "uncertain").put("execution_state", uncertain.observedState.name)
+                .put("exit_code", uncertain.observedExitCode ?: JSONObject.NULL)
+                .put("notice", "Observed execution facts may have changed. Inspect project_jobs; do not repeat the command.")
+                .toString())
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { CoreToolResult.failure(sanitizer.scrub(failure.message ?: failure.javaClass.simpleName)) }
     }
