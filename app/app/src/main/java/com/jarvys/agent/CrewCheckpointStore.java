@@ -57,8 +57,10 @@ public final class CrewCheckpointStore {
         public final JSONObject metadata;
         public final long savedAtMs;
         public final String scopeIdentity;
+        private final String serializedPayload;
 
         Snapshot(JSONObject payload) throws Exception {
+            this.serializedPayload = payload.toString();
             this.conversationId = CrewCheckpointStore.required(payload, "conversationId");
             this.botId = CrewCheckpointStore.required(payload, "botId");
             this.scopeIdentity = CrewCheckpointStore.required(payload, "scopeIdentity");
@@ -89,9 +91,11 @@ public final class CrewCheckpointStore {
         public final CoreAgentLoop.Checkpoint loop;
         private final String serializedMetadata;
         private final String serializedArtifactOwnership;
+        private final String verifiedPayload;
 
         private ConfirmedSnapshot(ObservedCheckpoint observed) {
             Snapshot snapshot = observed.snapshot;
+            verifiedPayload = snapshot.serializedPayload;
             conversationId = snapshot.conversationId;
             botId = snapshot.botId;
             scopeIdentity = snapshot.scopeIdentity;
@@ -100,6 +104,12 @@ public final class CrewCheckpointStore {
             loop = snapshot.loop;
             serializedMetadata = snapshot.metadata.toString();
             serializedArtifactOwnership = snapshot.artifactOwnership.toString();
+        }
+
+        /** Fresh decoded view of the verified payload, independent of the legacy public loop view. */
+        CoreAgentLoop.Checkpoint loopForEvidence() {
+            try { return new Snapshot(new JSONObject(verifiedPayload)).loop; }
+            catch (Exception invalid) { throw new IllegalStateException("Confirmed checkpoint payload invalid", invalid); }
         }
 
         public JSONObject metadataJson() {
@@ -152,6 +162,11 @@ public final class CrewCheckpointStore {
     }
 
     public void save(String conversationId, String botId, JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
+        saveConfirmed(conversationId, botId, metadata, scopeIdentity, loop, artifactOwnership);
+    }
+
+    /** Returns evidence of these exact bytes only after the complete save/sync succeeded. */
+    public ConfirmedSnapshot saveConfirmed(String conversationId, String botId, JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
         synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
@@ -209,6 +224,7 @@ public final class CrewCheckpointStore {
                 verify(pending);
                 atomicReplace(pending, target);
                 syncDirectoryChain(directory);
+                return new ConfirmedSnapshot(new ObservedCheckpoint(new Snapshot(new JSONObject(serialized)), digest(bytes)));
             } catch (StackOverflowError invalidDepth) {
                 throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
             } catch (CancellationException cancelled) {

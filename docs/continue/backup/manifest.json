@@ -1,13 +1,19 @@
 {
-  "source_commit": "7fd04efd6ab2b29819b8a8fbea76af82cc2d7d6c",
-  "source_tree": "e6512b90c260333e1453b620de811974d012afa3",
-  "remote_parent": "860517646d925b699720340610a02f237a37af08",
+  "source_commit": "2b719704c962aa838638252258c70731bd376fa2",
+  "source_tree": "356b9098eb92b5649e2b7f14942bf3d8e05246fd",
+  "remote_parent": "6879289c502342401750daff21653166a11803aa",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
       "remote_blob": "7c278f49340d1d25f99634d622273e8fbace6a6d",
       "remote_sha256": "5333d1f5ac3a7b2703028b4e62b7a5512ce39f787643251bb674fbdeac30b669",
       "restored_sha256": "97a2f9f245ce19970392a79531e185bde887b5e21bfe5c73313b5ca3f8e7156d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java",
+      "remote_blob": "26f1ebc3da8b1c30f4dbeea91068eeab7a92291e",
+      "remote_sha256": "2aeb7aa22a83a0b736c68c4ec7948a0aa0393572a3e033b2cc451919eee0b9fc",
+      "restored_sha256": "8802370dbd73d09e5e88f4a7173d09d83f744745a9dc28eb4a46731277069244"
     },
     {
       "path": "app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt",
@@ -20,6 +26,24 @@
       "remote_blob": "8dd8ac3bac3c1ac2686b7369e7702b06e120ed42",
       "remote_sha256": "b50faac12eb838270117efd65bc9a3fb9c89d758c1ba29f81a3f3fb88cd8854c",
       "restored_sha256": "bb635806d713cc473b746f3a9cd830c9f9bb40cb7a489a67cb3ea9fe241c0be0"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CrewCheckpointDurabilityTest.java",
+      "remote_blob": "50b3fb1669334225107fbb613eeae2c2dffa65f1",
+      "remote_sha256": "009f4a084384ab8d3bf2dd2f0260dadd2b23ca651c6b72fea59cae64fe73c7d1",
+      "restored_sha256": "0060bcb9b9ec8ca5b10793de9b7fe9f8b3892267e90d09750ed9060aaf469d24"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CrewCheckpointIncorporationCodecTest.java",
+      "remote_blob": "524175e140943055951a255d7927cef214015de8",
+      "remote_sha256": "e3b455f57da2ec0367a9eff10842ed4abe76805a5fb9fd58a66e07af2e470c47",
+      "restored_sha256": "e09ef7a839095944d81b2613c898b01d5e4af2648664618d0fe6311cd732991d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java",
+      "remote_blob": "98bb01f5cc2fb62168babf71619ca3b0ea886a8c",
+      "remote_sha256": "e7256c83e467f590c6949a5f65d8d642a41d2322b38556160365730f5f2357c4",
+      "restored_sha256": "f46d75bd33c58912fa8d6d2c93ceb5d5afe09e9ee9909e8b7c11381dcab5091e"
     },
     {
       "path": "app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt",
@@ -112,10 +136,10 @@
       "restored_sha256": "12277fe94e7833af5de28aca01cb93564577c0b63636067cba222146c8417ff5"
     }
   ],
-  "patch_sha256": "85da29b3444db53ed367ae27062bd242efd47fcb7f69f63569c5ccf44ce31ddf",
-  "readme_source_sha256": "49af67be59b738c65f02217d2616434ec46fcacdc99d0257b7e16a910c508bde",
-  "readme_backup_sha256": "4f74c8f7a68e58398fbcecae61a633d14b0c27d132319a839a021d6190f9e3af",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — CentralWorkspace\n\nEste árbol **no es build-ready tal cual**. Los 18 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `7fd04efd6ab2b29819b8a8fbea76af82cc2d7d6c`. Validación focal independiente: 677 Full + 673 Play PASS,\n1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "patch_sha256": "ca3367c4588859483a7a3706428d04fd4d1fcd9e11cb24316717d2b875c32935",
+  "readme_source_sha256": "e4fedc841e008cc0b5c25355c4a678bddfb9d0c5d7fdf86ef28d461ecb69cb23",
+  "readme_backup_sha256": "50e477f5e40a4827cf534d2d081034599c32239128848ac5ad36e526909bace5",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — procedencia Crew\n\nEste árbol **no es build-ready tal cual**. Los 22 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `2b719704c962aa838638252258c70731bd376fa2`. Validación focal independiente: 677 Full + 673 Play PASS,\n1.350 ejecuciones finales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",

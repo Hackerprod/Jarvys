@@ -1038,7 +1038,30 @@ public final class CoreAgentRuntime {
       throw new IllegalArgumentException(
           "Profile capability is no longer available in this bot scope");
     }
-    return guardCrewTools(effective, bot);
+    CoreToolRegistry guarded = guardCrewTools(effective, bot);
+    return projectScope && bot.role.profileVersion > 0 ? withCrewInvocationSource(guarded, bot, manager) : guarded;
+  }
+
+  /** The real worker installer; never a source reconstructed from model arguments or the latest checkpoint. */
+  static CoreToolRegistry withCrewInvocationSource(CoreToolRegistry guarded, CrewManager.Bot bot, CrewManager manager) {
+      return guarded.withInvocationSourceProvider(new CoreToolRegistry.InvocationSourceProvider() {
+        @Override public void bind(CoreTool tool, String callId, EffectInvocation invocation) {
+          throw new IllegalStateException("Crew dispatch requires its exact prepared checkpoint identity");
+        }
+        @Override public void bindPrepared(CoreTool tool, String callId, Map<String,Object> arguments,
+            CoreAgentLoop.PreparedInvocationSnapshot prepared, EffectInvocation invocation) {
+          if (prepared == null || !prepared.callId().equals(callId))
+            throw new IllegalStateException("Crew dispatch has no prepared checkpoint identity");
+          prepared.requireDispatch(tool, arguments);
+          CrewManager.InvocationCapture capture = manager.claimInvocationSource(bot, prepared);
+          prepared.requireConfirmed(capture.confirmed);
+          capture.requireCurrent();
+          CrewInvocationSource source = new CrewInvocationSource(capture.confirmed, prepared);
+          CrewInvocationWitness witness = new CrewInvocationWitness(source, invocation, capture.currentGuard());
+          invocation.bindCrewSource(witness);
+          witness.requireInvocationCurrent();
+        }
+      });
   }
 
   private CrewContextArtifacts crewArtifacts(CrewManager.Bot bot) {

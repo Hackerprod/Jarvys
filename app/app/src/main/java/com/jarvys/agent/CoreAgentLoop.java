@@ -42,6 +42,107 @@ public final class CoreAgentLoop {
     public interface CheckpointListener {
 
         void persist(Checkpoint checkpoint);
+        /** One checkpoint write, with the exact live prepared invocation (never restored from JSON). */
+        default void persistStarted(Checkpoint checkpoint, PreparedInvocationSnapshot prepared) { persist(checkpoint); }
+        default boolean requiresPreparedInvocationSnapshot() { return false; }
+    }
+
+    /** Runtime-only identity. Raw values are never exposed or hashed; effective values are executed unchanged. */
+    public static final class PreparedInvocationSnapshot {
+        private final String callId;
+        private final String toolName;
+        private final CoreTool tool;
+        private Map<String, Object> raw;
+        private Map<String, Object> effective;
+        private boolean disposed;
+        private PreparedInvocationSnapshot(ModelReply.Call call, CoreTool tool, Map<String, Object> raw,
+                                           Map<String, Object> effective) {
+            this.callId = call.id; this.toolName = call.name; this.tool = tool;
+            this.raw = freezeMap(raw); this.effective = freezeMap(effective);
+        }
+        public String callId() { return callId; }
+        public String toolName() { return toolName; }
+        synchronized Map<String, Object> arguments() {
+            if (disposed) throw new IllegalStateException("Prepared invocation expired");
+            return effective;
+        }
+        synchronized void requireDispatch(CoreTool actual, Map<String, Object> arguments) {
+            if (disposed || actual != tool || arguments != effective)
+                throw new IllegalStateException("Prepared invocation identity changed");
+        }
+        synchronized void requireConfirmed(CrewCheckpointStore.ConfirmedSnapshot confirmed) {
+            CoreAgentLoop.Checkpoint verified = confirmed.loopForEvidence();
+            if (disposed || !"STARTED".equals(verified.toolLifecycle.get(callId)))
+                throw new IllegalStateException("Prepared invocation is not durably started");
+            ModelReply.Call matched = null;
+            for (ConversationTurn turn : verified.transcript) {
+                if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && callId.equals(turn.toolCallId))
+                    throw new IllegalStateException("Prepared invocation already has a result");
+                for (ModelReply.Call call : turn.toolCalls) if (callId.equals(call.id)) {
+                    if (matched != null) throw new IllegalStateException("Ambiguous prepared invocation");
+                    matched = call;
+                }
+            }
+            if (matched == null || !toolName().equals(matched.name))
+                throw new IllegalStateException("Prepared invocation missing from checkpoint");
+            try {
+                Object sanitized = CrewCheckpointStore.sanitizeJson(new org.json.JSONObject(raw));
+                if (!jsonValuesEqual(freezeValue(sanitized), freezeMap(matched.arguments)))
+                    throw new IllegalStateException("Prepared checkpoint arguments changed");
+            } catch (RuntimeException failure) { throw failure; }
+            catch (Exception failure) { throw new IllegalStateException("Cannot verify prepared arguments", failure); }
+        }
+        public synchronized void discard() { disposed = true; raw = null; effective = null; }
+        private static Map<String, Object> freezeMap(Map<String, Object> map) {
+            @SuppressWarnings("unchecked") Map<String,Object> frozen = (Map<String,Object>) freezeValue(map);
+            return frozen;
+        }
+        private static boolean jsonValuesEqual(Object left, Object right) {
+            if (left instanceof Number && right instanceof Number)
+                return new java.math.BigDecimal(left.toString()).compareTo(new java.math.BigDecimal(right.toString())) == 0;
+            if (left instanceof Map && right instanceof Map) {
+                Map<?,?> a = (Map<?,?>)left, b = (Map<?,?>)right;
+                if (!a.keySet().equals(b.keySet())) return false;
+                for (Object key : a.keySet()) if (!jsonValuesEqual(a.get(key), b.get(key))) return false;
+                return true;
+            }
+            if (left instanceof List && right instanceof List) {
+                List<?> a = (List<?>)left, b = (List<?>)right;
+                if (a.size()!=b.size()) return false;
+                for (int i=0;i<a.size();i++) if (!jsonValuesEqual(a.get(i),b.get(i))) return false;
+                return true;
+            }
+            return java.util.Objects.equals(left,right);
+        }
+        private static Object freezeValue(Object value) {
+            if (value == org.json.JSONObject.NULL) return null;
+            if (value == null || value instanceof String || value instanceof Boolean
+                    || value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long
+                    || value instanceof Float || value instanceof Double || value instanceof java.math.BigDecimal
+                    || value instanceof java.math.BigInteger) return value;
+            if (value instanceof org.json.JSONObject) {
+                Map<String,Object> copy = new LinkedHashMap<>();
+                org.json.JSONObject json = (org.json.JSONObject)value;
+                java.util.Iterator<String> keys = json.keys();
+                while (keys.hasNext()) { String key = keys.next(); copy.put(key, freezeValue(json.opt(key))); }
+                return Collections.unmodifiableMap(copy);
+            }
+            if (value instanceof Map) {
+                Map<String,Object> copy = new LinkedHashMap<>();
+                for (Map.Entry<?,?> entry : ((Map<?,?>)value).entrySet()) {
+                    if (!(entry.getKey() instanceof String)) throw new IllegalArgumentException("Non-string argument key");
+                    copy.put((String)entry.getKey(), freezeValue(entry.getValue()));
+                }
+                return Collections.unmodifiableMap(copy);
+            }
+            List<Object> copy = new ArrayList<>();
+            if (value instanceof List) for (Object item : (List<?>)value) copy.add(freezeValue(item));
+            else if (value instanceof org.json.JSONArray) {
+                org.json.JSONArray array = (org.json.JSONArray)value;
+                for (int i=0;i<array.length();i++) copy.add(freezeValue(array.opt(i)));
+            } else throw new IllegalArgumentException("Unsupported mutable argument value");
+            return Collections.unmodifiableList(copy);
+        }
     }
 
     public interface ProgressListener {
@@ -334,7 +435,8 @@ public final class CoreAgentLoop {
         final int index;
         final ModelReply.Call call;
         final CoreTool tool;
-        final Map<String, Object> arguments;
+        volatile Map<String, Object> arguments;
+        final PreparedInvocationSnapshot sourceSnapshot;
         final String argumentsKey;
         final ToolActivity activity;
         final boolean hideFromProgress;
@@ -352,17 +454,26 @@ public final class CoreAgentLoop {
         boolean loopRecorded;
         boolean finalized;
 
+        void discardSourceArguments() {
+            if (sourceSnapshot != null) { sourceSnapshot.discard(); arguments = null; }
+        }
         boolean markRunning() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.RUNNING); }
-        boolean markCancelledBeforeStart() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.CANCELLED); }
+        boolean markCancelledBeforeStart() {
+            boolean cancelled = executionState.compareAndSet(ExecutionState.NEW, ExecutionState.CANCELLED);
+            if (cancelled) discardSourceArguments();
+            return cancelled;
+        }
         boolean executionStarted() { return executionState.get() == ExecutionState.RUNNING; }
 
         PreparedToolCall(int index, ModelReply.Call call, CoreTool tool, Map<String, Object> arguments,
                          String argumentsKey, ToolActivity activity, boolean hideFromProgress,
-                         String preflightError, String admissionReason) {
+                         String preflightError, String admissionReason, boolean captureSource, Map<String,Object> rawSnapshot) {
             this.index = index;
             this.call = call;
             this.tool = tool;
-            this.arguments = arguments;
+            this.sourceSnapshot = captureSource && preflightError == null && admissionReason == null && tool != null
+                    ? new PreparedInvocationSnapshot(call, tool, rawSnapshot, arguments) : null;
+            this.arguments = sourceSnapshot == null ? arguments : sourceSnapshot.arguments();
             this.argumentsKey = argumentsKey;
             this.activity = activity;
             this.hideFromProgress = hideFromProgress;
@@ -552,6 +663,11 @@ public final class CoreAgentLoop {
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults) {
+        updateTranscriptSnapshot(transcript, completedToolResults, null);
+    }
+
+    private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults,
+                                          PreparedInvocationSnapshot prepared) {
         for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 for (ModelReply.Call call : turn.toolCalls) {
@@ -570,9 +686,8 @@ public final class CoreAgentLoop {
         CheckpointListener listener = checkpointListener;
         if (listener != null) {
             try {
-                listener.persist(completedToolResults == null || completedToolResults.isEmpty() ? checkpoint
-                        : new Checkpoint(checkpoint.transcript, checkpoint.appliedIncomingIds, checkpoint.toolLifecycle,
-                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults));
+                if (prepared == null) listener.persist(checkpoint);
+                else listener.persistStarted(checkpoint, prepared);
             } catch (CheckpointFailure failure) {
                 throw failure;
             } catch (RuntimeException failure) {
@@ -945,12 +1060,14 @@ public final class CoreAgentLoop {
             ToolActivity activity = toolActivity(runId, modelTurns, index, call, registry);
             String preflightError = call.invalidArgumentsReason;
             String admissionReason = null;
-            Map<String, Object> invokeArguments = call.arguments;
+            boolean captureSource = checkpointListener != null && checkpointListener.requiresPreparedInvocationSnapshot();
+            Map<String,Object> rawArguments = captureSource ? PreparedInvocationSnapshot.freezeMap(call.arguments) : call.arguments;
+            Map<String, Object> invokeArguments = rawArguments;
             if (admissionReason == null && preflightError == null && tool == null) {
                 preflightError = "Tool is not available in this agent scope: " + call.name;
             } else if (admissionReason == null && preflightError == null) {
                 ToolArgumentValidator.Result validation = ToolArgumentValidator.coerceAndValidate(
-                        call.arguments, tool.declaration().jsonSchema());
+                        rawArguments, tool.declaration().jsonSchema());
                 invokeArguments = validation.arguments;
                 preflightError = validation.error == null ? null
                         : tool.preflightErrorMessage(call.arguments, validation.error);
@@ -965,9 +1082,11 @@ public final class CoreAgentLoop {
             if (preflightError == null && tool.executionMode() == CoreTool.ExecutionMode.SEQUENTIAL)
                 sequential = true;
             prepared.add(new PreparedToolCall(index, call, tool, invokeArguments,
-                    loopDetector.argumentsKey(call), activity, hideFromProgress, preflightError, admissionReason));
+                    loopDetector.argumentsKey(call), activity, hideFromProgress, preflightError, admissionReason,
+                    captureSource, rawArguments));
         }
 
+        try {
         ToolBatchOutcome outcome = new ToolBatchOutcome();
         outcome.allCallsTerminal = !prepared.isEmpty();
         // Results spend the shared turn budget in provider call order, never completion order.
@@ -1183,6 +1302,9 @@ public final class CoreAgentLoop {
                     && item.result.success && item.result.finishRun;
         }
         return outcome;
+        } finally {
+            for (PreparedToolCall item : prepared) item.discardSourceArguments();
+        }
     }
 
     private static CoreToolResult cancelledToolResult(CancellationException cancelled) {
@@ -1251,7 +1373,8 @@ public final class CoreAgentLoop {
             return false;
         }
         toolLifecycle.put(item.call.id, "STARTED");
-        updateTranscriptSnapshot(transcript);
+        try { updateTranscriptSnapshot(transcript, Collections.emptyMap(), item.sourceSnapshot); }
+        catch (RuntimeException failure) { item.discardSourceArguments(); throw failure; }
         if (!item.hideFromProgress) {
             activeActivities.put(item.call.id, item.activity);
             // Mark before notifying the listener: it may cancel synchronously from tool_call.
@@ -1263,13 +1386,15 @@ public final class CoreAgentLoop {
 
     private CoreToolResult invokePreparedTool(PreparedToolCall item, CoreToolRegistry registry,
             CancellationToken token, ProgressListener listener) {
-        return registry.invoke(item.call.name, item.arguments, token, message -> {
+        try { return registry.invoke(item.call.name, item.arguments, token, message -> {
             if (listener != null && !item.hideFromProgress && message != null && !message.isEmpty())
                 listener.onToolActivity(item.activity.event("tool_progress", message, null));
-        }, item.call.id);
+        }, item.call.id, null, item.sourceSnapshot);
+        } finally { item.discardSourceArguments(); }
     }
 
     private static void cancelPreparedTool(PreparedToolCall item) {
+        item.discardSourceArguments();
         // A self-cancelling tool may call this before submit() has published its Future.
         // Let its runner publish the returned result before cancelling that FutureTask.
         if (item.cancelAfterResult) return;

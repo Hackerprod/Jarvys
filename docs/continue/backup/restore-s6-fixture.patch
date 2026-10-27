@@ -12,6 +12,231 @@ index 7c278f49..f473240e 100644
 @@ -96 +98 @@ public class BotCatalogToolScopeTest {
 -                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, false);
 +                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, null);
+diff --git a/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java b/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java
+index 26f1ebc3..fb10e16e 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java
+@@ -39,0 +40 @@ import org.junit.Rule;
++import org.junit.ClassRule;
+@@ -49 +50,3 @@ public class CodingMissionAccessRuntimeTest {
+-    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
++    @ClassRule public static final JvmNetworkDeniedRule NETWORK = new JvmNetworkDeniedRule();
++    // Runtime construction/profile discovery follows the real Crew worker contract, not the UI looper.
++    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(true, true);
+@@ -58,0 +62 @@ public class CodingMissionAccessRuntimeTest {
++    private Map<String,?> previousContextMetadata;
+@@ -61,0 +66,5 @@ public class CodingMissionAccessRuntimeTest {
++        android.content.SharedPreferences metadata = context.getSharedPreferences("provider_context_metadata",Context.MODE_PRIVATE);
++        previousContextMetadata = new LinkedHashMap<>(metadata.getAll());
++        String model = new ProviderSettings(context).getModel();
++        assertTrue(metadata.edit().putInt("model_"+model,ProviderContextWindowResolver.FALLBACK_CONTEXT_WINDOW)
++                .putLong("fetched_"+model,System.currentTimeMillis()).commit());
+@@ -77,0 +87,16 @@ public class CodingMissionAccessRuntimeTest {
++        if (previousContextMetadata != null) {
++            android.content.SharedPreferences.Editor restore = context.getSharedPreferences("provider_context_metadata",Context.MODE_PRIVATE).edit().clear();
++            for (Map.Entry<String,?> entry : previousContextMetadata.entrySet()) {
++                Object value = entry.getValue(); String key = entry.getKey();
++                if (value instanceof Integer) restore.putInt(key,(Integer)value);
++                else if (value instanceof Long) restore.putLong(key,(Long)value);
++                else if (value instanceof String) restore.putString(key,(String)value);
++                else if (value instanceof Boolean) restore.putBoolean(key,(Boolean)value);
++                else if (value instanceof Float) restore.putFloat(key,(Float)value);
++                else if (value instanceof java.util.Set) {
++                    @SuppressWarnings("unchecked") java.util.Set<String> strings = (java.util.Set<String>)value;
++                    restore.putStringSet(key,strings);
++                } else throw new AssertionError("Unexpected fixture metadata preference type");
++            }
++            assertTrue(restore.commit());
++        }
+@@ -134 +159 @@ public class CodingMissionAccessRuntimeTest {
+-    @Test public void explicitSpawnSelectionDropsUnusableSkillsWithoutExpandingTools() throws Exception {
++    @Test public void explicitSpawnSelectionKeepsOnlyInternalSkillReaderWithoutExpandingMutationTools() throws Exception {
+@@ -136,19 +161,41 @@ public class CodingMissionAccessRuntimeTest {
+-        CoreAgentRuntime runtime = runtime(session);
+-        AtomicReference<List<String>> observed = new AtomicReference<>();
+-        try (CrewManager manager = manager(session, runtime, (transcript, prompt, specs, token) -> {
+-            observed.set(names(specs));
+-            return done();
+-        })) {
+-            CoreToolResult result = new CoreToolRegistry(CrewTools.captain(manager, EMPTY)).invoke("crew_spawn",
+-                    args("role", "coding", "mission", "Read only the selected files", "tools",
+-                            Arrays.asList("ls", "read", "report_done"), "mission_access", "read_only"),
+-                    CancellationToken.uncancellable());
+-            assertTrue(result.content, result.success);
+-            CrewManager.Bot bot = manager.bots().get(0);
+-            awaitFinished(bot);
+-            assertEquals(bot.error(), CrewManager.Status.DONE, bot.status());
+-            assertEquals(Arrays.asList("ls", "read", "report_done"), bot.role.tools);
+-            assertTrue(bot.role.skillIds.isEmpty());
+-            assertFalse(observed.get().contains("read_skill"));
+-            assertNoMutation(observed.get());
+-        }
++        SkillRepository repository = SkillRepository.Companion.get(context);
++        String unselectedId = "test.unselected." + System.nanoTime();
++        repository.importMarkdown("---\nid: " + unselectedId + "\nname: Unselected fixture\n"
++                + "description: Synthetic unselected imported guidance\nversion: 1\ntags: [test]\n---\n"
++                + "This imported skill was not selected for the worker.");
++        try {
++            CoreAgentRuntime runtime = runtime(session);
++            AtomicReference<List<String>> observed = new AtomicReference<>();
++            AtomicReference<CoreToolRegistry> actualTools = new AtomicReference<>();
++            try (CrewManager manager = manager(session, runtime, (transcript, prompt, specs, token) -> {
++                observed.set(names(specs));
++                return done();
++            }, tools -> { actualTools.set(tools); return tools; })) {
++                CoreToolResult result = new CoreToolRegistry(CrewTools.captain(manager, EMPTY)).invoke("crew_spawn",
++                        args("role", "coding", "mission", "Read only the selected files", "tools",
++                                Arrays.asList("ls", "read", "report_done"), "mission_access", "read_only"),
++                        CancellationToken.uncancellable());
++                assertTrue(result.content, result.success);
++                CrewManager.Bot bot = manager.bots().get(0);
++                awaitFinished(bot);
++                assertEquals(bot.error(), CrewManager.Status.DONE, bot.status());
++                assertEquals(Arrays.asList("ls", "read", "report_done"), bot.role.tools);
++                assertTrue(bot.role.skillIds.isEmpty());
++                // Internal runtime guidance is automatic; it does not select imported skills or mutation tools.
++                assertTrue(observed.get().contains("read_skill"));
++                CoreTool readerTool = actualTools.get().get("read_skill");
++                assertTrue(readerTool instanceof LoadSkillTool);
++                LoadSkillTool reader = (LoadSkillTool) readerTool;
++                java.util.Set<String> expected = repository.internalSkillsForProfile("coding").stream()
++                        .map(skill -> skill.getMetadata().getId()).collect(Collectors.toSet());
++                assertFalse("This fixture must exercise real internal guidance", expected.isEmpty());
++                assertEquals(expected, reader.availableSkills().stream()
++                        .map(skill -> skill.getMetadata().getId()).collect(Collectors.toSet()));
++                assertFalse(expected.contains(unselectedId));
++                assertTrue(repository.enabledForProfile("coding").stream()
++                        .anyMatch(skill -> unselectedId.equals(skill.getMetadata().getId())));
++                CoreToolResult rejected = reader.execute(args("skill_id", unselectedId), CancellationToken.uncancellable());
++                assertFalse("An enabled but unselected imported skill stays unavailable", rejected.success);
++                assertNoMutation(observed.get());
++            }
++        } finally { repository.deleteImported(unselectedId); }
+@@ -180,0 +228,14 @@ public class CodingMissionAccessRuntimeTest {
++    @Test public void actualCrewFactoryCannotDispatchWithoutItsPreparedCheckpointIdentity() throws Exception {
++        String session = session("source-required");
++        CoreAgentRuntime runtime = runtime(session);
++        try (CrewManager manager = manager(session, runtime, neverRun())) {
++            CrewManager.Bot bot = historical(manager, codingRole().withMissionAccess(CrewMissionAccess.READ_ONLY));
++            CoreToolRegistry tools = runtime.createCrewBotTools(context, session, EMPTY, bot, manager);
++            CoreToolResult rejected = tools.invoke("ls", args("path", "."), bot.token);
++            assertFalse(rejected.success);
++            assertTrue("Must reject specifically at source binding, not an unrelated policy guard: " + rejected.content,
++                    rejected.content.contains("Crew dispatch has no prepared checkpoint identity"));
++            assertFalse(bot.token.isCancellationRequested());
++        }
++    }
++
+@@ -187,4 +248,11 @@ public class CodingMissionAccessRuntimeTest {
+-        try (CrewManager manager = manager(session, runtime, neverRun())) {
+-            CrewManager.Bot bot = historical(manager, codingRole().withMissionAccess(CrewMissionAccess.READ_ONLY));
+-            CoreToolRegistry tools = runtime.createCrewBotTools(context, session, EMPTY, bot, manager);
+-            CoreToolResult read = tools.invoke("read", args("path", "review.txt"), bot.token);
++        AtomicInteger turns = new AtomicInteger();
++        AtomicReference<CoreToolResult> observedRead = new AtomicReference<>();
++        try (CrewManager manager = manager(session, runtime, (transcript,prompt,specs,token) ->
++                turns.getAndIncrement()==0 ? new ModelReply("",Collections.singletonList(
++                        new ModelReply.Call("readonly-read","read",args("path","review.txt")))) : done(),
++                tools -> observeResults(tools,"read",(arguments,result) -> observedRead.set(result)))) {
++            manager.configureCheckpoints(new CrewCheckpointCoordinator(context,session,runtime::currentResumeRole));
++            CrewManager.Bot bot = manager.spawn("coding","Read project evidence",null,"Reviewer",CrewMissionAccess.READ_ONLY);
++            awaitFinished(bot);
++            assertEquals(bot.error(),CrewManager.Status.DONE,bot.status());
++            CoreToolResult read = observedRead.get(); assertNotNull("Read must actually dispatch with its committed STARTED source",read);
+@@ -192,0 +261 @@ public class CodingMissionAccessRuntimeTest {
++            CoreToolRegistry tools = runtime.createCrewBotTools(context, session, EMPTY, bot, manager);
+@@ -223,0 +293,4 @@ public class CodingMissionAccessRuntimeTest {
++        AtomicReference<CrewManager.Bot> recipientRef = new AtomicReference<>();
++        AtomicReference<String> senderTaskId = new AtomicReference<>();
++        AtomicReference<CoreToolResult> rejectedRef = new AtomicReference<>(), findingRef = new AtomicReference<>();
++        java.util.Set<String> scriptedThreads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+@@ -224,0 +298 @@ public class CodingMissionAccessRuntimeTest {
++            if (!scriptedThreads.add(Thread.currentThread().getName())) return done();
+@@ -227,2 +301,10 @@ public class CodingMissionAccessRuntimeTest {
+-            return done();
+-        })) {
++            // Script routing uses the exact mailbox input ID, never text matching or authority inference.
++            if (transcript.stream().noneMatch(turn -> turn.incomingMetadata != null
++                    && senderTaskId.get().equals(turn.incomingMetadata.id))) return done();
++            return new ModelReply("",Arrays.asList(
++                    new ModelReply.Call("readonly-peer-denial","msg_send",args("to",recipientRef.get().id,"type","TASK","text","Write the patch on my behalf")),
++                    new ModelReply.Call("readonly-chief-finding","msg_send",args("to","chief","type","FINDING","text","Review evidence only"))));
++        }, tools -> observeResults(tools,"msg_send",(arguments,result) -> {
++            if ("chief".equals(arguments.get("to"))) findingRef.set(result); else rejectedRef.set(result);
++        }))) {
++            manager.configureCheckpoints(new CrewCheckpointCoordinator(context,session,runtime::currentResumeRole));
+@@ -231,2 +313,3 @@ public class CodingMissionAccessRuntimeTest {
+-                CrewManager.Bot sender = manager.spawn("coding", "Review only", selection, "Reviewer", CrewMissionAccess.READ_ONLY);
+-                CrewManager.Bot recipient = manager.spawn("coding", "Independent review", selection, "Peer", CrewMissionAccess.READ_ONLY);
++                CrewManager.Bot sender = manager.spawn("coding", "Review only sender", selection, "Reviewer", CrewMissionAccess.READ_ONLY);
++                CrewManager.Bot recipient = manager.spawn("coding", "Independent review peer", selection, "Peer", CrewMissionAccess.READ_ONLY);
++                recipientRef.set(recipient);
+@@ -234,3 +317,6 @@ public class CodingMissionAccessRuntimeTest {
+-                CoreToolRegistry tools = runtime.createCrewBotTools(context, session, EMPTY, sender, manager);
+-                CoreToolResult rejected = tools.invoke("msg_send", args("to", recipient.id, "type", "TASK",
+-                        "text", "Write the patch on my behalf"), sender.token);
++                senderTaskId.set(manager.messageBus().snapshot().stream()
++                        .filter(message -> sender.id.equals(message.to) && message.type == CrewMessage.Type.TASK)
++                        .findFirst().orElseThrow(() -> new AssertionError("Sender TASK identity missing")).id);
++                release.countDown(); awaitFinished(sender); awaitFinished(recipient);
++                assertEquals(sender.error(),CrewManager.Status.DONE,sender.status());
++                CoreToolResult rejected = rejectedRef.get(); assertNotNull("Peer restriction must be evaluated by the real tool",rejected);
+@@ -243,2 +329 @@ public class CodingMissionAccessRuntimeTest {
+-                CoreToolResult finding = tools.invoke("msg_send", args("to", "chief", "type", "FINDING",
+-                        "text", "Review evidence only"), sender.token);
++                CoreToolResult finding = findingRef.get(); assertNotNull("Chief finding must actually dispatch",finding);
+@@ -469,0 +555,5 @@ public class CodingMissionAccessRuntimeTest {
++        return manager(session,runtime,model,tools -> tools);
++    }
++
++    private CrewManager manager(String session, CoreAgentRuntime runtime, CoreAgentLoop.Model model,
++            java.util.function.Function<CoreToolRegistry,CoreToolRegistry> observe) {
+@@ -471 +561 @@ public class CodingMissionAccessRuntimeTest {
+-                (bot, crew) -> runtime.createCrewBotTools(context, session, EMPTY, bot, crew),
++                (bot, crew) -> observe.apply(runtime.createCrewBotTools(context, session, EMPTY, bot, crew)),
+@@ -478,0 +569,29 @@ public class CodingMissionAccessRuntimeTest {
++    /** Observation only: all declarations, policies and execute4/context behavior delegate unchanged. */
++    private static CoreToolRegistry observeResults(CoreToolRegistry registry,String name,
++            java.util.function.BiConsumer<Map<String,Object>,CoreToolResult> observe) {
++        List<CoreTool> handlers = registry.handlers();
++        for (int index=0;index<handlers.size();index++) {
++            CoreTool original = handlers.get(index);
++            if (!name.equals(original.declaration().name)) continue;
++            CoreTool wrapper = (CoreTool) java.lang.reflect.Proxy.newProxyInstance(CoreTool.class.getClassLoader(),
++                    new Class<?>[]{CoreTool.class},(proxy,method,arguments) -> {
++                        if (method.getDeclaringClass()==Object.class) {
++                            if ("equals".equals(method.getName())) return proxy==arguments[0];
++                            if ("hashCode".equals(method.getName())) return System.identityHashCode(proxy);
++                            return "Observed tool " + name;
++                        }
++                        try {
++                            Object returned = method.invoke(original,arguments);
++                            if ("execute".equals(method.getName()) && method.getParameterCount()==4) {
++                                assertNotNull(((EffectInvocation)arguments[3]).crewSource());
++                                @SuppressWarnings("unchecked") Map<String,Object> actual = (Map<String,Object>)arguments[0];
++                                observe.accept(actual,(CoreToolResult)returned);
++                            }
++                            return returned;
++                        } catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
++                    });
++            handlers.set(index,wrapper);
++        }
++        return registry.replaceSelectedHandlers(handlers);
++    }
++
+@@ -480 +599,11 @@ public class CodingMissionAccessRuntimeTest {
+-        return new CoreAgentRuntime(context, session, Collections.emptyList());
++        ModelProviderClient forbiddenInference = new ModelProviderClient() {
++            @Override public ModelReply complete(String instructions,String prompt,List<com.jarvys.agent.device.ScreenData> images,
++                    List<ToolSpec> tools,String sessionId,CancellationToken token) {
++                throw new AssertionError("Only this fixture's scripted Crew model may run");
++            }
++            @Override public ModelReply completeConversation(String instructions,List<ConversationTurn> history,String prompt,
++                    List<com.jarvys.agent.device.ScreenData> images,List<ToolSpec> tools,String sessionId,CancellationToken token) {
++                throw new AssertionError("Only this fixture's scripted Crew model may run");
++            }
++        };
++        return new CoreAgentRuntime(context, session, Collections.emptyList(),CorePromptBudget.standard(),forbiddenInference);
 diff --git a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt b/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
 index f5e36876..314028ab 100644
 --- a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
@@ -32,6 +257,109 @@ index 8dd8ac3b..260c4a8f 100644
 +        com.jarvys.agent.connectors.ConnectionAccessProvider {
 +        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
 +        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/CrewCheckpointDurabilityTest.java b/app/app/src/test/java/com/jarvys/agent/CrewCheckpointDurabilityTest.java
+index 50b3fb16..bf614395 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CrewCheckpointDurabilityTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewCheckpointDurabilityTest.java
+@@ -250 +250 @@ public class CrewCheckpointDurabilityTest {
+-        return new File(root, "jarvys/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
++        return new File(root, "jarvys/" + StorageGeneration.NAME + "/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
+diff --git a/app/app/src/test/java/com/jarvys/agent/CrewCheckpointIncorporationCodecTest.java b/app/app/src/test/java/com/jarvys/agent/CrewCheckpointIncorporationCodecTest.java
+index 524175e1..28918f01 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CrewCheckpointIncorporationCodecTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewCheckpointIncorporationCodecTest.java
+@@ -245 +245 @@ public class CrewCheckpointIncorporationCodecTest {
+-        return new File(root, "jarvys/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
++        return new File(root, "jarvys/" + StorageGeneration.NAME + "/crew-context/" + CrewCheckpointStore.digest("chat-one".getBytes(StandardCharsets.UTF_8))
+diff --git a/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java b/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java
+index 98bb01f5..d7ee2bbb 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/CrewMissionTitleCheckpointTest.java
+@@ -13,0 +14,3 @@ import com.jarvys.agent.crew.CrewRole;
++import com.jarvys.agent.workspaces.WorkspaceIdentity;
++import java.util.UUID;
++import java.util.concurrent.CancellationException;
+@@ -29 +32 @@ public class CrewMissionTitleCheckpointTest {
+-    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(false, true);
++    @Rule public final ChatTestStore chatTestStore = new ChatTestStore(true, true);
+@@ -34 +37,2 @@ public class CrewMissionTitleCheckpointTest {
+-        String session = "title-checkpoint-" + System.nanoTime();
++        String session = WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString());
++        new LocalRunStore(context).appendConversationMessage(session, "user", "Synthetic execution chat");
+@@ -52,0 +57 @@ public class CrewMissionTitleCheckpointTest {
++        assertEquals(CrewMissionAccess.READ_ONLY.value, checkpoint.metadata.getString("missionAccess"));
+@@ -64,0 +70,2 @@ public class CrewMissionTitleCheckpointTest {
++            assertTrue("Completed checkpoint must restore without historical fallback",
++                    restored.bot(botId).hasDurableCheckpoint());
+@@ -66 +73,2 @@ public class CrewMissionTitleCheckpointTest {
+-            assertTrue(restored.bot(botId).requiresExplicitResume());
++            assertEquals(CrewManager.Status.DONE, restored.bot(botId).status());
++            assertFalse(restored.bot(botId).requiresExplicitResume());
+@@ -70,0 +79,56 @@ public class CrewMissionTitleCheckpointTest {
++    @Test public void stoppedCheckpointPreservesRestrictionAndRequiresExplicitResumeWithoutRestart() throws Exception {
++        Context context = ApplicationProvider.getApplicationContext();
++        String session = WorkspaceIdentity.executionSessionId(UUID.randomUUID().toString());
++        new LocalRunStore(context).appendConversationMessage(session, "user", "Synthetic interrupted execution chat");
++        String original = "Preserve the original request\nincluding its second line.";
++        String worker = "Inspect the assigned project\nwithout changing files.";
++        CrewProfile profile = profile();
++        CrewRole role = profile.resolveRole(Collections.emptyList(), Collections.emptyList());
++        CrewCheckpointCoordinator coordinator = new CrewCheckpointCoordinator(context, session, bot -> bot.role);
++        AtomicInteger calls = new AtomicInteger();
++        CountDownLatch entered = new CountDownLatch(1);
++        CountDownLatch release = new CountDownLatch(1);
++        String botId;
++        try (CrewManager manager = new CrewManager(session, EMPTY, (bot, owner) -> EMPTY,
++                (bot, tools, incoming) -> new CoreAgentLoop((history, prompt, specs, token) -> {
++                    calls.incrementAndGet();
++                    entered.countDown();
++                    try {
++                        if (!release.await(30, TimeUnit.SECONDS)) throw new AssertionError("Stop was not delivered");
++                    } catch (InterruptedException stopped) {
++                        throw new CancellationException("Synthetic model interrupted by explicit stop");
++                    }
++                    token.throwIfCancelled();
++                    throw new AssertionError("Stopped model must not complete normally");
++                }, tools, "", session, CorePromptBudget.standard(), null,
++                        CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null)) {
++            manager.configureProfiles(id -> role);
++            manager.configureCheckpoints(coordinator);
++            manager.beginMission("interrupted-mission", original);
++            CrewManager.Bot bot = manager.spawn(profile.id, worker, null, "Reviewer",
++                    CrewMissionAccess.READ_ONLY, "Inspect assigned project");
++            botId = bot.id;
++            assertTrue(entered.await(30, TimeUnit.SECONDS));
++            assertTrue(manager.stop(bot.id));
++            await(bot, CrewManager.Status.STOPPED);
++        } finally { release.countDown(); }
++        CrewCheckpointStore.Snapshot saved = new CrewCheckpointStore(context.getFilesDir()).load(session, botId);
++        assertEquals("STOPPED", saved.metadata.getString("status"));
++        assertEquals(CrewMissionAccess.READ_ONLY.value, saved.metadata.getString("missionAccess"));
++        try (CrewManager restored = manager(session, calls)) {
++            coordinator.restore(restored, Collections.emptyList());
++            CrewMissionSnapshot presentation = restored.missionSnapshots().get(0);
++            assertEquals("Inspect assigned project", presentation.title);
++            assertEquals(CrewMissionTitle.AGENT, presentation.titleSource);
++            assertEquals(original, presentation.originalInstructions);
++            assertEquals(worker, presentation.bots.get(0).mission);
++            CrewManager.Bot bot = restored.bot(botId);
++            assertTrue("Stopped checkpoint must restore without historical fallback", bot.hasDurableCheckpoint());
++            assertEquals(CrewMissionAccess.READ_ONLY, bot.role.missionAccess);
++            assertEquals(CrewManager.Status.STOPPED, bot.status());
++            assertTrue(bot.requiresExplicitResume());
++            assertTrue(bot.canResume());
++            assertEquals(1, calls.get());
++        }
++    }
++
+@@ -204,0 +269,4 @@ public class CrewMissionTitleCheckpointTest {
++        await(bot, CrewManager.Status.DONE);
++    }
++
++    private static void await(CrewManager.Bot bot, CrewManager.Status expected) throws Exception {
+@@ -211 +279 @@ public class CrewMissionTitleCheckpointTest {
+-        assertEquals(bot.error(), CrewManager.Status.DONE, bot.status());
++        assertEquals(bot.error(), expected, bot.status());
 diff --git a/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt b/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt
 index fa0730bf..5ef78335 100644
 --- a/app/app/src/test/java/com/jarvys/agent/PersonalAgentBehaviorTest.kt

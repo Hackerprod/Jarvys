@@ -42,6 +42,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         this.currentRole = currentRole;
     }
 
+    @Override public boolean providesInvocationSource() { return true; }
+
     @Override
     public boolean canPersist(CrewManager.Bot bot) {
         return bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
@@ -49,8 +51,13 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
 
     @Override
     public void persist(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
+        persistConfirmed(bot, messages, pending);
+    }
+
+    @Override
+    public CrewCheckpointStore.ConfirmedSnapshot persistConfirmed(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
         if (bot.role.profileVersion <= 0 || bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
-            return;
+            return null;
         }
         try {
             if (bot.scopeIdentity().isEmpty()) {
@@ -64,7 +71,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
                     .put("title", title.title).put("titleSource", title.source)
                     .put("originalInstructions", bot.originalInstructions()));
-            this.store.save(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
+            return this.store.saveConfirmed(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
         } catch (CancellationException cancelled) {
             throw cancelled;
         } catch (Exception failure) {

@@ -145,11 +145,23 @@ public final class EffectInvocation {
     private boolean persisting;
     private volatile boolean sealed;
     private volatile CentralInvocationWitness centralSource;
+    private volatile CrewInvocationWitness crewSource;
+    public CrewInvocationWitness crewSource() { return crewSource; }
+    synchronized void bindCrewSource(CrewInvocationWitness witness) {
+        if (sealed || admission != null || persisting || centralSource != null || crewSource != null || !witness.ownedBy(this))
+            throw new IllegalStateException("Crew invocation source cannot be rebound");
+        crewSource = witness;
+    }
+    void requireCrewSourceActive(CrewInvocationWitness witness) {
+        if (sealed || crewSource != witness || !witness.ownedBy(this))
+            throw new IllegalStateException("Crew invocation source is no longer active");
+    }
+
 
     /** Read-only provenance; null only when no Central source provider was installed. */
     public synchronized CentralInvocationWitness centralSource() { return centralSource; }
     synchronized void bindCentralSource(CentralInvocationWitness witness) {
-        if (sealed || admission != null || persisting || centralSource != null || !witness.ownedBy(this))
+        if (sealed || admission != null || persisting || centralSource != null || crewSource != null || !witness.ownedBy(this))
             throw new IllegalStateException("Central source cannot be rebound or transferred");
         centralSource = witness;
     }

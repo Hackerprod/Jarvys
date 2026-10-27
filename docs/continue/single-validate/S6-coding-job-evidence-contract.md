@@ -474,3 +474,140 @@ texto; retorno duplicado de delegación no roba binding; OFF/forget/reemplazo de
 submission y terminal no recrean episode; callback tardío del job conserva ambas identidades causales.
 No hay una decisión pendiente de permisos o producto: estas son garantías de procedencia y
 persistencia que deben quedar revisadas antes de activar la implementación.
+
+## 11. Adenda del productor: aceptación administrativa, preparación y terminal durable
+
+Estado: **diseño revisable, sin implementación del productor ni opt-in ASYNC**. El proveedor Crew
+se implementa y valida por separado antes de ampliar manager/backend/Room. Esta sección precisa
+§§3–7; en particular §11.5 reemplaza cualquier lectura de `evidenceMode` que suspenda la auditoría
+técnica determinista por apagar memoria. No añade permisos, ejecución automática ni estados de UI.
+
+### 11.1 Pruebas distintas para submission y ejecución
+
+API orientativa, pendiente de concretar junto al journal schema3:
+
+- `SubmissionCommit(jobId, origin, revision)`: prueba administrativa de una solicitud persistida.
+  El ACK al llamador referencia ese commit y la aceptación técnica correspondiente; no acredita
+  preparación, creación de proceso, salida ni cumplimiento de misión.
+- `DurableExecutionCommit(jobId, origin, revision, phase, terminalFacts)`: prueba de una revisión
+  operacional persistida. Sólo un terminal válido permite normalizar el resultado del proceso.
+  Una revisión de preparación/launch continúa siendo intención, no éxito.
+- Un registro decodificado y validado no es ninguno de esos recibos. El productor de escritura
+  o la recuperación validada son los únicos que pueden emitir prueba de durabilidad; no el JSON
+  de una herramienta, un callback `Snapshot`, ni un constructor público de metadatos.
+
+No reutilizar `CompletionSemantics.COORDINATION_ACCEPTED` para convertir enqueue en command-OK.
+Esa semántica describe coordinación local síncrona en otros productores; el job necesita ACK
+administrativo separado del resultado de ejecución. Incluso si el worker termina antes de retornar
+`start`, el resultado de submission sigue siendo administrativo. Poll/read/wait no producen otra
+unidad de ejecución ni adoptan el terminal en el run que consulta.
+
+### 11.2 Journal y límites de la prueba de commit
+
+El journal schema3 conserva origen Crew exacto, contexto de inputs confirmado, raíz de assignment
+cuando exista, identidades de proceso/manager, revisión monotónica y fase de efecto. No reducir el
+contexto plural a la raíz de delegación ni a un supuesto último input causal. El estado de UI actual
+permanece separado de fases tales como preparación, intención de lanzamiento y terminal.
+
+La escritura conserva el protocolo temporal → `fd.sync()` → rename → sincronización del directorio.
+Sólo después de completar las tres fronteras se emite el commit tipado. Una excepción tras rename
+no prueba que los bytes no llegaron a disco; conservar la revisión/candidato exactos como inciertos.
+La reparación lee y valida lo persistido, nunca vuelve a entregar el comando al executor. Las pruebas
+con backend de fallos distinguen error antes de bytes, después de sync, después de rename y en dirsync;
+no se presentan como ensayos de corte eléctrico real ni garantía física del dispositivo.
+
+La recuperación verifica fichero/ruta, UUID, generación, identidad durable, conversación activa,
+origen completo, revisión y coherencia de fase/terminal. Schemas1/2 continúan como evidencia
+operacional histórica sin origen nuevo: no atribuir mediante texto, timestamps o última llamada.
+Fichero corrupto o terminal no acreditado conserva incertidumbre y no habilita replay.
+
+### 11.3 Frontera real de preparación: incluye construcción lazy
+
+El primer efecto no está necesariamente en `LinuxEnvironment.execute`:
+`FlavorLinuxTools` obtiene `LinuxEnvironment.get(app)` dentro de la lambda backend. En arranque frío,
+el constructor default crea `RootfsInstaller`, cuyo `init` puede crear directorios, renombrar o retirar
+árboles previos/staging y persistir estado recuperado. Después, la ruta project crea temporales antes
+de `beforeLaunch`. Que project evite certificados/chmod no elimina esos efectos de preparación.
+
+Por tanto, el manager debe revalidar y persistir intención de preparación, proyectar su admisión
+técnica y revalidar de nuevo **antes de llamar a `backend.execute`**, incluyendo cualquier factory
+lazy que éste invoque. No construir anticipadamente un backend con efectos fuera de esa frontera.
+Un seam colocado únicamente antes de `processTemp.mkdirs()` sería insuficiente en arranque frío.
+La API concreta puede envolver la llamada backend completa; no requiere fingir un callback que el
+backend legacy no pueda cumplir. Una ruta incompatible con la frontera no obtiene captura completa.
+
+El callback `beforeLaunch` conserva sus validaciones finales y journal bajo los locks actuales, sin
+introducir llamadas a Room dentro de `job.lock`, STOP/política o `ProotLauncher.launchLock`.
+`RUNNING`/`startedAt` actuales se escriben antes de `ProcessBuilder.start`: son intención de lanzamiento,
+no proceso observado. La preparación y su cleanup ya admitidos no desaparecen porque una validación
+posterior impida crear proceso. NOT_STARTED no implica automáticamente ausencia de efectos.
+
+### 11.4 Claim del worker, liveness y finalización
+
+Orden requerido: reserva/binding exactos → journal submission acreditado → aceptación técnica e
+intent de ejecución → claim/enqueue. Si falla la proyección técnica exigida antes de dispatch, no
+se entrega al executor. Un fallo posterior de presentación no transforma un job aceptado en un
+comando no ejecutado ni permite asignar un segundo job como retry.
+
+Debe existir un claim de worker idempotente que distinga executor no iniciado de executor que
+corrió y luego lanzó excepción. El catch de enqueue no puede llamar a un finalizador contradictorio
+mientras el worker ya ejecuta. La identidad de job se asigna una sola vez.
+
+El manager actual sólo tiene writer lease por proyecto; no posee aún el lease de liveness de §6.
+El nuevo protocolo exige lock de fichero privado estable por instancia, processUUID y managerUUID;
+no usar sólo PID ni ausencia de una entrada en otro mapa para declarar abandono. La reserva y el
+worker retienen liveness hasta reap/cleanup. No unlink/recrear el lockfile ni liberar el owner mientras
+queden productores o procesos vivos. Recovery no ejecuta ni señaliza procesos restaurados.
+
+`finish` conserva el writer lease hasta reap/cleanup y reconciliación de versión. Persiste terminal,
+obtiene commit y proyecta fuera de locks. Si persiste terminal pero pierde callback, recovery proyecta
+la misma revisión una sola vez. Si falla persistir terminal, el Snapshot en memoria no acredita OK.
+Un exitCode0 durable sólo confirma terminación de ese proceso, no que un objetivo/build/tests haya
+quedado validado semánticamente.
+
+### 11.5 Memoria OFF no elimina auditoría técnica
+
+Conforme a SINGLE_SESSION §7.5A y al gate de memoria, separar explícitamente:
+
+1. Journal operacional y auditoría causal técnica determinista de submission/admisión/terminal.
+   Se conservan también con memoria OFF; no depender de un booleano global `evidenceEnabled` para
+   omitir intent/started exigidos antes del efecto ni borrar su resultado técnico.
+2. Creación de memorias semánticas, enlaces semánticos/narración sujetos a memoria y backfill. Aplicar el ticket
+   capturado y las protecciones de retirada vigentes. OFF bloquea nuevas memorias semánticas/narraciones, no
+   fabrica ausencia de ejecución. Habilitar después no autoriza backfill del job.
+
+Ausencia de atribución central y memoria OFF son hechos distintos. Un job Crew operacional sin
+assignment verificable conserva su identidad técnica; no recibe episodio central inventado. El
+shape final debe distinguir estas dimensiones, en lugar de hacer que DISABLED elimine todo Room.
+La reparación estructural de evidencia ya admitida no resucita una entrada semántica retirada.
+
+Antes de integrar schema3 real, alinear también los tipos/codec de la foundation aislada:
+`CodingJobEvidence.CaptureMode` conserva los nombres previos `CENTRAL_ENABLED`, `MEMORY_DISABLED`
+y `CENTRAL_BINDING_ABSENT`. No interpretar `MEMORY_DISABLED` como prohibición de toda auditoría
+Room ni reutilizar OPERATIONAL_ONLY como apagado de evidencia causal técnica. Esa foundation no
+habilita actualmente el productor; su shape debe separar captura semántica, disponibilidad de
+atribución y evidencia operacional conforme a esta adenda. OFF no equivale a fuente olvidada,
+retirada o reemplazada: esos últimos estados impiden reconstruir memoria/atribución desaparecida,
+mientras el journal operacional conserva sus hechos sin convertirse en permiso para recrearla.
+No se cambia el codec en paralelo con el proveedor Crew; la alineación es gate previo a integrar
+journal schema3 y debe tener pruebas de compatibilidad explícitas.
+
+### 11.6 Oráculos mínimos antes de activar el productor
+
+Además de §9 y del origen Crew/input-context:
+
+- Dentro de una factory fría que simula el primer mkdir/rename, comprobar journal de preparación
+  y admisión técnica ya comprometidos. Fallo de cualquiera impide incluso construir esa factory.
+- Enqueue retorna antes/después del worker: siempre ACK administrativo, nunca command-OK. Executor
+  que corre y luego lanza excepción no duplica dispatch ni cierra como NOT_STARTED un proceso vivo.
+- PREPARATION_INTENT seguido de gate revocado antes de launch conserva posible efecto; no devuelve
+  NOT_EXECUTED por el mero `startedAt=null`.
+- Inyectar cada fallo de sync/rename/dirsync y callback perdido: proyección exacta e idempotente sin
+  reenviar ejecución. Decoder por sí solo no puede acuñar commit.
+- Scanner concurrente con reserva/enqueue y dos owners: un lease vivo conserva pendiente; sólo prueba
+  de owner muerto permite reconciliar abandono, nunca replay ni señales.
+- OFF durante submission/terminal: auditoría técnica íntegra, cero nueva narración/backfill. Olvido,
+  retiro o cambio de generación no se resuelven recreando el episodio desde el journal.
+
+Estos oráculos son requisitos pendientes, no resultados ejecutados. No se habilita ASYNC ni se cambia
+un permiso para hacerlos pasar; el futuro corte manager/backend/Room/registry debe cerrarlos coherentemente.

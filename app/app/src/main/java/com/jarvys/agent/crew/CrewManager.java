@@ -7,6 +7,7 @@ import com.jarvys.agent.CoreToolRegistry;
 import com.jarvys.agent.ConversationInput;
 import com.jarvys.agent.ConversationTurn;
 import com.jarvys.agent.CrewContextArtifacts;
+import com.jarvys.agent.CrewCheckpointStore;
 import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceAssignment;
 import java.util.Collection;
@@ -100,8 +101,13 @@ public final class CrewManager implements AutoCloseable {
     public interface CheckpointSupport {
 
         default boolean canPersist(Bot bot) { return true; }
+        default boolean providesInvocationSource() { return false; }
 
         void persist(Bot bot, List<CrewMessage> messages, List<CrewMessage> pending);
+        /** Legacy support may persist, but cannot fabricate a confirmed invocation witness. */
+        default CrewCheckpointStore.ConfirmedSnapshot persistConfirmed(Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
+            persist(bot, messages, pending); return null;
+        }
 
         ResumePlan reconcile(Bot bot);
     }
@@ -162,6 +168,7 @@ public final class CrewManager implements AutoCloseable {
         private volatile long completedCycles;
         private volatile CoreToolRegistry workerTools;
         private volatile CoreAgentLoop loop;
+        private final Map<CoreAgentLoop.PreparedInvocationSnapshot, InvocationCapture> invocationCaptures = new java.util.IdentityHashMap<>();
         private volatile List<ConversationTurn> transcript = Collections.emptyList();
         private volatile CoreAgentLoop.Checkpoint checkpoint = CoreAgentLoop.Checkpoint.empty();
         private volatile String assignmentId = "";
@@ -1016,6 +1023,34 @@ public final class CrewManager implements AutoCloseable {
         catch (RuntimeException ignored) { /* An accelerator cannot change a committed tool outcome. */ }
     }
 
+    /** Trusted checkpoint evidence, not a permission or a JSON-mintable invocation. */
+    public static final class InvocationCapture {
+        public final CrewCheckpointStore.ConfirmedSnapshot confirmed;
+        private final Runnable current;
+        private InvocationCapture(CrewCheckpointStore.ConfirmedSnapshot confirmed, Runnable current) {
+            this.confirmed = confirmed; this.current = current;
+        }
+        public void requireCurrent() { current.run(); }
+        /** Pure owner guard only; does not retain the confirmed transcript payload. */
+        public Runnable currentGuard() { return current; }
+    }
+
+    /** Claim under cycleLock, then the caller binds/admit/executes after this lock is released. */
+    public InvocationCapture claimInvocationSource(Bot bot, CoreAgentLoop.PreparedInvocationSnapshot prepared) {
+        if (prepared == null) throw new IllegalStateException("Crew invocation has no prepared identity");
+        synchronized (bot.cycleLock) {
+            InvocationCapture capture = bot.invocationCaptures.remove(prepared);
+            if (capture == null) throw new IllegalStateException("Crew invocation has no exact confirmed checkpoint");
+            capture.requireCurrent();
+            return capture;
+        }
+    }
+
+    private static void discardInvocationCaptures(Bot bot) {
+        for (CoreAgentLoop.PreparedInvocationSnapshot prepared : bot.invocationCaptures.keySet()) prepared.discard();
+        bot.invocationCaptures.clear();
+    }
+
     public void retainCheckpoint(Bot bot, CoreAgentLoop.Checkpoint checkpoint, JSONObject ownership) {
         boolean persisted;
         synchronized (bot.cycleLock) {
@@ -1027,14 +1062,42 @@ public final class CrewManager implements AutoCloseable {
 
     /** Capture each invocation, never consult a later live cycle as historical provenance. */
     private void retainCheckpointForRun(Bot bot, CoreAgentLoop loop, CancellationToken token, String cycleId,
-            CoreAgentLoop.Checkpoint checkpoint) {
+            CoreAgentLoop.Checkpoint checkpoint, CoreAgentLoop.PreparedInvocationSnapshot prepared) {
         boolean persisted;
         synchronized (bot.cycleLock) {
             if (bots.get(bot.id) != bot || bot.loop != loop || bot.token != token
                     || !cycleId.equals(bot.cycleMetadata.cycleId))
                 throw new IllegalStateException("Stale worker checkpoint callback");
             // A same-cycle STOP does not erase evidence already appended before cancellation.
-            persisted = retainCheckpointLocked(bot, checkpoint, bot.artifactOwnership());
+            if (prepared == null) persisted = retainCheckpointLocked(bot, checkpoint, bot.artifactOwnership());
+            else synchronized (bot) {
+                bot.checkpoint = checkpoint; bot.transcript = checkpoint.transcript;
+                bot.artifactOwnership = bot.artifactOwnership();
+                CheckpointSupport support = checkpointSupport;
+                if (support == null || !support.canPersist(bot))
+                    throw new IllegalStateException("Crew invocation checkpoint support unavailable");
+                CrewCheckpointStore.ConfirmedSnapshot confirmed = support.persistConfirmed(bot, bus.snapshot(), bus.pending(bot.id));
+                if (confirmed == null) throw new IllegalStateException("Crew invocation checkpoint is not confirmed");
+                JSONObject metadata = confirmed.metadataJson();
+                if (!conversationId.equals(confirmed.conversationId) || !bot.id.equals(confirmed.botId)
+                        || !bot.scopeIdentity().equals(confirmed.scopeIdentity)
+                        || !bot.missionId.equals(metadata.optString("missionId")) || !cycleId.equals(metadata.optString("cycleId")))
+                    throw new IllegalStateException("Crew checkpoint identity does not match its live owner");
+                if (bots.get(bot.id) != bot || bot.loop != loop || bot.token != token || !cycleId.equals(bot.cycleId()))
+                    throw new IllegalStateException("Crew checkpoint owner changed during persistence");
+                // The store lock has been released. No provider, admission or listener is called here.
+                InvocationCapture capture = new InvocationCapture(confirmed, () -> {
+                    if (bots.get(bot.id) != bot || bot.loop != loop || bot.token != token
+                            || !cycleId.equals(bot.cycleId()) || token.isCancellationRequested() || bot.thread == null)
+                        throw new IllegalStateException("Crew invocation owner changed");
+                });
+                if (bot.invocationCaptures.put(prepared, capture) != null)
+                    throw new IllegalStateException("Crew prepared identity already published");
+                bot.checkpointAvailable = true;
+                bus.drainMatching(bot.id, message -> checkpoint.appliedIncomingIds.contains(message.id));
+                bot.pendingAnswerIds.removeAll(checkpoint.appliedIncomingIds);
+                persisted = true;
+            }
         }
         signalCheckpointCommitted(persisted);
     }
@@ -1105,6 +1168,7 @@ public final class CrewManager implements AutoCloseable {
                 bot.role = plan.role;
                 invalidateCoordinationLocked(bot);
                 bot.token = bot.freshToken();
+                discardInvocationCaptures(bot);
                 bot.cycleMetadata = CycleMetadata.fresh();
                 bot.cycleResult = "";
                 bot.loop = null;
@@ -1614,7 +1678,18 @@ public final class CrewManager implements AutoCloseable {
             }
             final CoreAgentLoop invocationLoop = loop;
             loop.setCheckpointScope(cycleId);
-            loop.setCheckpointListener(saved -> retainCheckpointForRun(bot, invocationLoop, token, cycleId, saved));
+            loop.setCheckpointListener(new CoreAgentLoop.CheckpointListener() {
+                @Override public boolean requiresPreparedInvocationSnapshot() {
+                    CheckpointSupport support = checkpointSupport;
+                    return support != null && support.providesInvocationSource() && support.canPersist(bot);
+                }
+                @Override public void persist(CoreAgentLoop.Checkpoint saved) {
+                    retainCheckpointForRun(bot, invocationLoop, token, cycleId, saved, null);
+                }
+                @Override public void persistStarted(CoreAgentLoop.Checkpoint saved, CoreAgentLoop.PreparedInvocationSnapshot prepared) {
+                    retainCheckpointForRun(bot, invocationLoop, token, cycleId, saved, prepared);
+                }
+            });
             while (true) {
                 awaitIncomingDispatches(bot, token);
                 token.throwIfCancelled();
@@ -1742,11 +1817,13 @@ public final class CrewManager implements AutoCloseable {
                                 terminalReport.status, terminalReport.text, terminalReport.producedAtMillis);
                         bot.cycleMetadata = new CycleMetadata(cycleId, evidence);
                     }
+                    discardInvocationCaptures(bot);
                     bot.thread = null;
                     if (!bot.requiresExplicitResume && bot.reanimationRequested && bus.hasMessages(bot.id)) {
                         bot.reanimationRequested = false;
                         invalidateCoordinationLocked(bot);
                         bot.token = bot.freshToken();
+                        discardInvocationCaptures(bot);
                         bot.cycleMetadata = CycleMetadata.fresh();
                         bot.cycleResult = "";
                         bot.stopping = false;
@@ -2220,6 +2297,7 @@ public final class CrewManager implements AutoCloseable {
                         // Every new quiescent cycle has its own cancellation/job identity, including DONE.
                         invalidateCoordinationLocked(recipient);
                         recipient.token = recipient.freshToken();
+                        discardInvocationCaptures(recipient);
                         recipient.cycleMetadata = CycleMetadata.fresh();
                         recipient.cycleResult = "";
                         recipient.stopping = false;

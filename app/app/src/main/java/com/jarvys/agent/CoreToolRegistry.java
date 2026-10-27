@@ -21,6 +21,8 @@ public final class CoreToolRegistry {
   }
   interface InvocationSourceProvider {
     void bind(CoreTool tool, String callId, EffectInvocation invocation);
+    default void bindPrepared(CoreTool tool, String callId, Map<String,Object> arguments,
+        CoreAgentLoop.PreparedInvocationSnapshot prepared, EffectInvocation invocation) { bind(tool, callId, invocation); }
   }
   private final InvocationSourceProvider invocationSourceProvider;
   private final Runnable invocationGuard;
@@ -276,8 +278,17 @@ public final class CoreToolRegistry {
 
   public CoreToolResult invoke(String name, Map<String, Object> arguments, CancellationToken token,
       CoreTool.ProgressListener progress, String callId, EffectInvocation suppliedInvocation) {
+    return invoke(name, arguments, token, progress, callId, suppliedInvocation, null);
+  }
+
+  CoreToolResult invoke(String name, Map<String, Object> arguments, CancellationToken token,
+      CoreTool.ProgressListener progress, String callId, EffectInvocation suppliedInvocation,
+      CoreAgentLoop.PreparedInvocationSnapshot prepared) {
     CoreTool tool = this.tools.get(name);
-    if (tool == null) return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
+    if (tool == null) {
+      if (prepared != null) prepared.discard();
+      return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
+    }
     Map<String, Object> safeArguments = arguments == null ? Collections.emptyMap() : arguments;
     boolean recordsEffect = tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
         && tool.persistenceEffect(safeArguments) != CoreTool.PersistenceEffect.MEMORY;
@@ -294,7 +305,7 @@ public final class CoreToolRegistry {
     try {
       token.throwIfCancelled();
       if (this.invocationGuard != null) this.invocationGuard.run();
-      if (this.invocationSourceProvider != null) this.invocationSourceProvider.bind(tool, callId, invocation);
+      if (this.invocationSourceProvider != null) this.invocationSourceProvider.bindPrepared(tool, callId, safeArguments, prepared, invocation);
       if (recordsEffect && this.invocationObserver != null) {
         this.invocationObserver.beforeDispatch(tool, callId, safeArguments, invocation);
         observerPrepared = true;
@@ -323,6 +334,8 @@ public final class CoreToolRegistry {
         this.invocationObserver.afterDispatch(tool, callId, null, failure, receipt);
       String detail = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
       return CoreToolResult.failure(detail).withEffectReceipt(receipt);
+    } finally {
+      if (prepared != null) prepared.discard();
     }
   }
 
