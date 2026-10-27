@@ -50,6 +50,8 @@ class CodingJobManager(
     class EnqueueOutcomeUncertain internal constructor(val jobId: String, val observedState: State,
         val observedExitCode: Int?, cause: Exception) : IOException(
         "Job delivery outcome is uncertain; inspect project_jobs and do not repeat the command", cause)
+    /** Technical projection is separate from the observed command state and never permits dispatch. */
+    enum class TechnicalProjection { NOT_APPLICABLE, PENDING, CONFIRMED }
     private enum class WorkerClaim { RESERVED, CLAIMED, REJECTED, FINALIZING, FINISHED }
     data class Snapshot(val id: String, val owner: String, val scopeId: String, val cwd: String,
         val redactedCommand: String, val state: State, val createdAt: Long,
@@ -78,6 +80,13 @@ class CodingJobManager(
         var phase = CodingJobEvidence.Phase.SUBMISSION_INTENT
         var latest: CodingJobJournalStore.Commit? = null
         var desiredTerminal: Snapshot? = null
+        val reconciliationLock = Any()
+        @Volatile var projection = TechnicalProjection.PENDING
+        @Volatile var abandonedAcceptance = false
+        @Volatile var acceptanceAttempted = false
+        var reconciliationReady = false
+        var reconciliationStarted = false
+        var terminalForReconciliation: CodingJobJournalStore.Commit? = null
         fun persist(job: Job) {
             val s = job.snapshot
             val facts = if (!s.state.terminal) null else CodingJobEvidence.TerminalFacts(
@@ -176,14 +185,18 @@ class CodingJobManager(
                 submission.requireDispatchLive(); submission.requireFor(instrumented.invocation)
                 job.technical = Technical(submission,reservation,instrumented.bridge,pin,instrumented.authorization)
             }
-            synchronized(job.lock) { persist(job) }
+            val submissionCommit = synchronized(job.lock) { persist(job); job.technical?.latest }
+            // Visibility is not acceptance or permission to execute. Cancellation may now journal rev2,
+            // but the acceptance operation must always receive this exact original submission rev1.
+            jobs[id] = job
+            job.unregister = token.registerCancelAction { requestCancel(job) }
             job.technical?.let { technical ->
-                val acceptance = technical.bridge.acceptCodingJobSync(requireNotNull(technical.latest))
+                technical.submission.onAcceptanceCompleted { tryReconcileAbandonedAcceptance(technical) }
+                technical.acceptanceAttempted = true
+                val acceptance = technical.bridge.acceptCodingJobSync(requireNotNull(submissionCommit))
                 technical.submission.requireDispatchLive(); token.throwIfCancelled()
                 instrumented!!.invocation.bindAcceptedSubmission(acceptance)
             }
-            jobs[id] = job
-            job.unregister = token.registerCancelAction { requestCancel(job) }
             executor.execute {
                 if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.CLAIMED))
                     run(job, scope, command, timeoutMillis, lease, preflight, completion)
@@ -194,6 +207,10 @@ class CodingJobManager(
                 pendingSubmission?.abandonDispatch()
                 try { lease.close() } finally { pendingPin?.close() }
             } else if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.REJECTED)) {
+                job.technical?.let {
+                    it.submission.abandonDispatch()
+                    it.abandonedAcceptance = true
+                }
                 // Only absence of this manager's worker claim, not absence of all earlier preparation.
                 finish(job, lease, State.NOT_STARTED, null, "Job worker could not start", completion, false,
                     WorkerClaim.REJECTED)
@@ -399,22 +416,31 @@ class CodingJobManager(
             job.snapshot = job.snapshot.copy(state = state, finishedAt = System.currentTimeMillis(), exitCode = exit,
                 error = detail, logComplete = logComplete)
             job.technical?.desiredTerminal = job.snapshot
+            // A lost acceptance ACK restores the observer's interrupt flag. Only this audit-only
+            // terminal write consumes that already-observed interrupt; no command/preparation or
+            // callback runs with it cleared. A new interrupt during IO still fails conservatively.
+            val restoreObserverInterrupt = job.technical?.abandonedAcceptance == true && Thread.interrupted()
             try { persist(job) } catch (_: Exception) {
                 job.technical?.submission?.abandonDispatch()
                 job.snapshot = job.snapshot.copy(state = State.UNCERTAIN, exitCode = null, logComplete = false,
                     error = "Terminal result could not be durably recorded; do not automatically repeat the command")
+            } finally {
+                if (restoreObserverInterrupt) Thread.currentThread().interrupt()
             }
             terminal = job.snapshot
         }
             // No Room call under job.lock, policy admission, launch lock, or journal writer lock.
             job.technical?.let { technical ->
-                technical.latest?.takeIf { it.record().terminal != null }?.let { commit ->
+                technical.latest?.takeIf { !technical.abandonedAcceptance && it.record().terminal != null }?.let { commit ->
                     val projected = try { technical.bridge.projectCodingJobSync(commit); true } catch (_: Exception) {
                         // The original journal remains authoritative; never project into a replacement database.
                         technical.submission.abandonDispatch(); false
                     }
-                    if (projected) try { technical.bridge.linkCodingJobSemanticSync(commit) } catch (_: Exception) {
-                        // Semantic eligibility/projection failure must not rewrite the technical process result.
+                    if (projected) {
+                        technical.projection = TechnicalProjection.CONFIRMED
+                        try { technical.bridge.linkCodingJobSemanticSync(commit) } catch (_: Exception) {
+                            // Semantic eligibility/projection failure must not rewrite the technical process result.
+                        }
                     }
                 }
             }
@@ -422,15 +448,68 @@ class CodingJobManager(
             try { lease.close() } finally {
                 try { job.unregister.run() } finally {
                     job.unregister = Runnable { }
-                    try { job.technical?.pin?.close() } finally {
+                    try {
+                        job.technical?.takeIf { !it.abandonedAcceptance }?.pin?.close()
+                    } finally {
                         job.claim.set(WorkerClaim.FINISHED)
                         job.finished.countDown()
+                        job.technical?.takeIf { it.abandonedAcceptance }?.let { technical ->
+                            synchronized(technical.reconciliationLock) {
+                                technical.terminalForReconciliation = technical.latest?.takeIf { it.record().terminal != null }
+                                technical.reconciliationReady = true
+                            }
+                            tryReconcileAbandonedAcceptance(technical)
+                        }
                     }
                 }
             }
         }
         terminal?.let { try { completion(it) } catch (_: Exception) { /* Presentation failure is not execution failure. */ } }
     }
+
+    /** Only the exact original acceptance completion can unlock this audit-only continuation.
+     * It never invokes the command executor, binds an invocation, or changes terminal process facts.
+     */
+    private fun tryReconcileAbandonedAcceptance(technical: Technical) {
+        val outcome = technical.submission.acceptanceOutcome()
+        var closeWithoutProjection = false
+        val commit = synchronized(technical.reconciliationLock) {
+            if (!technical.abandonedAcceptance || !technical.reconciliationReady || technical.reconciliationStarted) return
+            val terminal = technical.terminalForReconciliation
+            if (terminal == null || !technical.acceptanceAttempted || outcome?.failed == true) {
+                technical.reconciliationStarted = true
+                closeWithoutProjection = true
+                null
+            } else {
+                if (outcome == null) return // Original callable still owns its outcome; no timeout/death inference.
+                check(outcome.acceptance.reservation() === technical.reservation) { "Foreign acceptance reconciliation" }
+                technical.reconciliationStarted = true
+                terminal
+            }
+        }
+        if (closeWithoutProjection) { technical.pin.close(); return }
+        val exactTerminal = requireNotNull(commit)
+        try {
+            Thread({
+                try {
+                    technical.bridge.projectCodingJobSync(exactTerminal)
+                    technical.projection = TechnicalProjection.CONFIRMED
+                    try { technical.bridge.linkCodingJobSemanticSync(exactTerminal) } catch (_: Exception) {
+                        // A suppressed/failed semantic link does not erase the confirmed technical terminal.
+                    }
+                } catch (_: Exception) {
+                    // Keep PENDING observable. No new DB identity, repeated acceptance, or command retry.
+                } finally { technical.pin.close() }
+            }, "jarvys-coding-terminal-audit").apply { isDaemon = true; start() }
+        } catch (failure: Throwable) {
+            technical.pin.close()
+            if (failure is Error) throw failure
+            // Scheduling failure is pending metadata, never a successfully repaired terminal.
+        }
+    }
+
+    fun technicalProjection(owner: String, scope: ProjectScope, id: String): TechnicalProjection =
+        owned(owner, scope, id).technical?.projection ?: TechnicalProjection.NOT_APPLICABLE
 
     private fun requestCancel(job: Job) {
         synchronized(job.lock) {

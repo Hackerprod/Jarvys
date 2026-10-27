@@ -1,13 +1,19 @@
 {
-  "source_commit": "612a8b8a4860b606cb1db48df8aebd14973ad938",
-  "source_tree": "a6f89e8a115ae8aa319254f4b6c6e8785e22c9ac",
-  "remote_parent": "c5ec6e927db8925273d93e9abc776af205ac1ddd",
+  "source_commit": "7e37b5f766cb9e85a3bfb1456c0605090f9b480a",
+  "source_tree": "d0a78aa824cd7d9be6d9bddd44d289fe1c0c5db2",
+  "remote_parent": "8a59dc5943ffc25458ba20d556e6c80264bba30d",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
       "remote_blob": "7c278f49340d1d25f99634d622273e8fbace6a6d",
       "remote_sha256": "5333d1f5ac3a7b2703028b4e62b7a5512ce39f787643251bb674fbdeac30b669",
       "restored_sha256": "97a2f9f245ce19970392a79531e185bde887b5e21bfe5c73313b5ca3f8e7156d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/CodingEpisodeConsumerTest.kt",
+      "remote_blob": "8f2276f507fcebce963da513fb6bf83679e875a4",
+      "remote_sha256": "3e474875488bc9de01c01c11f7358bdd3ec631982498bc47f71687813e770f0c",
+      "restored_sha256": "9cb4234598db567c24ef9021fb3a3faeb23cd22664e438eb9ef621392425d317"
     },
     {
       "path": "app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java",
@@ -208,10 +214,10 @@
       "restored_sha256": "29b979acf9470e6ecf3697eb0fd2bdae02a47d032d421db8ed0dfb99d5d55904"
     }
   ],
-  "patch_sha256": "90baff87269de3ff5cb7a24c9533ed2bfee21899ad82c85416b97cb9510735f8",
-  "readme_source_sha256": "183fc3960b5baac0783becca4de44a58eb33bc38fd1014922fe0155c5bb5c746",
-  "readme_backup_sha256": "b89209f6beac0ae03e483b525329e46f0e5c395d854e97c39ad9ab91a5d5f54c",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — productor interno Coding\n\nEste árbol **no es build-ready tal cual**. Los 34 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `612a8b8a4860b606cb1db48df8aebd14973ad938`. Validación focal independiente: 190 Full + 145 Play PASS (composición por clase),\n335 casos focales reconciliados sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "patch_sha256": "1738a839f8ce7735dab6b6964332797e9b63770187404030096d78845d8a04e6",
+  "readme_source_sha256": "5a173fb5d46851fb9efe75912c2a2807e1e61a76f986b630425c7b0122e960d2",
+  "readme_backup_sha256": "0814057a9331287da7d674f055b2bdb4c0be73062faa053aca8a64f067e87df3",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — frontera de aceptación Coding\n\nEste árbol **no es build-ready tal cual**. Los 35 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `7e37b5f766cb9e85a3bfb1456c0605090f9b480a`. Validación focal independiente: 221 Full + 174 Play PASS (ejecución fresca del árbol congelado),\n395 casos focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",

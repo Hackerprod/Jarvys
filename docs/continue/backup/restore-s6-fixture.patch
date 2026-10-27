@@ -12,6 +12,90 @@ index 7c278f49..f473240e 100644
 @@ -96 +98 @@ public class BotCatalogToolScopeTest {
 -                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, false);
 +                Collections.emptyList(), Collections.emptyList(), null, depth, CorePromptBudget.standard(), true, null);
+diff --git a/app/app/src/test/java/com/jarvys/agent/CodingEpisodeConsumerTest.kt b/app/app/src/test/java/com/jarvys/agent/CodingEpisodeConsumerTest.kt
+index 8f2276f5..5579c5d1 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CodingEpisodeConsumerTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/CodingEpisodeConsumerTest.kt
+@@ -6,0 +7,6 @@ import androidx.test.core.app.ApplicationProvider
++import com.jarvys.agent.chatdb.CompactionInput
++import com.jarvys.agent.chatdb.CompactionCoverage
++import com.jarvys.agent.chatdb.PreparedCompactionFlush
++import com.jarvys.agent.chatdb.ModelToolBatchInput
++import com.jarvys.agent.chatdb.ModelCallInput
++import com.jarvys.agent.chatdb.ModelToolResultInput
+@@ -68,0 +75,2 @@ class CodingEpisodeConsumerTest {
++        assertTrue(bridge.appendToolBatchSync(ModelToolBatchInput(central, batch, source, 0,
++            "Synthetic batch", calls = listOf(ModelCallInput(call, "synthetic_write", "{}")))) is ChatDbResult.Success)
+@@ -72,0 +81 @@ class CodingEpisodeConsumerTest {
++        assertTrue(bridge.appendToolResultSync(ModelToolResultInput(central, batch, call, "synthetic_write", "RESULT", "Synthetic result")) is ChatDbResult.Success)
+@@ -100,0 +110,67 @@ class CodingEpisodeConsumerTest {
++    private fun compactionCoverage(entry: String): CompactionCoverage {
++        val root = roots.getValue(entry)
++        return requireNotNull(bridge.prepareCompactionCoverageSync(central, listOf(
++            ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE, central, root.sourceMessageId, ""),
++            ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH, central, root.sourceBatchId, ""),
++            ConversationTurn.Source(ConversationTurn.Source.Kind.BATCH_RESULT, central, root.sourceBatchId, root.sourceCallId))))
++    }
++    private fun appendDigest(snapshot: CompactionCoverage): Boolean {
++        val candidate = PreparedCompactionFlush(snapshot, "Synthetic digest", "Only selected evidence",
++            MemoryWritePolicy.forContext(context).captureTicket()) { true }
++        val saved = bridge.appendCompactionPreparedSync(CompactionInput(central, "Synthetic summary", 1,
++            summarizedMessages = 1), snapshot, candidate, "principal") as ChatDbResult.Success
++        return LocalRunStore(context).compactionFlushCompleted(central, saved.value.compaction_id)
++    }
++
++    @Test fun compactionMarksPendingTechnicalJobActiveEvenWithSuppressedSemantics() {
++        val id = episode()
++        bridge.personalAgentSetEpisodeNarrationSync(id, "done", "Prior title", "Prior narration")
++        link(id, false, "SUPPRESSED")
++        val snapshot = compactionCoverage(id)
++        assertTrue(snapshot.episodesComplete)
++        assertTrue(snapshot.episodes.single().active)
++        assertFalse(appendDigest(snapshot))
++    }
++
++    @Test fun compactionRejectsNewPendingJobAfterCandidateWithoutChangingSourceLeaves() {
++        val id = episode()
++        bridge.personalAgentSetEpisodeNarrationSync(id, "done", "Prior title", "Prior narration")
++        val before = compactionCoverage(id)
++        assertTrue(before.episodesComplete)
++        assertFalse(before.episodes.single().active)
++        link(id, false)
++        val after = compactionCoverage(id)
++        assertEquals(before.coverageHash, after.coverageHash)
++        assertEquals(before.leaves, after.leaves)
++        assertNotEquals(before.fingerprint, after.fingerprint)
++        assertFalse(appendDigest(before))
++    }
++
++    @Test fun compactionSnapshotIncludesTerminalSemanticStatusEvenWhenNoRolesAreAdded() {
++        val id = episode()
++        bridge.personalAgentSetEpisodeNarrationSync(id, "done", "Prior title", "Prior narration")
++        val job = link(id, true)
++        val before = compactionCoverage(id)
++        assertFalse(before.episodes.single().active)
++        runBlocking {
++            val db = JarvysChatDatabaseProvider.getInstance(context)
++            db.withChatWriteTransaction {
++                db.chatSql.execSQL("UPDATE coding_job_semantic_links SET status='SUPPRESSED' WHERE job_id=?", arrayOf(job))
++            }
++        }
++        val after = compactionCoverage(id)
++        assertEquals(before.leaves, after.leaves)
++        assertEquals(before.episodes.single().input.evidence, after.episodes.single().input.evidence)
++        assertNotEquals(before.fingerprint, after.fingerprint)
++        val payload = JSONObject(PersonalMemoryFlush.digestPayload(emptyList(), after, 4096))
++        val item = payload.getJSONArray("episodes").getJSONObject(0)
++        assertEquals(1, item.getInt("coding_jobs_omitted"))
++        assertFalse(item.getBoolean("goal_verified"))
++        assertTrue(item.getString("coding_coverage").contains("do not establish overall mission"))
++        assertThrows(IllegalStateException::class.java) {
++            PersonalMemoryFlush.digestPayload(emptyList(), after, 64)
++        } // Budget pressure cannot silently remove the omission marker.
++        assertFalse(appendDigest(before))
++        assertTrue(appendDigest(after))
++    }
++
 diff --git a/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java b/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java
 index 26f1ebc3..fb10e16e 100644
 --- a/app/app/src/test/java/com/jarvys/agent/CodingMissionAccessRuntimeTest.java

@@ -99,7 +99,8 @@ internal class CompactionMemoryRepository(private val database: JarvysChatDataba
             if (outside) episodesComplete = false // Keep structural coverage and honest pending references, never complete the digest.
             val narration = sql.query("SELECT narration FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id)).use { if (it.moveToFirst()) it.getString(0) else null } ?: return null
             episodes += CompactionEpisode(id, input.title, input.text, narration,
-                input.evidence.any { it.outcome in setOf("intent", "started") }, input)
+                input.evidence.any { it.outcome in setOf("intent", "started") } ||
+                    input.codingJobs.any { it.admitted && !it.terminalConfirmed }, input)
         }
         val digest = digestFingerprint(conversationId, coverageHash)
         val snapshot = JSONArray().put(coverageHash).put(episodesComplete).put(digest ?: JSONObjectNull)
@@ -107,7 +108,11 @@ internal class CompactionMemoryRepository(private val database: JarvysChatDataba
         for (episode in episodes) snapshot.put(JSONArray().put(episode.id).put(episode.narration)
             .put(rows("SELECT * FROM memory_entries WHERE id=?", arrayOf(episode.id)))
             .put(rows("SELECT * FROM memory_evidence WHERE entry_id=? ORDER BY ordinal", arrayOf(episode.id)))
-            .put(episode.input.sourceFingerprint).put(episode.input.finalFingerprint))
+            .put(episode.input.sourceFingerprint).put(episode.input.finalFingerprint)
+            .put(JSONArray().also { jobs -> episode.input.codingJobs.sortedBy { it.jobId }.forEach { job ->
+                jobs.put(JSONArray().put(job.jobId).put(job.status).put(job.admitted)
+                    .put(job.terminalConfirmed).put(job.revision))
+            } }))
         return CompactionCoverage(conversationId, sources.distinct().toList(), canonical, coverageHash,
             hash(snapshot.toString()), canonical.maxOf { it.seq }, episodes, digest, episodesComplete, sourceTexts.toMap())
     }

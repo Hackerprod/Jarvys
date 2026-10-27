@@ -476,8 +476,13 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     /** A post-journal administrative ACK, not process execution or a semantic-memory receipt. */
     fun acceptCodingJobSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit): CodingJobAcceptance =
-        recordCodingCommit(commit, CodingJobRepository.Kind.SUBMISSION_ACCEPTED).let {
-            CodingJobAcceptance.confirmed(commit.reservation(), commit)
+        executeCodingOnWorker(commit.reservation().submission(), acceptance = true) { repos, operation ->
+            recordCodingCommitInWorker(repos, commit, CodingJobRepository.Kind.SUBMISSION_ACCEPTED)
+            // Publish the original post-TX ACK even if the waiting caller was interrupted. The
+            // anchor and SQL lease are released; listeners may schedule, never re-enter this bridge.
+            val accepted = CodingJobAcceptance.confirmed(commit.reservation(), commit)
+            operation.completeAcceptance(accepted)
+            accepted
         }
 
     /** Exact durable preparation admission; return before calling the entire lazy backend. */
@@ -492,6 +497,11 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     private fun recordCodingCommit(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
                                    kind: CodingJobRepository.Kind) = executeCodingOnWorker(commit.reservation().submission()) { repos, _ ->
+        recordCodingCommitInWorker(repos, commit, kind)
+    }
+
+    private fun recordCodingCommitInWorker(repos: Repositories,
+        commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit, kind: CodingJobRepository.Kind) {
         val reservation = commit.reservation()
         val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
         reservation.requireJournalOwner(journal)
@@ -595,8 +605,9 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     private fun <T> executeOnWorker(block: (Repositories) -> T): T = executeTrackedOnWorker(null, null, block)
 
     private fun <T> executeCodingOnWorker(submission: com.jarvys.agent.coding.CodingJobSubmission,
+        acceptance: Boolean = false,
         block: (Repositories, com.jarvys.agent.coding.CodingJobSubmission.RoomOperation) -> T): T {
-        val operation = submission.beginRoomOperation()
+        val operation = if (acceptance) submission.beginAcceptanceOperation() else submission.beginRoomOperation()
         return executeTrackedOnWorker(operation, { submission.abandonDispatch() }) { repos -> block(repos, operation) }
     }
 

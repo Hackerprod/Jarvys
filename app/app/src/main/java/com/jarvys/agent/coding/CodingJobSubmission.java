@@ -5,6 +5,9 @@ import com.jarvys.agent.CrewInvocationWitness;
 import com.jarvys.agent.EffectInvocation;
 import com.jarvys.agent.MemoryWriteGate;
 import com.jarvys.agent.chatdb.CodingJobReservation;
+import com.jarvys.agent.chatdb.CodingJobAcceptance;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.lang.ref.WeakReference;
@@ -21,6 +24,9 @@ public final class CodingJobSubmission {
     private final MemoryWriteGate.Ticket semanticTicket;
     private final AtomicBoolean dispatchAbandoned = new AtomicBoolean();
     private final AtomicReference<ReservationOutcome> reservationOutcome = new AtomicReference<>();
+    private final Object acceptanceLock = new Object();
+    private AcceptanceOutcome acceptanceOutcome;
+    private final List<Runnable> acceptanceObservers = new ArrayList<>();
     private final WeakReference<CrewInvocationWitness> pendingCapture;
     private CodingJobSubmission(EffectInvocation invocation, String job, String submission, String owner,
             String scope, String identity, CodingJobOwnerLease.Pin ownerPin,
@@ -76,11 +82,53 @@ public final class CodingJobSubmission {
     }
     /** Historical observation only, never a continuation/retry permission. */
     public ReservationOutcome reservationOutcome() { return reservationOutcome.get(); }
-    public RoomOperation beginRoomOperation() { return new RoomOperation(ownerPin.fork()); }
+    /** Exact completion of the original acceptance operation, never permission to enqueue work. */
+    public static final class AcceptanceOutcome {
+        public final CodingJobAcceptance acceptance;
+        public final boolean failed;
+        private AcceptanceOutcome(CodingJobAcceptance acceptance, boolean failed) {
+            this.acceptance = acceptance; this.failed = failed;
+        }
+    }
+    public AcceptanceOutcome acceptanceOutcome() {
+        synchronized (acceptanceLock) { return acceptanceOutcome; }
+    }
+    /** Observers may only schedule work; they run outside the slot monitor and Room lifecycle fence. */
+    public void onAcceptanceCompleted(Runnable observer) {
+        Objects.requireNonNull(observer);
+        synchronized (acceptanceLock) {
+            if (acceptanceOutcome == null) { acceptanceObservers.add(observer); return; }
+        }
+        notifyAcceptanceObserver(observer);
+    }
+    private void publishAcceptance(AcceptanceOutcome result) {
+        List<Runnable> observers;
+        synchronized (acceptanceLock) {
+            if (acceptanceOutcome != null) {
+                if (!result.failed && acceptanceOutcome.acceptance != result.acceptance)
+                    throw new IllegalStateException("Acceptance outcome cannot be replaced");
+                return; // A reported failure cannot erase an already committed acceptance.
+            }
+            acceptanceOutcome = result;
+            observers = new ArrayList<>(acceptanceObservers);
+            acceptanceObservers.clear();
+        }
+        for (Runnable observer : observers) notifyAcceptanceObserver(observer);
+    }
+    private static void notifyAcceptanceObserver(Runnable observer) {
+        try { observer.run(); } catch (RuntimeException ignored) {
+            // The exact operation result remains observable; an observer is not its authority.
+        }
+    }
+    public RoomOperation beginRoomOperation() { return new RoomOperation(ownerPin.fork(), false); }
+    public RoomOperation beginAcceptanceOperation() { return new RoomOperation(ownerPin.fork(), true); }
     public final class RoomOperation implements AutoCloseable {
         private final CodingJobOwnerLease.Pin pin;
         private final AtomicBoolean finished = new AtomicBoolean();
-        private RoomOperation(CodingJobOwnerLease.Pin pin) { this.pin=pin; }
+        private final boolean acceptance;
+        private RoomOperation(CodingJobOwnerLease.Pin pin, boolean acceptance) {
+            this.pin=pin; this.acceptance=acceptance;
+        }
         public void completeReservation(CodingJobReservation value) {
             if(value.submission()!=CodingJobSubmission.this)throw new IllegalStateException("Foreign reservation completion");
             ReservationOutcome result=new ReservationOutcome(value,false);
@@ -88,7 +136,15 @@ public final class CodingJobSubmission {
             if(previous!=null && previous.reservation!=value)throw new IllegalStateException("Reservation outcome cannot be replaced");
             reservationOutcome.compareAndSet(null,result);
         }
-        public void fail(Throwable ignored) { reservationOutcome.compareAndSet(null,new ReservationOutcome(null,true)); }
+        public void completeAcceptance(CodingJobAcceptance value) {
+            if (!acceptance || value.reservation().submission() != CodingJobSubmission.this)
+                throw new IllegalStateException("Foreign acceptance completion");
+            publishAcceptance(new AcceptanceOutcome(value, false));
+        }
+        public void fail(Throwable ignored) {
+            if (acceptance) publishAcceptance(new AcceptanceOutcome(null, true));
+            else reservationOutcome.compareAndSet(null,new ReservationOutcome(null,true));
+        }
         @Override public void close() { if(finished.compareAndSet(false,true))pin.close(); }
     }
     public String jobId() { return jobId; }

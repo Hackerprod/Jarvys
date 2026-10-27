@@ -1,3 +1,11 @@
+## Estado actual S6 — ACK interrumpido y guards de compaction, 27-10-2026
+
+Full/Play compilan; **221 + 174 casos frescos PASS** (395, cero skips), con oráculo real de terminal Room y pin tras ACK interrumpido, lectores y guards de compaction/flush. [Reporte](docs/continue/single-validate/S6-coding-acceptance-report.md).
+
+Antes del opt-in: reserva/primer journal inciertos, reparación live del terminal deseado, recovery acreditado, cadena semántica retenida con productor real, cobertura externa de compaction y matriz restante. ASYNC permanece desactivado; no hay cierre S6/S7/S8/paridad Engram ni APK. El segundo interrupt durante I/O sigue siendo incertidumbre, no una ausencia de efectos inventada.
+
+Respaldo confirmado anterior: `8a59dc59` reconstruye `612a8b8a` exactamente con el método seguro. Este bloque posterior todavía no se afirma publicado; los checkpoints siguientes son históricos.
+
 ## Estado actual S6 — productor Coding interno, 27-10-2026
 
 Checkpoint WIP: Full/Play compilan; 190 Full + 145 Play PASS en composición por clase, sin skips, y cinco endpoints de liveness entre JVM. Registry 8/8 se repitió tras corregir sólo el lector de transcript del fixture; no se afirma una nueva ejecución de los 335 casos. [Reporte y límites](docs/continue/single-validate/S6-coding-producer-report.md).
