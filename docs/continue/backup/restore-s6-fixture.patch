@@ -370,6 +370,38 @@ index fa0730bf..5ef78335 100644
 +        com.jarvys.agent.connectors.ConnectionAccessProvider {
 +        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
 +        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/ScheduledTaskBoundToolTest.java b/app/app/src/test/java/com/jarvys/agent/ScheduledTaskBoundToolTest.java
+index 6956980e..ffad762f 100644
+--- a/app/app/src/test/java/com/jarvys/agent/ScheduledTaskBoundToolTest.java
++++ b/app/app/src/test/java/com/jarvys/agent/ScheduledTaskBoundToolTest.java
+@@ -70,0 +71,27 @@ public class ScheduledTaskBoundToolTest {
++    @Test public void asyncMetadataIsForwardedButTasksRejectBeforeDeferralOrDispatch() {
++        CoreTool delegate = new CoreTool() {
++            @Override public ToolSpec declaration() {
++                return new ToolSpec("synthetic_async", "test", "Synthetic", "test", ToolSpec.Status.IMPLEMENTED,
++                        Collections.emptyMap(), Collections.emptyList());
++            }
++            @Override public CompletionMode completionMode(Map<String, Object> args) {
++                return Boolean.TRUE.equals(args.get("async")) ? CompletionMode.ASYNC_JOB : CompletionMode.SYNCHRONOUS;
++            }
++            @Override public boolean hasCompleteAsyncSubmissionCoverage() { return true; }
++            @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.WRITE; }
++            @Override public CoreToolResult execute(Map<String, Object> args, CancellationToken token) {
++                throw new AssertionError("No async dispatch");
++            }
++        };
++        CoreTool wrapped = new CoreAgentRuntime.ScheduledTaskBoundTool(delegate, false, false,
++                (name, args, token) -> { throw new AssertionError("No async pending action"); });
++        assertEquals(CoreTool.CompletionMode.SYNCHRONOUS, wrapped.completionMode(Collections.emptyMap()));
++        assertEquals(CoreTool.CompletionMode.ASYNC_JOB, wrapped.completionMode(Collections.singletonMap("async", true)));
++        assertTrue(wrapped.hasCompleteAsyncSubmissionCoverage());
++        EffectInvocation invocation = new EffectInvocation(admission -> { throw new AssertionError("No admission"); });
++        CoreToolResult result = wrapped.execute(Collections.singletonMap("async", true), CancellationToken.cancellable(), null, invocation);
++        org.junit.Assert.assertFalse(result.success);
++        assertEquals(EffectInvocation.Outcome.NOT_EXECUTED, result.effectReceipt.outcome);
++        org.junit.Assert.assertFalse(invocation.admitted());
++    }
++
 diff --git a/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt b/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt
 index 605efb38..60d07d51 100644
 --- a/app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt
@@ -567,6 +599,64 @@ index 2b526d9a..0a4a9741 100644
 +        com.jarvys.agent.connectors.ConnectionAccessProvider {
 +        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
 +        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
+index ed1e60d9..6f7313fe 100644
+--- a/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
+@@ -73 +73 @@ class ConnectionStateEventMigrationTest {
+-            assertEquals(6, freshSql.version)
++            assertEquals(7, freshSql.version)
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
+index f9859655..3f606384 100644
+--- a/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
+@@ -459,0 +460 @@ class JarvysChatDatabaseM0Test {
++        val globalCodingTables = setOf("coding_job_bindings", "coding_job_observations")
+@@ -463 +464 @@ class JarvysChatDatabaseM0Test {
+-        ) - globalConnectorTables
++        ) - globalConnectorTables - globalCodingTables
+@@ -466 +467 @@ class JarvysChatDatabaseM0Test {
+-        ) - globalConnectorTables)
++        ) - globalConnectorTables - globalCodingTables)
+@@ -470,0 +472,3 @@ class JarvysChatDatabaseM0Test {
++        assertTrue("Coding binding has no Central/semantic FK", foreignKeys(sqlite, "coding_job_bindings").isEmpty())
++        assertEquals(setOf("coding_job_bindings"), foreignKeys(sqlite, "coding_job_observations").map { it.parentTable }.toSet())
++        globalCodingTables.forEach { table -> assertEquals("technical fixture row in $table", 1L, rowCount(sqlite, table)) }
+@@ -492,0 +497,12 @@ class JarvysChatDatabaseM0Test {
++        globalCodingTables.forEach { table ->
++            assertEquals("technical history must survive conversation deletion: $table", 1L, rowCount(sqlite, table))
++            sqlite.query("SELECT * FROM `$table`").use { cursor ->
++                assertTrue(cursor.moveToFirst())
++                seeded.getValue(table).forEach { (column, expected) ->
++                    val index = cursor.getColumnIndexOrThrow(column)
++                    if (expected is ByteArray) assertArrayEquals("technical bytes changed: $table.$column", expected, cursor.getBlob(index))
++                    else assertEquals("technical metadata changed: $table.$column", expected?.toString(), cursor.getString(index))
++                }
++                assertFalse("duplicate technical history: $table", cursor.moveToNext())
++            }
++        }
+@@ -906,2 +922,2 @@ class JarvysChatDatabaseM0Test {
+-        val exportedDatabase = JSONObject(exportedSchemaFile(6).readText(Charsets.UTF_8)).getJSONObject("database")
+-        assertEquals("Exported schema version", 6, exportedDatabase.getInt("version"))
++        val exportedDatabase = JSONObject(exportedSchemaFile(7).readText(Charsets.UTF_8)).getJSONObject("database")
++        assertEquals("Exported schema version", 7, exportedDatabase.getInt("version"))
+@@ -911 +927 @@ class JarvysChatDatabaseM0Test {
+-        assertEquals("Room database version", 6L, pragmaLong(sqlite, "user_version"))
++        assertEquals("Room database version", 7L, pragmaLong(sqlite, "user_version"))
+@@ -958,2 +974,2 @@ class JarvysChatDatabaseM0Test {
+-                val exported = JSONObject(exportedSchemaFile(6).readText(Charsets.UTF_8)).getJSONObject("database")
+-                assertEquals(6L, pragmaLong(sql, "user_version"))
++                val exported = JSONObject(exportedSchemaFile(7).readText(Charsets.UTF_8)).getJSONObject("database")
++                assertEquals(7L, pragmaLong(sql, "user_version"))
+@@ -1003 +1019 @@ class JarvysChatDatabaseM0Test {
+-                assertEquals(6L, pragmaLong(migratedSql, "user_version"))
++                assertEquals(7L, pragmaLong(migratedSql, "user_version"))
+@@ -1005 +1021 @@ class JarvysChatDatabaseM0Test {
+-                    JSONObject(exportedSchemaFile(6).readText()).getJSONObject("database").getString("identityHash"),
++                    JSONObject(exportedSchemaFile(7).readText()).getJSONObject("database").getString("identityHash"),
+@@ -1075 +1091 @@ class JarvysChatDatabaseM0Test {
+-                assertEquals(6L, pragmaLong(reopenedSql, "user_version"))
++                assertEquals(7L, pragmaLong(reopenedSql, "user_version"))
 diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
 index 4707ec5e..451d83c1 100644
 --- a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
@@ -609,6 +699,13 @@ index 4707ec5e..451d83c1 100644
 +        assertFalse(success(artifacts.appendDeliveredArtifactWithReceipt(input)).inserted)
 +    }
 +
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
+index f5d6705a..a5fa9b10 100644
+--- a/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
+@@ -40 +40 @@ class MigrationDriverParityTest {
+-            assertEquals(listOf(3 to 4, 4 to 5, 5 to 6), Migrations.ALL.map { it.startVersion to it.endVersion })
++            assertEquals(listOf(3 to 4, 4 to 5, 5 to 6, 6 to 7), Migrations.ALL.map { it.startVersion to it.endVersion })
 diff --git a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java b/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
 index a06a2d8e..a3e78f2f 100644
 --- a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
@@ -699,7 +796,7 @@ index a06a2d8e..a3e78f2f 100644
 -        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),CaptureMode.CENTRAL_BINDING_ABSENT),1,Phase.SUBMISSION_INTENT,false,null,null);
 +        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),SemanticCapture.ENABLED),1,Phase.SUBMISSION_INTENT,false,null,null);
 diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
-index 479805d3..b47617c4 100644
+index 479805d3..0fb2302e 100644
 --- a/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
 +++ b/app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt
 @@ -67 +67 @@ class ScheduledTaskProcessorTest {
@@ -730,7 +827,7 @@ index 479805d3..b47617c4 100644
 +                requireNotNull(preparation.authorizeWriteEffect).invoke()
 @@ -829,0 +833 @@ class ScheduledTaskProcessorTest {
 +                requireNotNull(preparation.reportWriteOutcome).invoke(com.jarvys.agent.EffectInvocation.Outcome.OK)
-@@ -904,0 +909,35 @@ class ScheduledTaskProcessorTest {
+@@ -904,0 +909,37 @@ class ScheduledTaskProcessorTest {
 +    @Test fun argumentSensitiveWriteCannotDisappearBehindReadUnattendedMetadata() {
 +        val calls = mutableListOf<TaskToolCallRecord>()
 +        var effects = 0
@@ -759,6 +856,8 @@ index 479805d3..b47617c4 100644
 +    private fun contextAwareExecutor(block: (Context, ScheduledTask, TaskPendingAction,
 +                                             com.jarvys.agent.EffectInvocation) -> com.jarvys.agent.CoreToolResult) =
 +        object : TaskPendingActionExecutor {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
 +            override fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreToolResult =
 +                error("Explicit invocation context required")
 +            override fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction,
@@ -766,6 +865,46 @@ index 479805d3..b47617c4 100644
 +            override fun hasCompleteEffectAdmissionCoverage() = true
 +        }
 +
+diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/TaskMemoryAdmissionTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/TaskMemoryAdmissionTest.kt
+index e802c47e..c378a87e 100644
+--- a/app/app/src/test/java/com/jarvys/agent/tasks/TaskMemoryAdmissionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/tasks/TaskMemoryAdmissionTest.kt
+@@ -60,0 +61,2 @@ class TaskMemoryAdmissionTest {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
+@@ -191,0 +194,2 @@ class TaskMemoryAdmissionTest {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
+diff --git a/app/app/src/test/java/com/jarvys/agent/tasks/TaskPendingActionExecutionTest.kt b/app/app/src/test/java/com/jarvys/agent/tasks/TaskPendingActionExecutionTest.kt
+index 86f1de3c..cbaeb0c4 100644
+--- a/app/app/src/test/java/com/jarvys/agent/tasks/TaskPendingActionExecutionTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/tasks/TaskPendingActionExecutionTest.kt
+@@ -69 +69 @@ class TaskPendingActionExecutionTest {
+-                TaskPendingActionExecutor { _, _, _ -> rejectedInvocations++; CoreToolResult.success("unexpected") }))
++                syncExecutor { _, _, _ -> rejectedInvocations++; CoreToolResult.success("unexpected") }))
+@@ -77 +77 @@ class TaskPendingActionExecutionTest {
+-                TaskPendingActionExecutor { _, _, _ -> changedInvocations++; CoreToolResult.success("unexpected") }))
++                syncExecutor { _, _, _ -> changedInvocations++; CoreToolResult.success("unexpected") }))
+@@ -85 +85 @@ class TaskPendingActionExecutionTest {
+-            TaskPendingActionExecutor { _, _, _ -> CoreToolResult.success("administrative success") })
++            syncExecutor { _, _, _ -> CoreToolResult.success("administrative success") })
+@@ -92,0 +93,2 @@ class TaskPendingActionExecutionTest {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
+@@ -150,0 +153,7 @@ class TaskPendingActionExecutionTest {
++    private fun syncExecutor(block: (Context, ScheduledTask, TaskPendingAction) -> CoreToolResult) =
++        object : TaskPendingActionExecutor {
++            override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++                com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
++            override fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction) = block(context, task, action)
++        }
++
+@@ -151,0 +161,2 @@ class TaskPendingActionExecutionTest {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
+@@ -162,0 +174,2 @@ class TaskPendingActionExecutionTest {
++        override fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction) =
++            com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS
 diff --git a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt b/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt
 index 8fc843d6..1ca1c782 100644
 --- a/app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt

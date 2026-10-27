@@ -117,6 +117,7 @@ public final class EffectInvocation {
     }
 
     private AdministrativeReceipt administrativeCompletion(AdministrativeKind kind) {
+        requireSynchronousCompletion();
         if (admission != null) throw new IllegalStateException("An admitted external effect is not an administrative completion");
         return new AdministrativeReceipt(identity, kind);
     }
@@ -139,6 +140,31 @@ public final class EffectInvocation {
     }
 
     private final Object identity = new Object();
+    private final Object asyncSubmissionIdentity = new Object();
+    private boolean asyncSubmission;
+    private com.jarvys.agent.chatdb.CodingJobAcceptance acceptedSubmission;
+    /** Opaque identity only, with no reverse reference to this invocation or permission by itself. */
+    public Object asyncSubmissionOwnerIdentity() { return asyncSubmissionIdentity; }
+    synchronized void beginAsyncSubmission() {
+        if (sealed || asyncSubmission || admission != null || persisting)
+            throw new IllegalStateException("Invocation cannot become an async submission");
+        asyncSubmission = true;
+    }
+    /** The complete producer binds its durable administrative proof before it enqueues the worker. */
+    public synchronized void bindAcceptedSubmission(com.jarvys.agent.chatdb.CodingJobAcceptance acceptance) {
+        if (sealed || !asyncSubmission || admission != null || persisting || acceptedSubmission != null)
+            throw new IllegalStateException("Async submission acceptance cannot be rebound");
+        Objects.requireNonNull(acceptance, "acceptance").requireFor(this);
+        acceptedSubmission = acceptance;
+    }
+    /** Historical fact after seal; not permission to dispatch or claim a terminal result. */
+    public synchronized com.jarvys.agent.chatdb.CodingJobAcceptance acceptedSubmission() {
+        return acceptedSubmission;
+    }
+    private void requireSynchronousCompletion() {
+        if (asyncSubmission) throw new IllegalStateException("Async acceptance is not synchronous effect completion");
+    }
+
     private final List<AdmissionWriter> writers = new ArrayList<>();
     private Admission decision;
     private Admission admission;
@@ -192,6 +218,7 @@ public final class EffectInvocation {
 
     /** Call immediately before dispatch, after the existing gate checks. Never grants permission itself. */
     public synchronized void admit(Admission observed) {
+        requireSynchronousCompletion();
         if (sealed) throw new IllegalStateException("Invocation is terminal");
         Objects.requireNonNull(observed, "admission");
         if (observed.authorization != Authorization.ALLOW && observed.authorization != Authorization.ASK_APPROVED)
@@ -220,11 +247,13 @@ public final class EffectInvocation {
     public synchronized Admission admission() { return admission; }
     public synchronized Admission decision() { return decision; }
     public synchronized Receipt receipt(Outcome outcome) {
+        requireSynchronousCompletion();
         return new Receipt(outcome, admission != null ? admission : decision, identity,
                 CompletionSemantics.EXTERNAL_EFFECT, null);
     }
 
     public synchronized Receipt receipt(Outcome outcome, CompletionSemantics semantics, EffectReference reference) {
+        requireSynchronousCompletion();
         Objects.requireNonNull(outcome, "outcome");
         Objects.requireNonNull(semantics, "semantics");
         if (!validSemantics(outcome, semantics, reference))
@@ -252,6 +281,7 @@ public final class EffectInvocation {
      * A success flag alone never establishes an effect result. Prior admission is never erased.
      */
     public synchronized Receipt resolve(CoreToolResult result, boolean fullyInstrumented) {
+        requireSynchronousCompletion();
         Receipt explicit = result == null ? null : result.effectReceipt;
         if (explicit == null) return resolveFailure(fullyInstrumented);
         Admission actual = admission != null ? admission : decision;
@@ -264,6 +294,7 @@ public final class EffectInvocation {
     }
 
     public synchronized Receipt resolveFailure(boolean fullyInstrumented) {
+        requireSynchronousCompletion();
         return receipt(admission != null || !fullyInstrumented ? Outcome.UNCERTAIN : Outcome.NOT_EXECUTED);
     }
 }

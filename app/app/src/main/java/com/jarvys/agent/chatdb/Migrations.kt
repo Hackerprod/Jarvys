@@ -59,6 +59,14 @@ internal object Migrations {
             execute("CREATE UNIQUE INDEX IF NOT EXISTS index_connector_state_events_store_epoch_sequence ON connector_state_events(store_epoch,sequence)")
         }
     }
-    val ALL: Array<Migration> = arrayOf(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+    private val MIGRATION_6_7 = object : SqlMigration(6, 7) {
+        override fun migrateSql(execute: (String) -> Unit) {
+            execute("CREATE TABLE IF NOT EXISTS coding_job_bindings (job_id TEXT NOT NULL, submission_id TEXT NOT NULL, technical_generation TEXT NOT NULL, binding_json TEXT NOT NULL, PRIMARY KEY(job_id))")
+            execute("CREATE UNIQUE INDEX IF NOT EXISTS index_coding_job_bindings_submission_id ON coding_job_bindings(submission_id)")
+            execute("CREATE TABLE IF NOT EXISTS coding_job_observations (job_id TEXT NOT NULL, revision INTEGER NOT NULL, observation_kind TEXT NOT NULL, evidence_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, payload_bytes BLOB NOT NULL, PRIMARY KEY(job_id,revision), FOREIGN KEY(job_id) REFERENCES coding_job_bindings(job_id) ON UPDATE NO ACTION ON DELETE NO ACTION)")
+            execute("CREATE INDEX IF NOT EXISTS index_coding_job_observations_job_id ON coding_job_observations(job_id)")
+        }
+    }
+    val ALL: Array<Migration> = arrayOf(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 }
 

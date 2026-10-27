@@ -426,6 +426,9 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
                                  invocation: com.jarvys.agent.EffectInvocation) =
                 CoreAgentRuntime.executeScheduledTaskAction(context, task, action.toolName,
                     JSONObject(action.argumentsJson), CancellationToken.uncancellable(), invocation)
+            override fun completionMode(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
+                                        action: com.jarvys.agent.tasks.TaskPendingAction) =
+                CoreAgentRuntime.scheduledTaskActionCompletionMode(context, task, action.toolName, JSONObject(action.argumentsJson))
             override fun hasCompleteEffectAdmissionCoverage() = true
             override fun effectClassification(context: Context, task: com.jarvys.agent.tasks.ScheduledTask,
                                               action: com.jarvys.agent.tasks.TaskPendingAction) =

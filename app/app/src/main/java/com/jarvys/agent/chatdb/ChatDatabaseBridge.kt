@@ -454,6 +454,54 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentRetryJob(id: String, owner: String, error: String, availableAt: Long): Boolean =
         withAgentMemory("retry memory maintenance") { it.retryJob(id, owner, error, availableAt) }
 
+    /** Technical reservation is independent of semantic-memory preference and does not enqueue work. */
+    fun reserveCodingJobSync(submission: com.jarvys.agent.coding.CodingJobSubmission): CodingJobReservation =
+        executeOnWorker { repos ->
+            submission.requireCaptureCurrent()
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            check(submission.journal() === journal) { "Foreign coding journal store" }
+            // Workspace SQLite must never be opened while holding the Room lifecycle fence.
+            val source = resolveCodingJobSource(applicationContext, submission)
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val binding = runBlocking { CodingJobRepository(repos.database).reserve(submission, source) }
+                val reservation = CodingJobReservation.confirmed(binding, submission, journal,
+                    anchor.attest(repos.database, binding.technicalStoreGeneration))
+                submission.captureConfirmed()
+                reservation
+            }
+        }
+
+    /** A post-journal administrative ACK, not process execution or a semantic-memory receipt. */
+    fun acceptCodingJobSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit): CodingJobAcceptance =
+        recordCodingCommit(commit, CodingJobRepository.Kind.SUBMISSION_ACCEPTED).let {
+            CodingJobAcceptance.confirmed(commit.reservation(), commit)
+        }
+
+    /** Exact durable preparation admission; return before calling the entire lazy backend. */
+    fun admitCodingPreparationSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) {
+        recordCodingCommit(commit, CodingJobRepository.Kind.PREPARATION_ADMITTED)
+    }
+
+    /** Technical terminal/history projection. Never repairs source attribution or replays a command. */
+    fun projectCodingJobSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) {
+        recordCodingCommit(commit, CodingJobRepository.Kind.JOURNAL_PROJECTION)
+    }
+
+    private fun recordCodingCommit(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
+                                   kind: CodingJobRepository.Kind) = executeOnWorker { repos ->
+        val reservation = commit.reservation()
+        val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+        reservation.requireJournalOwner(journal)
+        commit.requireMintedBy(journal)
+        val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        anchor.fenced {
+            check(anchor.accepts(reservation.lifecycle(), repos.database)) { "Stale coding technical reservation" }
+            reservation.requireCurrentProjection()
+            runBlocking { CodingJobRepository(repos.database).record(commit, kind) }
+        }
+    }
+
     /** Capture exact Central-call provenance and the SAME database lifecycle; release before returning. */
     fun captureCentralInvocationSync(conversationId: String, ownerMessageId: String, batchId: String,
                                     callId: String, toolName: String, runId: String, processId: String): CentralInvocationCheckpoint =

@@ -700,3 +700,85 @@ worker vivo bloqueado antes del throw, Runnable duplicado simultáneo y después
 cancelación antes de claim, callback reentrante que crea otro job. Comprobar estado real,
 versión de scope y exclusión del writer, además del número de dispatch/callbacks. No usar
 una espera negativa como única evidencia de una carrera ni ejecutar procesos/modelos reales.
+
+## 15. Bundle integrado schema3, reserva técnica y owner lease
+
+Estado: diseño revisado por partes; APIs concretas e implementación pendientes. No habilita
+ASYNC ni convierte los checkpoints §§12–14 en productor completo.
+
+### 15.1 Owner y retiro
+
+El manager cacheado vive normalmente hasta terminar el proceso. processUUID identifica esa vida;
+managerUUID distingue instancias. Antes de reservar una submission adquiere un pin sobre un
+lease de fichero estable en `filesDir/jarvys/runtime-owners/coding/<managerUUID>.lock`, fuera de
+`StorageGeneration`, árboles retirados y limpieza de huérfanos. Header técnico, sin comandos,
+conversaciones ni contenido del usuario. No unlink/recreación por close, scanner o GC.
+
+Quiesce es corto/no bloqueante: OPEN→QUIESCING rechaza nuevas reservas. Pins cubren reserva,
+journal, enqueue, worker, reap/cleanup y el intento de proyección terminal. Sólo el último pin
+permite cerrar lock/channel; el cache no reemplaza un manager mientras drena. Esperar su cierre
+es operación externa fuera de callbacks/locks, no un método de bot ni señal adicional al proceso.
+La cancelación explícita conserva los mecanismos autorizados actuales. Un lock ausente, corrupto,
+contendido o solapado no acredita muerte. Recovery sólo puede concluir abandono al adquirir en
+exclusiva el fichero/header exactos; nunca por PID, timeout o mapa local vacío.
+
+### 15.2 Reserva y destino técnico
+
+EXEC execute4 captura procedencia Crew exacta e inputContext mientras su invocación es válida;
+el worker recibe historia inmutable y autoridad operacional vigente, no un witness sellado como
+permiso futuro. jobId/submissionId se asignan una vez, antes de posibles resultados inciertos.
+
+La reserva usa el UUID **real** del destino Room leído dentro de su transacción. Orden de locks:
+worker del bridge → anchor de instancia → transacción. El caller no espera al bridge reteniendo
+job, conversación, writer, política, launch o anchor. El resultado de reserva sólo se acredita
+tras commit. Interrupción de la espera puede dejar la callable ejecutándose: conservar candidato
+exacto/UNKNOWN, no enqueue, nuevo job o retry de comando por suponer rollback.
+
+Se requieren dos tablas técnicas separadas de episodios: bindings de submission inmutables
+(job/submission, generación técnica, origen exacto, owners, política semántica) y observaciones
+por (job, revisión) con payload/hash exactos, fase y terminal. Un duplicate debe comparar todos
+los campos, no considerar INSERT OR IGNORE como ACK por sí solo. No hay mensaje Central ficticio
+ni FK obligatoria a memoria semántica. Root histórica opcional no sustituye inputs ni generación.
+Memoria OFF no suprime estas filas técnicas.
+
+### 15.3 Un journal y productor acreditado
+
+Schema3 exterior contiene Snapshot operacional y envelope de evidencia v2, con identidades y
+relación validadas en los mismos bytes. No escribir un sidecar causal después del journal UI.
+El commit de IO debe ser issuer-bound y acuñado sólo por la frontera real sync/rename/dirsync;
+ni DTO, decoder, Snapshot ni token extensible del writer legacy bastan como autoridad de proyección.
+Las APIs compartidas main/Full deben resolver esa propiedad antes del wiring. Recovery acredita
+lectura/identidad mediante un protocolo separado, nunca fabricando un commit de ejecución.
+Schemas1/2 siguen legibles como historia operacional sin elevarlos a procedencia o liveness nueva.
+
+Orden: reserva Room → journal submission → aceptación/intent técnico Room → claim/enqueue.
+En worker: gates vigentes → journal PREPARATION_INTENT → admisión técnica Room → recheck
+operacional → backend entero, incluida factory lazy. beforeLaunch conserva guards y journal
+LAUNCH_INTENT bajo locks existentes; ninguna llamada Room dentro de esos locks. Tras reap/cleanup:
+terminal en journal → proyección exacta fuera de locks → liberar pin. Un callback perdido no exige
+repetir el comando: recovery proyecta el mismo job/revisión y conserva conflictos como incertidumbre.
+
+### 15.4 Punto de admisión y cambio de generación
+
+La admisión técnica durable exacta es el punto de linearización de esa fase, no una nueva API de
+cancelación. Close/reopen del proveedor o forget de memoria no revocan retroactivamente trabajo
+ya admitido. Se mantienen STOP, política, perfil, scope y lease antes de preparación/launch.
+No se sostiene el anchor Room durante el backend ni se promete cero efectos tras un close.
+Cada **nueva** admisión y proyección exige el mismo destino/UUID; jamás adoptar la base nueva,
+recrear un root olvidado o rebautizar el journal histórico para completar una proyección.
+
+Pruebas: close antes de admisión rechaza token viejo y no entra al backend; close después de
+admisión permite continuar bajo guards operacionales, con journal original y sin proyección en
+base reemplazada. Forget/retirada bloquean nuevos enlaces/narración, no convierten el comando
+ya admitido en inexistente. El target semántico debe ser exacto y no estar eliminado; no resolver
+por topic_key para resucitar una memoria durante recovery. ENABLED capturado no es permiso vivo;
+DISABLED no autoriza backfill al reactivar memoria.
+
+### 15.5 Gate del bundle
+
+Antes de opt-in: factory fría observa journal/admisión antes del primer efecto; fallos e
+interrupción real del bridge no encolan; pruebas de identidad/UUID/conflicto y reapertura sin
+replay; dos managers/owners vivos y muertos; quiesce con pins; terminal durable y callback perdido;
+OFF/forget/generación no resucitan semántica. Además deben cerrarse receipt administrativo del
+Registry, exclusión scheduled/pending y wrappers, narración y las pruebas de §§9–11. Subpartes
+verdes no autorizan por sí solas ASYNC ni un PASS final S6.

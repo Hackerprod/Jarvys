@@ -12,6 +12,8 @@ public final class CoreToolResult {
     /** Optional typed local effect evidence; independent of the presentation success flag. */
     public final EffectInvocation.Receipt effectReceipt;
     public final EffectInvocation.AdministrativeReceipt administrativeReceipt;
+    /** Exact durable job acceptance, separate from this result's transport success and command outcome. */
+    public final com.jarvys.agent.chatdb.CodingJobAcceptance jobSubmissionReceipt;
 
     private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
                            boolean finishRun) {
@@ -31,6 +33,15 @@ public final class CoreToolResult {
     private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
                            boolean finishRun, String persistenceEvidence, EffectInvocation.Receipt effectReceipt,
                            EffectInvocation.AdministrativeReceipt administrativeReceipt) {
+        this(success, content, completeContentRequired, previewId, finishRun,
+                persistenceEvidence, effectReceipt, administrativeReceipt, null);
+    }
+
+    private CoreToolResult(boolean success, String content, boolean completeContentRequired, String previewId,
+                           boolean finishRun, String persistenceEvidence, EffectInvocation.Receipt effectReceipt,
+                           EffectInvocation.AdministrativeReceipt administrativeReceipt,
+                           com.jarvys.agent.chatdb.CodingJobAcceptance jobSubmissionReceipt) {
+        this.jobSubmissionReceipt = jobSubmissionReceipt;
         this.administrativeReceipt = administrativeReceipt;
         this.effectReceipt = effectReceipt;
         this.persistenceEvidence = persistenceEvidence;
@@ -44,17 +55,22 @@ public final class CoreToolResult {
     /** Preserve all execution metadata when a wrapper redacts or reformats presentation content. */
     public CoreToolResult withContent(String content) {
         return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
-                persistenceEvidence, effectReceipt, administrativeReceipt);
+                persistenceEvidence, effectReceipt, administrativeReceipt, jobSubmissionReceipt);
     }
 
     public CoreToolResult withEffectReceipt(EffectInvocation.Receipt receipt) {
         return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
-                persistenceEvidence, receipt, administrativeReceipt);
+                persistenceEvidence, receipt, administrativeReceipt, jobSubmissionReceipt);
     }
 
     public CoreToolResult withAdministrativeReceipt(EffectInvocation.AdministrativeReceipt receipt) {
         return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
-                persistenceEvidence, effectReceipt, receipt);
+                persistenceEvidence, effectReceipt, receipt, jobSubmissionReceipt);
+    }
+
+    public CoreToolResult withJobSubmissionReceipt(com.jarvys.agent.chatdb.CodingJobAcceptance receipt) {
+        return new CoreToolResult(success, content, completeContentRequired, previewId, finishRun,
+                persistenceEvidence, effectReceipt, administrativeReceipt, receipt);
     }
 
     public static CoreToolResult success(String content) { return new CoreToolResult(true, content, false, null, false); }

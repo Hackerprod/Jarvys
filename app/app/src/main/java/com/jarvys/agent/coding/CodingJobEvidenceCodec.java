@@ -22,15 +22,21 @@ public final class CodingJobEvidenceCodec {
     private CodingJobEvidenceCodec() { }
     public static String encode(CodingJobEvidence.Record r) {
         Objects.requireNonNull(r);
-        return json(object("schema", 3L, "envelopeVersion", 2L, "binding", binding(r.binding), "revision", r.revision,
+        return json(recordObject(r));
+    }
+    static Map<String,Object> recordObject(CodingJobEvidence.Record r) {
+        return object("schema", 3L, "envelopeVersion", 2L, "binding", binding(r.binding), "revision", r.revision,
                 "highestEffectPhase", r.highestEffectPhase.name(), "submissionCommitted", r.submissionCommitted,
-                "authorization", auth(r.authorization), "terminal", terminal(r.terminal)));
+                "authorization", auth(r.authorization), "terminal", terminal(r.terminal));
     }
     /** The caller supplies its existing journal input budget; no product resource limit is added. */
     public static ValidatedRecord decode(String encoded, int maxChars) {
         if (maxChars <= 0 || encoded == null || encoded.length() > maxChars)
             throw new IllegalArgumentException("Envelope exceeds supplied parse budget");
         Map<String,Object> root = map(new Parser(encoded).parse());
+        return readRecord(root);
+    }
+    static ValidatedRecord readRecord(Map<String,Object> root) {
         keys(root, "schema", "envelopeVersion", "binding", "revision", "highestEffectPhase", "submissionCommitted", "authorization", "terminal");
         if (number(root, "schema") != 3 || number(root, "envelopeVersion") != 2) throw new IllegalArgumentException("Unsupported evidence schema");
         return new ValidatedRecord(new CodingJobEvidence.Record(readBinding(map(root.get("binding"))),
@@ -190,30 +196,30 @@ public final class CodingJobEvidenceCodec {
         return new TerminalFacts(enumeration(t,"state",TerminalState.class), exit, bool(t,"cancellationObserved"),
                 bool(t,"timeoutObserved"), bool(t,"uncertaintyObserved"), enumeration(t,"absenceCoverage",AbsenceCoverage.class));
     }
-    private static Map<String,Object> object(Object... pairs) {
+    static Map<String,Object> object(Object... pairs) {
         Map<String,Object> result = new LinkedHashMap<>();
         for (int i = 0; i < pairs.length; i += 2) result.put((String)pairs[i], pairs[i+1]);
         return result;
     }
-    @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value) {
+    @SuppressWarnings("unchecked") static Map<String,Object> map(Object value) {
         if (!(value instanceof Map)) throw new IllegalArgumentException("Expected envelope object");
         return (Map<String,Object>)value;
     }
-    private static void keys(Map<String,Object> value, String... names) {
+    static void keys(Map<String,Object> value, String... names) {
         if (value.size() != names.length || !value.keySet().containsAll(Arrays.asList(names)))
             throw new IllegalArgumentException("Unexpected or missing envelope fields");
     }
-    private static String string(Map<String,Object> value, String key) {
+    static String string(Map<String,Object> value, String key) {
         Object field = value.get(key);
         if (!(field instanceof String)) throw new IllegalArgumentException("Expected string field");
         return (String)field;
     }
-    private static long number(Map<String,Object> value, String key) {
+    static long number(Map<String,Object> value, String key) {
         Object field = value.get(key);
         if (!(field instanceof Long)) throw new IllegalArgumentException("Expected exact integer field");
         return (Long)field;
     }
-    private static boolean bool(Map<String,Object> value, String key) {
+    static boolean bool(Map<String,Object> value, String key) {
         Object field = value.get(key);
         if (!(field instanceof Boolean)) throw new IllegalArgumentException("Expected boolean field");
         return (Boolean)field;
@@ -222,7 +228,7 @@ public final class CodingJobEvidenceCodec {
         try { return Enum.valueOf(type, string(value,key)); }
         catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unknown envelope enum value"); }
     }
-    private static String json(Object value) {
+    static String json(Object value) {
         if (value == null) return "null";
         if (value instanceof String) {
             StringBuilder out = new StringBuilder("\"");
@@ -251,19 +257,26 @@ public final class CodingJobEvidenceCodec {
         throw new IllegalArgumentException("Unsupported envelope value");
     }
     /** Only schema-supported JSON types; rejects duplicate keys, coercions, decimals and trailing data. */
+    static Map<String,Object> parseJournal(String encoded, int maxChars) {
+        if (maxChars <= 0 || encoded == null || encoded.length() > maxChars)
+            throw new IllegalArgumentException("Journal exceeds supplied parse budget");
+        // One operational root wraps the evidence envelope; no arbitrary nesting expansion.
+        return map(new Parser(encoded, 9).parse());
+    }
     private static final class Parser {
         // root/binding/source/crew/inputContext/references/reference/scope/scalar = depth 8.
         // This is the v2 shape boundary, not a user-data count/length limit.
         static final int MAX_SCHEMA_DEPTH = 8;
-        final String input; int at;
-        Parser(String input) { this.input = input; }
+        final String input; final int maxDepth; int at;
+        Parser(String input) { this(input, MAX_SCHEMA_DEPTH); }
+        Parser(String input, int maxDepth) { this.input = input; this.maxDepth = maxDepth; }
         Object parse() { Object result = value(0); space(); if (at != input.length()) fail(); return result; }
         void space() { while (at < input.length() && " \r\n\t".indexOf(input.charAt(at)) >= 0) at++; }
         void fail() { throw new IllegalArgumentException("Malformed evidence envelope"); }
         char take() { if (at >= input.length()) fail(); return input.charAt(at++); }
         boolean eat(char expected) { space(); if (at < input.length() && input.charAt(at) == expected) { at++; return true; } return false; }
         Object value(int depth) {
-            space(); if (at >= input.length() || depth > MAX_SCHEMA_DEPTH) { fail(); return null; }
+            space(); if (at >= input.length() || depth > maxDepth) { fail(); return null; }
             char c = input.charAt(at);
             if (c == '"') return text();
             if (c == '{') {

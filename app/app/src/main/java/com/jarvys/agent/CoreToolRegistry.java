@@ -290,6 +290,15 @@ public final class CoreToolRegistry {
       return CoreToolResult.failure("Tool is not available in this agent scope: " + name);
     }
     Map<String, Object> safeArguments = arguments == null ? Collections.emptyMap() : arguments;
+    CoreTool.CompletionMode completionMode;
+    try {
+      completionMode = java.util.Objects.requireNonNull(tool.completionMode(safeArguments), "Completion mode is required");
+    } catch (RuntimeException invalidMetadata) {
+      if (prepared != null) prepared.discard();
+      return CoreToolResult.failure("Tool completion metadata is unavailable; dispatch was not attempted");
+    }
+    if (completionMode == CoreTool.CompletionMode.ASYNC_JOB)
+      return invokeAsyncSubmission(tool, callId, safeArguments, token, progress, suppliedInvocation, prepared);
     boolean recordsEffect = tool.effectClass(safeArguments) == CoreTool.EffectClass.WRITE
         && tool.persistenceEffect(safeArguments) != CoreTool.PersistenceEffect.MEMORY;
     EffectInvocation invocation = suppliedInvocation;
@@ -311,6 +320,8 @@ public final class CoreToolRegistry {
         observerPrepared = true;
       }
       CoreToolResult result = tool.execute(safeArguments, token, progress, invocation);
+      if (result != null && result.jobSubmissionReceipt != null)
+        throw new IllegalStateException("Synchronous tool returned asynchronous acceptance metadata");
       EffectInvocation.Receipt receipt = recordsEffect || result != null && result.effectReceipt != null
           ? invocation.resolve(result, tool.hasCompleteEffectAdmissionCoverage()) : null;
       if (receipt != null && result != null) result = result.withEffectReceipt(receipt);
@@ -337,6 +348,61 @@ public final class CoreToolRegistry {
     } finally {
       if (prepared != null) prepared.discard();
     }
+  }
+
+  /** The job producer owns its durable lifecycle. This branch never closes an execution as a sync call. */
+  private CoreToolResult invokeAsyncSubmission(CoreTool tool, String callId, Map<String,Object> arguments,
+      CancellationToken token, CoreTool.ProgressListener progress, EffectInvocation supplied,
+      CoreAgentLoop.PreparedInvocationSnapshot prepared) {
+    EffectInvocation invocation = supplied == null ? new EffectInvocation(admission -> {}) : supplied;
+    boolean beganThisSubmission = false;
+    try {
+      token.throwIfCancelled();
+      if (this.invocationGuard != null) this.invocationGuard.run();
+      if (!tool.hasCompleteAsyncSubmissionCoverage()
+          || tool.effectClass(arguments) != CoreTool.EffectClass.WRITE
+          || tool.persistenceEffect(arguments) == CoreTool.PersistenceEffect.MEMORY)
+        throw new IllegalStateException("Async job submission producer is not fully instrumented");
+      if (this.invocationSourceProvider == null || prepared == null)
+        throw new IllegalStateException("Async job submission requires its exact prepared Crew source");
+      invocation.beginAsyncSubmission();
+      beganThisSubmission = true;
+      this.invocationSourceProvider.bindPrepared(tool, callId, arguments, prepared, invocation);
+      CrewInvocationWitness witness = invocation.crewSource();
+      if (witness == null) throw new IllegalStateException("Async job submission has no Crew source");
+      witness.requireInvocationCurrent();
+      return normalizeAsyncSubmission(tool.execute(arguments, token, progress, invocation), invocation);
+    } catch (CancellationException cancelled) {
+      if (!beganThisSubmission || invocation.acceptedSubmission() == null) throw cancelled;
+      // Token remains cancelled. An accepted job is not undone, nor is its process terminal inferred.
+      return asyncFailure("Submission interrupted after durable acceptance", invocation);
+    } catch (RuntimeException failure) {
+      return beganThisSubmission
+          ? asyncFailure("Async submission was not confirmed by this call", invocation)
+          : CoreToolResult.failure("Async submission was not started by this call");
+    } finally {
+      if (beganThisSubmission) invocation.seal();
+      if (prepared != null) prepared.discard();
+    }
+  }
+
+  private static CoreToolResult asyncFailure(String message, EffectInvocation invocation) {
+    com.jarvys.agent.chatdb.CodingJobAcceptance accepted = invocation.acceptedSubmission();
+    if (accepted != null) message += "; job_id=" + accepted.reservation().binding().jobId
+        + "; inspect the existing job rather than repeating the command";
+    return CoreToolResult.failure(message).withJobSubmissionReceipt(accepted);
+  }
+
+  private static CoreToolResult normalizeAsyncSubmission(CoreToolResult result, EffectInvocation invocation) {
+    com.jarvys.agent.chatdb.CodingJobAcceptance accepted = invocation.acceptedSubmission();
+    if (result == null) return asyncFailure("Async submission returned no presentation result", invocation);
+    if (result.effectReceipt != null || result.administrativeReceipt != null || result.persistenceEvidence != null)
+      return asyncFailure("Async submission returned incompatible synchronous completion metadata", invocation);
+    if (result.jobSubmissionReceipt != null && result.jobSubmissionReceipt != accepted)
+      return asyncFailure("Async submission returned a foreign acceptance receipt", invocation);
+    if (result.success && accepted == null)
+      return asyncFailure("No durable job acceptance was confirmed; execution outcome is not inferred", invocation);
+    return result.withJobSubmissionReceipt(accepted);
   }
 
   public CoreToolRegistry subset(Collection<String> requestedNames) {

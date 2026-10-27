@@ -84,6 +84,12 @@ internal class CodingJobJournalWriter(root: File, private val backend: Backend =
     /** A fresh candidate is captured once; callers cannot resubmit a previous Candidate. */
     fun write(target: File, jobId: String, schema: Int, bytes: ByteArray): Commit {
         require(schema == 1 || schema == 2) { "Only legacy journal formats are supported" }
+        return writeBytes(target, jobId, schema, bytes)
+    }
+    /** Raw IO only. The Main schema-3 producer validates its envelope and owns its separate receipt. */
+    fun writeEnvelope(target: File, jobId: String, bytes: ByteArray): Commit = writeBytes(target, jobId, 3, bytes)
+
+    private fun writeBytes(target: File, jobId: String, schema: Int, bytes: ByteArray): Commit {
         require(UUID.fromString(jobId).toString() == jobId) { "Noncanonical job identity" }
         val exactTarget = target.absoluteFile
         verifyPath(exactTarget)

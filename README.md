@@ -446,9 +446,9 @@ Jarvys is an independent project. Names and logos of connected services identify
 
 
 <!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->
-## Respaldo WIP recuperable — claim local Coding
+## Respaldo WIP recuperable — integración temprana Coding
 
-Este árbol **no es build-ready tal cual**. Los 26 tests existentes modificados se conservan
+Este árbol **no es build-ready tal cual**. Los 32 tests existentes modificados se conservan
 exactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver
 a transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se
 eliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.
@@ -457,7 +457,7 @@ En un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: veri
 el patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,
 commits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**
 
-Source: `e1f0a41108d8d3717782de625024a43ee6554ec9`. Validación focal independiente: 47 Full + 6 Play PASS,
-53 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
+Source: `106cdccdab4d2990cb051bccffa3c78b47d9b794`. Validación focal independiente: 85 Full + 85 Play PASS,
+170 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
 paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.
 <!-- JARVYS_SAFE_BACKUP_NOTICE_END -->

@@ -458,6 +458,8 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         override fun activitySkillId(arguments: Map<String, Any>) = delegate.activitySkillId(arguments)
         override fun activitySkillName(arguments: Map<String, Any>) = delegate.activitySkillName(arguments)
 
+        override fun completionMode(arguments: Map<String, Any>) = delegate.completionMode(arguments)
+        override fun hasCompleteAsyncSubmissionCoverage() = delegate.hasCompleteAsyncSubmissionCoverage()
         override fun hasCompleteEffectAdmissionCoverage() = delegate.hasCompleteEffectAdmissionCoverage()
 
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
@@ -465,6 +467,14 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
 
         override fun execute(arguments: Map<String, Any>, token: CancellationToken,
                              progress: CoreTool.ProgressListener?, suppliedInvocation: EffectInvocation?): CoreToolResult {
+            if (delegate.completionMode(arguments) != CoreTool.CompletionMode.SYNCHRONOUS) {
+                synchronized(calls) { calls += TaskToolCallRecord(delegate.declaration().name,
+                    isWrite || delegate.effectClass(arguments) == CoreTool.EffectClass.WRITE,
+                    "NOT_EXECUTED", noDispatchVerified = true) }
+                val rejected = CoreToolResult.failure("Asynchronous submissions are unsupported for scheduled tasks")
+                return if (suppliedInvocation == null) rejected else rejected.withEffectReceipt(
+                    suppliedInvocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED))
+            }
             val invocation = suppliedInvocation ?: EffectInvocation { /* No outer effect observer. */ }
             val name = delegate.declaration().name
             val potentiallyWrites = isWrite || delegate.effectClass(arguments) == CoreTool.EffectClass.WRITE

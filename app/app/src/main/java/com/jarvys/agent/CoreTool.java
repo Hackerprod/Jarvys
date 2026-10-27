@@ -13,6 +13,11 @@ public interface CoreTool {
   enum AccessClassification { READ, WRITE }
   enum EffectClass { READ, WRITE }
   enum PersistenceEffect { NONE, MEMORY }
+  /** A durable job submission is administrative acceptance, never synchronous command completion. */
+  enum CompletionMode { SYNCHRONOUS, ASYNC_JOB }
+  default CompletionMode completionMode(Map<String, Object> arguments) { return CompletionMode.SYNCHRONOUS; }
+  /** Opt-in requires the complete durable producer and exact invocation-bound acceptance protocol. */
+  default boolean hasCompleteAsyncSubmissionCoverage() { return false; }
 
   interface ProgressListener {
     void onProgress(String message);

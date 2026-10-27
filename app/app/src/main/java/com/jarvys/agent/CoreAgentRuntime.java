@@ -1735,6 +1735,8 @@ public final class CoreAgentRuntime {
       return CoreToolResult.failure("Scheduled task changed after this action was approved");
     }
     CoreTool classifiedTool = registry.tool(toolName);
+    if (classifiedTool.completionMode(arguments) != CoreTool.CompletionMode.SYNCHRONOUS)
+      return CoreToolResult.failure("Asynchronous submissions are unsupported for scheduled actions");
     CoreTool.EffectClass classification = classifiedTool.effectClass(arguments);
     CoreTool.PersistenceEffect persistence = classifiedTool.persistenceEffect(arguments);
     CoreToolResult result = registry.invoke(toolName, arguments, token, null, null, invocation);
@@ -1772,6 +1774,16 @@ public final class CoreAgentRuntime {
         ConnectorRegistry.Companion.get(app), null, true, ModuleRegistry.get(app));
     CoreTool tool = registry.tool(toolName);
     return tool == null ? null : tool.effectClass(jsonMap(arguments));
+  }
+
+  /** Exact current catalog metadata; missing capability stays unknown and cannot be claimed. */
+  public static CoreTool.CompletionMode scheduledTaskActionCompletionMode(
+      Context context, ScheduledTask task, String toolName, JSONObject arguments) {
+    Context app = context.getApplicationContext();
+    CoreToolRegistry registry = createScheduledTaskTools(context, task, "scheduled-task:" + task.getId(),
+        ConnectorRegistry.Companion.get(app), null, true, ModuleRegistry.get(app));
+    CoreTool tool = registry.tool(toolName);
+    return tool == null ? null : tool.completionMode(jsonMap(arguments));
   }
 
   /** Memory exclusion is argument-sensitive and must be captured before an approval claim. */
@@ -1890,6 +1902,8 @@ public final class CoreAgentRuntime {
     @Override public boolean isConnectorTool() { return delegate.isConnectorTool(); }
     @Override public boolean isMcpTool() { return delegate.isMcpTool(); }
 
+    @Override public CompletionMode completionMode(Map<String, Object> arguments) { return delegate.completionMode(arguments); }
+    @Override public boolean hasCompleteAsyncSubmissionCoverage() { return delegate.hasCompleteAsyncSubmissionCoverage(); }
     @Override public boolean hasCompleteEffectAdmissionCoverage() {
       return delegate.hasCompleteEffectAdmissionCoverage();
     }
@@ -1900,6 +1914,10 @@ public final class CoreAgentRuntime {
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
         ProgressListener progress, EffectInvocation invocation) {
+      if (delegate.completionMode(arguments) != CompletionMode.SYNCHRONOUS) {
+        CoreToolResult unsupported = CoreToolResult.failure("Asynchronous submissions are unsupported for scheduled actions");
+        return invocation == null ? unsupported : unsupported.withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.NOT_EXECUTED));
+      }
       if (delegate.unattendedAccess() == UnattendedAccess.WRITE && !approvedPendingAction) {
         if ((delegate instanceof CoreConnectorTool
                 && ((CoreConnectorTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)

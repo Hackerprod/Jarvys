@@ -13,7 +13,7 @@ import com.jarvys.agent.workspaces.WorkspaceIdentity
 import org.json.JSONObject
 
 enum class TaskPendingActionExecutionStatus {
-    EXECUTED, WAITING_VISIBLE_APP, INTERRUPTED_UNCERTAIN, STALE, NOT_PENDING, NOT_FOUND,
+    UNSUPPORTED, EXECUTED, WAITING_VISIBLE_APP, INTERRUPTED_UNCERTAIN, STALE, NOT_PENDING, NOT_FOUND,
 }
 
 /** Single-use approval boundary. CLAIMED is durable before any real tool can run. */
@@ -32,6 +32,12 @@ class TaskPendingActionExecution(
     ): TaskPendingActionExecutionStatus {
         val pending = store.get(actionId) ?: return TaskPendingActionExecutionStatus.NOT_FOUND
         if (pending.taskId != taskId) return TaskPendingActionExecutionStatus.NOT_FOUND
+        val metadataTask = currentTask(taskId)
+        val completionMode = metadataTask?.let { task ->
+            runCatching { executor.completionMode(context, task, pending) }.getOrNull()
+        }
+        if (completionMode != com.jarvys.agent.CoreTool.CompletionMode.SYNCHRONOUS)
+            return TaskPendingActionExecutionStatus.UNSUPPORTED
         val attemptId = java.util.UUID.randomUUID().toString()
         val classification = currentTask(taskId)?.let { task ->
             runCatching { executor.actionEffectClassification(context, task, pending) }.getOrNull()
@@ -300,7 +306,10 @@ class TaskPendingActionWorker(context: Context, parameters: WorkerParameters) : 
         if (status == TaskPendingActionExecutionStatus.STALE && pending?.taskId == taskId) {
             TaskStore(app).get(taskId)?.let { current -> TaskNotifier.pendingActionExpired(app, current, pending) }
         }
-        TaskScheduler.pendingActionResolved(app, taskId)
+        // Unsupported metadata did not consume or resolve the pending action. Worker success only
+        // acknowledges this delivery; do not alter task scheduling or claim command completion.
+        if (status != TaskPendingActionExecutionStatus.UNSUPPORTED)
+            TaskScheduler.pendingActionResolved(app, taskId)
         return Result.success()
     }
 

@@ -132,6 +132,8 @@ object ProactiveReadOnlyToolFactory {
 
 /** Connector output is also redacted before becoming a model tool-result turn. */
 private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : CoreTool {
+    override fun completionMode(arguments: Map<String, Any>) = delegate.completionMode(arguments)
+    override fun hasCompleteAsyncSubmissionCoverage() = delegate.hasCompleteAsyncSubmissionCoverage()
     override fun hasCompleteEffectAdmissionCoverage() = delegate.hasCompleteEffectAdmissionCoverage()
     override fun declaration(): ToolSpec = delegate.declaration()
     override fun canDelegate() = delegate.canDelegate()

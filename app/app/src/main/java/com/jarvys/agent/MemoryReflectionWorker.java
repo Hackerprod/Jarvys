@@ -90,6 +90,8 @@ public final class MemoryReflectionWorker {
             for (CoreTool original : memoryTools) guardedTools.add(new CoreTool() {
                 @Override public ToolSpec declaration() { return original.declaration(); }
                 @Override public boolean canDelegate() { return original.canDelegate(); }
+                @Override public CompletionMode completionMode(Map<String, Object> arguments) { return original.completionMode(arguments); }
+                @Override public boolean hasCompleteAsyncSubmissionCoverage() { return original.hasCompleteAsyncSubmissionCoverage(); }
                 @Override public boolean hasCompleteEffectAdmissionCoverage() {
                     return original.hasCompleteEffectAdmissionCoverage();
                 }

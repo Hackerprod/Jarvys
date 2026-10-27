@@ -324,6 +324,8 @@ fun interface TaskPendingActionExecutor {
     fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction,
                 invocation: com.jarvys.agent.EffectInvocation): com.jarvys.agent.CoreToolResult =
         throw IllegalStateException("Task action executor does not support durable effect admission")
+    /** Unknown metadata is not permission to claim a synchronous action. */
+    fun completionMode(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreTool.CompletionMode? = null
     fun hasCompleteEffectAdmissionCoverage(): Boolean = false
     fun effectClassification(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreTool.EffectClass? = null
     /** Compatibility bridge preserves unknown legacy metadata; memory-aware providers override this. */

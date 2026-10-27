@@ -1,7 +1,7 @@
 {
-  "source_commit": "e1f0a41108d8d3717782de625024a43ee6554ec9",
-  "source_tree": "51a542b3232356902a9cda24462caa5b2822082f",
-  "remote_parent": "9a0e736eae8f790d0a6072892eaf04f6b332a978",
+  "source_commit": "106cdccdab4d2990cb051bccffa3c78b47d9b794",
+  "source_tree": "4ac6af1477bf02069a56d1208385f0798e94ac61",
+  "remote_parent": "0fd50125e4557187aa4a0c38ed366d0d2cca88fe",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
@@ -52,6 +52,12 @@
       "restored_sha256": "49020cebc304845522decd150b60d758fdcd53449fcb61f9640ad0fbc785ee01"
     },
     {
+      "path": "app/app/src/test/java/com/jarvys/agent/ScheduledTaskBoundToolTest.java",
+      "remote_blob": "6956980e6304cf95d7f3dcda31d04b6c3fe02f92",
+      "remote_sha256": "82518834de027eb434311f6b48a7346dbb62356d616d9dcd5a8d01d70ad5728c",
+      "restored_sha256": "67206738da6aa40e8abb10e3a5bf5ba8a8e30d889dcd3f59f550aab3481636c3"
+    },
+    {
       "path": "app/app/src/test/java/com/jarvys/agent/SingleSessionMemoryRetentionTest.kt",
       "remote_blob": "605efb38ffee9c119b32841f57b0005e3a3367cb",
       "remote_sha256": "afd0b549d23e2ffbde6c4f2deac39b6e9d90ef90e0b0f59f5d86625509877151",
@@ -100,10 +106,28 @@
       "restored_sha256": "5366c9c0ff910233cffe4085bad6449ec6beb8dd98a50f7721e49c7fa72cf7a2"
     },
     {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt",
+      "remote_blob": "ed1e60d917e60f1a658ca66e123a224de65e3e96",
+      "remote_sha256": "4800f1c0c9be73476afd3645f04d1e0544df3729d6ebdb1ca5ca9f20607d39d2",
+      "restored_sha256": "d442bb5b8881d568fd6de9abdb914d3a4f43bb793b2ed6c696f6d6035a5fca93"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt",
+      "remote_blob": "f98596550c26916991c293fa93451699796a44bf",
+      "remote_sha256": "e662b28770649f1ecdda84531047489bd09113e844f95cfd612413655a3ea1df",
+      "restored_sha256": "38d430eab970f6ef7468a010a19fc7e4a443957627f0dcbe8892616a0afeca1c"
+    },
+    {
       "path": "app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt",
       "remote_blob": "4707ec5ea916d22d87aba3adef2f4ccb164694f8",
       "remote_sha256": "fbc101e0ca7e249fb2e3283e9e15bdda1a0bdc6a38140acd2122ea96aac6da3b",
       "restored_sha256": "cb7909e324b134ba66b56cbe32ad649f00820447174f9121e7fab18c6175ee4d"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt",
+      "remote_blob": "f5d6705aa964b0eac9d5455df4382d509430361f",
+      "remote_sha256": "cbdb231506c18611a2f2f6bdf8fb102ca50e9fe43b444b9b65275e87613f555f",
+      "restored_sha256": "92c8cde3e4bbed90e7178a3e0bec60e90e1427108576f9ac5923be2d6212ce17"
     },
     {
       "path": "app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java",
@@ -115,7 +139,19 @@
       "path": "app/app/src/test/java/com/jarvys/agent/tasks/ScheduledTaskProcessorTest.kt",
       "remote_blob": "479805d3425a333090e4e734da9975a5cd7a1773",
       "remote_sha256": "4cfa48f3cdfbd1db215e834b4d47391d319b99115b346083162aa642b508a4c5",
-      "restored_sha256": "643c9d4e9f911b2c9b19e9c41883cf9fa0c71a1e450bf153fc7e77e470756db9"
+      "restored_sha256": "f41c2af6776df26cf72062dee695d8565b910f26f81de841308258b711bdcbe7"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/tasks/TaskMemoryAdmissionTest.kt",
+      "remote_blob": "e802c47e9f586cdeb216fa16c6759a915696d043",
+      "remote_sha256": "a668b33d203d920026f64277520a572ad8e9332806c677ef915aa527ad514a62",
+      "restored_sha256": "bd72268722224601ea2f82770185c2847090900378ab0e261d4e30573deef167"
+    },
+    {
+      "path": "app/app/src/test/java/com/jarvys/agent/tasks/TaskPendingActionExecutionTest.kt",
+      "remote_blob": "86f1de3c2dbab3f861b0ad4f033c8a30d2fa5363",
+      "remote_sha256": "b79780b6d93d2bcaba61ab856967402b56b484d48db757fda64bc93377148677",
+      "restored_sha256": "d97e2a2ed968920422bbd88263ae614de5e555611f67395c69741fcfb93b625f"
     },
     {
       "path": "app/app/src/test/java/com/jarvys/agent/workspaces/CentralWorkspaceCoordinationToolTest.kt",
@@ -160,10 +196,10 @@
       "restored_sha256": "29b979acf9470e6ecf3697eb0fd2bdae02a47d032d421db8ed0dfb99d5d55904"
     }
   ],
-  "patch_sha256": "0516361b6584f3b4b3b43c582007fd21b683d6637a185434b6017b57b8b5706c",
+  "patch_sha256": "5a2e0b4c8a5ebc90e5621d7e1baa236bc2cd2d2590ea7bec52f2958b174304d3",
   "readme_source_sha256": "976a5fe918c00bcb1100f78ce5e246066949f8a2957498ba5544ef75a4e7373c",
-  "readme_backup_sha256": "3ed5cce988040cd6142f74c9c12e87b490ddbfd491b8fbf6cbb563ce6565f891",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — claim local Coding\n\nEste árbol **no es build-ready tal cual**. Los 26 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `e1f0a41108d8d3717782de625024a43ee6554ec9`. Validación focal independiente: 47 Full + 6 Play PASS,\n53 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "readme_backup_sha256": "70785e2bc1acfd4d91c2609bf640c09c787ab6eef0b497d99e5bdb3863ea5977",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — integración temprana Coding\n\nEste árbol **no es build-ready tal cual**. Los 32 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `106cdccdab4d2990cb051bccffa3c78b47d9b794`. Validación focal independiente: 85 Full + 85 Play PASS,\n170 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,\nparidad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",
