@@ -833,7 +833,7 @@ conservan su árbol y fecha propios; no se suman como una única suite final.
 | Terminal deseado y journal/proyección fallidos | Parcial | Store exacto/CAS y manager con backend sintético ejecutado una vez+fallo terminal recuperado probados; no power-loss ni recovery extranjero. |
 | Recovery de otro owner/callback perdido | Pendiente | Muerte acreditada, terminal exacto, conflictos y cero replay/señales. |
 | STOP/ASK/policy/cancel y fallos en cada frontera | Parcial | Regresiones focales verdes; falta matriz integrada completa de §§9–11. |
-| Memoria OFF/olvido/generación y fuente semántica | Parcial | Consumidores sembrados y supresión probados; falta cadena con productor real hasta lectura/narración. |
+| Memoria OFF/olvido/generación y fuente semántica | Parcial | Cadena natural Central→Crew→Coding→narración/fuente, OFF ABA y olvido probados; variantes de generación/integridad/recovery aún pendientes. |
 | Narración/compaction pending y CAS | Cerrado en pruebas focales | Nuevo job o cambio invalida snapshot; omisiones no acreditan éxito global. |
 | Cobertura de referencias externas retenidas | Pendiente | Roles de job/contexto Crew no equivalen por sí solos a hojas Central cubiertas. |
 | Mutantes pertinentes y opt-in final | Pendiente | Sólo tras cerrar los gates anteriores y juicio independiente; catálogo permanece desactivado. |
@@ -843,3 +843,7 @@ restringida pendientes no se consideran aprobadas por esta tabla.
 
 Adenda test-only: [tres oráculos Full](S6-coding-live-boundaries-test-results.json) posteriores al corte
 419, producción idéntica a `025c0e31`; son ejecuciones separadas, no una suite fresca combinada.
+
+Adenda semántica test-only: [tres casos Full naturales](S6-coding-natural-episode-test-results.json)
+cierran el oráculo productor→entrada existente→narrador/fuente sin fabricar raíces; producción
+`025c0e31` intacta. No equivalen a catálogo habilitado ni cobertura externa completa de compaction.

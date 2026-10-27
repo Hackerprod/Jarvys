@@ -1,3 +1,9 @@
+## Estado S6 — cadena semántica natural, 27-10-2026
+
+Tres casos Full nuevos PASS, ambos sabores compilados, producción intacta `025c0e31`: origen Central/Recorder→assignment→Crew→Coding real, roles terminales exactos, fuente después de narrar, OFF ABA sin backfill y olvido sin recreación. [Reporte](docs/continue/single-validate/S6-coding-natural-episode-report.md). No se agregan a los cortes anteriores como una suite fresca.
+
+Siguen recovery/scanner/Crew, integridad/retención y referencias externas de compaction, matriz integrada y opt-in. Último backup confirmado `c579cfab` reconstruye `d8c1e20f`; esta nueva prueba todavía no se afirma publicada. Sin cierre S6/S7/S8/Engram/APK.
+
 ## Actualización test-only S6 — tres fronteras live, 27-10-2026
 
 Tres tests Full ejecutados juntos PASS, compilación ambos sabores PASS, sobre producción intacta `025c0e31`. Añaden ACK de reserva perdido, terminal después de backend ejecutado una vez/fallo de persistencia y operación original aún en cola. [Manifiesto separado](docs/continue/single-validate/S6-coding-live-boundaries-test-results.json). No es una suite fresca de 422 casos.

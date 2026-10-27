@@ -1,7 +1,7 @@
 {
-  "source_commit": "d8c1e20f165d679475dd16569a1ed24e4ea80dde",
-  "source_tree": "6875e2ecf25a380dbb084193380170abbf7427bd",
-  "remote_parent": "634ccaad42f4ea23232dc1ad9d8a21ef01c99993",
+  "source_commit": "cb64b42849c792c9c90eee49545b6d6e1291a88d",
+  "source_tree": "7761b214263c1f3a1259aefdf1f8dbf694ad14fe",
+  "remote_parent": "c579cfaba417e27a4a2697c69083d8e96184fa5b",
   "fixtures": [
     {
       "path": "app/app/src/test/java/com/jarvys/agent/BotCatalogToolScopeTest.java",
@@ -215,9 +215,9 @@
     }
   ],
   "patch_sha256": "1738a839f8ce7735dab6b6964332797e9b63770187404030096d78845d8a04e6",
-  "readme_source_sha256": "8f74f5585ed9313f16de6ae76b6f67f4677287165190ac0760043faf029e57e7",
-  "readme_backup_sha256": "1785d2dd055793e41d4afaf73f1d88f48f1359f5d07cdcb2620fac45461c7545",
-  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — fronteras live Coding\n\nEste árbol **no es build-ready tal cual**. Los 35 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `d8c1e20f165d679475dd16569a1ed24e4ea80dde`. Producto sin cambios respecto a `025c0e31` (419 casos focales previos PASS).\nTres oráculos Full adicionales ejecutados juntos PASS, cero skips; compilación ambos sabores PASS.\nNo son 422 casos frescos combinados, suite global, cierre S6, Coding ASYNC, paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
+  "readme_source_sha256": "f169a7ed07441ff0aa3e496f4be126438fc344a50474ad501aa7c8dca40a2dcc",
+  "readme_backup_sha256": "8de8d34d6d660d88fa3e719cec954537879c7fe5b9a095c466642966aefebe61",
+  "readme_footer": "\n\n<!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->\n## Respaldo WIP recuperable — cadena semántica natural Coding\n\nEste árbol **no es build-ready tal cual**. Los 35 tests existentes modificados se conservan\nexactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver\na transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se\neliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.\n\nEn un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: verifica cada baseline,\nel patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,\ncommits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**\n\nSource: `cb64b42849c792c9c90eee49545b6d6e1291a88d`. Producto sin cambios respecto a `025c0e31` (419 casos focales previos PASS).\nFronteras Full (3 casos) y cadena semántica natural Full (3 casos) PASS en grupos separados, cero skips.\nCompilación ambos sabores PASS; no suite fresca combinada, cierre S6, Coding ASYNC, paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.\n<!-- JARVYS_SAFE_BACKUP_NOTICE_END -->\n",
   "backup_only_paths": [
     "docs/continue/backup/manifest.json",
     "docs/continue/backup/restore-s6-fixture.patch",
