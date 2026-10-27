@@ -293,7 +293,7 @@ final class PersonalMemoryTools {
             put(entry, "facts", row.getFactsJson());
             if ("source".equals(expand)) {
               token.throwIfCancelled();
-              put(entry, "source", sourceOf(row, perSource, transcriptStore));
+              put(entry, "source", sourceOf(hit.getId(), row, perSource, transcriptStore));
             }
             evidence.put(entry);
           }
@@ -305,7 +305,11 @@ final class PersonalMemoryTools {
     }
 
     /** Bounded extract of the stored tool result behind one evidence row; absent for evidence that is not a tool call. */
-    private Object sourceOf(PersonalMemoryEvidenceView row, int maxChars, MainChatTranscriptStore transcriptStore) {
+    private Object sourceOf(String entryId, PersonalMemoryEvidenceView row, int maxChars, MainChatTranscriptStore transcriptStore) {
+      if ("coding_job_submission".equals(row.getRefKind()) || "coding_job_execution".equals(row.getRefKind())) {
+        // Resolve through the live exact episode/job link, never a path, response body, or latest call.
+        return bridge.personalAgentCodingJobSourceSync(entryId, row.getRefId(), maxChars);
+      }
       boolean tool = "tool_call".equals(row.getRefKind()) || "tool_result".equals(row.getRefKind());
       if (!tool || row.getRefConversationId() == null) return JSONObject.NULL;
       // Only this conversation's ledger is readable from here.

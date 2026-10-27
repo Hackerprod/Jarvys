@@ -23,6 +23,7 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
             sql.execSQL("INSERT OR IGNORE INTO coding_job_bindings(job_id,submission_id,technical_generation,binding_json) VALUES(?,?,?,?)",
                 arrayOf(binding.jobId, binding.submissionId, generation, encoded))
             requireBinding(binding)
+            CodingJobSemanticRepository(database).capture(binding)
             binding
         }
 
@@ -78,6 +79,7 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
         }
         sql.execSQL("INSERT INTO coding_job_observations(job_id,revision,observation_kind,evidence_json,payload_sha256,payload_bytes) VALUES(?,?,?,?,?,?)",
             arrayOf(record.binding.jobId, record.revision, kind.name, encoded, digest, payload))
+        CodingJobSemanticRepository(database).recordTechnical(record, kind)
     }
 
     private fun hasKind(jobId: String, kind: Kind): Boolean =

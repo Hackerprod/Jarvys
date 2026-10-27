@@ -782,3 +782,34 @@ replay; dos managers/owners vivos y muertos; quiesce con pins; terminal durable 
 OFF/forget/generación no resucitan semántica. Además deben cerrarse receipt administrativo del
 Registry, exclusión scheduled/pending y wrappers, narración y las pruebas de §§9–11. Subpartes
 verdes no autorizan por sí solas ASYNC ni un PASS final S6.
+
+### 15.6 Destino semántico existente y jobs pendientes
+
+La raíz histórica de assignment no es una causa exclusiva ni sustituye el contexto plural Crew
+(incluidos sus inputs no resueltos/PARTIAL). El destino semántico, cuando exista, se captura como una
+entrada **ya existente** y activa mediante el tuple exacto de raíz: conversación, batch, call y run,
+fuente de la entrada y su revisión/fingerprint. Una raíz ausente, retirada, ambigua o de otra generación
+no autoriza fabricar un episodio, adoptar el último episodio ni reconstruir memoria olvidada.
+
+El ticket de memoria se captura en la misma invocación. `enabledAtCapture()` sólo describe esa captura;
+no es permiso actual. El ticket no se serializa en el journal ni se reconstruye en recovery. La auditoría
+técnica y sus cierres siguen siendo independientes del gate de memoria.
+
+El link técnico de destino conserva por separado admisión y terminal confirmado. Mientras el job esté
+pendiente, ese link excluye la entrada de la cola de narración y también de su CAS de commit: un job
+nuevo admitido mientras el LLM narra invalida el commit antiguo. No basta filtrar sólo la consulta de
+la cola. No se agregan roles de memoria durante submission/preparación.
+
+Una vez confirmado el terminal técnico, se libera el bloqueo pending aunque el ticket ya no sea válido.
+El enlace semántico es un paso separado: gate(ticket) → fence del destino → transacción, después de la
+proyección técnica, nunca anchor → gate. Sólo el ticket vivo y la misma entrada/revisión/fingerprint
+permiten insertar los roles de submission (sin resultado de ejecución) y execution terminal. Un fallo
+semántico no modifica el resultado técnico del proceso. `SUPPRESSED` es persistente: activar memoria más
+tarde, reiniciar o leer el journal no habilita backfill ni restaura un ticket.
+
+El lector normalizado resuelve cada referencia por entrada/job/generación/revisión exactos. Transporta
+metadatos de evidencia, no comandos privados, argumentos ni logs. La integración actual debe declarar
+sus límites: una raíz Central no acredita por sí sola la cobertura de todos los inputs Crew para un
+digest; esos episodios conservan cobertura estructural pero `episodesComplete=false` hasta resolver esa
+cobertura. La elegibilidad previa del narrador que exige evidencia OK no se transforma en una narración
+de éxito para jobs error-only. Estos límites no constituyen cierre de S6 ni habilitación ASYNC.

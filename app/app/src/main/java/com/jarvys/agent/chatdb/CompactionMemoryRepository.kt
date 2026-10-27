@@ -87,6 +87,11 @@ internal class CompactionMemoryRepository(private val database: JarvysChatDataba
                         if (!inBatch || (evidence.outcome !in setOf("intent", "started") && !inResult)) outside = true
                     }
                     "crew_result" -> if (canonical.none { it.source.kind == ConversationTurn.Source.Kind.MESSAGE && it.source.sourceId == input.sourceMessageId }) outside = true
+                    "coding_job_submission", "coding_job_execution" -> {
+                        // Root lineage alone cannot cover the job's plural Crew input context.
+                        // Keep this episode structural until exact source leaves can prove coverage.
+                        episodesComplete = false
+                    }
                     "connector_event" -> Unit // Attached metadata, not another execution.
                     else -> episodesComplete = false
                 }

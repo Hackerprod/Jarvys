@@ -22,7 +22,9 @@ El writer del journal Coding ya está extraído e integrado en `persist`, conser
 
 El claim local del worker Coding evita doble dispatch/finalización cuando el executor ejecuta y luego lanza excepción. La herramienta conserva jobId y estado factual en error de transporte separado, sin command-OK. **47 Full + 6 Play PASS**, ambos compilados, cero skips. Aún sin liveness durable, schema3/Room ni ASYNC. [Resultados y límites](docs/continue/single-validate/S6-coding-worker-claim-report.md).
 
-El respaldo del writer IO está confirmado en `continue/s6-cloud` (`9a0e736e`, fuente `adb2e835`); el claim posterior aún no se afirma publicado. Conserva pruebas existentes restringidas como en remoto y un patch mínimo limpio permite reconstruir la fuente validada exactamente. El árbol de respaldo requiere ejecutar sus instrucciones de restauración antes de compilar; no subir directamente los archivos restaurados sin autorización de publicación. Los checkpoints no sobrescriben historial. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
+El respaldo de la infraestructura temprana está confirmado en `continue/s6-cloud` (`c5ec6e92`, fuente `106cdccd`, 170 casos focales PASS); el nuevo productor descrito a continuación aún no se afirma publicado. Conserva pruebas existentes restringidas como en remoto y un patch mínimo limpio permite reconstruir la fuente validada exactamente. El árbol de respaldo requiere ejecutar sus instrucciones de restauración antes de compilar; no subir directamente los archivos restaurados sin autorización de publicación. Los checkpoints no sobrescriben historial. [Manifiesto de validación](docs/continue/single-validate/S6-validation-manifest.md).
+
+El productor Coding interno ya recorre pin→Room→journal→aceptación→worker y proyecta el terminal; consumidores semánticos usan destino exacto y tickets, con Room 8 aditivo. **190 Full + 145 Play PASS** en composición por clase (Registry 8/8 reejecutado tras un fix sólo del test), más cinco endpoints de liveness entre JVM; compilación ambos sabores. No es suite global ni recovery validado: siguen pendientes ACK interrumpido, reparación/recovery, cadena semántica completa y compaction. **Catálogo ASYNC aún desactivado**, sin cierre S6 ni APK. [Reporte y límites](docs/continue/single-validate/S6-coding-producer-report.md).
 
 ---
 
@@ -446,9 +448,9 @@ Jarvys is an independent project. Names and logos of connected services identify
 
 
 <!-- JARVYS_SAFE_BACKUP_NOTICE_BEGIN -->
-## Respaldo WIP recuperable — integración temprana Coding
+## Respaldo WIP recuperable — productor interno Coding
 
-Este árbol **no es build-ready tal cual**. Los 32 tests existentes modificados se conservan
+Este árbol **no es build-ready tal cual**. Los 34 tests existentes modificados se conservan
 exactamente como en remoto; un patch de contexto cero contiene sólo cambios revisados, sin volver
 a transmitir sus fixtures históricos. Los tests nuevos limpios se incluyen completos. No se
 eliminan asertos ni se cambian valores del source. Continue.md permanece idéntico al remoto.
@@ -457,7 +459,7 @@ En un checkout limpio ejecuta `python3 docs/continue/backup/restore-s6.py`: veri
 el patch y README, restaura el árbol source exacto y deja cambios staged. No ejecuta red, builds,
 commits ni servicios. **No publiques archivos restaurados con fixtures restringidos sin autorización.**
 
-Source: `106cdccdab4d2990cb051bccffa3c78b47d9b794`. Validación focal independiente: 85 Full + 85 Play PASS,
-170 ejecuciones focales sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
+Source: `612a8b8a4860b606cb1db48df8aebd14973ad938`. Validación focal independiente: 190 Full + 145 Play PASS (composición por clase),
+335 casos focales reconciliados sin fallos/errores/skips; no suite global, cierre S6, Coding ASYNC,
 paridad Engram ni APK. Integridad: `docs/continue/backup/manifest.json`.
 <!-- JARVYS_SAFE_BACKUP_NOTICE_END -->

@@ -59,9 +59,11 @@ data class PersonalMemoryEvidenceView(
     val runId: String? = null,
     val processId: String? = null,
 )
+data class CodingJobNarrationState(val jobId: String, val status: String, val admitted: Boolean, val terminalConfirmed: Boolean, val revision: Long)
 data class EpisodeNarrationInput(val id: String, val sourceMessageId: String?, val title: String?,
     val eventAt: Long?, val evidence: List<PersonalMemoryEvidenceView>, val finalMessageId: String? = null,
-    val text: String = "", val sourceFingerprint: String? = null, val finalFingerprint: String? = null)
+    val text: String = "", val sourceFingerprint: String? = null, val finalFingerprint: String? = null,
+    val codingJobs: List<CodingJobNarrationState> = emptyList())
 data class EpisodeReference(val id: String, val title: String?, val eventAt: Long?, val narration: String)
 
 /** Structured filters of `memory_search`; every present field narrows the result, and all of them work without a query. */
@@ -383,12 +385,12 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 val scope = ids?.joinToString(",", " AND id IN (", ")") { "?" }.orEmpty()
                 val arguments = arrayOf(conversationId, *(ids?.toTypedArray() ?: emptyArray()))
                 return sql.query(
-                    "SELECT id,text,layer,kind,title,topic_key,event_at,narration,updated_at FROM memory_entries WHERE kind='episode' AND source_conversation_id=? AND deleted_at IS NULL AND narration IN ('none','pending','failed') AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.entry_id=memory_entries.id AND e.ref_kind IN ('tool_call','crew_result') AND e.outcome='ok') AND NOT EXISTS(SELECT 1 FROM memory_evidence active WHERE active.entry_id=memory_entries.id AND active.outcome IN ('intent','started'))" + scope + " ORDER BY event_at,id", arguments,
+                    "SELECT id,text,layer,kind,title,topic_key,event_at,narration,updated_at FROM memory_entries WHERE kind='episode' AND source_conversation_id=? AND deleted_at IS NULL AND narration IN ('none','pending','failed') AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.entry_id=memory_entries.id AND e.ref_kind IN ('tool_call','crew_result','coding_job_execution') AND e.outcome='ok') AND NOT EXISTS(SELECT 1 FROM memory_evidence active WHERE active.entry_id=memory_entries.id AND active.outcome IN ('intent','started'))" + scope + " ORDER BY event_at,id", arguments,
                 ).use { c -> buildList {
                     while (c.moveToNext()) add(PersonalMemoryHit(c.getString(0), c.getString(1), c.getString(2), 0.0,
                         c.getString(3), c.getStringOrNull(4), c.getStringOrNull(5), if (c.isNull(6)) null else c.getLong(6),
                         c.getString(7), c.getLong(8)))
-                } }
+                } }.filter { hit -> readCodingJobNarrationState(hit.id).none { it.admitted && !it.terminalConfirmed } }
             }
             if (selected == null) read(null)
             else selected.chunked(400).flatMap(::read)
@@ -411,7 +413,18 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
             .use { if (it.moveToFirst()) it.getStringOrNull(0) else null }
         return head.copy(evidence = readEpisodeEvidence(id), finalMessageId = finalMessageId,
             sourceFingerprint = episodeMessageFingerprint(sourceConversation, head.sourceMessageId),
-            finalFingerprint = episodeMessageFingerprint(sourceConversation, finalMessageId))
+            finalFingerprint = episodeMessageFingerprint(sourceConversation, finalMessageId), codingJobs = readCodingJobNarrationState(id))
+    }
+
+    private fun readCodingJobNarrationState(id: String): List<CodingJobNarrationState> {
+        val rows = sql.query("SELECT l.job_id,l.status,l.admitted,l.terminal_confirmed,COALESCE((SELECT MAX(o.revision) FROM coding_job_observations o WHERE o.job_id=l.job_id),0) " +
+            "FROM coding_job_semantic_links l WHERE l.target_entry_id=? ORDER BY l.job_id", arrayOf(id)).use { c ->
+            buildList {
+                while(c.moveToNext()) add(CodingJobNarrationState(c.getString(0),c.getString(1),c.getInt(2)!=0,c.getInt(3)!=0,c.getLong(4)))
+            }
+        }
+        val links = CodingJobSemanticRepository(database)
+        return java.util.Collections.unmodifiableList(rows.filter { links.isCurrentTarget(id, it.jobId) })
     }
 
     private fun episodeMessageFingerprint(conversationId: String?, messageId: String?): String? {
@@ -441,7 +454,8 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         state: String, title: String?, text: String?): Boolean {
         require(state in setOf("failed", "done"))
         return database.withChatWriteTransaction {
-            if (expected.id != id || readEpisodeNarrationInput(id) != expected) return@withChatWriteTransaction false
+            if (expected.id != id || expected.codingJobs.any { it.admitted && !it.terminalConfirmed } ||
+                readEpisodeNarrationInput(id) != expected) return@withChatWriteTransaction false
             sql.execSQL("UPDATE memory_entries SET narration=?,title=COALESCE(?,title),text=COALESCE(?,text),updated_at=? WHERE id=?",
                 arrayOf(state, title?.takeIf(String::isNotBlank), text?.takeIf(String::isNotBlank), System.currentTimeMillis(), id))
             true

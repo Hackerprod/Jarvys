@@ -1,3 +1,11 @@
+## Estado actual S6 — productor Coding interno, 27-10-2026
+
+Checkpoint WIP: Full/Play compilan; 190 Full + 145 Play PASS en composición por clase, sin skips, y cinco endpoints de liveness entre JVM. Registry 8/8 se repitió tras corregir sólo el lector de transcript del fixture; no se afirma una nueva ejecución de los 335 casos. [Reporte y límites](docs/continue/single-validate/S6-coding-producer-report.md).
+
+**Antes de habilitar ASYNC:** cerrar ACK interrumpido antes de bind con terminal Room confirmado, reparación/recovery de schema 3, cadena real de fuente semántica retenida y guards/cobertura de compaction. El catálogo conserva cobertura false y no hay APK ni cierre S6/S7/S8/paridad Engram. `linux_status` y publicación completa de fixtures restringidos siguen sin decisión nueva.
+
+Último respaldo confirmado: `c5ec6e92` reconstruye fuente temprana `106cdccd` (170 focales); este checkpoint posterior aún no se afirma publicado. Mantener método seguro de restauración exacta sin retransmitir fixtures restringidos. Los apartados siguientes son checkpoints históricos con los pendientes que tenían entonces.
+
 ## Checkpoint S6 — claim local Coding, 27-10-2026
 
 Claim único antes del worker y finalización one-shot; fallo posterior del executor conserva jobId y estado factual sin afirmar command-OK. Full47 + Play6 PASS, ambos flavors compilados y revisión independiente conforme. [Reporte](docs/continue/single-validate/S6-coding-worker-claim-report.md). Pendientes owner lease durable, schema3/reserva Room y admisión antes de preparación; sin ASYNC ni cierre S6.

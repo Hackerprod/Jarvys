@@ -100,8 +100,9 @@ import kotlin.coroutines.ContinuationInterceptor
         ConnectorStateEvent::class,
         CodingJobBindingRow::class,
         CodingJobObservationRow::class,
+        CodingJobSemanticLinkRow::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
@@ -175,13 +176,14 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "connector_state_events",
             "coding_job_bindings",
             "coding_job_observations",
+            "coding_job_semantic_links",
         )
     }
 }
 
 /** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 7
+    private const val DATABASE_VERSION = 8
     private const val DATABASE_NAME = "jarvys-chat-v3.db"
     private const val DATABASE_DIRECTORY = "jarvys"
     private const val BUSY_TIMEOUT_MILLIS = 5_000

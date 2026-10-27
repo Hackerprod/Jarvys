@@ -28,6 +28,8 @@ public final class MemoryWriteGate {
         private final MemoryWriteGate owner;
         private final long epoch;
         private final boolean enabled;
+        /** Observed immutable policy metadata, not current write permission. */
+        public boolean enabledAtCapture() { return enabled; }
         private Ticket(MemoryWriteGate owner, long epoch, boolean enabled) {
             this.owner = owner;
             this.epoch = epoch;

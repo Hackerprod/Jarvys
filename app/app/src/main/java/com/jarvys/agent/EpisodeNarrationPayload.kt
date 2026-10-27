@@ -51,12 +51,28 @@ internal object EpisodeNarrationPayload {
     private fun redactCredentialText(value: String): String =
         headerCredential.replace(quotedCredential.replace(value, "\"credential\":\"[secret redacted]\""), "[secret redacted]")
 
-    fun render(request: String, finalResponse: String, eventAt: Long?, evidence: JSONArray, budget: Int): String {
+    fun render(request: String, finalResponse: String, eventAt: Long?, evidence: JSONArray, budget: Int,
+               suppressedCodingJobs: Int = 0): String {
         require(budget > 0)
+        require(suppressedCodingJobs >= 0)
         val body = JSONObject().put("request", request).put("final_response", finalResponse)
             .put("event_at_ms", eventAt ?: JSONObject.NULL).put("evidence", evidence)
             .put("evidence_rows", evidence.length()).put("evidence_aggregated", false)
             .put("source_coverage", "Bounded source excerpts, not proof of an affected-item total unless every relevant source supports it.")
+        val codingJobs = linkedSetOf<String>()
+        for (index in 0 until evidence.length()) {
+            val row = evidence.getJSONObject(index)
+            if (row.optString("kind") in setOf("coding_job_submission", "coding_job_execution")) {
+                val id = row.optString("ref_id").takeIf(String::isNotBlank)
+                    ?: row.optJSONObject("facts")?.optString("job_id")?.takeIf(String::isNotBlank)
+                    ?: throw IllegalStateException("coding_evidence_job_identity_missing")
+                codingJobs += id
+            }
+        }
+        if (codingJobs.isNotEmpty()) body.put("coding_job_count", codingJobs.size)
+            .put("coding_goal_verified", false)
+        if (suppressedCodingJobs > 0) body.put("coding_jobs_suppressed", suppressedCodingJobs)
+            .put("coding_coverage", "Job evidence omitted; visible evidence cannot establish overall goal completion.")
         fun fits() = body.toString().length <= budget
         if (fits()) return body.toString()
         for (index in 0 until evidence.length()) evidence.getJSONObject(index).remove("source")
@@ -64,23 +80,41 @@ internal object EpisodeNarrationPayload {
         if (fits()) return body.toString()
 
         val groups = linkedMapOf<List<String>, JSONObject>()
+        val codingGroupJobs = linkedMapOf<List<String>, MutableSet<String>>()
         for (index in 0 until evidence.length()) {
             val row = evidence.getJSONObject(index)
             val facts = row.optJSONObject("facts")
             val keys = listOf("kind", "tool", "connector", "outcome", "authorization")
             val identity = keys.map { row.optString(it) } +
-                listOf(facts?.optString("reported_status").orEmpty(), facts?.optString("result_verified").orEmpty())
+                listOf(facts?.optString("reported_status").orEmpty(), facts?.optString("result_verified").orEmpty(),
+                    facts?.optString("input_coverage").orEmpty())
+            val coding = row.optString("kind") in setOf("coding_job_submission", "coding_job_execution")
             val group = groups.getOrPut(identity) {
                 JSONObject().apply {
                     keys.forEach { put(it, row.opt(it) ?: JSONObject.NULL) }
                     put("evidence_count", 0)
                     put("first_at_ms", row.optLong("at_ms"))
                     put("last_at_ms", row.optLong("at_ms"))
+                    if (coding) {
+                        put("completion_semantics", if (row.optString("kind") == "coding_job_submission")
+                            "async_submission" else "durable_process_terminal")
+                        put("goal_verified", false)
+                        put("historical_root_is_exclusive_cause", false)
+                        put("input_coverage", facts?.optString("input_coverage")?.takeIf(String::isNotBlank) ?: "unknown")
+                    }
                     if (row.optString("kind") == "crew_result") {
                         put("result_verified", false)
                         put("reported_status", facts?.opt("reported_status") ?: JSONObject.NULL)
                     }
                 }
+            }
+            if (coding) {
+                val jobId = row.optString("ref_id").takeIf(String::isNotBlank)
+                    ?: facts?.optString("job_id")?.takeIf(String::isNotBlank)
+                    ?: throw IllegalStateException("coding_evidence_job_identity_missing")
+                val jobs = codingGroupJobs.getOrPut(identity) { linkedSetOf() }
+                jobs += jobId
+                group.put("job_count", jobs.size)
             }
             group.put("evidence_count", group.getLong("evidence_count") + 1)
             group.put("first_at_ms", minOf(group.getLong("first_at_ms"), row.optLong("at_ms")))

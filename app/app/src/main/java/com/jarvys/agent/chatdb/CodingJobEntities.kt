@@ -26,3 +26,19 @@ data class CodingJobObservationRow(
     val payload_sha256: String,
     val payload_bytes: ByteArray,
 )
+
+/** Persisted eligibility metadata only: no serialized memory ticket or reconstructed permission. */
+@Entity(tableName = "coding_job_semantic_links",
+    foreignKeys = [ForeignKey(entity = CodingJobBindingRow::class, parentColumns = ["job_id"],
+        childColumns = ["job_id"], onDelete = ForeignKey.NO_ACTION)],
+    indices = [Index(value = ["target_entry_id"])])
+data class CodingJobSemanticLinkRow(
+    @PrimaryKey val job_id: String,
+    val target_entry_id: String?,
+    val target_fingerprint: String?,
+    val status: String,
+    val admitted: Boolean,
+    val terminal_confirmed: Boolean,
+    val submission_ordinal: Long?,
+    val execution_ordinal: Long?,
+)

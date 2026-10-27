@@ -1,5 +1,11 @@
 package com.jarvys.agent.flavor
 
+import com.jarvys.agent.EffectInvocation
+import com.jarvys.agent.CoreTool.ProgressListener
+import com.jarvys.agent.MemoryWriteGate
+import com.jarvys.agent.MemoryWritePolicy
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.coding.CodingJobEvidence
 import com.jarvys.agent.R
 import com.jarvys.agent.connectors.ConnectorUiText
 import com.jarvys.agent.CancellationToken
@@ -34,12 +40,18 @@ class CodingExecutionTools internal constructor(
     private val owner: (CancellationToken) -> String,
     private val available: (String, CancellationToken) -> Boolean,
     private val completed: (CancellationToken, CodingJobManager.Snapshot) -> Unit = { _, _ -> },
+    private val technical: TechnicalContext? = null,
 ) {
+    internal data class TechnicalContext(val bridge: ChatDatabaseBridge, val memoryPolicy: MemoryWritePolicy)
     private val responseBudget = budget.toolResultsPerTurnChars.coerceAtLeast(1)
     fun create(selected: Collection<String>): List<CoreTool> = NAMES.filter(selected::contains).map(::Tool)
 
     private inner class Tool(private val name: String) : CoreTool {
         override fun canDelegate() = false
+        override fun completionMode(arguments: Map<String, Any>) =
+            if (name == EXEC && technical != null) CoreTool.CompletionMode.ASYNC_JOB else CoreTool.CompletionMode.SYNCHRONOUS
+        // Deliberately closed until recovery/receipt/liveness gates are independently validated.
+        override fun hasCompleteAsyncSubmissionCoverage() = false
         // Status is inspection only; jobs can wait/cancel and exec owns the project writer lease.
         override fun executionMode() = if (name == STATUS) CoreTool.ExecutionMode.PARALLEL
             else CoreTool.ExecutionMode.SEQUENTIAL
@@ -71,11 +83,21 @@ class CodingExecutionTools internal constructor(
             return ToolSpec(name, "coding_project_runtime", description, "project", ToolSpec.Status.IMPLEMENTED,
                 emptyMap(), required, mapOf("type" to "object", "properties" to properties, "required" to required, "additionalProperties" to false))
         }
-        override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult = try {
+        override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
+            executeInternal(arguments, token, null)
+        override fun execute(arguments: Map<String, Any>, token: CancellationToken, progress: ProgressListener?,
+            invocation: EffectInvocation?): CoreToolResult =
+            if (name != EXEC || technical == null) super<CoreTool>.execute(arguments, token, progress, invocation)
+            else executeInternal(arguments, token, invocation)
+        private fun executeInternal(arguments: Map<String, Any>, token: CancellationToken, invocation: EffectInvocation?): CoreToolResult = try {
+            if (name == EXEC && technical != null) check(invocation?.crewSource() != null) {
+                "Project execution requires its exact async invocation source"
+            }
+            val ticket = if (name == EXEC) technical?.memoryPolicy?.captureTicket() else null
             token.throwIfCancelled()
             check(available(name, token)) { "This capability is no longer selected or this project bot is no longer interactive. Nothing was launched." }
             scope.validate()
-            when (name) { EXEC -> executeCommand(arguments, token); JOBS -> jobOperation(arguments, token); else -> environmentStatus(arguments) }
+            when (name) { EXEC -> executeCommand(arguments, token, invocation, ticket); JOBS -> jobOperation(arguments, token); else -> environmentStatus(arguments) }
         } catch (uncertain: CodingJobManager.EnqueueOutcomeUncertain) {
             CoreToolResult.failure(JSONObject().put("job_id", uncertain.jobId)
                 .put("submission_transport", "uncertain").put("execution_state", uncertain.observedState.name)
@@ -100,7 +122,8 @@ class CodingExecutionTools internal constructor(
             .put("notice", "PRoot is not a security sandbox; the prepared system rootfs is shared and writable. No command was run by this status check; tool versions were not executed.").toString())
     }
 
-    private fun executeCommand(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+    private fun executeCommand(arguments: Map<String, Any>, token: CancellationToken,
+        invocation: EffectInvocation?, ticket: MemoryWriteGate.Ticket?): CoreToolResult {
         require(arguments.keys.none { it in setOf("stdin", "tty", "pty", "interactive") }) {
             "Only non-interactive jobs are supported: stdin is closed and PTY/interactive input is unavailable."
         }
@@ -177,7 +200,15 @@ class CodingExecutionTools internal constructor(
             validate() // Scope/status/toolchain checks stay outside the short policy/STOP admission lock.
             autonomy.admitProject(authorization, approvedAsk, token, ::validatePolicy)
         }
-        val result = jobs.start(scope, owner(token), command, cwd, version, timeout, token, ::admitLaunch) { completed(token, it) }
+        val result = if (technical == null) {
+            jobs.start(scope, owner(token), command, cwd, version, timeout, token, ::admitLaunch) { completed(token, it) }
+        } else {
+            val captured = CodingJobEvidence.AuthorizationSnapshot(
+                if (authorization.policy == AutonomyPolicy.ALLOW) CodingJobEvidence.Authorization.ALLOW else CodingJobEvidence.Authorization.ASK_APPROVED,
+                "coding", "project_exec", authorization.revision.toString(), "project_policy_snapshot")
+            jobs.startInstrumented(scope, owner(token), command, cwd, version, timeout, token,
+                requireNotNull(invocation), technical.bridge, captured, requireNotNull(ticket), ::admitLaunch) { completed(token, it) }
+        }
         return CoreToolResult.success(snapshotJson(result).put("message", "Job accepted. Read or wait with project_jobs; do not report completion while it is pending.").toString())
     }
 

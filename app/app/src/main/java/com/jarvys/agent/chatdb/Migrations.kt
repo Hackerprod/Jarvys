@@ -65,8 +65,15 @@ internal object Migrations {
             execute("CREATE UNIQUE INDEX IF NOT EXISTS index_coding_job_bindings_submission_id ON coding_job_bindings(submission_id)")
             execute("CREATE TABLE IF NOT EXISTS coding_job_observations (job_id TEXT NOT NULL, revision INTEGER NOT NULL, observation_kind TEXT NOT NULL, evidence_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, payload_bytes BLOB NOT NULL, PRIMARY KEY(job_id,revision), FOREIGN KEY(job_id) REFERENCES coding_job_bindings(job_id) ON UPDATE NO ACTION ON DELETE NO ACTION)")
             execute("CREATE INDEX IF NOT EXISTS index_coding_job_observations_job_id ON coding_job_observations(job_id)")
+
         }
     }
-    val ALL: Array<Migration> = arrayOf(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+    private val MIGRATION_7_8 = object : SqlMigration(7, 8) {
+        override fun migrateSql(execute: (String) -> Unit) {
+            execute("CREATE TABLE IF NOT EXISTS coding_job_semantic_links (job_id TEXT NOT NULL, target_entry_id TEXT, target_fingerprint TEXT, status TEXT NOT NULL, admitted INTEGER NOT NULL, terminal_confirmed INTEGER NOT NULL, submission_ordinal INTEGER, execution_ordinal INTEGER, PRIMARY KEY(job_id), FOREIGN KEY(job_id) REFERENCES coding_job_bindings(job_id) ON UPDATE NO ACTION ON DELETE NO ACTION)")
+            execute("CREATE INDEX IF NOT EXISTS index_coding_job_semantic_links_target_entry_id ON coding_job_semantic_links(target_entry_id)")
+        }
+    }
+    val ALL: Array<Migration> = arrayOf(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
 }
 

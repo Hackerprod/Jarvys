@@ -16,6 +16,7 @@ public final class CodingJobJournalStore {
     private static final Map<String,CodingJobJournalStore> STORES = new ConcurrentHashMap<>();
     private final File root;
     private final CodingJobJournalWriter writer;
+    private final Map<String,Object> directoryAnchors = new ConcurrentHashMap<>();
     private final Map<String,Head> heads = new ConcurrentHashMap<>();
     private CodingJobJournalStore(File files) throws IOException {
         root = new StorageGeneration(files).directory("crew-context").getAbsoluteFile();
@@ -83,6 +84,7 @@ public final class CodingJobJournalStore {
             CodingJobSnapshot snapshot) throws IOException {
         Objects.requireNonNull(reservation).requireJournalOwner(this);
         if (!reservation.binding().equals(next.binding)) throw new IllegalArgumentException("Journal binding changed");
+        reservation.submission().requireOwnerLive();
         snapshot.requireMatches(next);
         byte[] bytes = CodingJobJournalCodec.encode(snapshot,next);
         Head head = heads.computeIfAbsent(next.binding.jobId,key -> new Head(reservation));
@@ -103,6 +105,13 @@ public final class CodingJobJournalStore {
             }
             File directory = new File(root,ProjectScope.sha256(snapshot.conversationId.getBytes(StandardCharsets.UTF_8))+"/coding-jobs");
             File target = new File(directory,next.binding.jobId+".json"); verify(target);
+            requireExistingAnchor(root); requireExistingAnchor(directory.getParentFile());
+            requireExistingAnchor(new File(snapshot.projectRoot));
+            if (head.confirmed != null) {
+                requireExistingAnchor(directory);
+                if (!Arrays.equals(readBounded(target,head.confirmed.payload.length),head.confirmed.payload))
+                    throw new IllegalStateException("Confirmed journal bytes changed before revision advance");
+            }
             if (head.confirmed == null && target.exists()) throw new IllegalStateException("An existing journal requires verified recovery, not overwrite");
             head.pending = new Pending(reservation,next,snapshot,bytes,target);
             return persistPending(head);
@@ -111,12 +120,16 @@ public final class CodingJobJournalStore {
     /** Exact private-candidate durability repair only. It never resumes enqueue, preparation or execution. */
     public Commit repairPending(CodingJobReservation reservation) throws IOException {
         reservation.requireJournalOwner(this);
+        reservation.submission().requireOwnerLive();
         Head head = heads.get(reservation.binding().jobId);
         if (head == null || head.reservation != reservation) throw new IllegalStateException("No matching local journal head");
         synchronized (head) {
             Pending pending = head.pending;
             if (pending == null) throw new IllegalStateException("No exact pending candidate");
             verify(pending.target);
+            requireExistingAnchor(root);requireExistingAnchor(pending.target.getParentFile().getParentFile());
+            requireExistingAnchor(new File(pending.snapshot.projectRoot));
+            if (directoryAnchors.containsKey(pending.target.getParentFile().getPath()))requireExistingAnchor(pending.target.getParentFile());
             if (pending.target.exists()) {
                 byte[] disk = readBounded(pending.target,Math.max(pending.payload.length,head.confirmed==null?0:head.confirmed.payload.length));
                 if (!Arrays.equals(disk,pending.payload) && (head.confirmed==null || !Arrays.equals(disk,head.confirmed.payload)))
@@ -130,18 +143,29 @@ public final class CodingJobJournalStore {
     private Commit persistPending(Head head) throws IOException {
         Pending pending = head.pending;
         try {
+            requireExistingAnchor(root);
+            requireExistingAnchor(pending.target.getParentFile().getParentFile());
             ensureDirectory(pending.target.getParentFile());
+            requireExistingAnchor(pending.target.getParentFile());
             writer.writeEnvelope(pending.target,pending.record.binding.jobId,pending.payload);
             Commit commit = new Commit(this,pending);
             head.confirmed=commit; head.pending=null;
             return commit;
         } catch (Exception failure) { throw new UnconfirmedWrite(pending.record.binding.jobId,failure); }
     }
+    private void requireExistingAnchor(File directory) throws IOException {
+        verify(directory);
+        ProjectFileIO.Attributes attributes=ProjectFileIO.attributes(directory);
+        if(!attributes.isDirectory() || attributes.isSymbolicLink() || attributes.fileKey()==null)
+            throw new IOException("Journal directory identity is unavailable");
+        Object previous=directoryAnchors.putIfAbsent(directory.getPath(),attributes.fileKey());
+        if(previous!=null && !previous.equals(attributes.fileKey()))throw new IOException("Journal directory identity was replaced");
+    }
     private void ensureDirectory(File directory) throws IOException {
         verify(directory);
         if (!directory.exists()) {
             File parent=directory.getParentFile(); if(parent==null)throw new IOException("Journal directory has no parent");
-            ensureDirectory(parent);
+            requireExistingAnchor(parent);
             if(!directory.mkdir()&&!directory.isDirectory())throw new IOException("Cannot create journal directory");
             CodingJobJournalWriter.RealBackend.INSTANCE.syncDirectory(parent);
         }

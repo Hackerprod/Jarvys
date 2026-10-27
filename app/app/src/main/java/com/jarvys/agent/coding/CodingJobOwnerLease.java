@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 /** Process-owned liveness only. Never a dispatch permission. Stable files are NEVER unlinked. */
 public final class CodingJobOwnerLease {
     private static final String PROCESS_ID = UUID.randomUUID().toString();
+    private static final java.util.Map<String,Object> LOCAL_FILES = new java.util.HashMap<>();
     private static final String HEADER = "JARVYS_CODING_OWNER_V1\n";
     private final String managerId;
     private final File file;
@@ -38,7 +39,9 @@ public final class CodingJobOwnerLease {
             if(held==null)throw new IOException("Could not own the new Coding liveness file");
             handle.write(header(PROCESS_ID,manager));handle.sync();
             CodingJobJournalWriter.RealBackend.INSTANCE.syncDirectory(directory);
-            return new CodingJobOwnerLease(file,manager,handle,held);
+            CodingJobOwnerLease owner=new CodingJobOwnerLease(file,manager,handle,held);
+            synchronized(LOCAL_FILES){if(LOCAL_FILES.putIfAbsent(file.getPath(),owner)!=null)throw new IOException("Owner file already registered");}
+            return owner;
         } catch(Exception failure) {
             try { if(held!=null)held.release(); } catch(Exception cleanup){failure.addSuppressed(cleanup);}
             try { handle.close(); } catch(Exception cleanup){failure.addSuppressed(cleanup);}
@@ -60,17 +63,31 @@ public final class CodingJobOwnerLease {
         public String processId(){return owner.processId();}
         public String managerId(){return owner.managerId();}
         public void requireLive(){synchronized(owner){if(closed||owner.released||!owner.lock.isValid())throw new IllegalStateException("Coding owner pin is no longer live");}}
-        @Override public void close(){synchronized(owner){if(closed)return;closed=true;owner.pins--;owner.releaseIfQuiescent();}}
+        public Pin fork() { synchronized(owner) { requireLive(); owner.pins++; return new Pin(owner); } }
+        @Override public void close(){
+            boolean release;
+            synchronized(owner){if(closed)return;closed=true;owner.pins--;release=owner.claimReleaseIfQuiescent();}
+            if(release)owner.releaseOwnedFile();
+        }
     }
     /** Nonblocking; cancellation of an observer future cannot cancel the owner drain. */
-    public synchronized CompletableFuture<Void> requestQuiesce() {
-        quiescing=true;releaseIfQuiescent();return closed.thenApply(value->value);
+    public CompletableFuture<Void> requestQuiesce() {
+        boolean release;
+        synchronized(this){quiescing=true;release=claimReleaseIfQuiescent();}
+        if(release)releaseOwnedFile();
+        return closed.thenApply(value->value);
     }
-    private void releaseIfQuiescent() {
-        if(!quiescing||pins!=0||released)return;
-        released=true;Throwable failure=null;
+    private boolean claimReleaseIfQuiescent() {
+        if(!quiescing||pins!=0||released)return false;
+        released=true;return true;
+    }
+    private void releaseOwnedFile() {
+        Throwable failure=null;
         try {lock.release();}catch(Throwable error){failure=error;}
         try {handle.close();}catch(Throwable error){if(failure==null)failure=error;else failure.addSuppressed(error);}
+        // Never open/close another descriptor of a locally locked inode: POSIX close may release process locks.
+        if(failure==null)synchronized(LOCAL_FILES){LOCAL_FILES.remove(file.getPath(),this);}
+        // Future continuations run outside the owner monitor and all journal/Room locks.
         if(failure==null)closed.complete(null);else closed.completeExceptionally(failure);
     }
     public enum Liveness { ALIVE, DEAD, UNKNOWN }
@@ -78,29 +95,41 @@ public final class CodingJobOwnerLease {
         private final Liveness liveness;
         private final Handle handle;
         private final FileLock lock;
+        private String registeredPath;
         private Probe(Liveness liveness,Handle handle,FileLock lock){this.liveness=liveness;this.handle=handle;this.lock=lock;}
         public Liveness liveness(){return liveness;}
         @Override public void close() throws IOException {
             try {if(lock!=null&&lock.isValid())lock.release();}finally{if(handle!=null)handle.close();}
+            if(registeredPath!=null)synchronized(LOCAL_FILES){LOCAL_FILES.remove(registeredPath,this);}
         }
     }
     /** Existing-only open; missing/corrupt is UNKNOWN. DEAD retains the acquired lock until close. */
     public static Probe probe(File filesRoot,String process,String manager) {
+        synchronized(LOCAL_FILES) {
         Handle opened=null;FileLock held=null;
         try {
             CodingJobEvidence.uuid(process);CodingJobEvidence.uuid(manager);
             File root=filesRoot.getAbsoluteFile();verify(root);
             File file=new File(root,"jarvys/runtime-owners/coding/"+manager+".lock");verify(file);
+            Object local=LOCAL_FILES.get(file.getPath());
+            if(local!=null) {
+                if(local instanceof CodingJobOwnerLease && ((CodingJobOwnerLease)local).processId().equals(process))
+                    return new Probe(Liveness.ALIVE,null,null);
+                return new Probe(Liveness.UNKNOWN,null,null);
+            }
             opened=open(file,false);byte[] expected=header(process,manager);
             if(!Arrays.equals(expected,opened.read(expected.length))) {opened.close();return new Probe(Liveness.UNKNOWN,null,null);}
             try {held=opened.channel().tryLock();}catch(OverlappingFileLockException alive){opened.close();return new Probe(Liveness.ALIVE,null,null);}
             if(held==null){opened.close();return new Probe(Liveness.ALIVE,null,null);}
             if(!Arrays.equals(expected,opened.read(expected.length))){held.release();opened.close();return new Probe(Liveness.UNKNOWN,null,null);}
-            return new Probe(Liveness.DEAD,opened,held);
+            Probe probe=new Probe(Liveness.DEAD,opened,held);probe.registeredPath=file.getPath();
+            LOCAL_FILES.put(file.getPath(),probe);
+            return probe;
         } catch(Exception unknown) {
             try{if(held!=null&&held.isValid())held.release();}catch(Exception ignored){}
             try{if(opened!=null)opened.close();}catch(Exception ignored){}
             return new Probe(Liveness.UNKNOWN,null,null);
+        }
         }
     }
     private static byte[] header(String process,String manager){return (HEADER+process+"\n"+manager+"\n").getBytes(StandardCharsets.US_ASCII);}

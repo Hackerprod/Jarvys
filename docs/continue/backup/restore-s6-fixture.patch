@@ -237,6 +237,55 @@ index 26f1ebc3..fb10e16e 100644
 +            }
 +        };
 +        return new CoreAgentRuntime(context, session, Collections.emptyList(),CorePromptBudget.standard(),forbiddenInference);
+diff --git a/app/app/src/test/java/com/jarvys/agent/CodingSubmissionTestSource.java b/app/app/src/test/java/com/jarvys/agent/CodingSubmissionTestSource.java
+index 65617fbc..49c2a52c 100644
+--- a/app/app/src/test/java/com/jarvys/agent/CodingSubmissionTestSource.java
++++ b/app/app/src/test/java/com/jarvys/agent/CodingSubmissionTestSource.java
+@@ -8,0 +9 @@ import java.util.Collections;
++import java.util.Arrays;
+@@ -20,0 +22,14 @@ public final class CodingSubmissionTestSource {
++    /** Declared companion required by the real Coding profile; never executed by these scripts. */
++    public static CoreTool projectJobsCompanion() {
++        return new CoreTool() {
++            private final ToolSpec spec = new ToolSpec("project_jobs", "test", "Required job observation companion", "test",
++                    ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList());
++            @Override public ToolSpec declaration() { return spec; }
++            @Override public CoreToolResult execute(Map<String,Object> arguments, CancellationToken token) {
++                throw new AssertionError("Script must not dispatch the companion job tool");
++            }
++        };
++    }
++    public interface AsyncProducer {
++        CoreToolResult execute(EffectInvocation invocation, CancellationToken token) throws Exception;
++    }
+@@ -21,0 +37,9 @@ public final class CodingSubmissionTestSource {
++        runProducer(context, (invocation, token) -> {
++            action.accept(invocation, token);
++            return CoreToolResult.success("Synthetic local callback completed");
++        }, false);
++    }
++    public static void runAsync(Context context, AsyncProducer action) throws Exception {
++        runProducer(context, action, true);
++    }
++    private static void runProducer(Context context, AsyncProducer action, boolean asynchronous) throws Exception {
+@@ -30,0 +55,7 @@ public final class CodingSubmissionTestSource {
++            @Override public AccessClassification accessClassification() {
++                return asynchronous ? AccessClassification.WRITE : AccessClassification.READ;
++            }
++            @Override public CompletionMode completionMode(Map<String,Object> args) {
++                return asynchronous ? CompletionMode.ASYNC_JOB : CompletionMode.SYNCHRONOUS;
++            }
++            @Override public boolean hasCompleteAsyncSubmissionCoverage() { return asynchronous; }
+@@ -40,2 +71 @@ public final class CodingSubmissionTestSource {
+-                    action.accept(invocation, token);
+-                    return CoreToolResult.success("Synthetic local callback completed");
++                    return action.execute(invocation, token);
+@@ -48 +78 @@ public final class CodingSubmissionTestSource {
+-        CoreToolRegistry registry = new CoreToolRegistry(Collections.singletonList(probe));
++        CoreToolRegistry registry = new CoreToolRegistry(Arrays.asList(probe, projectJobsCompanion()));
+@@ -50 +80 @@ public final class CodingSubmissionTestSource {
+-                Collections.singletonList("project_exec"), null, "Local fixture profile", 1,
++                Arrays.asList("project_exec", "project_jobs"), null, "Local fixture profile", 1,
 diff --git a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt b/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
 index f5e36876..314028ab 100644
 --- a/app/app/src/test/java/com/jarvys/agent/CompactionFlushPersistenceTest.kt
@@ -599,30 +648,57 @@ index 2b526d9a..0a4a9741 100644
 +        com.jarvys.agent.connectors.ConnectionAccessProvider {
 +        private val connectionHandle = com.jarvys.agent.connectors.ConnectionAccess.forTests(emptyMap())
 +        override fun connectionAccess() = connectionHandle
+diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/CodingJobMigrationTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/CodingJobMigrationTest.kt
+index 12fcda6f..ce86dcce 100644
+--- a/app/app/src/test/java/com/jarvys/agent/chatdb/CodingJobMigrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/chatdb/CodingJobMigrationTest.kt
+@@ -37 +37 @@ class CodingJobMigrationTest {
+-            assertEquals(7, freshSql.version)
++            assertEquals(8, freshSql.version)
+@@ -50,0 +51,18 @@ class CodingJobMigrationTest {
++    @Test fun semanticLinkMigrationPreservesExistingTechnicalJobsWithoutBackfillingTargets() {
++        val helper = oldDatabase()
++        val fresh = Room.inMemoryDatabaseBuilder(context, JarvysChatDatabase::class.java).allowMainThreadQueries().build()
++        try {
++            val db = helper.writableDatabase
++            Migrations.ALL.single { it.startVersion == 6 && it.endVersion == 7 }.migrate(db)
++            db.execSQL("INSERT INTO coding_job_bindings VALUES('historical-job','historical-submission','original-generation','original-binding')")
++            Migrations.ALL.single { it.startVersion == 7 && it.endVersion == 8 }.migrate(db)
++            assertEquals(TableInfo.read(fresh.openHelper.writableDatabase, "coding_job_semantic_links"),
++                TableInfo.read(db, "coding_job_semantic_links"))
++            db.query("SELECT * FROM coding_job_semantic_links").use { assertFalse(it.moveToFirst()) }
++            db.query("SELECT submission_id,technical_generation,binding_json FROM coding_job_bindings WHERE job_id='historical-job'").use {
++                assertTrue(it.moveToFirst()); assertEquals("historical-submission", it.getString(0))
++                assertEquals("original-generation", it.getString(1)); assertEquals("original-binding", it.getString(2))
++            }
++        } finally { fresh.close(); helper.close() }
++    }
++
 diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
-index ed1e60d9..6f7313fe 100644
+index ed1e60d9..d3c9c7be 100644
 --- a/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
 +++ b/app/app/src/test/java/com/jarvys/agent/chatdb/ConnectionStateEventMigrationTest.kt
 @@ -73 +73 @@ class ConnectionStateEventMigrationTest {
 -            assertEquals(6, freshSql.version)
-+            assertEquals(7, freshSql.version)
++            assertEquals(8, freshSql.version)
 diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
-index f9859655..3f606384 100644
+index f9859655..9359e842 100644
 --- a/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
 +++ b/app/app/src/test/java/com/jarvys/agent/chatdb/JarvysChatDatabaseM0Test.kt
 @@ -459,0 +460 @@ class JarvysChatDatabaseM0Test {
-+        val globalCodingTables = setOf("coding_job_bindings", "coding_job_observations")
++        val globalCodingTables = setOf("coding_job_bindings", "coding_job_observations", "coding_job_semantic_links")
 @@ -463 +464 @@ class JarvysChatDatabaseM0Test {
 -        ) - globalConnectorTables
 +        ) - globalConnectorTables - globalCodingTables
 @@ -466 +467 @@ class JarvysChatDatabaseM0Test {
 -        ) - globalConnectorTables)
 +        ) - globalConnectorTables - globalCodingTables)
-@@ -470,0 +472,3 @@ class JarvysChatDatabaseM0Test {
+@@ -470,0 +472,4 @@ class JarvysChatDatabaseM0Test {
 +        assertTrue("Coding binding has no Central/semantic FK", foreignKeys(sqlite, "coding_job_bindings").isEmpty())
 +        assertEquals(setOf("coding_job_bindings"), foreignKeys(sqlite, "coding_job_observations").map { it.parentTable }.toSet())
++        assertEquals(setOf("coding_job_bindings"), foreignKeys(sqlite, "coding_job_semantic_links").map { it.parentTable }.toSet())
 +        globalCodingTables.forEach { table -> assertEquals("technical fixture row in $table", 1L, rowCount(sqlite, table)) }
-@@ -492,0 +497,12 @@ class JarvysChatDatabaseM0Test {
+@@ -492,0 +498,12 @@ class JarvysChatDatabaseM0Test {
 +        globalCodingTables.forEach { table ->
 +            assertEquals("technical history must survive conversation deletion: $table", 1L, rowCount(sqlite, table))
 +            sqlite.query("SELECT * FROM `$table`").use { cursor ->
@@ -635,28 +711,28 @@ index f9859655..3f606384 100644
 +                assertFalse("duplicate technical history: $table", cursor.moveToNext())
 +            }
 +        }
-@@ -906,2 +922,2 @@ class JarvysChatDatabaseM0Test {
+@@ -906,2 +923,2 @@ class JarvysChatDatabaseM0Test {
 -        val exportedDatabase = JSONObject(exportedSchemaFile(6).readText(Charsets.UTF_8)).getJSONObject("database")
 -        assertEquals("Exported schema version", 6, exportedDatabase.getInt("version"))
-+        val exportedDatabase = JSONObject(exportedSchemaFile(7).readText(Charsets.UTF_8)).getJSONObject("database")
-+        assertEquals("Exported schema version", 7, exportedDatabase.getInt("version"))
-@@ -911 +927 @@ class JarvysChatDatabaseM0Test {
++        val exportedDatabase = JSONObject(exportedSchemaFile(8).readText(Charsets.UTF_8)).getJSONObject("database")
++        assertEquals("Exported schema version", 8, exportedDatabase.getInt("version"))
+@@ -911 +928 @@ class JarvysChatDatabaseM0Test {
 -        assertEquals("Room database version", 6L, pragmaLong(sqlite, "user_version"))
-+        assertEquals("Room database version", 7L, pragmaLong(sqlite, "user_version"))
-@@ -958,2 +974,2 @@ class JarvysChatDatabaseM0Test {
++        assertEquals("Room database version", 8L, pragmaLong(sqlite, "user_version"))
+@@ -958,2 +975,2 @@ class JarvysChatDatabaseM0Test {
 -                val exported = JSONObject(exportedSchemaFile(6).readText(Charsets.UTF_8)).getJSONObject("database")
 -                assertEquals(6L, pragmaLong(sql, "user_version"))
-+                val exported = JSONObject(exportedSchemaFile(7).readText(Charsets.UTF_8)).getJSONObject("database")
-+                assertEquals(7L, pragmaLong(sql, "user_version"))
-@@ -1003 +1019 @@ class JarvysChatDatabaseM0Test {
++                val exported = JSONObject(exportedSchemaFile(8).readText(Charsets.UTF_8)).getJSONObject("database")
++                assertEquals(8L, pragmaLong(sql, "user_version"))
+@@ -1003 +1020 @@ class JarvysChatDatabaseM0Test {
 -                assertEquals(6L, pragmaLong(migratedSql, "user_version"))
-+                assertEquals(7L, pragmaLong(migratedSql, "user_version"))
-@@ -1005 +1021 @@ class JarvysChatDatabaseM0Test {
++                assertEquals(8L, pragmaLong(migratedSql, "user_version"))
+@@ -1005 +1022 @@ class JarvysChatDatabaseM0Test {
 -                    JSONObject(exportedSchemaFile(6).readText()).getJSONObject("database").getString("identityHash"),
-+                    JSONObject(exportedSchemaFile(7).readText()).getJSONObject("database").getString("identityHash"),
-@@ -1075 +1091 @@ class JarvysChatDatabaseM0Test {
++                    JSONObject(exportedSchemaFile(8).readText()).getJSONObject("database").getString("identityHash"),
+@@ -1075 +1092 @@ class JarvysChatDatabaseM0Test {
 -                assertEquals(6L, pragmaLong(reopenedSql, "user_version"))
-+                assertEquals(7L, pragmaLong(reopenedSql, "user_version"))
++                assertEquals(8L, pragmaLong(reopenedSql, "user_version"))
 diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
 index 4707ec5e..451d83c1 100644
 --- a/app/app/src/test/java/com/jarvys/agent/chatdb/M1bRepositoriesTest.kt
@@ -700,12 +776,12 @@ index 4707ec5e..451d83c1 100644
 +    }
 +
 diff --git a/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt b/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
-index f5d6705a..a5fa9b10 100644
+index f5d6705a..f7ac1ff8 100644
 --- a/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
 +++ b/app/app/src/test/java/com/jarvys/agent/chatdb/MigrationDriverParityTest.kt
 @@ -40 +40 @@ class MigrationDriverParityTest {
 -            assertEquals(listOf(3 to 4, 4 to 5, 5 to 6), Migrations.ALL.map { it.startVersion to it.endVersion })
-+            assertEquals(listOf(3 to 4, 4 to 5, 5 to 6, 6 to 7), Migrations.ALL.map { it.startVersion to it.endVersion })
++            assertEquals(listOf(3 to 4, 4 to 5, 5 to 6, 6 to 7, 7 to 8), Migrations.ALL.map { it.startVersion to it.endVersion })
 diff --git a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java b/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java
 index a06a2d8e..a3e78f2f 100644
 --- a/app/app/src/test/java/com/jarvys/agent/coding/CodingJobEvidenceTest.java

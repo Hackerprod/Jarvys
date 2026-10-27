@@ -30,8 +30,9 @@ internal class EpisodeNarrator(context: Context, private val conversationId: Str
             token.throwIfCancelled()
             if (!memoryEnabled()) return false
             val input = bridge.personalAgentEpisodeNarrationInputSync(episode.id) ?: continue
-            if (input.evidence.any { it.outcome == "intent" || it.outcome == "started" } ||
-                input.evidence.none { it.refKind in setOf("tool_call", "crew_result") && it.outcome == "ok" }) continue
+            if (input.codingJobs.any { it.admitted && !it.terminalConfirmed } ||
+                input.evidence.any { it.outcome == "intent" || it.outcome == "started" } ||
+                input.evidence.none { it.refKind in setOf("tool_call", "crew_result", "coding_job_execution") && it.outcome == "ok" }) continue
             bridge.personalAgentSetEpisodeNarrationAutomatic(ticket, token, episode.id, "pending", null, null)
             try {
                 val request = input.sourceMessageId?.let { bridge.readMessageSync(conversationId, it) }
@@ -43,12 +44,15 @@ internal class EpisodeNarrator(context: Context, private val conversationId: Str
                 val transcriptStore = MainChatTranscriptStore(app.filesDir, conversationId, LocalRunStore(app))
                 val evidence = JSONArray()
                 input.evidence.forEach { row ->
-                    val source = if (row.refKind in setOf("tool_call", "tool_result") &&
+                    val source = if (row.refKind in setOf("coding_job_submission", "coding_job_execution")) {
+                        bridge.personalAgentCodingJobSourceSync(input.id, row.refId, sourceBudget)
+                    } else if (row.refKind in setOf("tool_call", "tool_result") &&
                         row.refConversationId == conversationId && row.sourceBatchId != null) {
                         transcriptStore.readSource(row.sourceBatchId, row.refId, sourceBudget)
                     } else null
                     evidence.put(JSONObject()
                         .put("kind", row.refKind)
+                        .put("ref_id", row.refId)
                         .put("tool", row.toolName ?: JSONObject.NULL)
                         .put("connector", row.connector ?: JSONObject.NULL)
                         .put("outcome", row.outcome ?: JSONObject.NULL)
@@ -61,7 +65,8 @@ internal class EpisodeNarrator(context: Context, private val conversationId: Str
                     EpisodeNarrationPayload.redact(request, PersonalMemoryFlush::redactSecrets).toString(),
                     EpisodeNarrationPayload.redact(finalResponse, PersonalMemoryFlush::redactSecrets).toString(),
                     input.eventAt, EpisodeNarrationPayload.redactEvidence(evidence, PersonalMemoryFlush::redactSecrets),
-                    CorePromptBudget.standard().transcriptChars)
+                    CorePromptBudget.standard().transcriptChars,
+                    suppressedCodingJobs = input.codingJobs.count { it.status == "SUPPRESSED" })
                 val reply = model.complete(
                     promptContext.rules + "\n\n" + promptContext.soul,
                     mutableListOf(ConversationTurn.messageWithRichParts("user", userPayload, null, 0, 0)),
@@ -70,7 +75,11 @@ internal class EpisodeNarrator(context: Context, private val conversationId: Str
                         "coordination_accepted confirms only local delegation or input acceptance, never worker consumption, mission completion or a Coding command result; " +
                         "local_delivery_confirmed confirms only local delivery, not that a recipient read it; " +
                         "existing_reference refers to an earlier operation and is not a new execution. " +
-                        "An ok outcome for these local acts is not verification of the user's goal, build or tests. Never turn goal_verified=false into success of that goal.",
+                        "An ok outcome for these local acts is not verification of the user's goal, build or tests. Never turn goal_verified=false into success of that goal. " +
+                        "coding_job_submission is administrative acceptance only, never command completion. " +
+                        "coding_job_execution records one durable process terminal per job, not proof that a build, test suite or user goal succeeded. " +
+                        "Count unique jobs, not submission and execution rows as separate commands. Recorded inputs may be plural or partial; a historical root is not an exclusive cause. " +
+                        "If coding_jobs_suppressed is nonzero, some job evidence is intentionally omitted: narrate only visible evidence, never infer overall mission or goal completion.",
                     emptyList(),
                     token,
                 ) ?: throw IllegalStateException("Episode narration model returned no response")

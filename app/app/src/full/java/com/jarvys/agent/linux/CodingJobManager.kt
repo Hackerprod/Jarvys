@@ -5,6 +5,15 @@ import android.system.Os
 import android.system.OsConstants
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CodingJobConversationGuard
+import com.jarvys.agent.EffectInvocation
+import com.jarvys.agent.MemoryWriteGate
+import com.jarvys.agent.coding.CodingJobEvidence
+import com.jarvys.agent.coding.CodingJobJournalStore
+import com.jarvys.agent.coding.CodingJobOwnerLease
+import com.jarvys.agent.coding.CodingJobSnapshot
+import com.jarvys.agent.coding.CodingJobSubmission
+import com.jarvys.agent.chatdb.ChatDatabaseBridge
+import com.jarvys.agent.chatdb.CodingJobReservation
 import com.jarvys.agent.coding.ProjectScope
 import org.json.JSONObject
 import java.io.File
@@ -61,6 +70,47 @@ class CodingJobManager(
         var launchAttempted = false
         var recovered = false
         var needsReconciliation = false
+        var technical: Technical? = null
+    }
+    private class Technical(val submission: CodingJobSubmission, val reservation: CodingJobReservation,
+        val bridge: ChatDatabaseBridge, val pin: CodingJobOwnerLease.Pin,
+        val authorization: CodingJobEvidence.AuthorizationSnapshot) {
+        var phase = CodingJobEvidence.Phase.SUBMISSION_INTENT
+        var latest: CodingJobJournalStore.Commit? = null
+        var desiredTerminal: Snapshot? = null
+        fun persist(job: Job) {
+            val s = job.snapshot
+            val facts = if (!s.state.terminal) null else CodingJobEvidence.TerminalFacts(
+                CodingJobEvidence.TerminalState.valueOf(s.state.name), s.exitCode,
+                s.state == State.CANCELLED, s.state == State.TIMED_OUT, s.state == State.UNCERTAIN,
+                CodingJobEvidence.AbsenceCoverage.NOT_PROVEN)
+            val revision = latest?.record()?.revision ?: 0L
+            val record = CodingJobEvidence.Record(reservation.binding(), Math.addExact(revision, 1L), phase,
+                true, authorization, facts)
+            val snapshot = CodingJobSnapshot(s.id,s.owner,s.scopeId,s.cwd,s.redactedCommand,job.projectRoot,
+                job.conversationId, CodingJobSnapshot.State.valueOf(s.state.name),s.createdAt,s.startedAt,s.finishedAt,
+                s.exitCode,s.logArtifact,s.error,s.logBytes,s.logComplete)
+            latest = submission.journal().write(reservation,revision,record,snapshot)
+        }
+    }
+    private data class InstrumentedStart(val invocation: EffectInvocation, val bridge: ChatDatabaseBridge,
+        val authorization: CodingJobEvidence.AuthorizationSnapshot, val ticket: MemoryWriteGate.Ticket)
+    private val applicationFiles = filesDir.canonicalFile
+    private val ownerLifecycle = Any()
+    private var managerQuiescing = false
+    private val liveOwner = lazy { CodingJobOwnerLease.create(applicationFiles) }
+    private fun pinSubmission(): CodingJobOwnerLease.Pin = synchronized(ownerLifecycle) {
+        check(!managerQuiescing) { "Coding manager is quiescing" }
+        liveOwner.value.pinSubmission()
+    }
+    /** Process cache stays quiescing until this future completes; no blocking close from a worker callback. */
+    fun requestQuiesce(): java.util.concurrent.CompletableFuture<Void> {
+        val owner = synchronized(ownerLifecycle) {
+            managerQuiescing = true
+            if (liveOwner.isInitialized()) liveOwner.value else null
+        }
+        // Completion callbacks are never run under the manager lifecycle monitor.
+        return owner?.requestQuiesce() ?: java.util.concurrent.CompletableFuture.completedFuture(null)
     }
     private val conversations = CodingJobConversationGuard(filesDir)
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -84,7 +134,20 @@ class CodingJobManager(
 
     fun start(scope: ProjectScope, owner: String, command: String, cwd: String, expectedVersion: Long,
               timeoutMillis: Long?, token: CancellationToken, preflight: () -> Unit = { },
-              completion: (Snapshot) -> Unit = { }): Snapshot {
+              completion: (Snapshot) -> Unit = { }): Snapshot =
+        startInternal(scope,owner,command,cwd,expectedVersion,timeoutMillis,token,preflight,completion,null)
+
+    /** Explicit integrated path; catalogue ASYNC opt-in remains gated separately. */
+    fun startInstrumented(scope: ProjectScope, owner: String, command: String, cwd: String, expectedVersion: Long,
+        timeoutMillis: Long?, token: CancellationToken, invocation: EffectInvocation, bridge: ChatDatabaseBridge,
+        authorization: CodingJobEvidence.AuthorizationSnapshot, ticket: MemoryWriteGate.Ticket,
+        preflight: () -> Unit = { }, completion: (Snapshot) -> Unit = { }): Snapshot =
+        startInternal(scope,owner,command,cwd,expectedVersion,timeoutMillis,token,preflight,completion,
+            InstrumentedStart(invocation,bridge,authorization,ticket))
+
+    private fun startInternal(scope: ProjectScope, owner: String, command: String, cwd: String, expectedVersion: Long,
+        timeoutMillis: Long?, token: CancellationToken, preflight: () -> Unit, completion: (Snapshot) -> Unit,
+        instrumented: InstrumentedStart?): Snapshot {
         require(owner.isNotBlank()) { "A mission owner is required" }
         require(command.isNotBlank() && '\u0000' !in command) { "A nonempty command without NUL is required" }
         require(timeoutMillis == null || timeoutMillis > 0) { "Timeout must be positive" }
@@ -100,8 +163,25 @@ class CodingJobManager(
         val id = UUID.randomUUID().toString()
         val job = Job(Snapshot(id, owner, scope.id(), relative, sanitize(command), State.LAUNCH_INTENT,
             System.currentTimeMillis()), project, scope.conversationId(), identity)
+        var pendingPin: CodingJobOwnerLease.Pin? = null
+        var pendingSubmission: CodingJobSubmission? = null
         try {
+            if (instrumented != null) {
+                preflight(); token.throwIfCancelled()
+                val pin = pinSubmission(); pendingPin = pin
+                val submission = CodingJobSubmission.capture(instrumented.invocation,id,UUID.randomUUID().toString(),
+                    owner,scope.id(),requireNotNull(identity),pin,instrumented.ticket,CodingJobJournalStore.forFilesRoot(applicationFiles))
+                pendingSubmission = submission
+                val reservation = instrumented.bridge.reserveCodingJobSync(submission)
+                submission.requireDispatchLive(); submission.requireFor(instrumented.invocation)
+                job.technical = Technical(submission,reservation,instrumented.bridge,pin,instrumented.authorization)
+            }
             synchronized(job.lock) { persist(job) }
+            job.technical?.let { technical ->
+                val acceptance = technical.bridge.acceptCodingJobSync(requireNotNull(technical.latest))
+                technical.submission.requireDispatchLive(); token.throwIfCancelled()
+                instrumented!!.invocation.bindAcceptedSubmission(acceptance)
+            }
             jobs[id] = job
             job.unregister = token.registerCancelAction { requestCancel(job) }
             executor.execute {
@@ -111,7 +191,8 @@ class CodingJobManager(
             return snapshot(job)
         } catch (failure: Throwable) {
             if (jobs[id] !== job) {
-                lease.close()
+                pendingSubmission?.abandonDispatch()
+                try { lease.close() } finally { pendingPin?.close() }
             } else if (job.claim.compareAndSet(WorkerClaim.RESERVED, WorkerClaim.REJECTED)) {
                 // Only absence of this manager's worker claim, not absence of all earlier preparation.
                 finish(job, lease, State.NOT_STARTED, null, "Job worker could not start", completion, false,
@@ -244,6 +325,15 @@ class CodingJobManager(
             output = activeOutput
             job.token.throwIfCancelled(); validateCwd(scope, job.snapshot.cwd); lease.validate(); preflight()
             job.token.throwIfCancelled()
+            job.technical?.let { technical ->
+                technical.submission.requireDispatchLive()
+                val preparation = synchronized(job.lock) {
+                    technical.phase = CodingJobEvidence.Phase.PREPARATION_INTENT
+                    persist(job); requireNotNull(technical.latest)
+                }
+                technical.bridge.admitCodingPreparationSync(preparation)
+                technical.submission.requireDispatchLive(); preflight(); job.token.throwIfCancelled()
+            }
             val result = backend.execute(scope, command, job.snapshot.cwd, timeout, job.token,
                 LinuxOutputCallback { stream, text -> activeOutput.accept(stream, text) }) {
                 preflight(); validateCwd(scope, job.snapshot.cwd); lease.validate()
@@ -252,6 +342,7 @@ class CodingJobManager(
                     check(!job.launchAttempted) { "A coding job cannot launch twice" }
                     val previous = job.snapshot
                     job.snapshot = previous.copy(state = State.RUNNING, startedAt = System.currentTimeMillis())
+                    job.technical?.phase = CodingJobEvidence.Phase.LAUNCH_INTENT
                     try {
                         // This fsynced intent precedes ProcessBuilder.start, not merely dispatch to a worker.
                         persist(job)
@@ -307,17 +398,34 @@ class CodingJobManager(
             }
             job.snapshot = job.snapshot.copy(state = state, finishedAt = System.currentTimeMillis(), exitCode = exit,
                 error = detail, logComplete = logComplete)
+            job.technical?.desiredTerminal = job.snapshot
             try { persist(job) } catch (_: Exception) {
+                job.technical?.submission?.abandonDispatch()
                 job.snapshot = job.snapshot.copy(state = State.UNCERTAIN, exitCode = null, logComplete = false,
                     error = "Terminal result could not be durably recorded; do not automatically repeat the command")
             }
             terminal = job.snapshot
-        } } finally {
+        }
+            // No Room call under job.lock, policy admission, launch lock, or journal writer lock.
+            job.technical?.let { technical ->
+                technical.latest?.takeIf { it.record().terminal != null }?.let { commit ->
+                    val projected = try { technical.bridge.projectCodingJobSync(commit); true } catch (_: Exception) {
+                        // The original journal remains authoritative; never project into a replacement database.
+                        technical.submission.abandonDispatch(); false
+                    }
+                    if (projected) try { technical.bridge.linkCodingJobSemanticSync(commit) } catch (_: Exception) {
+                        // Semantic eligibility/projection failure must not rewrite the technical process result.
+                    }
+                }
+            }
+        } finally {
             try { lease.close() } finally {
                 try { job.unregister.run() } finally {
                     job.unregister = Runnable { }
-                    job.claim.set(WorkerClaim.FINISHED)
-                    job.finished.countDown()
+                    try { job.technical?.pin?.close() } finally {
+                        job.claim.set(WorkerClaim.FINISHED)
+                        job.finished.countDown()
+                    }
                 }
             }
         }
@@ -399,7 +507,12 @@ class CodingJobManager(
         return directory
     }
     private fun logFile(job: Job) = File(directory(job.conversationId), "${job.snapshot.id}.log").also(::verifyPath)
-    private fun persist(job: Job) = conversations.active(job.conversationId) {
+    private fun persist(job: Job) {
+        val technical = job.technical
+        if (technical != null) { technical.persist(job); return }
+        persistLegacy(job)
+    }
+    private fun persistLegacy(job: Job) = conversations.active(job.conversationId) {
         val destination = directory(job.conversationId, true)
         val s = job.snapshot
         val json = JSONObject().put("schema", if (job.durableIdentity == null) 1 else 2).put("id", s.id).put("owner", s.owner)

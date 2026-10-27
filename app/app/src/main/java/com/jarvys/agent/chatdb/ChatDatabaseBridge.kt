@@ -456,20 +456,22 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     /** Technical reservation is independent of semantic-memory preference and does not enqueue work. */
     fun reserveCodingJobSync(submission: com.jarvys.agent.coding.CodingJobSubmission): CodingJobReservation =
-        executeOnWorker { repos ->
+        executeCodingOnWorker(submission) { repos, operation ->
             submission.requireCaptureCurrent()
             val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
             check(submission.journal() === journal) { "Foreign coding journal store" }
             // Workspace SQLite must never be opened while holding the Room lifecycle fence.
             val source = resolveCodingJobSource(applicationContext, submission)
             val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
-            anchor.fenced {
+            val reserved = anchor.fenced {
                 val binding = runBlocking { CodingJobRepository(repos.database).reserve(submission, source) }
                 val reservation = CodingJobReservation.confirmed(binding, submission, journal,
                     anchor.attest(repos.database, binding.technicalStoreGeneration))
                 submission.captureConfirmed()
                 reservation
             }
+            operation.completeReservation(reserved)
+            reserved
         }
 
     /** A post-journal administrative ACK, not process execution or a semantic-memory receipt. */
@@ -489,7 +491,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     }
 
     private fun recordCodingCommit(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
-                                   kind: CodingJobRepository.Kind) = executeOnWorker { repos ->
+                                   kind: CodingJobRepository.Kind) = executeCodingOnWorker(commit.reservation().submission()) { repos, _ ->
         val reservation = commit.reservation()
         val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
         reservation.requireJournalOwner(journal)
@@ -501,6 +503,37 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             runBlocking { CodingJobRepository(repos.database).record(commit, kind) }
         }
     }
+
+    /** Optional semantic roles; technical terminal commit is a separate, already-completed operation. */
+    fun linkCodingJobSemanticSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) =
+        executeCodingOnWorker(commit.reservation().submission()) { repos, _ ->
+            val reservation = commit.reservation()
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            reservation.requireJournalOwner(journal); commit.requireMintedBy(journal)
+            check(commit.record().terminal != null) { "Semantic Coding roles require terminal facts" }
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            fun current() {
+                check(anchor.accepts(reservation.lifecycle(), repos.database)) { "Stale Coding semantic destination" }
+                reservation.requireCurrentProjection()
+            }
+            try {
+                MemoryWritePolicy.forContext(applicationContext).gate().commit(reservation.submission().semanticTicket(), { true }, Callable {
+                    anchor.fenced { current(); runBlocking { repos.database.withChatWriteTransaction {
+                        CodingJobSemanticRepository(repos.database).linkTerminal(commit)
+                    } } }
+                })
+            } catch (_: MemoryWriteGate.RejectedException) {
+                // This is technical eligibility metadata, not an automatic semantic write.
+                anchor.fenced { current(); runBlocking { repos.database.withChatWriteTransaction {
+                    CodingJobSemanticRepository(repos.database).suppress(commit.record().binding.jobId)
+                } } }
+            }
+        }
+
+    fun personalAgentCodingJobSourceSync(entryId: String, jobId: String, maxChars: Int): JSONObject =
+        execute { repos -> repos.database.withChatReadTransaction {
+            CodingJobSemanticRepository(repos.database).source(entryId, jobId, maxChars)
+        } }
 
     /** Capture exact Central-call provenance and the SAME database lifecycle; release before returning. */
     fun captureCentralInvocationSync(conversationId: String, ownerMessageId: String, batchId: String,
@@ -559,33 +592,47 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }, Callable { runBlocking { block(repos) } })
     }
 
-    private fun <T> executeOnWorker(block: (Repositories) -> T): T {
-        ChatSqlBeforeWriteGuard.checkRepositoryAccess()
-        check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
-            "ChatDatabaseBridge cannot be called inside an active chat database lease"
-        }
-        check(Thread.currentThread() !== executorThread) {
-            "ChatDatabaseBridge cannot be re-entered from its own executor thread"
-        }
-        check(mainThreadGuardDisabledForTests || unitTestMainThreadGuardDisabled()
-            || Looper.myLooper() != Looper.getMainLooper()) {
-            "ChatDatabaseBridge blocking methods must not be called from the main thread"
-        }
-        return try {
-            val pending = synchronized(lifecycleLock) {
+    private fun <T> executeOnWorker(block: (Repositories) -> T): T = executeTrackedOnWorker(null, null, block)
+
+    private fun <T> executeCodingOnWorker(submission: com.jarvys.agent.coding.CodingJobSubmission,
+        block: (Repositories, com.jarvys.agent.coding.CodingJobSubmission.RoomOperation) -> T): T {
+        val operation = submission.beginRoomOperation()
+        return executeTrackedOnWorker(operation, { submission.abandonDispatch() }) { repos -> block(repos, operation) }
+    }
+
+    private fun <T> executeTrackedOnWorker(operation: com.jarvys.agent.coding.CodingJobSubmission.RoomOperation?,
+        interruptedObserver: (() -> Unit)?, block: (Repositories) -> T): T {
+        val ownership = java.util.concurrent.atomic.AtomicInteger(0)
+        val pending = try {
+            ChatSqlBeforeWriteGuard.checkRepositoryAccess()
+            check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
+                "ChatDatabaseBridge cannot be called inside an active chat database lease"
+            }
+            check(Thread.currentThread() !== executorThread) { "ChatDatabaseBridge cannot be re-entered from its own executor thread" }
+            check(mainThreadGuardDisabledForTests || unitTestMainThreadGuardDisabled() || Looper.myLooper() != Looper.getMainLooper()) {
+                "ChatDatabaseBridge blocking methods must not be called from the main thread"
+            }
+            synchronized(lifecycleLock) {
                 check(!closingForTests) { "ChatDatabaseBridge test instance is closed" }
                 executor.submit(Callable {
-                    val repos = repositories()
-                    block(repos)
+                    check(ownership.compareAndSet(0, 1)) { "Bridge operation was rejected before worker claim" }
+                    try { block(repositories()) }
+                    catch (failure: Throwable) { operation?.fail(failure); throw failure }
+                    finally { operation?.close() } // Block has released all Room leases/anchor fences.
                 })
             }
-            pending.get()
-        } catch (interrupted: InterruptedException) {
+        } catch (failure: Throwable) {
+            if (ownership.compareAndSet(0, 2)) {
+                try { operation?.fail(failure) } finally { operation?.close() }
+            }
+            throw failure
+        }
+        return try { pending.get() }
+        catch (interrupted: InterruptedException) {
+            interruptedObserver?.invoke() // Never cancel the process-owned callable or release its pin.
             Thread.currentThread().interrupt()
             throw ChatDatabaseWaitInterruptedException(interrupted)
-        } catch (failure: ExecutionException) {
-            throw (failure.cause ?: failure)
-        }
+        } catch (failure: ExecutionException) { throw (failure.cause ?: failure) }
     }
 
     private fun closeForTests() {
