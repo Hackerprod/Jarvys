@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P4-F — consolidación explícita — checkpoint 29-10-2026
+
+**Candidate5: Full: 321 pruebas / Play: 321 pruebas; 36 clases por sabor, cero fallos/errores/skips; doble PASS independiente acotado.** Preview completo → confirmación exacta → retirada atómica de originales y superviviente nuevo. Focal128 separado; código `0fb294063f7fcf83be3a592b9b507d7b26b601af`.
+
+[Reporte y límites](docs/continue/engram-port/P4-F-consolidation-report.md) · [Resultados exactos](docs/continue/engram-port/P4-F-consolidation-results.json).
+
+Fingerprint full-row/rawbytes, proof real de Main, actual-owner y readback en la misma TX; identidad técnica preservada sin resurrección. Manual independiente del OFF automático, sin inferencia ni autoridad nueva para bots. Historia de compilaciones/focales fallidos e interrupción5 conservada; el seam autorizado acredita la capacidad de la instancia real, no una configuración externa. **No P4 global, sync/export/import ni Android físico.** Próximos pasos sujetos a reconciliación del roadmap, no a suma de cohortes.
+
 ## Memoria P4-E — scan semántico manual informado — checkpoint 29-10-2026
 
 **Candidate3 / recovery1: 226 pruebas por sabor, 34 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Desde Memoria: preparar pares localmente → revisar contenido/proveedor/consumo → confirmar envío para preview semántico o aplicar juicios. Preview semántico sí consume inferencia; el scan léxico no. Apply requiere preparación y consentimiento nuevos. Focal48 separado.

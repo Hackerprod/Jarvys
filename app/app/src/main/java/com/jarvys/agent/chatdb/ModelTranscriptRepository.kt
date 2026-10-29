@@ -188,7 +188,8 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
                     (it.memorySaveInputDigest != null && !((it.toolName == "memory_save" && MemorySaveOperations.isInputDigest(it.memorySaveInputDigest)) ||
                         (MemorySessionCommands.isCommand(it.toolName) && MemorySessionCommands.isInputDigest(it.memorySaveInputDigest)) ||
                         (it.toolName == "memory_review" && MemoryReviewArguments.isInputDigest(it.memorySaveInputDigest)) ||
-                        (MemoryJudgmentArguments.isTool(it.toolName) && MemoryJudgmentArguments.isInputDigest(it.memorySaveInputDigest))))
+                        (MemoryJudgmentArguments.isTool(it.toolName) && MemoryJudgmentArguments.isInputDigest(it.memorySaveInputDigest)) ||
+                        (it.toolName==MemoryConsolidationArguments.TOOL && MemoryConsolidationArguments.isInputDigest(it.memorySaveInputDigest))))
             }) return@transaction ChatDbResult.Invalid("batch, owner index, call IDs, names, and opaque arguments are required")
         if (input.callsDecodeError == null && input.rawCalls != null) return@transaction ChatDbResult.Invalid("raw_calls is reserved for undecodable call arrays")
         if (input.callsDecodeError != null && input.rawCalls == null) return@transaction ChatDbResult.Invalid("undecodable calls must retain raw_calls")

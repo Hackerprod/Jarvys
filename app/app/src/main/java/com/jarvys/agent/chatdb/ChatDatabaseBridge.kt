@@ -290,6 +290,38 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    fun personalAgentConsolidationPreview(request:MemoryConsolidationRequest,token:CancellationToken):MemoryConsolidationPlan = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,request.expectedProject,null,false,true)
+        runBlocking { MemoryConsolidationRepository(repos.database).preview(request,namespace) { token.throwIfCancelled() } }
+    }
+    fun personalAgentConsolidationConfirm(request:MemoryConsolidationRequest,fingerprint:String,token:CancellationToken):MemoryConsolidationResult = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,request.expectedProject,null,false,true)
+        runBlocking { MemoryConsolidationRepository(repos.database).confirm(request,fingerprint,namespace,"user",
+            before={token.throwIfCancelled()},after={token.throwIfCancelled()}) }
+    }
+    fun memoryConsolidationAutomatic(ticket:MemoryWriteGate.Ticket,token:CancellationToken,caller:String?,request:MemoryConsolidationRequest,
+        witness:com.jarvys.agent.CentralInvocationWitness?,resultChars:Int):MemoryConsolidationResult = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,caller,request.expectedProject,null,false,true)
+        fun budget(plan:MemoryConsolidationPlan) { require(MemoryConsolidationJson.result(MemoryConsolidationResult("preview",plan)).length<=resultChars) { "memory_consolidation_preview_budget_exceeded" } }
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable { runBlocking {
+            val repository=MemoryConsolidationRepository(repos.database)
+            if(!request.confirm) {
+                val plan=repository.preview(request,namespace) { token.throwIfCancelled() };budget(plan);MemoryConsolidationResult("preview",plan)
+            } else {
+                val current=requireNotNull(witness) { "memory_consolidation_source_required" }
+                check(caller==current.source().ownerCentralSessionId) { "memory_consolidation_source_invalid" }
+                val sessions=MemorySessionRepository(repos.database);var binding:MemorySessionBinding?=null
+                repository.confirm(request,requireNotNull(request.fingerprint),namespace,"agent",
+                    before={token.throwIfCancelled();current.requireInvocationCurrent();binding=sessions.requireConsolidationSource(request,current)},
+                    after={token.throwIfCancelled();current.requireInvocationCurrent();sessions.requireConsolidationSource(request,current);sessions.renewCurrent(requireNotNull(binding));token.throwIfCancelled();current.requireInvocationCurrent()},
+                    validatePlan=::budget)
+            }
+        } })
+    }
+
     fun personalAgentRelationDetails(judgmentId:String):MemoryRelationDetails = executeOnWorker { repos ->
         val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
         runBlocking { MemoryRelationRepository(repos.database).details(judgmentId,namespace) }

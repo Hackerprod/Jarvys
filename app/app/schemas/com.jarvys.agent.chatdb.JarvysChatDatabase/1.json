@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "1871c9a13da248871a440c4b76939bca",
+    "identityHash": "aa62eda78fdf0d20bc4b810034e28fc1",
     "entities": [
       {
         "tableName": "conversations",
@@ -5789,7 +5789,7 @@
       },
       {
         "tableName": "memory_entries",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, `project` TEXT NOT NULL DEFAULT 'jarvys-central', `scope` TEXT NOT NULL DEFAULT 'project', `observation_type` TEXT NOT NULL DEFAULT 'manual', `revision_count` INTEGER NOT NULL DEFAULT 1, `normalized_hash` TEXT, `duplicate_count` INTEGER NOT NULL DEFAULT 1, `last_seen_at` INTEGER, `pinned` INTEGER NOT NULL DEFAULT 0, `memory_session_id` TEXT, `tool_name` TEXT, `review_after` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`memory_session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, `project` TEXT NOT NULL DEFAULT 'jarvys-central', `scope` TEXT NOT NULL DEFAULT 'project', `observation_type` TEXT NOT NULL DEFAULT 'manual', `revision_count` INTEGER NOT NULL DEFAULT 1, `normalized_hash` TEXT, `duplicate_count` INTEGER NOT NULL DEFAULT 1, `last_seen_at` INTEGER, `pinned` INTEGER NOT NULL DEFAULT 0, `memory_session_id` TEXT, `tool_name` TEXT, `review_after` TEXT, `superseded_by_id` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`memory_session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
         "fields": [
           {
             "fieldPath": "id",
@@ -5979,6 +5979,11 @@
           {
             "fieldPath": "review_after",
             "columnName": "review_after",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "superseded_by_id",
+            "columnName": "superseded_by_id",
             "affinity": "TEXT"
           }
         ],
@@ -8131,7 +8136,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1871c9a13da248871a440c4b76939bca')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'aa62eda78fdf0d20bc4b810034e28fc1')"
     ]
   }
 }

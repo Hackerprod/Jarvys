@@ -1673,4 +1673,38 @@ Authentication mode: %6$s</string>
     <string name="memory_semantic_reported_model">Provider-reported model: %1$s</string>
     <string name="memory_semantic_confirmed">Confirmed judgment: %1$s</string>
     <string name="memory_semantic_capped">Semantic pair limit reached. No continuation is available for this capped selection.</string>
+    <string name="memory_consolidate_select">Select memories to consolidate</string>
+    <string name="memory_consolidate_cancel_selection">Cancel consolidation selection</string>
+    <string name="memory_consolidate_selection">%1$d selected · project: %2$s. Select at least two live memories from the same project; scopes may differ.</string>
+    <string name="memory_consolidate_pick">Select this live memory</string>
+    <string name="memory_consolidate_open">Prepare replacement…</string>
+    <string name="memory_consolidate_title">Consolidate selected memories</string>
+    <string name="memory_consolidate_warning">Manual operation, without a model. Preview does not write. Confirmation creates a NEW memory and retires every selected source atomically. It does not merge relations or delete source history.</string>
+    <string name="memory_consolidate_requested">Expected project: %1$s
+Selected source IDs:
+%2$s</string>
+    <string name="memory_consolidate_new_title">Final title (required)</string>
+    <string name="memory_consolidate_new_content">Final complete content (required)</string>
+    <string name="memory_consolidate_type">Type override (blank: newest source type)</string>
+    <string name="memory_consolidate_topic">Topic override (blank: no topic)</string>
+    <string name="memory_consolidate_preview">Read complete preview</string>
+    <string name="memory_consolidate_invalid">Check the selected sources, title and content. No preview was accepted.</string>
+    <string name="memory_consolidate_failed">The current sources could not be previewed. Reload the current list and select again, or explicitly request a new preview.</string>
+    <string name="memory_consolidate_mismatch">The sources or resolved plan changed. Nothing was consolidated by this confirmation. Review this NEW complete plan and confirm separately again.</string>
+    <string name="memory_consolidate_cancelled">Operation cancelled. No success is assumed; reload current memories before deciding what to do next.</string>
+    <string name="memory_consolidate_unknown">No confirmation receipt was received. The operation may already be committed. No automatic retry or rollback is claimed. Close, reload and inspect current memories before explicitly replanning.</string>
+    <string name="memory_consolidate_plan">Complete resolved plan — not yet applied</string>
+    <string name="memory_consolidate_retire">Retire these source IDs and record their new survivor:
+%1$s</string>
+    <string name="memory_consolidate_survivor_metadata">New survivor: project=%1$s · scope=%2$s · type=%3$s
+Inherited session=%4$s (descriptive lineage only)
+Topic raw bytes (Base64)=%5$s</string>
+    <string name="memory_consolidate_defaults">New ID, unpinned, no review date, revision 1 and duplicate count 1. Sources keep their payload, history, counters, review state, links and judgments; only retirement time, update time and superseded-by ID change.</string>
+    <string name="memory_consolidate_raw_fields">Complete source fields: exact storage type and value. TEXT/BLOB include original bytes as Base64; NULL remains distinct.</string>
+    <string name="memory_consolidate_consent">I reviewed this full plan and confirm creating the new memory and retiring ALL listed sources.</string>
+    <string name="memory_consolidate_confirm">Confirm destructive consolidation</string>
+    <string name="memory_consolidate_complete">Confirmed new survivor: %1$s
+Confirmed retired sources:
+%2$s</string>
+    <string name="memory_consolidate_superseded_reference">Superseded by ID: %1$s. This retained reference does not imply that its target still exists or may be opened.</string>
 </resources>

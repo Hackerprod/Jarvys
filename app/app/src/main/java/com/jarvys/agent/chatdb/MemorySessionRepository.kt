@@ -174,6 +174,22 @@ internal class MemorySessionRepository(private val database: JarvysChatDatabase,
         requireCurrent(binding);witness.requireInvocationCurrent();return binding
     }
 
+    internal fun requireConsolidationSource(request:MemoryConsolidationRequest,witness:com.jarvys.agent.CentralInvocationWitness):MemorySessionBinding {
+        require(request.confirm) { "memory_consolidation_source_invalid" }
+        witness.requireInvocationCurrent();val source=witness.source()
+        check(source.ownerCentralSessionId==MemoryNamespace.CENTRAL && MemorySaveSourceIdentity.existingGeneration(database)==source.storageGeneration) { "memory_consolidation_source_invalid" }
+        val session=sql.query("SELECT b.memory_session_id,c.memory_save_input_digest FROM tool_batches b JOIN tool_calls c ON c.conversation_id=b.conversation_id AND c.batch_id=b.batch_id JOIN messages m ON m.conversation_id=b.conversation_id AND m.message_id=b.owner_user_message_id WHERE b.conversation_id=? AND b.batch_id=? AND c.call_id=? AND c.name=? AND c.lifecycle='STARTED' AND b.owner_user_message_id=? AND b.calls_decode_error IS NULL AND m.role='user' AND m.hidden_kind IS NULL AND NOT EXISTS(SELECT 1 FROM tool_results r WHERE r.conversation_id=c.conversation_id AND r.batch_id=c.batch_id AND r.call_id=c.call_id)",
+            arrayOf(source.ownerCentralSessionId,source.sourceBatchId,source.sourceCallId,MemoryConsolidationArguments.TOOL,source.sourceMessageId)).use { c ->
+            check(c.moveToFirst() && !c.isNull(0) && !c.isNull(1)) { "memory_consolidation_source_invalid" }
+            val current=c.getString(0);val proof=c.getString(1)
+            check(MemoryConsolidationArguments.isInputDigest(proof) && proof==MemoryConsolidationCodec.digest(MemoryConsolidationArguments.PROOF_PREFIX,MemoryConsolidationArguments.proofTree(request,current))) { "memory_consolidation_source_invalid" }
+            check(!c.moveToNext()) { "memory_consolidation_source_invalid" };current
+        }
+        val binding=MemorySessionBinding(session,MemoryNamespace.CENTRAL,source.storageGeneration,source.ownerCentralSessionId,
+            source.sourceMessageId,source.sourceRunId,source.sourceProcessId)
+        requireCurrent(binding);witness.requireInvocationCurrent();return binding
+    }
+
     /** Same current producer may renew an expired but un-ended lease; expiry grants no authority. */
     fun renewCurrent(binding: MemorySessionBinding) {
         requireCurrent(binding)

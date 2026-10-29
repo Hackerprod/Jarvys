@@ -197,6 +197,7 @@ final class PersonalMemoryTools {
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, name, Collections.emptyList(), resultChars, ticket, allowDestructive));
     }
     if (allowDestructive && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId)) {
+      result.add(new MemoryConsolidationTool(bridge,ticket,conversationId,resultChars));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_search_prompts", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_context", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_review", Collections.emptyList(), resultChars, ticket));
@@ -940,7 +941,8 @@ final class PersonalMemoryTools {
           JSONObject item=new JSONObject();
           put(item,"id",hit.getId());put(item,"title",hit.getTitle()==null?JSONObject.NULL:hit.getTitle());
           put(item,"type",hit.getObservationType());put(item,"state",hit.getReviewState());put(item,"project",hit.getProject());
-          put(item,"review_after",hit.getReviewAfter()==null?JSONObject.NULL:hit.getReviewAfter());
+          put(item,"superseded_by_id",hit.getSupersededById()==null?JSONObject.NULL:hit.getSupersededById());
+      put(item,"review_after",hit.getReviewAfter()==null?JSONObject.NULL:hit.getReviewAfter());
           put(item,"title_bytes_base64",hit.getTitleBytesBase64()==null?JSONObject.NULL:hit.getTitleBytesBase64());
           put(item,"title_is_utf8",hit.getTitleIsUtf8()==null?JSONObject.NULL:hit.getTitleIsUtf8());items.put(item);
         }
@@ -963,6 +965,7 @@ final class PersonalMemoryTools {
       put(item, "id", hit.getId()); put(item, "kind", hit.getKind()); put(item, "type", hit.getObservationType()); put(item, "layer", hit.getLayer());
       put(item, "project", hit.getProject()); put(item, "scope", hit.getScope());
       put(item, "pinned", hit.getPinned());
+      put(item,"superseded_by_id",hit.getSupersededById()==null?JSONObject.NULL:hit.getSupersededById());
       put(item,"review_after",hit.getReviewAfter()==null?JSONObject.NULL:hit.getReviewAfter()); put(item,"state",hit.getReviewState());
       put(item, "duplicate_count", hit.getDuplicateCount());
       put(item, "last_seen_at", hit.getLastSeenAt() == null ? JSONObject.NULL : hit.getLastSeenAt());

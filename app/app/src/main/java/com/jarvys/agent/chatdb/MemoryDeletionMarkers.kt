@@ -50,6 +50,13 @@ internal object MemoryDeletionMarkers {
 
     /** Caller holds the same transaction as owner validation and payload deletion. */
     fun insertForTarget(database: JarvysChatDatabase, id: String, project: String, scope: String, now: Long) {
+        val producer=validateTarget(database,id,project,scope)
+        database.chatSql.execSQL("INSERT INTO memory_deleted_observations(old_id,project,scope,deleted_at,producer,producer_key) VALUES(?,?,?,?,?,?)",
+            arrayOf(id, project, scope, now, producer?.producer, producer?.key))
+    }
+
+    /** Same retained producer validation, with no marker write for a soft consolidation. */
+    fun validateTarget(database:JarvysChatDatabase,id:String,project:String,scope:String):Identity? {
         val sql = database.chatSql
         val row = sql.query("SELECT provenance,kind,source_ref,source_conversation_id,source_message_id,CAST(topic_key AS BLOB),category,layer FROM memory_entries WHERE id=? AND project=? AND scope=?",
             arrayOf(id, project, scope)).use { c ->
@@ -106,8 +113,7 @@ internal object MemoryDeletionMarkers {
         }
         check(!isDeletedId(database, id, project, scope)) { "memory_runtime_identity_conflict" }
         if (producer != null) check(deletedId(database, producer, project, scope) == null) { "memory_runtime_identity_conflict" }
-        sql.execSQL("INSERT INTO memory_deleted_observations(old_id,project,scope,deleted_at,producer,producer_key) VALUES(?,?,?,?,?,?)",
-            arrayOf(id, project, scope, now, producer?.producer, producer?.key))
+        return producer
     }
 
     private fun missionIdentity(database: JarvysChatDatabase, row: List<String?>): Identity {

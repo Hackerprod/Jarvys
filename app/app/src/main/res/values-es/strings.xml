@@ -1674,4 +1674,38 @@ Modo de autenticación: %6$s</string>
     <string name="memory_semantic_reported_model">Modelo informado por el proveedor: %1$s</string>
     <string name="memory_semantic_confirmed">Juicio confirmado: %1$s</string>
     <string name="memory_semantic_capped">Se alcanzó el límite de pares semánticos. Esta selección limitada no tiene continuación.</string>
+    <string name="memory_consolidate_select">Seleccionar memorias para consolidar</string>
+    <string name="memory_consolidate_cancel_selection">Cancelar selección para consolidar</string>
+    <string name="memory_consolidate_selection">%1$d seleccionadas · proyecto: %2$s. Selecciona al menos dos memorias activas del mismo proyecto; los ámbitos pueden diferir.</string>
+    <string name="memory_consolidate_pick">Seleccionar esta memoria activa</string>
+    <string name="memory_consolidate_open">Preparar reemplazo…</string>
+    <string name="memory_consolidate_title">Consolidar memorias seleccionadas</string>
+    <string name="memory_consolidate_warning">Operación manual, sin modelo. La vista previa no escribe. Confirmar crea una memoria NUEVA y retira todas las fuentes seleccionadas de forma atómica. No combina relaciones ni elimina el historial de las fuentes.</string>
+    <string name="memory_consolidate_requested">Proyecto esperado: %1$s
+IDs de las fuentes seleccionadas:
+%2$s</string>
+    <string name="memory_consolidate_new_title">Título final (obligatorio)</string>
+    <string name="memory_consolidate_new_content">Contenido final completo (obligatorio)</string>
+    <string name="memory_consolidate_type">Tipo opcional (vacío: tipo de la fuente más reciente)</string>
+    <string name="memory_consolidate_topic">Tema opcional (vacío: sin tema)</string>
+    <string name="memory_consolidate_preview">Leer vista previa completa</string>
+    <string name="memory_consolidate_invalid">Revisa las fuentes seleccionadas, el título y el contenido. No se aceptó una vista previa.</string>
+    <string name="memory_consolidate_failed">No se pudo obtener la vista previa de las fuentes actuales. Recarga la lista y vuelve a seleccionar, o solicita explícitamente otra vista previa.</string>
+    <string name="memory_consolidate_mismatch">Las fuentes o el plan resuelto han cambiado. Esta confirmación no consolidó nada. Revisa este NUEVO plan completo y vuelve a confirmar por separado.</string>
+    <string name="memory_consolidate_cancelled">Operación cancelada. No se supone éxito; recarga las memorias actuales antes de decidir el siguiente paso.</string>
+    <string name="memory_consolidate_unknown">No se recibió el comprobante de confirmación. Puede que la operación ya esté confirmada en la base de datos. No hay reintento automático ni se afirma una reversión. Cierra, recarga e inspecciona las memorias actuales antes de preparar otro plan explícitamente.</string>
+    <string name="memory_consolidate_plan">Plan completo resuelto — aún sin aplicar</string>
+    <string name="memory_consolidate_retire">Retirar estas fuentes y registrar su nueva memoria superviviente:
+%1$s</string>
+    <string name="memory_consolidate_survivor_metadata">Nueva memoria: proyecto=%1$s · ámbito=%2$s · tipo=%3$s
+Sesión heredada=%4$s (solo procedencia descriptiva)
+Bytes del tema (Base64)=%5$s</string>
+    <string name="memory_consolidate_defaults">ID nuevo, sin fijar, sin fecha de revisión, revisión 1 y contador de duplicados 1. Las fuentes conservan contenido, historial, contadores, revisión, enlaces y juicios; solo cambian la fecha de retirada, la de actualización y el ID que las sustituye.</string>
+    <string name="memory_consolidate_raw_fields">Campos completos de la fuente: tipo y valor exactos de almacenamiento. TEXT/BLOB incluyen los bytes originales en Base64; NULL se mantiene distinto.</string>
+    <string name="memory_consolidate_consent">He revisado este plan completo y confirmo crear la nueva memoria y retirar TODAS las fuentes indicadas.</string>
+    <string name="memory_consolidate_confirm">Confirmar consolidación destructiva</string>
+    <string name="memory_consolidate_complete">Nueva memoria confirmada: %1$s
+Fuentes retiradas confirmadas:
+%2$s</string>
+    <string name="memory_consolidate_superseded_reference">Sustituida por el ID: %1$s. Esta referencia conservada no implica que su destino siga existiendo ni que se pueda abrir.</string>
 </resources>

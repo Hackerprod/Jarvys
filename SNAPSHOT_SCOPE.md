@@ -1,6 +1,6 @@
 # Partial production-code backup
 
-Source checkpoint: `dbe87c2d98d4573704c24803a6420dbfb8ea200e`. Previous backup parent: `42502efdf5dc44271b467493f46ce6c02e1ae971`.
+Source checkpoint: `a1bd361c0649ed7990d3302ecc2ff4fd5bfa8cc1`. Previous backup parent: `4c8f30f6c77de9b6bd78281c6f9650ec1d351709`.
 
 This intentionally incomplete snapshot contains selected production source, text resources, configuration, schemas, license notices, and the root README/Pending files. It omits tests and fixtures, operational records, technical report directories, archives, binary assets, and Markdown resources other than the two root documents. Technical documentation directories are omitted; links in README/Pending to omitted files may be broken. It is not a full repository restoration, a build-ready checkout, or a reproducible test backup.
 

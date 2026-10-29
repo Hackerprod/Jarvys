@@ -43,6 +43,10 @@ import com.jarvys.agent.chatdb.PersonalMemorySessionView
 import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
+import com.jarvys.agent.chatdb.MemoryConsolidationRequest
+import com.jarvys.agent.chatdb.MemoryConsolidationPlan
+import com.jarvys.agent.chatdb.MemoryConsolidationResult
+import com.jarvys.agent.chatdb.MemoryConsolidationArguments
 import com.jarvys.agent.chatdb.MemoryRelationScanOptions
 import com.jarvys.agent.chatdb.MemoryRelationScanResult
 import com.jarvys.agent.chatdb.MemoryRelationDetails
@@ -85,6 +89,10 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showPendingRelations by remember { mutableStateOf(false) }
     var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
+    var consolidationSelecting by remember { mutableStateOf(false) }
+    var consolidationIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var consolidationProject by remember { mutableStateOf<String?>(null) }
+    var consolidationTarget by remember { mutableStateOf<Pair<List<String>, String>?>(null) }
     var reloadGeneration by remember { mutableStateOf(0L) }
     val deleteFailure = stringResource(R.string.memory_delete_failed)
     val pinFailure = stringResource(R.string.memory_pin_failed)
@@ -94,6 +102,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     }
 
     fun reload() {
+        consolidationIds = emptyList(); consolidationProject = null; consolidationSelecting = false
         val requestedFilter = showRemoved
         val requestedDue = dueOnly
         val request = ++reloadGeneration
@@ -167,6 +176,16 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                         modifier = Modifier.testTag("memory-relations-open")) { Text(stringResource(R.string.memory_relations_open)) }
                     TextButton(enabled = !deletePending && pinPendingId == null, onClick = { if (!deletePending && pinPendingId == null) showRelationScan = true },
                         modifier = Modifier.testTag("memory-scan-open")) { Text(stringResource(R.string.memory_scan_open)) }
+                    TextButton(enabled = !loading && !deletePending && pinPendingId == null, onClick = {
+                        consolidationSelecting = !consolidationSelecting
+                        consolidationIds = emptyList(); consolidationProject = null
+                    }, modifier = Modifier.testTag("memory-consolidate-select")) { Text(stringResource(if (consolidationSelecting) R.string.memory_consolidate_cancel_selection else R.string.memory_consolidate_select)) }
+                    if (consolidationSelecting) {
+                        Text(stringResource(R.string.memory_consolidate_selection, consolidationIds.size, consolidationProject ?: "—"))
+                        TextButton(enabled = consolidationIds.size >= 2 && consolidationProject != null && !deletePending && pinPendingId == null,
+                            onClick = { if (consolidationIds.size >= 2) consolidationProject?.let { consolidationTarget = consolidationIds.toList() to it } },
+                            modifier = Modifier.testTag("memory-consolidate-open")) { Text(stringResource(R.string.memory_consolidate_open)) }
+                    }
                     notice?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("memory-notice")) }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("memory-error")) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -191,6 +210,22 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                 items(items, key = { "${it.kind}:${it.id}" }) { item ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            if (consolidationSelecting && item.kind == "memory" && item.deletedAt == null && item.project != null) {
+                                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    androidx.compose.material3.Checkbox(checked = item.id in consolidationIds,
+                                        enabled = !deletePending && pinPendingId == null && (consolidationProject == null || consolidationProject == item.project),
+                                        onCheckedChange = { selected ->
+                                            if (!deletePending && pinPendingId == null && (consolidationProject == null || consolidationProject == item.project)) {
+                                                consolidationIds = if (selected) (consolidationIds + item.id).distinct() else consolidationIds - item.id
+                                                consolidationProject = if (consolidationIds.isEmpty()) null else item.project
+                                            }
+                                        }, modifier = Modifier.testTag("memory-consolidate-pick-${item.id}"))
+                                    Text(stringResource(R.string.memory_consolidate_pick))
+                                }
+                            }
+                            item.supersededById?.let { survivorId ->
+                                Text(stringResource(R.string.memory_consolidate_superseded_reference, survivorId), modifier = Modifier.testTag("memory-superseded-${item.id}"))
+                            }
                             val episode = item.memoryKind == "episode"
                             Text(
                                 when {
@@ -263,6 +298,10 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                 }
             }
         }
+    }
+
+    consolidationTarget?.let { target ->
+        MemoryConsolidationDialog(target.first, target.second, onClose = { consolidationTarget = null }, onCommitted = { reload() })
     }
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
@@ -425,6 +464,7 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(stringResource(R.string.memory_inspector_id, hit.id), modifier = Modifier.testTag("memory-inspector-id"))
+                                hit.supersededById?.let { survivorId -> Text(stringResource(R.string.memory_consolidate_superseded_reference, survivorId), modifier = Modifier.testTag("memory-inspector-superseded")) }
                                 Text(stringResource(R.string.memory_inspector_project, hit.project), modifier = Modifier.testTag("memory-inspector-project"))
                                 Text(stringResource(R.string.memory_inspector_scope, hit.scope), modifier = Modifier.testTag("memory-inspector-scope"))
                                 Text(stringResource(R.string.memory_inspector_type, hit.observationType), modifier = Modifier.testTag("memory-inspector-type"))
@@ -636,6 +676,126 @@ private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit,
         if (pending) TextButton(enabled = !cancelling, onClick = { cancelling = true; activeToken?.cancel() }, modifier = Modifier.testTag("memory-scan-cancel")) { Text(stringResource(R.string.memory_scan_cancel)) }
     }, dismissButton = {
         TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-scan-close")) { Text(stringResource(R.string.memory_inspector_close)) }
+    })
+}
+
+/** Explicit human compound write; only a complete displayed plan can enable confirmation. */
+@Composable
+private fun MemoryConsolidationDialog(ids: List<String>, project: String, onClose: () -> Unit, onCommitted: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var title by remember { mutableStateOf("") }
+    var content by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("") }
+    var topic by remember { mutableStateOf("") }
+    var request by remember { mutableStateOf<MemoryConsolidationRequest?>(null) }
+    var plan by remember { mutableStateOf<MemoryConsolidationPlan?>(null) }
+    var result by remember { mutableStateOf<MemoryConsolidationResult?>(null) }
+    var confirmed by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<String?>(null) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel() } }
+    fun invalidate() { request = null; plan = null; result = null; confirmed = false; state = null }
+    fun preview() {
+        if (pending || result?.status == "consolidated") return
+        invalidate()
+        val prepared = try { MemoryConsolidationArguments.prepare(mapOf(
+            "ids_to_delete" to ids, "new_title" to title, "new_content" to content,
+            "expected_project" to project, "type" to type, "topic_key" to topic,
+        )) } catch (_: Exception) { state = "invalid"; return }
+        val token = CancellationToken.cancellable(); activeToken = token; pending = true
+        scope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentConsolidationPreview(prepared, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled(); request = prepared; plan = loaded
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { invalidate(); state = "cancelled" }
+            } catch (_: Exception) { coroutineContext.ensureActive(); invalidate(); state = "failed" }
+            finally { if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { pending = false; activeToken = null } }
+        }
+    }
+    fun confirm() {
+        val original = request ?: return; val displayed = plan ?: return
+        if (!confirmed || pending || result != null) return
+        val token = CancellationToken.cancellable(); activeToken = token; pending = true; confirmed = false; state = null
+        scope.launch {
+            try {
+                val received = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentConsolidationConfirm(original, displayed.fingerprint, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                when (received.status) {
+                    "fingerprint_mismatch" -> { plan = received.plan; state = "mismatch" }
+                    "consolidated" -> { result = received; plan = null; request = null; onCommitted() }
+                    else -> { invalidate(); state = "unknown" }
+                }
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { invalidate(); state = "cancelled" }
+            } catch (_: Exception) { coroutineContext.ensureActive(); invalidate(); state = "unknown" }
+            finally { if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { pending = false; activeToken = null } }
+        }
+    }
+    AlertDialog(onDismissRequest = { if (!pending) onClose() }, title = { Text(stringResource(R.string.memory_consolidate_title)) }, text = {
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-consolidate-content"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item {
+                Text(stringResource(R.string.memory_consolidate_warning))
+                Text(stringResource(R.string.memory_consolidate_requested, project, ids.joinToString("\n")))
+                OutlinedTextField(value = title, onValueChange = { title = it; invalidate() }, enabled = !pending && result == null,
+                    label = { Text(stringResource(R.string.memory_consolidate_new_title)) }, modifier = Modifier.fillMaxWidth().testTag("memory-consolidate-title"))
+                OutlinedTextField(value = content, onValueChange = { content = it; invalidate() }, enabled = !pending && result == null,
+                    label = { Text(stringResource(R.string.memory_consolidate_new_content)) }, modifier = Modifier.fillMaxWidth().testTag("memory-consolidate-body"))
+                OutlinedTextField(value = type, onValueChange = { type = it; invalidate() }, enabled = !pending && result == null,
+                    label = { Text(stringResource(R.string.memory_consolidate_type)) }, modifier = Modifier.fillMaxWidth().testTag("memory-consolidate-type"))
+                OutlinedTextField(value = topic, onValueChange = { topic = it; invalidate() }, enabled = !pending && result == null,
+                    label = { Text(stringResource(R.string.memory_consolidate_topic)) }, modifier = Modifier.fillMaxWidth().testTag("memory-consolidate-topic"))
+                TextButton(enabled = !pending && result == null, onClick = { preview() }, modifier = Modifier.testTag("memory-consolidate-preview")) { Text(stringResource(R.string.memory_consolidate_preview)) }
+                state?.let { value -> Text(stringResource(when (value) { "invalid" -> R.string.memory_consolidate_invalid; "failed" -> R.string.memory_consolidate_failed; "mismatch" -> R.string.memory_consolidate_mismatch; "cancelled" -> R.string.memory_consolidate_cancelled; else -> R.string.memory_consolidate_unknown }), modifier = Modifier.testTag("memory-consolidate-$value")) }
+            }
+            plan?.let { displayed ->
+                item {
+                    Text(stringResource(R.string.memory_consolidate_plan), modifier = Modifier.testTag("memory-consolidate-plan"))
+                    Text(displayed.fingerprint, modifier = Modifier.testTag("memory-consolidate-fingerprint"))
+                    Text(stringResource(R.string.memory_consolidate_retire, displayed.sourceIds.joinToString("\n")))
+                    val survivor = displayed.survivor
+                    Text(survivor.title, modifier = Modifier.testTag("memory-consolidate-survivor-title"))
+                    Text(survivor.content, modifier = Modifier.testTag("memory-consolidate-survivor-content"))
+                    Text(stringResource(R.string.memory_consolidate_survivor_metadata, survivor.project, survivor.scope, survivor.type, survivor.memorySessionId ?: "NULL", survivor.topicKeyBytesBase64 ?: "NULL"))
+                    Text(stringResource(R.string.memory_consolidate_defaults))
+                }
+                items(displayed.sources, key = { it.id }) { source ->
+                    Column(Modifier.testTag("memory-consolidate-source-${source.id}"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${source.id} · ${source.rowId}\n${source.title ?: "NULL"}")
+                        Text(source.content, modifier = Modifier.testTag("memory-consolidate-source-body-${source.id}"))
+                        Text("${source.project} · ${source.scope} · ${source.type}\nSession: ${source.memorySessionId ?: "NULL"}")
+                        Text(stringResource(R.string.memory_consolidate_raw_fields))
+                        source.fields.forEach { field ->
+                            val decoded = if (field.storageType == "text" && field.value != null) runCatching {
+                                Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                                    .decode(java.nio.ByteBuffer.wrap(java.util.Base64.getDecoder().decode(field.value))).toString()
+                            }.getOrNull() else null
+                            Text("${field.name} [${field.storageType}]: ${decoded ?: field.value ?: "NULL"}")
+                            if (field.storageType == "text" && decoded != null) Text("Base64: ${field.value}")
+                        }
+                    }
+                }
+                item {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(checked = confirmed, onCheckedChange = { confirmed = it }, enabled = !pending,
+                            modifier = Modifier.testTag("memory-consolidate-consent"))
+                        Text(stringResource(R.string.memory_consolidate_consent))
+                    }
+                    TextButton(enabled = confirmed && !pending, onClick = { confirm() }, modifier = Modifier.testTag("memory-consolidate-confirm")) { Text(stringResource(R.string.memory_consolidate_confirm)) }
+                }
+            }
+            result?.let { receipt -> item {
+                Text(stringResource(R.string.memory_consolidate_complete, receipt.survivor?.id ?: "—", receipt.softDeletedIds.joinToString("\n")), modifier = Modifier.testTag("memory-consolidate-complete"))
+                receipt.survivor?.let { Text(it.content) }
+            } }
+        }
+    }, confirmButton = {
+        if (pending) TextButton(onClick = { activeToken?.cancel() }, modifier = Modifier.testTag("memory-consolidate-cancel")) { Text(stringResource(R.string.memory_scan_cancel)) }
+    }, dismissButton = {
+        TextButton(enabled = !pending, onClick = { if (!pending) onClose() }, modifier = Modifier.testTag("memory-consolidate-close")) { Text(stringResource(R.string.memory_inspector_close)) }
     })
 }
 

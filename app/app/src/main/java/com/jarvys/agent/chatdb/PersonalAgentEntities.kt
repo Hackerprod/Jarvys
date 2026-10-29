@@ -97,6 +97,7 @@ data class MemoryEntry(
     /** Actual observation producer tool, never inferred from evidence or operation keys. */
     val tool_name: String? = null,
     val review_after: String? = null,
+    val superseded_by_id: String? = null,
 )
 
 /** Payload-free identity retained after explicit permanent observation deletion. */

@@ -110,6 +110,7 @@ public final class CoreAgentRuntime {
   private volatile String currentTurnOwnerMessageId = "";
   private volatile MainChatTurnContextProvider mainChatSteeringProvider;
   private final ModelProviderClient modelProviderOverride;
+  private CoreAgentModel modelOverrideForTests;
 
   public static List<CrewMissionSnapshot> crewSnapshots() {
     List<CrewMissionSnapshot> result = new ArrayList<>();
@@ -174,6 +175,15 @@ public final class CoreAgentRuntime {
         discoverConnectorTools(context, sessionId), WorkspaceTools.createChat(context, sessionId),
         ConnectorRegistry.Companion.get(context), 0, budget,
         true, requireModelProvider(modelProviderOverride));
+  }
+
+  /** Package-private test boundary: preserve the supplied model's real configured context path. */
+  static CoreAgentRuntime withModelForTests(Context context, String sessionId,
+      Collection<SkillEntry> skills, CorePromptBudget budget, CoreAgentModel model) {
+    if (model == null) throw new IllegalArgumentException("A test model is required");
+    CoreAgentRuntime runtime = new CoreAgentRuntime(context, sessionId, skills, budget);
+    runtime.modelOverrideForTests = model;
+    return runtime;
   }
 
   private static ModelProviderClient requireModelProvider(ModelProviderClient provider) {
@@ -357,7 +367,8 @@ public final class CoreAgentRuntime {
     if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
     CrewMode mode = crewMode();
     ModelProviderClient override = modelProviderOverride;
-    final CoreAgentModel model = override == null ? new CoreAgentModel(context, sessionId)
+    final CoreAgentModel model = modelOverrideForTests != null ? modelOverrideForTests
+        : override == null ? new CoreAgentModel(context, sessionId)
         : new CoreAgentModel(context, override, sessionId);
     CrewManager crewManager = null;
     String crewMissionId = null;
@@ -1757,6 +1768,7 @@ public final class CoreAgentRuntime {
           this.budget.toolResultsPerTurnChars)) {
         if ((com.jarvys.agent.chatdb.MemorySessionCommands.isCommand(memoryTool.declaration().name)
             || com.jarvys.agent.chatdb.MemoryJudgmentArguments.isTool(memoryTool.declaration().name)
+            || ("memory_consolidate".equals(memoryTool.declaration().name) && "agent_memory_consolidation".equals(memoryTool.declaration().source))
             || "memory_search_prompts".equals(memoryTool.declaration().name)
             || "memory_context".equals(memoryTool.declaration().name)
             || "memory_review".equals(memoryTool.declaration().name))

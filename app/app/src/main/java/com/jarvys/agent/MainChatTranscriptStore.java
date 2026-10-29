@@ -243,6 +243,11 @@ final class MainChatTranscriptStore {
                                                 // Invalid envelopes receive no mutation proof; batch item errors remain encoded.
                                             }
                                         }
+                                        if ("memory_consolidate".equals(call.name) && memorySessionBinding != null
+                                                && loop.registeredToolHasSource(call.name, "agent_memory_consolidation")) {
+                                            try { memorySaveInputDigest = com.jarvys.agent.chatdb.MemoryConsolidationArguments.checkpointDigest(call.arguments, memorySessionBinding.getId()); }
+                                            catch (IllegalArgumentException invalidArguments) { /* No proof for invalid requests. */ }
+                                        }
                                         BoundedArguments arguments = boundedArguments(call.arguments);
                                         calls.put(new JSONObject().put("id", call.id).put("name", call.name)
                                                 .put("arguments", arguments.json).put("artifactIds", new JSONArray(arguments.artifactIds))

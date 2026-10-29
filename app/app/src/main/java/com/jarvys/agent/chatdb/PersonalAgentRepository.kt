@@ -87,6 +87,7 @@ data class PersonalMemoryHit(
     val titleBytesBase64: String? = null, val titleIsUtf8: Boolean? = null,
     val reviewAfter: String? = null, val reviewState: String = "active",
     val relations: List<MemoryRelationView> = emptyList(),
+    val supersededById:String?=null,
 )
 
 data class PersonalMemoryLinkView(val relation: String, val direction: String, val id: String, val title: String?,
@@ -211,6 +212,7 @@ data class PersonalMemoryItem(
     val deletedAt: Long? = null,
     val titleBytesBase64:String?=null,val titleIsUtf8:Boolean?=null,
     val reviewAfter:String?=null,val reviewState:String="active",
+    val supersededById:String?=null,
 )
 data class PersonalMemoryJob(val id: String, val type: String, val conversationId: String?, val attempts: Long)
 data class PersonalMemoryRevision(
@@ -1237,7 +1239,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         ids.chunked(MAX_IN_IDS).forEach { chunk ->
             val marks = chunk.joinToString(",") { "?" }
             sql.query(
-                "SELECT id,layer,kind,CAST(title AS BLOB) AS title_bytes,CAST(topic_key AS BLOB) AS topic_key_bytes,text,event_at,narration,updated_at,created_at,project,scope,observation_type,duplicate_count,last_seen_at,pinned,deleted_at,memory_session_id,review_after FROM memory_entries " +
+                "SELECT id,layer,kind,CAST(title AS BLOB) AS title_bytes,CAST(topic_key AS BLOB) AS topic_key_bytes,text,event_at,narration,updated_at,created_at,project,scope,observation_type,duplicate_count,last_seen_at,pinned,deleted_at,memory_session_id,review_after,superseded_by_id FROM memory_entries " +
                     "WHERE id IN ($marks) AND ${if (includeDeleted) "1" else "deleted_at IS NULL"} AND $ownerSql",
                 (chunk + ownerArgs).toTypedArray(),
             ).use { c ->
@@ -1250,7 +1252,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                     topicKeyIsUtf8 = MemoryObservationContent.topicIsUtf8(if(c.isNull(4)) null else c.getBlob(4)),
                     eventAt = if (c.isNull(6)) null else c.getLong(6), narration = c.getString(7), updatedAt = c.getLong(8), project = c.getString(10), scope = c.getString(11), observationType = c.getString(12), duplicateCount = c.getLong(13), lastSeenAt = if (c.isNull(14)) null else c.getLong(14), pinned = c.getInt(15) != 0, deletedAt = if(c.isNull(16)) null else c.getLong(16),
                     createdAt = c.getLong(9), memorySessionId = if(c.isNull(17)) null else c.getString(17),
-                    reviewAfter=c.getStringOrNull(18), reviewState=MemoryReview.state(c.getStringOrNull(18),reviewNow),
+                    reviewAfter=c.getStringOrNull(18), reviewState=MemoryReview.state(c.getStringOrNull(18),reviewNow),supersededById=c.getStringOrNull(19),
                 )
             }
         }
@@ -1332,7 +1334,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
             hydrate(ids, withEvidence = false, namespace = namespace, includeDeleted = includeDeleted).forEach { hit ->
                 result += PersonalMemoryItem(
                     hit.id, "memory", hit.layer, hit.text, if(hit.deletedAt == null) "active" else "deleted", hit.updatedAt,
-                    memoryKind = hit.kind, title = hit.title, label = hit.label, eventAt = hit.eventAt, narration = hit.narration, pinned = hit.pinned, project = hit.project, scope = hit.scope, deletedAt = hit.deletedAt, titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8, reviewAfter=hit.reviewAfter,reviewState=hit.reviewState,
+                    memoryKind = hit.kind, title = hit.title, label = hit.label, eventAt = hit.eventAt, narration = hit.narration, pinned = hit.pinned, project = hit.project, scope = hit.scope, deletedAt = hit.deletedAt, titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8, reviewAfter=hit.reviewAfter,reviewState=hit.reviewState,supersededById=hit.supersededById,
                 )
             }
             result.sortedByDescending { it.updatedAt }
@@ -1353,7 +1355,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     suspend fun reviewItems(namespace:MemoryNamespace,limit:Long=20):List<PersonalMemoryItem> = memoriesNeedingReview(namespace,limit).map { hit ->
         PersonalMemoryItem(hit.id,"memory",hit.layer,hit.text,"active",hit.updatedAt,memoryKind=hit.kind,title=hit.title,label=hit.label,
             eventAt=hit.eventAt,narration=hit.narration,pinned=hit.pinned,project=hit.project,scope=hit.scope,
-            titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8,reviewAfter=hit.reviewAfter,reviewState=hit.reviewState)
+            titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8,reviewAfter=hit.reviewAfter,reviewState=hit.reviewState,supersededById=hit.supersededById)
     }
 
     suspend fun markReviewed(id:String,expectedProject:String,namespace:MemoryNamespace):PersonalMemoryReviewReceipt = database.withChatWriteTransaction {

@@ -517,6 +517,11 @@ public final class CoreAgentLoop {
     static final String PROVIDER_MESSAGE = "The provider request ended without a complete response. Progress is retained. Inspect existing results before continuing.";
     private final Model model;
     private final CoreToolRegistry tools;
+    /** Read-only actual dispatch declaration, never a model-supplied source or a permission. */
+    boolean registeredToolHasSource(String name,String source) {
+        CoreTool tool=tools.get(name);
+        return tool!=null && name.equals(tool.declaration().name) && source.equals(tool.declaration().source);
+    }
     private final CorePromptBudget budget;
     private final String instructions;
     private final ConversationCompactor compactor;
@@ -1116,7 +1121,8 @@ public final class CoreAgentLoop {
                 if (preflightError == null) preflightError = PersonalMemoryTools.rawPromptSearchError(tool, rawArguments);
                 if (preflightError == null) preflightError = PersonalMemoryTools.rawReviewError(tool, rawArguments);
                 if (preflightError == null) preflightError = PersonalMemoryTools.rawJudgmentError(tool, rawArguments);
-                if (preflightError == null && PersonalMemoryTools.isJudgment(tool)) {
+                if (preflightError == null) preflightError = MemoryConsolidationTool.rawError(tool, rawArguments);
+                if (preflightError == null && (PersonalMemoryTools.isJudgment(tool) || MemoryConsolidationTool.matches(tool))) {
                     // Native judgment parser preserves per-item errors and raw semantics before generic coercion.
                     invokeArguments = rawArguments;
                 } else if (preflightError == null) {
