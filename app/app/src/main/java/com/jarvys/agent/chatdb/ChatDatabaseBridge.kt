@@ -351,6 +351,73 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    /** Explicit human scan; coordinator stays OUTSIDE worker calls so each pair has its own ACK. */
+    fun personalAgentScanRelations(options:MemoryRelationScanOptions,token:CancellationToken):MemoryRelationScanResult {
+        fun owners():MemoryNamespace = MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,
+            options.project,null,options.project==null,true)
+        token.throwIfCancelled()
+        val plan=executeOnWorker { repos ->
+            token.throwIfCancelled()
+            val namespace=owners()
+            runBlocking { MemoryRelationScanRepository(repos.database).lookup(options,namespace,token) }
+        }
+        val confirmed=ArrayList<MemoryRelationCandidate>()
+        val sources=ArrayList<MemoryRelationScanSource>()
+        val diagnostics=ArrayList<MemoryRelationScanDiagnostic>()
+        var inspected=0; var candidatesFound=0; var alreadyRelated=0; var capped=false; var stopped=false
+        scan@ for(selection in plan.sources) {
+            token.throwIfCancelled()
+            inspected++
+            sources.add(MemoryRelationScanSource(selection.source.base.id,plan.rankingPath,
+                selection.candidates.map {MemoryRelationScanCandidate(it.target.base.id,it.score)}))
+            if(selection.problem!=null) {
+                diagnostics.add(MemoryRelationScanDiagnostic(selection.problem,selection.source.base.id))
+                continue
+            }
+            candidatesFound+=selection.candidates.size
+            if(!plan.options.apply) continue
+            if(confirmed.size>=plan.options.maxInsert && selection.candidates.isNotEmpty()) { capped=true; break }
+            for((index,match) in selection.candidates.withIndex()) {
+                token.throwIfCancelled()
+                try {
+                    // Only this RETURN ACK confirms a pair to the coordinator. A lost outer report
+                    // still does not mean the UI received these internally confirmed identities.
+                    val receipt=executeOnWorker { repos ->
+                        token.throwIfCancelled()
+                        // Registry/namespace failures retain their original category and instance.
+                        val namespace=owners()
+                        runBlocking { MemoryRelationScanRepository(repos.database).insert(plan,selection,match,namespace,token) }
+                    }
+                    if(receipt.candidate==null) alreadyRelated++ else confirmed.add(receipt.candidate)
+                } catch(failure:CancellationException) { throw failure }
+                catch(failure:MemoryRelationScanSqlItemFailure) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_sql_item_incomplete",selection.source.base.id,match.target.base.id))
+                    continue
+                } catch(failure:MemoryRelationSourceChanged) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_source_changed",selection.source.base.id,match.target.base.id)); stopped=true; break@scan
+                } catch(failure:MemoryRelationScanSourceFailure) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_source_error",selection.source.base.id,match.target.base.id)); stopped=true; break@scan
+                } catch(failure:MemoryRelationScanInvariantFailure) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_readback_invalid",selection.source.base.id,match.target.base.id)); stopped=true; break@scan
+                } catch(failure:MemoryRelationScanIndexFailure) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_index_unavailable",selection.source.base.id,match.target.base.id)); stopped=true; break@scan
+                } catch(failure:MemoryRelationScanCorruption) {
+                    diagnostics.add(MemoryRelationScanDiagnostic("memory_scan_storage_corrupt",selection.source.base.id,match.target.base.id)); stopped=true; break@scan
+                }
+                // Unexpected transport/runtime failures propagate unchanged. No report was delivered;
+                // the UI cannot reconstruct internal receipts or infer rollback/ACK loss from that.
+                if(confirmed.size==plan.options.maxInsert && index+1<selection.candidates.size) { capped=true; break@scan }
+            }
+        }
+        token.throwIfCancelled()
+        val boundary=plan.sources.lastOrNull()?.source
+        val next=if(!capped && !stopped && plan.hasMore && boundary!=null)
+            MemoryRelationScanCursor(plan.database,plan.generation,plan.options.project,plan.options.sinceMillis,boundary.rowId,boundary.base.id) else null
+        return MemoryRelationScanResult(plan.options.project,plan.options.sinceMillis,!plan.options.apply,
+            inspected,inspected,candidatesFound,alreadyRelated,confirmed.size,capped,next,plan.rankingPath,
+            sources.toList(),confirmed.toList(),diagnostics.isNotEmpty(),stopped,diagnostics.toList())
+    }
+
     @JvmOverloads
     fun personalAgentPendingRelations(limit:Int=20,offset:Int=0):MemoryRelationPage = executeOnWorker { repos ->
         val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)

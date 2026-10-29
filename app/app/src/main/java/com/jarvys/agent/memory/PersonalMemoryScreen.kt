@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.MemoryWritePolicy
 import com.jarvys.agent.PersonalMemoryConsolidationWorker
 import com.jarvys.agent.R
@@ -41,6 +43,8 @@ import com.jarvys.agent.chatdb.PersonalMemorySessionView
 import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
+import com.jarvys.agent.chatdb.MemoryRelationScanOptions
+import com.jarvys.agent.chatdb.MemoryRelationScanResult
 import com.jarvys.agent.chatdb.MemoryRelationDetails
 import com.jarvys.agent.chatdb.MemoryRelationPage
 import com.jarvys.agent.chatdb.PersonalMemoryHit
@@ -79,6 +83,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showPendingRelations by remember { mutableStateOf(false) }
+    var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
     var reloadGeneration by remember { mutableStateOf(0L) }
     val deleteFailure = stringResource(R.string.memory_delete_failed)
@@ -160,6 +165,8 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                         modifier = Modifier.testTag("memory-projects-open")) { Text(stringResource(R.string.memory_projects_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null, onClick = { if (!deletePending && pinPendingId == null) showPendingRelations = true },
                         modifier = Modifier.testTag("memory-relations-open")) { Text(stringResource(R.string.memory_relations_open)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null, onClick = { if (!deletePending && pinPendingId == null) showRelationScan = true },
+                        modifier = Modifier.testTag("memory-scan-open")) { Text(stringResource(R.string.memory_scan_open)) }
                     notice?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("memory-notice")) }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("memory-error")) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -264,6 +271,10 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
         onClose = { showProjectMemories = false },
         onCommitted = { showProjectMemories = false; reload() },
     )
+
+    if (showRelationScan) MemoryRelationScanDialog(onClose = { showRelationScan = false }, onChanged = { reload() }, onPending = {
+        showRelationScan = false; showPendingRelations = true
+    })
 
     if (showPendingRelations) PendingMemoryRelationsDialog(onClose = { showPendingRelations = false }, onInspect = { id ->
         showPendingRelations = false; inspectorTarget = id
@@ -503,6 +514,117 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
         },
         dismissButton = { TextButton(enabled = !mutationPending, onClick = { if (!mutationPending) onClose() }, modifier = Modifier.testTag("memory-inspector-close")) { Text(stringResource(R.string.memory_inspector_close)) } },
     )
+}
+
+/** A returned preview is only information; Apply starts a fresh operation on the same incoming page. */
+@Composable
+private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit, onPending: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var projects by remember { mutableStateOf<List<String>?>(null) }
+    var projectsFailed by remember { mutableStateOf(false) }
+    var project by remember { mutableStateOf<String?>(WorkspaceIdentity.CENTRAL_SESSION) }
+    var since by remember { mutableStateOf("") }
+    var limit by remember { mutableStateOf("100") }
+    var cap by remember { mutableStateOf("100") }
+    var incoming by remember { mutableStateOf<MemoryRelationScanOptions?>(null) }
+    var report by remember { mutableStateOf<MemoryRelationScanResult?>(null) }
+    var pending by remember { mutableStateOf(false) }
+    var cancelling by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf<String?>(null) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var activeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun invalidate() { incoming = null; report = null; state = null }
+    fun close() { activeToken?.cancel(); activeJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel(); activeJob?.cancel() } }
+    fun launchScan(options: MemoryRelationScanOptions) {
+        if (pending || projects == null || projectsFailed) return
+        val token = CancellationToken.cancellable()
+        // This is deliberately NOT the report's nextCursor.
+        incoming = options.copy(apply = false)
+        report = null; state = null; pending = true; cancelling = false; activeToken = token
+        activeJob = scope.launch {
+            try {
+                val received = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentScanRelations(options, token) }
+                coroutineContext.ensureActive()
+                token.throwIfCancelled()
+                report = received
+                if (received.confirmedRelations.isNotEmpty()) onChanged()
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) state = "cancelled"
+            } catch (failure: Exception) {
+                coroutineContext.ensureActive(); state = "unknown"
+            } finally {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { pending = false; cancelling = false; activeToken = null; activeJob = null }
+            }
+        }
+    }
+    fun dryRun() {
+        if (pending) return
+        val count = limit.toIntOrNull()
+        val maximum = cap.toIntOrNull()
+        val date = try { if (since.isBlank()) null else java.time.Instant.parse(since.trim()).toEpochMilli() } catch (_: Exception) { state = "invalid"; return }
+        if (count == null || count !in 0..100 || maximum == null) { state = "invalid"; return }
+        launchScan(MemoryRelationScanOptions(project, date, count, maximum, false, incoming?.cursor))
+    }
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_scan_title)) }, text = {
+        LaunchedEffect(Unit) {
+            try {
+                val loaded = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentMemoryProjects().map { it.project } }
+                coroutineContext.ensureActive(); projects = (listOf(WorkspaceIdentity.CENTRAL_SESSION) + loaded).distinct()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { coroutineContext.ensureActive(); projectsFailed = true }
+        }
+        when {
+            projectsFailed -> Text(stringResource(R.string.memory_scan_project_error), modifier = Modifier.testTag("memory-scan-project-error"))
+            projects == null -> Text(stringResource(R.string.memory_scan_loading_projects))
+            else -> LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-scan-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    Text(stringResource(R.string.memory_scan_explanation))
+                    TextButton(enabled = !pending, onClick = { if (!pending) { project = null; invalidate() } }, modifier = Modifier.testTag("memory-scan-project-all")) { Text((if (project == null) "✓ " else "") + stringResource(R.string.memory_scan_all)) }
+                }
+                items(projects.orEmpty(), key = { it }) { choice ->
+                    TextButton(enabled = !pending, onClick = { if (!pending) { project = choice; invalidate() } }, modifier = Modifier.testTag("memory-scan-project-$choice")) { Text((if (project == choice) "✓ " else "") + choice) }
+                }
+                item {
+                    OutlinedTextField(value = since, onValueChange = { since = it; invalidate() }, enabled = !pending, label = { Text(stringResource(R.string.memory_scan_since)) }, modifier = Modifier.fillMaxWidth().testTag("memory-scan-since"))
+                    OutlinedTextField(value = limit, onValueChange = { limit = it; report = null; state = null }, enabled = !pending, label = { Text(stringResource(R.string.memory_scan_limit)) }, modifier = Modifier.fillMaxWidth().testTag("memory-scan-limit"))
+                    OutlinedTextField(value = cap, onValueChange = { cap = it; report = null; state = null }, enabled = !pending, label = { Text(stringResource(R.string.memory_scan_cap)) }, modifier = Modifier.fillMaxWidth().testTag("memory-scan-cap"))
+                    TextButton(enabled = !pending, onClick = { dryRun() }, modifier = Modifier.testTag("memory-scan-dry")) { Text(stringResource(R.string.memory_scan_dry)) }
+                    if (incoming != null) TextButton(enabled = !pending, onClick = { if (!pending) invalidate() }, modifier = Modifier.testTag("memory-scan-restart")) { Text(stringResource(R.string.memory_scan_restart)) }
+                    if (pending) Text(stringResource(if (cancelling) R.string.memory_scan_cancelling else R.string.memory_scan_running), modifier = Modifier.testTag("memory-scan-running"))
+                    state?.let { status -> Text(stringResource(when (status) { "invalid" -> R.string.memory_scan_invalid; "cancelled" -> R.string.memory_scan_cancelled; else -> R.string.memory_scan_unknown }), modifier = Modifier.testTag("memory-scan-$status")) }
+                }
+                report?.let { received ->
+                    item {
+                        Text(stringResource(if (received.dryRun) R.string.memory_scan_dry_report else R.string.memory_scan_apply_report), modifier = Modifier.testTag("memory-scan-report"))
+                        Text(stringResource(R.string.memory_scan_counts, received.inspected, received.rankedQueries, received.candidatesFound, received.alreadyRelated, received.relationsInserted), modifier = Modifier.testTag("memory-scan-counts"))
+                        Text(stringResource(R.string.memory_scan_path, received.rankingPath), modifier = Modifier.testTag("memory-scan-path"))
+                        if (received.capped) Text(stringResource(R.string.memory_scan_capped), modifier = Modifier.testTag("memory-scan-capped"))
+                        if (received.incomplete || received.stopped) Text(stringResource(R.string.memory_scan_partial), modifier = Modifier.testTag("memory-scan-partial"))
+                        Text(stringResource(R.string.memory_scan_continuation))
+                        // A conscious rerun, never a promise that this report authorizes the earlier candidate set.
+                        TextButton(enabled = !pending, onClick = { incoming?.let { launchScan(it.copy(apply = true)) } }, modifier = Modifier.testTag("memory-scan-apply")) { Text(stringResource(R.string.memory_scan_apply)) }
+                        val next = received.nextCursor
+                        if (!received.capped && !received.stopped && next != null) TextButton(enabled = !pending, onClick = { incoming?.let { launchScan(it.copy(apply = false, cursor = next)) } }, modifier = Modifier.testTag("memory-scan-next")) { Text(stringResource(R.string.memory_scan_next)) }
+                    }
+                    items(received.sources, key = { it.id }) { source ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(R.string.memory_scan_source, source.id, source.rankingPath, source.candidates.size), modifier = Modifier.testTag("memory-scan-source-${source.id}"))
+                            source.candidates.forEach { candidate -> Text(stringResource(R.string.memory_scan_candidate, candidate.id, candidate.score.toString()), modifier = Modifier.testTag("memory-scan-candidate-${source.id}-${candidate.id}")) }
+                        }
+                    }
+                    items(received.confirmedRelations, key = { it.judgmentId }) { pair -> Text(stringResource(R.string.memory_scan_confirmed, pair.judgmentId), modifier = Modifier.testTag("memory-scan-confirmed-${pair.judgmentId}")) }
+                    items(received.diagnostics) { diagnostic -> Text(listOfNotNull(diagnostic.code, diagnostic.sourceId, diagnostic.targetId).joinToString(" · ")) }
+                }
+                item { TextButton(enabled = !pending, onClick = { if (!pending) onPending() }, modifier = Modifier.testTag("memory-scan-pending")) { Text(stringResource(R.string.memory_scan_pending)) } }
+            }
+        }
+    }, confirmButton = {
+        if (pending) TextButton(enabled = !cancelling, onClick = { cancelling = true; activeToken?.cancel() }, modifier = Modifier.testTag("memory-scan-cancel")) { Text(stringResource(R.string.memory_scan_cancel)) }
+    }, dismissButton = {
+        TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-scan-close")) { Text(stringResource(R.string.memory_inspector_close)) }
+    })
 }
 
 /** Human-authored metadata, bound to the actual displayed endpoint snapshot, never a content editor. */

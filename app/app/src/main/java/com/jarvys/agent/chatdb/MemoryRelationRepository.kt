@@ -54,9 +54,10 @@ internal class MemoryRelationRepository(private val database:JarvysChatDatabase,
     }
 
     suspend fun insertPending(lookup:MemoryRelationLookup,match:MemoryRelationMatch,namespace:MemoryNamespace,
-        beforeEffect:()->Unit = {}, afterEffect:()->Unit = {}):MemoryRelationCandidate? = database.withChatWriteTransaction {
+        beforeEffect:()->Unit = {}, afterEffect:()->Unit = {}, beforeInsert:()->Unit = {}):MemoryRelationCandidate? = database.withChatWriteTransaction {
         beforeEffect()
         if(!lookup.source.same(snapshot(lookup.source.id,namespace)) || !match.target.same(snapshot(match.target.id,namespace))) throw MemoryRelationSourceChanged()
+        beforeInsert() // Source queries completed; callers may distinguish their failures from mutation SQL.
         val id=UUID.randomUUID().toString(); val now=clock()
         sql.execSQL("INSERT INTO memory_relations(relation_id,source_id,target_id,project,scope,relation,status,created_at,updated_at) " +
             "SELECT ?,?,?,?,?,'pending','pending',?,? WHERE NOT EXISTS(SELECT 1 FROM memory_relations WHERE (source_id=? AND target_id=?) OR (source_id=? AND target_id=?))",

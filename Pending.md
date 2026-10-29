@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P4-D — scan léxico manual — checkpoint 29-10-2026
+
+**Candidate 2: 99 pruebas por sabor, 18 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Desde Memoria: analizar sin escribir → ver candidatos/ranking → aplicar conscientemente un análisis fresco de la misma página → inspeccionar/juzgar pendientes. No inferencia automática ni consolidación. Focal 13 separado.
+
+[Reporte, adaptaciones e historia](docs/continue/engram-port/P4-D-scan-report.md) · [Resultados exactos](docs/continue/engram-port/P4-D-scan-results.json).
+
+Código `b4bafe08ef3dc266619330e6e7e5ac9d7070f855`. Mismo Room, dueño actual y snapshot exacto por par; sólo retorno ACK real confirma IDs, cancelación real comprobada dentro del writer y pérdidas de reporte sin resultados inventados. Manual OFF sigue permitido sin conceder autoridad a bots. Candidate1 tuvo un fallo de helper lifecycle por sabor, preservado; fix test-only, producto idéntico. **No P4 total ni PASS agregado P3/C4**. Siguientes: runner semántico real y consolidación preview/CAS; export/import/sync y Android físico no se infieren. GrokBot espera Engram completo.
+
 ## Memoria P4-C — juicios de relaciones — checkpoint 29-10-2026
 
 **Run 2: 196 pruebas por sabor, 24 clases, cero fallos/errores/skips; doble PASS independiente acotado.** La persona puede inspeccionar y registrar/revisar un veredicto; el principal Central además compara pares y procesa lotes ordenados de 1..32. Persistir un juicio externo no significa inferencia automática ni consolidación. Focal 54 separado.
