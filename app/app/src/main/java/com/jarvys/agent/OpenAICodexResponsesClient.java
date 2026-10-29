@@ -143,7 +143,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
                     (SecretStore.CodexCredentials) credentials,
                     currentSession,
                     currentToken,
-                    true,
+                    !settings.suppressesSensitiveDiagnostics(),
                     false,
                     connectionFactory,
                     listener));

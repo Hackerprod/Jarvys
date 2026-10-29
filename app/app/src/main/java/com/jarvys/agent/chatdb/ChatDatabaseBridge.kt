@@ -351,6 +351,44 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }
     }
 
+    /** One app-scoped operation owner; survives dialog and route disposal until physical drain. */
+    val semanticScan:com.jarvys.agent.MemorySemanticScan by lazy { com.jarvys.agent.MemorySemanticScan(applicationContext,this) }
+
+    internal fun prepareSemanticScan(options:MemoryRelationScanOptions,token:CancellationToken):MemoryRelationScanPlan = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,options.project,null,options.project==null,true)
+        runBlocking { MemoryRelationScanRepository(repos.database).lookup(options,namespace,token) }
+    }
+
+    internal fun validateSemanticPair(plan:MemoryRelationScanPlan,source:MemoryRelationScanSnapshot,target:MemoryRelationScanSnapshot,token:CancellationToken) = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,plan.options.project,null,plan.options.project==null,true)
+        runBlocking { repos.database.withChatReadTransaction {
+            MemoryRelationScanRepository(repos.database).requireSnapshots(plan,source,target,namespace,token)
+        } }
+    }
+
+    internal fun applySemanticPair(plan:MemoryRelationScanPlan,source:MemoryRelationScanSnapshot,target:MemoryRelationScanSnapshot,
+        verdict:com.jarvys.agent.MemorySemanticVerdict,model:String?,token:CancellationToken,terminalCheck:()->Unit):MemoryRelationView = executeOnWorker { repos ->
+        token.throwIfCancelled();terminalCheck()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,plan.options.project,null,plan.options.project==null,true)
+        var mutation=false
+        try {
+            runBlocking { repos.database.withChatWriteTransaction {
+                token.throwIfCancelled();terminalCheck()
+                MemoryRelationScanRepository(repos.database).requireSnapshots(plan,source,target,namespace,token)
+                val readback=MemoryRelationRepository(repos.database).compareSemantic(source.base.id,target.base.id,verdict,model,namespace,
+                    beforeEffect={token.throwIfCancelled();terminalCheck()},afterEffect={token.throwIfCancelled();terminalCheck()},beforeMutation={mutation=true})
+                token.throwIfCancelled();terminalCheck()
+                readback
+            } }
+        } catch(failure:android.database.SQLException) {
+            if(isChatSqlCorruption(failure)) throw MemoryRelationScanCorruption(failure)
+            if(!mutation) throw MemoryRelationScanSourceFailure(failure)
+            throw MemoryRelationScanSqlItemFailure(failure)
+        }
+    }
+
     /** Explicit human scan; coordinator stays OUTSIDE worker calls so each pair has its own ACK. */
     fun personalAgentScanRelations(options:MemoryRelationScanOptions,token:CancellationToken):MemoryRelationScanResult {
         fun owners():MemoryNamespace = MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,

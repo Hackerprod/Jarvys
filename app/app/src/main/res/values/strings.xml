@@ -1639,4 +1639,38 @@ Project: %2$s</string>
     <string name="memory_scan_confirmed">Confirmed relation: %1$s</string>
     <string name="memory_scan_source">Ranked source: %1$s · %2$s · candidates: %3$d</string>
     <string name="memory_scan_candidate">Ranked candidate (not a creation receipt): %1$s · score: %2$s</string>
+    <string name="memory_semantic_open">Semantic analysis…</string>
+    <string name="memory_semantic_title">Semantic analysis with a model</string>
+    <string name="memory_semantic_warning">Both semantic preview and apply send the disclosed memory content to your configured provider and may incur usage. Local preparation does not send it. Lexical scan remains separate.</string>
+    <string name="memory_semantic_selector">Project: %1$s · Since (UTC milliseconds): %2$s</string>
+    <string name="memory_semantic_workers">Concurrent requests (1–20)</string>
+    <string name="memory_semantic_timeout">Timeout per pair, seconds (1–600)</string>
+    <string name="memory_semantic_maximum">Maximum pairs (0 or negative: 100)</string>
+    <string name="memory_semantic_prepare_preview">Prepare preview locally</string>
+    <string name="memory_semantic_prepare_apply">Prepare fresh apply locally</string>
+    <string name="memory_semantic_busy">An operation is still active. Cancellation stops later work, but requests already sent cannot be recalled. Wait for physical completion before starting another operation.</string>
+    <string name="memory_semantic_invalid">Check the concurrency, timeout and pair limit.</string>
+    <string name="memory_semantic_cancelled">Cancelled. Earlier confirmed judgments remain; no late result is displayed.</string>
+    <string name="memory_semantic_unknown">No complete report was received. Some judgments may already exist. Inspect them and prepare again explicitly; there is no automatic retry or rollback.</string>
+    <string name="memory_semantic_apply_disclosure">Review this fresh request: send and persist judgments. This does not merge or delete memories.</string>
+    <string name="memory_semantic_preview_disclosure">Review this request: send for inference only, without saving judgments. This preview uses the provider.</string>
+    <string name="memory_semantic_route">Provider: %1$s
+Model: %2$s
+Destination: %3$s
+Reasoning: %4$s
+Compatibility: %5$s
+Authentication mode: %6$s</string>
+    <string name="memory_semantic_parameters">%1$d selected pairs · %2$d concurrent requests · %3$d seconds per pair · maximum %4$d pairs</string>
+    <string name="memory_semantic_privacy">The complete prepared titles and bodies below may be sensitive. Private-tagged content is redacted before transmission. A bounded credential check is not a guarantee that content is safe. Known likely credentials are blocked, with no override.</string>
+    <string name="memory_semantic_blocked">This pair is blocked by the credential check and will not be sent.</string>
+    <string name="memory_semantic_consent">I have reviewed this exact content and destination and authorize sending this potentially sensitive content, with possible provider usage.</string>
+    <string name="memory_semantic_send_apply">Send and apply judgments</string>
+    <string name="memory_semantic_send_preview">Send for semantic preview</string>
+    <string name="memory_semantic_preview_report">Received inference preview — no judgments saved</string>
+    <string name="memory_semantic_apply_report">Received applied judgment report</string>
+    <string name="memory_semantic_counts">Judged: %1$d · Skipped: %2$d · Errors: %3$d. A valid verdict is not a guarantee of correctness.</string>
+    <string name="memory_semantic_next">Prepare next page locally (new confirmation required)</string>
+    <string name="memory_semantic_reported_model">Provider-reported model: %1$s</string>
+    <string name="memory_semantic_confirmed">Confirmed judgment: %1$s</string>
+    <string name="memory_semantic_capped">Semantic pair limit reached. No continuation is available for this capped selection.</string>
 </resources>

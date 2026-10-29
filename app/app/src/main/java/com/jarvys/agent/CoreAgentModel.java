@@ -20,6 +20,27 @@ public final class CoreAgentModel {
     this.sessionId = sessionId;
   }
 
+  /** Semantic manual operation: called only after informed consent, using the displayed route. */
+  CoreAgentModel(Context context, String sessionId, ProviderSettings frozenSettings) {
+    if (frozenSettings == null || !frozenSettings.isSnapshot())
+      throw new IllegalArgumentException("An immutable provider route is required");
+    this.context = context.getApplicationContext();
+    this.settings = frozenSettings;
+    this.sessionId = sessionId;
+    this.provider = ProviderClientRegistry.createClient(frozenSettings.getProvider(),
+        SecretStore.get(this.context), frozenSettings, this.context);
+  }
+
+  /** Test transport injection with the same immutable routing/context path as production. */
+  CoreAgentModel(Context context, ModelProviderClient provider, String sessionId, ProviderSettings frozenSettings) {
+    if (frozenSettings == null || !frozenSettings.isSnapshot())
+      throw new IllegalArgumentException("An immutable provider route is required");
+    this.context = context == null ? null : context.getApplicationContext();
+    this.settings = frozenSettings;
+    this.provider = provider;
+    this.sessionId = sessionId;
+  }
+
   CoreAgentModel(ModelProviderClient provider, String sessionId) {
     this(null, provider, sessionId);
   }

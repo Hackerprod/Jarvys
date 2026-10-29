@@ -1640,4 +1640,38 @@ Proyecto: %2$s</string>
     <string name="memory_scan_confirmed">Relación confirmada: %1$s</string>
     <string name="memory_scan_source">Fuente ordenada: %1$s · %2$s · candidatas: %3$d</string>
     <string name="memory_scan_candidate">Candidata ordenada (no es acuse de creación): %1$s · puntuación: %2$s</string>
+    <string name="memory_semantic_open">Análisis semántico…</string>
+    <string name="memory_semantic_title">Análisis semántico con un modelo</string>
+    <string name="memory_semantic_warning">Tanto la vista previa semántica como aplicar envían el contenido mostrado al proveedor configurado y pueden generar consumo. La preparación local no lo envía. El análisis léxico sigue separado.</string>
+    <string name="memory_semantic_selector">Proyecto: %1$s · Desde (milisegundos UTC): %2$s</string>
+    <string name="memory_semantic_workers">Solicitudes simultáneas (1–20)</string>
+    <string name="memory_semantic_timeout">Tiempo límite por par, segundos (1–600)</string>
+    <string name="memory_semantic_maximum">Máximo de pares (0 o negativo: 100)</string>
+    <string name="memory_semantic_prepare_preview">Preparar vista previa localmente</string>
+    <string name="memory_semantic_prepare_apply">Preparar nueva aplicación localmente</string>
+    <string name="memory_semantic_busy">Hay una operación activa. Cancelar detiene el trabajo posterior, pero no retira solicitudes ya enviadas. Espera a su finalización física antes de iniciar otra operación.</string>
+    <string name="memory_semantic_invalid">Revisa la concurrencia, el tiempo límite y el máximo de pares.</string>
+    <string name="memory_semantic_cancelled">Cancelado. Los juicios ya confirmados permanecen; no se muestra un resultado tardío.</string>
+    <string name="memory_semantic_unknown">No se recibió un informe completo. Puede que ya existan algunos juicios. Inspecciónalos y prepara otra operación explícitamente; no hay reintento ni reversión automáticos.</string>
+    <string name="memory_semantic_apply_disclosure">Revisa esta nueva solicitud: enviar y guardar juicios. No combina ni elimina memorias.</string>
+    <string name="memory_semantic_preview_disclosure">Revisa esta solicitud: enviar solo para inferencia, sin guardar juicios. Esta vista previa utiliza el proveedor.</string>
+    <string name="memory_semantic_route">Proveedor: %1$s
+Modelo: %2$s
+Destino: %3$s
+Razonamiento: %4$s
+Compatibilidad: %5$s
+Modo de autenticación: %6$s</string>
+    <string name="memory_semantic_parameters">%1$d pares seleccionados · %2$d solicitudes simultáneas · %3$d segundos por par · máximo %4$d pares</string>
+    <string name="memory_semantic_privacy">Los títulos y cuerpos preparados completos que siguen pueden ser sensibles. El contenido etiquetado como privado se redacta antes del envío. Una comprobación limitada de credenciales no garantiza que el contenido sea seguro. Las posibles credenciales detectadas se bloquean, sin excepción.</string>
+    <string name="memory_semantic_blocked">Este par está bloqueado por la comprobación de credenciales y no se enviará.</string>
+    <string name="memory_semantic_consent">He revisado este contenido exacto y su destino y autorizo enviar este contenido potencialmente sensible, con posible consumo del proveedor.</string>
+    <string name="memory_semantic_send_apply">Enviar y aplicar juicios</string>
+    <string name="memory_semantic_send_preview">Enviar para vista previa semántica</string>
+    <string name="memory_semantic_preview_report">Vista previa de inferencia recibida — sin juicios guardados</string>
+    <string name="memory_semantic_apply_report">Informe de juicios aplicados recibido</string>
+    <string name="memory_semantic_counts">Juzgados: %1$d · Omitidos: %2$d · Errores: %3$d. Un veredicto válido no garantiza que sea correcto.</string>
+    <string name="memory_semantic_next">Preparar siguiente página localmente (requiere nueva confirmación)</string>
+    <string name="memory_semantic_reported_model">Modelo informado por el proveedor: %1$s</string>
+    <string name="memory_semantic_confirmed">Juicio confirmado: %1$s</string>
+    <string name="memory_semantic_capped">Se alcanzó el límite de pares semánticos. Esta selección limitada no tiene continuación.</string>
 </resources>

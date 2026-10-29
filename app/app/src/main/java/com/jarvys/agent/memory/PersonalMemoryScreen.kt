@@ -521,6 +521,7 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
 private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit, onPending: () -> Unit) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
+    var semanticOptions by remember { mutableStateOf<MemoryRelationScanOptions?>(null) }
     var projects by remember { mutableStateOf<List<String>?>(null) }
     var projectsFailed by remember { mutableStateOf(false) }
     var project by remember { mutableStateOf<String?>(WorkspaceIdentity.CENTRAL_SESSION) }
@@ -567,6 +568,10 @@ private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit,
         if (count == null || count !in 0..100 || maximum == null) { state = "invalid"; return }
         launchScan(MemoryRelationScanOptions(project, date, count, maximum, false, incoming?.cursor))
     }
+    semanticOptions?.let { options ->
+        MemorySemanticScanDialog(options, onClose = { semanticOptions = null }, onChanged = onChanged)
+        return
+    }
     AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_scan_title)) }, text = {
         LaunchedEffect(Unit) {
             try {
@@ -591,6 +596,13 @@ private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit,
                     OutlinedTextField(value = limit, onValueChange = { limit = it; report = null; state = null }, enabled = !pending, label = { Text(stringResource(R.string.memory_scan_limit)) }, modifier = Modifier.fillMaxWidth().testTag("memory-scan-limit"))
                     OutlinedTextField(value = cap, onValueChange = { cap = it; report = null; state = null }, enabled = !pending, label = { Text(stringResource(R.string.memory_scan_cap)) }, modifier = Modifier.fillMaxWidth().testTag("memory-scan-cap"))
                     TextButton(enabled = !pending, onClick = { dryRun() }, modifier = Modifier.testTag("memory-scan-dry")) { Text(stringResource(R.string.memory_scan_dry)) }
+                    TextButton(enabled = !pending, onClick = {
+                        val count = limit.toIntOrNull()
+                        val date = try { if (since.isBlank()) null else java.time.Instant.parse(since.trim()).toEpochMilli() } catch (_: Exception) { state = "invalid"; return@TextButton }
+                        if (count == null || count !in 0..100) state = "invalid"
+                        else semanticOptions = MemoryRelationScanOptions(project, date, count, cursor = incoming?.cursor)
+                    }, modifier = Modifier.testTag("memory-scan-semantic")) { Text(stringResource(R.string.memory_semantic_open)) }
+
                     if (incoming != null) TextButton(enabled = !pending, onClick = { if (!pending) invalidate() }, modifier = Modifier.testTag("memory-scan-restart")) { Text(stringResource(R.string.memory_scan_restart)) }
                     if (pending) Text(stringResource(if (cancelling) R.string.memory_scan_cancelling else R.string.memory_scan_running), modifier = Modifier.testTag("memory-scan-running"))
                     state?.let { status -> Text(stringResource(when (status) { "invalid" -> R.string.memory_scan_invalid; "cancelled" -> R.string.memory_scan_cancelled; else -> R.string.memory_scan_unknown }), modifier = Modifier.testTag("memory-scan-$status")) }
@@ -624,6 +636,125 @@ private fun MemoryRelationScanDialog(onClose: () -> Unit, onChanged: () -> Unit,
         if (pending) TextButton(enabled = !cancelling, onClick = { cancelling = true; activeToken?.cancel() }, modifier = Modifier.testTag("memory-scan-cancel")) { Text(stringResource(R.string.memory_scan_cancel)) }
     }, dismissButton = {
         TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-scan-close")) { Text(stringResource(R.string.memory_inspector_close)) }
+    })
+}
+
+/** Disclosure is local; only the explicit Send action can consume this exact preparation. */
+@Composable
+private fun MemorySemanticScanDialog(scan: MemoryRelationScanOptions, onClose: () -> Unit, onChanged: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val controller = remember(context) { ChatDatabaseBridge.getInstance(context).semanticScan }
+    val scope = rememberCoroutineScope()
+    var concurrency by remember { mutableStateOf("5") }
+    var timeout by remember { mutableStateOf("60") }
+    var maximum by remember { mutableStateOf("100") }
+    var incomingCursor by remember { mutableStateOf(scan.cursor) }
+    var prepared by remember { mutableStateOf<com.jarvys.agent.PreparedMemorySemanticScan?>(null) }
+    var confirmed by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<com.jarvys.agent.MemorySemanticScanResult?>(null) }
+    var pending by remember { mutableStateOf(false) }
+    var observedOperation by remember { mutableStateOf(controller.activeOperation()) }
+    var state by remember { mutableStateOf<String?>(null) }
+    var ownToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var ownJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun invalidate() { prepared = null; confirmed = false; report = null; state = null }
+    fun close() { ownToken?.cancel(); ownJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { ownToken?.cancel(); ownJob?.cancel() } }
+    fun prepare(apply: Boolean, cursor: com.jarvys.agent.chatdb.MemoryRelationScanCursor? = incomingCursor) {
+        if (pending || controller.isRunning()) return
+        val workers = concurrency.toIntOrNull(); val seconds = timeout.toIntOrNull(); val cap = maximum.toIntOrNull()
+        invalidate()
+        if (workers == null || workers !in 1..20 || seconds == null || seconds !in 1..600 || cap == null) { state = "invalid"; return }
+        incomingCursor = cursor
+        val options = com.jarvys.agent.MemorySemanticScanOptions(scan.copy(apply = apply, cursor = cursor), workers, seconds, cap)
+        val token = CancellationToken.cancellable(); ownToken = token; pending = true
+        ownJob = scope.launch {
+            try {
+                val local = withContext(Dispatchers.IO) { controller.prepare(options, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled(); prepared = local
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) state = "cancelled"
+            } catch (_: Exception) { coroutineContext.ensureActive(); state = "unknown" }
+            finally { if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { pending = false; ownToken = null; ownJob = null } }
+        }
+    }
+    fun send() {
+        val approved = prepared ?: return
+        if (!confirmed || pending || controller.isRunning()) return
+        val token = CancellationToken.cancellable(); ownToken = token; pending = true
+        confirmed = false; prepared = null; report = null; state = null
+        ownJob = scope.launch {
+            try {
+                val received = withContext(Dispatchers.IO) { controller.execute(approved, true, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled(); report = received
+                if (received.outcomes.any { it.relation != null }) onChanged()
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) state = "cancelled"
+            } catch (_: Exception) { coroutineContext.ensureActive(); state = "unknown" }
+            finally { if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) { pending = false; ownToken = null; ownJob = null; observedOperation = controller.activeOperation() } }
+        }
+    }
+    val busy = pending || observedOperation != null
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_semantic_title)) }, text = {
+        // Observe physical lifetime only; the Bridge CAS, not this display, controls admission.
+        LaunchedEffect(controller) { while (true) { observedOperation = controller.activeOperation(); kotlinx.coroutines.delay(100) } }
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-semantic-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_semantic_warning))
+                Text(stringResource(R.string.memory_semantic_selector, scan.project ?: stringResource(R.string.memory_scan_all), scan.sinceMillis?.toString() ?: "—"))
+                OutlinedTextField(value = concurrency, onValueChange = { concurrency = it; invalidate() }, enabled = !busy, label = { Text(stringResource(R.string.memory_semantic_workers)) }, modifier = Modifier.testTag("memory-semantic-workers"))
+                OutlinedTextField(value = timeout, onValueChange = { timeout = it; invalidate() }, enabled = !busy, label = { Text(stringResource(R.string.memory_semantic_timeout)) }, modifier = Modifier.testTag("memory-semantic-timeout"))
+                OutlinedTextField(value = maximum, onValueChange = { maximum = it; invalidate() }, enabled = !busy, label = { Text(stringResource(R.string.memory_semantic_maximum)) }, modifier = Modifier.testTag("memory-semantic-maximum"))
+                TextButton(enabled = !busy, onClick = { prepare(false) }, modifier = Modifier.testTag("memory-semantic-prepare-preview")) { Text(stringResource(R.string.memory_semantic_prepare_preview)) }
+                TextButton(enabled = !busy, onClick = { prepare(true) }, modifier = Modifier.testTag("memory-semantic-prepare-apply")) { Text(stringResource(R.string.memory_semantic_prepare_apply)) }
+                if (busy) Text(stringResource(R.string.memory_semantic_busy), modifier = Modifier.testTag("memory-semantic-busy"))
+                state?.let { value -> Text(stringResource(when (value) { "invalid" -> R.string.memory_semantic_invalid; "cancelled" -> R.string.memory_semantic_cancelled; else -> R.string.memory_semantic_unknown }), modifier = Modifier.testTag("memory-semantic-$value")) }
+            }
+            prepared?.let { local ->
+                item {
+                    Text(stringResource(if (local.options.scan.apply) R.string.memory_semantic_apply_disclosure else R.string.memory_semantic_preview_disclosure), modifier = Modifier.testTag("memory-semantic-disclosure"))
+                    Text(stringResource(R.string.memory_semantic_route, local.route.provider, local.route.model, local.route.destination, local.route.reasoningVariant ?: "—", local.route.compatibility ?: "—", local.route.authenticationMode ?: "—"), modifier = Modifier.testTag("memory-semantic-route"))
+                    Text(stringResource(R.string.memory_semantic_parameters, local.pairs.size, local.options.concurrency, local.options.timeoutSeconds, local.options.maxSemantic))
+                    Text(stringResource(R.string.memory_semantic_privacy))
+                }
+                items(local.pairs, key = { it.index }) { pair ->
+                    Column(Modifier.testTag("memory-semantic-pair-${pair.index}")) {
+                        Text("A: ${pair.sourceId}\n${pair.sourceTitle}\n${pair.sourceContent}", modifier = Modifier.testTag("memory-semantic-source-${pair.index}"))
+                        Text("B: ${pair.targetId}\n${pair.targetTitle}\n${pair.targetContent}", modifier = Modifier.testTag("memory-semantic-target-${pair.index}"))
+                        if (pair.blockedReason != null) Text(stringResource(R.string.memory_semantic_blocked), modifier = Modifier.testTag("memory-semantic-blocked-${pair.index}"))
+                    }
+                }
+                item {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(checked = confirmed, onCheckedChange = { confirmed = it }, enabled = !busy, modifier = Modifier.testTag("memory-semantic-consent"))
+                        Text(stringResource(R.string.memory_semantic_consent))
+                    }
+                    TextButton(enabled = confirmed && !busy, onClick = { send() }, modifier = Modifier.testTag("memory-semantic-send")) { Text(stringResource(if (local.options.scan.apply) R.string.memory_semantic_send_apply else R.string.memory_semantic_send_preview)) }
+                }
+            }
+            report?.let { received ->
+                item {
+                    Text(stringResource(if (received.dryRun) R.string.memory_semantic_preview_report else R.string.memory_semantic_apply_report), modifier = Modifier.testTag("memory-semantic-report"))
+                    Text(stringResource(R.string.memory_semantic_counts, received.semanticJudged, received.semanticSkipped, received.semanticErrors), modifier = Modifier.testTag("memory-semantic-counts"))
+                    Text(stringResource(R.string.memory_scan_path, received.rankingPath))
+                    if (received.capped) Text(stringResource(R.string.memory_semantic_capped))
+                    if (!received.capped && received.nextCursor != null) TextButton(enabled = !busy, onClick = { prepare(false, received.nextCursor) }, modifier = Modifier.testTag("memory-semantic-next")) { Text(stringResource(R.string.memory_semantic_next)) }
+                }
+                items(received.outcomes, key = { it.index }) { outcome ->
+                    Column(Modifier.testTag("memory-semantic-outcome-${outcome.index}")) {
+                        Text("${outcome.index}: ${outcome.sourceId} → ${outcome.targetId}\n${outcome.status}")
+                        outcome.verdict?.let { Text("${it.relation} · ${it.confidence}\n${it.reasoning}") }
+                        outcome.reportedModel?.let { Text(stringResource(R.string.memory_semantic_reported_model, it)) }
+                        outcome.relation?.let { Text(stringResource(R.string.memory_semantic_confirmed, it.judgmentId)) }
+                        outcome.error?.let { Text(it) }
+                    }
+                }
+            }
+        }
+    }, confirmButton = {
+        if (busy) TextButton(onClick = { if (ownToken != null) ownToken?.cancel() else observedOperation?.let { controller.cancelIfCurrent(it) } }, modifier = Modifier.testTag("memory-semantic-cancel")) { Text(stringResource(R.string.memory_scan_cancel)) }
+    }, dismissButton = {
+        TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-semantic-close")) { Text(stringResource(R.string.memory_inspector_close)) }
     })
 }
 

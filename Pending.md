@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P4-E — scan semántico manual informado — checkpoint 29-10-2026
+
+**Candidate3 / recovery1: 226 pruebas por sabor, 34 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Desde Memoria: preparar pares localmente → revisar contenido/proveedor/consumo → confirmar envío para preview semántico o aplicar juicios. Preview semántico sí consume inferencia; el scan léxico no. Apply requiere preparación y consentimiento nuevos. Focal48 separado.
+
+[Reporte, adaptaciones e incidentes](docs/continue/engram-port/P4-E-semantic-report.md) · [Resultados exactos](docs/continue/engram-port/P4-E-semantic-results.json).
+
+Código `de43f4f269623cfeba87442a4aff05dff073ab4c`. Snapshot no secreto de destino, fuente/dueño actual y evidencia exacta; pool físicamente acotado hasta unwind, ACK real sin reintentos inciertos. Manual OFF no concede envíos automáticos ni permisos a bots. Validación con transporte fake en la ruta productiva, no proveedor pagado ni Android físico. Compile1 y final2 fallidos, final3 interrumpido e incidentes de captura conservados; recovery final usa sólo sus resultados completos. **No P4 total ni PASS agregado P3/C4.** Siguiente: consolidación preview/plan-CAS con confirmación explícita; export/import/sync y GrokBot no se adelantan.
+
 ## Memoria P4-D — scan léxico manual — checkpoint 29-10-2026
 
 **Candidate 2: 99 pruebas por sabor, 18 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Desde Memoria: analizar sin escribir → ver candidatos/ranking → aplicar conscientemente un análisis fresco de la misma página → inspeccionar/juzgar pendientes. No inferencia automática ni consolidación. Focal 13 separado.

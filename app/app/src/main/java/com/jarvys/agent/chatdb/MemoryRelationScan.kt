@@ -135,6 +135,15 @@ internal class MemoryRelationScanRepository(private val database:JarvysChatDatab
         }
     }
 
+    /** Caller owns a read/write lease; never grants authority from a display snapshot. */
+    fun requireSnapshots(plan:MemoryRelationScanPlan,source:MemoryRelationScanSnapshot,target:MemoryRelationScanSnapshot,
+        namespace:MemoryNamespace,token:CancellationToken) {
+        token.throwIfCancelled()
+        if(plan.database!==database || plan.generation!=generation() || !source.same(snapshot(source.base.id,namespace)) ||
+            !target.same(snapshot(target.base.id,namespace))) throw MemoryRelationSourceChanged()
+        PersonalMemorySearchIndex.requireCanonical(sql)
+    }
+
     suspend fun insert(plan:MemoryRelationScanPlan,selection:MemoryRelationScanSelection,match:MemoryRelationScanMatch,
         namespace:MemoryNamespace,token:CancellationToken):MemoryRelationScanPairResult {
         var sourceChecked=false

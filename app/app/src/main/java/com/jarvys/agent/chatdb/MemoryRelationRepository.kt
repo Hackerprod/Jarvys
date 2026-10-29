@@ -151,15 +151,27 @@ internal class MemoryRelationRepository(private val database:JarvysChatDatabase,
             arrayOf(item.relation,item.reason,item.evidence,item.confidence,actor,kind,session,now,item.judgmentId))
         requireOne();afterEffect();readback(item.judgmentId,namespace)
     }
-    suspend fun compare(item:MemoryJudgmentItem,namespace:MemoryNamespace,session:String?,beforeEffect:()->Unit={},afterEffect:()->Unit={}):MemoryRelationView = database.withChatWriteTransaction {
+    suspend fun compare(item:MemoryJudgmentItem,namespace:MemoryNamespace,session:String?,beforeEffect:()->Unit={},afterEffect:()->Unit={}):MemoryRelationView =
+        comparePrepared(item,namespace,session,false,beforeEffect,afterEffect,{})
+
+    /** Actual semantic runner permits the primary empty reasoning default, unlike caller compare. */
+    suspend fun compareSemantic(sourceId:String,targetId:String,verdict:com.jarvys.agent.MemorySemanticVerdict,model:String?,namespace:MemoryNamespace,
+        beforeEffect:()->Unit={},afterEffect:()->Unit={},beforeMutation:()->Unit={}):MemoryRelationView =
+        comparePrepared(MemoryJudgmentItem(0,sourceId=sourceId,targetId=targetId,relation=verdict.relation,reason=verdict.reasoning,
+            confidence=verdict.confidence,model=model),namespace,null,true,beforeEffect,afterEffect,beforeMutation)
+
+    private suspend fun comparePrepared(item:MemoryJudgmentItem,namespace:MemoryNamespace,session:String?,allowEmptyReason:Boolean,
+        beforeEffect:()->Unit,afterEffect:()->Unit,beforeMutation:()->Unit):MemoryRelationView = database.withChatWriteTransaction {
         beforeEffect()
-        require(item.error==null && item.sourceId!=null && item.targetId!=null && item.relation in MemoryJudgmentArguments.verbs && !item.reason.isNullOrEmpty() && item.confidence!=null) { "memory_judgment_item_invalid" }
+        require(item.error==null && item.sourceId!=null && item.targetId!=null && item.relation in MemoryJudgmentArguments.verbs &&
+            item.reason!=null && (allowEmptyReason || item.reason.isNotEmpty()) && item.confidence!=null && item.confidence.isFinite() && item.confidence in 0.0..1.0) { "memory_judgment_item_invalid" }
         val source=endpoint(item.sourceId,namespace,true);val target=endpoint(item.targetId,namespace,true)
         if(source.project!=target.project) throw MemoryJudgmentItemException("memory_judgment_cross_project")
         val existing=sql.query("SELECT relation_id,status FROM memory_relations WHERE (source_id=? AND target_id=?) OR (source_id=? AND target_id=?) ORDER BY id ASC LIMIT 1",arrayOf(source.id,target.id,target.id,source.id)).use { c ->
             if(!c.moveToFirst()) null else c.getString(0) to c.getString(1)
         }
         if(existing?.second=="orphaned") throw MemoryJudgmentItemException("memory_judgment_orphaned")
+        beforeMutation()
         val id=existing?.first ?: UUID.randomUUID().toString();val now=clock()
         if(existing==null) sql.execSQL("INSERT INTO memory_relations(relation_id,source_id,target_id,project,scope,relation,status,created_at,updated_at,reason,confidence,marked_by_actor,marked_by_kind,marked_by_model,memory_session_id) VALUES(?,?,?,?,?,?,'judged',?,?,?,?,'jarvys','system',?,?)",
             arrayOf(id,source.id,target.id,source.project,source.scope,item.relation,now,now,item.reason,item.confidence,item.model,session))
