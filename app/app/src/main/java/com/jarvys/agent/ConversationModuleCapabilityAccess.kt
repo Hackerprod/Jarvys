@@ -31,9 +31,7 @@ internal class ConversationModuleCapabilityAccess(
         WorkspaceStore.projectIdForSession(conversationId),
         null,
         null,
-        null,
         conversationId,
-        false,
     ).forDelegatedAgent().withoutAttachments()
 
     override fun readWorkspace(path: String): String {

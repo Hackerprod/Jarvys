@@ -1,7 +1,0 @@
-artifacts/
-host-tools/
-references/
-node_modules/
-__pycache__/
-runtime.mjs
-runtime.wasm

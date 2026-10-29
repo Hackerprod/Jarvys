@@ -131,7 +131,9 @@ internal class ConversationModelTurnWriter(
         }
     }
 
-    suspend fun append(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> {
+    suspend fun append(input:ConversationModelTurnInput):ChatDbResult<ConversationModelTurnResult> = appendForMission(input,null)
+
+    internal suspend fun appendForMission(input: ConversationModelTurnInput,missionAuthorization:MissionReceiptAuthorization?): ChatDbResult<ConversationModelTurnResult> {
         if (input.conversationId.isBlank()) return ChatDbResult.Invalid("conversation id is required")
         if ((input.inputState == null) != input.inputMessageIds.isEmpty()) {
             return ChatDbResult.Invalid("input state and message IDs must be supplied together")
@@ -176,7 +178,7 @@ internal class ConversationModelTurnWriter(
                     }
                 }
                 val incorporated = input.inputState?.let { state ->
-                    requireSuccess(conversations.markInputState(input.conversationId, input.inputMessageIds, state))
+                    requireSuccess(conversations.markInputStateForMission(input.conversationId, input.inputMessageIds, state,missionAuthorization))
                 }.orEmpty()
                 ChatDbResult.Success(ConversationModelTurnResult(
                     batch, lifecycleSequences, results, errors, providerOutputs, incorporated,

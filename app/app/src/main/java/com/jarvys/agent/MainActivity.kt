@@ -408,16 +408,40 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreConversationUiState(savedInstanceState)
-        if (SingleSessionReset.isReady(this)) initializeConversationUi()
-        else lifecycleScope.launch {
+        if (FreshStorageBootstrap.isReady(this)) {
+            try { initializeConversationUi() }
+            catch (failure: Exception) { showStorageStartupFailure(failure) }
+        } else lifecycleScope.launch {
             try {
-                SingleSessionReset.awaitReady(this@MainActivity)
+                FreshStorageBootstrap.awaitReady(this@MainActivity)
                 initializeConversationUi()
                 if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resumeConversationUi()
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                reportChatDatabaseFailure(failure)
+                showStorageStartupFailure(failure)
+            }
+        }
+    }
+
+    private fun showStorageStartupFailure(failure: Exception) {
+        if (generateSequence<Throwable>(failure) { it.cause }.none { it is CleanInstallRequiredException }) {
+            reportChatDatabaseFailure(failure)
+            return
+        }
+        // Storage is unavailable: no repositories, tools or partial chat UI are constructed.
+        activityResultsReady = false
+        setContent {
+            JarvysOwnTheme(themeMode) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Column(modifier = Modifier.fillMaxSize().padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(R.string.clean_install_required_title), style = MaterialTheme.typography.headlineSmall)
+                        Spacer(Modifier.height(16.dp))
+                        Text(stringResource(R.string.clean_install_required_body), style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
             }
         }
     }
@@ -464,7 +488,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initializeConversationUi() {
-        if (SingleSessionReset.takeStartupNotice(this)) toast(getString(R.string.single_session_started), Toast.LENGTH_LONG)
+        FreshStorageBootstrap.requireFreshInstall(applicationContext)
         languageChoice = AppLanguageRuntime.current(this)
         setupWizardPreferences = SetupWizardPreferences(this)
         CodexModelCatalog.loadCached(this)
@@ -749,7 +773,7 @@ class MainActivity : ComponentActivity() {
         goalInput = ""
         restoreConversationSession(session)
         refreshUi()
-        activeNavController?.let { controller ->
+        controller?.let { controller ->
             if (controller.currentDestination?.route != Routes.CHAT) {
                 controller.popBackStack(Routes.CHAT, false)
                 if (controller.currentDestination?.route != Routes.CHAT) {
@@ -1142,7 +1166,7 @@ ${event.text}
             val skillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
             runCatching {
                 AgentForegroundService.startRegenerateAssistant(this@MainActivity, prompt.text, ArrayList(skillIds),
-                    sessionId, prompt.userMessageId)
+                    sessionId, prompt.userMessageId, prompt.resumeReceipt)
             }.onFailure {
                 toast(getString(R.string.chat_footer_regenerate_error), Toast.LENGTH_LONG)
             }

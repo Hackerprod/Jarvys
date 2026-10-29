@@ -4,14 +4,15 @@ import java.util.UUID
 import java.nio.charset.StandardCharsets
 
 /** [artifactIds] are the conversation artifacts that hold this call's archived arguments. */
-data class ModelCallInput(
+data class ModelCallInput @JvmOverloads constructor(
     val callId: String,
     val toolName: String,
     val argumentsJson: String,
     val artifactIds: List<String> = emptyList(),
+    val memorySaveInputDigest: String? = null,
 )
 
-data class ModelToolBatchInput(
+data class ModelToolBatchInput @JvmOverloads constructor(
     val conversationId: String,
     val batchId: String = UUID.randomUUID().toString(),
     val ownerUserMessageId: String?,
@@ -25,6 +26,7 @@ data class ModelToolBatchInput(
     val createdAtSeconds: Double? = null,
     /** Artifacts that hold the archived assistant text of the batch. */
     val textArtifactIds: List<String> = emptyList(),
+    val memorySessionId: String? = null,
 )
 
 data class ModelToolResultInput(
@@ -182,7 +184,11 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         // Legacy transcript rows treated batch IDs as opaque strings; only blank IDs are unusable.
         if (input.conversationId.isBlank() || input.batchId.isBlank() || input.messageIndex < 0L || input.calls.any {
                 it.callId.isBlank() || it.toolName.isBlank() || it.argumentsJson.isBlank() ||
-                    it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS
+                    it.callId.length > 512 || it.toolName.length > 256 || it.argumentsJson.length > INLINE_TOOL_OUTPUT_CHARS ||
+                    (it.memorySaveInputDigest != null && !((it.toolName == "memory_save" && MemorySaveOperations.isInputDigest(it.memorySaveInputDigest)) ||
+                        (MemorySessionCommands.isCommand(it.toolName) && MemorySessionCommands.isInputDigest(it.memorySaveInputDigest)) ||
+                        (it.toolName == "memory_review" && MemoryReviewArguments.isInputDigest(it.memorySaveInputDigest)) ||
+                        (MemoryJudgmentArguments.isTool(it.toolName) && MemoryJudgmentArguments.isInputDigest(it.memorySaveInputDigest))))
             }) return@transaction ChatDbResult.Invalid("batch, owner index, call IDs, names, and opaque arguments are required")
         if (input.callsDecodeError == null && input.rawCalls != null) return@transaction ChatDbResult.Invalid("raw_calls is reserved for undecodable call arrays")
         if (input.callsDecodeError != null && input.rawCalls == null) return@transaction ChatDbResult.Invalid("undecodable calls must retain raw_calls")
@@ -195,27 +201,29 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
             val same = existing.owner_user_message_id == input.ownerUserMessageId && existing.message_index == input.messageIndex &&
                 existing.assistant_text == input.assistantText && existing.assistant_progress == input.assistantProgress &&
                 existing.raw_calls == input.rawCalls && existing.calls_decode_error == input.callsDecodeError &&
-                existing.provider_output_items_json == input.providerOutputItemsJson &&
-                readCalls(input.conversationId, input.batchId).map { Triple(it.call_id, it.name, it.arguments_json) } ==
-                    input.calls.map { Triple(it.callId, it.toolName, it.argumentsJson) }
+                existing.provider_output_items_json == input.providerOutputItemsJson && existing.memory_session_id == input.memorySessionId &&
+                readCalls(input.conversationId, input.batchId).map { listOf(it.call_id, it.name, it.arguments_json, it.memory_save_input_digest) } ==
+                    input.calls.map { listOf(it.callId, it.toolName, it.argumentsJson, it.memorySaveInputDigest) }
             return@transaction if (same) ChatDbResult.Success(readBatchSnapshot(input.conversationId, input.batchId)!!) else ChatDbResult.Conflict("model_tool_calls batch identity has different payload")
         }
         if (input.ownerUserMessageId != null) {
             if (ownerMessageSeq(input.conversationId, input.ownerUserMessageId) == null)
                 return@transaction ChatDbResult.Invalid("tool batch owner must name a user message in this conversation")
         }
+        // Historical association only: deleting a memory session must not block transcript persistence.
+        // New memory effects independently require the current admitted session inside their write TX.
         val time = input.createdAtSeconds ?: nowSeconds()
         val seq = insertLedgerItem(input.conversationId, "model_tool_calls", input.batchId, time, ownerMessageSeq(input.conversationId, input.ownerUserMessageId))
         sql.execSQL(
-            "INSERT INTO tool_batches(conversation_id,batch_id,seq,owner_user_message_id,message_index,assistant_text,assistant_progress,created_at,last_activity_seq,calls_decode_error,raw_calls,provider_output_items_json) " +
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO tool_batches(conversation_id,batch_id,seq,owner_user_message_id,message_index,assistant_text,assistant_progress,created_at,last_activity_seq,calls_decode_error,raw_calls,provider_output_items_json,memory_session_id) " +
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf(input.conversationId, input.batchId, seq, input.ownerUserMessageId, input.messageIndex, input.assistantText,
-                input.assistantProgress, time, seq, input.callsDecodeError, input.rawCalls, input.providerOutputItemsJson),
+                input.assistantProgress, time, seq, input.callsDecodeError, input.rawCalls, input.providerOutputItemsJson, input.memorySessionId),
         )
         input.calls.forEachIndexed { ordinal, call ->
             sql.execSQL(
-                "INSERT INTO tool_calls(conversation_id,batch_id,ordinal,call_id,name,arguments_json,lifecycle,lifecycle_seq) VALUES(?,?,?,?,?,?,?,?)",
-                arrayOf(input.conversationId, input.batchId, ordinal, call.callId, call.toolName, call.argumentsJson, "INTENT", seq),
+                "INSERT INTO tool_calls(conversation_id,batch_id,ordinal,call_id,name,arguments_json,lifecycle,lifecycle_seq,memory_save_input_digest) VALUES(?,?,?,?,?,?,?,?,?)",
+                arrayOf(input.conversationId, input.batchId, ordinal, call.callId, call.toolName, call.argumentsJson, "INTENT", seq, call.memorySaveInputDigest),
             )
             insertArtifactRefs(input.conversationId, OWNER_TOOL_CALL_ARGS, input.batchId, call.callId, call.artifactIds)
         }
@@ -941,7 +949,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         c.getString(c.getColumnIndexOrThrow("conversation_id")), c.getString(c.getColumnIndexOrThrow("batch_id")), c.getLong(c.getColumnIndexOrThrow("seq")),
         c.getStringOrNullM1b("owner_user_message_id"), c.getLong(c.getColumnIndexOrThrow("message_index")), c.getString(c.getColumnIndexOrThrow("assistant_text")),
         c.getInt(c.getColumnIndexOrThrow("assistant_progress")) != 0, c.getDouble(c.getColumnIndexOrThrow("created_at")), c.getLongOrNullM1b("last_activity_seq"),
-        c.getStringOrNullM1b("calls_decode_error"), c.getStringOrNullM1b("raw_calls"), c.getStringOrNullM1b("provider_output_items_json"),
+        c.getStringOrNullM1b("calls_decode_error"), c.getStringOrNullM1b("raw_calls"), c.getStringOrNullM1b("provider_output_items_json"), c.getStringOrNullM1b("memory_session_id"),
     )
 
     private fun readCalls(conversationId: String, batchId: String): List<ToolCall> = sql.query(
@@ -956,6 +964,7 @@ internal class ModelTranscriptRepository internal constructor(database: JarvysCh
         c.getString(c.getColumnIndexOrThrow("conversation_id")), c.getString(c.getColumnIndexOrThrow("batch_id")),
         c.getInt(c.getColumnIndexOrThrow("ordinal")), c.getString(c.getColumnIndexOrThrow("call_id")), c.getString(c.getColumnIndexOrThrow("name")),
         c.getString(c.getColumnIndexOrThrow("arguments_json")), c.getString(c.getColumnIndexOrThrow("lifecycle")), c.getLongOrNullM1b("lifecycle_seq"),
+        c.getColumnIndexOrThrow("memory_save_input_digest").let { if(c.isNull(it)) null else c.getString(it) },
     )
 
     private fun readToolResult(conversationId: String, batchId: String, callId: String): ToolResult? = sql.query(

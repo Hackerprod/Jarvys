@@ -1,6 +1,0 @@
-﻿app\app\src\main\java\com\jarvys\agent\MainActivity.kt
-app\app\src\main\java\com\jarvys\agent\SingleSessionReset.kt
-app\app\src\main\java\com\jarvys\agent\StorageGeneration.java
-app\app\src\main\java\com\jarvys\agent\apkfactory\FactoryInstallCoordinator.kt
-app\app\src\main\java\com\jarvys\agent\chatdb\JarvysChatDatabase.kt
-app\app\src\main\java\com\jarvys\agent\workspaces\WorkspaceRegistry.kt

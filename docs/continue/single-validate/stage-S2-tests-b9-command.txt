@@ -1,1 +1,0 @@
-.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.tasks.ui.TasksNavigationContractTest --tests com.jarvys.agent.AppNavigationBackPolicyTest -x :app:prepareApkFactoryTemplate --console=plain

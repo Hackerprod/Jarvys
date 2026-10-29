@@ -158,8 +158,8 @@ public final class WorkspaceArtifactDelivery {
         validate.run();
         // No skill or memory mounts. Coding identity still derives solely from the registered session.
         WorkspaceStore workspace = new WorkspaceStore(new StorageGeneration(files),
-                WorkspaceStore.projectIdForSession(source.getExecutionSessionId()), null, null, null,
-                source.getExecutionSessionId(), false);
+                WorkspaceStore.projectIdForSession(source.getExecutionSessionId()), null, null,
+                source.getExecutionSessionId());
         return new SourceScope(workspace, validate);
     }
 

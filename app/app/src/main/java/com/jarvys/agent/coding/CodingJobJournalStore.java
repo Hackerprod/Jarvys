@@ -2,6 +2,7 @@ package com.jarvys.agent.coding;
 
 import com.jarvys.agent.StorageGeneration;
 import com.jarvys.agent.chatdb.CodingJobReservation;
+import com.jarvys.agent.chatdb.CodingJobRecoveryBinding;
 import com.jarvys.agent.linux.CodingJobJournalWriter;
 import java.io.File;
 import java.io.IOException;
@@ -15,10 +16,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class CodingJobJournalStore {
     private static final Map<String,CodingJobJournalStore> STORES = new ConcurrentHashMap<>();
     private final File root;
+    private final File filesRoot;
+    private final Object recoveryLock = new Object();
     private final CodingJobJournalWriter writer;
     private final Map<String,Object> directoryAnchors = new ConcurrentHashMap<>();
     private final Map<String,Head> heads = new ConcurrentHashMap<>();
     private CodingJobJournalStore(File files) throws IOException {
+        filesRoot=files;
         root = new StorageGeneration(files).directory("crew-context").getAbsoluteFile();
         verify(root);
         writer = new CodingJobJournalWriter(root, CodingJobJournalWriter.RealBackend.INSTANCE);
@@ -55,6 +59,132 @@ public final class CodingJobJournalStore {
             snapshot.requireMatches(record);
             if (!Arrays.equals(payload,CodingJobJournalCodec.encode(snapshot,record)))
                 throw new IllegalStateException("Journal commit payload changed");
+        }
+    }
+    /** Verified syntax and exact existing file identity only, not durability or provenance authority. */
+    public static final class RecoveryCandidate {
+        private final CodingJobJournalStore issuer;
+        private final CodingJobEvidence.Record record;
+        private final CodingJobSnapshot snapshot;
+        private final byte[] payload;
+        private final File target;
+        private final Object fileKey;
+        private RecoveryCandidate(CodingJobJournalStore issuer,File target,byte[] bytes,
+                CodingJobJournalCodec.Decoded decoded,Object fileKey) {
+            this.issuer=issuer;this.target=target;payload=bytes.clone();record=decoded.record;
+            snapshot=decoded.snapshot;this.fileKey=fileKey;
+        }
+        public CodingJobJournalStore journal(){return issuer;}
+        public CodingJobEvidence.Record record(){return record;}
+        public CodingJobSnapshot snapshot(){return snapshot;}
+        public byte[] copyPayload(){return payload.clone();}
+        public File target(){return target;}
+    }
+    /** Producer-issued recovery IO attestation, deliberately not a live submission Commit. */
+    public static final class RecoveryVerified {
+        private final CodingJobJournalStore issuer;
+        private final CodingJobRecoveryBinding binding;
+        private final CodingJobEvidence.Record record;
+        private final CodingJobSnapshot snapshot;
+        private final byte[] payload;
+        private final File target;
+        private RecoveryVerified(CodingJobJournalStore issuer,CodingJobRecoveryBinding binding,
+                CodingJobEvidence.Record record,CodingJobSnapshot snapshot,byte[] payload,File target) {
+            this.issuer=issuer;this.binding=binding;this.record=record;this.snapshot=snapshot;
+            this.payload=payload.clone();this.target=target;
+        }
+        public CodingJobRecoveryBinding recoveryBinding(){return binding;}
+        public CodingJobEvidence.Record record(){return record;}
+        public CodingJobSnapshot snapshot(){return snapshot;}
+        public byte[] copyPayload(){return payload.clone();}
+        public String payloadSha256(){return ProjectScope.sha256(payload);}
+        public File target(){return target;}
+        public void requireMintedBy(CodingJobJournalStore expected) {
+            if(issuer!=expected)throw new IllegalStateException("Foreign recovered journal issuer");
+            binding.requireFor(binding.candidate(),expected);
+            if(!record.binding.equals(binding.candidate().record.binding))throw new IllegalStateException("Recovered binding changed");
+            snapshot.requireMatches(record);
+            CodingJobJournalCodec.Decoded decoded=CodingJobJournalCodec.decode(payload,payload.length);
+            if(!Arrays.equals(CodingJobJournalCodec.encode(snapshot,record),CodingJobJournalCodec.encode(decoded.snapshot,decoded.record)))
+                throw new IllegalStateException("Recovered payload facts changed");
+        }
+    }
+    /** Existing-only inspection. It neither creates directories nor changes a journal or Room row. */
+    public RecoveryCandidate inspectExisting(File target,int maxBytes) throws IOException {
+        verify(target);
+        if(maxBytes<0)throw new IllegalArgumentException("Negative journal read budget");
+        ProjectFileIO.Attributes before=ProjectFileIO.attributes(target);
+        if(!before.isRegularFile() || before.isSymbolicLink() || before.fileKey()==null)
+            throw new IOException("Recovery journal is not an identifiable regular file");
+        byte[] bytes=readRecoveryBounded(target,maxBytes);
+        CodingJobJournalCodec.Decoded decoded=CodingJobJournalCodec.decode(bytes,maxBytes);
+        CodingJobSnapshot snapshot=decoded.snapshot;
+        File expected=new File(new File(root,ProjectScope.sha256(snapshot.conversationId.getBytes(StandardCharsets.UTF_8))+"/coding-jobs"),snapshot.id+".json");
+        if(!expected.equals(target.getAbsoluteFile()))throw new IOException("Recovered journal path identity mismatch");
+        ProjectScope scope=new ProjectScopeStore(filesRoot).openExisting(snapshot.conversationId);
+        if(!scope.id().equals(snapshot.scopeId) || !scope.rootDirectory().getCanonicalPath().equals(snapshot.projectRoot) ||
+                !scope.durableIdentity().equals(decoded.record.binding.durableScopeIdentity))
+            throw new IOException("Recovered project identity changed");
+        requireExistingAnchor(root);requireExistingAnchor(expected.getParentFile().getParentFile());
+        requireExistingAnchor(expected.getParentFile());requireExistingAnchor(scope.rootDirectory());
+        ProjectFileIO.Attributes after=ProjectFileIO.attributes(target);
+        if(!before.fileKey().equals(after.fileKey()) || !after.isRegularFile() || before.size()!=after.size())
+            throw new IOException("Recovery journal changed while reading");
+        RecoveryCandidate candidate=new RecoveryCandidate(this,expected,bytes,decoded,after.fileKey());
+        requireCurrentCandidate(candidate);
+        return candidate;
+    }
+    private void requireCurrentCandidate(RecoveryCandidate candidate) throws IOException {
+        if(candidate.issuer!=this)throw new IllegalStateException("Foreign recovery candidate");
+        verify(candidate.target);
+        requireExistingAnchor(root);requireExistingAnchor(candidate.target.getParentFile().getParentFile());
+        requireExistingAnchor(candidate.target.getParentFile());requireExistingAnchor(new File(candidate.snapshot.projectRoot));
+        ProjectScope scope=new ProjectScopeStore(filesRoot).openExisting(candidate.snapshot.conversationId);
+        if(!scope.durableIdentity().equals(candidate.record.binding.durableScopeIdentity))throw new IOException("Recovery scope changed");
+        ProjectFileIO.Attributes before=ProjectFileIO.attributes(candidate.target);
+        if(!before.isRegularFile() || before.isSymbolicLink() || !candidate.fileKey.equals(before.fileKey()) ||
+                !Arrays.equals(candidate.payload,readRecoveryBounded(candidate.target,candidate.payload.length)))
+            throw new IOException("Recovery candidate bytes or file identity changed");
+        if(!candidate.fileKey.equals(ProjectFileIO.attributes(candidate.target).fileKey()))
+            throw new IOException("Recovery journal was replaced during validation");
+    }
+    public RecoveryVerified recertifyTerminal(RecoveryCandidate candidate,CodingJobRecoveryBinding binding) throws IOException {
+        binding.requireFor(candidate,this);
+        if(candidate.record.terminal==null)throw new IllegalArgumentException("Only an immutable terminal can be recertified without owner death");
+        synchronized(recoveryLock) {
+            requireCurrentCandidate(candidate);
+            // A new exact-byte durable write, not a claim about the original attempt's fsync.
+            writer.writeEnvelope(candidate.target,candidate.record.binding.jobId,candidate.payload);
+            RecoveryCandidate installed=inspectExisting(candidate.target,candidate.payload.length);
+            if(!Arrays.equals(candidate.payload,installed.payload))throw new IOException("Recertified terminal bytes changed after commit");
+            return new RecoveryVerified(this,binding,candidate.record,candidate.snapshot,candidate.payload,candidate.target);
+        }
+    }
+    /** The caller retains this exact exclusive owner probe through the durable journal recovery commit. */
+    public RecoveryVerified recoverDead(RecoveryCandidate candidate,CodingJobRecoveryBinding binding,
+            CodingJobOwnerLease.Probe probe) throws IOException {
+        binding.requireFor(candidate,this);
+        if(candidate.record.terminal!=null)throw new IllegalArgumentException("Existing terminal facts are immutable");
+        synchronized(recoveryLock) {
+            CodingJobEvidence.Binding identity=candidate.record.binding;
+            probe.requireDeadOwner(filesRoot,identity.ownerProcessId,identity.managerInstanceId);
+            requireCurrentCandidate(candidate);
+            CodingJobEvidence.Record next=new CodingJobEvidence.Record(identity,Math.addExact(candidate.record.revision,1),
+                candidate.record.highestEffectPhase,candidate.record.submissionCommitted,candidate.record.authorization,
+                new CodingJobEvidence.TerminalFacts(CodingJobEvidence.TerminalState.UNCERTAIN,null,false,false,true,
+                    CodingJobEvidence.AbsenceCoverage.NOT_PROVEN));
+            CodingJobSnapshot old=candidate.snapshot;
+            CodingJobSnapshot snapshot=new CodingJobSnapshot(old.id,old.owner,old.scopeId,old.cwd,old.redactedCommand,
+                old.projectRoot,old.conversationId,CodingJobSnapshot.State.UNCERTAIN,old.createdAt,old.startedAt,null,null,
+                old.logArtifact,"Owner terminated; command outcome is unknown. No command was replayed or process signalled.",old.logBytes,false);
+            byte[] bytes=CodingJobJournalCodec.encode(snapshot,next);
+            probe.requireDeadOwner(filesRoot,identity.ownerProcessId,identity.managerInstanceId);
+            requireCurrentCandidate(candidate);
+            writer.writeEnvelope(candidate.target,identity.jobId,bytes);
+            RecoveryCandidate installed=inspectExisting(candidate.target,bytes.length);
+            if(!Arrays.equals(bytes,installed.payload))throw new IOException("Recovered terminal bytes changed after commit");
+            probe.requireDeadOwner(filesRoot,identity.ownerProcessId,identity.managerInstanceId);
+            return new RecoveryVerified(this,binding,next,snapshot,bytes,candidate.target);
         }
     }
     public static final class UnconfirmedWrite extends IOException {
@@ -220,6 +350,16 @@ public final class CodingJobJournalStore {
         if(!file.isFile()||file.length()>maximum)throw new IOException("Unexpected journal bytes");
         java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
         try(java.io.InputStream in=new java.io.FileInputStream(file)) {
+            byte[] buffer=new byte[8192];int count;
+            while((count=in.read(buffer))!=-1) { if(out.size()+count>maximum)throw new IOException("Journal changed while reading");out.write(buffer,0,count); }
+        }
+        return out.toByteArray();
+    }
+    /** Recovery additionally requires an existing no-follow descriptor; live protocol is unchanged. */
+    private static byte[] readRecoveryBounded(File file,int maximum) throws IOException {
+        if(!file.isFile()||file.length()>maximum)throw new IOException("Unexpected journal bytes");
+        java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
+        try(java.io.InputStream in=ProjectFileIO.openNoFollow(file)) {
             byte[] buffer=new byte[8192];int count;
             while((count=in.read(buffer))!=-1) { if(out.size()+count>maximum)throw new IOException("Journal changed while reading");out.write(buffer,0,count); }
         }

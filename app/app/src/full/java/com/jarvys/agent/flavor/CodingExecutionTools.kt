@@ -48,6 +48,12 @@ class CodingExecutionTools internal constructor(
 
     private inner class Tool(private val name: String) : CoreTool {
         override fun canDelegate() = false
+        // Schema-3 producer metadata only; the legacy synchronous adapter is not opted in here.
+        override fun accessClassification() =
+            if (name == EXEC && technical != null) CoreTool.AccessClassification.WRITE else CoreTool.AccessClassification.READ
+        override fun effectClass(arguments: Map<String, Any>) =
+            if (name == JOBS && arguments["action"] == "cancel") CoreTool.EffectClass.WRITE
+            else super<CoreTool>.effectClass(arguments)
         override fun completionMode(arguments: Map<String, Any>) =
             if (name == EXEC && technical != null) CoreTool.CompletionMode.ASYNC_JOB else CoreTool.CompletionMode.SYNCHRONOUS
         // Deliberately closed until recovery/receipt/liveness gates are independently validated.
@@ -87,17 +93,22 @@ class CodingExecutionTools internal constructor(
             executeInternal(arguments, token, null)
         override fun execute(arguments: Map<String, Any>, token: CancellationToken, progress: ProgressListener?,
             invocation: EffectInvocation?): CoreToolResult =
-            if (name != EXEC || technical == null) super<CoreTool>.execute(arguments, token, progress, invocation)
+            if (name == JOBS && arguments["action"] == "cancel") executeInternal(arguments, token, invocation)
+            else if (name != EXEC || technical == null) super<CoreTool>.execute(arguments, token, progress, invocation)
             else executeInternal(arguments, token, invocation)
         private fun executeInternal(arguments: Map<String, Any>, token: CancellationToken, invocation: EffectInvocation?): CoreToolResult = try {
             if (name == EXEC && technical != null) check(invocation?.crewSource() != null) {
                 "Project execution requires its exact async invocation source"
             }
-            val ticket = if (name == EXEC) technical?.memoryPolicy?.captureTicket() else null
+            if (name == JOBS && arguments["action"] == "cancel") check(invocation != null) {
+                "Project job cancellation requires its exact invocation context"
+            }
+            val ticket = if (name == EXEC || name == JOBS && arguments["action"] == "cancel")
+                technical?.memoryPolicy?.captureTicket() else null
             token.throwIfCancelled()
             check(available(name, token)) { "This capability is no longer selected or this project bot is no longer interactive. Nothing was launched." }
             scope.validate()
-            when (name) { EXEC -> executeCommand(arguments, token, invocation, ticket); JOBS -> jobOperation(arguments, token); else -> environmentStatus(arguments) }
+            when (name) { EXEC -> executeCommand(arguments, token, invocation, ticket); JOBS -> jobOperation(arguments, token, invocation, ticket); else -> environmentStatus(arguments) }
         } catch (uncertain: CodingJobManager.EnqueueOutcomeUncertain) {
             CoreToolResult.failure(JSONObject().put("job_id", uncertain.jobId)
                 .put("submission_transport", "uncertain").put("execution_state", uncertain.observedState.name)
@@ -212,7 +223,59 @@ class CodingExecutionTools internal constructor(
         return CoreToolResult.success(snapshotJson(result).put("message", "Job accepted. Read or wait with project_jobs; do not report completion while it is pending.").toString())
     }
 
-    private fun jobOperation(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+    private fun cancelJob(ownerId: String, id: String, token: CancellationToken,
+        invocation: EffectInvocation, ticket: MemoryWriteGate.Ticket?): CoreToolResult {
+        val reference = EffectInvocation.EffectReference(EffectInvocation.EffectReferenceKind.JOB, scope.id(), id)
+        try {
+            val context = requireNotNull(technical) { "Cancellation requires the technical runtime" }
+            val source = context.bridge.resolveCodingCancellationSource(invocation)
+            val disposition = jobs.cancelInstrumented(ownerId, scope, id, token, validateCurrent = {
+                token.throwIfCancelled()
+                check(available(JOBS, token) && owner(token) == ownerId) {
+                    "Current profile or job owner no longer permits cancellation"
+                }
+                scope.validate()
+            }, admit = {
+                invocation.admit(EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
+                    "native", "project_jobs.cancel", null, "owned_job_cancellation"))
+            }, invocation = invocation, bridge = context.bridge,
+                semanticTicket = requireNotNull(ticket), semanticSource = source)
+            val accepted = disposition.kind == CodingJobManager.CancellationKind.REQUESTED &&
+                disposition.journalConfirmed && disposition.ledgerConfirmed
+            val outcome = if (accepted) EffectInvocation.Outcome.OK else if (disposition.admitted)
+                EffectInvocation.Outcome.UNCERTAIN else EffectInvocation.Outcome.NOT_EXECUTED
+            val semantics = if (accepted) EffectInvocation.CompletionSemantics.CANCEL_REQUEST_ACCEPTED
+                else EffectInvocation.CompletionSemantics.EXISTING_REFERENCE
+            val content = snapshotJson(disposition.snapshot)
+                .put("cancellation_request", disposition.kind.name)
+                .put("request_journal_confirmed", disposition.journalConfirmed)
+                .put("request_ledger_confirmed", disposition.admitted && disposition.ledgerConfirmed)
+                .put("notice", "This describes only the cancellation request, not process cleanup or command completion.")
+            if (!disposition.admitted) content
+                .put("observation_audit_confirmed", disposition.ledgerConfirmed)
+                .put("audit_status", if (disposition.ledgerConfirmed) "confirmed" else "unknown")
+                .put("notice", "No new cancellation was requested; this is an observation of the exact existing job.")
+            val result = if (!disposition.admitted && !disposition.ledgerConfirmed) {
+                content.put("audit_status", "unknown")
+                    .put("notice", "The exact job no-op was observed, but its technical audit was not confirmed. No new cancellation was requested.")
+                CoreToolResult.failure(content.toString())
+            } else CoreToolResult.success(content.toString())
+            return result.withEffectReceipt(invocation.receipt(outcome, semantics, reference))
+        } catch (cancelled: CancellationException) {
+            if (!invocation.admitted()) throw cancelled
+            // Preserve STOP on the caller token while retaining the exact admitted request reference.
+            return CoreToolResult.failure("Cancellation request outcome is uncertain; the caller was stopped")
+                .withEffectReceipt(invocation.receipt(EffectInvocation.Outcome.UNCERTAIN,
+                    EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, reference))
+        } catch (failure: Exception) {
+            val result = CoreToolResult.failure(sanitizer.scrub(failure.message ?: failure.javaClass.simpleName))
+            return if (invocation.admitted()) result.withEffectReceipt(invocation.receipt(
+                EffectInvocation.Outcome.UNCERTAIN, EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, reference)) else result
+        }
+    }
+
+    private fun jobOperation(arguments: Map<String, Any>, token: CancellationToken, invocation: EffectInvocation?,
+        ticket: MemoryWriteGate.Ticket?): CoreToolResult {
         strict(arguments, setOf("action", "job_id", "offset", "wait_seconds", "recovery_offset"))
         val action = arguments["action"] as? String ?: error("action must be a string")
         val ownerId = owner(token)
@@ -234,7 +297,7 @@ class CodingExecutionTools internal constructor(
         }
         val id = arguments["job_id"] as? String ?: error("job_id is required")
         when (action) {
-            "cancel" -> return CoreToolResult.success(snapshotJson(jobs.cancel(ownerId, scope, id)).toString())
+            "cancel" -> return cancelJob(ownerId, id, token, requireNotNull(invocation), ticket)
             "wait" -> jobs.await(ownerId, scope, id, Math.multiplyExact(integer(arguments["wait_seconds"], "wait_seconds", 1), 1000L), token)
             "read" -> Unit
             else -> error("Unsupported job action")

@@ -9,6 +9,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.chatdb.PersonalMemoryJob
+import com.jarvys.agent.chatdb.MaintenanceMemoryBinding
+import com.jarvys.agent.chatdb.MaintenanceClaimStatus
+import com.jarvys.agent.workspaces.WorkspaceIdentity
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -23,23 +26,23 @@ class PersonalMemoryExtractionWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
+    internal var modelFactory: () -> CoreAgentModel = { CoreAgentModel(applicationContext, "${inputData.getString(KEY_CONVERSATION_ID)}-memory-maintenance") }
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        if (inputData.getString(SingleSessionReset.GENERATION_EXTRA) != StorageGeneration.NAME)
+        if (inputData.getString(FreshStorageBootstrap.GENERATION_EXTRA) != StorageGeneration.NAME)
             return@withContext Result.success()
+        val conversationId = inputData.getString(KEY_CONVERSATION_ID)?.takeIf(String::isNotBlank)
+            ?: return@withContext Result.failure()
+        val type = inputData.getString(KEY_TYPE) ?: TYPE_EXTRACT
+        val manual = inputData.getBoolean(KEY_MANUAL, false)
+        if (!WorkspaceIdentity.isCentral(conversationId)
+            || type !in setOf(TYPE_EXTRACT, TYPE_SNAPSHOT, TYPE_NARRATE)) return@withContext Result.success()
         try {
-            SingleSessionReset.awaitReady(applicationContext)
+            FreshStorageBootstrap.awaitReady(applicationContext)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
             return@withContext Result.retry()
-        }
-        val conversationId = inputData.getString(KEY_CONVERSATION_ID)?.takeIf(String::isNotBlank)
-            ?: return@withContext Result.failure()
-        val type = inputData.getString(KEY_TYPE) ?: TYPE_EXTRACT
-        val manual = inputData.getBoolean(KEY_MANUAL, false)
-        if (type !in setOf(TYPE_EXTRACT, TYPE_SNAPSHOT, TYPE_NARRATE) || !MessageReactionTool.isOrdinaryChat(conversationId)) {
-            return@withContext Result.success()
         }
         if (!MemoryWritePolicy.forContext(applicationContext).isEnabled()
             || !manual && !MemoryReflectionPreferences(applicationContext).enabled()) {
@@ -51,54 +54,68 @@ class PersonalMemoryExtractionWorker(
         val owner = UUID.randomUUID().toString()
         var leased = false
         var finished = false
+        var binding:MaintenanceMemoryBinding?=null
+        val ticket=MemoryWritePolicy.forContext(applicationContext).captureTicket()
+        val token=CancellationToken.cancellable()
+        val coroutineJob=currentCoroutineContext().job
         try {
             jobId = bridge.personalAgentEnqueueJob(conversationId, type)
-            val now = System.currentTimeMillis()
-            // WorkManager's worker execution window is shorter than this lease; expired work can be reclaimed.
-            val job: PersonalMemoryJob = bridge.personalAgentClaimJob(
-                jobId,
-                owner,
-                now,
-                now + TimeUnit.MINUTES.toMillis(9),
-            ) ?: return@withContext Result.success()
-            leased = true
-            val token = CancellationToken.cancellable()
-            val cancellationRegistration = currentCoroutineContext().job.invokeOnCompletion { token.cancel() }
+            val now = bridge.maintenanceNow()
+            val claim=bridge.claimMaintenanceJob(ticket,token,jobId,owner,now,now+TimeUnit.MINUTES.toMillis(9),java.util.function.BooleanSupplier { coroutineJob.isActive })
+            if(claim.status==MaintenanceClaimStatus.SESSION_DELETED) { finished=true;return@withContext Result.failure() }
+            if(claim.status!=MaintenanceClaimStatus.CLAIMED) return@withContext Result.success()
+            val job=requireNotNull(claim.job)
+            binding=requireNotNull(claim.binding)
+            leased=true
+            val cancellationRegistration=coroutineJob.invokeOnCompletion { token.cancel() }
             try {
-                val model = CoreAgentModel(applicationContext, "$conversationId-memory-maintenance")
+                binding.checkCancellation(token)
+                val model = modelFactory()
                 val completed = if (job.type == TYPE_NARRATE) {
-                    EpisodeNarrator(applicationContext, conversationId, model).narratePending(token)
+                    EpisodeNarrator(applicationContext, conversationId, model).narratePending(token,null,ticket,binding)
                 } else {
-                    extractIncrementally(conversationId, bridge, model, token, job.type == TYPE_SNAPSHOT)
+                    extractIncrementally(conversationId, bridge, model, token, job.type == TYPE_SNAPSHOT,ticket,binding)
                 }
+                binding.checkCancellation(token)
                 token.throwIfCancelled()
                 if (!completed) throw IllegalStateException("memory_maintenance_failed")
-                if (!bridge.personalAgentCompleteJob(job.id, owner)) throw IllegalStateException("memory_job_lease_lost")
+                binding.checkCancellation(token)
+                if (!bridge.completeMaintenanceJob(ticket,token,binding)) throw IllegalStateException("memory_job_lease_lost")
                 finished = true
                 Result.success()
             } finally {
                 cancellationRegistration.dispose()
             }
         } catch (cancelled: CancellationException) {
-            retryOwnedJob(bridge, jobId, owner, leased, "cancelled")
+            retryOwnedJob(bridge, jobId, owner, leased, "cancelled",ticket,binding)
             finished = true
             throw cancelled
+        } catch (deleted: com.jarvys.agent.chatdb.MaintenanceSessionDeletedException) {
+            val current=requireNotNull(binding)
+            bridge.abortDeletedMaintenanceJob(current)
+            finished=true
+            Result.failure()
         } catch (failure: Exception) {
+            if(!coroutineJob.isActive) {
+                token.cancel();retryOwnedJob(bridge,jobId,owner,leased,"cancelled",ticket,binding);finished=true
+                throw CancellationException("Memory maintenance cancelled",failure)
+            }
             AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
-            retryOwnedJob(bridge, jobId, owner, leased, failure.javaClass.simpleName)
+            retryOwnedJob(bridge, jobId, owner, leased, failure.javaClass.simpleName,ticket,binding)
             finished = true
             Result.retry()
         } finally {
-            if (leased && !finished) retryOwnedJob(bridge, jobId, owner, true, "interrupted")
+            if (leased && !finished) retryOwnedJob(bridge, jobId, owner, true, "interrupted",ticket,binding)
         }
     }
 
     internal fun extractIncrementally(conversationId: String, bridge: ChatDatabaseBridge,
-                                     model: CoreAgentModel, token: CancellationToken, snapshot: Boolean): Boolean {
+                                     model: CoreAgentModel, token: CancellationToken, snapshot: Boolean, originalTicket:MemoryWriteGate.Ticket?=null, maintenance:MaintenanceMemoryBinding?=null): Boolean {
+        if (!WorkspaceIdentity.isCentral(conversationId)) return false
         val policy = MemoryWritePolicy.forContext(applicationContext)
         fun memoryEnabled() = policy.isEnabled()
         if (!memoryEnabled()) return false
-        val ticket = policy.captureTicket()
+        val ticket = originalTicket ?: policy.captureTicket()
         // Narration is driven by durable evidence, not this cursor. Advancing it there would skip user facts.
         val cursor = bridge.personalAgentExtractionCursorSync(conversationId)
         val messages = bridge.readInputsAfterSync(conversationId, cursor)
@@ -106,18 +123,18 @@ class PersonalMemoryExtractionWorker(
         val transcript = messages.filter { it.role == "user" }.map {
             ConversationTurn("user", it.text).withDurableMessageId(it.messageId)
         }
-        val completed = transcript.isEmpty() || PersonalMemoryFlush(applicationContext, conversationId, "principal", model, ticket)
+        val completed = transcript.isEmpty() || PersonalMemoryFlush(applicationContext, conversationId, "principal", model, ticket,maintenance)
             .runOffline(transcript, token, snapshot)
         token.throwIfCancelled()
         if (!completed || !memoryEnabled()) return false
-        if (throughSeq > cursor) bridge.personalAgentAdvanceExtractionCursorAutomatic(ticket, token, conversationId, throughSeq)
+        if (throughSeq > cursor) { if(maintenance==null) bridge.personalAgentAdvanceExtractionCursorAutomatic(ticket, token, conversationId, throughSeq) else bridge.advanceMaintenanceCursor(ticket,token,maintenance,conversationId,throughSeq) }
         return true
     }
 
     private fun retryOwnedJob(bridge: ChatDatabaseBridge, id: String?, owner: String,
-                              leased: Boolean, reason: String) {
+                              leased: Boolean, reason: String,ticket:MemoryWriteGate.Ticket,binding:MaintenanceMemoryBinding?) {
         if (!leased || id == null) return
-        runCatching { bridge.personalAgentRetryJob(id, owner, reason, System.currentTimeMillis()) }
+        runCatching { if(binding!=null) bridge.retryMaintenanceJob(ticket,binding,reason,bridge.maintenanceNow()) else false }
             .onFailure { AgentErrorReporter.reportBackgroundFailure(applicationContext, it) }
     }
 
@@ -131,8 +148,9 @@ class PersonalMemoryExtractionWorker(
 
         @JvmStatic
         fun enqueueNarration(context: Context, conversationId: String) {
+            if (!WorkspaceIdentity.isCentral(conversationId)) return
             val input = Data.Builder()
-                .putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME)
+                .putString(FreshStorageBootstrap.GENERATION_EXTRA, StorageGeneration.NAME)
                 .putString(KEY_CONVERSATION_ID, conversationId)
                 .putString(KEY_TYPE, TYPE_NARRATE)
                 .build()
@@ -149,10 +167,10 @@ class PersonalMemoryExtractionWorker(
         @JvmStatic
         @JvmOverloads
         fun enqueue(context: Context, conversationId: String, snapshot: Boolean = false, manual: Boolean = false) {
-            if (!MessageReactionTool.isOrdinaryChat(conversationId)) return
+            if (!WorkspaceIdentity.isCentral(conversationId)) return
             val type = if (snapshot) TYPE_SNAPSHOT else TYPE_EXTRACT
             val input = Data.Builder()
-                .putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME)
+                .putString(FreshStorageBootstrap.GENERATION_EXTRA, StorageGeneration.NAME)
                 .putString(KEY_CONVERSATION_ID, conversationId)
                 .putString(KEY_TYPE, type)
                 .putBoolean(KEY_MANUAL, manual)

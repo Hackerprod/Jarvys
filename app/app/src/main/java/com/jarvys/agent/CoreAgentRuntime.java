@@ -85,8 +85,23 @@ public final class CoreAgentRuntime {
   private final int depth;
   private final List<CoreTool> mcpTools;
   private final boolean memoryEnabled;
-  private final MemoryStore memoryStore;
   private final String sessionId;
+  private boolean memorySessionRegeneration;
+  private MemorySessionActivity injectedMemoryActivity;
+
+  CoreAgentRuntime withMemorySessionActivity(MemorySessionActivity activity) {
+    this.injectedMemoryActivity = activity;
+    return this;
+  }
+  private AgentForegroundService.MemoryResumeAdmission memoryResumeAdmission;
+
+  CoreAgentRuntime withMemorySessionRegeneration(boolean regeneration,
+      AgentForegroundService.MemoryResumeAdmission admission) {
+    this.memorySessionRegeneration = regeneration;
+    this.memoryResumeAdmission = admission;
+    return this;
+  }
+
   private final List<SkillEntry> skills;
   private final boolean webSearchEnabledForConversation;
   private final List<CoreTool> workspaceTools;
@@ -144,7 +159,7 @@ public final class CoreAgentRuntime {
         discoverMcpTools(context),
         discoverConnectorTools(context, sessionId),
         // Legacy /memory/ files are deliberately no longer opened by conversational agents.
-        WorkspaceTools.createChat(context, sessionId, false),
+        WorkspaceTools.createChat(context, sessionId),
         ConnectorRegistry.Companion.get(context),
         0,
         budget,
@@ -156,7 +171,7 @@ public final class CoreAgentRuntime {
   CoreAgentRuntime(Context context, String sessionId, Collection<SkillEntry> skills,
       CorePromptBudget budget, ModelProviderClient modelProviderOverride) {
     this(context, sessionId, new ArrayList(skills), null, discoverMcpTools(context),
-        discoverConnectorTools(context, sessionId), WorkspaceTools.createChat(context, sessionId, false),
+        discoverConnectorTools(context, sessionId), WorkspaceTools.createChat(context, sessionId),
         ConnectorRegistry.Companion.get(context), 0, budget,
         true, requireModelProvider(modelProviderOverride));
   }
@@ -236,7 +251,6 @@ public final class CoreAgentRuntime {
     this.connectorRegistry = connectorRegistry;
     this.depth = depth;
     this.budget = budget;
-    this.memoryStore = null;
     this.memoryEnabled = this.context == null || MemoryWritePolicy.forContext(this.context).isEnabled();
     this.webSearchEnabledForConversation = webSearchEnabledForConversation;
     this.modelProviderOverride = modelProviderOverride;
@@ -334,6 +348,10 @@ public final class CoreAgentRuntime {
     }
     final MainChatTranscriptStore transcriptStore = mainChat && context != null
         ? new MainChatTranscriptStore(context.getFilesDir(), sessionId, new LocalRunStore(context)) : null;
+    com.jarvys.agent.chatdb.MemorySessionBinding memorySessionBinding = null;
+    MemorySessionActivity.Handle memoryActivity = null;
+    MemoryWriteGate.Ticket memorySessionTicket = null;
+    String memorySessionOutcome = "failed";
     if (transcriptStore != null) toolRegistry = toolRegistry.with(Collections.singletonList(transcriptStore.recoveryTool()));
     final MessageReactionTool reactionTool = reactionToolForRun(mainChat);
     if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
@@ -363,23 +381,60 @@ public final class CoreAgentRuntime {
         registry.beginAgentRun(token.generation(), request, prior);
     }
     try {
+      if (mainChat && depth == 0 && context != null
+          && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId) && !currentTurnOwnerMessageId.isBlank()) {
+        MemoryWritePolicy policy = MemoryWritePolicy.forContext(context);
+        try {
+          memorySessionTicket = policy.captureTicket();
+          MemoryWriteGate.PromptCaptureTicket captureTicket = policy.capturePromptTicket(memorySessionTicket);
+          if (memorySessionTicket.enabledAtCapture()) {
+            String canonicalSessionId = UUID.randomUUID().toString();
+            com.jarvys.agent.chatdb.ChatDatabaseBridge bridge = com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context);
+            if (memorySessionRegeneration) {
+              if (memoryResumeAdmission == null) throw new com.jarvys.agent.chatdb.MemorySessionUnavailableException();
+              memorySessionBinding = bridge.beginResumedMemorySession(memorySessionTicket, token,
+                  memoryResumeAdmission, runId, com.jarvys.agent.crew.CrewProcessIdentity.ID);
+            } else {
+              memorySessionBinding = bridge.beginMemorySession(memorySessionTicket, token, canonicalSessionId,
+                  sessionId, currentTurnOwnerMessageId, runId, com.jarvys.agent.crew.CrewProcessIdentity.ID);
+            }
+            transcriptStore.setMemorySessionBinding(memorySessionBinding);
+            if (runKind()==RunKind.PRINCIPAL) {
+              MemorySessionActivity tracker=injectedMemoryActivity==null
+                  ? MemorySessionActivity.forGeneration(memorySessionBinding.getSourceGeneration()) : injectedMemoryActivity;
+              memoryActivity=tracker.open(memorySessionBinding);
+              memoryActivity.recordToolCall();
+            }
+            if (captureTicket.enabledAtCapture()) {
+              try { bridge.captureMemoryPrompt(captureTicket, token, memorySessionBinding); }
+              catch (RuntimeException unavailableCapture) { memoryUnconfirmed(listener, "Prompt capture was not confirmed."); }
+            }
+          }
+        } catch (RuntimeException unavailableSession) {
+          // Continue the conversation without a writable memory binding; no retry/remint/manual fallback.
+          memorySessionBinding = null;
+          memoryUnconfirmed(listener, "Memory session admission was not confirmed.");
+        }
+      }
+      if (memoryActivity != null) toolRegistry=PersonalMemoryTools.withActivity(toolRegistry,memoryActivity);
       ConversationCompactor compactor =
           depth == 0 && context != null
               ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat,
-                  compactionMemoryLifecycle(model))
+                  compactionMemoryLifecycle(model, memorySessionBinding, memorySessionTicket))
               : null;
       if (mainChat && depth == 0 && context != null
           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
         toolRegistry = toolRegistry.withInvocationSourceProvider(
             transcriptStore.centralSourceProvider(currentTurnOwnerMessageId, runId));
       }
-      if (mainChat && depth == 0 && context != null && !currentTurnOwnerMessageId.isBlank()) {
+      if (mainChat && depth == 0 && context != null && memorySessionBinding != null && !currentTurnOwnerMessageId.isBlank()) {
         toolRegistry = toolRegistry.withInvocationObserver(
-            new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId, runId, transcriptStore));
+            new EpisodeRecorder(context, sessionId, currentTurnOwnerMessageId, runId, transcriptStore, listener));
       }
       final CoreToolRegistry observedToolRegistry = toolRegistry;
       final String runInstructions = instructions(observedToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
-      CoreAgentLoop.Model scopedModel = requestModel(model, observedToolRegistry, mainChat, reactionTool);
+      CoreAgentLoop.Model scopedModel = requestModel(model, observedToolRegistry, mainChat, reactionTool,
+          memorySessionBinding, memorySessionTicket, memoryActivity, listener);
       CoreAgentLoop.TurnContextProvider turnContextProvider = mainChat && depth == 0
               ? mainChatSteeringProvider : null;
       CoreAgentLoop loop =
@@ -387,8 +442,18 @@ public final class CoreAgentRuntime {
               scopedModel, observedToolRegistry, runInstructions, sessionId, budget, compactor,
               CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
       if (transcriptStore != null) transcriptStore.attach(loop, history, currentTurnOwnerMessageId, runId);
-      CoreAgentLoop.Result result = AgentResultPresentation.localize(context,
-          loop.run(request, history, attachments, token, listener, currentUserMessageId, runId));
+      CoreAgentLoop.Result completed = loop.run(request, history, attachments, token, listener, currentUserMessageId, runId);
+      if (runKind() == RunKind.PRINCIPAL && mainChat && depth == 0 && context != null
+          && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
+          && memorySessionBinding != null && memorySessionTicket != null && "COMPLETED".equals(completed.outcome)) {
+        try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+            .capturePassiveMemory(memorySessionTicket, token, memorySessionBinding, completed.text, memoryActivity); }
+        catch (com.jarvys.agent.chatdb.MemorySessionFinalizedException expectedClosed) { /* No new effects after explicit finalize. */ }
+        catch (RuntimeException unconfirmedCapture) { memoryUnconfirmed(listener, "Passive memory capture was not confirmed."); }
+      }
+      CoreAgentLoop.Result result = AgentResultPresentation.localize(context, completed);
+      memorySessionOutcome = "COMPLETED".equals(result.outcome) ? "completed" :
+          (token.isCancelled() ? "cancelled" : "failed");
       if (crewManager != null) {
         crewManager.finishMission(crewMissionId, result.text, result.interruptionReason == CoreAgentLoop.InterruptionReason.DEADLINE ? "TIMED_OUT" : result.outcome);
         if ("COMPLETED".equals(result.outcome))
@@ -401,17 +466,30 @@ public final class CoreAgentRuntime {
           ? result.withText(WebSearchCitationMarkup.resolve(result.text))
           : result;
     } catch (RuntimeException failure) {
+      memorySessionOutcome = token.isCancelled() ? "cancelled" : "failed";
       if (crewManager != null)
         crewManager.finishMission(
             crewMissionId, null, token.isStoppedByUser() ? "STOPPED" : "FAILED");
       throw failure;
     } finally {
+      if (memorySessionBinding != null && memorySessionTicket != null) {
+        try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+            .finishMemorySession(memorySessionTicket, memorySessionBinding, memorySessionOutcome); }
+        catch (RuntimeException unconfirmedEnd) { memoryUnconfirmed(listener, "Memory session completion was not confirmed."); }
+      }
       if (context != null && depth == 0 && mainChat) {
         try { com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
             .personalAgentReconcileEpisodeRunSync(runId); } catch (RuntimeException ignored) { }
       }
-      for (ConnectorRegistry registry : registries) registry.endAgentRun(token.generation());
+      try { for (ConnectorRegistry registry : registries) registry.endAgentRun(token.generation()); }
+      finally { if(memoryActivity!=null) memoryActivity.close(); }
     }
+  }
+
+  private static void memoryUnconfirmed(CoreAgentLoop.ProgressListener listener, String message) {
+    if (listener == null) return;
+    try { listener.onProgress("memory_unconfirmed", message); }
+    catch (RuntimeException ignored) { /* A presentation failure must not fail the user's execution. */ }
   }
 
   /** One run-bound provider adapter; scoped memory is evaluated at each actual model request. */
@@ -420,7 +498,26 @@ public final class CoreAgentRuntime {
       final CoreToolRegistry runToolRegistry,
       final boolean mainChat,
       final MessageReactionTool reactionTool) {
+    return requestModel(model, runToolRegistry, mainChat, reactionTool, null, null, null, null);
+  }
+
+  private CoreAgentLoop.Model requestModel(final CoreAgentModel model,
+      final CoreToolRegistry runToolRegistry, final boolean mainChat,
+      final MessageReactionTool reactionTool,
+      final com.jarvys.agent.chatdb.MemorySessionBinding admittedMemorySession,
+      final MemoryWriteGate.Ticket admissionMemoryTicket,
+      final MemorySessionActivity.Handle activity,
+      final CoreAgentLoop.ProgressListener lifecycleListener) {
+    final boolean preparedPrincipal = mainChat && depth == 0 && runKind() == RunKind.PRINCIPAL
+        && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId);
     return new CoreAgentLoop.Model() {
+      private boolean currentSessionContext;
+
+      @Override public void onCompactionCompleted() {
+        // Rest-invocation host adapter; this flag is not authority and is never restored on NEW.
+        if (preparedPrincipal && admittedMemorySession != null) currentSessionContext = true;
+      }
+
       @Override
       public ModelReply complete(
           List<ConversationTurn> transcript,
@@ -437,6 +534,8 @@ public final class CoreAgentRuntime {
           List<ToolSpec> declarations,
           CancellationToken runToken,
           ModelProviderClient.TextDeltaListener listener) {
+        if (preparedPrincipal) return completePrepared(
+            prepareRequest(transcript, prompt, declarations, runToken), runToken, listener);
         // Recompile scoped memory for each request so a native revocation or source edit
         // cannot survive in a run-cached system prompt. Previously sent text cannot be recalled.
         String requestInstructions = instructions(runToolRegistry, mainChat)
@@ -445,6 +544,77 @@ public final class CoreAgentRuntime {
         ModelReply reply = mainChat
             ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken, listener)
             : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
+        if (reactionTool != null) reactionTool.modelRequestCompleted();
+        return reply;
+      }
+
+      @Override public boolean usesPreparedRequests() { return preparedPrincipal; }
+
+      @Override public PreparedModelRequest prepareRequest(List<ConversationTurn> transcript,
+          String prompt, List<ToolSpec> declarations, CancellationToken runToken) {
+        return prepareRequest(transcript,prompt,declarations,runToken,false);
+      }
+
+      @Override public PreparedModelRequest prepareRequest(List<ConversationTurn> transcript,
+          String prompt, List<ToolSpec> declarations, CancellationToken runToken, boolean activityAttempt) {
+        runToken.throwIfCancelled();
+        if (!preparedPrincipal) throw new IllegalStateException("prepared_model_request_unavailable");
+        boolean activityAvailable=false;
+        if (context != null && admittedMemorySession != null && admissionMemoryTicket != null) {
+          try {
+            activityAvailable=com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+                .renewMemorySession(admissionMemoryTicket, runToken, admittedMemorySession);
+          } catch (com.jarvys.agent.chatdb.MemorySessionUnavailableException unavailable) {
+            memoryUnconfirmed(lifecycleListener, "Memory session renewal was not confirmed.");
+          } catch (MemoryWriteGate.RejectedException unavailable) {
+            memoryUnconfirmed(lifecycleListener, "Memory session renewal was not confirmed.");
+          }
+        }
+        PreparedModelRequest.MemoryBoundary memoryBoundary = null;
+        if (context != null && memoryEnabled) {
+          MemoryWriteGate.Ticket ticket = MemoryWritePolicy.forContext(context).captureTicket();
+          if (ticket.enabledAtCapture()) memoryBoundary = new PreparedModelRequest.MemoryBoundary(ticket,
+              com.jarvys.agent.chatdb.MemoryNamespace.resolve(context, sessionId, null, null, false, true, false));
+        }
+        com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection = context == null ? null
+            : com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+                .validateProtectedContextSync(sessionId, transcript);
+        if(activity!=null) activity.setAvailable(activityAvailable && memoryBoundary!=null);
+        if(activity!=null && activityAttempt && memoryBoundary!=null) activity.recordToolCall();
+        String reminder=activity==null || memoryBoundary==null ? "" : activity.reminder(memoryBoundary.namespace.getProject());
+        String requestInstructions = instructions(runToolRegistry, mainChat,
+            memoryBoundary == null ? null : memoryBoundary.namespace, context == null || memoryBoundary != null, reminder,
+            currentSessionContext ? admittedMemorySession : null)
+            + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE
+            + reactionTool.prepareModelMetadata(transcript, prompt));
+        return model.prepareMainChat(requestInstructions, transcript, prompt, declarations, runToken, protection, memoryBoundary);
+      }
+
+      @Override public ModelReply completePrepared(PreparedModelRequest request,
+          CancellationToken runToken, ModelProviderClient.TextDeltaListener listener) {
+        if (!preparedPrincipal) throw new IllegalStateException("prepared_model_request_unavailable");
+        if (context != null) {
+          com.jarvys.agent.chatdb.InteractionProtectionSnapshot current =
+              com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+                  .validateProtectedContextSync(sessionId, request.sourceTranscript);
+          if (request.protection == null || !request.protection.getFingerprint().equals(current.getFingerprint()))
+            throw new IllegalStateException("context_protection_changed");
+        }
+        if (context != null && request.memoryBoundary != null) {
+          com.jarvys.agent.chatdb.MemoryNamespace currentOwners =
+              com.jarvys.agent.chatdb.MemoryNamespace.resolve(context, sessionId, null, null, false, true, false);
+          if (!request.memoryBoundary.namespace.hasSameOwners(currentOwners))
+            throw new IllegalStateException("context_memory_ownership_changed");
+          try {
+            // This is only epoch validation. No Room, Registry, callback, or network runs under the gate.
+            MemoryWritePolicy.forContext(context).gate().commit(request.memoryBoundary.ticket,
+                () -> !runToken.isCancelled(), () -> null);
+          } catch (MemoryWriteGate.RejectedException denied) {
+            throw new IllegalStateException("context_memory_unavailable", denied);
+          } catch (RuntimeException failure) { throw failure; }
+          catch (Exception failure) { throw new IllegalStateException("context_memory_unavailable", failure); }
+        }
+        ModelReply reply = model.completePrepared(request, runToken, listener);
         if (reactionTool != null) reactionTool.modelRequestCompleted();
         return reply;
       }
@@ -763,7 +933,7 @@ public final class CoreAgentRuntime {
             null,
             discoverMcpTools(context),
             discoverConnectorTools(context, sessionId),
-            WorkspaceTools.create(context, sessionId, false),
+            WorkspaceTools.create(context, sessionId),
             ConnectorRegistry.Companion.get(context),
             1,
             CorePromptBudget.standard(),
@@ -915,7 +1085,7 @@ public final class CoreAgentRuntime {
       workspace = createCodingTools(sessionId, bot);
     } else {
       workspace =
-          WorkspaceTools.forDelegatedAgent(WorkspaceTools.create(context, sessionId, false));
+          WorkspaceTools.forDelegatedAgent(WorkspaceTools.create(context, sessionId));
     }
     final List<String> workspaceNames =
         projectScope ? CodingProjectTools.names() : WorkspaceTools.names();
@@ -1395,7 +1565,7 @@ public final class CoreAgentRuntime {
             null,
             discoverMcpTools(context),
             discoverConnectorTools(context, sessionId),
-            WorkspaceTools.create(context, catalogSession, false),
+            WorkspaceTools.create(context, catalogSession),
             ConnectorRegistry.Companion.get(context),
             1,
             CorePromptBudget.standard(),
@@ -1567,38 +1737,51 @@ public final class CoreAgentRuntime {
         creatorToolNames.add(it.next().declaration().name);
       }
       List<String> taskCapabilityNames = new ArrayList<>();
-      boolean taskMemoryAllowed = WorkspaceTools.hasEnabledMemory(this.workspaceTools);
       for (CoreTool tool : tools) {
         String name = tool.declaration().name;
-        if (unattendedCapabilityAllowed(tool)
-            && (taskMemoryAllowed || !tool.requiresMemoryScopeForScheduledTask())) {
+        if (unattendedCapabilityAllowed(tool)) {
           taskCapabilityNames.add(name);
         }
       }
       tools.add(new UserDecisionTool(this.context, this.sessionId));
       tools.addAll(TaskManagementTools.create(this.context, this.sessionId, creatorToolNames,
-          taskCapabilityNames, taskMemoryAllowed,
+          taskCapabilityNames,
           this.skills.stream().map(skill -> skill.getMetadata().getId()).collect(Collectors.toList())));
     }
     if (this.depth == 0 && this.context != null) {
       tools.add(new ProactiveStatusCoreTool(this.context));
     }
     if (this.depth == 0 && this.context != null && this.memoryEnabled
-        && MessageReactionTool.isOrdinaryChat(this.sessionId)) {
-      tools.addAll(PersonalMemoryTools.create(this.context, this.mainChatSteeringCursor, this.sessionId,
-          this.budget.toolResultsPerTurnChars));
+        && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(this.sessionId)) {
+      for (CoreTool memoryTool : PersonalMemoryTools.create(this.context, this.mainChatSteeringCursor, this.sessionId,
+          this.budget.toolResultsPerTurnChars)) {
+        if ((com.jarvys.agent.chatdb.MemorySessionCommands.isCommand(memoryTool.declaration().name)
+            || com.jarvys.agent.chatdb.MemoryJudgmentArguments.isTool(memoryTool.declaration().name)
+            || "memory_search_prompts".equals(memoryTool.declaration().name)
+            || "memory_context".equals(memoryTool.declaration().name)
+            || "memory_review".equals(memoryTool.declaration().name))
+            && runKind() != RunKind.PRINCIPAL) continue;
+        tools.add(memoryTool);
+      }
     }
     return new CoreToolRegistry(tools);
   }
 
   ConversationCompactor.MemoryFlush compactionMemoryLifecycle(CoreAgentModel model) {
-    if (context == null || depth != 0) return null;
+    return compactionMemoryLifecycle(model,null,null);
+  }
+  ConversationCompactor.MemoryFlush compactionMemoryLifecycle(CoreAgentModel model,
+      com.jarvys.agent.chatdb.MemorySessionBinding parent,MemoryWriteGate.Ticket originalTicket) {
+    if (context == null || depth != 0
+        || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) return null;
     // Source coverage belongs to transcript history even while automatic memory is disabled.
     final String kind = runKind().memoryKind();
-    final PersonalMemoryFlush phase = new PersonalMemoryFlush(context, sessionId, kind, model);
+    final PersonalMemoryFlush phase = new PersonalMemoryFlush(context, sessionId, kind, model,
+        originalTicket==null ? MemoryWritePolicy.forContext(context).captureTicket() : originalTicket)
+        .withCompactionParent(runKind()==RunKind.PRINCIPAL ? parent : null);
     return new ConversationCompactor.MemoryFlush() {
       @Override public boolean beforeCompact(List<ConversationTurn> transcript, CancellationToken token) {
-        return phase.run(transcript, token);
+        return false;
       }
 
       @Override public com.jarvys.agent.chatdb.CompactionCoverage coverage(
@@ -1612,6 +1795,9 @@ public final class CoreAgentRuntime {
         return phase.prepare(transcript, coverage, token);
       }
 
+      @Override public com.jarvys.agent.chatdb.CompactionCoverage coverageAfterPreparation(com.jarvys.agent.chatdb.CompactionCoverage original) { return phase.coverageAfterPreparation(original); }
+      @Override public com.jarvys.agent.chatdb.CompactionMemoryAttempt execution() { return phase.execution(); }
+      @Override public void finishPreparation(CancellationToken token) { phase.finishPreparation(token); }
       @Override public String sessionKind() { return kind; }
       // Completion and counters are bound atomically by appendCompactionPrepared, never here.
     };
@@ -1681,7 +1867,7 @@ public final class CoreAgentRuntime {
         appContext, sessionId, skills, null,
         discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry, moduleRegistry),
         WorkspaceTools.createScheduledTask(appContext, workspaceSession,
-            false, task.getToolScope().getSkillIds()), connectorRegistry, 0,
+            task.getToolScope().getSkillIds()), connectorRegistry, 0,
         CorePromptBudget.standard(), true, null);
     runtime.runKind = RunKind.TASK;
     return runtime.createScheduledTaskToolRegistry(task, approvedPendingAction, deferrer);
@@ -1803,7 +1989,8 @@ public final class CoreAgentRuntime {
   }
 
   private static boolean unattendedCapabilityAllowed(CoreTool tool) {
-    if (tool == null || tool.unattendedAccess() == CoreTool.UnattendedAccess.EXCLUDED) return false;
+    if (tool == null || tool.requiresInteractiveWorkspace()
+        || tool.unattendedAccess() == CoreTool.UnattendedAccess.EXCLUDED) return false;
     if (tool instanceof CoreConnectorTool)
       return ((CoreConnectorTool) tool).autonomyPolicy() != AutonomyPolicy.DENY;
     if (tool instanceof PolicyGatedTool)
@@ -1862,8 +2049,8 @@ public final class CoreAgentRuntime {
 
     @Override public ToolSpec declaration() { return delegate.declaration(); }
     @Override public boolean canDelegate() { return delegate.canDelegate(); }
-    @Override public boolean requiresMemoryScopeForScheduledTask() {
-      return delegate.requiresMemoryScopeForScheduledTask();
+    @Override public boolean requiresInteractiveWorkspace() {
+      return delegate.requiresInteractiveWorkspace();
     }
     @Override public AccessClassification accessClassification() { return delegate.accessClassification(); }
     @Override public EffectClass effectClass() { return delegate.effectClass(); }
@@ -2243,11 +2430,25 @@ public final class CoreAgentRuntime {
   }
 
   String instructions(CoreToolRegistry effective, boolean mainChat) {
+    return instructions(effective, mainChat, null, true, "");
+  }
+
+  private String instructions(CoreToolRegistry effective, boolean mainChat,
+      com.jarvys.agent.chatdb.MemoryNamespace requestNamespace, boolean allowMemory, String reminder) {
+    return instructions(effective, mainChat, requestNamespace, allowMemory, reminder, null);
+  }
+
+  private String instructions(CoreToolRegistry effective, boolean mainChat,
+      com.jarvys.agent.chatdb.MemoryNamespace requestNamespace, boolean allowMemory, String reminder,
+      com.jarvys.agent.chatdb.MemorySessionBinding compactionSession) {
+    final boolean currentMemoryEnabled = this.memoryEnabled && allowMemory
+        && (context == null || MemoryWritePolicy.forContext(context).isEnabled());
     List<String> declared = effective.names();
     String base = mainChat ? MainAgentPrompt.core(responseLocale(context), true) : BASE_INSTRUCTIONS;
     StringBuilder prompt = new StringBuilder(base);
     RunKind kind = runKind();
-    boolean ordinaryChat = kind == RunKind.PRINCIPAL && MessageReactionTool.isOrdinaryChat(this.sessionId);
+    boolean ordinaryChat = kind == RunKind.PRINCIPAL
+        && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(this.sessionId);
     String memorySessionKind = kind.memoryKind();
     if (this.context != null && this.depth > 0) {
       // Persist the session class without loading any user content into delegated agents.
@@ -2256,14 +2457,17 @@ public final class CoreAgentRuntime {
       prompt.append("\n\nDelegated subagent memory boundary: do not read or write the user's profile or personal memory, or ask bootstrap questions. Return user facts to the parent agent for review.");
     }
     if (this.context != null && this.depth == 0 && (ordinaryChat || kind.isBackground())) {
-      com.jarvys.agent.chatdb.PersonalAgentPromptContext memory =
-          com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context)
-              .personalAgentPromptContext(ordinaryChat ? this.sessionId : "", this.memoryEnabled, memorySessionKind);
+      com.jarvys.agent.chatdb.ChatDatabaseBridge memoryBridge =
+          com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(this.context);
+      com.jarvys.agent.chatdb.PersonalAgentPromptContext memory = ordinaryChat && requestNamespace != null
+          ? memoryBridge.personalAgentPromptContextWithNamespace(sessionId, currentMemoryEnabled,
+              memorySessionKind, requestNamespace, reminder, compactionSession)
+          : memoryBridge.personalAgentPromptContext(ordinaryChat ? this.sessionId : "", currentMemoryEnabled, memorySessionKind);
       prompt.append("\n\n<assistant_identity authority=\"system\">\n")
           .append(xml(memory.getIdentity())).append('\n').append(xml(memory.getSoul())).append("\n</assistant_identity>");
       prompt.append("\n\n<execution_and_memory_rules authority=\"system\">\n")
           .append(xml(memory.getRules())).append("\n</execution_and_memory_rules>");
-      if (ordinaryChat && this.memoryEnabled) {
+      if (ordinaryChat && currentMemoryEnabled) {
         prompt.append("\n\n<user_profile authority=\"user preferences and facts; system and current user instructions take priority\">\n")
             .append(xml(memory.getUserProfile())).append("\n</user_profile>");
         prompt.append("\n\n<curated_memory authority=\"factual context\">\n")
@@ -2486,15 +2690,6 @@ public final class CoreAgentRuntime {
         + "; device time zone: " + deviceZone.getId() + '.';
   }
 
-  static String withMemoryInstructions(
-      String base, MemoryStore memoryStore, CorePromptBudget budget) {
-    if (memoryStore == null || !memoryStore.isEnabled()) {
-      return base;
-    }
-    String projection = memoryStore.compileSystemPromptProjection(budget.memoryChars);
-    return projection.isEmpty() ? base : base + "\n\n" + projection;
-  }
-
   private boolean skillWorkspaceAvailable() {
     if (this.allowedTools == null) {
       return true;
@@ -2504,7 +2699,7 @@ public final class CoreAgentRuntime {
       String name = strArr[i];
       boolean included = false;
       for (String allowed : this.allowedTools) {
-        if (name.equals(WorkspaceTools.canonicalToolName(allowed))) {
+        if (name.equals(allowed)) {
           included = true;
           break;
         }

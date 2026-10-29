@@ -552,26 +552,8 @@
     <string name="memory_actor_user">Tú</string>
     <string name="memory_actor_agent">Jarvys</string>
     <string name="memory_actor_reflection">Reflexión</string>
-    <string name="memory_seed_root_index">"# Memoria
-
-Índice de recuerdos duraderos sobre la persona usuaria. Mantén aquí enlaces a notas ampliadas; consulta cada índice antes de leer sus detalles.
-
-- [Persona usuaria](human.md)
-- [Preferencias de interacción](persona.md)
-"</string>
-    <string name="memory_seed_human">"---
-name: Persona usuaria
-description: Datos, gustos, preferencias y contexto personal que la persona haya compartido explícitamente.
----
-"</string>
-    <string name="memory_seed_persona">"---
-name: Preferencias de interacción
-description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayudar a esta persona.
----
-"</string>
     <string name="memory_add_note">Añadir una nota</string>
     <string name="memory_add_section">Crear una sección</string>
-    <string name="memory_history">Historial de versiones</string>
     <string name="memory_export">Exportar la memoria de este chat</string>
     <string name="memory_clear_all">Borrar la memoria de este chat</string>
     <string name="memory_file_path">Nombre del archivo, por ejemplo preferencias.md</string>
@@ -584,6 +566,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="memory_editor_body">Notas de memoria</string>
     <string name="memory_index_hint">Este archivo es un índice, no un dato principal. Usa enlaces Markdown relativos para enlazar notas de esta sección.</string>
     <string name="memory_editor_limit">Máximo %1$d caracteres por archivo de memoria.</string>
+    <string name="memory_note_title">Título</string>
     <string name="memory_save">Guardar cambios</string>
     <string name="memory_back">Volver</string>
     <string name="memory_saved">Memoria guardada en este dispositivo.</string>
@@ -1504,4 +1487,127 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="connector_transition_permission_denied">No se concedió acceso. Revisá los permisos del conector.</string>
     <string name="connector_transition_runtime_failed">El conector no terminó de iniciarse. Revisá su estado antes de volver a intentarlo.</string>
     <string name="connector_transition_cleanup_failed">No se pudo confirmar la limpieza del conector. Revisá el estado actual de la conexión.</string>
+    <string name="clean_install_required_title">Se requiere una instalación limpia</string>
+    <string name="clean_install_required_body">Esta versión necesita una instalación limpia. El almacenamiento existente de la app no es compatible. No se han importado ni borrado datos. Reinstala la app o borra su almacenamiento desde los ajustes de Android antes de continuar.</string>
+    <string name="memory_pinned">Fijado</string>
+    <string name="memory_not_pinned">Sin fijar</string>
+    <string name="memory_pin_action">Fijar</string>
+    <string name="memory_unpin_action">Desfijar</string>
+    <string name="memory_pin_failed">No se pudo cambiar el estado fijado.</string>
+    <string name="memory_delete_action">Retirar recuerdo</string>
+    <string name="memory_observation_delete_title">¿Retirar este recuerdo?</string>
+    <string name="memory_delete_target">Recuerdo: %1$s\nProyecto: %2$s</string>
+    <string name="memory_delete_soft_description">Este recuerdo dejará de aparecer al consultar la memoria. Su historial y evidencia conservados no se borran permanentemente.</string>
+    <string name="memory_delete_cancel">Cancelar</string>
+    <string name="memory_delete_failed">No se pudo retirar este recuerdo.</string>
+    <string name="memory_show_removed">Mostrar recuerdos retirados</string>
+    <string name="memory_removed_state">Recuerdo retirado</string>
+    <string name="memory_hard_delete_action">Eliminar recuerdo permanentemente</string>
+    <string name="memory_hard_delete_title">¿Eliminar este recuerdo permanentemente?</string>
+    <string name="memory_hard_delete_description">Elimina permanentemente esta observación de memoria y su historial. No se puede deshacer. Se conservan los mensajes de origen independientes, los registros técnicos y el historial de relaciones.</string>
+    <string name="memory_hard_delete_confirm">Eliminar permanentemente</string>
+    <string name="memory_inspector_action">Ver detalles e historial</string>
+    <string name="memory_inspector_title">Detalles e historial del recuerdo</string>
+    <string name="memory_inspector_loading">Cargando recuerdo…</string>
+    <string name="memory_inspector_unavailable">Este recuerdo ya no está disponible.</string>
+    <string name="memory_inspector_changed">Este recuerdo cambió. Vuelve a cargar las versiones más recientes.</string>
+    <string name="memory_inspector_error">No se pudo cargar el recuerdo. Vuelve a intentarlo.</string>
+    <string name="memory_inspector_id">ID: %1$s</string>
+    <string name="memory_inspector_project">Proyecto: %1$s</string>
+    <string name="memory_inspector_scope">Ámbito: %1$s</string>
+    <string name="memory_inspector_type">Tipo: %1$s</string>
+    <string name="memory_inspector_untitled">(Sin título)</string>
+    <string name="memory_inspector_empty_content">(Contenido vacío)</string>
+    <string name="memory_inspector_unknown">No disponible</string>
+    <string name="memory_inspector_duplicates">Número de duplicados: %1$d</string>
+    <string name="memory_inspector_last_seen">Última aparición (epoch ms): %1$s</string>
+    <string name="memory_inspector_revision">Revisión actual: %1$d</string>
+    <string name="memory_inspector_total">Versiones históricas: %1$d</string>
+    <string name="memory_inspector_version">Versión %1$d · creada (epoch ms): %2$d</string>
+    <string name="memory_inspector_newest">Versiones recientes</string>
+    <string name="memory_inspector_older">Cargar versiones anteriores</string>
+    <string name="memory_inspector_retry">Reintentar</string>
+    <string name="memory_inspector_close">Cerrar</string>
+
+    <string name="memory_projects_action">Memorias del proyecto</string>
+    <string name="memory_projects_title">Retirar memorias del proyecto</string>
+    <string name="memory_projects_hard_title">Eliminar memorias del proyecto permanentemente</string>
+    <string name="memory_projects_scope">Afecta las observaciones de todos los ámbitos, los prompts guardados y las sesiones canónicas de memoria elegibles de este proyecto. No elimina chats, espacios de trabajo, perfiles, registros técnicos independientes ni datos de sincronización.</string>
+    <string name="memory_projects_counts">Observaciones activas: %1$d · Retiradas: %2$d · Total: %3$d · Fijadas: %4$d · Prompts guardados: %5$d · Sesiones de memoria: %6$d</string>
+    <string name="memory_projects_soft_warning">Retira las observaciones activas, incluidas las fijadas, de la consulta normal y elimina permanentemente los prompts guardados. Conserva el contenido e historial de las observaciones, las sesiones de memoria y los mensajes originales del chat.</string>
+    <string name="memory_projects_hard_warning">Irreversible: elimina las observaciones y su historial, incluidas las retiradas y fijadas, los prompts guardados y las sesiones de memoria sin observaciones restantes. Conserva las transcripciones fuente independientes, registros técnicos y metadatos de relaciones retenidos. No es un borrado seguro de todas las copias.</string>
+    <string name="memory_projects_soft_confirm">Retirar observaciones y eliminar prompts guardados</string>
+    <string name="memory_projects_hard_choice">Revisar eliminación permanente</string>
+    <string name="memory_projects_hard_confirm">Eliminar estas memorias permanentemente</string>
+    <string name="memory_projects_refresh">Actualizar proyectos y revisar de nuevo</string>
+    <string name="memory_projects_empty">Ningún proyecto autorizado contiene observaciones, prompts guardados o sesiones de memoria retenidos.</string>
+    <string name="memory_projects_failed">La operación sobre las memorias del proyecto falló. Actualiza y confirma de nuevo.</string>
+
+    <string name="memory_prompt_capture_label">Guardar mis mensajes de usuario como memoria</string>
+    <string name="memory_prompt_capture_description">Desactivado inicialmente. Junto con la memoria automática, permite guardar mensajes de usuario elegibles como prompts. Redacta el contenido con etiquetas private; no copia adjuntos ni historial ajeno. Desactivarlo detiene futuras capturas, no elimina la conversación original.</string>
+    <string name="memory_prompt_capture_memory_off">La memoria automática está desactivada: no se capturan prompts. Puedes desactivar esta preferencia.</string>
+    <string name="memory_prompt_capture_failed">No se pudo confirmar la preferencia de captura. Desactívala explícitamente para confirmar un estado seguro.</string>
+    <string name="memory_sessions_action">Sesiones de memoria y prompts guardados</string>
+    <string name="memory_sessions_title">Sesiones de memoria</string>
+    <string name="memory_sessions_description">Son registros de ejecución de memoria, no chats. Consultar una sesión no la selecciona para nuevas ejecuciones ni guardados.</string>
+    <string name="memory_sessions_empty">No hay sesiones de memoria autorizadas guardadas.</string>
+    <string name="memory_sessions_delete">Eliminar esta sesión de memoria</string>
+    <string name="memory_sessions_delete_warning">Elimina esta sesión de memoria y sus prompts guardados sólo si ninguna observación la referencia, incluidas las retiradas. Conserva los mensajes de la conversación original.</string>
+    <string name="memory_prompt_delete">Eliminar este prompt guardado</string>
+    <string name="memory_prompt_delete_warning">Elimina permanentemente este prompt de memoria e impide capturar de nuevo la misma fuente en esta sesión. No elimina el mensaje original de la conversación.</string>
+    <string name="memory_sessions_target">ID: %1$s
+Proyecto: %2$s</string>
+    <string name="memory_sessions_state">Estado: %1$s · Observaciones: %2$d · Prompts: %3$d</string>
+    <string name="memory_sessions_back">Volver a sesiones de memoria</string>
+    <string name="memory_sessions_refresh">Actualizar</string>
+    <string name="memory_sessions_failed">Los datos de sesión de memoria no están disponibles. Actualiza para reintentar.</string>
+    <string name="memory_sessions_no_prompts">No hay prompts guardados en esta sesión.</string>
+    <string name="memory_sessions_confirm">Confirmar eliminación de memoria</string>
+    <string name="memory_prompt_capture_recover">Desactivar y confirmar</string>
+    <string name="memory_sessions_times">Inicio (epoch ms): %1$s · Fin (epoch ms): %2$s</string>
+    <string name="memory_prompt_created">Creación (epoch ms): %1$s</string>
+    <string name="memory_sessions_unconfirmed_close">Sin cierre confirmado. Este estado guardado no verifica que la ejecución siga en curso.</string>
+    <string name="memory_review_due_only">Solo memorias pendientes de revisión</string>
+    <string name="memory_review_none_due">No hay memorias pendientes de revisión en este momento.</string>
+    <string name="memory_review_due">Necesita revisión</string>
+    <string name="memory_review_active">No requiere revisión en este momento</string>
+    <string name="memory_review_date">Fecha de revisión guardada: %1$s</string>
+    <string name="memory_review_no_date">Sin fecha de revisión</string>
+    <string name="memory_review_metadata_only">Marcar como revisada solo actualiza los metadatos de revisión; no verifica ni reescribe esta memoria.</string>
+    <string name="memory_review_mark">Marcar como revisada</string>
+    <string name="memory_relations_open">Relaciones pendientes de revisión</string>
+    <string name="memory_relations_questions">Los pares pendientes son preguntas, no relaciones verificadas ni dictámenes de conflicto. Los enlaces explícitos existentes son independientes.</string>
+    <string name="memory_relations_detect">Buscar posibles relaciones</string>
+    <string name="memory_relations_detection_complete">Se confirmaron %1$d pares pendientes nuevos en este intento. Cero no significa que no haya conflictos o pares pendientes existentes. Inspecciona ambas memorias desde la lista.</string>
+    <string name="memory_relations_detection_incomplete">La detección está incompleta. Se confirmaron %1$d pares pendientes nuevos. Las memorias y los pares ya guardados se conservan; consulta la lista.</string>
+    <string name="memory_relations_detection_unknown">No se pudo confirmar la detección. No se revierten las memorias ni los pares pendientes ya guardados; vuelve a abrir la lista.</string>
+    <string name="memory_relations_read_failed">No se pudieron leer las relaciones pendientes. Reintenta para cargar los datos autorizados actuales.</string>
+    <string name="memory_relations_page">Total de pares pendientes: %1$d · Desplazamiento de página: %2$d</string>
+    <string name="memory_relations_empty">No hay pares pendientes en esta página. Esto no es una evaluación de conflictos.</string>
+    <string name="memory_relations_identity">Par %1$s · %2$s / %3$s</string>
+    <string name="memory_relations_endpoint">Memoria %1$s: %2$s</string>
+    <string name="memory_relations_missing">Extremo no disponible o eliminado</string>
+    <string name="memory_relations_inspect_source">Inspeccionar memoria de origen</string>
+    <string name="memory_relations_inspect_target">Inspeccionar memoria de destino</string>
+    <string name="memory_relations_previous">Página anterior</string>
+    <string name="memory_relations_next">Página siguiente</string>
+    <string name="memory_judgment_open">Inspeccionar y juzgar esta relación</string>
+    <string name="memory_judgment_title">Tu juicio sobre la relación</string>
+    <string name="memory_judgment_metadata_only">Inspecciona ambas observaciones completas. Esto registra sólo tu juicio: no combina, sustituye ni elimina memorias.</string>
+    <string name="memory_judgment_deleted">Observación eliminada retenida para inspección; juzgarla no la restaura.</string>
+    <string name="memory_judgment_choose">Elige conscientemente un veredicto. Ninguno está seleccionado por defecto.</string>
+    <string name="memory_judgment_reason">Razón (opcional)</string>
+    <string name="memory_judgment_evidence">Evidencia (opcional)</string>
+    <string name="memory_judgment_confidence">Confianza 0–1 (opcional)</string>
+    <string name="memory_judgment_omitted">Los campos opcionales vacíos borran sus valores anteriores al volver a juzgar.</string>
+    <string name="memory_judgment_submit">Registrar mi juicio</string>
+    <string name="memory_judgment_error">El juicio no se confirmó o la evidencia mostrada ya no está disponible o vigente. Pueden conservarse escrituras previas. Recarga e inspecciona antes de decidir si enviar de nuevo; no hay reintento automático.</string>
+    <string name="memory_judgment_reload">Recargar evidencia</string>
+    <string name="memory_judgment_topic">Tema: %1$s</string>
+    <string name="memory_judgment_related">Relacionadas</string>
+    <string name="memory_judgment_compatible">Compatibles</string>
+    <string name="memory_judgment_scoped">Ámbito distinto</string>
+    <string name="memory_judgment_conflicts">En conflicto</string>
+    <string name="memory_judgment_supersedes">Sustituye (sólo como juicio)</string>
+    <string name="memory_judgment_not_conflict">No es un conflicto</string>
 </resources>

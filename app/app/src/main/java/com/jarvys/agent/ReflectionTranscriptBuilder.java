@@ -99,7 +99,7 @@ public final class ReflectionTranscriptBuilder {
     }
 
     static String sanitize(String value) {
-        if (MemoryStore.containsLikelySecret(value)) return "[message omitted: possible secret or credential]";
+        if (ContentSecretHeuristic.containsLikelySecret(value)) return "[message omitted: possible secret or credential]";
         String safe = COORDINATES.matcher(value).replaceAll("[exact coordinates omitted]");
         safe = STREET_ADDRESS.matcher(safe).replaceAll("[exact address omitted]");
         return safe;

@@ -42,8 +42,8 @@ public interface CoreTool {
     return false;
   }
 
-  /** Task file tools use a memory-only view and require the creator's saved memory capability. */
-  default boolean requiresMemoryScopeForScheduledTask() {
+  /** Interactive workspace operations are excluded from scheduled-task catalogs regardless of saved scope. */
+  default boolean requiresInteractiveWorkspace() {
     return false;
   }
 

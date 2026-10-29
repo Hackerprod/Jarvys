@@ -32,7 +32,7 @@ class TaskTickWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            com.jarvys.agent.SingleSessionReset.awaitReady(applicationContext)
+            com.jarvys.agent.FreshStorageBootstrap.awaitReady(applicationContext)
             val currentExecutor = executor ?: ScheduledTaskExecutor(applicationContext)
             val deadline = SystemClock.elapsedRealtime() + MAX_TICK_PROCESSING_MILLIS
             val result = withTimeout(MAX_TICK_PROCESSING_MILLIS) {

@@ -39,7 +39,7 @@ internal object TaskActionBinding {
         task.lastRun?.let { JSONArray(listOf(it.runId, it.scheduledFor, it.startedAt,
             it.finishedAt ?: JSONObject.NULL, it.status, it.deliveryStatus)) } ?: JSONObject.NULL,
         JSONArray(listOf(task.toolScope.mode, JSONArray(task.toolScope.tools), task.toolScope.web,
-            task.toolScope.writes, task.toolScope.memory, JSONArray(task.toolScope.skillIds))),
+            task.toolScope.writes, JSONArray(task.toolScope.skillIds))),
         task.delivery.name, task.createdBy, JSONArray(task.creatorToolNames), task.createdAt, task.updatedAt,
     )).toString()
 

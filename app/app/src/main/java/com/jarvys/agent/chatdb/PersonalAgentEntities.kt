@@ -49,12 +49,17 @@ data class UserDirective(
 
 @Entity(
     tableName = "memory_entries",
+    foreignKeys = [ForeignKey(entity = MemorySession::class, parentColumns = ["id"], childColumns = ["memory_session_id"], onDelete = ForeignKey.RESTRICT)],
     indices = [
+        Index(value = ["memory_session_id"]),
         Index(name = "idx_memory_entries_layer_day", value = ["layer", "day"]),
         Index(name = "idx_memory_entries_deleted", value = ["deleted_at"]),
         Index(name = "idx_memory_entries_kind_event", value = ["kind", "event_at"]),
         Index(name = "idx_memory_entries_source_message", value = ["source_message_id"]),
         Index(name = "idx_memory_entries_topic_key", value = ["topic_key"]),
+        Index(name = "idx_memory_entries_content_dedupe",
+            value = ["normalized_hash", "project", "scope", "observation_type", "title", "created_at"],
+            orders = [Index.Order.ASC, Index.Order.ASC, Index.Order.ASC, Index.Order.ASC, Index.Order.ASC, Index.Order.DESC]),
     ],
 )
 data class MemoryEntry(
@@ -80,9 +85,40 @@ data class MemoryEntry(
     val source_conversation_id: String? = null,
     val source_message_id: String? = null,
     val through_seq: Long? = null,
+    @androidx.room.ColumnInfo(defaultValue = "'jarvys-central'") val project: String = "jarvys-central",
+    @androidx.room.ColumnInfo(defaultValue = "'project'") val scope: String = "project",
+    @androidx.room.ColumnInfo(defaultValue = "'manual'") val observation_type: String = "manual",
+    @androidx.room.ColumnInfo(defaultValue = "1") val revision_count: Long = 1,
+    val normalized_hash: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "1") val duplicate_count: Long = 1,
+    val last_seen_at: Long? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
+    val memory_session_id: String? = null,
+    /** Actual observation producer tool, never inferred from evidence or operation keys. */
+    val tool_name: String? = null,
+    val review_after: String? = null,
 )
 
-@Entity(tableName = "memory_revisions", indices = [Index(name = "idx_memory_revisions_target", value = ["target_type", "target_id", "created_at"])])
+/** Payload-free identity retained after explicit permanent observation deletion. */
+@Entity(tableName = "memory_deleted_observations", indices = [
+    Index(name = "idx_memory_deleted_producer", value = ["project", "scope", "producer", "producer_key"], unique = true),
+])
+data class MemoryDeletedObservation(
+    @androidx.room.PrimaryKey val old_id: String,
+    val project: String,
+    val scope: String,
+    val deleted_at: Long,
+    val producer: String?,
+    val producer_key: String?,
+)
+
+@Entity(
+    tableName = "memory_revisions",
+    indices = [
+        Index(name = "idx_memory_revisions_target", value = ["target_type", "target_id", "created_at"]),
+        Index(name = "idx_memory_revisions_snapshot_version", value = ["target_type", "target_id", "snapshot_version"], unique = true),
+    ],
+)
 data class MemoryRevision(
     @androidx.room.PrimaryKey val id: String,
     val target_type: String,
@@ -92,6 +128,8 @@ data class MemoryRevision(
     val actor: String,
     val cause: String,
     val created_at: Long,
+    val before_title: String? = null,
+    val snapshot_version: Long? = null,
 )
 
 @Entity(tableName = "agent_session_state")
@@ -128,6 +166,7 @@ data class MemoryJob(
     val last_error: String?,
     val created_at: Long,
     val updated_at: Long,
+    val memory_session_id: String? = null,
 )
 
 /** Runtime-written pointers and neutral facts behind an episode; the model never writes these rows. */
@@ -161,10 +200,7 @@ data class MemoryEvidence(
     val process_id: String? = null,
 )
 
-@Entity(tableName = "memory_links", primaryKeys = ["from_id", "to_id", "relation"], foreignKeys = [
-    ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["from_id"], onDelete = ForeignKey.CASCADE),
-    ForeignKey(entity = MemoryEntry::class, parentColumns = ["id"], childColumns = ["to_id"], onDelete = ForeignKey.CASCADE),
-], indices = [Index(value = ["to_id"])])
+@Entity(tableName = "memory_links", primaryKeys = ["from_id", "to_id", "relation"], indices = [Index(value = ["to_id"])])
 data class MemoryLink(
     val from_id: String,
     val to_id: String,
@@ -172,6 +208,8 @@ data class MemoryLink(
     val actor: String,
     val reason: String?,
     val created_at: Long,
+    @androidx.room.ColumnInfo(defaultValue = "0") val orphaned: Boolean = false,
+    @androidx.room.ColumnInfo(defaultValue = "0") val updated_at: Long = 0L,
 )
 
 @Entity(tableName = "transcript_artifact_refs", indices = [Index(value = ["conversation_id"])],
@@ -213,4 +251,39 @@ data class ConnectorStateEvent(
     val operation_id: String? = null,
     val parent_operation_id: String? = null,
     val payload_version: Int? = null,
+)
+
+/** Native save identity only; hard deletion expires its target without deleting the operation. */
+@Entity(tableName = "memory_save_operations", foreignKeys = [ForeignKey(entity = MemoryEntry::class,
+    parentColumns = ["id"], childColumns = ["observation_id"], onDelete = ForeignKey.SET_NULL)],
+    indices = [Index(name = "idx_memory_save_operation_target", value = ["observation_id"]),
+        Index(name = "idx_memory_save_operation_created", value = ["created_at"])])
+data class MemorySaveOperation(
+    @androidx.room.PrimaryKey val operation_id: String,
+    val fingerprint: String, val extension_fingerprint: String, val observation_id: String?,
+    val project: String, val scope: String, val source_generation: String, val source_session_id: String,
+    val source_owner_message_id: String, val source_batch_id: String, val source_call_id: String,
+    val source_arguments_digest: String, val source_input_digest: String, val created_at: Long,
+    val memory_session_id: String,
+)
+
+/** Payload-free local explicit-clear intent; not a cloud queue or a resurrection source. */
+@Entity(tableName = "memory_review_clear_events", indices = [Index(value = ["event_key"], unique = true)])
+data class MemoryReviewClearEventEntity(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val event_key: String,
+    val observation_id: String,
+)
+
+/** Canonical question identity; no endpoint FK and no pair uniqueness (later actors may judge independently). */
+@Entity(tableName = "memory_relations", indices = [Index(value = ["relation_id"], unique = true),
+    Index(value = ["source_id"]), Index(value = ["target_id"])])
+data class MemoryRelationEntity(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val relation_id: String, val source_id: String, val target_id: String,
+    val project: String, val scope: String, val relation: String, val status: String,
+    val created_at: Long, val updated_at: Long,
+    val reason:String?=null,val evidence:String?=null,val confidence:Double?=null,
+    val marked_by_actor:String?=null,val marked_by_kind:String?=null,val marked_by_model:String?=null,
+    val memory_session_id:String?=null,
 )

@@ -11,6 +11,8 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
   private final String ownerMessageId;
   private final ChatDatabaseBridge database;
   private final String runId;
+  private final CoreAgentLoop.ProgressListener progressListener;
+  private final java.util.Set<String> unavailableCalls = java.util.concurrent.ConcurrentHashMap.newKeySet();
   private final MainChatTranscriptStore transcriptStore;
   private final Map<String, MainChatTranscriptStore.CallBinding> admitted = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -20,6 +22,12 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
 
   EpisodeRecorder(Context context, String conversationId, String ownerMessageId, String runId,
       MainChatTranscriptStore transcriptStore) {
+    this(context, conversationId, ownerMessageId, runId, transcriptStore, null);
+  }
+
+  EpisodeRecorder(Context context, String conversationId, String ownerMessageId, String runId,
+      MainChatTranscriptStore transcriptStore, CoreAgentLoop.ProgressListener listener) {
+    this.progressListener = listener;
     this.conversationId = conversationId;
     this.ownerMessageId = ownerMessageId;
     this.database = ChatDatabaseBridge.getInstance(context);
@@ -46,6 +54,8 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
 
   @Override public void beforeDispatch(CoreTool tool, String callId, Map<String, Object> arguments) {
     if (blank(callId) || blank(ownerMessageId)) throw new IllegalStateException("Durable call and owner identity are required for effect evidence");
+    unavailableCalls.remove(callId);
+    admitted.remove(callId);
     MainChatTranscriptStore.CallBinding binding = transcriptStore == null ? null : transcriptStore.committedCall(callId);
     String connector = tool instanceof CoreConnectorTool ? ((CoreConnectorTool) tool).connectorId()
         : tool instanceof CoreMcpTool ? "mcp:" + ((CoreMcpTool) tool).policyGroupName() : null;
@@ -55,14 +65,23 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
       facts.put("classification", "WRITE");
       facts.put("policy", policy);
     } catch (Exception ignored) { }
-    database.personalAgentRecordEpisodeToolStartedSync(conversationId, ownerMessageId, callId,
+    try { database.personalAgentRecordEpisodeToolStartedSync(conversationId, ownerMessageId, callId,
         tool.declaration().name, connector, null, facts.toString(), "intent", null, null,
         binding == null ? null : binding.batchId, runId,
         runId == null ? null : com.jarvys.agent.crew.CrewProcessIdentity.ID);
+    } catch (RuntimeException failure) {
+      if (!isSessionUnavailable(failure)) throw failure;
+      unavailableCalls.add(callId);
+      if (!isSessionFinalized(failure) && progressListener != null) try {
+        progressListener.onProgress("memory_unconfirmed", "Effect memory recording was not confirmed.");
+      } catch (RuntimeException ignored) { /* Presentation must not block the operational effect. */ }
+      return;
+    }
     if (binding != null) admitted.put(callId, binding);
   }
 
   @Override public void onEffectAdmission(CoreTool tool, String callId, EffectInvocation.Admission admission) {
+    if (unavailableCalls.contains(callId)) return;
     if (blank(callId) || blank(ownerMessageId)) throw new IllegalStateException("Durable call and owner identity are required for effect evidence");
     MainChatTranscriptStore.CallBinding binding = admitted.get(callId);
     if (runId != null && binding == null) throw new IllegalStateException("Committed call identity is required");
@@ -79,6 +98,7 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
 
   @Override public void afterDispatch(CoreTool tool, String callId, CoreToolResult result, Throwable failure,
       EffectInvocation.Receipt receipt) {
+    if (unavailableCalls.contains(callId)) return;
     if (blank(callId) || blank(ownerMessageId)) return;
     MainChatTranscriptStore.CallBinding binding = admitted.get(callId);
     if (runId != null && binding == null) return;
@@ -88,6 +108,20 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
         completionFacts(receipt), null, binding == null ? null : binding.batchId, runId,
         admission == null || admission.authorization == EffectInvocation.Authorization.UNSPECIFIED ? null
             : admission.authorization.name().toLowerCase(java.util.Locale.ROOT));
+  }
+
+  private static boolean isSessionUnavailable(Throwable failure) {
+    java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause())
+      if (cause instanceof com.jarvys.agent.chatdb.MemorySessionUnavailableException) return true;
+    return false;
+  }
+
+  private static boolean isSessionFinalized(Throwable failure) {
+    java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause())
+      if (cause instanceof com.jarvys.agent.chatdb.MemorySessionFinalizedException) return true;
+    return false;
   }
 
   /** Registry supplies the owner/snapshot-normalized receipt, never producer response JSON. */
@@ -102,6 +136,9 @@ final class EpisodeRecorder implements CoreToolRegistry.InvocationObserver {
       if (receipt.reference != null) facts.put("effect_reference", new JSONObject()
           .put("kind", receipt.reference.kind.name().toLowerCase(java.util.Locale.ROOT))
           .put("scope_id", receipt.reference.scopeId).put("id", receipt.reference.id));
+      if (receipt.completionSemantics == EffectInvocation.CompletionSemantics.CANCEL_REQUEST_ACCEPTED
+          && receipt.reference != null && receipt.reference.kind == EffectInvocation.EffectReferenceKind.JOB)
+        facts.put("causes_cancel_of", receipt.reference.id);
       return facts.toString();
     } catch (Exception failure) { throw new IllegalStateException("Cannot encode normalized completion semantics", failure); }
   }

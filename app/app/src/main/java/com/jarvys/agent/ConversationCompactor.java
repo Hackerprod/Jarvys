@@ -32,6 +32,9 @@ public final class ConversationCompactor {
             beforeCompact(summarized, token);
             return null;
         }
+        default CompactionCoverage coverageAfterPreparation(CompactionCoverage original) { return original; }
+        default com.jarvys.agent.chatdb.CompactionMemoryAttempt execution() { return null; }
+        default void finishPreparation(CancellationToken token) { }
         default String sessionKind() { return "principal"; }
         default void onCompacted(boolean memoryFlushCompleted) { }
     }
@@ -126,17 +129,38 @@ public final class ConversationCompactor {
         try {
             if (listener != null) listener.onStarted(trigger);
             token.throwIfCancelled();
+            com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection =
+                    com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)
+                    ? store.readInteractionProtection(sessionId) : null;
+            java.util.Set<ConversationTurn.Source> safeCompactions = new java.util.HashSet<>();
+            if (protection != null && !protection.getUnsafeAnchor()) {
+                for (ConversationTurn turn : transcript) {
+                    if (turn.source() == null || turn.source().kind != ConversationTurn.Source.Kind.COMPACTION) continue;
+                    CompactionCoverage prior = store.prepareProtectedCompactionCoverage(sessionId, java.util.Collections.singletonList(turn));
+                    if (prior == null || prior.getLeaves().isEmpty()) continue;
+                    boolean eligible = true;
+                    for (com.jarvys.agent.chatdb.CompactionLeaf leaf : prior.getLeaves()) {
+                        com.jarvys.agent.chatdb.InteractionSourcePosition position = protection.getSourcePositions().get(leaf.getSource());
+                        if (position == null || protection.getProtectedSources().contains(leaf.getSource()) ||
+                                (protection.getEarliestProtected() != null && position.compareTo(protection.getEarliestProtected()) >= 0)) {
+                            eligible = false; break;
+                        }
+                    }
+                    if (eligible) safeCompactions.add(turn.source());
+                }
+            }
             ConversationCompactionPolicy.Plan plan = requestedMode == ConversationCompactionPolicy.Mode.ALL ? ConversationCompactionPolicy.planAll(transcript) : ConversationCompactionPolicy.planSliding(transcript, contextWindow, ConversationCompactionPolicy.DEFAULT_SLIDING_PERCENTAGE);
+            plan = protectPlan(transcript, plan, protection, safeCompactions);
             if (plan.summarize.isEmpty()) return null;
-            CompactionCoverage coverage = memoryFlush == null ? null
+            CompactionCoverage coverage = memoryFlush == null ? (protection == null ? null : store.prepareProtectedCompactionCoverage(sessionId, plan.summarize))
                     : memoryFlush.coverage(new ArrayList<>(plan.summarize), token);
             List<String> sourceArtifacts = new ArrayList<>();
             String summary = summarize(plan.summarize, plan.mode, token, sourceArtifacts);
             summary = appendEpisodeReferences(summary, plan.summarize, coverage);
             if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
-                plan = ConversationCompactionPolicy.planAll(transcript);
+                plan = protectPlan(transcript, ConversationCompactionPolicy.planAll(transcript), protection, safeCompactions);
                 if (plan.summarize.isEmpty()) return null;
-                coverage = memoryFlush == null ? null : memoryFlush.coverage(new ArrayList<>(plan.summarize), token);
+                coverage = memoryFlush == null ? (protection == null ? null : store.prepareProtectedCompactionCoverage(sessionId, plan.summarize)) : memoryFlush.coverage(new ArrayList<>(plan.summarize), token);
                 sourceArtifacts.clear();
                 summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token, sourceArtifacts);
                 summary = appendEpisodeReferences(summary, plan.summarize, coverage);
@@ -144,6 +168,7 @@ public final class ConversationCompactor {
             // Extract facts only once, after fallback has selected the final source set.
             PreparedCompactionFlush prepared = memoryFlush == null ? null
                     : memoryFlush.prepare(new ArrayList<>(plan.summarize), coverage, token);
+            if(memoryFlush!=null) coverage=memoryFlush.coverageAfterPreparation(coverage);
             if (prepared != null) coverage = prepared.getCoverage();
             token.throwIfCancelled();
             int firstKept = store.conversationMessageCount(sessionId);
@@ -171,7 +196,8 @@ public final class ConversationCompactor {
             token.throwIfCancelled();
             Compaction committed = store.appendCompactionPrepared(sessionId, summary, firstKept, trigger,
                     plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount, sourceArtifacts, coverage,
-                    prepared, memoryFlush == null ? "principal" : memoryFlush.sessionKind());
+                    prepared, memoryFlush == null ? "principal" : memoryFlush.sessionKind(), protection,
+                    memoryFlush==null ? null : memoryFlush.execution());
             if (memoryFlush != null) {
                 boolean completed = false;
                 try { completed = store.compactionFlushCompleted(sessionId, committed.getCompaction_id()); }
@@ -192,8 +218,18 @@ public final class ConversationCompactor {
             if (listener != null) listener.onCompleted(summary, summarizedCount, plan.mode.name().toLowerCase(java.util.Locale.ROOT));
             return outcome;
         } finally {
-            sessionLock.unlock();
+            try { if(memoryFlush!=null) memoryFlush.finishPreparation(token); }
+            finally { sessionLock.unlock(); }
         }
+    }
+
+    private static ConversationCompactionPolicy.Plan protectPlan(List<ConversationTurn> transcript,
+            ConversationCompactionPolicy.Plan plan, com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection,
+            java.util.Set<ConversationTurn.Source> safeCompactions) {
+        if (protection == null) return plan;
+        int cutoff = Math.min(plan.cutoffIndex, protection.protectedPrefixLimit(transcript, safeCompactions));
+        return new ConversationCompactionPolicy.Plan(transcript.subList(0, cutoff),
+                transcript.subList(cutoff, transcript.size()), cutoff, plan.mode);
     }
 
     private String appendEpisodeReferences(String summary, List<ConversationTurn> turns, CompactionCoverage coverage) {

@@ -1,14 +1,17 @@
 package com.jarvys.agent.chatdb
 
 import android.content.Context
+import com.jarvys.agent.CrewInvocationSource
 import com.jarvys.agent.coding.CodingJobEvidence
 import com.jarvys.agent.coding.CodingJobSubmission
 import com.jarvys.agent.workspaces.WorkspaceIdentity
 import com.jarvys.agent.workspaces.WorkspaceRegistry
 
 /** Exact assignment history only. Run outside the Room anchor/lease; never guess a latest root. */
-internal fun resolveCodingJobSource(context: Context, submission: CodingJobSubmission): CodingJobEvidence.Source {
-    val source = submission.crew()
+internal fun resolveCodingJobSource(context: Context, submission: CodingJobSubmission): CodingJobEvidence.Source =
+    resolveCodingJobSource(context, submission.crew())
+
+internal fun resolveCodingJobSource(context: Context, source: CrewInvocationSource): CodingJobEvidence.Source {
     val crew = CodingJobEvidence.CrewSource(source.executionSessionId, source.botId, source.missionId,
         source.cycleId, source.scopeIdentity, source.checkpointPayloadSha256, source.callId, source.toolName, source.inputContext)
     if (!WorkspaceIdentity.isExecutionSession(source.executionSessionId)) return CodingJobEvidence.Source(crew, null, null)

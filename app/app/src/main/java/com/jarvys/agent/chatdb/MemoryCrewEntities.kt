@@ -350,6 +350,8 @@ data class CrewResultEvidence(
     val result_text: ByteArray,
     val produced_at_ms: Long,
     val content_sha256: String,
+    // Local privacy metadata, deliberately outside the immutable worker payload/hash.
+    @androidx.room.ColumnInfo(defaultValue = "0") val memory_projection_suppressed: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean = this === other || other is CrewResultEvidence &&
         evidence_id == other.evidence_id && conversation_id == other.conversation_id && seq == other.seq &&

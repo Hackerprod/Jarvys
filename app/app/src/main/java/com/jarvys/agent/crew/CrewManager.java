@@ -109,6 +109,8 @@ public final class CrewManager implements AutoCloseable {
             persist(bot, messages, pending); return null;
         }
 
+        /** Explicit lifecycle observation only; invoked once outside the bot cycle monitor. */
+        default void beforeReconcile(Bot bot) { }
         ResumePlan reconcile(Bot bot);
     }
 
@@ -1133,31 +1135,36 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public void resumeExact(String id, CancellationToken expectedToken, String userText, CrewInputBinding inputBinding) {
-        Bot bot = bots.get(id);
-        if (bot == null) throw new IllegalArgumentException("Unknown worker");
-        synchronized (bot.cycleLock) {
-            if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
-            if (inputBinding != null) validateInputBinding(bot, userText, inputBinding, CrewInputBinding.SourceKind.NATIVE_CORRECT);
-            resumeWithUserMessage(id, userText, inputBinding);
-        }
+        resumeWithUserMessage(id, userText, inputBinding, expectedToken);
     }
 
     public void resume(String id) { resumeWithUserMessage(id, null); }
 
     /** Native user correction is queued durably before any resumed model turn can start. */
     public void resumeWithUserMessage(String id, String userText) {
-        resumeWithUserMessage(id, userText, null);
+        Bot bot = bots.get(id);
+        if (bot == null) throw new IllegalArgumentException("Historical bot has no resumable checkpoint");
+        resumeWithUserMessage(id, userText, null, bot.token);
     }
 
-    private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding) {
+    private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding, CancellationToken expectedToken) {
         if (userText != null && userText.trim().isEmpty())
             throw new IllegalArgumentException("User correction must be non-empty");
         Bot bot = bots.get(id);
         if (bot == null) throw new IllegalArgumentException("Historical bot has no resumable checkpoint");
+        final CheckpointSupport support;
         synchronized (bot.cycleLock) {
+            if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
             if (!bot.canResume()) throw new IllegalStateException("This bot is not ready for explicit resume");
-            CheckpointSupport support = checkpointSupport;
+            support = checkpointSupport;
             if (support == null) throw new IllegalStateException("Resume is unavailable in this runtime");
+            if (inputBinding != null) validateInputBinding(bot, userText, inputBinding, CrewInputBinding.SourceKind.NATIVE_CORRECT);
+        }
+        support.beforeReconcile(bot);
+        synchronized (bot.cycleLock) {
+            if (bot.token != expectedToken || checkpointSupport != support)
+                throw new IllegalStateException("Worker cycle or checkpoint owner changed");
+            if (!bot.canResume()) throw new IllegalStateException("This bot is not ready for explicit resume");
             try {
                 ResumePlan plan = support.reconcile(bot);
                 if (bot.role.missionAccess == CrewMissionAccess.READ_ONLY

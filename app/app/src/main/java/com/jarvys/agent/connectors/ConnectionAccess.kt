@@ -2,7 +2,8 @@ package com.jarvys.agent.connectors
 
 import android.app.Application
 import android.content.Context
-import android.database.sqlite.SQLiteDatabaseCorruptException
+import android.database.SQLException
+import com.jarvys.agent.chatdb.isChatSqlCorruption
 import com.jarvys.agent.chatdb.ChatDatabaseBridge
 import com.jarvys.agent.connectors.ConnectionStateCoordinator as Core
 import java.util.UUID
@@ -370,7 +371,7 @@ class ConnectionAccess private constructor(
                 owner.invalidateDestination()
                 var cause: Throwable? = failure
                 while (cause != null) {
-                    if (cause is SQLiteDatabaseCorruptException) return RepairOutcome.BLOCKED
+                    if (cause is SQLException && isChatSqlCorruption(cause)) return RepairOutcome.BLOCKED
                     cause = cause.cause
                 }
                 RepairOutcome.RETRY

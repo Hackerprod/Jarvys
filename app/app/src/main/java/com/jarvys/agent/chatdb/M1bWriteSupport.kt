@@ -16,7 +16,8 @@ internal abstract class M1bWriteSupport(protected val database: JarvysChatDataba
             "conversation_id_invalid" -> ChatDbResult.Invalid("conversation id and kind are required")
             else -> ChatDbResult.Conflict(failure.reason)
         }
-    } catch (failure: android.database.sqlite.SQLiteConstraintException) {
+    } catch (failure: android.database.SQLException) {
+        if (!isChatSqlConstraint(failure)) throw failure
         ChatDbResult.Conflict(failure.message ?: "sqlite_constraint")
     }
 

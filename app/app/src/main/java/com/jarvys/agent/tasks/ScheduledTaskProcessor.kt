@@ -438,7 +438,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         override fun effectClass(arguments: Map<String, Any>) = delegate.effectClass(arguments)
         override fun isConnectorTool() = delegate.isConnectorTool()
         override fun isMcpTool() = delegate.isMcpTool()
-        override fun requiresMemoryScopeForScheduledTask() = delegate.requiresMemoryScopeForScheduledTask()
+        override fun requiresInteractiveWorkspace() = delegate.requiresInteractiveWorkspace()
         override fun accessClassification() = delegate.accessClassification()
         override fun persistenceEffect() = delegate.persistenceEffect()
         override fun persistenceEffect(arguments: Map<String, Any>) = delegate.persistenceEffect(arguments)

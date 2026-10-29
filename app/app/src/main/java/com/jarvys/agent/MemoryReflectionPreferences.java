@@ -13,7 +13,6 @@ public final class MemoryReflectionPreferences {
     public MemoryReflectionPreferences(Context context) {
         this.context = context.getApplicationContext();
         preferences = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        removeLegacyNumericControls();
     }
 
     public boolean enabled() { return preferences.getBoolean("enabled", DEFAULT_ENABLED); }
@@ -97,27 +96,7 @@ public final class MemoryReflectionPreferences {
         return "session_" + sessionId;
     }
 
-    private void removeLegacyNumericControls() {
-        SharedPreferences.Editor editor = preferences.edit()
-                .remove("step_count")
-                .remove("minimum_interval_minutes")
-                .remove("max_per_day")
-                .remove("daily_day")
-                .remove("daily_count");
-        if ("step-count".equals(preferences.getString("trigger", ""))) {
-            editor.putString("trigger", "compaction-event");
-        }
-        preferences.getAll().keySet().stream()
-                .filter(key -> key.startsWith("session_")
-                        && (key.endsWith("_last_start") || key.endsWith("_last_attempt")))
-                .forEach(editor::remove);
-        editor.apply();
-    }
-
     private String readStatus(String key) {
-        String stored = preferences.getString(key, "");
-        String stable = MemoryReflectionStatus.code(context, stored);
-        if (!stable.equals(stored)) preferences.edit().putString(key, stable).apply();
-        return stable;
+        return preferences.getString(key, "");
     }
 }

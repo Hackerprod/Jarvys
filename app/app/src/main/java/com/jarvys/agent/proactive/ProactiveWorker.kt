@@ -22,7 +22,7 @@ class ProactiveWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val app = applicationContext
         try {
-            com.jarvys.agent.SingleSessionReset.awaitReady(app)
+            com.jarvys.agent.FreshStorageBootstrap.awaitReady(app)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

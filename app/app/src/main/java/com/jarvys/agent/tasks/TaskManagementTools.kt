@@ -7,7 +7,6 @@ import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.R
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.connectors.ConnectorRegistry
-import com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
@@ -33,7 +32,6 @@ class TaskManagementTools @JvmOverloads constructor(
     private val manualRunIsActive: (Context, String) -> Boolean = TaskManualRunScheduler::isActive,
     private val taskCapabilityNames: List<String> = creatorToolNames,
     private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(context.applicationContext),
-    private val creatorMemoryAllowed: Boolean = false,
     private val creatorSkillIds: List<String> = emptyList(),
 ) {
     private val app = context.applicationContext
@@ -90,7 +88,7 @@ class TaskManagementTools @JvmOverloads constructor(
             timePrecision = TaskTimePrecision.APPROXIMATE, validUntil = validUntil,
             deleteAfterRun = deleteAfterRun,
             // Scheduled runs rebuild read_skill and skill search from this saved skill ceiling.
-            toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, writes, creatorMemoryAllowed,
+            toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, writes,
                 if ("read_skill" in allowedCreatorTools) creatorSkillIds.distinct().sorted() else emptyList()),
             delivery = delivery,
             createdBy = createdBy(), creatorToolNames = allowedCreatorTools,
@@ -488,34 +486,15 @@ class TaskManagementTools @JvmOverloads constructor(
         @JvmField val TOOL_NAMES = setOf(SCHEDULE_TASK, LIST_TASKS, UPDATE_TASK, CANCEL_TASK, TASK_RUNS, RUN_TASK)
         private val WEB_TOOL_NAMES = setOf(com.jarvys.agent.WebSearchTools.SEARCH, com.jarvys.agent.WebSearchTools.FETCH)
 
-        @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>): List<CoreTool> =
-            create(context, sessionId, creatorToolNames, legacyTaskCapabilities(context, creatorToolNames))
-
         @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
                               taskCapabilityNames: List<String>): List<CoreTool> =
             TaskManagementTools(context, sessionId, creatorToolNames,
                 taskCapabilityNames = taskCapabilityNames.toList()).tools()
 
         @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
-                              taskCapabilityNames: List<String>, creatorMemoryAllowed: Boolean): List<CoreTool> =
+                              taskCapabilityNames: List<String>, creatorSkillIds: List<String>): List<CoreTool> =
             TaskManagementTools(context, sessionId, creatorToolNames,
                 taskCapabilityNames = taskCapabilityNames.toList(),
-                creatorMemoryAllowed = creatorMemoryAllowed).tools()
-
-        @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
-                              taskCapabilityNames: List<String>, creatorMemoryAllowed: Boolean,
-                              creatorSkillIds: List<String>): List<CoreTool> =
-            TaskManagementTools(context, sessionId, creatorToolNames,
-                taskCapabilityNames = taskCapabilityNames.toList(),
-                creatorMemoryAllowed = creatorMemoryAllowed,
                 creatorSkillIds = creatorSkillIds.toList()).tools()
-
-        private fun legacyTaskCapabilities(context: Context, creatorToolNames: List<String>): List<String> {
-            val registry = ConnectorRegistry.get(context.applicationContext)
-            registry.refreshStates()
-            val safeConnectors = ProactiveReadOnlyToolFactory.readOnlyConnectorTools(registry)
-                .map { it.declaration().name }.toSet()
-            return creatorToolNames.distinct().filter { it in safeConnectors || it in WEB_TOOL_NAMES }
-        }
     }
 }

@@ -1,1 +1,0 @@
-.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.JarvysSettingsChoiceDialogTest -x :app:prepareApkFactoryTemplate --console=plain

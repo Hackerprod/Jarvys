@@ -88,6 +88,14 @@ android {
     }
 }
 
+// Host unit tests use the JVM native loader; Android production/instrumentation retain the AAR.
+// Never allow duplicate BundledSQLiteDriver/NativeLibraryLoader classes to depend on classpath order.
+configurations.matching {
+    it.name.endsWith("UnitTestCompileClasspath") || it.name.endsWith("UnitTestRuntimeClasspath")
+}.configureEach {
+    exclude(group = "androidx.sqlite", module = "sqlite-bundled-android")
+}
+
 dependencies {
     implementation(project(":factory-contract"))
     implementation(project(":factory-runtime-core"))
@@ -119,12 +127,13 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")
-    // Room's SupportSQLiteOpenHelper path serializes reads and writes on one helper connection.
-    // AndroidSQLiteDriver supplies the framework SQLite connection pool (WAL readers + writer).
-    implementation("androidx.sqlite:sqlite-framework:2.5.0")
+    // One bundled engine serves Room and the provider's independent read-only pool.
+    // Framework support remains for isolated SupportSQLite fixtures, not production file handles.
+    implementation("androidx.sqlite:sqlite-framework:2.6.1")
+    implementation("androidx.sqlite:sqlite-bundled:2.6.1")
     ksp("androidx.room:room-compiler:2.7.2")
     testImplementation("androidx.room:room-testing:2.7.2")
-    testImplementation("androidx.sqlite:sqlite-bundled-jvm:2.5.0")
+    testImplementation("androidx.sqlite:sqlite-bundled-jvm:2.6.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

@@ -1,5 +1,6 @@
 package com.jarvys.agent.flavor
 
+import com.jarvys.agent.CrewCheckpointStore
 import android.content.Context
 import android.os.Build
 import com.jarvys.agent.CancellationToken
@@ -104,8 +105,10 @@ object FlavorLinuxTools {
         val selected = CodingExecutionTools.NAMES.filter(bot.role.tools::contains)
         if (selected.isEmpty()) return emptyList()
         val app = context.applicationContext
+        val manager=projectJobManager(app)
+        manager.initializeRecoveryOnce(com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app))
         return createProfileForRuntime(app, conversationId, bot, crew, budget,
-            ProjectScopeStore(app.filesDir).open(conversationId), projectJobManager(app),
+            ProjectScopeStore(app.filesDir).open(conversationId), manager,
             ProjectInspectionRuntime(app), ApprovalGate.INSTANCE, LinuxExecAutonomy.get(app),
             LinuxOutputSanitizer.from(app))
     }
@@ -152,7 +155,9 @@ object FlavorLinuxTools {
             }, available = ::permitted, completed = { token, job ->
                 crew.observeOwnedWork(bot, token.generation(), "project-job:${job.id}",
                     "Project job ${job.id} is ${job.state.name}; exit code ${job.exitCode ?: "unknown"}. Read its redacted log with project_jobs before verifying or reporting the result. Never automatically repeat an interrupted or uncertain command.")
-            }).create(selected)
+            }, technical = CodingExecutionTools.TechnicalContext(
+                com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app),
+                com.jarvys.agent.MemoryWritePolicy.forContext(app))).create(selected)
     }
 
     @JvmStatic fun validateProfileResume(context: Context, selectedNames: List<String>) =
@@ -164,12 +169,25 @@ object FlavorLinuxTools {
         }
     }
 
+    @JvmStatic fun refreshCheckpointRecovery(context: Context, scope: ProjectScope) {
+        projectJobManager(context).initializeRecoveryOnce(com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context))
+    }
+
+    @JvmStatic fun correlatedCheckpointOwners(context: Context, scope: ProjectScope,
+            checkpoint: CrewCheckpointStore.ConfirmedSnapshot): List<String> {
+        val manager=projectJobManager(context)
+        manager.initializeRecoveryOnce(com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context))
+        return manager.correlatedCheckpointOwners(scope,checkpoint)
+    }
+
     @JvmStatic fun checkpointRecovery(context: Context, conversationId: String, scope: ProjectScope, owners: List<String>): String {
         check(available(context, conversationId, 0) && conversationId == scope.conversationId()) {
             "Project recovery is unavailable for this conversation"
         }
         scope.validate(); scope.durableIdentity()
         val manager = projectJobManager(context)
+        manager.requireRecoveryInitialized()
+        manager.requireNoRecoveredScopeTakeover(scope)
         val evidence = manager.checkpointEvidence(scope, owners)
         check(evidence.all { it.state.terminal }) { "Previous jobs are still pending; stop and await the original owner before resuming" }
         val issues = manager.recoveryIssueCount(scope)

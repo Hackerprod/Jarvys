@@ -1,7 +1,7 @@
 package com.jarvys.agent.chatdb
 
 import android.database.Cursor
-import android.database.sqlite.SQLiteConstraintException
+import android.database.SQLException
 import com.jarvys.agent.crew.CrewCoordinationEvidence as CrewCoordinationLedgerEvidence
 import com.jarvys.agent.crew.CrewResultEvidence as CrewResultLedgerEvidence
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference as CoordinationReference
@@ -1153,7 +1153,8 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         }
     } catch (invalid: IllegalArgumentException) {
         ChatDbResult.Invalid(invalid.message ?: "invalid strict journal row")
-    } catch (constraint: SQLiteConstraintException) {
+    } catch (constraint: SQLException) {
+        if (!isChatSqlConstraint(constraint)) throw constraint
         ChatDbResult.Conflict(constraint.message ?: "strict journal constraint conflict")
     }
 
@@ -1172,7 +1173,8 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         }
     } catch (invalid: IllegalArgumentException) {
         ChatDbResult.Invalid(invalid.message ?: "invalid strict journal row")
-    } catch (constraint: SQLiteConstraintException) {
+    } catch (constraint: SQLException) {
+        if (!isChatSqlConstraint(constraint)) throw constraint
         ChatDbResult.Conflict(constraint.message ?: "strict journal constraint conflict")
     }
 

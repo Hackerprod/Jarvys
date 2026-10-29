@@ -1,3 +1,284 @@
+## Prioridad siguiente tras completar Engram — portar lógica GrokBot
+
+- **Estado: pendiente; no iniciado.** Portar la lógica GrokBot de [milind-soni/OpenMausBot](https://github.com/milind-soni/OpenMausBot) a nuestros bots.
+- **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
+- Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
+
+## Memoria P4-C — juicios de relaciones — checkpoint 29-10-2026
+
+**Run 2: 196 pruebas por sabor, 24 clases, cero fallos/errores/skips; doble PASS independiente acotado.** La persona puede inspeccionar y registrar/revisar un veredicto; el principal Central además compara pares y procesa lotes ordenados de 1..32. Persistir un juicio externo no significa inferencia automática ni consolidación. Focal 54 separado.
+
+[Reporte, adaptaciones e incidentes](docs/continue/engram-port/P4-C-judgment-report.md) · [Resultados exactos](docs/continue/engram-port/P4-C-judgment-results.json).
+
+Código `ba4b1c5f37c4104dbddb89a088ca6b374c3a44e2`. Supersedes-veredicto no borra observaciones; links/procedencia, historia y fechas siguen intactos. Confirmación humana rechaza evidencia cambiada; native usa fuente/proof y permiso actual, sin fingir lectura previa. Run 1 falló por error SQLite disk-full en una prueba de cada sabor; run 2 conservó fuente/binarios/asertos y trasladó sólo temporales a workspace, sin borrar evidencia. **No P4 total ni PASS agregado P3/C4**. Siguientes: scan léxico dry-run/apply, runner semántico real y consolidación preview/CAS, cada uno con contrato observable. Sync/export/import, Android físico y GrokBot no se adelantan.
+
+## Memoria P4-B — candidatos de relaciones — checkpoint 29-10-2026
+
+**Candidate 1: 228 pruebas por sabor, 24 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Guardado nativo confirmado → candidatos canónicos pendientes; detección manual → lista paginada → inspección de ambos extremos. Una pregunta pendiente no es un juicio ni una consolidación. Focal 43 separado.
+
+[Reporte, adaptaciones y evidencia](docs/continue/engram-port/P4-B-relations-report.md) · [Resultados exactos](docs/continue/engram-port/P4-B-relations-results.json).
+
+Código `b4b55b1b257a93b8976cac02881ca70e2a7bb7d7`. Links explícitos/procedencia y supersedes permanecen activos; los pares canónicos viven en el mismo Room. Soft-delete conserva status/fecha; hard-delete conserva auditoría orphan. Revalidación de snapshot y autoridad actual, rollback por elemento y recibos parciales honestos; replay no vuelve a detectar. **No P4 total ni PASS agregado de P3/C4**: judge/judge_many, compare, scan y consolidación general requieren próximos contratos con consumidores reales. No scoring decay nuevo: el calendario de revisión ya está cubierto por P4-A. Export/import/sync, dispositivo físico y GrokBot siguen pendientes.
+
+## Memoria P4-A — revisión explícita — checkpoint 29-10-2026
+
+**Candidate 2: 276 pruebas por sabor, 27 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Fechas de revisión por tipo/calendario sólo al insertar; estado virtual needs_review y flujo lista de pendientes → inspector → marcar revisado, tanto UI manual como Central autorizado. No expiración/borrado automático ni timers. Focal 54 separado.
+
+[Reporte, adaptaciones e historia 1–2](docs/continue/engram-port/P4-A-review-report.md) · [Resultados exactos](docs/continue/engram-port/P4-A-review-results.json).
+
+Código `3d2d69fd60c0fe158b50791d6d5e75e088cd8c35`. La operación no cambia ID/texto/historia; el proof de selectores se conserva antes de retención, sin conceder a una llamada list autoridad mark. Intención local de limpiar fecha no equivale a sync. La autoridad manual y el OFF automático son distintos y se conservan. **No P4 total ni PASS agregado de P3/C4**: relaciones/candidatos, judge/compare y consolidación general siguen pendientes bajo contratos separados; no se inventa scoring decay por implementar recordatorios. Dispositivo físico, export/import/sync y GrokBot no se adelantan.
+
+## Memoria A05 — contexto e historial antiguo — checkpoint 29-10-2026
+
+**Candidate 3: 95 pruebas por sabor, 13 clases, cero fallos/errores/skips; doble PASS independiente acotado.** `memory_context` permite al principal Central pedir el historial antiguo mediante el renderer existente, sin otro backend ni grants. Plaintext completo hacia el proveedor, UTF-8 acotado y límite exterior explícito; actividad una vez fuera de retries de lectura. Focal 36 separado.
+
+[Reporte, adaptaciones e historia 1–3](docs/continue/engram-port/A05-context-tool-report.md) · [Resultados exactos](docs/continue/engram-port/A05-context-tool-results.json).
+
+Código `b374c8c8b9537390d593d63acc3cf739536877c5`. Reconciliación local P3/C4 por unidades: A05 cierra el último consumidor ausente identificado, **sin nuevo PASS conjunto ni suma de corpus**. F43 sigue close/reopen→NEW, no OS restart. Siguiente P4: review/decay con consumidor real y contrato separado, después relaciones/consolidación. Los pendientes A05 inferiores son históricos; Android físico, export/import/sync y entrega no se infieren. GrokBot sólo después de Engram completo.
+
+## Memoria F16 — búsqueda de prompts retenidos — checkpoint 29-10-2026
+
+**Candidate 4: 133 pruebas por sabor, 14 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Nuevo read nativo Central `memory_search_prompts`: full content histórico no confiable, índice propio de dos columnas en Room, owner antes de LIMIT y presupuesto completo sin recorte. Focal 68 separado. No nuevo grant, captura, actividad ni renew.
+
+[Reporte, adaptaciones e historia 1–4](docs/continue/engram-port/F16-prompt-search-report.md) · [Resultados exactos](docs/continue/engram-port/F16-prompt-search-results.json).
+
+F16 queda cerrado en su alcance local, código `d2368357bc684ad15582048a51b67cb498cf6b14`. No P3/global PASS automático ni suma de checkpoints. El cotejo residual confirmó A05: falta un consumidor productivo del renderer older-history ya implementado. Se conectará ese selector mínimo antes de P4, sin rehacer el renderer ni ampliar autoridad. Los pendientes F16 de checkpoints inferiores son históricos, supersedidos sólo por este alcance. Android físico, sync/export/import y migraciones no se infieren.
+
+## Memoria A06 / F43 acotado — checkpoint 29-10-2026
+
+**147 pruebas por sabor, 17 clases, cero fallos/errores/skips; doble PASS independiente acotado.** Contexto readonly de la sesión padre actual tras ACK de compacción, pins sin clamp artificial y presupuesto final completo. F43 cubre close/reopen → NEW con binding nuevo, no muerte de proceso ni auto-resume. Código `bdab8c37106a4bc15c4584b56aeced2a34d989cd`. Focal 34 separado.
+
+[Reporte, historia 1–6 e incidente de snapshots](docs/continue/engram-port/A06-current-session-report.md) · [Resultados exactos](docs/continue/engram-port/A06-current-session-results.json).
+
+C4 queda reconciliado funcionalmente por unidades A–F y A06, **sin nuevo PASS conjunto ni suma de corpus**. Próximo pendiente confirmado: **P3/F16, búsqueda canónica de prompts por proyecto/texto con contenido completo**, antes de P4. Los checkpoints y labels inferiores son históricos; sus pendientes A06/F43 quedan supersedidos sólo por el alcance aquí descrito. No P3 total, Android físico, sync/export ni migraciones implícitos.
+
+## Memoria C4-F: recibo Mission atómico en Central — checkpoint 29-10-2026
+
+**Ejecución final: 276 pruebas por flavor, 19 clases, cero fallos/errores/skips. Doble PASS independiente acotado.** Una nueva incorporación corroborada crea sesión técnica completed y episodio en la misma transacción; no es chat, sesión de bot ni certificación del éxito de su trabajo. Código `5818b67f6029bfbb49a2484885fd8df16a069351`.
+
+[Reporte y límites](docs/continue/engram-port/C4-F-mission-report.md) · [Resultados](docs/continue/engram-port/C4-F-mission-results.json). OFF conserva entrega técnica y deja supresión sticky por evidencia sólo al corroborar; ON/restart/retries no hacen backfill. Owner/errores y borrado no conceden permiso nuevo. Focal 57 separado; no C4/paridad total/Android runtime. A06 permanece abierto: falta el consumidor específico FormatCompactionContext de sesión actual; el contexto genérico Previous no se afirma exclusivo de sesiones anteriores. F43 conserva pendiente la integración reopen→NEW, sin auto-resume. P4 todavía no iniciado; checkpoints inferiores históricos.
+
+## Memoria C4-E: ejecución interna de compacción — checkpoint 29-10-2026
+
+**PASS independiente acotado de preparación de compacción y selección afectada:** 285 pruebas por flavor, 27 clases, cero fallos/errores/skips. La ejecución de memoria se admite antes de extraer/narrar, con binding Main y ticket originales; no es un chat adicional. Código `cc260995`.
+
+[Reporte y límites](docs/continue/engram-port/C4-E-compaction-report.md) · [Resultados](docs/continue/engram-port/C4-E-compaction-results.json). Narración propia sólo avanza cobertura tras ACK exacto; cambios ajenos no se absorben. Hechos confirmados antes de un append fallido se conservan, sin rollback global ficticio. Finalización/OFF no otorgan permiso nuevo ni bloquean compacción ordinaria segura. Mission sigue pendiente; no C4/paridad total ni Android runtime. Focal 107 separado y fallos anteriores preservados; checkpoints inferiores históricos.
+
+## Memoria C4-D: sesiones del mantenimiento real — checkpoint 29-10-2026
+
+**PASS independiente acotado de bindings de mantenimiento y selección afectada:** 200 pruebas por flavor, 20 clases, cero fallos/errores/skips. Claim CAS y sesión se admiten atómicamente; extracción/snapshot, narración y consolidación reales conservan gates de lease, ticket, cancelación y borrado. Código `20a384bf`.
+
+[Reporte y límites](docs/continue/engram-port/C4-D-maintenance-report.md) · [Resultados](docs/continue/engram-port/C4-D-maintenance-results.json). Reclaim invalida escritores anteriores; sesión borrada produce fallo tipado, no remint ni éxito falso. Topic/dedupe y agregados mantienen asociaciones explícitas. Compaction y Mission siguen pendientes; no C4/paridad total ni Android runtime. Focal 50 separado; checkpoints inferiores históricos.
+
+## Memoria C4-C: aprendizajes pasivos del cierre real — checkpoint 29-10-2026
+
+**PASS independiente acotado de captura pasiva y selección afectada:** 160 pruebas por flavor, 19 clases, cero fallos/errores/skips. Una respuesta final completada del agente Central pasa por parser determinista y captura con binding/ticket originales; no escanea transcript ni habilita captura de prompts. Código `e5b76e20`.
+
+[Reporte y límites](docs/continue/engram-port/C4-C-passive-report.md) · [Resultados](docs/continue/engram-port/C4-C-passive-results.json). Dedupe histórico, título raw de 60 bytes, historia/lecturas/FTS y reapertura verificados; privado se redacta antes de cortar título y errores SQL fallan cerrados, divergencias protectoras explícitas. Lifetimes técnicos, export/sync y Android runtime siguen pendientes; no C4/paridad total ni publicación/firma. Focal 21 separado; checkpoints inferiores históricos.
+
+## Memoria C4-B: recordatorio de actividad en el request real — checkpoint 29-10-2026
+
+**PASS independiente acotado de nudge y selección afectada:** 106 pruebas por flavor, 12 clases, cero fallos/errores/skips. El recordatorio usa actividad de la sesión admitida y freshness del proyecto; se reserva dentro del presupuesto UTF-8 antes de preparar el request real. Código `e7ceb424`.
+
+[Reporte y límites](docs/continue/engram-port/C4-B-nudge-report.md) · [Resultados](docs/continue/engram-port/C4-B-nudge-results.json). Reloj/counters en memoria, sin timers ni escrituras de memoria adicionales. Eventos, replay sin contador, supresión tras finalize y nombre real de herramienta son adaptaciones explícitas. Parser/captura pasiva y asociaciones técnicas siguen pendientes; no C4 completo/dispositivo/paridad ni publicación/firma. Focal 22 separado; checkpoints inferiores históricos.
+
+## Memoria C4-A: continuidad de sesión y finalización atómica — checkpoint 29-10-2026
+
+**PASS independiente acotado C4-A y selección afectada:** 346 pruebas por flavor, 31 clases, cero fallos/errores/skips. Regenerar consume un recibo durable exacto; lease/renew no sustituyen autoridad ni cierre físico de la ejecución. Summary no termina la sesión; finalize crea observación y cierre/journal atómicos, sin bloquear herramientas ordinarias. Código `6e41d8d3`.
+
+[Reporte y límites](docs/continue/engram-port/C4-A-lifecycle-report.md) · [Resultados](docs/continue/engram-port/C4-A-lifecycle-results.json). Nuevos efectos automáticos de memoria se deniegan tras finalize; lecturas/replay y mantenimiento autorizado conservados. Parser/nudge y asociaciones de productores técnicos siguen pendientes, igual que Android runtime y paridad completa. Focal 56 no sumado; sin publicación/firma. Checkpoints inferiores históricos.
+
+## Memoria P3: contexto canónico y continuidad S7 — checkpoint 29-10-2026
+
+**PASS independiente acotado de contexto/request preparado y selección afectada:** 159 pruebas por flavor, 16 clases, cero fallos/errores/skips. El request real usa una única snapshot tras refrescar memoria, XML y adjuntos; conserva diez interacciones cerradas y todas las abiertas/inciertas, con revalidación transaccional. Código `d0cb92e3`.
+
+[Reporte y límites](docs/continue/engram-port/P3-context-report.md) · [Resultados](docs/continue/engram-port/P3-context-results.json). Perfil/docs actuales preservados; presupuesto UTF-8 de contexto separado de estimación aproximada del request. C4 lifecycle/summary/finalize/lease y Android runtime siguen pendientes; no P3 completo/paridad ni publicación/firma. Focal no sumado; checkpoints inferiores históricos.
+
+## Memoria P3: timeline de la misma sesión — checkpoint 29-10-2026
+
+**PASS independiente acotado de timeline y selección afectada:** 111 pruebas por flavor, 11 clases, cero fallos/errores/skips. Central recorre herramientas reales search→timeline→get con IDs retornados y una sesión admitida real; vecinos autorizados, previews500/150 y salida completa o error. Código `e777f3b6`.
+
+[Reporte y límites](docs/continue/engram-port/P3-timeline-report.md) · [Resultados](docs/continue/engram-port/P3-timeline-results.json). No mutaciones ni permisos nuevos; orden rowid local y fail-closed son adaptaciones explícitas. Contexto en request final, protección de interacciones y lifecycle/C4 siguen pendientes; no P3 completo, dispositivo ni publicación/firma. Checkpoints inferiores históricos.
+
+## Memoria P3: búsqueda canónica y listado estructurado — checkpoint 29-10-2026
+
+**PASS independiente acotado de búsqueda/listado y selección afectada.** 298 pruebas por flavor, 28 clases, cero fallos/errores/skips. LIKE literal conocido cerrado en este árbol; B5 de episodios sin narración conservado mediante `memory_list`, sin consulta ficticia. Código `a01409e2`.
+
+[Reporte y límites](docs/continue/engram-port/P3-canonical-search-report.md) · [Resultados](docs/continue/engram-port/P3-canonical-search-results.json). AND/any, trigram/LIKE, ranking, raw-topic y filtros autorizados sobre el mismo Room; búsqueda/listado sin mutaciones. Prepass fail-closed, desempate rowid local y transporte de previews son adaptaciones explícitas. Timeline/context/lifecycle P3 y Android runtime siguen pendientes; no paridad total ni publicación/firma. Checkpoints inferiores históricos.
+
+## Prerrequisito P3: SQLite bundled en el mismo Room — checkpoint 28-10-2026
+
+**PASS independiente acotado del proveedor; cohorte FAIL.** Full 576/1 y Play 557/1, único fallo LIKE conocido, cero errores/skips. Trigram y BM25 reales en Room/JVM, lectores/escritor uniformes, leases/cancelación y errores nativos conservados. Código `9b04df94`.
+
+[Reporte y límites](docs/continue/engram-port/P3-provider-prerequisite-report.md) · [Resultados](docs/continue/engram-port/P3-provider-prerequisite-results.json). SQLite oficial 2.6.1, Room 2.7.2 sin cambio; no segundo backend. Android runtime/dispositivo sigue sin validar. Búsqueda canónica/LIKE/ranking/contexto/lifecycle P3 siguen pendientes; no paridad total, publicación ni firma. Checkpoints inferiores históricos.
+
+## Memoria P2/P3: sesiones internas y captura opcional — checkpoint 28-10-2026
+
+**PASS independiente acotado de sesiones/prompts y selección afectada.** Full454 y Play435 pruebas, cero fallos/errores/skips. Sesión durable de la ejecución Central, prompts sólo con opt-in explícito (OFF por defecto), administración manual y borrado por proyecto de los dominios locales. Código `6af4a31a`.
+
+[Reporte y límites](docs/continue/engram-port/P2-session-prompt-report.md) · [Resultados](docs/continue/engram-port/P2-session-prompt-results.json). No chats adicionales. Lifecycle avanzado/continuidad P3, bindings técnicos NULL y sync siguen pendientes; no DeleteProject completo/P2/paridad/dispositivo PASS. LIKE no reejecutado sigue deuda. Sin publicación/firma; checkpoints inferiores históricos.
+
+## Memoria P2: borrado manual por proyecto — checkpoint 28-10-2026
+
+**PASS independiente acotado de observaciones por proyecto y selección afectada.** 107 pruebas por flavor, cero fallos/errores/skips. Preview y confirmación soft/hard, todos los scopes autorizados, rollback y no resurrección; UI desplazable corregida. Código `d4c1b7a5`.
+
+[Reporte y límites](docs/continue/engram-port/P2-project-observations-report.md) · [Resultados](docs/continue/engram-port/P2-project-observations-results.json). No DeleteProject completo: sesiones/prompts/sync canónicos pendientes, sin sustituirlos por chats/workspaces. LIKE no reejecutado sigue deuda. Sin P2/paridad/dispositivo PASS ni publicación/firma; checkpoints inferiores históricos.
+
+## Memoria P2: claves raw y sugerencia — checkpoint 28-10-2026
+
+**PASS independiente acotado raw-topic/suggest y selección afectada.** 208 pruebas por flavor, cero fallos/errores/skips. Claves UTF-8 cortadas conservan bytes/identidad; sugerencia nativa de sólo lectura, sin nuevo backend. Código `311085ad`.
+
+[Reporte y límites](docs/continue/engram-port/P2-raw-topic-report.md) · [Resultados](docs/continue/engram-port/P2-raw-topic-results.json). Export/import raw, Unicode Android universal, scoped y resto P2/paridad pendientes. LIKE no reejecutado sigue deuda. Sin migraciones, publicación ni firma; checkpoints inferiores históricos.
+
+## Memoria P2: identidad durable de guardados — checkpoint 28-10-2026
+
+**PASS independiente acotado de operation-ID nativo/recuperación y selección afectada.** 189 pruebas por flavor, cero fallos/errores/skips; replay sin mutación, rollback y referencia de guardado tras respuesta perdida/reapertura. Código `3c794188`.
+
+[Reporte y límites](docs/continue/engram-port/P2-operation-id-report.md) · [Resultados](docs/continue/engram-port/P2-operation-id-results.json). La recuperación no reejecuta ni fabrica RESULT. Manual/directo sigue sin operation-ID. LIKE no reejecutado sigue pendiente; raw-topic/suggest_topic, scoped y resto P2/paridad abiertos. Publicación/firma bloqueadas; checkpoints inferiores históricos.
+
+## Memoria P2: inspector manual de historial — checkpoint 28-10-2026
+
+**PASS independiente acotado del inspector y selección afectada.** 64 pruebas por flavor, cero fallos/errores/skips; páginas reales, metadata completa, owner, no escrituras y reapertura. Código `29298e51`.
+
+[Reporte y límites](docs/continue/engram-port/P2-inspector-report.md) · [Resultados](docs/continue/engram-port/P2-inspector-results.json). No suite global: LIKE conocido no se reejecutó aquí y sigue pendiente. No P2 completa/paridad/dispositivo; siguen operation-ID, raw-topic/suggest_topic y scoped. Publicación/firma bloqueadas; checkpoints inferiores históricos.
+
+## Memoria P2: borrado permanente manual — checkpoint 28-10-2026
+
+**PASS independiente acotado de hard delete/UI/identidad/orphan; cohorte FAIL.** Full375/1 y Play348/1, único LIKE heredado. Purga observación e historia con confirmación; bloquea resurrección del mismo origen runtime y conserva relaciones huérfanas/hechos técnicos. Código `cc99a30a`.
+
+[Reporte y límites](docs/continue/engram-port/P2-hard-delete-report.md) · [Resultados](docs/continue/engram-port/P2-hard-delete-results.json). No borrado forense de todas las copias, admin al modelo ni scoped. Requiere instalación limpia. Siguen operation-ID, inspector, raw-topic/Unicode y dependencias de sesiones; no P2 completa/paridad. Publicación y firma bloqueadas; checkpoints inferiores históricos.
+
+## Memoria P2: borrado lógico manual — checkpoint 28-10-2026
+
+**PASS independiente acotado de soft delete/UI/FTS live fresh; cohorte FAIL.** Full363/1 y Play336/1, único LIKE heredado. Confirmación con proyecto almacenado, revalidación en transacción y postings retirados tras borrar/reabrir. Código `6a1449ba`.
+
+[Reporte y límites](docs/continue/engram-port/P2-soft-delete-report.md) · [Resultados](docs/continue/engram-port/P2-soft-delete-results.json). Requiere instalación limpia, no actualiza índices antiguos. FTS4 provider y FTS5 standalone, no FTS5 Android. Hard/scoped/admin, operation-ID y resto P2/P3 siguen pendientes; memory_forget no es alias canónico. Sin publicación ni firma; checkpoints inferiores históricos.
+
+## Memoria P2: pin/unpin local — checkpoint 28-10-2026
+
+**PASS independiente acotado de pin, herramientas y UI; cohorte agregada FAIL.** Full351/1 fallo y Play324/1, único LIKE heredado; cero errores/skips. Pin persiste tras reapertura y no altera cuerpo, revisión, historia ni timestamps. Código `968ccb97`.
+
+[Reporte y límites](docs/continue/engram-port/P2-pin-report.md) · [Resultados](docs/continue/engram-port/P2-pin-results.json). Sin prioridad/contexto/ranking todavía. Pendientes borrados canónicos, operation-ID, inspector UI, topic UTF-8 partido y resto del port. No P2 completa ni paridad. Publicación y firma siguen bloqueadas; checkpoints inferiores históricos.
+
+## Memoria P2: dedupe por contenido — checkpoint local 28-10-2026
+
+**PASS independiente acotado de dedupe/contadores; cohorte agregada FAIL.** Full342/1 fallo y Play315/1 (único LIKE heredado), cero errores/skips. Save distingue topic-upsert de contenido repetido, aplica título/tipo/partición/ventana y conserva duplicate_count/last_seen tras reapertura. Código `9c292149`.
+
+[Reporte y límites](docs/continue/engram-port/P2-content-dedupe-report.md) · [Resultados](docs/continue/engram-port/P2-content-dedupe-results.json). Default activo15min; no preferencia de ventana de usuario ni replay por operation-ID. Siguen pendientes pin, borrados canónicos, inspector UI, topic UTF-8 partido y resto del port. No suite PASS/P2 completa/paridad. Publicación y firma bloqueadas; checkpoints inferiores históricos.
+
+## Memoria P2: update por ID e historial — checkpoint local 28-10-2026
+
+**PASS independiente acotado de la unidad; cohorte agregada FAIL.** Full 330 pruebas/1 fallo y Play 303/1, cero errores/skips: el único fallo es la búsqueda literal LIKE heredada, conservada sin rebajar asertos. Update mantiene ID y evidencia, historial durable/paginado y recorrido Central con reapertura verificados. Código `d3091bbd`.
+
+[Reporte y límites](docs/continue/engram-port/P2-update-history-report.md) · [Resultados](docs/continue/engram-port/P2-update-history-results.json). `memory_correct` fue sustituido explícitamente, sin alias. Sigue abierto el caso topic UTF-8 partido; no P2 completa, suite PASS ni paridad total. Publicación y firma siguen bloqueadas. Los checkpoints inferiores son históricos.
+
+## Memoria D1 por proyecto/scope — checkpoint local 28-10-2026
+
+**PASS independiente acotado: 275 Full / 250 Play, cero fallos, errores y skips.** Save/upsert durable y lecturas/escrituras actuales respetan particiones y autoridad real; mismo ID tras reapertura, Central/workspaces/bots y fuentes runtime protegidos. Código `f41a4ec2`.
+
+[Reporte](docs/continue/engram-port/D1-namespace-report.md) · [Resultados](docs/continue/engram-port/D1-namespace-results.json). Pendiente siguiente unidad P2: update por ID e historial canónicos; correct actual crea reemplazo y no equivale a update. No P2 completa, paridad total ni Unicode Android certificados. Publicación y firma siguen bloqueadas; no se transfieren resultados de árboles anteriores.
+
+## Cierre de remanentes fresh-only — checkpoint local 28-10-2026
+
+**PASS independiente acotado: 203 Full / 203 Play, cero fallos, errores y skips.** Retirados el slot `TaskToolScope.memory`, aliases de herramientas y navegación antigua de memoria, y factory implícita sin callers. Formato retirado falla explícitamente sin recuperar revisiones anteriores; Central, memoria Room y workspaces/bots actuales conservados. Código `9ec30e0f`.
+
+[Reporte e inventario final](docs/continue/engram-port/Fresh-residual-report.md) · [Resultados](docs/continue/engram-port/Fresh-residual-results.json). No P0 completo ni paridad Engram inferidos; continúan los contratos del roadmap. Publicación bloqueada. Las listas de pendientes inferiores son históricas y quedan sustituidas en este alcance por este checkpoint.
+
+## Retiro MemFS — checkpoint local 28-10-2026
+
+**PASS independiente acotado: 327 Full / 319 Play, cero fallos, errores y skips.** Backend antiguo y adaptadores retirados; Room actual, Central/workspaces/bots, redacción y límites de herramientas preservados. Código `bdff50b5`. [Reporte](docs/continue/engram-port/MemFS-retirement-report.md) · [Resultados](docs/continue/engram-port/MemFS-retirement-results.json).
+
+**Pendiente:** slot `TaskToolScope.memory`, serialización y aliases obsoletos; después inventario final. No P0 completo ni paridad Engram. Publicación bloqueada. Los checkpoints inferiores son históricos y no transfieren sus resultados al árbol actual.
+
+## Foundation fresh-only — checkpoint local 28-10-2026
+
+**PASS independiente acotado: 339 Full / 304 Play, cero fallos, errores y skips.** Esquema nuevo sin migraciones/fallback destructivo, arranque Central idempotente y datos nuevos conservados al reabrir. Preflight conjunto bloquea incompatibilidad antes de crear el otro store; UI Central→runtime/herramientas/Room→memoria corregida tras reapertura y aislamiento de workspaces/bots verificados nuevamente. Código `9c05d1c9`.
+
+[Reporte y límites](docs/continue/engram-port/Fresh-foundation-report.md) · [Manifiesto](docs/continue/engram-port/Fresh-foundation-results.json) · [Contratos de pruebas sustituidos](docs/continue/engram-port/Fresh-test-contract-changes.md). **No P0 completo ni paridad Engram:** siguen pendientes MemFS/adaptadores y binding/scopes. No se borran/importan datos instalados antiguos; se exige instalación limpia. Publicación bloqueada, sin APK firmado. Los apartados inferiores son checkpoints históricos: las dependencias de conservación/migración quedaron sustituidas por el [roadmap rev2 fresh-only](docs/ENGRAM_PORT_ROADMAP.md).
+
+## Memoria Central integrada — hito P1 JVM verificado 27-10-2026
+
+**PASS independiente acotado: 81 Full / 81 Play, mismo árbol y binarios.** UI Central→runtime/herramientas/Room reales→guardar/buscar/corregir→cerrar/reabrir→nuevo run recupera y muestra el dato corregido. Tres guardas de identidad cierran acceso personal desde workspaces; STOP/revocación y regresión Central/bots verificados. [Reporte y límites](docs/continue/engram-port/P1-central-memory-flow-report.md) · [Manifiesto](docs/continue/engram-port/P1-central-memory-flow-results.json). Código local `40871d46`.
+
+**No paridad Engram ni prueba física.** P0 binding/migración sigue pendiente antes de activar project/scope; se continúa conforme roadmap, sin saltar a funciones posteriores. Publicación permanece bloqueada y no hay APK nuevo firmado. Los checkpoints inferiores conservan su estado histórico.
+
+## Roadmap Engram propio — planificación revisada 27-10-2026
+
+**PASS del roadmap por juez independiente; no PASS del port.** [Plan ejecutable](docs/ENGRAM_PORT_ROADMAP.md) · [Matriz de capacidades](docs/ENGRAM_PORT_MATRIX.md) · [Hallazgos y dictamen](docs/ENGRAM_PORT_REVIEW.md). Base Jarvys `86211a5b`; upstream fijado `52cbdab`. Primer hito previsto: Central→runtime→herramientas/Room reales→guardar/buscar/corregir→reabrir y recuperar, antes de curación avanzada y sync.
+
+El encargo posterior del usuario reactiva la planificación de memoria y sustituye la pausa histórica indicada debajo; en aquel checkpoint de planificación aún no se había iniciado implementación nueva y la fuente productiva permanecía intacta. Publicación continúa bloqueada; transporte remoto/datos ambiguos/firma permanecen sujetos a sus límites, sin permiso implícito por el PASS.
+
+## Flujo Central + workspaces + bots — checkpoint local 27-10-2026
+
+**37 pruebas Full / 37 Play PASS**, cohorte fresca de seis clases, cero fallos/errores/skips, guard offline intacto y revisión independiente por cambio y final. Se verifican UI Central única, rechazo/no adopción de entradas legacy, navegación misión/bot con su sesión de ejecución y mensajes reales del canal interno entre bots. [Reporte y límites](docs/continue/single-validate/Central-workspace-flow-report.md) · [Manifiesto](docs/continue/single-validate/Central-workspace-flow-test-results.json).
+
+La retirada de selección/creación legacy y el aislamiento workspace **ya estaban en la rama**. El cambio productivo nuevo es una línea que evita navegar antes de que exista el grafo, con repro rojo previo. No se borran ni importan historiales antiguos. Tests usan Activity/Compose reales en Robolectric; modelo/runner y transporte de assets están simulados, sin llamadas externas. No equivale a prueba en teléfono ni APK instalable.
+
+**Alcance cerrado de forma acotada; Engram/S7, rendimiento y otras mejoras quedan pausados por instrucción del usuario.** Sin publicación (denegación vigente; remoto confirmado `337fcac0`) ni APK firmado. Identidad original de firma no disponible en este entorno; no se crea una nueva.
+
+## S6 — auditoría de migración corregida, checkpoint local 27-10-2026
+
+**Cambio exclusivamente de test, revisado independientemente: 48 Full / 48 Play PASS**, tres clases por sabor, cero fallos, errores o skips y compilación correcta. La auditoría valida ahora los INSERT de migración contra el esquema de su fase, conservando correspondencia completa y negativos; producción y todas sus clases compiladas permanecen idénticas. [Reporte](docs/continue/single-validate/S6-migration-audit-report.md) · [Manifiesto](docs/continue/single-validate/S6-migration-audit-test-results.json).
+
+El fallo del auditor queda resuelto en esta cohorte focal; **el gate de rendimiento sigue pendiente**, sin nuevo intento para obtener verde. La cohorte anterior de 163 pruebas conserva sus fallos históricos y no se suma ni reclasifica como PASS. No cierra S6, S7/S8 ni paridad Engram.
+
+Publicación detenida por la denegación vigente, remoto confirmado `337fcac0`; sin APK. Decisiones sobre fixtures de respaldo y `linux_status` aún pendientes.
+
+## Checkpoint anterior — entrega y lectura, 27-10-2026
+
+**Compilación Full/Play PASS; cohorte final NO PASS:** Full **163 pruebas / 2 fallos**, Play **163 / 1 fallo**, sin errores ni skips. Entrega nativa, recuperación de previews retenidos y equivalencia del rango SQL pasan sus casos afectados; los controles causales D1–D3 fueron detectados y revisados independientemente. Esto no cierra S6 ni acredita paridad con Engram.
+
+En ese checkpoint persistían la auditoría de una tabla temporal de migración (reproducida también en el baseline histórico `3aff5162`) y el gate de rendimiento de 200 ms (Full: mediana 202 ms; Play pasa esta ejecución, sin mediana numérica registrada). La cota SQL aporta una parada indexada demostrada, no una garantía de latencia.
+
+Código local separado: `bd05fc57` (entrega/preview retenido) y `1714b762` (cota de rango). La restauración final corresponde a este candidato, no al baseline histórico. [Reporte y límites](docs/continue/single-validate/S6-delivery-validation-report.md) · [Manifiesto](docs/continue/single-validate/S6-delivery-validation-test-results.json).
+
+**Publicación bloqueada por la denegación vigente; no se reintentó.** Último remoto confirmado: `337fcac0`. Sin APK, despliegue, opt-in Coding ni cierre S6/S7/S8. Siguen pendientes las decisiones sobre fixtures de respaldo y `linux_status`.
+
+### Unidad prevista entonces — resuelta en el checkpoint superior
+Revisar el contrato del auditor SQL de migraciones: sólo corregir el test si debe validar tablas transitorias contra el esquema de su fase, manteniendo una prueba negativa de tabla desconocida. No cambiar producción ni omitir la auditoría para obtener verde. El gate temporal continúa pendiente por separado.
+
+## Checkpoints anteriores — resultados de otros árboles
+
+> **Inventario runtime — 27-10-2026:** slice test-only revisado **7 Full / 7 Play PASS**, sobre `716bbf14`, producción intacta. Ensamblaje real `createTools`, módulos, Google y MCP con servicios exclusivamente simulados. [Reporte y límites](docs/continue/single-validate/S6-runtime-inventory-report.md). Clasificación por operación y evidencia de productores siguen separadas; no cierre §7.5/S6. No se suman los checkpoints siguientes como una sola suite fresca.
+
+> **Inventario Crew — 27-10-2026:** nuevo slice test-only revisado, **5 Full / 5 Play PASS** sobre checkpoint `88bc31f1`, producción intacta. Comprueba ensamblajes y forwarding; contratos de efecto **UNRESOLVED** siguen abiertos, no cobertura durable ni cierre del inventario §7.5/S6. [Reporte separado](docs/continue/single-validate/S6-crew-inventory-report.md). Las 3.081 ejecuciones siguientes pertenecen al checkpoint anterior, no se suman como una suite fresca.
+
+> **S6 — checkpoint anterior, 27-10-2026:** validación seleccionada fresca **3.081 ejecuciones PASS** (Full 1.664 / Play 1.417), 186 clases Full y 159 Play, cero fallos/errores/skips y launchers correctos, verificada por revisor independiente. Cinco ajustes de fixtures preservan los asertos; producción sin cambios en este bloque. [Reporte y manifiesto](docs/continue/single-validate/S6-current-validation-report.md).
+
+La [campaña de mutaciones](docs/continue/single-validate/S6-coding-mutation-report.md) verifica invariantes seleccionadas y conserva intentos inconclusos/no evaluados y un superviviente protegido; no es una cuota ni cierre S6. La integración de handlers Node permanece **BLOCKED** y excluida explícitamente del conteo verde. Siguen abiertos inventario de efectos por operación, clasificación Crew/Delegate, decisión `linux_status` y opt-in Coding; sin APK ni cierre S6/S7/S8/Engram. Respaldo externo detenido por denegación de fixtures; último remoto confirmado `337fcac0`.
+
+## Historial de checkpoints S6 — fuentes anteriores, no estado actual
+
+## Estado S6 — factory técnica conectada, 27-10-2026
+
+**76 Full + 43 Play = 119 pruebas frescas PASS**, 13/6 clases, ambos sabores compilados. Factory real y revocaciones de perfiles persistidos verificadas; los asertos Assembly se preservan con fuente Crew real. [Reporte](docs/continue/single-validate/S6-coding-factory-cutover-report.md).
+
+**WIP no operativo:** project_exec de la factory ya usa el productor técnico pero coverage sigue false, por lo que el catálogo rechaza sin ejecutar; no hay fallback legacy ni APK. Restan cancel, fronteras root/STOP y mutantes antes de opt-in. No cierre S6/S7/S8/Engram. Respaldo posterior a `337fcac0` aún no confirmado; resultados siguientes son históricos de otros árboles.
+
+## Estado S6 — oráculos STOP/scope, 27-10-2026
+
+Ocho casos Full frescos PASS, ambos sabores compilados, producción intacta `cebf0c1d`. Cubren STOP después del ACK, después de preparación comprometida y durante backend sintético, más aprobación ASK con versión de scope obsoleta; conservan efectos posibles/NOT_PROVEN y no reejecutan. [Manifiesto separado](docs/continue/single-validate/S6-coding-stop-boundary-test-results.json). No son 101 casos frescos ni nueva ejecución Play.
+
+Pendientes factory real/legacy, root/capabilities, cancel y catálogo/mutantes; sin cierre S6/S7/S8/Engram/APK. Respaldo remoto posterior a `337fcac0` sigue sin confirmarse.
+
+## Estado S6 — política técnica Coding, 27-10-2026
+
+**57 Full + 36 Play = 93 pruebas frescas PASS**, 8/5 clases, ambos sabores compilados. `project_exec` técnico declara WRITE, pero coverage/catálogo sigue desactivado. Pruebas reales de fuente, DENY, ASK pendiente/STOP y revocación ASK/DENY/ABA después del ACK no autorizan preparación ni backend. [Reporte y límites](docs/continue/single-validate/S6-coding-policy-boundary-report.md).
+
+Siguen STOP/scope/capabilities restantes, JOBS cancel, legacy/cutover y mutantes; no cierre S6/S7/S8/Engram/APK. Respaldos posteriores a `337fcac0` aún no confirmados. Los resultados históricos siguientes pertenecen a otros árboles.
+
+## Estado S6 — recuperación técnica, 27-10-2026
+
+**351 Full + 294 Play = 645 pruebas frescas PASS**, ambos sabores compilados, cero skips. Recuperación existing-only de Room y journals, recertificación terminal exacta, owner DEAD acreditado sin replay, restore RAW STARTED y bloqueo Play sin owners. Cinco endpoints host de liveness se verifican por separado. [Reporte y límites](docs/continue/single-validate/S6-coding-durable-recovery-report.md).
+
+Pendiente matriz operacional schema3 de STOP/ASK/policy/scope, mutantes y opt-in; catálogo desactivado, sin cierre S6/S7/S8/Engram/APK. Último respaldo confirmado `337fcac0` reconstruye `cb64b428`; los checkpoints posteriores siguen locales mientras se aclara una publicación de resultado incierto. Las secciones siguientes conservan el historial de sus propios árboles.
+
+## Estado S6 — referencias externas e integridad, 27-10-2026
+
+**248 Full + 191 Play = 439 casos frescos PASS**, ambos compilados, cero skips. Validación compartida de bytes/envelope/roles/destino, conjunto exacto de dos roles, CAS externa y navegación digest→episodio→fuente. PARTIAL/unresolved sigue episodesComplete=false; sin autoridad o tablas nuevas. [Reporte](docs/continue/single-validate/S6-coding-external-refs-report.md).
+
+Pendientes recovery extranjero/scanner, restore Crew, matriz/mutantes integrados restantes y opt-in. Último backup confirmado `337fcac0` reconstruye `cb64b428`; este parche posterior todavía no se afirma publicado. No cierre S6/S7/S8/Engram/APK.
+
 ## Estado S6 — cadena semántica natural, 27-10-2026
 
 Tres casos Full nuevos PASS, ambos sabores compilados, producción intacta `025c0e31`: origen Central/Recorder→assignment→Crew→Coding real, roles terminales exactos, fuente después de narrar, OFF ABA sin backfill y olvido sin recreación. [Reporte](docs/continue/single-validate/S6-coding-natural-episode-report.md). No se agregan a los cortes anteriores como una suite fresca.

@@ -1,5 +1,0 @@
-Quedaron resueltas las cuatro incidencias. La revisión durable invalida cursores tras editar, ocultar o regenerar mensajes, mientras que los appends siguen excluidos por `highWater`. B2, las dos pruebas B14, la comprobación del plan FTS y el test de esquema M0 quedaron adaptados.
-
-La compilación Full/Play y tests de Full terminó correctamente. Los tests limitados pasaron: **152 tests, 0 fallos**. `git diff --check` no encontró errores.
-
-El informe con cambios, comandos y límites de verificación está en [stage-S5fix4-report.md](C:/Projects/Jarvys-wt/single-validate/stage-S5fix4-report.md). Conservé los cambios S5 existentes; no hice commit, push ni APK, y no toqué `docs/SINGLE_SESSION.md`.

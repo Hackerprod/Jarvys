@@ -23,6 +23,7 @@ public final class MemoryWritePolicy {
     });
     private volatile boolean readinessFailed;
     private volatile boolean settingUnconfirmed;
+    private volatile boolean captureSettingUnconfirmed;
 
     public interface AfterAttempt {
         /** Fixed runtime follow-up, outside the gate and on the ordered worker; no Activity capture. */
@@ -47,7 +48,7 @@ public final class MemoryWritePolicy {
         try { key = app.getFilesDir().getCanonicalPath(); }
         catch (IOException failure) { throw new IllegalStateException("Memory storage identity is unavailable"); }
         return POLICIES.computeIfAbsent(key, ignored -> new MemoryWritePolicy(app,
-            () -> SingleSessionReset.awaitReadyBlocking(app.getFilesDir())));
+            () -> FreshStorageBootstrap.awaitReadyBlocking(app.getFilesDir())));
     }
 
     /** Package-private readiness injection for Android adapter tests; production uses forContext. */
@@ -61,6 +62,14 @@ public final class MemoryWritePolicy {
                 try { return preferences.getBoolean(MemoryConstants.ENABLED_KEY, true); }
                 catch (RuntimeException failure) { settingUnconfirmed = true; return false; }
             }
+            @Override public boolean readPromptCaptureEnabled() {
+                try { return !readinessFailed && !captureSettingUnconfirmed && preferences.getBoolean(MemoryConstants.PROMPT_CAPTURE_ENABLED_KEY, false); }
+                catch (RuntimeException failure) { captureSettingUnconfirmed = true; return false; }
+            }
+            @Override public boolean commitPromptCaptureEnabled(boolean enabled) {
+                requireWorker();
+                return preferences.edit().putBoolean(MemoryConstants.PROMPT_CAPTURE_ENABLED_KEY, enabled).commit();
+            }
             @Override public boolean commitEnabled(boolean enabled) {
                 requireWorker();
                 return preferences.edit().putBoolean(MemoryConstants.ENABLED_KEY, enabled).commit();
@@ -70,12 +79,41 @@ public final class MemoryWritePolicy {
 
     public MemoryWriteGate gate() { return gate; }
     public MemoryWriteGate.Ticket captureTicket() {
-        if (!SingleSessionReset.isReady(app) || readinessFailed)
+        if (!FreshStorageBootstrap.isReady(app) || readinessFailed)
             throw new IllegalStateException("Memory storage is not ready");
         return gate.capture();
     }
     public boolean isEnabled() {
-        return !readinessFailed && SingleSessionReset.isReady(app) && gate.isEnabled();
+        return !readinessFailed && FreshStorageBootstrap.isReady(app) && gate.isEnabled();
+    }
+
+    public boolean isPromptCaptureEnabled() {
+        return !readinessFailed && FreshStorageBootstrap.isReady(app) && gate.isPromptCaptureEnabled();
+    }
+    public MemoryWriteGate.PromptCaptureTicket capturePromptTicket(MemoryWriteGate.Ticket originalMemoryTicket) {
+        if (!FreshStorageBootstrap.isReady(app) || readinessFailed) throw new IllegalStateException("Memory storage is not ready");
+        return gate.capturePromptTicket(originalMemoryTicket);
+    }
+    public CompletableFuture<SettingResult> requestSetPromptCaptureEnabled(boolean enabled) {
+        CompletableFuture<SettingResult> answer = new CompletableFuture<>();
+        requests.execute(() -> {
+            boolean confirmed = true;
+            try { awaitStorage(); gate.setPromptCaptureEnabled(enabled); captureSettingUnconfirmed = false; }
+            catch (RuntimeException failure) { confirmed = false; captureSettingUnconfirmed = true; }
+            boolean effective = isPromptCaptureEnabled();
+            answer.complete(new SettingResult(confirmed && !captureSettingUnconfirmed, effective, true));
+        });
+        return answer;
+    }
+    public CompletableFuture<SettingResult> readPromptCaptureStateAsync() {
+        CompletableFuture<SettingResult> answer = new CompletableFuture<>();
+        requests.execute(() -> {
+            boolean confirmed = true;
+            try { awaitStorage(); } catch (RuntimeException failure) { confirmed = false; }
+            boolean effective = isPromptCaptureEnabled();
+            answer.complete(new SettingResult(confirmed && !captureSettingUnconfirmed, effective, true));
+        });
+        return answer;
     }
 
     /** No gate/registry lock is held while startup readiness is awaited. */

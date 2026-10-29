@@ -47,8 +47,6 @@ data class TaskToolScope(
     val tools: List<String> = emptyList(),
     val web: Boolean = false,
     val writes: String = "DEFER",
-    /** Creator had memory enabled; task file tools are then restricted to /memory/ only. */
-    val memory: Boolean = false,
     /** Skill ids visible to the creator when the task was created. */
     val skillIds: List<String> = emptyList(),
 ) {

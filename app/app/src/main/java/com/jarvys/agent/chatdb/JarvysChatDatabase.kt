@@ -2,7 +2,6 @@ package com.jarvys.agent.chatdb
 
 import android.content.Context
 import android.database.Cursor
-import android.database.sqlite.SQLiteDatabase
 import android.os.Looper
 import androidx.room.Database
 import androidx.room.Room
@@ -11,7 +10,9 @@ import androidx.room.RoomDatabase.Callback
 import androidx.room.RoomDatabase.JournalMode
 import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
-import androidx.sqlite.driver.AndroidSQLiteDriver
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_FULLMUTEX
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -87,6 +88,15 @@ import kotlin.coroutines.ContinuationInterceptor
         AgentDoc::class,
         UserDirective::class,
         MemoryEntry::class,
+        MemoryReviewClearEventEntity::class,
+        MemoryRelationEntity::class,
+        MemorySession::class,
+        MemoryPrompt::class,
+        MemoryPromptTombstone::class,
+        MemorySessionTombstone::class,
+        MemorySessionFinalization::class,
+        MemoryDeletedObservation::class,
+        MemorySaveOperation::class,
         MemoryEvidence::class,
         MissionEpisodeInput::class,
         CompactionCoverageSource::class,
@@ -101,11 +111,15 @@ import kotlin.coroutines.ContinuationInterceptor
         CodingJobBindingRow::class,
         CodingJobObservationRow::class,
         CodingJobSemanticLinkRow::class,
+        CodingCancelRequestRow::class,
     ],
-    version = 8,
+    version = 1,
     exportSchema = true,
 )
 internal abstract class JarvysChatDatabase : RoomDatabase() {
+    internal fun expectedFreshIdentity(): String =
+        (createOpenDelegate() as androidx.room.RoomOpenDelegate).identityHash
+
     internal abstract fun conversationDao(): ConversationDao
     internal abstract fun conversationItemDao(): ConversationItemDao
     internal abstract fun messageDao(): MessageDao
@@ -163,6 +177,11 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "agent_docs",
             "user_directives",
             "memory_entries",
+            "memory_review_clear_events",
+            "memory_relations",
+            "memory_sessions", "memory_prompts", "memory_prompt_tombstones", "memory_session_tombstones", "memory_session_finalizations",
+            "memory_deleted_observations",
+            "memory_save_operations",
             "memory_evidence",
             "mission_episode_inputs",
             "compaction_coverage_sources",
@@ -177,15 +196,15 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "coding_job_bindings",
             "coding_job_observations",
             "coding_job_semantic_links",
+            "coding_cancel_requests",
         )
     }
 }
 
-/** One lazy app-process database instance per filesDir/jarvys/jarvys-chat.db path. */
+/** One lazy app-process database instance per current-generation agent.db path. */
 internal object JarvysChatDatabaseProvider {
-    private const val DATABASE_VERSION = 8
-    private const val DATABASE_NAME = "jarvys-chat-v3.db"
-    private const val DATABASE_DIRECTORY = "jarvys"
+    private const val DATABASE_VERSION = 1
+    private const val DATABASE_NAME = "agent.db"
     private const val BUSY_TIMEOUT_MILLIS = 5_000
     private const val WAL_AUTOCHECKPOINT_PAGES = 1_000
     private const val JOURNAL_SIZE_LIMIT_BYTES = 16_777_216
@@ -204,7 +223,7 @@ internal object JarvysChatDatabaseProvider {
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "Connection destination identity must be obtained off the main thread"
         }
-        return projectionAnchor(File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME))
+        return projectionAnchor(File(com.jarvys.agent.StorageGeneration(context).chatRoot(), DATABASE_NAME))
     }
 
     internal fun connectionProjectionAnchor(database: JarvysChatDatabase): ConnectionProjectionAnchor =
@@ -226,11 +245,12 @@ internal object JarvysChatDatabaseProvider {
         check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null) {
             "Database lifecycle cannot be entered from an active database lease"
         }
-        com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.applicationContext.filesDir)
+        com.jarvys.agent.FreshStorageBootstrap.requireFreshInstall(context.applicationContext)
+        com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.applicationContext.filesDir)
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "JarvysChatDatabaseProvider.getInstance must be called off the main thread"
         }
-        val databaseFile = File(File(context.applicationContext.filesDir, DATABASE_DIRECTORY), DATABASE_NAME)
+        val databaseFile = File(com.jarvys.agent.StorageGeneration(context).chatRoot(), DATABASE_NAME)
         val key = databaseFile.canonicalPath
         val anchor = projectionAnchor(databaseFile)
         return anchor.fenced { synchronized(this) {
@@ -315,8 +335,8 @@ internal object JarvysChatDatabaseProvider {
     private fun closeDatabaseUnderFence(database: JarvysChatDatabase) {
         val readPool = synchronized(readPools) { readPools[database] }
         try {
-            // Mark the pool closed and wake blocked acquisitions before Room waits for its own
-            // connection leases. Borrowed raw handles close when their owners return them.
+            // Owners must drain active Room transactions before shutdown; Room does not await them.
+            // Wake blocked raw acquisitions; borrowed raw handles close when returned.
             readPool?.close()
         } finally {
             synchronized(readPools) {
@@ -415,10 +435,10 @@ internal object JarvysChatDatabaseProvider {
         return withContext(dispatcher) { operation() }
     }
 
-    internal suspend fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteDatabase {
+    internal suspend fun acquireReadDatabase(database: JarvysChatDatabase): SQLiteConnection {
         // runInterruptible discards its result when the job is cancelled after the blocking call already
         // returned; the borrowed handle must then go back to the pool or it is lost forever.
-        val acquired = java.util.concurrent.atomic.AtomicReference<SQLiteDatabase?>()
+        val acquired = java.util.concurrent.atomic.AtomicReference<SQLiteConnection?>()
         try {
             return kotlinx.coroutines.runInterruptible {
                 acquireReadDatabaseBlocking(database).also { acquired.set(it) }
@@ -430,20 +450,32 @@ internal object JarvysChatDatabaseProvider {
     }
 
     /** Synchronous SQL facade fallback; its monitor wait responds to thread interruption. */
-    internal fun acquireReadDatabaseBlocking(database: JarvysChatDatabase): SQLiteDatabase =
+    internal fun acquireReadDatabaseBlocking(database: JarvysChatDatabase): SQLiteConnection =
         synchronized(readPools) { readPools[database] }
             ?.acquireBlocking()
             ?: throw IllegalStateException("No Jarvys chat read pool is registered for this database")
 
-    internal fun releaseReadDatabase(database: JarvysChatDatabase, handle: SQLiteDatabase) {
+    internal fun releaseReadDatabase(database: JarvysChatDatabase, handle: SQLiteConnection) {
         val pool = synchronized(readPools) { readPools[database] }
         if (pool != null) pool.release(handle) else runCatching { handle.close() }
     }
 
     /** Per-connection SQLite commit generation used to validate a multi-statement read projection. */
-    internal fun readDataVersion(handle: SQLiteDatabase): Long = handle.rawQuery("PRAGMA data_version", null).use { cursor ->
+    internal fun readDataVersion(handle: SQLiteConnection): Long = DriverChatSqlDatabase(handle).query("PRAGMA data_version").use { cursor ->
         check(cursor.moveToFirst()) { "PRAGMA data_version returned no value" }
         cursor.getLong(0)
+    }
+
+    /** Startup worker preflight only: never construct Room or create a directory/database. */
+    internal fun preflightFreshStorage(context: Context) {
+        check(Looper.myLooper() != Looper.getMainLooper()) { "Storage preflight must run off the main thread" }
+        val files = context.applicationContext.filesDir.absoluteFile
+        val root = File(File(files, "jarvys"), com.jarvys.agent.StorageGeneration.NAME)
+        val expectedRoot = File(File(files.canonicalFile, "jarvys"), com.jarvys.agent.StorageGeneration.NAME)
+        if (root.canonicalFile != expectedRoot) throw com.jarvys.agent.CleanInstallRequiredException()
+        val file = File(root, DATABASE_NAME)
+        rejectNewerDatabaseWithoutMutation(file)
+        requireFreshIdentity(file, JarvysChatDatabase_Impl().expectedFreshIdentity())
     }
 
     private fun buildDatabase(
@@ -452,19 +484,18 @@ internal object JarvysChatDatabaseProvider {
         executors: List<ExecutorService>,
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
+        // Even closing an initialized Room object may open its lazy Android connection. Reject an
+        // incompatible file before constructing that object; this generated delegate has no context or path.
+        runIdentityPreflight(databaseFile, JarvysChatDatabase_Impl().expectedFreshIdentity(), executors[0])
         return Room.databaseBuilder(context, JarvysChatDatabase::class.java, databaseFile.absolutePath)
-            // Room 2.7's Android driver uses one connection for writer and reader leases. The
-            // provider's separate read-only pool serves concurrent projections from WAL.
-            .setDriver(AndroidSQLiteDriver())
+            // Room and the independent read-only pool use the same bundled SQLite engine/file.
+            .setDriver(BundledSQLiteDriver())
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-            // Android SQLiteSession transactions are thread-bound: Room's only connection (the writer) must
-            // always run on ONE thread, so Room's query and transaction contexts share the single writer executor.
-            // Our own concurrent reads use the separate read pool and never touch Room's connection.
+            // Preserve the existing single writer executor and Room lease ordering. Independent
+            // committed reads use the bounded read-only pool and never share a writer lease.
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
-            // v1 shipped with an incomplete schema identity; the owner chose a clean reset. Keep future versions loud.
-            .fallbackToDestructiveMigrationFrom(true, 1)
-            .addMigrations(*Migrations.ALL)
+            // Fresh-only schema: no imports, historical migration chain or destructive fallback.
             .addCallback(connectionPragmasCallback(context.applicationContext))
             .build()
     }
@@ -485,11 +516,26 @@ internal object JarvysChatDatabaseProvider {
 
     /** Read only: Room must never see a schema newer than the one this binary understands. */
     private fun rejectNewerDatabaseWithoutMutation(databaseFile: File) {
-        if (!databaseFile.exists() || databaseFile.length() == 0L) return
+        val members = listOf("", "-wal", "-shm", "-journal").map { File(databaseFile.path + it) }
+        val present = members.map { member ->
+            val stat = try {
+                android.system.Os.lstat(member.absolutePath)
+            } catch (error: android.system.ErrnoException) {
+                if (error.errno == android.system.OsConstants.ENOENT) null else throw error
+            }
+            if (stat != null && !android.system.OsConstants.S_ISREG(stat.st_mode)) {
+                throw com.jarvys.agent.CleanInstallRequiredException()
+            }
+            stat != null
+        }
+        if (!present[0] || databaseFile.length() == 0L) {
+            if (present.drop(1).any { it }) throw com.jarvys.agent.CleanInstallRequiredException()
+            return
+        }
         val foundVersion = try {
-            val sqlite = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            val sqlite = openReadOnlyConnection(databaseFile)
             sqlite.use { db ->
-                db.rawQuery("PRAGMA user_version", null).use { cursor ->
+                DriverChatSqlDatabase(db).query("PRAGMA user_version").use { cursor ->
                     check(cursor.moveToFirst()) { "Could not read SQLite user_version from ${databaseFile.name}" }
                     cursor.getInt(0)
                 }
@@ -499,10 +545,35 @@ internal object JarvysChatDatabaseProvider {
         } catch (error: Throwable) {
             throw IllegalStateException("Could not inspect chat database schema version at ${databaseFile.absolutePath}", error)
         }
-        if (foundVersion > DATABASE_VERSION) {
-            throw IllegalStateException(
-                "database_schema_too_new: found user_version=$foundVersion, supported=$DATABASE_VERSION; file was left untouched",
-            )
+        if (foundVersion != DATABASE_VERSION) {
+            throw com.jarvys.agent.CleanInstallRequiredException()
+        }
+    }
+
+    /** Require the current generated Room identity before any writer can adopt an existing file. */
+    private fun runIdentityPreflight(file: File, expected: String, executor: ExecutorService) {
+        try {
+            executor.submit<Unit> {
+                requireFreshIdentity(file, expected)
+            }.get()
+        } catch (error: ExecutionException) {
+            throw (error.cause ?: error)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("Interrupted while inspecting database identity", error)
+        }
+    }
+
+    private fun requireFreshIdentity(file: File, expected: String) {
+        if (!file.exists() || file.length() == 0L) return
+        openReadOnlyConnection(file).use { db ->
+            val hasMaster = DriverChatSqlDatabase(db).query(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_master_table'",
+            ).use { it.moveToFirst() }
+            if (!hasMaster) throw com.jarvys.agent.CleanInstallRequiredException()
+            val identity = DriverChatSqlDatabase(db).query("SELECT identity_hash FROM room_master_table WHERE id=42")
+                .use { if (it.moveToFirst()) it.getString(0) else null }
+            if (identity != expected) throw com.jarvys.agent.CleanInstallRequiredException()
         }
     }
 
@@ -532,7 +603,7 @@ internal object JarvysChatDatabaseProvider {
         }
 
         // Kept for the test-only SupportSQLiteOpenHelper accessor; Room itself is built with
-        // AndroidSQLiteDriver and calls the SQLiteConnection overloads above.
+        // BundledSQLiteDriver and calls the SQLiteConnection overloads above.
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
             DatabaseTriggers.create(db, context)
@@ -578,7 +649,7 @@ internal object JarvysChatDatabaseProvider {
         verifyPragma(connection, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
     }
 
-/** Invariants Room cannot encode. Every future migration that rebuilds these tables must call [create]. */
+/** Invariants Room cannot encode, installed when creating the current fresh schema. */
 internal object DatabaseTriggers {
     fun create(connection: SQLiteConnection, context: Context? = null) {
         val sql = DriverChatSqlDatabase(connection)
@@ -588,8 +659,9 @@ internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase, context: Context? = null) = create(SupportChatSqlDatabase(db), context)
 
     fun create(db: ChatSqlDatabase, context: Context? = null) {
-        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(project,scope,topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
         PersonalMemorySearchIndex.install(db, context)
+        MemoryPromptSearchIndex.install(db)
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_artifact_owner ON transcript_artifact_refs(conversation_id,owner_kind,batch_id,IFNULL(call_id,''),artifact_id)")
         MessageSearchIndex.install(db)
         db.execSQL(
@@ -695,21 +767,25 @@ internal object DatabaseTriggers {
         Executors.newSingleThreadExecutor(NamedDaemonThreadFactory("jarvys-chat-transaction")),
     )
 
-    /** Independent committed-read handles; Room's Android driver reader lease aliases the writer. */
+    /** Read-only handles are never created through the framework or allowed to create a store. */
+    private fun openReadOnlyConnection(file: File): SQLiteConnection =
+        BundledSQLiteDriver().open(file.absolutePath, SQLITE_OPEN_READONLY or SQLITE_OPEN_FULLMUTEX)
+
+    /** Independent committed-read handles; retain the established bounded pool and snapshot fence. */
     private class ReadDatabasePool(databaseFile: File) {
-        private val all = mutableListOf<SQLiteDatabase>()
+        private val all = mutableListOf<SQLiteConnection>()
         private val lock = java.lang.Object()
-        private val available = ArrayDeque<SQLiteDatabase>()
-        private val borrowed = Collections.newSetFromMap(IdentityHashMap<SQLiteDatabase, Boolean>())
+        private val available = ArrayDeque<SQLiteConnection>()
+        private val borrowed = Collections.newSetFromMap(IdentityHashMap<SQLiteConnection, Boolean>())
         private var closed = false
 
         init {
             try {
                 repeat(READ_CONNECTION_POOL_SIZE) {
-                    val database = SQLiteDatabase.openDatabase(databaseFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                    val database = openReadOnlyConnection(databaseFile)
                     try {
-                        database.rawQuery("PRAGMA query_only=ON", null).use { while (it.moveToNext()) Unit }
-                        database.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MILLIS", null).use { while (it.moveToNext()) Unit }
+                        DriverChatSqlDatabase(database).execSQL("PRAGMA query_only=ON")
+                        DriverChatSqlDatabase(database).execSQL("PRAGMA busy_timeout=$BUSY_TIMEOUT_MILLIS")
                         verifyPragma(database, "journal_mode", "wal")
                         verifyPragma(database, "query_only", "1")
                         verifyPragma(database, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
@@ -726,7 +802,7 @@ internal object DatabaseTriggers {
             }
         }
 
-        fun acquireBlocking(): SQLiteDatabase {
+        fun acquireBlocking(): SQLiteConnection {
             synchronized(lock) {
                 while (true) {
                     check(!closed) { "Jarvys chat read pool is closed" }
@@ -743,7 +819,7 @@ internal object DatabaseTriggers {
             }
         }
 
-        fun release(database: SQLiteDatabase) {
+        fun release(database: SQLiteConnection) {
             val closeOnReturn = synchronized(lock) {
                 if (!borrowed.remove(database)) return
                 if (closed) {
@@ -771,8 +847,8 @@ internal object DatabaseTriggers {
             availableToClose.forEach { runCatching { it.close() } }
         }
 
-        private fun verifyPragma(database: SQLiteDatabase, pragma: String, expected: String) {
-            val actual = database.rawQuery("PRAGMA $pragma", null).use { cursor ->
+        private fun verifyPragma(database: SQLiteConnection, pragma: String, expected: String) {
+            val actual = DriverChatSqlDatabase(database).query("PRAGMA $pragma").use { cursor ->
                 check(cursor.moveToFirst()) { "PRAGMA $pragma returned no value" }
                 cursor.getString(0)
             }

@@ -19,6 +19,7 @@ data class CompactionCoverageSource(
 data class CompactionFlushBinding(
     val conversation_id: String, val compaction_id: String, val coverage_hash: String?,
     val digest_id: String?, val digest_revision: Long?, val status: String,
+    val memory_session_id: String? = null,
 )
 
 data class CompactionLeaf(val source: ConversationTurn.Source, val fingerprint: String, val seq: Long,
@@ -35,3 +36,8 @@ data class CompactionCoverage(val conversationId: String, val sources: List<Conv
 data class PreparedCompactionFlush(val coverage: CompactionCoverage, val title: String, val text: String,
     val memoryTicket: com.jarvys.agent.MemoryWriteGate.Ticket,
     val canCommit: java.util.function.BooleanSupplier)
+
+/** Request-local lifecycle survives a missing digest candidate. It is not a persisted receipt. */
+data class CompactionMemoryAttempt(val binding:CompactionMemoryBinding,
+    val memoryTicket:com.jarvys.agent.MemoryWriteGate.Ticket,
+    val token:com.jarvys.agent.CancellationToken)

@@ -51,10 +51,43 @@ internal object EpisodeNarrationPayload {
     private fun redactCredentialText(value: String): String =
         headerCredential.replace(quotedCredential.replace(value, "\"credential\":\"[secret redacted]\""), "[secret redacted]")
 
+    /** Preserve only typed cancellation/reference metadata, never command or log payloads. */
+    @JvmStatic fun cancellationFacts(facts: JSONObject?): JSONObject? {
+        val semantics = facts?.optString("completion_semantics") ?: return null
+        if (semantics !in setOf("cancel_request_accepted", "existing_reference")) return null
+        val reference = facts.optJSONObject("effect_reference") ?: return null
+        if (reference.optString("kind") != "job") return null
+        val scope = reference.optString("scope_id")
+        val job = reference.optString("id")
+        require(listOf(scope, job).all { it.length in 1..512 && it.matches(Regex("[A-Za-z0-9_.:-]+")) }) {
+            "cancellation_reference_identity_missing"
+        }
+        return JSONObject().put("completion_semantics", semantics)
+            .put("effect_reference", JSONObject().put("kind", "job").put("scope_id", scope).put("id", job))
+            .put("goal_verified", false)
+            .put("cancellation_evidence", if (semantics == "cancel_request_accepted")
+                "request_accepted_not_process_termination" else "existing_reference_not_new_request")
+            .also {
+                if (semantics == "cancel_request_accepted") it.put("causes_cancel_of", job)
+                if (facts.has("input_coverage")) {
+                    val coverage = facts.optString("input_coverage")
+                    it.put("input_coverage", coverage.takeIf { value -> value in setOf("complete", "partial") } ?: "unknown")
+                        .put("root_is_historical", true).put("historical_root_is_exclusive_cause", false)
+                }
+            }
+    }
+
+    @JvmStatic fun unverifiedCancellationFacts(): JSONObject = JSONObject()
+        .put("cancellation_evidence", "retention_unverified")
+        .put("goal_verified", false)
+
     fun render(request: String, finalResponse: String, eventAt: Long?, evidence: JSONArray, budget: Int,
-               suppressedCodingJobs: Int = 0): String {
+               suppressedCodingJobs: Int = 0, omittedCodingCancellations: Int = 0,
+               unconfirmedCodingCancellationProjections: Int = 0): String {
         require(budget > 0)
         require(suppressedCodingJobs >= 0)
+        require(omittedCodingCancellations >= 0)
+        require(unconfirmedCodingCancellationProjections in 0..omittedCodingCancellations)
         val body = JSONObject().put("request", request).put("final_response", finalResponse)
             .put("event_at_ms", eventAt ?: JSONObject.NULL).put("evidence", evidence)
             .put("evidence_rows", evidence.length()).put("evidence_aggregated", false)
@@ -62,6 +95,7 @@ internal object EpisodeNarrationPayload {
         val codingJobs = linkedSetOf<String>()
         for (index in 0 until evidence.length()) {
             val row = evidence.getJSONObject(index)
+            cancellationFacts(row.optJSONObject("facts"))?.let { row.put("facts", it) }
             if (row.optString("kind") in setOf("coding_job_submission", "coding_job_execution")) {
                 val id = row.optString("ref_id").takeIf(String::isNotBlank)
                     ?: row.optJSONObject("facts")?.optString("job_id")?.takeIf(String::isNotBlank)
@@ -73,6 +107,10 @@ internal object EpisodeNarrationPayload {
             .put("coding_goal_verified", false)
         if (suppressedCodingJobs > 0) body.put("coding_jobs_suppressed", suppressedCodingJobs)
             .put("coding_coverage", "Job evidence omitted; visible evidence cannot establish overall goal completion.")
+        if (omittedCodingCancellations > 0) body.put("coding_cancellations_omitted", omittedCodingCancellations)
+            .put("coding_cancellation_projection_unconfirmed", unconfirmedCodingCancellationProjections)
+            .put("cancellation_coverage", "Technical observations lack linked semantic evidence; do not infer request acceptance or process termination.")
+            .put("goal_verified", false)
         fun fits() = body.toString().length <= budget
         if (fits()) return body.toString()
         for (index in 0 until evidence.length()) evidence.getJSONObject(index).remove("source")
@@ -85,9 +123,14 @@ internal object EpisodeNarrationPayload {
             val row = evidence.getJSONObject(index)
             val facts = row.optJSONObject("facts")
             val keys = listOf("kind", "tool", "connector", "outcome", "authorization")
+            val cancellation = cancellationFacts(facts)
+            val cancelReference = cancellation?.optJSONObject("effect_reference")
             val identity = keys.map { row.optString(it) } +
                 listOf(facts?.optString("reported_status").orEmpty(), facts?.optString("result_verified").orEmpty(),
-                    facts?.optString("input_coverage").orEmpty())
+                    facts?.optString("input_coverage").orEmpty(),
+                    cancellation?.optString("completion_semantics").orEmpty(),
+                    cancelReference?.optString("scope_id").orEmpty(), cancelReference?.optString("id").orEmpty(),
+                    facts?.optString("cancellation_evidence").orEmpty())
             val coding = row.optString("kind") in setOf("coding_job_submission", "coding_job_execution")
             val group = groups.getOrPut(identity) {
                 JSONObject().apply {
@@ -95,6 +138,11 @@ internal object EpisodeNarrationPayload {
                     put("evidence_count", 0)
                     put("first_at_ms", row.optLong("at_ms"))
                     put("last_at_ms", row.optLong("at_ms"))
+                    cancellation?.let { normalized -> normalized.keys().forEach { key -> put(key, normalized.get(key)) } }
+                    if (facts?.optString("cancellation_evidence") == "retention_unverified") {
+                        put("cancellation_evidence", "retention_unverified")
+                        put("goal_verified", false)
+                    }
                     if (coding) {
                         put("completion_semantics", if (row.optString("kind") == "coding_job_submission")
                             "async_submission" else "durable_process_terminal")

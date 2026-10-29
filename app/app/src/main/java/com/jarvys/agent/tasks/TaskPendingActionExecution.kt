@@ -282,7 +282,7 @@ object TaskPendingActionWork {
 class TaskPendingActionWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
     override fun doWork(): Result {
         try {
-            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(applicationContext.filesDir)
+            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(applicationContext.filesDir)
         } catch (failure: Exception) {
             com.jarvys.agent.AgentErrorReporter.reportBackgroundFailure(applicationContext, failure)
             return Result.retry()

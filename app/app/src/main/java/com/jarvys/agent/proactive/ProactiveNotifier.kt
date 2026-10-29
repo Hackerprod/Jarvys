@@ -52,7 +52,7 @@ object ProactiveNotifier {
         return runCatching {
             ensureChannel(app, AppLanguageRuntime.localizedContext(app))
             // The notice lives in Central: the intent only carries the anchor message to open it at.
-            val openChat = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
+            val openChat = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, MainActivity::class.java))
                 .putExtra(MainActivity.EXTRA_OPEN_PROACTIVE_MESSAGE_ID, messageId)
                 .setData(Uri.parse("jarvys://proactive/${ProactiveThreadKey.fingerprint(threadKey)}/${Uri.encode(messageId)}"))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -90,7 +90,7 @@ object ProactiveNotifier {
             val actions = mutableListOf<NotificationCompat.Action>()
             if (!suggestedRepliesUsed && sourceMessageId.isNotBlank()) {
                 suggestedReplies.take((MAX_PLATFORM_ACTION_BUTTONS - 1).coerceAtLeast(0)).forEachIndexed { index, reply ->
-                    val actionIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, ProactiveActionReceiver::class.java))
+                    val actionIntent = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, ProactiveActionReceiver::class.java))
                         .setAction(ProactiveActionReceiver.ACTION_SUGGESTED_REPLY)
                         .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, sourceMessageId)
                         .putExtra(ProactiveActionReceiver.EXTRA_REPLY_INDEX, index)
@@ -100,7 +100,7 @@ object ProactiveNotifier {
                     actions += NotificationCompat.Action.Builder(R.drawable.ic_jarvys, reply.label, actionPendingIntent).build()
                 }
             }
-            val replyIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, ProactiveActionReceiver::class.java))
+            val replyIntent = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, ProactiveActionReceiver::class.java))
                 .setAction(ProactiveActionReceiver.ACTION_INLINE_REPLY)
                 .putExtra(ProactiveActionReceiver.EXTRA_MESSAGE_ID, messageId)
                 .putExtra(ProactiveActionReceiver.EXTRA_THREAD_TOKEN, ProactiveThreadKey.fingerprint(threadKey))

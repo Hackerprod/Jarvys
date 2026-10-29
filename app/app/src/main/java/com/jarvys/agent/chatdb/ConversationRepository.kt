@@ -104,7 +104,8 @@ data class MessageSlot(val item: ConversationItem, val message: StoredMessage?)
 data class ConversationMessageAt(val message: StoredMessage, val sortSeq: Long, val sortSub: Int)
 
 /** User prompt paired with a regeneration marker that was durably appended in the same transaction. */
-data class RegenerationPromptValue(val text: String, val userMessageId: String)
+data class RegenerationPromptValue(val text: String, val userMessageId: String,
+    val resumeReceipt: MemorySessionResumeReceipt? = null)
 
 /** Marker identity and assistant owner captured together by one writer transaction. */
 data class AssistantMarkerValue(val seq: Long, val ownerUserMessageId: String?)
@@ -756,7 +757,23 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             arrayOf(seq, conversationId, messageId),
         )
         bumpHistoryRevision(conversationId)
-        ChatDbResult.Success(RegenerationPromptValue(prompt.text, prompt.messageId))
+        // Chat's positional fallback remains useful for display, but cannot grant memory resume.
+        val generation = if (conversationId == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION &&
+            explicitOwner != null && !target.runId.isNullOrBlank()) MemorySaveSourceIdentity.existingGeneration(database) else null
+        val roots = if(generation == null) emptyList() else sql.query(
+            "SELECT COALESCE(runtime_root_id,id) FROM memory_sessions WHERE ownership_mode='shared' " +
+                "AND source_generation=? AND owner_conversation_id=? AND owner_message_id=? AND run_id=? AND project=?",
+            arrayOf(generation,conversationId,explicitOwnerId,target.runId,conversationId)).use { c ->
+                buildList { while(c.moveToNext()) add(c.getString(0)) }
+            }
+        val root = roots.singleOrNull()?.takeIf { candidate -> sql.query(
+            "SELECT 1 FROM memory_sessions s WHERE s.id=? AND s.ownership_mode='shared' AND s.source_generation=? " +
+                "AND s.owner_conversation_id=? AND s.owner_message_id=? AND s.project=? " +
+                "AND NOT EXISTS(SELECT 1 FROM memory_session_tombstones t WHERE t.id=s.id)",
+            arrayOf(candidate,generation,conversationId,explicitOwnerId,conversationId)).use { it.moveToFirst() } }
+        val receipt = if(generation != null && root != null) MemorySessionResumeReceipt(generation,conversationId,
+            requireNotNull(explicitOwnerId),messageId,requireNotNull(target.runId),seq,root) else null
+        ChatDbResult.Success(RegenerationPromptValue(prompt.text, prompt.messageId, receipt))
     }
 
     /** Stores the positional `assistant_translation_hidden` marker, replacing `LocalRunStore.java:appendAssistantTranslationHidden`. */
@@ -939,7 +956,10 @@ class ConversationRepository internal constructor(private val database: JarvysCh
      * `main_chat_input_resolved` from `LocalRunStore.java:markConversationMessagesIncorporated` and
      * `markConversationMessagesResolved`.
      */
-    suspend fun markInputState(conversationId: String, messageIds: List<String>, state: String): ChatDbResult<List<String>> = transactionResult {
+    suspend fun markInputState(conversationId:String,messageIds:List<String>,state:String):ChatDbResult<List<String>> =
+        markInputStateForMission(conversationId,messageIds,state,null)
+
+    internal suspend fun markInputStateForMission(conversationId: String, messageIds: List<String>, state: String,missionAuthorization:MissionReceiptAuthorization?): ChatDbResult<List<String>> = transactionResult {
         if (findConversation(conversationId) == null) return@transactionResult missingConversation(conversationId)
         if (state != INPUT_INCORPORATED && state != INPUT_RESOLVED) return@transactionResult ChatDbResult.Invalid("unknown input state")
         if (messageIds.isEmpty()) return@transactionResult ChatDbResult.Success(emptyList())
@@ -964,7 +984,7 @@ class ConversationRepository internal constructor(private val database: JarvysCh
             }
             changed += id
         }
-        if (state == INPUT_INCORPORATED) MissionEpisodeRepository(database).reconcileInputs(conversationId, messageIds)
+        if (state == INPUT_INCORPORATED) MissionEpisodeRepository(database).reconcileInputs(conversationId, messageIds,missionAuthorization,changed.toSet())
         ChatDbResult.Success(changed)
     }
 
@@ -1587,12 +1607,12 @@ class ConversationRepository internal constructor(private val database: JarvysCh
         if (startPosition == null) return MessageWindow(conversationId, emptyList(), null)
 
         val upper = cursorPosition?.let { " AND ${tupleLess("conversation_items")}" }.orEmpty()
-        val rangeArgs = mutableListOf<Any?>(conversationId, highWater).also {
+        val rangeArgs = mutableListOf<Any?>(conversationId, highWater, startPosition.sortSeq).also {
             it.addAll(tupleGreaterOrEqualArguments(startPosition))
             if (cursorPosition != null) it.addAll(tupleArguments(cursorPosition))
             it += MAX_WINDOW_ITEMS
         }
-        val itemSql = "SELECT * FROM conversation_items INDEXED BY idx_conversation_items_sort WHERE conversation_id=? AND seq<=? AND ${tupleGreaterOrEqual("conversation_items")}$upper " +
+        val itemSql = "SELECT * FROM conversation_items INDEXED BY idx_conversation_items_sort WHERE conversation_id=? AND seq<=? AND conversation_items.sort_seq>=? AND ${tupleGreaterOrEqual("conversation_items")}$upper " +
             "ORDER BY sort_seq DESC,sort_sub DESC,seq DESC LIMIT ?"
         val items = sql.query(itemSql, rangeArgs.toTypedArray()).use { c ->
             buildList { while (c.moveToNext()) add(readItem(c)) }.asReversed()

@@ -47,9 +47,9 @@ public final class EffectInvocation {
 
     public enum CompletionSemantics {
         EXTERNAL_EFFECT, LOCAL_RESOURCE_CREATED, COORDINATION_ACCEPTED,
-        LOCAL_DELIVERY_CONFIRMED, EXISTING_REFERENCE
+        LOCAL_DELIVERY_CONFIRMED, EXISTING_REFERENCE, CANCEL_REQUEST_ACCEPTED
     }
-    public enum EffectReferenceKind { WORKSPACE, ASSIGNMENT, WORKSPACE_INPUT, DELIVERY }
+    public enum EffectReferenceKind { WORKSPACE, ASSIGNMENT, WORKSPACE_INPUT, DELIVERY, JOB }
 
     /** Operational identifiers only, never tool text, private paths or a grant of authority. */
     public static final class EffectReference {
@@ -272,6 +272,8 @@ public final class EffectInvocation {
             case COORDINATION_ACCEPTED: return reference.kind == EffectReferenceKind.ASSIGNMENT
                     || reference.kind == EffectReferenceKind.WORKSPACE_INPUT;
             case LOCAL_DELIVERY_CONFIRMED: return reference.kind == EffectReferenceKind.DELIVERY;
+            // Confirms only the local cancellation request, never that a process stopped or a job succeeded.
+            case CANCEL_REQUEST_ACCEPTED: return reference.kind == EffectReferenceKind.JOB;
             default: return false;
         }
     }

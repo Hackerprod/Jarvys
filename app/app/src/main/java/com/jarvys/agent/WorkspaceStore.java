@@ -26,13 +26,12 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Routes per-conversation project files and memory, plus app-wide installed skills. */
+/** Routes per-conversation project files and app-wide installed skills. */
 public final class WorkspaceStore {
     public static final int MAX_FILE_BYTES = 256 * 1024;
     private static final long MAX_WORKSPACE_BYTES = 16L * 1024L * 1024L;
     private static final int MAX_LIST_ENTRIES = 200;
     private static final String SKILLS_ZONE = "skills";
-    private static final String MEMORY_ZONE = "memory";
     private static final Pattern SKILL_ID_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,127}");
     private static final java.util.concurrent.ConcurrentMap<String, Object> PROJECT_LOCKS =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -44,12 +43,8 @@ public final class WorkspaceStore {
     private final File skillsRoot;
     private final String canonicalSkillsRoot;
     private final SkillWorkspaceObserver skillWorkspaceObserver;
-    private final MemoryStore memoryStore;
     private final String conversationId;
-    private final boolean memoryAccessAllowed;
-    private final MemoryStore.Actor memoryActor;
-    private final String reflectionGroupId;
-    private final boolean memoryOnly;
+    private final boolean skillsOnly;
     private final boolean attachmentsAllowed;
     private final boolean delegatedPrivateZonesDenied;
     private final String expectedAttachmentWorkspaceRoot;
@@ -76,69 +71,43 @@ public final class WorkspaceStore {
     }
 
     public WorkspaceStore(Context context, String projectId, String conversationId) {
-        this(context, projectId, conversationId, true);
-    }
-
-    public WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed) {
-        this(context, projectId, conversationId, memoryAccessAllowed,
-                memoryAccessAllowed ? new MemoryStore(context.getApplicationContext()) : null,
-                MemoryStore.Actor.AGENT, null, false);
-    }
-
-    WorkspaceStore(Context context, String projectId, String conversationId, boolean memoryAccessAllowed,
-                   MemoryStore sharedMemoryStore, MemoryStore.Actor memoryActor,
-                   String reflectionGroupId, boolean memoryOnly) {
         this(new StorageGeneration(context), workspaceRoot(context), projectId,
                 new File(context.getApplicationContext().getFilesDir(), "skills"),
-                SkillRepository.Companion.get(context.getApplicationContext()),
-                sharedMemoryStore, conversationId, memoryAccessAllowed, memoryActor, reflectionGroupId, memoryOnly);
+                SkillRepository.Companion.get(context.getApplicationContext()), conversationId, false);
+    }
+
+    public static WorkspaceStore forScheduledTask(Context context, String sessionId) {
+        Context app = context.getApplicationContext();
+        StorageGeneration storage = new StorageGeneration(app);
+        return new WorkspaceStore(storage, storage.directory("workspaces"), projectIdForSession(sessionId),
+                new File(app.getFilesDir(), "skills"), null, sessionId, true);
     }
 
     WorkspaceStore(File workspacesRoot, String projectId) {
-        this(workspacesRoot, projectId, null, null, null, projectId, true);
+        this(workspacesRoot, projectId, null, null);
     }
 
     WorkspaceStore(File workspacesRoot, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver skillWorkspaceObserver) {
-        this(workspacesRoot, projectId, skillsRoot, skillWorkspaceObserver, null, projectId, true);
+                   SkillWorkspaceObserver observer) {
+        this(workspacesRoot, projectId, skillsRoot, observer, projectId, false);
     }
 
     WorkspaceStore(File workspacesRoot, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
-                   String conversationId) {
-        this(workspacesRoot, projectId, skillsRoot, skillWorkspaceObserver, memoryStore, conversationId, true);
-    }
-
-    WorkspaceStore(File workspacesRoot, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
-                   String conversationId, boolean memoryAccessAllowed) {
-        this(workspacesRoot, projectId, skillsRoot, skillWorkspaceObserver, memoryStore, conversationId,
-                memoryAccessAllowed, MemoryStore.Actor.AGENT, null, false);
-    }
-
-    WorkspaceStore(File workspacesRoot, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
-                   String conversationId, boolean memoryAccessAllowed, MemoryStore.Actor memoryActor,
-                   String reflectionGroupId, boolean memoryOnly) {
-        this(null, workspacesRoot, projectId, skillsRoot, skillWorkspaceObserver, memoryStore,
-                conversationId, memoryAccessAllowed, memoryActor, reflectionGroupId, memoryOnly);
+                   SkillWorkspaceObserver observer, String conversationId, boolean skillsOnly) {
+        this(null, workspacesRoot, projectId, skillsRoot, observer, conversationId, skillsOnly);
     }
 
     WorkspaceStore(StorageGeneration storage, String projectId) {
-        this(storage, projectId, null, null, null, projectId, true);
+        this(storage, projectId, null, null, projectId);
     }
 
     WorkspaceStore(StorageGeneration storage, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver observer, MemoryStore memoryStore, String conversationId,
-                   boolean memoryAccessAllowed) {
-        this(storage, storage.directory("workspaces"), projectId, skillsRoot, observer, memoryStore,
-                conversationId, memoryAccessAllowed, MemoryStore.Actor.AGENT, null, false);
+                   SkillWorkspaceObserver observer, String conversationId) {
+        this(storage, storage.directory("workspaces"), projectId, skillsRoot, observer, conversationId, false);
     }
 
     private WorkspaceStore(StorageGeneration storage, File workspacesRoot, String projectId, File skillsRoot,
-                   SkillWorkspaceObserver skillWorkspaceObserver, MemoryStore memoryStore,
-                   String conversationId, boolean memoryAccessAllowed, MemoryStore.Actor memoryActor,
-                   String reflectionGroupId, boolean memoryOnly) {
+                   SkillWorkspaceObserver skillWorkspaceObserver, String conversationId, boolean skillsOnly) {
         this.appFiles = storage == null ? null : storage.filesDir();
         if (projectId == null || !projectId.matches("[a-f0-9]{24}")) {
             throw new IllegalArgumentException("Workspace id is invalid");
@@ -147,19 +116,9 @@ public final class WorkspaceStore {
         root = new File(workspacesRoot, projectId);
         this.skillsRoot = skillsRoot;
         this.skillWorkspaceObserver = skillWorkspaceObserver;
-        MemoryStore scopedMemory = memoryStore != null
-                && conversationId != null && !conversationId.trim().isEmpty()
-                ? memoryStore.forConversation(conversationId) : null;
-        // Construction is the toolset boundary, never an execution-time ticket refresh.
-        this.memoryStore = scopedMemory != null && memoryAccessAllowed
-                && memoryActor != MemoryStore.Actor.USER
-                ? scopedMemory.bindAutomaticWritesForToolset() : scopedMemory;
         this.conversationId = conversationId;
-        this.memoryAccessAllowed = memoryAccessAllowed;
-        this.memoryActor = memoryActor == null ? MemoryStore.Actor.AGENT : memoryActor;
-        this.reflectionGroupId = reflectionGroupId;
-        this.memoryOnly = memoryOnly;
-        this.attachmentsAllowed = true;
+        this.skillsOnly = skillsOnly;
+        this.attachmentsAllowed = !skillsOnly;
         this.delegatedPrivateZonesDenied = false;
         try {
             canonicalRoot = root.getCanonicalPath();
@@ -185,13 +144,9 @@ public final class WorkspaceStore {
         skillsRoot = privateZonesDenied ? null : original.skillsRoot;
         canonicalSkillsRoot = privateZonesDenied ? null : original.canonicalSkillsRoot;
         skillWorkspaceObserver = privateZonesDenied ? null : original.skillWorkspaceObserver;
-        memoryStore = original.memoryStore;
         conversationId = original.conversationId;
-        memoryAccessAllowed = !privateZonesDenied && original.memoryAccessAllowed;
-        memoryActor = original.memoryActor;
-        reflectionGroupId = original.reflectionGroupId;
-        memoryOnly = original.memoryOnly;
-        this.attachmentsAllowed = attachmentsAllowed;
+        skillsOnly = original.skillsOnly;
+        this.attachmentsAllowed = attachmentsAllowed && !skillsOnly;
         delegatedPrivateZonesDenied = privateZonesDenied || original.delegatedPrivateZonesDenied;
         ensureDelegatedRoot();
     }
@@ -203,8 +158,7 @@ public final class WorkspaceStore {
         Context app = context.getApplicationContext();
         com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app);
         return new WorkspaceStore(new StorageGeneration(app), new StorageGeneration(app).directory("workspaces"),
-                projectIdForSession(sessionId), null, null, null, sessionId, false,
-                MemoryStore.Actor.AGENT, null, false).withoutAttachments();
+                projectIdForSession(sessionId), null, null, sessionId, false).withoutAttachments();
     }
 
     public boolean isCodingProjectPath(String path) {
@@ -212,7 +166,7 @@ public final class WorkspaceStore {
     }
 
     public ProjectScope codingProjectScope() throws IOException {
-        if (delegatedPrivateZonesDenied || memoryOnly || conversationId == null) {
+        if (delegatedPrivateZonesDenied || skillsOnly || conversationId == null) {
             throw new IllegalArgumentException("The Coding project namespace is unavailable in this workspace scope");
         }
         if (appFiles == null) {
@@ -245,7 +199,7 @@ public final class WorkspaceStore {
     }
 
     DeliverySource deliverySource(String path) throws IOException {
-        if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed)
+        if (delegatedPrivateZonesDenied || skillsOnly || !attachmentsAllowed)
             throw new IOException("File delivery is available only in the main chat");
         if (isCodingProjectPath(path)) {
             ProjectScope scope = codingProjectScope();
@@ -273,7 +227,7 @@ public final class WorkspaceStore {
     }
 
     File appFilesForDelivery() throws IOException {
-        if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed || conversationId == null)
+        if (delegatedPrivateZonesDenied || skillsOnly || !attachmentsAllowed || conversationId == null)
             throw new IOException("Explicit HTML previews require an owning main conversation");
         if (appFiles == null) throw new IOException("Conversation storage is unavailable");
         return appFiles;
@@ -295,7 +249,7 @@ public final class WorkspaceStore {
                 String relative;
                 File target;
                 try (InputStream source = input) {
-                    requireAllowedWorkspacePath(null);
+                    requireFileOperations();
                     if (attachment == null || attachment.kind != ChatAttachment.Kind.FILE) {
                         throw new IllegalArgumentException("Only file attachments belong in the workspace");
                     }
@@ -389,8 +343,8 @@ public final class WorkspaceStore {
         synchronized (projectLock) {
             token.throwIfCancelled();
             String normalized = normalizePath(path);
-            if (memoryRelativePath(normalized) != null || skillRelativePath(normalized) != null) return null;
-            requireAllowedWorkspacePath(null);
+            if (skillRelativePath(normalized) != null) return null;
+            requireFileOperations();
             File file = resolveExisting(normalized);
             String attachmentRoot = new File(canonicalRoot, "attachments").getPath();
             if (!file.getPath().startsWith(attachmentRoot + File.separator)) return null;
@@ -530,9 +484,7 @@ public final class WorkspaceStore {
         ensureDelegatedRoot();
         boolean projectRoot = isProjectRoot(relativePath);
         String normalized = projectRoot ? "." : normalizePath(relativePath);
-        String memoryRelative = memoryRelativePath(normalized);
-        if (memoryRelative != null) return requireMemoryStore().list(memoryRelative);
-        requireAllowedWorkspacePath(memoryRelative);
+        requireFileOperations();
         if (!projectRoot && skillsRoot != null) {
             String skillRelative = skillRelativePath(normalized);
             if (skillRelative != null) return listSkills(skillRelative);
@@ -562,7 +514,10 @@ public final class WorkspaceStore {
     public List<SearchDocument> searchDocuments(Set<String> zones) {
         synchronized (projectLock) {
             List<SearchDocument> documents = new ArrayList<>();
-            if (zones.contains("memory")) documents.addAll(requireMemoryStore().searchDocuments());
+            if (!java.util.Arrays.asList("workspace", "skills").containsAll(zones))
+                throw new IllegalArgumentException("Search zones must be workspace or skills");
+            if (skillsOnly && zones.contains("workspace"))
+                throw new IllegalArgumentException("Scheduled tasks can search only installed skills");
             if (zones.contains("workspace")) collectSearchFiles(root, canonicalRoot, "workspace", "", documents, false);
             if (zones.contains("skills") && skillsRoot != null && skillsRoot.isDirectory()) {
                 File[] skillDirectories = skillsRoot.listFiles();
@@ -585,13 +540,6 @@ public final class WorkspaceStore {
     public SearchDocument searchDocumentForPath(String path) {
         synchronized (projectLock) {
             String normalized = normalizePath(path);
-            String memoryRelative = memoryRelativePath(normalized);
-            if (memoryRelative != null) {
-                for (SearchDocument document : requireMemoryStore().searchDocuments()) {
-                    if (document.getPath().equals(memoryRelative)) return document;
-                }
-                return null;
-            }
             String skillRelative = skillRelativePath(normalized);
             if (skillRelative != null) {
                 if (skillRelative.isEmpty()) throw new IllegalArgumentException("Skill path is not a file");
@@ -656,9 +604,7 @@ public final class WorkspaceStore {
 
     private String readLocked(String relativePath) {
         String normalized = normalizePath(relativePath);
-        String memoryRelative = memoryRelativePath(normalized);
-        if (memoryRelative != null) return requireMemoryStore().read(memoryRelative);
-        requireAllowedWorkspacePath(memoryRelative);
+        requireFileOperations();
         if (skillsRoot != null) {
             String skillRelative = skillRelativePath(normalized);
             if (skillRelative != null) return readSkillFile(skillRelative);
@@ -682,31 +628,24 @@ public final class WorkspaceStore {
     }
 
     public void write(String relativePath, String content) {
-        writeWithRevision(relativePath, content);
+        write(relativePath, content, null);
     }
 
-    public MemoryStore.Revision writeWithRevision(String relativePath, String content) {
-        return writeWithRevision(relativePath, content, null);
+    public void write(String relativePath, String content, CancellationToken token) {
+        synchronized (projectLock) { writeLocked(relativePath, content, token); }
     }
 
-    public MemoryStore.Revision writeWithRevision(String relativePath, String content, CancellationToken token) {
-        synchronized (projectLock) { return writeWithRevisionLocked(relativePath, content, token); }
-    }
-
-    private MemoryStore.Revision writeWithRevisionLocked(String relativePath, String content, CancellationToken token) {
+    private void writeLocked(String relativePath, String content, CancellationToken token) {
         String normalized = normalizePath(relativePath);
-        String memoryRelative = memoryRelativePath(normalized);
-        if (memoryRelative != null) {
-            return memoryForMutation(token).write(memoryRelative, content, memoryActor, conversationId, reflectionGroupId);
-        }
-        requireAllowedWorkspacePath(memoryRelative);
+        requireFileOperations();
+        if (token != null) token.throwIfCancelled();
         byte[] bytes = (content == null ? "" : content).getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_FILE_BYTES) throw new IllegalArgumentException("File exceeds 256 KiB");
         if (skillsRoot != null) {
             String skillRelative = skillRelativePath(normalized);
             if (skillRelative != null) {
                 writeSkillFile(skillRelative, bytes);
-                return null;
+                return;
             }
         }
         File target = resolveForWrite(normalized);
@@ -720,7 +659,7 @@ public final class WorkspaceStore {
         } catch (Exception error) {
             throw new IllegalStateException("Could not write workspace file", error);
         }
-        return null;
+        return;
     }
 
     public String edit(String relativePath, String oldText, String newText) {
@@ -734,13 +673,8 @@ public final class WorkspaceStore {
     private String editLocked(String relativePath, String oldText, String newText, CancellationToken token) {
         if (oldText == null || oldText.isEmpty()) throw new IllegalArgumentException("old_text must not be empty");
         String normalizedPath = normalizePath(relativePath);
-        String memoryRelative = memoryRelativePath(normalizedPath);
-        if (memoryRelative != null) {
-            MemoryStore.Revision revision = memoryForMutation(token).edit(memoryRelative, oldText, newText,
-                    memoryActor, conversationId, reflectionGroupId);
-            return "Updated /memory/" + revision.path + " (revision " + revision.id + ")";
-        }
-        requireAllowedWorkspacePath(memoryRelative);
+        requireFileOperations();
+        if (token != null) token.throwIfCancelled();
         String current = read(relativePath);
         int first = current.indexOf(oldText);
         if (first < 0) throw new IllegalArgumentException("old_text was not found in the file");
@@ -748,28 +682,9 @@ public final class WorkspaceStore {
             throw new IllegalArgumentException("old_text matches more than once; provide a unique edit");
         }
         String replacement = newText == null ? "" : newText;
-        write(relativePath, current.substring(0, first) + replacement + current.substring(first + oldText.length()));
+        write(relativePath, current.substring(0, first) + replacement + current.substring(first + oldText.length()), token);
         String normalized = normalizePath(relativePath);
-        return "Updated " + (memoryRelativePath(normalized) != null ? normalized : normalizeRelativePath(relativePath));
-    }
-
-    /** Deletes only a file inside the explicit /memory/ zone; workspace and skills are never deletable by this tool. */
-    public String deleteMemoryFile(String path) {
-        return deleteMemoryFile(path, null);
-    }
-
-    public String deleteMemoryFile(String path, CancellationToken token) {
-        String normalized = normalizePath(path);
-        String memoryRelative = memoryRelativePath(normalized);
-        if (memoryRelative == null || memoryRelative.isEmpty()) {
-            throw new IllegalArgumentException("delete accepts only a file path below /memory/");
-        }
-        MemoryStore.Revision revision = memoryForMutation(token).delete(memoryRelative, memoryActor, conversationId, reflectionGroupId);
-        return "Deleted /memory/" + revision.path + " (revision " + revision.id + ")";
-    }
-
-    public boolean isMemoryPath(String path) {
-        return memoryRelativePath(normalizePath(path)) != null;
+        return "Updated " + normalizeRelativePath(relativePath);
     }
 
     /** Resolves only an existing regular file/directory under this workspace for preview reads. */
@@ -804,18 +719,15 @@ public final class WorkspaceStore {
         return path == null || path.trim().isEmpty() || ".".equals(path.trim());
     }
 
+    /** Pure lexical rejection, also used before a tool admits any filesystem mutation. */
+    static void rejectRemovedMemoryNamespace(String raw) {
+        if (raw != null && (raw.trim().equals("/memory") || raw.trim().startsWith("/memory/")))
+            throw new IllegalArgumentException("The /memory/ filesystem namespace is not available");
+    }
+
     private String normalizePath(String raw) {
+        rejectRemovedMemoryNamespace(raw);
         ensureDelegatedRoot();
-        if (raw != null) {
-            String path = raw.trim();
-            if (("/" + MEMORY_ZONE).equals(path) || ("/" + MEMORY_ZONE + "/").equals(path)) {
-                return "/" + MEMORY_ZONE + "/";
-            }
-            if (path.startsWith("/" + MEMORY_ZONE + "/")) {
-                String suffix = path.substring(MEMORY_ZONE.length() + 2);
-                return "/" + MEMORY_ZONE + "/" + normalizeRelativePath(suffix);
-            }
-        }
         if (skillsRoot != null && raw != null) {
             String path = raw.trim();
             if (SKILLS_ZONE.equals(path)) return normalizeRelativePath(path);
@@ -827,62 +739,14 @@ public final class WorkspaceStore {
         return normalizeRelativePath(raw);
     }
 
-    private String memoryRelativePath(String normalized) {
-        if (memoryStore == null) return null;
-        if (("/" + MEMORY_ZONE + "/").equals(normalized)) return "";
-        if (!normalized.startsWith("/" + MEMORY_ZONE + "/")) return null;
-        String relative = normalized.substring(MEMORY_ZONE.length() + 2);
-        if (relative.equalsIgnoreCase(SKILLS_ZONE) || relative.toLowerCase(java.util.Locale.ROOT).startsWith(SKILLS_ZONE + "/")) {
-            throw new IllegalArgumentException("skills/ is a separate app-wide zone, not part of /memory/");
-        }
-        return relative;
-    }
-
-    public boolean memoryEnabled() {
-        return memoryAccessAllowed && memoryStore != null && memoryStore.isEnabled();
-    }
-
-    public boolean memoryOnly() { return memoryOnly; }
+    public boolean skillsOnly() { return skillsOnly; }
     public boolean skillsEnabled() { return skillsRoot != null; }
     public boolean attachmentsEnabled() { return attachmentsAllowed; }
 
-    private void requireAllowedWorkspacePath(String memoryRelative) {
-        if (memoryOnly && memoryRelative == null) {
-            throw new IllegalArgumentException("Reflection tools are restricted to paths below /memory/");
-        }
+    private void requireFileOperations() {
+        if (skillsOnly) throw new IllegalArgumentException("Scheduled tasks can only search installed skills");
     }
 
-    /** Pure trusted scope lookup for permission preparation. Never seeds, recovers or broadens a zone. */
-    public MemoryStore memoryStoreForNativeAction(String path) {
-        String relative = memoryRelativePath(normalizePath(path));
-        if (relative == null) return null;
-        if (!memoryAccessAllowed) throw new IllegalStateException("Memory is disabled for this conversation");
-        if (memoryStore == null || !memoryStore.isEnabled()) throw new IllegalStateException("User memory is disabled in Settings");
-        return memoryStore;
-    }
-
-    public String normalizedNativeMemoryPath(String path) {
-        String normalized = normalizePath(path);
-        if (memoryRelativePath(normalized) == null) throw new IllegalArgumentException("Not a memory path");
-        return normalized;
-    }
-
-    public MemoryStore memoryStore() {
-        return requireMemoryStore();
-    }
-
-    private MemoryStore memoryForMutation(CancellationToken token) {
-        MemoryStore store = requireMemoryStore();
-        return token == null ? store : store.withAutomaticCancellation(token);
-    }
-
-    private MemoryStore requireMemoryStore() {
-        if (!memoryAccessAllowed) throw new IllegalStateException("Memory is disabled for this conversation");
-        if (memoryStore == null) throw new IllegalArgumentException("The /memory/ zone is unavailable in this workspace");
-        if (!memoryStore.isEnabled()) throw new IllegalStateException("User memory is disabled in Settings");
-        memoryStore.ensureInitialized();
-        return memoryStore;
-    }
 
     /** Returns null for ordinary workspace paths, or a validated path below the skills zone. */
     private String skillRelativePath(String normalized) {
@@ -1074,6 +938,7 @@ public final class WorkspaceStore {
     }
 
     private File resolveExisting(String relativePath) {
+        requireFileOperations();
         String normalized = normalizeRelativePath(relativePath);
         requireAttachmentAccess(new File(root, normalized));
         File file;
@@ -1088,6 +953,7 @@ public final class WorkspaceStore {
     }
 
     private File resolveForWrite(String relativePath) {
+        requireFileOperations();
         String normalized = normalizeRelativePath(relativePath);
         requireAttachmentAccess(new File(root, normalized));
         if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Could not create workspace directory");

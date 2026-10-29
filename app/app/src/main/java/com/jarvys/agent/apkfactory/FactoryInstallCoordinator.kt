@@ -406,7 +406,7 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
-        com.jarvys.agent.SingleSessionReset.register(base.filesDir)
+        com.jarvys.agent.FreshStorageBootstrap.register(base.filesDir)
     }
 
     override val workManagerConfiguration: androidx.work.Configuration
@@ -440,7 +440,7 @@ class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvide
 
     override fun onCreate() {
         super.onCreate()
-        com.jarvys.agent.SingleSessionReset.start(this)
+        com.jarvys.agent.FreshStorageBootstrap.start(this)
         connectionAccess().initializeAsync() // Process-owned local bootstrap; does not await Room.
         com.jarvys.agent.modules.ModuleHostVisibility.install(this) {
             com.jarvys.agent.tasks.TaskPendingActionWork.resumeWaitingForVisibleApp(this)

@@ -7,6 +7,9 @@ import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CodingJobConversationGuard
 import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.MemoryWriteGate
+import com.jarvys.agent.CrewCheckpointStore
+import com.jarvys.agent.coding.CodingCancellation
+import com.jarvys.agent.chatdb.CodingCancellationCheckpoint
 import com.jarvys.agent.coding.CodingJobEvidence
 import com.jarvys.agent.coding.CodingJobJournalCodec
 import com.jarvys.agent.coding.CodingJobJournalStore
@@ -53,6 +56,19 @@ class CodingJobManager(
         "Job delivery outcome is uncertain; inspect project_jobs and do not repeat the command", cause)
     /** Technical projection is separate from the observed command state and never permits dispatch. */
     enum class TechnicalProjection { NOT_APPLICABLE, PENDING, CONFIRMED }
+    /** Factual cancellation-request result, never process cleanup or command completion. */
+    enum class CancellationKind { REQUESTED, ALREADY_REQUESTED, ALREADY_TERMINAL }
+    sealed interface CancellationDisposition {
+        val snapshot: Snapshot
+        val kind: CancellationKind
+        val journalConfirmed: Boolean
+        val admitted: Boolean
+        val ledgerConfirmed: Boolean
+    }
+    private data class CancelDisposition(override val snapshot: Snapshot,
+        override val kind: CancellationKind, override val journalConfirmed: Boolean,
+        override val admitted: Boolean, override val ledgerConfirmed: Boolean = false,
+        val cancellingCommit: CodingJobJournalStore.Commit? = null) : CancellationDisposition
     private enum class WorkerClaim { RESERVED, CLAIMED, REJECTED, FINALIZING, FINISHED }
     data class Snapshot(val id: String, val owner: String, val scopeId: String, val cwd: String,
         val redactedCommand: String, val state: State, val createdAt: Long,
@@ -77,6 +93,10 @@ class CodingJobManager(
         var unregister = Runnable { }
         var launchAttempted = false
         var recovered = false
+        @Volatile var recoveryScopeBlocked = false
+        var recoveryRecord: CodingJobEvidence.Record? = null
+        var expectedRecoveryBinding: CodingJobEvidence.Binding? = null
+        var recoveryVersionInvalidated=false
         var needsReconciliation = false
         var technical: Technical? = null
     }
@@ -124,10 +144,118 @@ class CodingJobManager(
         // Completion callbacks are never run under the manager lifecycle monitor.
         return owner?.requestQuiesce() ?: java.util.concurrent.CompletableFuture.completedFuture(null)
     }
+    /** One pass per explicit lifecycle event; concurrent events share only the in-flight pass.
+     * Never invoked by list/status/getters or while holding a caller's cache/job/Room lock.
+     */
+    fun initializeRecoveryOnce(bridge: ChatDatabaseBridge) {
+        val created=java.util.concurrent.CompletableFuture<Void>()
+        while(true) {
+            val running=recoveryInitialization.get()
+            if(running!=null) {
+                try { running.get(); return }
+                catch(interrupted: InterruptedException) { Thread.currentThread().interrupt(); throw IOException("Recovery observation interrupted",interrupted) }
+                catch(failure: java.util.concurrent.ExecutionException) {
+                    if(failure.cause is Error)throw failure.cause as Error
+                    throw IOException("Recovery initialization failed",failure.cause)
+                }
+            }
+            if(recoveryInitialization.compareAndSet(null,created))break
+        }
+            try {
+                val store=CodingJobJournalStore.forFilesRoot(applicationFiles)
+                for((jobId,path) in recoveryCandidates.toMap()) {
+                    val job=jobs[jobId] ?: continue
+                    try {
+                        // A later event never reuses a candidate from a previous observation.
+                        var candidate=store.inspectExisting(path,MAX_JOURNAL_BYTES)
+                        check(candidate.record().binding.jobId==jobId && candidate.record().binding==job.expectedRecoveryBinding) { "Recovery journal identity changed" }
+                        conversations.active(candidate.snapshot().conversationId) { }
+                        val identity=candidate.record().binding
+                        CodingJobOwnerLease.probe(applicationFiles,identity.ownerProcessId,identity.managerInstanceId).use { probe ->
+                            candidate=store.inspectExisting(path,MAX_JOURNAL_BYTES)
+                            check(candidate.record().binding==job.expectedRecoveryBinding) { "Recovery binding changed" }
+                            if(probe.liveness()==CodingJobOwnerLease.Liveness.DEAD) {
+                                probe.requireDeadOwner(applicationFiles,identity.ownerProcessId,identity.managerInstanceId)
+                                val uncertain=candidate.record().terminal==null ||
+                                    candidate.record().terminal?.state==CodingJobEvidence.TerminalState.UNCERTAIN
+                                if(!job.recoveryVersionInvalidated && uncertain && (candidate.record().highestEffectPhase==CodingJobEvidence.Phase.LAUNCH_INTENT ||
+                                            candidate.snapshot().startedAt!=null)) {
+                                    job.needsReconciliation=true
+                                    // Existing writer/version invalidation, before allowing a new deliberate action.
+                                    reconcile(com.jarvys.agent.coding.ProjectScopeStore(applicationFiles)
+                                        .openExisting(candidate.snapshot().conversationId))
+                                    job.recoveryVersionInvalidated=true
+                                }
+                                if(candidate.record().terminal!=null)job.recoveryScopeBlocked=false
+                            }
+                            val binding=bridge.verifyExistingCodingJobSync(candidate)
+                            job.recoveryRecord=candidate.record() // Historical source match only, not settled execution.
+                            if(candidate.record().terminal==null && probe.liveness()!=CodingJobOwnerLease.Liveness.DEAD) {
+                                synchronized(job.lock) { job.snapshot=job.snapshot.copy(error="Recorded job owner is live or unknown; no takeover, replay or signal was attempted") }
+                                return@use
+                            }
+                            val verified=if(candidate.record().terminal!=null) store.recertifyTerminal(candidate,binding)
+                                else store.recoverDead(candidate,binding,probe)
+                            // A genuinely dead owner permits new deliberate actions, but unprojected history stays UNKNOWN.
+                            if(probe.liveness()==CodingJobOwnerLease.Liveness.DEAD) {
+                                probe.requireDeadOwner(applicationFiles,identity.ownerProcessId,identity.managerInstanceId)
+                                job.recoveryScopeBlocked=false
+                            }
+                            bridge.projectRecoveredCodingJobSync(verified)
+                            synchronized(job.lock) {
+                                job.snapshot=operationalSnapshot(verified.snapshot())
+                                job.recoveryRecord=verified.record()
+                                job.projection=TechnicalProjection.CONFIRMED
+                                job.recoveryScopeBlocked=false
+                            }
+                            job.finished.countDown()
+                            recoveryCandidates.remove(jobId)
+                        }
+                    } catch (_: Exception) {
+                        synchronized(job.lock) {
+                            job.snapshot=job.snapshot.copy(state=State.UNCERTAIN,exitCode=null,finishedAt=null,logComplete=false,
+                                error="Recovered journal is unverified or inconsistent; original evidence retained and no command replayed")
+                        }
+                        recordProblem(hash(job.conversationId))
+                    }
+                }
+                recoveryObserved=true
+                created.complete(null)
+            } catch(failure: Throwable) { created.completeExceptionally(failure); throw failure }
+            finally { recoveryInitialization.compareAndSet(created,null) }
+    }
+    /** Pure readiness check for callers such as Resume that already hold a Crew cycle monitor. */
+    fun requireRecoveryInitialized() {
+        val observation=recoveryInitialization.get()
+        check(recoveryObserved && (observation==null || (observation.isDone && !observation.isCompletedExceptionally))) {
+            "Coding recovery lifecycle observation has not completed"
+        }
+    }
+    fun requireNoRecoveredScopeTakeover(scope: ProjectScope) {
+        check(jobs.values.none { it.recovered && it.recoveryScopeBlocked && matchesScope(it,scope) }) {
+            "A recorded job still has live or unknown ownership; no scope takeover is permitted"
+        }
+    }
+    /** Adds historical read ownership only for the exact RAW STARTED checkpoint that supplied the job. */
+    fun correlatedCheckpointOwners(scope: ProjectScope, checkpoint: CrewCheckpointStore.ConfirmedSnapshot): List<String> = active(scope) {
+        jobs.values.filter { job -> job.recovered && matchesScope(job,scope) &&
+            job.recoveryRecord?.let {
+                val source=it.binding.source.crew
+                checkpoint.matchesCodingSource(source) && job.snapshot.owner==it.binding.owner &&
+                    ownerBot(job.snapshot.owner,source.executionSessionId)==source.botId
+            } == true }
+            .map { it.snapshot.owner }.distinct()
+    }
+    private fun operationalSnapshot(s: CodingJobSnapshot) = Snapshot(s.id,s.owner,s.scopeId,s.cwd,s.redactedCommand,
+        State.valueOf(s.state.name),s.createdAt,s.startedAt,s.finishedAt,s.exitCode,s.logArtifact,s.error,s.logBytes,s.logComplete)
+
     private val conversations = CodingJobConversationGuard(filesDir)
     private val jobs = ConcurrentHashMap<String, Job>()
     private val recoveredAccess = ConcurrentHashMap<String, RecoveredAccess>()
     private val recoveryLock = Any()
+    private val recoveryInitialization = AtomicReference<java.util.concurrent.CompletableFuture<Void>>()
+    @Volatile private var recoveryObserved=false
+    private val recoveryCandidates = LinkedHashMap<String,File>()
     private val restoreProblems = mutableListOf<String>()
     private val restoreProblemScopes = mutableMapOf<String, Int>()
     private val journalWriter: CodingJobJournalWriter
@@ -170,6 +298,7 @@ class CodingJobManager(
         val project = scope.rootDirectory().canonicalPath
         check(root.path != project && !root.path.startsWith(project + File.separator)) { "Coding job journals must be outside the editable project" }
         reconcile(scope)
+        requireNoRecoveredScopeTakeover(scope)
         val identity = scope.durableIdentity()
         val lease = scope.acquireWriter(owner, expectedVersion)
         val id = UUID.randomUUID().toString()
@@ -246,7 +375,7 @@ class CodingJobManager(
         val allowed = previousOwners.filter { it != owner }.toSet()
         require(allowed.all { ownerBot(it, scope.conversationId()) == bot }) { "Recovered jobs must belong to the same conversation and bot" }
         val identity = scope.durableIdentity()
-        check(jobs.values.none { it.snapshot.owner in allowed && matchesScope(it, scope) && !snapshot(it).state.terminal }) {
+        check(jobs.values.none { it.snapshot.owner in allowed && matchesScope(it, scope) && (!snapshot(it).state.terminal || it.recoveryScopeBlocked) }) {
             "Previous jobs are still pending; stop and await the original owner before resuming"
         }
         recoveredAccess[owner] = RecoveredAccess(scope.id(), scope.rootDirectory().canonicalPath, identity, allowed)
@@ -326,6 +455,123 @@ class CodingJobManager(
         // A restored journal is evidence, never a process handle.
         if (!job.recovered) requestCancel(job)
         return active(scope) { snapshot(job) }
+    }
+
+    /** Admission and profile checks run outside job/conversation locks. Profile revalidation is
+     * a preflight, not an atomic fence against subsequent profile changes. */
+    fun cancelInstrumented(owner: String, scope: ProjectScope, id: String,
+        callerToken: CancellationToken, validateCurrent: () -> Unit,
+        admit: () -> Unit, invocation: EffectInvocation? = null,
+        bridge: ChatDatabaseBridge? = null, semanticTicket: MemoryWriteGate.Ticket? = null,
+        semanticSource: CodingJobEvidence.Source? = null): CancellationDisposition {
+        validateCurrent()
+        callerToken.throwIfCancelled()
+        val job = owned(owner, scope, id, allowRecoveredAccess = false)
+        var noOp: CancelDisposition? = null
+        val technical = synchronized(job.lock) {
+            check(jobs[id] === job && job.snapshot.owner == owner &&
+                job.snapshot.scopeId == scope.id() && job.conversationId == scope.conversationId() && !job.recovered) {
+                "Coding job is not a live cancellation target for this owner"
+            }
+            callerToken.throwIfCancelled()
+            val targetTechnical = checkNotNull(job.technical) { "Legacy jobs have no technical cancellation reservation" }
+            if (job.snapshot.state.terminal)
+                noOp = CancelDisposition(job.snapshot, CancellationKind.ALREADY_TERMINAL, false, false)
+            else if (job.token.isCancellationRequested)
+                noOp = CancelDisposition(job.snapshot, CancellationKind.ALREADY_REQUESTED, false, false)
+            targetTechnical
+        }
+        noOp?.let { observed ->
+            // This immutable fact was captured under the job lock. Audit failure never requests cancellation.
+            val confirmed = try {
+                val currentInvocation = requireNotNull(invocation)
+                val destination = requireNotNull(bridge)
+                validateCurrent()
+                callerToken.throwIfCancelled()
+                val pin = pinSubmission()
+                val issuer = liveOwner.value.cancellationIssuer()
+                val observation = try { issuer.observe(currentInvocation, technical.reservation, pin,
+                    if(observed.kind == CancellationKind.ALREADY_TERMINAL) CodingCancellation.Disposition.ALREADY_TERMINAL
+                    else CodingCancellation.Disposition.ALREADY_REQUESTED,
+                    CodingJobSnapshot.State.valueOf(observed.snapshot.state.name), observed.snapshot.exitCode,
+                    requireNotNull(semanticTicket), semanticSource) }
+                    catch (failure: Throwable) { pin.close(); throw failure }
+                observation.use {
+                    val checkpoint = destination.observeCodingCancellationSync(observation)
+                    checkpoint.requireFor(observation)
+                    try { destination.linkCodingCancelSemanticSync(checkpoint) } catch (_: Exception) {
+                        // Optional semantics cannot change the exact technical observation or create a retry.
+                    }
+                }
+                true
+            } catch (_: Exception) { false }
+            return observed.copy(ledgerConfirmed = confirmed)
+        }
+        val currentInvocation = requireNotNull(invocation) { "Cancellation requires its live invocation" }
+        val destination = requireNotNull(bridge) { "Cancellation requires its technical destination" }
+        val pin = pinSubmission()
+        val issuer = liveOwner.value.cancellationIssuer()
+        val request = try { issuer.capture(currentInvocation, technical.reservation, pin,
+            requireNotNull(semanticTicket), semanticSource) }
+            catch (failure: Throwable) { pin.close(); throw failure }
+        request.use {
+            var intent: CodingCancellationCheckpoint? = null
+            var resultCaptured = false
+            currentInvocation.addAdmissionWriter { observed ->
+                intent = destination.admitCodingCancelSync(request, observed)
+            }
+            try {
+                admit()
+                val confirmedIntent = checkNotNull(intent) { "Cancellation intent was not confirmed" }
+                confirmedIntent.requireIntent(request)
+                request.requireFor(currentInvocation)
+                request.requireDispatchLive()
+                validateCurrent()
+                callerToken.throwIfCancelled()
+                // No profile/Room callback under this lock. Journal IO keeps its existing lock order.
+                val disposition = synchronized(job.lock) {
+                    check(jobs[id] === job && job.snapshot.owner == owner &&
+                        job.snapshot.scopeId == scope.id() && job.conversationId == scope.conversationId() && !job.recovered) {
+                        "Coding job identity changed before cancellation"
+                    }
+                    callerToken.throwIfCancelled()
+                    request.requireDispatchLive()
+                    requestCancel(job, admitted = true)
+                }
+                val kind = when(disposition.kind) {
+                    CancellationKind.REQUESTED -> CodingCancellation.Disposition.NEW_REQUEST
+                    CancellationKind.ALREADY_REQUESTED -> CodingCancellation.Disposition.ALREADY_REQUESTED
+                    CancellationKind.ALREADY_TERMINAL -> CodingCancellation.Disposition.ALREADY_TERMINAL
+                }
+                val result = issuer.result(request, confirmedIntent, kind,
+                    if(disposition.kind == CancellationKind.REQUESTED) disposition.cancellingCommit else null)
+                resultCaptured = true
+                val ledgerConfirmed = try {
+                    val checkpoint = destination.finishCodingCancelSync(result)
+                    checkpoint.requireResult(result)
+                    try { destination.linkCodingCancelSemanticSync(checkpoint) } catch (_: Exception) {
+                        // No ticket refresh, backfill, cancellation replay or rewrite of command facts.
+                    }
+                    true
+                } catch (_: Exception) { false }
+                return disposition.copy(ledgerConfirmed = ledgerConfirmed)
+            } catch (failure: Exception) {
+                request.abandonDispatch()
+                // This is audit-only. A late intent ACK never resumes the cancellation operation.
+                val confirmedIntent = intent
+                if (confirmedIntent != null && !resultCaptured) {
+                    try {
+                        val result = issuer.result(request, confirmedIntent,
+                            CodingCancellation.Disposition.REQUEST_UNCONFIRMED, null)
+                        resultCaptured = true
+                        val checkpoint = destination.finishCodingCancelSync(result)
+                        checkpoint.requireResult(result)
+                        try { destination.linkCodingCancelSemanticSync(checkpoint) } catch (_: Exception) { }
+                    } catch (_: Exception) { /* Exact intent/result remains observable; never replay a request. */ }
+                }
+                throw failure
+            }
+        }
     }
 
     fun cancelAllAndAwait(owner: String) {
@@ -555,12 +801,28 @@ class CodingJobManager(
     fun technicalProjection(owner: String, scope: ProjectScope, id: String): TechnicalProjection =
         owned(owner, scope, id).projection
 
-    private fun requestCancel(job: Job) {
+    private fun requestCancel(job: Job, admitted: Boolean = false): CancelDisposition {
         synchronized(job.lock) {
-            if (job.snapshot.state.terminal || job.recovered) return
+            if (job.snapshot.state.terminal || job.recovered)
+                return CancelDisposition(job.snapshot, CancellationKind.ALREADY_TERMINAL, false, admitted)
+            if (job.token.isCancellationRequested)
+                return CancelDisposition(job.snapshot, CancellationKind.ALREADY_REQUESTED, false, admitted)
             job.snapshot = job.snapshot.copy(state = State.CANCELLING)
-            runCatching { persist(job) }
-            job.token.cancel()
+            var confirmed = false
+            var requested = false
+            var cancellingCommit: CodingJobJournalStore.Commit? = null
+            try {
+                persist(job)
+                confirmed = true
+                cancellingCommit = job.technical?.latest
+            } catch (_: Exception) {
+                // STOP remains effective even when its journal acknowledgement is unknown.
+            } finally {
+                requested = job.token.cancel()
+            }
+            return CancelDisposition(job.snapshot,
+                if (requested) CancellationKind.REQUESTED else CancellationKind.ALREADY_REQUESTED,
+                confirmed, admitted, cancellingCommit = cancellingCommit)
         }
     }
 
@@ -684,9 +946,25 @@ class CodingJobManager(
                 require(out.size() + count <= MAX_JOURNAL_BYTES) { "Job journal grew beyond current memory headroom" }; out.write(buffer, 0, count) }
             out.toByteArray()
         }
+        val schema = CodingJobJournalCodec.schemaVersion(bytes,MAX_JOURNAL_BYTES)
+        if(schema==3L) {
+            val candidate=CodingJobJournalStore.forFilesRoot(applicationFiles).inspectExisting(file,MAX_JOURNAL_BYTES)
+            val original=candidate.snapshot()
+            val observed=operationalSnapshot(original).let { value ->
+                if(candidate.record().terminal==null)value.copy(error="Recorded job has not yet been reconciled; no runtime handle was restored")
+                else value.copy(state=State.UNCERTAIN,exitCode=null,finishedAt=null,logComplete=false,
+                    error="Recovered terminal is not yet verified; no execution result is accredited")
+            }
+            val job=Job(observed,original.projectRoot,original.conversationId,candidate.record().binding.durableScopeIdentity)
+            job.recovered=true;job.recoveryScopeBlocked=true;job.projection=TechnicalProjection.PENDING
+            job.expectedRecoveryBinding=candidate.record().binding
+            require(jobs.putIfAbsent(original.id,job)==null) { "Duplicate recovered job identity" }
+            recoveryCandidates[original.id]=candidate.target()
+            return
+        }
         val json = JSONObject(String(bytes, Charsets.UTF_8))
-        val schema = json.getInt("schema"); require(schema == 1 || schema == 2)
-        val identity = if (schema == 2) json.getString("durableIdentity").also { require(it.isNotBlank() && it != "null") } else null
+        require(schema == 1L || schema == 2L)
+        val identity = if (schema == 2L) json.getString("durableIdentity").also { require(it.isNotBlank() && it != "null") } else null
         val id = json.getString("id"); require(UUID.fromString(id).toString() == id && file.name == "$id.json")
         val conversation = json.getString("conversationId")
         conversations.active(conversation) { }
@@ -698,7 +976,7 @@ class CodingJobManager(
         require(!log.exists() || log.isFile)
         val size = if (log.exists()) log.length() else 0L
         val expected = json.optLong("logBytes", 0); require(expected >= 0)
-        val complete = schema == 2 && previous.terminal && json.optBoolean("logComplete", false) && size == expected
+        val complete = schema == 2L && previous.terminal && json.optBoolean("logComplete", false) && size == expected
         val error = if (previous.terminal) json.optString("error").takeUnless { json.isNull("error") } else
             if (started == null) "Interrupted before launch; no command was replayed" else
                 "Execution outcome and process liveness are unknown after restart; no command was replayed"

@@ -120,6 +120,7 @@ data class ToolBatch(
     val raw_calls: String? = null,
     /** Provider-specific output item shapes have no common schema and are retained opaquely. */
     val provider_output_items_json: String? = null,
+    val memory_session_id: String? = null,
 )
 
 /** Calls from `model_tool_calls`, with `model_tool_started`/`model_tool_not_started` stored as lifecycle state. Arguments JSON is opaque by tool contract. */
@@ -145,6 +146,8 @@ data class ToolCall(
     val arguments_json: String,
     val lifecycle: String,
     val lifecycle_seq: Long? = null,
+    /** Producer proof of native save/session-command/review selectors before transcript sanitization/retention. */
+    val memory_save_input_digest: String? = null,
 )
 
 /** First-wins `model_tool_result` row for a batch call. */

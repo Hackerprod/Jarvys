@@ -2059,26 +2059,6 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun memoryChanged(revision: MemoryStore.Revision) = inSession(revision.conversationId) { synchronized(lock) {
-        // Seed remains journaled by MemoryStore; only its live chat presentation is suppressed.
-        if (revision.operation == "SEED") return@synchronized
-        val current = _state.value
-        if (!current.running || current.sessionId != revision.conversationId
-            || revision.actor == MemoryStore.Actor.USER || revision.actor == MemoryStore.Actor.REFLECTION) return@synchronized
-        val change = AgentRunUiEvent(
-            id = nextEventId++,
-            kind = "memory",
-            stage = revision.operation,
-            text = revision.path,
-            memoryRevisionId = revision.id,
-            memoryPath = revision.path,
-            memoryBefore = MemoryUiLogic.shortContent(revision.previousContent, 320),
-            memoryAfter = MemoryUiLogic.shortContent(revision.newContent, 320),
-        )
-        _state.value = current.copy(events = append(current.events, change))
-    } }
-
-    @JvmStatic
     fun showApproval(
         id: String,
         title: String,

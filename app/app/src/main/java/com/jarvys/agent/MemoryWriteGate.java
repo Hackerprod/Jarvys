@@ -21,6 +21,8 @@ public final class MemoryWriteGate {
         /** Fast, thread-safe raw preference read; never acquire database or writer locks. */
         boolean readEnabled();
         boolean commitEnabled(boolean enabled);
+        default boolean readPromptCaptureEnabled() { return false; }
+        default boolean commitPromptCaptureEnabled(boolean enabled) { return false; }
     }
 
     /** Opaque snapshot, valid only for the gate and preference epoch that issued it. */
@@ -41,6 +43,17 @@ public final class MemoryWriteGate {
         private RejectedException() { super("Automatic memory write is no longer authorized"); }
     }
 
+    public static final class PromptCaptureTicket {
+        private final Ticket memory;
+        private final long epoch;
+        private final boolean enabled;
+        private PromptCaptureTicket(Ticket memory, long epoch, boolean enabled) {
+            this.memory = memory; this.epoch = epoch; this.enabled = enabled;
+        }
+        public boolean enabledAtCapture() { return enabled; }
+    }
+    private volatile long captureEpoch;
+    private volatile boolean captureDenied;
     private final Settings settings;
     private final ReentrantLock lock = new ReentrantLock();
     private static final class State {
@@ -92,6 +105,35 @@ public final class MemoryWriteGate {
             }
             lock.unlock();
         }
+    }
+
+    public boolean isPromptCaptureEnabled() {
+        return !captureDenied && settings.readPromptCaptureEnabled();
+    }
+    public PromptCaptureTicket capturePromptTicket(Ticket originalMemoryTicket) {
+        lock.lock();
+        try { return new PromptCaptureTicket(originalMemoryTicket, captureEpoch, isPromptCaptureEnabled()); }
+        finally { lock.unlock(); }
+    }
+    /** Uses the same lock, but invalidates only capture tickets, not ordinary memory tickets. */
+    public void setPromptCaptureEnabled(boolean enabled) {
+        rejectReentrantWrite(); lock.lock();
+        boolean committed = false;
+        try {
+            boolean changed = captureDenied || settings.readPromptCaptureEnabled() != enabled;
+            if (!settings.commitPromptCaptureEnabled(enabled)) throw new IllegalStateException("Prompt capture preference could not be persisted");
+            committed = true;
+            if (changed) captureEpoch++;
+            captureDenied = false;
+        } finally {
+            if (!committed) { captureEpoch++; captureDenied = true; }
+            lock.unlock();
+        }
+    }
+    public <T> T commitPrompt(PromptCaptureTicket ticket, BooleanSupplier pureCheck, Callable<T> effect) throws Exception {
+        if (ticket == null) throw new RejectedException();
+        return commit(ticket.memory, () -> ticket.enabled && ticket.epoch == captureEpoch &&
+            !captureDenied && settings.readPromptCaptureEnabled() && pureCheck.getAsBoolean(), effect);
     }
 
     /** pureCheck is a quick, side-effect-free cancellation/eligibility check, not a dispatcher. */

@@ -1,1 +1,0 @@
-.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests "com.jarvys.agent.MainAgentInteractionTest" --tests "com.jarvys.agent.CoreAgentRuntimeConnectorToolsTest" --tests "com.jarvys.agent.LocalRunStoreMessageMetadataTest" --tests "com.jarvys.agent.AgentForegroundServiceMainThreadAdmissionTest" -x :app:prepareApkFactoryTemplate --console=plain

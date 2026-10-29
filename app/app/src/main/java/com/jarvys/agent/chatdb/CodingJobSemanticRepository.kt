@@ -1,12 +1,19 @@
 package com.jarvys.agent.chatdb
 
+import com.jarvys.agent.CrewInputContext
 import com.jarvys.agent.CentralInvocationSource
 import com.jarvys.agent.coding.CodingJobEvidence
 import com.jarvys.agent.coding.CodingJobEvidenceCodec
 import com.jarvys.agent.coding.CodingJobJournalStore
+import com.jarvys.agent.coding.CodingJobJournalCodec
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
+
+/** Read-consistency metadata only: never a journal, dispatch, or provenance capability. */
+internal data class CodingJobRetainedReference(val jobId: String, val technicalGeneration: String,
+    val revision: Long, val integrityFingerprint: String, val inputContextCoverage: CrewInputContext.Coverage,
+    val unresolvedInputIds: Set<String>)
 
 /** Exact existing targets only. Caller owns the current Room transaction and (for roles) memory gate. */
 internal class CodingJobSemanticRepository(private val database: JarvysChatDatabase) {
@@ -19,22 +26,25 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
         var target: String? = null
         var fingerprint: String? = null
         val root = binding.source.rootCentral
-        if (status != "DISABLED" && root != null && root.storageGeneration == binding.technicalStoreGeneration) {
-            val candidates = sql.query(
-                "SELECT DISTINCT m.id FROM memory_entries m JOIN memory_evidence e ON e.entry_id=m.id " +
-                    "WHERE m.kind='episode' AND m.deleted_at IS NULL AND m.source_conversation_id=? AND m.source_message_id=? " +
-                    "AND e.ref_kind='tool_call' AND e.ref_conversation_id=? AND e.source_batch_id=? AND e.ref_id=? AND e.run_id=? AND e.process_id=? LIMIT 2",
-                arrayOf(root.ownerCentralSessionId, root.sourceMessageId, root.ownerCentralSessionId,
-                    root.sourceBatchId, root.sourceCallId, root.sourceRunId, root.sourceProcessId)).use { c -> buildList {
-                while (c.moveToNext()) add(c.getString(0))
-            } }
-            if (candidates.size == 1) {
-                fingerprint = targetFingerprint(candidates.single(), root)
-                if (fingerprint != null) { target = candidates.single(); status = "PENDING" }
+        if (status != "DISABLED" && root != null) {
+            existingTarget(root,binding.technicalStoreGeneration)?.let { selected ->
+                target=selected.first;fingerprint=selected.second;status="PENDING"
             }
         }
         sql.execSQL("INSERT INTO coding_job_semantic_links(job_id,target_entry_id,target_fingerprint,status,admitted,terminal_confirmed,submission_ordinal,execution_ordinal) VALUES(?,?,?,?,0,0,NULL,NULL)",
             arrayOf(binding.jobId, target, fingerprint, status))
+    }
+
+    /** Shared exact-target selection for automatic technical-source links; no creation or fallback. */
+    internal fun existingTarget(root: CentralInvocationSource, generation: String): Pair<String,String>? {
+        if(root.storageGeneration != generation || currentGeneration()!=generation) return null
+        val candidates=sql.query("SELECT DISTINCT m.id FROM memory_entries m JOIN memory_evidence e ON e.entry_id=m.id " +
+            "WHERE m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND m.kind='episode' AND m.deleted_at IS NULL AND m.source_conversation_id=? AND m.source_message_id=? " +
+            "AND e.ref_kind='tool_call' AND e.ref_conversation_id=? AND e.source_batch_id=? AND e.ref_id=? AND e.run_id=? AND e.process_id=? LIMIT 2",
+            arrayOf(root.ownerCentralSessionId,root.sourceMessageId,root.ownerCentralSessionId,root.sourceBatchId,root.sourceCallId,root.sourceRunId,root.sourceProcessId))
+            .use {c -> buildList {while(c.moveToNext())add(c.getString(0))}}
+        if(candidates.size!=1)return null
+        return targetFingerprint(candidates.single(),root)?.let {candidates.single() to it}
     }
 
     fun recordTechnical(record: CodingJobEvidence.Record, kind: CodingJobRepository.Kind) {
@@ -83,18 +93,23 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
         insert(firstOrdinal + 1, "coding_job_execution", outcome(record), "durable_process_terminal")
         sql.execSQL("UPDATE coding_job_semantic_links SET status='LINKED',submission_ordinal=?,execution_ordinal=? WHERE job_id=? AND status='PENDING'",
             arrayOf(firstOrdinal, firstOrdinal + 1, record.binding.jobId))
-        sql.execSQL("UPDATE memory_entries SET narration='none',updated_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(now, target))
+        if (!MemoryObservationHistory.hasBodyOverride(database, target))
+            sql.execSQL("UPDATE memory_entries SET narration='none',updated_at=? WHERE id=? AND project='jarvys-central' AND scope='project' AND provenance='runtime' AND deleted_at IS NULL", arrayOf(now, target))
     }
 
     private data class Link(val target: String?, val fingerprint: String?, val status: String, val admitted: Boolean, val terminal: Boolean)
 
-    // Narration may change text/title/updated_at without changing target identity. Explicit memory
-    // mutations append memory_revisions; source edits change the exact message-part fingerprint.
-    private fun targetFingerprint(id: String, root: CentralInvocationSource): String? {
+    // Authorized presentation edits retain this exact target. Their canonical audit/history stays
+    // persisted but is not an identity mutation. Every other audit (including unknown/null tuples)
+    // invalidates the capture; source edits separately change the exact message-part fingerprint.
+    internal fun targetFingerprint(id: String, root: CentralInvocationSource): String? {
         val row = sql.query("SELECT m.id,m.source_conversation_id,m.source_message_id,m.created_at," +
-            "(SELECT COUNT(*) FROM memory_revisions r WHERE r.target_type='memory' AND r.target_id=m.id) " +
+            "(SELECT COUNT(*) FROM memory_revisions r WHERE r.target_type='memory' AND r.target_id=m.id AND " +
+            "CASE WHEN (r.actor='runtime' AND r.cause='episode_narration') OR " +
+            "(r.actor IN ('user','agent') AND r.cause IN ('${MemoryObservationHistory.BODY_UPDATE}','${MemoryObservationHistory.METADATA_UPDATE}')) " +
+            "THEN 0 ELSE 1 END=1) " +
             "FROM memory_entries m JOIN messages source ON source.conversation_id=m.source_conversation_id AND source.message_id=m.source_message_id " +
-            "WHERE m.id=? AND m.kind='episode' AND m.deleted_at IS NULL AND m.source_conversation_id=? AND m.source_message_id=? " +
+            "WHERE m.id=? AND m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND m.kind='episode' AND m.deleted_at IS NULL AND m.source_conversation_id=? AND m.source_message_id=? " +
             "AND source.role='user' AND source.hidden_kind IS NULL AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.entry_id=m.id AND e.ref_kind='tool_call' " +
             "AND e.ref_conversation_id=? AND e.source_batch_id=? AND e.ref_id=? AND e.run_id=? AND e.process_id=?)",
             arrayOf(id, root.ownerCentralSessionId, root.sourceMessageId, root.ownerCentralSessionId,
@@ -103,33 +118,16 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
         } ?: return null
         sql.query("SELECT ordinal,payload FROM message_parts WHERE conversation_id=? AND message_id=? AND kind='text' ORDER BY ordinal",
             arrayOf(root.ownerCentralSessionId, root.sourceMessageId)).use { c -> while(c.moveToNext()) row.put(JSONArray().put(c.getLong(0)).put(c.getString(1))) }
+        row.put("jarvys-central").put("project").put("runtime")
         return sha256(row.toString())
     }
 
     fun source(entryId: String, jobId: String, maxChars: Int): JSONObject {
         val unavailable = JSONObject().put("state", "unavailable")
         require(maxChars >= unavailable.toString().length) { "Source budget cannot hold the minimal result state" }
-        val row = sql.query("SELECT o.evidence_json,l.target_fingerprint,l.submission_ordinal,l.execution_ordinal,b.binding_json,b.technical_generation,b.submission_id " +
-            "FROM coding_job_semantic_links l JOIN memory_entries m ON m.id=l.target_entry_id " +
-            "JOIN coding_job_bindings b ON b.job_id=l.job_id JOIN coding_job_observations o ON o.job_id=l.job_id " +
-            "WHERE l.job_id=? AND l.target_entry_id=? AND l.status='LINKED' AND l.admitted=1 " +
-            "AND l.terminal_confirmed=1 AND m.deleted_at IS NULL ORDER BY o.revision DESC LIMIT 1", arrayOf(jobId, entryId))
-            .use { c -> if (!c.moveToFirst() || c.isNull(1) || c.isNull(2) || c.isNull(3)) null else
-                SourceRow(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getString(4), c.getString(5), c.getString(6)) } ?: return unavailable
-        val encoded = row.encoded
-        val record = CodingJobEvidenceCodec.decode(encoded, encoded.length).record
-        val bound = CodingJobEvidenceCodec.decode(row.binding, row.binding.length).record.binding
-        if (record.terminal == null || record.binding != bound || bound.jobId != jobId ||
-            bound.submissionId != row.submission || bound.technicalStoreGeneration != row.generation ||
-            currentGeneration() != row.generation) return unavailable
-        val root = bound.source.rootCentral ?: return unavailable
-        if (targetFingerprint(entryId, root) != row.fingerprint) return unavailable
-        fun exactRole(ordinal: Long, kind: String): Boolean = sql.query(
-            "SELECT ref_kind,ref_id,ref_conversation_id,tool_name FROM memory_evidence WHERE entry_id=? AND ordinal=?",
-            arrayOf(entryId, ordinal)).use { c -> c.moveToFirst() && c.getString(0) == kind && c.getString(1) == jobId &&
-                c.getString(2) == bound.source.crew.executionSessionId && c.getString(3) == "project_exec" }
-        if (row.submissionOrdinal == row.executionOrdinal || !exactRole(row.submissionOrdinal, "coding_job_submission") ||
-            !exactRole(row.executionOrdinal, "coding_job_execution")) return unavailable
+        val validated = validateSource(entryId, jobId) ?: return unavailable
+        val record = validated.record
+        val encoded = validated.encoded
         val source = JSONObject(encoded).getJSONObject("binding").getJSONObject("source")
         val result = JSONObject().put("state", "retained").put("job_id", jobId).put("revision", record.revision)
             .put("technical_generation", record.binding.technicalStoreGeneration).put("execution_state", record.terminal.state.name)
@@ -141,8 +139,72 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
         return if(result.toString().length <= maxChars) result else JSONObject().put("state", "bounded")
     }
 
+    fun retainedReference(entryId: String, jobId: String): CodingJobRetainedReference? {
+        val valid = validateSource(entryId, jobId) ?: return null
+        val record = valid.record
+        return CodingJobRetainedReference(jobId, record.binding.technicalStoreGeneration, record.revision,
+            valid.fingerprint, record.binding.source.crew.inputContext.coverage,
+            java.util.Collections.unmodifiableSet(LinkedHashSet(record.binding.source.crew.inputContext.unresolvedInputIds)))
+    }
+
+    private data class ValidatedSource(val record: CodingJobEvidence.Record, val encoded: String, val fingerprint: String)
+    private fun validateSource(entryId: String, jobId: String): ValidatedSource? = try {
+        validateSourceRows(entryId, jobId)
+    } catch (_: IllegalArgumentException) { null } catch (_: org.json.JSONException) { null }
+
+    private fun validateSourceRows(entryId: String, jobId: String): ValidatedSource? {
+        val row = sql.query("SELECT o.evidence_json,l.target_fingerprint,l.submission_ordinal,l.execution_ordinal,b.binding_json,b.technical_generation,b.submission_id,o.revision,o.payload_sha256,o.payload_bytes " +
+            "FROM coding_job_semantic_links l JOIN memory_entries m ON m.id=l.target_entry_id " +
+            "JOIN coding_job_bindings b ON b.job_id=l.job_id JOIN coding_job_observations o ON o.job_id=l.job_id " +
+            "WHERE l.job_id=? AND l.target_entry_id=? AND l.status='LINKED' AND l.admitted=1 " +
+            "AND l.terminal_confirmed=1 AND m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND m.deleted_at IS NULL ORDER BY o.revision DESC LIMIT 1", arrayOf(jobId, entryId))
+            .use { c -> if (!c.moveToFirst() || c.isNull(1) || c.isNull(2) || c.isNull(3)) null else
+                SourceRow(c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getString(4), c.getString(5), c.getString(6), c.getLong(7), c.getString(8), c.getBlob(9)) } ?: return null
+        val encoded = row.encoded
+        val record = CodingJobEvidenceCodec.decode(encoded, encoded.length).record
+        val bound = CodingJobEvidenceCodec.decode(row.binding, row.binding.length).record.binding
+        if (record.terminal == null || record.binding != bound || bound.jobId != jobId ||
+            bound.submissionId != row.submission || bound.technicalStoreGeneration != row.generation ||
+            currentGeneration() != row.generation) return null
+        if (row.revision != record.revision || sha256(row.payload) != row.payloadHash) return null
+        val decoded = CodingJobJournalCodec.decode(row.payload, row.payload.size)
+        if (decoded.record != record || !CodingJobJournalCodec.encode(decoded.snapshot, decoded.record).contentEquals(row.payload)) return null
+        val root = bound.source.rootCentral ?: return null
+        if (root.storageGeneration != row.generation) return null
+        if (targetFingerprint(entryId, root) != row.fingerprint) return null
+        fun exactRole(ordinal: Long, kind: String): String? = sql.query(
+            "SELECT ref_kind,ref_id,ref_conversation_id,tool_name,outcome,facts_json,process_id,at_ms FROM memory_evidence WHERE entry_id=? AND ordinal=?",
+            arrayOf(entryId, ordinal)).use { c ->
+            if (!c.moveToFirst() || c.getString(0) != kind || c.getString(1) != jobId ||
+                c.getString(2) != bound.source.crew.executionSessionId || c.getString(3) != "project_exec" ||
+                c.isNull(6) || c.getString(6) != bound.ownerProcessId) return@use null
+            if (kind == "coding_job_submission" && !c.isNull(4) || kind == "coding_job_execution" &&
+                (c.isNull(4) || c.getString(4) != outcome(record))) return@use null
+            val facts = JSONObject(c.getString(5))
+            if (facts.getString("job_id") != jobId || facts.getString("technical_generation") != row.generation ||
+                facts.get("revision").toString() != record.revision.toString() || facts.get("goal_verified") != false ||
+                facts.get("root_is_historical") != true || facts.get("historical_root_is_exclusive_cause") != false ||
+                facts.getString("input_coverage") != bound.source.crew.inputContext.coverage.name.lowercase(java.util.Locale.ROOT) ||
+                facts.getString("completion_semantics") != (if (kind == "coding_job_submission") "async_submission" else "durable_process_terminal")) return@use null
+            JSONArray().apply { for (index in 0..7) put(if (c.isNull(index)) JSONObject.NULL else c.getString(index)) }.toString()
+        }
+        if (row.submissionOrdinal == row.executionOrdinal) return null
+        val roleOrdinals = sql.query("SELECT ordinal FROM memory_evidence WHERE entry_id=? AND ref_id=? " +
+            "AND ref_kind IN ('coding_job_submission','coding_job_execution') ORDER BY ordinal", arrayOf(entryId, jobId)).use { c ->
+            buildList { while (c.moveToNext()) add(c.getLong(0)) }
+        }
+        if (roleOrdinals.size != 2 || roleOrdinals.toSet() != setOf(row.submissionOrdinal, row.executionOrdinal)) return null
+        val submissionRole = exactRole(row.submissionOrdinal, "coding_job_submission") ?: return null
+        val executionRole = exactRole(row.executionOrdinal, "coding_job_execution") ?: return null
+        val fingerprint = sha256(JSONArray().put(entryId).put(jobId).put(row.generation).put(record.revision)
+            .put(row.binding).put(row.payloadHash).put(row.fingerprint).put(row.submissionOrdinal).put(row.executionOrdinal)
+            .put(submissionRole).put(executionRole).toString())
+        return ValidatedSource(record, encoded, fingerprint)
+    }
+
     private data class SourceRow(val encoded: String, val fingerprint: String, val submissionOrdinal: Long,
-        val executionOrdinal: Long, val binding: String, val generation: String, val submission: String)
+        val executionOrdinal: Long, val binding: String, val generation: String, val submission: String,
+        val revision: Long, val payloadHash: String, val payload: ByteArray)
 
     private fun currentGeneration(): String? = sql.query("SELECT value FROM storage_meta WHERE key=?",
         arrayOf(ConnectionProjectionRepository.GENERATION_KEY)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
@@ -172,7 +234,8 @@ internal class CodingJobSemanticRepository(private val database: JarvysChatDatab
                 else -> "uncertain" // Cancellation/timeout/interruption do not prove absence of effects.
             }
         }
-        private fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+        private fun sha256(text: String) = sha256(text.toByteArray(Charsets.UTF_8))
+        private fun sha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(java.util.Locale.ROOT, it.toInt() and 255) }
     }
 }

@@ -10,7 +10,7 @@ import java.util.UUID
 /** File-local nullable projection; similarly named helpers in other repositories are private. */
 private fun Cursor.getStringOrNull(index: Int): String? = if (isNull(index)) null else getString(index)
 
-/** Results per `memory_search` page when the caller sends no limit; also how many overlapping entries a save reports. */
+/** Maximum overlap suggestions attached to a save; canonical search independently defaults to ten. */
 internal const val DEFAULT_MEMORY_SEARCH_LIMIT = 8
 
 data class PersonalMemoryReceipt(
@@ -20,7 +20,39 @@ data class PersonalMemoryReceipt(
     val directive: String? = null,
     /** Active entries that overlap what was just saved, so the next call can link them with `supersedes_id`/`related_ids`. */
     val candidates: List<PersonalMemoryHit> = emptyList(),
+    val project: String? = null,
+    val scope: String? = null,
+    val contentTruncated: Boolean = false,
+    val contentOriginalBytes: Int? = null,
+    val contentLimitBytes: Int? = null,
+    val observationType: String? = null,
+    val duplicateCount: Long? = null,
+    val lastSeenAt: Long? = null,
+    val pinned: Boolean? = null,
+    val operationReplayed: Boolean? = null,
+    val metadataReadback: String? = null,
 )
+
+/** Result of explicit permanent deletion, not a fabricated live observation readback. */
+data class PersonalMemoryDeletionReceipt(val id: String, val project: String, val scope: String, val hardDeleted: Boolean = true)
+
+/** Observations only: these counts never stand in for canonical sessions, prompts or sync state. */
+data class PersonalMemoryProjectSummary(val project: String, val liveCount: Long, val removedCount: Long,
+    val totalCount: Long, val pinnedCount: Long, val promptCount: Long = 0, val sessionCount: Long = 0)
+internal data class MemoryProjectRowStamp(val id: String, val project: String, val scope: String,
+    val revision: Long, val updatedAt: Long, val deletedAt: Long?, val pinned: Boolean)
+class PersonalMemoryProjectDeletionPreview internal constructor(
+    val project: String, val hardDelete: Boolean, val liveCount: Long, val removedCount: Long,
+    val totalCount: Long, val pinnedCount: Long, stamps: List<MemoryProjectRowStamp>,
+    val promptCount: Long = 0, val sessionCount: Long = 0,
+    internal val promptStamps: List<String> = emptyList(), internal val sessionStamps: List<String> = emptyList(),
+) {
+    // Local comparison data, not a permission token. Do not expose mutable confirmation state.
+    internal val stamps: List<MemoryProjectRowStamp> = java.util.Collections.unmodifiableList(ArrayList(stamps))
+}
+data class PersonalMemoryProjectDeletionReceipt(val project: String, val hardDelete: Boolean,
+    val observationsDeleted: Long, val scope: String = "observations_sessions_prompts",
+    val promptsDeleted: Long = 0, val sessionsDeleted: Long = 0)
 
 /** One memory entry as search and get return it; [text] is complete, callers cut their own excerpt. */
 data class PersonalMemoryHit(
@@ -40,9 +72,25 @@ data class PersonalMemoryHit(
     val links: List<PersonalMemoryLinkView> = emptyList(),
     val evidence: List<PersonalMemoryEvidenceView> = emptyList(),
     val evidenceCount: Int = 0,
+    val project: String = MemoryNamespace.CENTRAL,
+    val scope: String = "project",
+    val observationType: String = "manual",
+    val history: PersonalMemoryHistoryPage? = null,
+    val duplicateCount: Long = 1L,
+    val lastSeenAt: Long? = null,
+    val pinned: Boolean = false,
+    val deletedAt: Long? = null,
+    val topicKeyBytesBase64: String? = null,
+    val topicKeyIsUtf8: Boolean? = null,
+    val createdAt: Long = 0L,
+    val memorySessionId: String? = null,
+    val titleBytesBase64: String? = null, val titleIsUtf8: Boolean? = null,
+    val reviewAfter: String? = null, val reviewState: String = "active",
+    val relations: List<MemoryRelationView> = emptyList(),
 )
 
-data class PersonalMemoryLinkView(val relation: String, val direction: String, val id: String, val title: String?)
+data class PersonalMemoryLinkView(val relation: String, val direction: String, val id: String, val title: String?,
+    val titleBytesBase64:String?=null,val titleIsUtf8:Boolean?=null)
 
 data class PersonalMemoryEvidenceView(
     val ordinal: Long,
@@ -60,13 +108,16 @@ data class PersonalMemoryEvidenceView(
     val processId: String? = null,
 )
 data class CodingJobNarrationState(val jobId: String, val status: String, val admitted: Boolean, val terminalConfirmed: Boolean, val revision: Long)
+data class CodingCancellationNarrationState(val requestId:String,val jobId:String,val recordKind:String,val status:String,
+    val resultConfirmed:Boolean,val integrityFingerprint:String)
 data class EpisodeNarrationInput(val id: String, val sourceMessageId: String?, val title: String?,
     val eventAt: Long?, val evidence: List<PersonalMemoryEvidenceView>, val finalMessageId: String? = null,
     val text: String = "", val sourceFingerprint: String? = null, val finalFingerprint: String? = null,
-    val codingJobs: List<CodingJobNarrationState> = emptyList())
+    val codingJobs: List<CodingJobNarrationState> = emptyList(),
+    val codingCancellations: List<CodingCancellationNarrationState> = emptyList())
 data class EpisodeReference(val id: String, val title: String?, val eventAt: Long?, val narration: String)
 
-/** Structured filters of `memory_search`; every present field narrows the result, and all of them work without a query. */
+/** Shared structured predicates for canonical search and explicit memory_list; never an ownership grant. */
 data class MemorySearchFilter(
     val kind: String? = null,
     val fromMs: Long? = null,
@@ -75,22 +126,25 @@ data class MemorySearchFilter(
     val connector: String? = null,
     val outcome: String? = null,
     val sourceMessageId: String? = null,
+    val observationType: String? = null,
+    val matchMode: String = "all",
 ) {
     val isEmpty: Boolean
         get() = kind == null && fromMs == null && toMsExclusive == null && tool == null &&
-            connector == null && outcome == null && sourceMessageId == null
+            connector == null && outcome == null && sourceMessageId == null && observationType == null
 
     companion object {
         /** [from] and [to] are ISO dates or date-times; a bare [to] date covers that whole day. */
-        @JvmStatic
+        @JvmStatic @JvmOverloads
         fun parse(kind: String?, from: String?, to: String?, tool: String?, connector: String?, outcome: String?,
-                  sourceMessageId: String?): MemorySearchFilter {
+                  sourceMessageId: String?, observationType: String? = null, matchMode: String? = null): MemorySearchFilter {
             fun clean(value: String?) = value?.trim()?.takeIf(String::isNotEmpty)
             return MemorySearchFilter(
                 kind = clean(kind), fromMs = clean(from)?.let { parseInstant(it, "from", endOfDay = false) },
                 toMsExclusive = clean(to)?.let { parseInstant(it, "to", endOfDay = true) },
                 tool = clean(tool), connector = clean(connector), outcome = clean(outcome),
-                sourceMessageId = clean(sourceMessageId),
+                sourceMessageId = clean(sourceMessageId), observationType = observationType?.takeIf(String::isNotEmpty),
+                matchMode = CanonicalMemorySearch.normalizeMatchMode(matchMode),
             )
         }
 
@@ -113,9 +167,9 @@ data class MemorySearchFilter(
     }
 }
 
-/** What `memory_save` may set besides the text; blank values keep what the entry already has. */
+/** Canonical note input metadata; title is explicit, descriptive type is independent of structural kind. */
 data class MemorySaveOptions(
-    val kind: String? = null,
+    val type: String? = null,
     val topicKey: String? = null,
     val title: String? = null,
     val eventAtMs: Long? = null,
@@ -128,6 +182,14 @@ data class MemorySaveOptions(
     /** Who wrote the entry: `user` from the memory screen, `agent` from a tool call. */
     val actor: String = "user",
 )
+
+data class MemoryUpdateOptions(val title: String? = null, val content: String? = null,
+    val find: String? = null, val replace: String? = null, val type: String? = null,
+    val scope: String? = null, val topicKey: String? = null)
+data class PersonalMemoryVersion(val version: Long, val title: String?, val content: String, val createdAt: Long,
+    val titleBytesBase64:String?=null,val titleIsUtf8:Boolean?=null)
+data class PersonalMemoryHistoryPage(val versions: List<PersonalMemoryVersion>, val total: Long,
+    val hasMore: Boolean, val nextCursor: Long?)
 
 data class PersonalMemoryCandidate(val id: String, val text: String, val importance: Double)
 data class PersonalMemoryItem(
@@ -143,6 +205,12 @@ data class PersonalMemoryItem(
     val label: String = "",
     val eventAt: Long? = null,
     val narration: String = "none",
+    val pinned: Boolean? = null,
+    val project: String? = null,
+    val scope: String? = null,
+    val deletedAt: Long? = null,
+    val titleBytesBase64:String?=null,val titleIsUtf8:Boolean?=null,
+    val reviewAfter:String?=null,val reviewState:String="active",
 )
 data class PersonalMemoryJob(val id: String, val type: String, val conversationId: String?, val attempts: Long)
 data class PersonalMemoryRevision(
@@ -180,7 +248,9 @@ private data class MemoryJobRow(
 )
 
 /** SQLite source of truth for agent identity, user directives, durable notes, and session state. */
-class PersonalAgentRepository internal constructor(private val database: JarvysChatDatabase) {
+class PersonalAgentRepository internal constructor(private val database: JarvysChatDatabase,
+    private val dedupeWindowMillis: Long = 900_000L,
+    private val observationClock: () -> Long = System::currentTimeMillis) {
     private val sql get() = database.chatSql
 
     /** Writes a deterministic episode and the pre-dispatch evidence before an external effect runs. */
@@ -203,9 +273,13 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         toolName: String, connector: String?, authorization: String?, factsJson: String, outcome: String,
         actionId: String?, attemptId: String?, sourceBatchId: String? = null,
         runId: String? = null, processId: String? = null): String {
+        require(conversationId == com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION) { "memory_runtime_owner_denied" }
+        val topic = "episode:$conversationId:$sourceMessageId"
+        MemoryDeletionMarkers.requireAvailable(database, MemoryDeletionMarkers.mainEpisode(conversationId, sourceMessageId))
+        val retained = RuntimeMemoryIdentity.byTopic(database, topic, "runtime", "episode", "message:$sourceMessageId", conversationId, sourceMessageId)
         // Provider call IDs may recur across batches; only a durable approval attempt is unique here.
         val existing = if (attemptId == null) null else sql.query(
-            "SELECT e.entry_id,m.source_message_id,e.tool_name,e.action_id,e.ref_id FROM memory_evidence e JOIN memory_entries m ON m.id=e.entry_id WHERE e.ref_conversation_id=? AND e.attempt_id=? AND e.ref_kind='tool_call' LIMIT 1",
+            "SELECT e.entry_id,m.source_message_id,e.tool_name,e.action_id,e.ref_id FROM memory_evidence e JOIN memory_entries m ON m.id=e.entry_id WHERE m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND e.ref_conversation_id=? AND e.attempt_id=? AND e.ref_kind='tool_call' LIMIT 1",
             arrayOf(conversationId, attemptId),
         ).use { c ->
             if (!c.moveToFirst()) null else {
@@ -216,11 +290,14 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 c.getString(0)
             }
         }
-        if (existing != null) return existing
+        if (existing != null) {
+            check(existing == retained?.id) { "memory_runtime_identity_conflict" }
+            return existing
+        }
         if (sourceBatchId != null) {
             require(!runId.isNullOrBlank() && !processId.isNullOrBlank())
             val duplicate = sql.query(
-                "SELECT e.entry_id,m.source_message_id,e.tool_name,e.run_id FROM memory_evidence e JOIN memory_entries m ON m.id=e.entry_id WHERE e.ref_conversation_id=? AND e.source_batch_id=? AND e.ref_id=? AND e.ref_kind='tool_call' LIMIT 1",
+                "SELECT e.entry_id,m.source_message_id,e.tool_name,e.run_id FROM memory_evidence e JOIN memory_entries m ON m.id=e.entry_id WHERE m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND e.ref_conversation_id=? AND e.source_batch_id=? AND e.ref_id=? AND e.ref_kind='tool_call' LIMIT 1",
                 arrayOf(conversationId, sourceBatchId, callId),
             ).use { c -> if (!c.moveToFirst()) null else {
                 require(c.getString(1) == sourceMessageId && c.getString(2) == toolName && c.getString(3) == runId) {
@@ -228,20 +305,37 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 }
                 c.getString(0)
             } }
-            if (duplicate != null) return duplicate
+            if (duplicate != null) {
+                check(duplicate == retained?.id) { "memory_runtime_identity_conflict" }
+                return duplicate
+            }
         }
         org.json.JSONObject(factsJson) // Reject malformed facts before creating any row.
         val now = System.currentTimeMillis()
-        val topic = "episode:$conversationId:$sourceMessageId"
-        var entryId = sql.query("SELECT id FROM memory_entries WHERE topic_key=? AND deleted_at IS NULL LIMIT 1", arrayOf(topic))
-            .use { if (it.moveToFirst()) it.getString(0) else null }
+        check(retained?.deleted != true) { "memory_runtime_target_forgotten" }
+        val memorySessionId = if (sourceBatchId == null) null else {
+            val session = sql.query("SELECT memory_session_id FROM tool_batches WHERE conversation_id=? AND batch_id=? AND owner_user_message_id=?",
+                arrayOf(conversationId, sourceBatchId, sourceMessageId)).use { c -> if(c.moveToFirst()) c.getStringOrNull(0) else null }
+                ?: throw MemorySessionUnavailableException()
+            sql.query("SELECT source_generation,owner_conversation_id,owner_message_id,run_id,process_id,state,ended_at FROM memory_sessions WHERE id=?",
+                arrayOf(session)).use { c ->
+                if (!c.moveToFirst()) throw MemorySessionUnavailableException()
+                check(c.getString(0) == MemorySaveSourceIdentity.existingGeneration(database) &&
+                    c.getString(1) == conversationId && c.getString(2) == sourceMessageId &&
+                    c.getString(3) == runId && c.getString(4) == processId) { "memory_session_source_invalid" }
+                MemorySessionRepository(database).renewCurrent(MemorySessionBinding(session,MemoryNamespace.CENTRAL,
+                    c.getString(0),conversationId,sourceMessageId,requireNotNull(runId),requireNotNull(processId)))
+            }
+            session
+        }
+        var entryId = retained?.id
         if (entryId == null) {
             entryId = UUID.randomUUID().toString()
             sql.execSQL(
-                "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq) " +
-                    "VALUES(?,'curated',?,'',NULL,1.0,'','runtime',?,0,NULL,?,?,NULL,'episode',?,NULL,'none',?,?,?,NULL)",
+                "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq,project,scope,observation_type,normalized_hash,last_seen_at,memory_session_id,review_after) " +
+                    "VALUES(?,'curated',?,'',NULL,1.0,'','runtime',?,0,NULL,?,?,NULL,'episode',?,NULL,'none',?,?,?,NULL,'jarvys-central','project','episode',?,?,?,?)",
                 arrayOf(entryId, LocalDate.now().toString(), "message:$sourceMessageId", now, now, topic, now,
-                    conversationId, sourceMessageId),
+                    conversationId, sourceMessageId, MemoryObservationContent.normalizedHash(""), now, memorySessionId, MemoryReview.defaultAfter("episode", now)),
             )
         }
         val ordinal = sql.query("SELECT COALESCE(MAX(ordinal),-1)+1 FROM memory_evidence WHERE entry_id=?", arrayOf(entryId))
@@ -254,8 +348,15 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         return entryId
     }
 
+    private fun requireRuntimeEpisode(entryId: String) {
+        check(sql.query("SELECT 1 FROM memory_entries WHERE id=? AND project='jarvys-central' AND scope='project' AND provenance='runtime' AND kind='episode'", arrayOf(entryId)).use { it.moveToFirst() }) {
+            "memory_runtime_identity_conflict"
+        }
+    }
+
     private fun invalidateEpisodeNarration(entryId: String) {
-        sql.execSQL("UPDATE memory_entries SET narration='none',updated_at=? WHERE id=? AND kind='episode' AND deleted_at IS NULL",
+        if (MemoryObservationHistory.hasBodyOverride(database, entryId)) return
+        sql.execSQL("UPDATE memory_entries SET narration='none',updated_at=? WHERE id=? AND project='jarvys-central' AND scope='project' AND provenance='runtime' AND kind='episode' AND deleted_at IS NULL",
             arrayOf(System.currentTimeMillis(), entryId))
     }
 
@@ -307,6 +408,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         if (requireIntent) check(rows.size == 1) { "Exact pending effect intent is required before dispatch" }
         rows.forEach { target ->
             val (entryId, ordinal, mergedFacts) = target
+            requireRuntimeEpisode(entryId)
             if (connectionObservation != null) check(target.connector.isNullOrBlank() ||
                 target.connector == connectionObservation.connectorId) { "Connection observation does not match the exact intent" }
             sql.execSQL("UPDATE memory_evidence SET outcome=?,facts_json=?,authorization=COALESCE(?,authorization) WHERE entry_id=? AND ordinal=?",
@@ -368,7 +470,8 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     }
 
     private fun reconcilePendingEpisodeRows(ownerPredicate: String, arguments: Array<String>) {
-        val pending = "outcome IN ('intent','started') AND $ownerPredicate"
+        val pending = "outcome IN ('intent','started') AND $ownerPredicate AND EXISTS(" +
+            "SELECT 1 FROM memory_entries m WHERE m.id=memory_evidence.entry_id AND m.project='jarvys-central' AND m.scope='project' AND m.provenance='runtime' AND m.kind='episode')"
         sql.execSQL("UPDATE memory_entries SET narration='none' WHERE id IN (SELECT entry_id FROM memory_evidence WHERE $pending)", arguments)
         sql.execSQL("UPDATE memory_evidence SET outcome='uncertain' WHERE $pending", arguments)
     }
@@ -385,12 +488,15 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 val scope = ids?.joinToString(",", " AND id IN (", ")") { "?" }.orEmpty()
                 val arguments = arrayOf(conversationId, *(ids?.toTypedArray() ?: emptyArray()))
                 return sql.query(
-                    "SELECT id,text,layer,kind,title,topic_key,event_at,narration,updated_at FROM memory_entries WHERE kind='episode' AND source_conversation_id=? AND deleted_at IS NULL AND narration IN ('none','pending','failed') AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.entry_id=memory_entries.id AND e.ref_kind IN ('tool_call','crew_result','coding_job_execution') AND e.outcome='ok') AND NOT EXISTS(SELECT 1 FROM memory_evidence active WHERE active.entry_id=memory_entries.id AND active.outcome IN ('intent','started'))" + scope + " ORDER BY event_at,id", arguments,
+                    "SELECT id,text,layer,kind,title,CAST(topic_key AS BLOB),event_at,narration,updated_at FROM memory_entries WHERE project='jarvys-central' AND scope='project' AND provenance='runtime' AND kind='episode' AND source_conversation_id=? AND deleted_at IS NULL AND narration IN ('none','pending','failed') AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.entry_id=memory_entries.id AND e.ref_kind IN ('tool_call','crew_result','coding_job_execution','coding_cancel_request') AND e.outcome='ok') AND NOT EXISTS(SELECT 1 FROM memory_evidence active WHERE active.entry_id=memory_entries.id AND active.outcome IN ('intent','started'))" + scope + " ORDER BY event_at,id", arguments,
                 ).use { c -> buildList {
                     while (c.moveToNext()) add(PersonalMemoryHit(c.getString(0), c.getString(1), c.getString(2), 0.0,
-                        c.getString(3), c.getStringOrNull(4), c.getStringOrNull(5), if (c.isNull(6)) null else c.getLong(6),
-                        c.getString(7), c.getLong(8)))
-                } }.filter { hit -> readCodingJobNarrationState(hit.id).none { it.admitted && !it.terminalConfirmed } }
+                        c.getString(3), c.getStringOrNull(4), MemoryObservationContent.topicDisplay(if(c.isNull(5)) null else c.getBlob(5)), if (c.isNull(6)) null else c.getLong(6),
+                        c.getString(7), c.getLong(8),
+                        topicKeyBytesBase64 = MemoryObservationContent.topicBase64(if(c.isNull(5)) null else c.getBlob(5)),
+                        topicKeyIsUtf8 = MemoryObservationContent.topicIsUtf8(if(c.isNull(5)) null else c.getBlob(5))))
+                } }.filter { hit -> !MemoryObservationHistory.hasBodyOverride(database, hit.id) && readCodingJobNarrationState(hit.id).none { it.admitted && !it.terminalConfirmed } &&
+                    CodingCancellationSemanticRepository(database).narrationStates(hit.id).none {it.recordKind=="ADMITTED_INTENT" && !it.resultConfirmed} }
             }
             if (selected == null) read(null)
             else selected.chunked(400).flatMap(::read)
@@ -402,7 +508,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         database.withChatReadTransaction { readEpisodeNarrationInput(id) }
 
     private fun readEpisodeNarrationInput(id: String): EpisodeNarrationInput? {
-        val head = sql.query("SELECT source_message_id,title,event_at,text FROM memory_entries WHERE id=? AND kind='episode' AND deleted_at IS NULL", arrayOf(id))
+        val head = sql.query("SELECT source_message_id,title,event_at,text FROM memory_entries WHERE id=? AND project='jarvys-central' AND scope='project' AND provenance='runtime' AND kind='episode' AND deleted_at IS NULL", arrayOf(id))
             .use { c -> if (c.moveToFirst()) EpisodeNarrationInput(id, c.getStringOrNull(0), c.getStringOrNull(1),
                 if (c.isNull(2)) null else c.getLong(2), emptyList(), text = c.getString(3)) else null } ?: return null
         val finalMessageId = sql.query(
@@ -413,7 +519,8 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
             .use { if (it.moveToFirst()) it.getStringOrNull(0) else null }
         return head.copy(evidence = readEpisodeEvidence(id), finalMessageId = finalMessageId,
             sourceFingerprint = episodeMessageFingerprint(sourceConversation, head.sourceMessageId),
-            finalFingerprint = episodeMessageFingerprint(sourceConversation, finalMessageId), codingJobs = readCodingJobNarrationState(id))
+            finalFingerprint = episodeMessageFingerprint(sourceConversation, finalMessageId), codingJobs = readCodingJobNarrationState(id),
+            codingCancellations = CodingCancellationSemanticRepository(database).narrationStates(id))
     }
 
     private fun readCodingJobNarrationState(id: String): List<CodingJobNarrationState> {
@@ -454,11 +561,10 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         state: String, title: String?, text: String?): Boolean {
         require(state in setOf("failed", "done"))
         return database.withChatWriteTransaction {
-            if (expected.id != id || expected.codingJobs.any { it.admitted && !it.terminalConfirmed } ||
+            if (MemoryObservationHistory.hasBodyOverride(database, id) || expected.id != id || expected.codingJobs.any { it.admitted && !it.terminalConfirmed } ||
+                expected.codingCancellations.any {it.recordKind=="ADMITTED_INTENT" && !it.resultConfirmed} ||
                 readEpisodeNarrationInput(id) != expected) return@withChatWriteTransaction false
-            sql.execSQL("UPDATE memory_entries SET narration=?,title=COALESCE(?,title),text=COALESCE(?,text),updated_at=? WHERE id=?",
-                arrayOf(state, title?.takeIf(String::isNotBlank), text?.takeIf(String::isNotBlank), System.currentTimeMillis(), id))
-            true
+            writeEpisodeNarration(id, state, title, text, expected.title, expected.text)
         }
     }
 
@@ -469,7 +575,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
             buildList {
                 for (group in ids.chunked(MAX_IN_IDS)) {
                     val marks = group.joinToString(",") { "?" }
-                    sql.query("SELECT id,title,event_at,narration FROM memory_entries WHERE kind='episode' AND source_conversation_id=? AND source_message_id IN ($marks) AND deleted_at IS NULL ORDER BY event_at,id",
+                    sql.query("SELECT id,title,event_at,narration FROM memory_entries WHERE project='jarvys-central' AND scope='project' AND provenance='runtime' AND kind='episode' AND source_conversation_id=? AND source_message_id IN ($marks) AND deleted_at IS NULL ORDER BY event_at,id",
                         (listOf(conversationId) + group).toTypedArray()).use { c ->
                         while (c.moveToNext()) add(EpisodeReference(c.getString(0), c.getStringOrNull(1),
                             if (c.isNull(2)) null else c.getLong(2), c.getString(3)))
@@ -482,9 +588,25 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     suspend fun setEpisodeNarration(id: String, state: String, title: String? = null, text: String? = null) {
         require(state in setOf("pending", "failed", "done"))
         database.withChatWriteTransaction {
-            sql.execSQL("UPDATE memory_entries SET narration=?,title=COALESCE(?,title),text=COALESCE(?,text),updated_at=? WHERE id=? AND kind='episode' AND deleted_at IS NULL",
-                arrayOf(state, title?.takeIf(String::isNotBlank), text?.takeIf(String::isNotBlank), System.currentTimeMillis(), id))
+            if (MemoryObservationHistory.hasBodyOverride(database, id)) return@withChatWriteTransaction
+            val current = readEpisodeNarrationInput(id) ?: return@withChatWriteTransaction
+            writeEpisodeNarration(id, state, title, text, current.title, current.text)
         }
+    }
+
+    private fun writeEpisodeNarration(id: String, state: String, title: String?, text: String?, oldTitle: String?, oldText: String): Boolean {
+        val preparedTitle = title?.let(MemoryObservationContent::prepareTitle)
+        val preparedText = text?.let { MemoryObservationContent.prepareContent(it).content }
+        // A completed response must supply actual narration; never certify its old fallback text.
+        if (state == "done" && (preparedTitle.isNullOrEmpty() || preparedText.isNullOrEmpty())) return false
+        val nextTitle = preparedTitle?.takeIf(String::isNotEmpty) ?: oldTitle
+        val nextText = preparedText?.takeIf(String::isNotEmpty) ?: oldText
+        val now = System.currentTimeMillis()
+        if (nextTitle != oldTitle || nextText != oldText)
+            MemoryObservationHistory.recordChange(database, id, nextText, nextTitle, "runtime", "episode_narration", now)
+        sql.execSQL("UPDATE memory_entries SET narration=?,title=?,text=?,updated_at=? WHERE id=? AND deleted_at IS NULL",
+            arrayOf(state, nextTitle, nextText, now, id))
+        return true
     }
 
     suspend fun extractionCursor(conversationId: String): Long = database.withChatReadTransaction {
@@ -515,6 +637,10 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         conversationId: String,
         memoryEnabled: Boolean,
         runKind: String = "principal",
+        namespace: MemoryNamespace = MemoryNamespace.centralRead(),
+        includeCanonicalMemory: Boolean = true,
+        reminder: String = "",
+        compactionSession: MemorySessionBinding? = null,
     ): PersonalAgentPromptContext {
         initialize()
         val kind = runKind.takeIf { it in setOf("principal", "task", "proactive", "subagent") } ?: "principal"
@@ -539,13 +665,13 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 while (cursor.moveToNext()) docs[cursor.getString(0)] = cursor.getString(1)
             }
             val includeProfile = memoryEnabled && kind in setOf("principal", "task", "proactive")
-            val includeMemory = memoryEnabled && kind == "principal"
+            val includeMemory = memoryEnabled && kind == "principal" && includeCanonicalMemory
             val directives = if (!includeProfile) emptyList() else sql.query(
                 "SELECT id,directive FROM user_directives WHERE scope='user' AND status='active' ORDER BY section,observed_at,id",
             ).use { cursor -> buildList { while (cursor.moveToNext()) add("[directive_id=${cursor.getString(0)}] ${cursor.getString(1)}") } }
-            val notes = if (!includeMemory) emptyList() else sql.query(
-                "SELECT text FROM memory_entries WHERE deleted_at IS NULL AND layer='curated' ORDER BY importance DESC,updated_at DESC",
-            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            val memoryContext = if (!includeMemory) "" else if(compactionSession == null) canonicalContext(namespace, reminder = reminder)
+                else CanonicalMemoryContext(database, observationClock).formatCompaction(namespace, compactionSession)
+                    ?.let { it + reminder }.orEmpty()
             val bootstrap = if (conversationId.isBlank()) false else sql.query(
                 "SELECT bootstrap_completed FROM agent_session_state WHERE conversation_id=? LIMIT 1", arrayOf(conversationId),
             ).use { it.moveToFirst() && it.getInt(0) != 0 }
@@ -559,11 +685,16 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 snapshotPrompt = docs["memory_snapshot"].orEmpty(),
                 consolidationPrompt = docs["memory_consolidation"].orEmpty(),
                 userProfile = renderBudgeted(directives, 8_000),
-                relevantMemory = renderBudgeted(notes, 4_000),
+                relevantMemory = memoryContext,
                 bootstrapCompleted = bootstrap || profile[5] == "1",
             )
         }
     }
+
+    /** Canonical memory context only; no bootstrap/session bookkeeping or usage mutation. */
+    suspend fun canonicalContext(namespace: MemoryNamespace = MemoryNamespace.centralRead(),
+        compact: Boolean = false, olderHistory: Boolean = false, maxBytes: Int = 16_384, reminder: String = ""): String =
+        CanonicalMemoryContext(database, observationClock).render(namespace, compact, olderHistory, maxBytes, reminder)
 
     suspend fun setDirective(
         section: String,
@@ -636,88 +767,159 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         }
     }
 
-    suspend fun saveMemory(text: String, layer: String, category: String?, importance: Double, sourceRef: String?): PersonalMemoryReceipt =
-        saveMemory(text, layer, category, importance, sourceRef, MemorySaveOptions())
-
     /**
      * Saves one memory entry. An active entry with the same [MemorySaveOptions.topicKey] is updated in place and
-     * keeps its revision history; without a key an identical active text is not saved twice. The receipt lists
+     * keeps its revision history; after a topic miss the scoped prepared title/type/content key uses the
+     * creation-time dedupe window. A duplicate increments its count, not its content revision. The receipt lists
      * overlapping entries so a later call can link them, and a failure of that lookup never fails the save.
      */
     suspend fun saveMemory(
         text: String, layer: String, category: String?, importance: Double, sourceRef: String?,
-        options: MemorySaveOptions,
+        options: MemorySaveOptions, namespace: MemoryNamespace = MemoryNamespace.central(),
+        operation: MemorySaveOperationInput? = null,
+        passive: PassiveMemoryInput? = null,
+        maintenance: MaintenanceMemoryBinding? = null,
+        compaction: CompactionMemoryBinding? = null,
     ): PersonalMemoryReceipt {
-        val cleaned = text.trim()
+        operation?.request?.let { request ->
+            check(request.text == text && request.layer == layer && request.category == category &&
+                java.lang.Double.doubleToLongBits(request.importance) == java.lang.Double.doubleToLongBits(importance) &&
+                request.sourceRef == sourceRef && request.options == options) { "memory_save_source_arguments_mismatch" }
+        }
+        val prepared = MemoryObservationContent.prepareContent(text)
+        val cleaned = prepared.content
         require(cleaned.isNotEmpty()) { "memory_empty" }
+        require(options.actor in setOf("user", "agent")) { "memory_actor_invalid" }
         require(layer in setOf("curated", "daily", "session_snapshot")) { "memory_layer_invalid" }
-        val kind = options.kind?.trim()?.takeIf(String::isNotEmpty)
-        require(kind == null || kind in MEMORY_KINDS) { "memory_kind_invalid" }
+        val type = options.type?.takeUnless { it.isEmpty() } ?: "manual"
         require(options.relation in LINK_RELATIONS) { "memory_relation_invalid" }
-        val topic = normalizeTopicKey(options.topicKey)
-        val title = options.title?.trim()?.takeIf(String::isNotEmpty)
+        val topic = MemoryObservationContent.normalizeTopicBytes(options.topicKey)
+        val title = MemoryObservationContent.prepareTitle(requireNotNull(options.title) { "memory_title_required" })
+        require(title.isNotEmpty()) { "memory_title_empty" }
+        val titleBytes = passive?.titleBytes ?: title.toByteArray(Charsets.UTF_8)
+        var writtenNamespace = namespace
         val receipt = database.withChatWriteTransaction {
-            val now = System.currentTimeMillis()
+            passive?.let {
+                check(operation == null && type == "passive" && options.actor == "agent" && topic == null) { "memory_passive_source_invalid" }
+                MemorySessionRepository(database).requirePassiveCurrent(it.binding)
+                MemorySessionRepository(database).renewCurrent(it.binding)
+                MemoryDeletionMarkers.requireAvailable(database,MemoryDeletionMarkers.passive(it.binding.sourceGeneration,it.binding.id,it.binding.runId,it.ordinal),namespace.project,namespace.scope)
+                check(sourceRef==MemoryDeletionMarkers.passive(it.binding.sourceGeneration,it.binding.id,it.binding.runId,it.ordinal).key &&
+                    it.titleBytes.contentEquals(MemoryPassiveCapture.rawTitle(text)) && options.sourceConversationId==it.binding.ownerConversation && options.sourceMessageId==it.binding.ownerMessageId && namespace.project==it.binding.project && namespace.scope=="project") { "memory_passive_source_invalid" }
+                check(!sql.query("SELECT 1 FROM memory_entries WHERE provenance='passive_capture' AND source_ref=? AND project=? AND scope=?",arrayOf(sourceRef,namespace.project,namespace.scope)).use { c -> c.moveToFirst() }) { "memory_passive_source_conflict" }
+            }
+            val preparedOperation = operation?.let { MemorySaveOperations.prepare(database, it) }
+            preparedOperation?.let { prepared ->
+                MemorySaveOperations.replay(database, namespace, prepared)?.let { return@withChatWriteTransaction it }
+                MemorySaveOperations.requireSessionForWrite(database, requireNotNull(operation), prepared)
+            }
+            val namespace = operation?.let { namespace.selectWrite(it.request.requestedProject, it.request.rawScope) } ?: namespace
+            writtenNamespace = namespace
+            val memorySessionId = compaction?.id ?: maintenance?.sessionId ?: passive?.binding?.id ?: preparedOperation?.source?.memorySessionId
+                ?: if(options.actor == "user") MemorySessionRepository(database).manualSession(namespace.project) else null
+            val now = observationClock()
+            fun committed(value: PersonalMemoryReceipt): PersonalMemoryReceipt {
+                if (preparedOperation != null) MemorySaveOperations.record(database, preparedOperation, value.id, namespace, now)
+                return if (preparedOperation == null) value else value.copy(operationReplayed = false)
+            }
+            val partition = namespace.partition()
+            (options.relatedIds + listOfNotNull(options.supersedesId)).filter { it.isNotBlank() }.forEach {
+                requireEntry(it.trim(), partition)
+            }
+            // Explicit links/retirement do not adopt their target's runtime identity. A same-key
+            // replacement must still pass the protected-origin guard BEFORE any target is retired.
+            topic?.let { key ->
+                sql.query("SELECT id FROM memory_entries WHERE topic_key=CAST(? AS TEXT) AND project=? AND scope=? AND deleted_at IS NULL",
+                    arrayOf(key, namespace.project, namespace.scope)).use { c ->
+                    while (c.moveToNext()) requireEntry(c.getString(0), partition, writableObservation = true)
+                }
+            }
             val replaced = options.supersedesId?.trim()?.takeIf(String::isNotEmpty)?.let { retireSuperseded(it, cleaned, options.actor, now) }
             val sameTopic = topic?.let { key ->
-                sql.query("SELECT id,text,title,kind,event_at,layer,category,importance FROM memory_entries WHERE topic_key=? AND deleted_at IS NULL LIMIT 1", arrayOf(key)).use { c ->
+                sql.query("SELECT id,text,title,kind,event_at,layer,category,importance FROM memory_entries WHERE topic_key=CAST(? AS TEXT) AND project=? AND scope=? AND deleted_at IS NULL LIMIT 1", arrayOf(key, namespace.project, namespace.scope)).use { c ->
                     if (c.moveToFirst()) TopicRow(c.getString(0), c.getString(1), c.getStringOrNullM1b("title"), c.getString(3),
                         if (c.isNull(4)) null else c.getLong(4), c.getString(5), c.getStringOrNullM1b("category"), c.getDouble(7)) else null
                 }
             }
-            val duplicate = if (sameTopic != null || topic != null) null else sql.query(
-                "SELECT id FROM memory_entries WHERE deleted_at IS NULL AND lower(trim(text))=lower(trim(?)) LIMIT 1",
-                arrayOf(cleaned),
+            sameTopic?.let { requireEntry(it.id, partition, writableObservation = true) }
+            val duplicate = if (sameTopic != null) null else sql.query(
+                "SELECT id FROM memory_entries WHERE normalized_hash=? AND project=? AND scope=? AND observation_type=? AND title=CAST(? AS TEXT) AND deleted_at IS NULL " +
+                    "AND datetime((created_at / 1000) - CASE WHEN created_at < 0 AND created_at % 1000 != 0 THEN 1 ELSE 0 END, 'unixepoch') " +
+                    ">= datetime(?, 'unixepoch', ?) ORDER BY created_at DESC LIMIT 1",
+                arrayOf(MemoryObservationContent.normalizedHash(cleaned), namespace.project, namespace.scope, type, titleBytes,
+                    Math.floorDiv(now, 1000L), MemoryObservationContent.dedupeWindowExpression(dedupeWindowMillis)),
             ).use { if (it.moveToFirst()) it.getString(0) else null }
             if (duplicate != null) {
+                requireEntry(duplicate, partition, writableObservation = true)
+                sql.execSQL("UPDATE memory_entries SET duplicate_count=duplicate_count+1,last_seen_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL",
+                    arrayOf(now, now, duplicate))
                 if (replaced != null) insertLink(duplicate, replaced, "supersedes", options.actor, null, now)
                 linkAll(duplicate, options, now)
-                return@withChatWriteTransaction PersonalMemoryReceipt(duplicate, "already_saved", revisionCount(duplicate))
+                return@withChatWriteTransaction committed(PersonalMemoryReceipt(duplicate, "already_saved", revisionCount(duplicate), observationType = observationType(duplicate)).withObservationState())
             }
             val id: String
             val status: String
             if (sameTopic != null) {
                 id = sameTopic.id
-                val unchanged = sameTopic.text == cleaned && (title == null || title == sameTopic.title) &&
-                    (kind == null || kind == sameTopic.kind) && (options.eventAtMs == null || options.eventAtMs == sameTopic.eventAt) &&
-                    layer == sameTopic.layer && (category == null || category == sameTopic.category) && importance == sameTopic.importance
-                if (unchanged) {
-                    if (replaced != null) insertLink(id, replaced, "supersedes", options.actor, null, now)
-                    linkAll(id, options, now)
-                    return@withChatWriteTransaction PersonalMemoryReceipt(id, "already_active", revisionCount(id))
-                }
+                MemoryObservationHistory.recordChange(database, id, cleaned, title, options.actor, "topic_update", now, forceSnapshot = true)
                 sql.execSQL(
-                    "UPDATE memory_entries SET text=?,title=COALESCE(?,title),kind=COALESCE(?,kind),layer=?,category=COALESCE(?,category)," +
-                        "importance=?,event_at=COALESCE(?,event_at),day=COALESCE(?,day),updated_at=? WHERE id=?",
-                    arrayOf(cleaned, title, kind, layer, category, importance, options.eventAtMs, options.eventAtMs?.let { dayOf(it) }, now, id),
-                )
-                sql.execSQL(
-                    "INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                    arrayOf(UUID.randomUUID().toString(), "memory", id, sameTopic.text, cleaned, options.actor, "topic_update", now),
+                    "UPDATE memory_entries SET tool_name=NULL,text=?,title=?,observation_type=?,layer=?,category=COALESCE(?,category)," +
+                        "importance=?,event_at=COALESCE(?,event_at),day=COALESCE(?,day),updated_at=?,last_seen_at=?,memory_session_id=COALESCE(?,memory_session_id) WHERE id=?",
+                    arrayOf(cleaned, title, type, layer, category, importance, options.eventAtMs, options.eventAtMs?.let { dayOf(it) }, now, now, memorySessionId, id),
                 )
                 status = "updated"
             } else {
                 id = UUID.randomUUID().toString()
                 sql.execSQL(
                     "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at," +
-                        "created_at,updated_at,deleted_at,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,0,NULL,?,?,NULL,?,?,?,'none',?,?,?,NULL)",
+                        "created_at,updated_at,deleted_at,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq,project,scope,observation_type,normalized_hash,last_seen_at,memory_session_id,review_after) " +
+                        "VALUES(?,?,?,?,?,?,?,?,?,0,NULL,?,?,NULL,?,CAST(? AS TEXT),CAST(? AS TEXT),'none',?,?,?,NULL,?,?,?,?,?,?,?)",
                     arrayOf(id, layer, options.eventAtMs?.let { dayOf(it) } ?: LocalDate.now().toString(), cleaned, category, importance, "",
-                        options.actor, sourceRef, now, now, kind ?: "note", topic, title, options.eventAtMs,
-                        options.sourceConversationId?.takeIf(String::isNotBlank), options.sourceMessageId?.takeIf(String::isNotBlank)),
+                        if(passive == null) options.actor else "passive_capture", sourceRef, now, now, "note", topic, titleBytes, options.eventAtMs,
+                        options.sourceConversationId?.takeIf(String::isNotBlank), options.sourceMessageId?.takeIf(String::isNotBlank), namespace.project, namespace.scope, type, MemoryObservationContent.normalizedHash(cleaned), now, memorySessionId, MemoryReview.defaultAfter(type, now)),
                 )
                 sql.execSQL(
                     "INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
                     arrayOf(UUID.randomUUID().toString(), "memory", id, null, cleaned, options.actor, "save", now),
                 )
+                if(passive != null) sql.execSQL("UPDATE memory_entries SET tool_name='session-end' WHERE id=?",arrayOf(id))
                 status = "saved"
             }
             if (replaced != null) insertLink(id, replaced, "supersedes", options.actor, null, now)
             linkAll(id, options, now)
-            PersonalMemoryReceipt(id, status, revisionCount(id))
+            committed(PersonalMemoryReceipt(id, status, revisionCount(id), observationType = observationType(id)).withObservationState())
         }
-        val candidates = runCatching { overlapping(receipt.id, kind, title, cleaned) }.getOrDefault(emptyList())
-        return receipt.copy(candidates = candidates)
+        if (receipt.operationReplayed == true) return receipt
+        val candidates = runCatching { overlapping(receipt.id, "note", title, cleaned, writtenNamespace.partition()) }.getOrDefault(emptyList())
+        return receipt.copy(candidates = candidates, project = writtenNamespace.project, scope = writtenNamespace.scope,
+            contentTruncated = prepared.truncated, contentOriginalBytes = prepared.originalBytes, contentLimitBytes = prepared.limitBytes)
+    }
+
+    /** One already-extracted learning, per-item atomicity; preliminary hash is never persisted. */
+    suspend fun capturePassiveItem(learning:String, ordinal:Int, binding:MemorySessionBinding, namespace:MemoryNamespace):Boolean = database.withChatWriteTransaction {
+        MemorySessionRepository(database).requirePassiveCurrent(binding)
+        check(namespace.project==binding.project && namespace.scope=="project") { "memory_passive_source_invalid" }
+        val identity=MemoryDeletionMarkers.passive(binding.sourceGeneration,binding.id,binding.runId,ordinal)
+        MemoryDeletionMarkers.requireAvailable(database,identity,namespace.project,namespace.scope)
+        val rawTitle=MemoryPassiveCapture.rawTitle(learning)
+        val existingProducer=sql.query("SELECT text,CAST(title AS BLOB),memory_session_id,source_conversation_id,source_message_id,deleted_at FROM memory_entries WHERE provenance='passive_capture' AND source_ref=? AND project=? AND scope=?",
+            arrayOf(identity.key,namespace.project,namespace.scope)).use { c ->
+            if(!c.moveToFirst()) false else {
+                check(c.isNull(5) && c.getString(0)==MemoryObservationContent.prepareContent(learning).content &&
+                    !c.isNull(1) && c.getBlob(1).contentEquals(rawTitle) && c.getString(2)==binding.id &&
+                    c.getString(3)==binding.ownerConversation && c.getString(4)==binding.ownerMessageId && !c.moveToNext()) { "memory_passive_source_conflict" }
+                true
+            }
+        }
+        if(existingProducer) return@withChatWriteTransaction false
+        val exists=sql.query("SELECT 1 FROM memory_entries WHERE normalized_hash=? AND project=? AND deleted_at IS NULL LIMIT 1",
+            arrayOf(MemoryObservationContent.normalizedHash(learning),namespace.project)).use { it.moveToFirst() }
+        if(exists) return@withChatWriteTransaction false
+        saveMemory(learning,"curated",null,0.5,identity.key,
+            MemorySaveOptions(actor="agent",title=MemoryObservationContent.topicDisplay(rawTitle),type="passive",
+                sourceConversationId=binding.ownerConversation,sourceMessageId=binding.ownerMessageId),
+            namespace,passive=PassiveMemoryInput(binding,ordinal,rawTitle))
+        true
     }
 
     private data class TopicRow(
@@ -725,8 +927,36 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         val layer: String, val category: String?, val importance: Double,
     )
 
+    private fun requireEntryIfPresent(id: String, namespace: MemoryNamespace): Boolean {
+        val exists = sql.query("SELECT 1 FROM memory_entries WHERE id=?", arrayOf(id)).use { it.moveToFirst() }
+        if (exists) requireEntry(id, namespace, includeDeleted = true)
+        return exists
+    }
+
+    private fun requireEntry(id: String, namespace: MemoryNamespace, writableObservation: Boolean = false, includeDeleted: Boolean = false) {
+        val (where, args) = namespace.clause()
+        val provenance = sql.query("SELECT provenance FROM memory_entries WHERE id=? AND $where" +
+            if (includeDeleted) "" else " AND deleted_at IS NULL", (listOf(id) + args).toTypedArray()).use {
+            if (it.moveToFirst()) it.getString(0) else throw IllegalStateException("memory_owner_or_target_denied")
+        }
+        if (writableObservation) {
+            val evidence = sql.query("SELECT 1 FROM memory_evidence WHERE entry_id=? LIMIT 1", arrayOf(id)).use { it.moveToFirst() }
+            require(provenance !in setOf("runtime", "compaction_flush", "daily_consolidation") && !evidence) { "memory_runtime_identity_conflict" }
+        }
+    }
+
+    /** Read actual post-mutation fields while caller still owns its Room transaction. */
+    private fun PersonalMemoryReceipt.withObservationState(): PersonalMemoryReceipt =
+        sql.query("SELECT duplicate_count,last_seen_at,pinned FROM memory_entries WHERE id=?", arrayOf(id)).use {
+            check(it.moveToFirst()) { "memory_not_found" }
+            copy(duplicateCount = it.getLong(0), lastSeenAt = if (it.isNull(1)) null else it.getLong(1), pinned = it.getInt(2) != 0)
+        }
+
+    private fun observationType(id: String): String = sql.query("SELECT observation_type FROM memory_entries WHERE id=?", arrayOf(id))
+        .use { check(it.moveToFirst()) { "memory_not_found" }; it.getString(0) }
+
     private fun revisionCount(id: String): Long = sql.query(
-        "SELECT COUNT(*) FROM memory_revisions WHERE target_type='memory' AND target_id=?", arrayOf(id),
+        "SELECT revision_count FROM memory_entries WHERE id=?", arrayOf(id),
     ).use { if (it.moveToFirst()) it.getLong(0).coerceAtLeast(1L) else 1L }
 
     /** Retires the entry a new one replaces: it leaves search and the prompt but its row, revisions and links stay. */
@@ -751,19 +981,26 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     }
 
     private fun insertLink(from: String, to: String, relation: String, actor: String, reason: String?, now: Long) {
+        // Caller holds the save transaction and has checked its authorized partition. Supersedes
+        // intentionally refers to the row retired by that same transaction; other targets are live.
+        check(sql.query("SELECT 1 FROM memory_entries f JOIN memory_entries t ON t.id=? WHERE f.id=? AND f.deleted_at IS NULL " +
+            "AND f.project=t.project AND f.scope=t.scope AND (?='supersedes' OR t.deleted_at IS NULL)",
+            arrayOf(to, from, relation)).use { it.moveToFirst() }) { "memory_link_target_missing" }
+        check(!sql.query("SELECT 1 FROM memory_links WHERE from_id=? AND to_id=? AND relation=? AND orphaned=1",
+            arrayOf(from, to, relation)).use { it.moveToFirst() }) { "memory_link_orphaned" }
         sql.execSQL(
-            "INSERT OR IGNORE INTO memory_links(from_id,to_id,relation,actor,reason,created_at) VALUES(?,?,?,?,?,?)",
-            arrayOf(from, to, relation, actor, reason, now),
+            "INSERT OR IGNORE INTO memory_links(from_id,to_id,relation,actor,reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            arrayOf(from, to, relation, actor, reason, now, now),
         )
     }
 
     /** Active entries of the same kind that share words with the saved one and are not linked to it yet. */
-    private suspend fun overlapping(id: String, kind: String?, title: String?, text: String): List<PersonalMemoryHit> {
+    private suspend fun overlapping(id: String, kind: String?, title: String?, text: String, namespace: MemoryNamespace): List<PersonalMemoryHit> {
         val effectiveKind = kind ?: database.withChatReadTransaction {
             sql.query("SELECT kind FROM memory_entries WHERE id=?", arrayOf(id)).use { if (it.moveToFirst()) it.getString(0) else "note" }
         }
         val linked = database.withChatReadTransaction {
-            sql.query("SELECT to_id FROM memory_links WHERE from_id=? UNION SELECT from_id FROM memory_links WHERE to_id=?", arrayOf(id, id)).use { c ->
+            sql.query("SELECT to_id FROM memory_links WHERE from_id=? AND orphaned=0 UNION SELECT from_id FROM memory_links WHERE to_id=? AND orphaned=0", arrayOf(id, id)).use { c ->
                 buildSet { while (c.moveToNext()) add(c.getString(0)) }
             }
         }
@@ -772,7 +1009,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         // Search one normalized term per query so LIKE fallback stays below SQLite's bind-variable limit.
         val candidates = LinkedHashMap<String, PersonalMemoryHit>()
         for (term in terms) {
-            for (hit in searchWithoutUsage(term, DEFAULT_MEMORY_SEARCH_LIMIT, MemorySearchFilter(kind = effectiveKind))) {
+            for (hit in searchWithoutUsage(term, DEFAULT_MEMORY_SEARCH_LIMIT, MemorySearchFilter(kind = effectiveKind), namespace)) {
                 if (hit.id != id && hit.id !in linked) candidates.putIfAbsent(hit.id, hit)
                 if (candidates.size >= DEFAULT_MEMORY_SEARCH_LIMIT) break
             }
@@ -782,7 +1019,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     }
 
     suspend fun dailyConsolidationCandidates(): List<PersonalMemoryCandidate> = database.withChatReadTransaction {
-        sql.query("SELECT id,text,importance FROM memory_entries WHERE layer='daily' AND deleted_at IS NULL ORDER BY day,created_at,id").use { cursor ->
+        sql.query("SELECT id,text,importance FROM memory_entries WHERE project='jarvys-central' AND scope='project' AND layer='daily' AND deleted_at IS NULL ORDER BY day,created_at,id").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
                     val text = cursor.getString(1)
@@ -793,107 +1030,153 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
     }
 
     /** Updates one audited curated digest while retaining every source note unchanged. */
-    suspend fun consolidateDailyNotes(sourceIds: List<String>, summary: String): PersonalMemoryReceipt {
+    suspend fun consolidateDailyNotes(sourceIds: List<String>, summary: String, maintenance:MaintenanceMemoryBinding?=null): PersonalMemoryReceipt {
         val ids = sourceIds.distinct().sorted()
-        val text = summary.trim()
+        val text = MemoryObservationContent.prepareContent(summary).content
         require(ids.isNotEmpty()) { "consolidation_sources_empty" }
         require(text.isNotEmpty()) { "consolidation_summary_empty" }
         val sourceRef = org.json.JSONArray(ids).toString()
         return database.withChatWriteTransaction {
             val placeholders = ids.joinToString(",") { "?" }
             val found = sql.query(
-                "SELECT id,text,importance FROM memory_entries WHERE layer='daily' AND deleted_at IS NULL AND id IN ($placeholders)",
+                "SELECT id,text,importance FROM memory_entries WHERE project='jarvys-central' AND scope='project' AND layer='daily' AND deleted_at IS NULL AND id IN ($placeholders)",
                 ids.toTypedArray(),
             ).use { cursor ->
                 buildList { while (cursor.moveToNext()) add(Triple(cursor.getString(0), cursor.getString(1), cursor.getDouble(2))) }
             }
             if (found.map { it.first }.toSet() != ids.toSet()) throw IllegalStateException("consolidation_source_changed")
             val now = System.currentTimeMillis()
-            val previous = sql.query(
-                "SELECT id,text,importance FROM memory_entries WHERE layer='curated' AND category='daily_consolidation' AND source_ref=? AND deleted_at IS NULL LIMIT 1",
-                arrayOf(sourceRef),
-            ).use { cursor -> if (cursor.moveToFirst()) Triple(cursor.getString(0), cursor.getString(1), cursor.getDouble(2)) else null }
+            MemoryDeletionMarkers.requireAvailable(database, MemoryDeletionMarkers.dailyDigest(ids))
+            val retained = RuntimeMemoryIdentity.dailyDigest(database, sourceRef)
+            if (retained != null && (retained.deleted || MemoryObservationHistory.hasBodyOverride(database, retained.id)))
+                return@withChatWriteTransaction PersonalMemoryReceipt(retained.id, if(retained.deleted) "forgotten" else "user_corrected", revisionCount(retained.id), project = MemoryNamespace.CENTRAL, scope = "project", observationType = observationType(retained.id)).withObservationState()
+            val previous = retained?.let { Triple(it.id,it.text,0.0) }
             if (previous != null) {
-                if (previous.second == text) return@withChatWriteTransaction PersonalMemoryReceipt(previous.first, "already_active", revisionCount(previous.first))
+                if (previous.second == text) return@withChatWriteTransaction PersonalMemoryReceipt(previous.first, "already_active", revisionCount(previous.first), project = MemoryNamespace.CENTRAL, scope = "project", observationType = observationType(previous.first)).withObservationState()
+                MemoryObservationHistory.recordChange(database, previous.first, text, retained?.title, "agent", "daily_consolidation", now)
                 sql.execSQL("UPDATE memory_entries SET text=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(text, now, previous.first))
-                sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                    arrayOf(UUID.randomUUID().toString(), "memory", previous.first, previous.second, text, "agent", "daily_consolidation", now))
-                return@withChatWriteTransaction PersonalMemoryReceipt(previous.first, "updated", revisionCount(previous.first))
+                return@withChatWriteTransaction PersonalMemoryReceipt(previous.first, "updated", revisionCount(previous.first), project = MemoryNamespace.CENTRAL, scope = "project", observationType = observationType(previous.first)).withObservationState()
             }
             val id = UUID.randomUUID().toString()
             val importance = found.map { it.third }.average()
             sql.execSQL(
-                "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at,kind,narration) " +
-                    "VALUES(?,'curated',?,?,?,?,?,'daily_consolidation',?,0,NULL,?,?,NULL,'digest','none')",
-                arrayOf(id, LocalDate.now().toString(), text, "daily_consolidation", importance, "", sourceRef, now, now),
+                "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at,kind,narration,project,scope,observation_type,normalized_hash,last_seen_at,memory_session_id,review_after) " +
+                    "VALUES(?,'curated',?,?,?,?,?,'daily_consolidation',?,0,NULL,?,?,NULL,'digest','none','jarvys-central','project','digest',?,?,?,?)",
+                arrayOf(id, LocalDate.now().toString(), text, "daily_consolidation", importance, "", sourceRef, now, now, MemoryObservationContent.normalizedHash(text), now, maintenance?.sessionId, MemoryReview.defaultAfter("digest", now)),
             )
             sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
                 arrayOf(UUID.randomUUID().toString(), "memory", id, null, text, "agent", "daily_consolidation", now))
-            PersonalMemoryReceipt(id, "saved", 1)
+            PersonalMemoryReceipt(id, "saved", 1, project = MemoryNamespace.CENTRAL, scope = "project", observationType = "digest").withObservationState()
         }
     }
 
-    suspend fun search(query: String, limit: Int = DEFAULT_MEMORY_SEARCH_LIMIT): List<PersonalMemoryHit> =
+    suspend fun search(query: String, limit: Int = 10): List<PersonalMemoryHit> =
         search(query, limit, MemorySearchFilter())
 
-    /**
-     * Ranked search over title, text and topic key, narrowed by [filter]. A query is optional when a filter is
-     * present: the result then comes straight from `memory_entries` and `memory_evidence`, newest first, so an
-     * episode without a narration yet is still found by date, tool, connector or outcome.
-     */
-    suspend fun search(query: String, limit: Int, filter: MemorySearchFilter): List<PersonalMemoryHit> {
-        val hits = searchWithoutUsage(query, limit, filter)
-        if (hits.isNotEmpty()) database.withChatWriteTransaction {
-            val now = System.currentTimeMillis()
-            hits.forEach { hit ->
-                sql.execSQL("UPDATE memory_entries SET usage_count=usage_count+1,last_used_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(now, hit.id))
+    /** Same-session window by local insertion ordinal; session membership never grants ownership. */
+    suspend fun timeline(id: String, before: Int = 5, after: Int = 5,
+        namespace: MemoryNamespace = MemoryNamespace.centralRead()): PersonalMemoryTimeline {
+        require(id.isNotBlank()) { "memory_timeline_observation_id_required" }
+        val beforeLimit = if (before <= 0) 5 else before
+        val afterLimit = if (after <= 0) 5 else after
+        val (focusGuard, focusArgs) = namespace.clause()
+        val owners = namespace.ids()
+        val (ownerGuard, ownerArgs) = owners.clause()
+        return database.withChatReadTransaction {
+            val identity = sql.query("SELECT rowid,memory_session_id FROM memory_entries WHERE id=? AND deleted_at IS NULL AND $focusGuard",
+                (listOf(id) + focusArgs).toTypedArray()).use { c ->
+                if (c.moveToFirst()) c.getLong(0) to (if(c.isNull(1)) null else c.getString(1)) else null
             }
+            requireNotNull(identity) { "memory_timeline_not_found" }
+            val focus = hydrate(listOf(id to 0.0), false, namespace).singleOrNull()
+            requireNotNull(focus) { "memory_timeline_not_found" }
+            val sessionId = identity.second
+            if (sessionId == null) return@withChatReadTransaction PersonalMemoryTimeline(focus, emptyList(), emptyList(), null, "unassociated", 0L)
+            fun neighbors(earlier: Boolean, limit: Int): List<PersonalMemoryHit> {
+                val comparison = if (earlier) "<" else ">"
+                val direction = if (earlier) "DESC" else "ASC"
+                val ids = sql.query("SELECT id FROM memory_entries WHERE memory_session_id=? AND rowid $comparison ? AND deleted_at IS NULL AND $ownerGuard ORDER BY rowid $direction LIMIT ?",
+                    (listOf<Any?>(sessionId, identity.first) + ownerArgs + limit).toTypedArray()).use { c ->
+                    buildList { while(c.moveToNext()) add(c.getString(0) to 0.0) }
+                }
+                return hydrate(if(earlier) ids.reversed() else ids, false, owners)
+            }
+            val preceding = neighbors(true, beforeLimit)
+            val following = neighbors(false, afterLimit)
+            val total = sql.query("SELECT COUNT(*) FROM memory_entries WHERE memory_session_id=? AND deleted_at IS NULL AND $ownerGuard",
+                (listOf(sessionId) + ownerArgs).toTypedArray()).use { c -> check(c.moveToFirst()); c.getLong(0) }
+            val session = sql.query("SELECT id,project,state,started_at,ended_at FROM memory_sessions WHERE id=? AND $ownerGuard",
+                (listOf(sessionId) + ownerArgs).toTypedArray()).use { c ->
+                if(c.moveToFirst()) PersonalMemoryTimelineSession(c.getString(0),c.getString(1),c.getString(2),c.getLong(3),if(c.isNull(4)) null else c.getLong(4)) else null
+            }
+            PersonalMemoryTimeline(focus, preceding, following, session, if(session == null) "session_unavailable" else "associated", total)
         }
-        return hits
     }
 
-    private suspend fun searchWithoutUsage(query: String, limit: Int, filter: MemorySearchFilter): List<PersonalMemoryHit> {
-        val cleaned = query.trim()
-        require(cleaned.isNotEmpty() || !filter.isEmpty) { "memory_search_requires_query_or_filter" }
-        val max = limit.coerceAtLeast(1)
-        val (filterSql, filterArgs) = filterClause(filter)
-        val match = if (cleaned.isEmpty()) null else PersonalMemoryFtsSql.matchExpression(cleaned)
-        if (match == null && filter.isEmpty) return emptyList()
+    /** Structured Jarvys discovery, including pending episodes, independent of lexical indexes. */
+    suspend fun listMemories(limit: Int = 8, filter: MemorySearchFilter = MemorySearchFilter(),
+        namespace: MemoryNamespace = MemoryNamespace.centralRead()): List<PersonalMemoryHit> {
+        val (domainSql, domainArgs) = filterClause(filter)
+        val (ownerSql, ownerArgs) = namespace.clause("m")
         return database.withChatReadTransaction {
-            val ranked: List<Pair<String, Double>> = when {
-                match == null -> sql.query(
-                    "SELECT m.id FROM memory_entries m WHERE m.deleted_at IS NULL $filterSql " +
-                        "ORDER BY COALESCE(m.event_at,m.created_at) DESC,m.updated_at DESC LIMIT ?",
-                    (filterArgs + max).toTypedArray(),
-                ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to 0.0) } }
-                else -> when (PersonalMemorySearchIndex.currentMode(sql)) {
-                    PersonalMemorySearchMode.FTS5 -> sql.query(
-                        PersonalMemoryFtsSql.fts5Search(filterSql),
-                        (listOf<Any?>(match) + filterArgs + max).toTypedArray(),
-                    ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getDouble(2)) } }
-                    PersonalMemorySearchMode.FTS4 -> {
-                        val exactMatch = PersonalMemoryFtsSql.exactMatchExpression(cleaned) ?: return@withChatReadTransaction emptyList()
-                        val documentCount = sql.query("SELECT COUNT(*) FROM memory_entries WHERE deleted_at IS NULL")
-                            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
-                        val exactScores = sql.query(PersonalMemoryFtsSql.fts4Search(filterSql), (listOf<Any?>(exactMatch) + filterArgs).toTypedArray()).use { cursor ->
-                            buildMap {
-                                while (cursor.moveToNext()) put(cursor.getString(0), PersonalMemoryFtsSql.fts4Score(cursor.getBlob(2), documentCount))
-                            }
-                        }
-                        // FTS4 MATCH handles exact terms consistently across Android builds. LIKE
-                        // supplies the FTS5-compatible prefix candidates; matchinfo refines exact hits.
-                        likeRanked(cleaned, Int.MAX_VALUE, filterSql, filterArgs)
-                            .map { (id, score) ->
-                                val matchInfoScore = exactScores[id] ?: return@map id to score
-                                id to score + matchInfoScore / (1.0 + kotlin.math.abs(matchInfoScore)) * 0.01
-                            }
-                            .sortedByDescending { it.second }
-                            .take(max)
-                    }
-                    PersonalMemorySearchMode.LIKE -> likeRanked(cleaned, max, filterSql, filterArgs)
+            val ids = sql.query("SELECT m.id FROM memory_entries m WHERE m.deleted_at IS NULL $domainSql AND $ownerSql " +
+                "ORDER BY COALESCE(m.event_at,m.created_at) DESC,m.updated_at DESC LIMIT ?",
+                (domainArgs + ownerArgs + limit.coerceAtLeast(1)).toTypedArray()).use { c ->
+                buildList { while (c.moveToNext()) add(c.getString(0) to 0.0) }
+            }
+            hydrate(ids, withEvidence = false, namespace = namespace)
+        }
+    }
+
+    /** Canonical observation search is read-only; manual browse and overlap discovery are separate callers. */
+    suspend fun search(query: String, limit: Int, filter: MemorySearchFilter, namespace: MemoryNamespace = MemoryNamespace.centralRead(), activity: com.jarvys.agent.MemorySessionActivity.Handle? = null): List<PersonalMemoryHit> =
+        searchWithoutUsage(query, limit, filter, namespace, activity)
+
+    private suspend fun searchWithoutUsage(query: String, limit: Int, filter: MemorySearchFilter, namespace: MemoryNamespace = MemoryNamespace.centralRead(), activity: com.jarvys.agent.MemorySessionActivity.Handle? = null): List<PersonalMemoryHit> {
+        val mode = CanonicalMemorySearch.normalizeMatchMode(filter.matchMode)
+        require(MemoryObservationContent.trimSpace(query).isNotEmpty()) { "memory_search_query_required" }
+        val terms = CanonicalMemorySearch.terms(query)
+        require(mode != "any" || terms.isNotEmpty()) { "memory_search_query_required" }
+        val max = CanonicalMemorySearch.normalizeLimit(limit)
+        val (domainSql, domainArgs) = filterClause(filter)
+        val (ownerSql, ownerArgs) = namespace.clause("m")
+        val filters = "$domainSql AND $ownerSql"
+        val args = domainArgs + ownerArgs
+        activity?.recordToolCall()
+        return database.withChatReadTransaction {
+            PersonalMemorySearchIndex.requireCanonical(sql)
+            val ranked = LinkedHashMap<String, Double>()
+            if (query.contains('/')) {
+                // Identity is the original query's bytes; never normalized or display-decoded.
+                sql.query("SELECT m.id FROM memory_entries m WHERE m.deleted_at IS NULL AND CAST(m.topic_key AS BLOB)=? $filters " +
+                    "ORDER BY ${CanonicalMemorySearch.date("m.updated_at")} DESC LIMIT ?",
+                    (listOf<Any?>(query.toByteArray(Charsets.UTF_8)) + args + max).toTypedArray()).use { c ->
+                    while (c.moveToNext()) ranked[c.getString(0)] = -1000.0
                 }
             }
-            hydrate(ranked, withEvidence = false)
+            if (terms.isNotEmpty()) {
+                val lexical = if (CanonicalMemorySearch.usesLike(terms)) {
+                    val columns = listOf("m.title", "m.text", "m.tool_name", "m.observation_type", "m.project", "m.topic_key")
+                    val group = columns.joinToString(" OR ", "(", ")") { "$it LIKE ? ESCAPE '\\'" }
+                    val predicate = terms.joinToString(if (mode == "any") " OR " else " AND ") { group }
+                    val termArgs = terms.flatMap { term -> List(columns.size) { CanonicalMemorySearch.likeTerm(term) } }
+                    sql.query("SELECT m.id,0.0 FROM memory_entries m WHERE m.deleted_at IS NULL AND ($predicate) $filters " +
+                        "ORDER BY ${CanonicalMemorySearch.date("m.updated_at")} DESC,m.rowid DESC LIMIT ?",
+                        (termArgs + args + max).toTypedArray())
+                } else {
+                    val raw = "bm25(memory_fts,5.0,1.0,0.0,0.0,0.0,3.0)"
+                    val seen = "COALESCE(julianday(${CanonicalMemorySearch.date("m.last_seen_at")}),julianday(${CanonicalMemorySearch.date("m.updated_at")}),julianday(${CanonicalMemorySearch.date("m.created_at")}),julianday(?))"
+                    val total = "(MAX(0,COALESCE(m.revision_count,0))+MAX(0,COALESCE(m.duplicate_count,0)))"
+                    val composite = "$raw*(1.0+CASE WHEN m.pinned THEN 0.10 ELSE 0.0 END+0.06/(1.0+MAX(0.0,julianday(?)-$seen)/30.0)+0.04*($total/($total+4.0)))"
+                    val nowInstant = java.time.Instant.ofEpochMilli(observationClock()).toString()
+                    sql.query("SELECT m.id,$raw AS raw_rank FROM memory_fts CROSS JOIN memory_entries m ON m.rowid=memory_fts.rowid " +
+                        "WHERE memory_fts MATCH ? AND m.deleted_at IS NULL $filters " +
+                        "ORDER BY $composite ASC,printf('%020d',m.rowid) ASC,m.rowid ASC LIMIT ?",
+                        (listOf<Any?>(CanonicalMemorySearch.matchExpression(terms, mode)) + args + listOf(nowInstant, nowInstant, max)).toTypedArray())
+                }
+                lexical.use { c -> while (c.moveToNext()) ranked.putIfAbsent(c.getString(0), c.getDouble(1)) }
+            }
+            hydrate(ranked.entries.take(max).map { it.key to it.value }, withEvidence = false, namespace = namespace)
         }
     }
 
@@ -902,6 +1185,7 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         val parts = ArrayList<String>()
         val args = ArrayList<Any?>()
         filter.kind?.let { parts += "m.kind=?"; args += it }
+        filter.observationType?.let { parts += "m.observation_type=?"; args += it }
         filter.fromMs?.let { parts += "COALESCE(m.event_at,m.created_at)>=?"; args += it }
         filter.toMsExclusive?.let { parts += "COALESCE(m.event_at,m.created_at)<?"; args += it }
         filter.sourceMessageId?.let {
@@ -922,46 +1206,51 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         PersonalMemorySearchIndex.currentMode(sql).storedValue
     }
 
-    private fun likeRanked(query: String, limit: Int, filterSql: String, filterArgs: List<Any?>): List<Pair<String, Double>> {
-        val terms = PersonalMemoryFtsSql.terms(query)
-        if (terms.isEmpty()) return emptyList()
-        val patterns = terms.map { "%${it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")}%" }
-        val haystack = "(COALESCE(m.title,'') || ' ' || m.text || ' ' || COALESCE(m.topic_key,''))"
-        val score = terms.joinToString(" + ") { "CASE WHEN $haystack LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END" }
-        val matches = terms.joinToString(" OR ") { "$haystack LIKE ? ESCAPE '\\'" }
-        val args = (patterns + patterns + filterArgs + limit.coerceAtLeast(1)).toTypedArray()
-        return sql.query(
-            "SELECT m.id,($score) AS score FROM memory_entries m " +
-                "WHERE m.deleted_at IS NULL AND ($matches) $filterSql " +
-                "ORDER BY score DESC,m.updated_at DESC LIMIT ?",
-            args,
-        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getDouble(1)) } }
-    }
-
     /**
      * Reads [ids] with their complete text, links and revision count, keeping the given order; with
      * [withEvidence] the evidence rows come too. Superseded and forgotten entries are not returned.
      */
-    suspend fun get(ids: List<String>, withEvidence: Boolean = false): List<PersonalMemoryHit> {
+    suspend fun get(ids: List<String>, withEvidence: Boolean = false, namespace: MemoryNamespace = MemoryNamespace.central(),
+        includeHistory: Boolean = false, historyCursor: Long = 0, historyLimit: Int = 50): List<PersonalMemoryHit> {
+        if (includeHistory) { require(historyCursor >= 0) { "memory_history_cursor_invalid" }; require(historyLimit in 1..100) { "memory_history_limit_invalid" } }
         if (ids.isEmpty()) return emptyList()
-        return database.withChatReadTransaction { hydrate(ids.distinct().map { it to 0.0 }, withEvidence) }
+        return database.withChatReadTransaction {
+            ids.distinct().forEach { requireEntryIfPresent(it, namespace.ids()) }
+            hydrate(ids.distinct().map { it to 0.0 }, withEvidence, namespace.ids()).map { hit ->
+                if (includeHistory) hit.copy(history = readVersionHistory(hit.id, historyLimit, historyCursor)) else hit
+            }
+        }
     }
 
-    private fun hydrate(ranked: List<Pair<String, Double>>, withEvidence: Boolean): List<PersonalMemoryHit> {
+    /** Explicit manual relation-inspection read, not a change to the ordinary live-only get API. */
+    internal suspend fun retainedRelationEndpoints(ids:List<String>,namespace:MemoryNamespace):List<PersonalMemoryHit> = database.withChatReadTransaction {
+        hydrate(ids.distinct().map { it to 0.0 },true,namespace.ids(),includeDeleted=true).map { hit ->
+            hit.copy(history=readVersionHistory(hit.id,50,0))
+        }
+    }
+
+    private fun hydrate(ranked: List<Pair<String, Double>>, withEvidence: Boolean, namespace: MemoryNamespace = MemoryNamespace.central(), includeDeleted: Boolean = false, reviewNow: Long = observationClock()): List<PersonalMemoryHit> {
         if (ranked.isEmpty()) return emptyList()
         val ids = ranked.map { it.first }
         val rows = HashMap<String, PersonalMemoryHit>()
+        val (ownerSql, ownerArgs) = namespace.clause()
         ids.chunked(MAX_IN_IDS).forEach { chunk ->
             val marks = chunk.joinToString(",") { "?" }
             sql.query(
-                "SELECT id,layer,kind,title,topic_key,text,event_at,narration,updated_at,created_at FROM memory_entries " +
-                    "WHERE id IN ($marks) AND deleted_at IS NULL",
-                chunk.toTypedArray(),
+                "SELECT id,layer,kind,CAST(title AS BLOB) AS title_bytes,CAST(topic_key AS BLOB) AS topic_key_bytes,text,event_at,narration,updated_at,created_at,project,scope,observation_type,duplicate_count,last_seen_at,pinned,deleted_at,memory_session_id,review_after FROM memory_entries " +
+                    "WHERE id IN ($marks) AND ${if (includeDeleted) "1" else "deleted_at IS NULL"} AND $ownerSql",
+                (chunk + ownerArgs).toTypedArray(),
             ).use { c ->
                 while (c.moveToNext()) rows[c.getString(0)] = PersonalMemoryHit(
                     id = c.getString(0), text = c.getString(5), layer = c.getString(1), score = 0.0, kind = c.getString(2),
-                    title = c.getStringOrNullM1b("title"), topicKey = c.getStringOrNullM1b("topic_key"),
-                    eventAt = if (c.isNull(6)) null else c.getLong(6), narration = c.getString(7), updatedAt = c.getLong(8),
+                    title = MemoryObservationContent.topicDisplay(if(c.isNull(3)) null else c.getBlob(3)),
+                    titleBytesBase64 = MemoryObservationContent.topicBase64(if(c.isNull(3)) null else c.getBlob(3)),
+                    titleIsUtf8 = MemoryObservationContent.topicIsUtf8(if(c.isNull(3)) null else c.getBlob(3)), topicKey = MemoryObservationContent.topicDisplay(if(c.isNull(4)) null else c.getBlob(4)),
+                    topicKeyBytesBase64 = MemoryObservationContent.topicBase64(if(c.isNull(4)) null else c.getBlob(4)),
+                    topicKeyIsUtf8 = MemoryObservationContent.topicIsUtf8(if(c.isNull(4)) null else c.getBlob(4)),
+                    eventAt = if (c.isNull(6)) null else c.getLong(6), narration = c.getString(7), updatedAt = c.getLong(8), project = c.getString(10), scope = c.getString(11), observationType = c.getString(12), duplicateCount = c.getLong(13), lastSeenAt = if (c.isNull(14)) null else c.getLong(14), pinned = c.getInt(15) != 0, deletedAt = if(c.isNull(16)) null else c.getLong(16),
+                    createdAt = c.getLong(9), memorySessionId = if(c.isNull(17)) null else c.getString(17),
+                    reviewAfter=c.getStringOrNull(18), reviewState=MemoryReview.state(c.getStringOrNull(18),reviewNow),
                 )
             }
         }
@@ -986,30 +1275,32 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
                 )
             }
             sql.query(
-                "SELECT l.from_id,l.to_id,l.relation,f.title,t.title FROM memory_links l " +
+                "SELECT l.from_id,l.to_id,l.relation,CAST(f.title AS BLOB),CAST(t.title AS BLOB) FROM memory_links l " +
                     "JOIN memory_entries f ON f.id=l.from_id JOIN memory_entries t ON t.id=l.to_id " +
-                    "WHERE l.from_id IN ($marks) OR l.to_id IN ($marks)",
-                (chunk + chunk).toTypedArray(),
+                    "WHERE l.orphaned=0 AND (l.from_id IN ($marks) OR l.to_id IN ($marks)) AND f.project=t.project AND f.scope=t.scope " +
+                    "AND ${namespace.ids().clause("f").first} AND ${namespace.ids().clause("t").first}",
+                (chunk + chunk + namespace.ids().clause("f").second + namespace.ids().clause("t").second).toTypedArray(),
             ).use { c ->
                 while (c.moveToNext()) {
                     val from = c.getString(0)
                     val to = c.getString(1)
-                    if (from in rows) links.getOrPut(from) { ArrayList() } += PersonalMemoryLinkView(c.getString(2), "out", to, if (c.isNull(4)) null else c.getString(4))
-                    if (to in rows) links.getOrPut(to) { ArrayList() } += PersonalMemoryLinkView(c.getString(2), "in", from, if (c.isNull(3)) null else c.getString(3))
+                    if (from in rows) links.getOrPut(from) { ArrayList() } += PersonalMemoryLinkView(c.getString(2), "out", to, MemoryObservationContent.topicDisplay(if(c.isNull(4)) null else c.getBlob(4)),MemoryObservationContent.topicBase64(if(c.isNull(4)) null else c.getBlob(4)),MemoryObservationContent.topicIsUtf8(if(c.isNull(4)) null else c.getBlob(4)))
+                    if (to in rows) links.getOrPut(to) { ArrayList() } += PersonalMemoryLinkView(c.getString(2), "in", from, MemoryObservationContent.topicDisplay(if(c.isNull(3)) null else c.getBlob(3)),MemoryObservationContent.topicBase64(if(c.isNull(3)) null else c.getBlob(3)),MemoryObservationContent.topicIsUtf8(if(c.isNull(3)) null else c.getBlob(3)))
                 }
             }
             sql.query(
-                "SELECT target_id,COUNT(*) FROM memory_revisions WHERE target_type='memory' AND target_id IN ($marks) GROUP BY target_id",
+                "SELECT id,revision_count FROM memory_entries WHERE id IN ($marks)",
                 chunk.toTypedArray(),
             ).use { c -> while (c.moveToNext()) revisions[c.getString(0)] = c.getLong(1) }
         }
+        val relations = MemoryRelationRepository(database).annotations(live,namespace)
         val scores = ranked.toMap()
         return live.map { id ->
             val hit = rows.getValue(id)
             val own = evidence[id].orEmpty()
             hit.copy(
                 score = scores.getValue(id), revision = revisions[id]?.coerceAtLeast(1L) ?: 1L,
-                label = labelFor(hit, own), links = links[id].orEmpty(), evidenceCount = own.size,
+                label = labelFor(hit, own), links = links[id].orEmpty(), relations = relations[id].orEmpty(), evidenceCount = own.size,
                 evidence = if (withEvidence) own else emptyList(),
             )
         }
@@ -1028,34 +1319,248 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         return listOf(hit.kind, day, detail.takeIf(String::isNotEmpty)).filterNotNull().joinToString(" ")
     }
 
-    suspend fun browse(): List<PersonalMemoryItem> {
+    suspend fun browse(namespace: MemoryNamespace = MemoryNamespace.centralRead(), includeDeleted: Boolean = false): List<PersonalMemoryItem> {
         initialize()
         return database.withChatReadTransaction {
             val result = ArrayList<PersonalMemoryItem>()
             sql.query("SELECT id,section,directive,status,observed_at FROM user_directives WHERE scope='user' AND status='active' ORDER BY observed_at DESC").use { cursor ->
                 while (cursor.moveToNext()) result += PersonalMemoryItem(cursor.getString(0), "profile", cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getLong(4))
             }
-            val ids = sql.query("SELECT id FROM memory_entries WHERE deleted_at IS NULL ORDER BY updated_at DESC").use { cursor ->
+            val ids = sql.query("SELECT id FROM memory_entries WHERE ${if (includeDeleted) "1" else "deleted_at IS NULL"} AND ${namespace.clause().first} ORDER BY updated_at DESC", namespace.clause().second.toTypedArray()).use { cursor ->
                 buildList { while (cursor.moveToNext()) add(cursor.getString(0) to 0.0) }
             }
-            hydrate(ids, withEvidence = false).forEach { hit ->
+            hydrate(ids, withEvidence = false, namespace = namespace, includeDeleted = includeDeleted).forEach { hit ->
                 result += PersonalMemoryItem(
-                    hit.id, "memory", hit.layer, hit.text, "active", hit.updatedAt,
-                    memoryKind = hit.kind, title = hit.title, label = hit.label, eventAt = hit.eventAt, narration = hit.narration,
+                    hit.id, "memory", hit.layer, hit.text, if(hit.deletedAt == null) "active" else "deleted", hit.updatedAt,
+                    memoryKind = hit.kind, title = hit.title, label = hit.label, eventAt = hit.eventAt, narration = hit.narration, pinned = hit.pinned, project = hit.project, scope = hit.scope, deletedAt = hit.deletedAt, titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8, reviewAfter=hit.reviewAfter,reviewState=hit.reviewState,
                 )
             }
             result.sortedByDescending { it.updatedAt }
         }
     }
 
-    suspend fun forget(id: String): PersonalMemoryReceipt = database.withChatWriteTransaction {
-        val old = sql.query("SELECT text FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id)).use { if (it.moveToFirst()) it.getString(0) else null }
+    /** SQL eligibility intentionally follows SQLite datetime, separate from virtual display parsing. */
+    suspend fun memoriesNeedingReview(namespace:MemoryNamespace, limit:Long=20, now:Long=observationClock()):List<PersonalMemoryHit> = database.withChatReadTransaction {
+        val selected=namespace.projectOnly()
+        val (guard,args)=selected.clause()
+        val ids=sql.query("SELECT id FROM memory_entries WHERE deleted_at IS NULL AND review_after IS NOT NULL AND datetime(review_after)<=datetime(?) AND $guard ORDER BY datetime(review_after) ASC,rowid ASC LIMIT ?",
+            (listOf<Any?>(MemoryReview.timestamp(now))+args+listOf(if(limit<=0) 20L else limit)).toTypedArray()).use { c ->
+            buildList { while(c.moveToNext()) add(c.getString(0) to 0.0) }
+        }
+        hydrate(ids,false,selected,reviewNow=now)
+    }
+
+    suspend fun reviewItems(namespace:MemoryNamespace,limit:Long=20):List<PersonalMemoryItem> = memoriesNeedingReview(namespace,limit).map { hit ->
+        PersonalMemoryItem(hit.id,"memory",hit.layer,hit.text,"active",hit.updatedAt,memoryKind=hit.kind,title=hit.title,label=hit.label,
+            eventAt=hit.eventAt,narration=hit.narration,pinned=hit.pinned,project=hit.project,scope=hit.scope,
+            titleBytesBase64=hit.titleBytesBase64,titleIsUtf8=hit.titleIsUtf8,reviewAfter=hit.reviewAfter,reviewState=hit.reviewState)
+    }
+
+    suspend fun markReviewed(id:String,expectedProject:String,namespace:MemoryNamespace):PersonalMemoryReviewReceipt = database.withChatWriteTransaction {
+        val project=MemoryNamespace.normalizeProject(expectedProject)
+        namespace.requireOwner(project)
+        val prior=sql.query("SELECT observation_type,review_after FROM memory_entries WHERE id=? AND project=? AND deleted_at IS NULL",arrayOf(id,project)).use { c ->
+            check(c.moveToFirst()) { "memory_not_found" }
+            c.getString(0) to c.getStringOrNull(1)
+        }
+        val now=observationClock()
+        val after=MemoryReview.defaultAfter(prior.first,now)
+        sql.execSQL("UPDATE memory_entries SET review_after=?,updated_at=? WHERE id=? AND project=? AND deleted_at IS NULL",arrayOf(after,now,id,project))
+        check(sql.query("SELECT changes()").use { it.moveToFirst();it.getLong(0)==1L }) { "memory_not_found" }
+        if(prior.second!=null && after==null) sql.execSQL("INSERT INTO memory_review_clear_events(event_key,observation_id) VALUES(?,?)",arrayOf(UUID.randomUUID().toString(),id))
+        sql.query("SELECT review_after,updated_at FROM memory_entries WHERE id=? AND project=? AND deleted_at IS NULL",arrayOf(id,project)).use { c ->
+            check(c.moveToFirst()) { "memory_not_found" }
+            PersonalMemoryReviewReceipt(id,project,c.getStringOrNull(0),MemoryReview.state(c.getStringOrNull(0),now),c.getLong(1))
+        }
+    }
+
+    /** Local explicit-clear intent only. Not an export transport, grant, or cloud ACK queue. */
+    internal suspend fun reviewClearEvents():List<MemoryReviewClearEvent> = database.withChatReadTransaction {
+        sql.query("SELECT c.id,c.event_key,c.observation_id FROM memory_review_clear_events c JOIN memory_entries e ON e.id=c.observation_id WHERE e.deleted_at IS NULL AND e.review_after IS NULL ORDER BY c.id").use { c ->
+            buildList { while(c.moveToNext()) add(MemoryReviewClearEvent(c.getLong(0),c.getString(1),c.getString(2))) }
+        }
+    }
+
+    /** Manual project discovery includes removed observations, but no unrelated conversation domains. */
+    suspend fun memoryProjects(namespace: MemoryNamespace = MemoryNamespace.central()): List<PersonalMemoryProjectSummary> =
+        database.withChatReadTransaction {
+            val (guard,args)=namespace.ids().clause()
+            val projects=sql.query("SELECT project FROM (SELECT project FROM memory_entries UNION SELECT project FROM memory_sessions UNION SELECT project FROM memory_prompts) WHERE $guard ORDER BY project",args.toTypedArray()).use { c -> buildList { while(c.moveToNext()) add(c.getString(0)) } }
+            projects.map { project ->
+                val rows=projectRowStamps(project); val live=rows.count { it.deletedAt==null }.toLong()
+                PersonalMemoryProjectSummary(project,live,rows.size.toLong()-live,rows.size.toLong(),rows.count { it.pinned }.toLong(),
+                    projectPromptStamps(project).size.toLong(),projectSessionStamps(project).size.toLong())
+            }
+        }
+
+    private fun projectPromptStamps(project:String):List<String> = sql.query("SELECT id,session_id,project,created_at FROM memory_prompts WHERE project=? ORDER BY id",arrayOf(project)).use { c -> buildList {
+        while(c.moveToNext()) add(org.json.JSONArray().put(c.getString(0)).put(c.getString(1)).put(c.getString(2)).put(c.getLong(3)).toString())
+    } }
+    private fun projectSessionStamps(project:String):List<String> = sql.query("SELECT id,project,state,started_at,ended_at FROM memory_sessions WHERE project=? ORDER BY id",arrayOf(project)).use { c -> buildList {
+        while(c.moveToNext()) add(org.json.JSONArray().put(c.getString(0)).put(c.getString(1)).put(c.getString(2)).put(c.getLong(3)).put(if(c.isNull(4)) org.json.JSONObject.NULL else c.getLong(4)).toString())
+    } }
+
+    private fun exactDeletionProject(project: String, namespace: MemoryNamespace): String {
+        val exact = MemoryObservationContent.trimSpace(project)
+        require(exact.isNotEmpty()) { "memory_project_required" }
+        namespace.requireOwner(exact)
+        return exact
+    }
+
+    /** Caller owns the read/write transaction. No normalization or implicit scope restriction. */
+    private fun projectRowStamps(project: String): List<MemoryProjectRowStamp> =
+        sql.query("SELECT id,project,scope,revision_count,updated_at,deleted_at,pinned FROM memory_entries WHERE project=? ORDER BY id",
+            arrayOf(project)).use { c -> buildList {
+            while(c.moveToNext()) add(MemoryProjectRowStamp(c.getString(0), c.getString(1), c.getString(2),
+                c.getLong(3), c.getLong(4), if(c.isNull(5)) null else c.getLong(5), c.getInt(6) != 0))
+        } }
+
+    suspend fun previewProjectDeletion(project: String, hardDelete: Boolean,
+        namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryProjectDeletionPreview {
+        val exact = exactDeletionProject(project, namespace)
+        return database.withChatReadTransaction {
+            val rows = projectRowStamps(exact)
+            val prompts=projectPromptStamps(exact); val sessions=projectSessionStamps(exact)
+            check(rows.isNotEmpty() || sessions.isNotEmpty()) { "memory_project_not_found" }
+            val live = rows.count { it.deletedAt == null }.toLong()
+            PersonalMemoryProjectDeletionPreview(exact, hardDelete, live, rows.size.toLong() - live,
+                rows.size.toLong(), rows.count { it.pinned }.toLong(), rows, prompts.size.toLong(), sessions.size.toLong(),
+                java.util.Collections.unmodifiableList(prompts), java.util.Collections.unmodifiableList(sessions))
+        }
+    }
+
+    /** Explicit manual confirmation. A preview binds only its stamped state, never grants ownership. */
+    suspend fun deleteProjectMemories(preview: PersonalMemoryProjectDeletionPreview,
+        namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryProjectDeletionReceipt {
+        val exact = exactDeletionProject(preview.project, namespace)
+        require(exact == preview.project) { "memory_project_preview_changed" }
+        return database.withChatWriteTransaction {
+            val rows = projectRowStamps(exact)
+            val promptStamps=projectPromptStamps(exact); val sessionStamps=projectSessionStamps(exact)
+            check(rows == preview.stamps && promptStamps == preview.promptStamps && sessionStamps == preview.sessionStamps) { "memory_project_preview_changed" }
+            check(rows.isNotEmpty() || sessionStamps.isNotEmpty()) { "memory_project_not_found" }
+            val now = System.currentTimeMillis()
+            val sessionRepo=MemorySessionRepository(database)
+            fun finishDomains(observationsDeleted:Long):PersonalMemoryProjectDeletionReceipt {
+                val promptIds=sql.query("SELECT id FROM memory_prompts WHERE project=? ORDER BY id",arrayOf(exact)).use { c -> buildList { while(c.moveToNext()) add(c.getString(0)) } }
+                promptIds.forEach { sessionRepo.purgePrompt(it,now) }
+                var sessionsDeleted=0L
+                if(preview.hardDelete) {
+                    val ids=sql.query("SELECT s.id FROM memory_sessions s WHERE s.project=? AND NOT EXISTS(SELECT 1 FROM memory_entries e WHERE e.memory_session_id=s.id) AND NOT EXISTS(SELECT 1 FROM memory_prompts p WHERE p.session_id=s.id)",arrayOf(exact)).use { c -> buildList { while(c.moveToNext()) add(c.getString(0)) } }
+                    ids.forEach { id ->
+                        sql.execSQL("INSERT OR IGNORE INTO memory_session_tombstones(id,project,deleted_at) VALUES(?,?,?)",arrayOf(id,exact,now))
+                        sql.execSQL("DELETE FROM memory_sessions WHERE id=?",arrayOf(id)); sessionsDeleted++
+                    }
+                }
+                return PersonalMemoryProjectDeletionReceipt(exact,preview.hardDelete,observationsDeleted,promptsDeleted=promptIds.size.toLong(),sessionsDeleted=sessionsDeleted)
+            }
+            if (preview.hardDelete) {
+                // Validate every protected producer and establish all markers before purging payload.
+                rows.forEach { MemoryDeletionMarkers.insertForTarget(database, it.id, it.project, it.scope, now) }
+                rows.forEach { sql.execSQL("DELETE FROM memory_review_clear_events WHERE observation_id=?",arrayOf(it.id)) }
+                rows.forEach { purgeMemoryTargetInTransaction(it.id, now) }
+                finishDomains(rows.size.toLong())
+            } else {
+                val live = rows.filter { it.deletedAt == null }
+                live.forEach { row ->
+                    val text = sql.query("SELECT text FROM memory_entries WHERE id=?", arrayOf(row.id)).use { c ->
+                        check(c.moveToFirst()) { "memory_project_preview_changed" }; c.getString(0)
+                    }
+                    softDeleteMemoryTargetInTransaction(row.id, text, now)
+                }
+                finishDomains(live.size.toLong())
+            }
+        }
+    }
+
+    /** Internal primitives only: caller must already own the complete authorization/write transaction. */
+    private fun softDeleteMemoryTargetInTransaction(id: String, text: String, now: Long) {
+        sql.execSQL("UPDATE memory_entries SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(now, now, id))
+        sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            arrayOf(UUID.randomUUID().toString(), "memory", id, text, null, "user", "forget", now))
+    }
+    private fun purgeMemoryTargetInTransaction(id: String, now: Long) {
+        MemoryRelationRepository(database).orphan(id,now)
+        sql.execSQL("UPDATE memory_links SET orphaned=1,updated_at=? WHERE from_id=? OR to_id=?", arrayOf(now, id, id))
+        sql.execSQL("DELETE FROM memory_revisions WHERE target_type='memory' AND target_id=?", arrayOf(id))
+        sql.execSQL("DELETE FROM memory_entries WHERE id=?", arrayOf(id))
+    }
+
+    /** Pin is local state, not a content edit, activity timestamp or new evidence authority. */
+    suspend fun setPinned(id: String, pinned: Boolean, namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryReceipt =
+        database.withChatWriteTransaction {
+            val (ownerSql, ownerArgs) = namespace.ids().clause()
+            check(sql.query("SELECT 1 FROM memory_entries WHERE id=? AND deleted_at IS NULL AND $ownerSql",
+                (listOf(id) + ownerArgs).toTypedArray()).use { it.moveToFirst() }) { "memory_not_found" }
+            sql.execSQL("UPDATE memory_entries SET pinned=? WHERE id=? AND deleted_at IS NULL", arrayOf(if (pinned) 1 else 0, id))
+            sql.query("SELECT project,scope,observation_type,revision_count,pinned FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id)).use { c ->
+                check(c.moveToFirst()) { "memory_not_found" }
+                PersonalMemoryReceipt(id, if (c.getInt(4) != 0) "pinned" else "unpinned", c.getLong(3),
+                    project = c.getString(0), scope = c.getString(1), observationType = c.getString(2)).withObservationState()
+            }
+        }
+
+    /** Manual observation deletion; expected project is a precondition, never an ownership grant. */
+    suspend fun deleteObservation(id: String, expectedProject: String,
+        namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryReceipt {
+        require(MemoryObservationContent.trimSpace(expectedProject).isNotEmpty()) { "memory_expected_project_required" }
+        val expected = MemoryNamespace.normalizeProject(expectedProject)
+        return database.withChatWriteTransaction {
+            val (ownerSql, ownerArgs) = namespace.ids().clause()
+            val old = sql.query("SELECT text,project,scope FROM memory_entries WHERE id=? AND deleted_at IS NULL AND $ownerSql",
+                (listOf(id) + ownerArgs).toTypedArray()).use { c ->
+                check(c.moveToFirst()) { "memory_not_found" }
+                Triple(c.getString(0), c.getString(1), c.getString(2))
+            }
+            require(old.second == expected) { "memory_expected_project_mismatch" }
+            val now = System.currentTimeMillis()
+            softDeleteMemoryTargetInTransaction(id, old.first, now)
+            PersonalMemoryReceipt(id, "forgotten", revisionCount(id), project = old.second, scope = old.third,
+                observationType = observationType(id)).withObservationState()
+        }
+    }
+
+    /** Permanent target purge for the explicit manual UI; original technical ledgers are not deleted. */
+    suspend fun hardDeleteObservation(id: String, expectedProject: String,
+        namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryDeletionReceipt {
+        require(MemoryObservationContent.trimSpace(expectedProject).isNotEmpty()) { "memory_expected_project_required" }
+        val expected = MemoryNamespace.normalizeProject(expectedProject)
+        return database.withChatWriteTransaction {
+            val (ownerSql, ownerArgs) = namespace.ids().clause()
+            val owner = sql.query("SELECT project,scope FROM memory_entries WHERE id=? AND $ownerSql",
+                (listOf(id) + ownerArgs).toTypedArray()).use { c ->
+                check(c.moveToFirst()) { "memory_not_found" }
+                c.getString(0) to c.getString(1)
+            }
+            require(owner.first == expected) { "memory_expected_project_mismatch" }
+            val now = System.currentTimeMillis()
+            MemoryDeletionMarkers.insertForTarget(database, id, owner.first, owner.second, now)
+            purgeMemoryTargetInTransaction(id, now)
+            PersonalMemoryDeletionReceipt(id, owner.first, owner.second)
+        }
+    }
+
+    /** Explicit manual profile operation; an observation ID cannot enter this domain. */
+    suspend fun forgetDirective(id: String): PersonalMemoryReceipt = database.withChatWriteTransaction {
+        val directive = sql.query("SELECT directive FROM user_directives WHERE id=? AND scope='user' AND status='active'", arrayOf(id)).use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: throw IllegalStateException("memory_not_found")
+        sql.execSQL("UPDATE user_directives SET status='superseded',superseded_by=NULL WHERE id=? AND status='active'", arrayOf(id))
+        sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            arrayOf(UUID.randomUUID().toString(), "directive", id, directive, null, "user", "forget", System.currentTimeMillis()))
+        PersonalMemoryReceipt(id, "forgotten", 2, directive)
+    }
+
+    suspend fun forget(id: String, namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryReceipt = database.withChatWriteTransaction {
+        val memoryExists = requireEntryIfPresent(id, namespace.ids())
+        val old = sql.query("SELECT text,project,scope FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id)).use { if (it.moveToFirst()) Triple(it.getString(0),it.getString(1),it.getString(2)) else null }
         val now = System.currentTimeMillis()
         if (old != null) {
             sql.execSQL("UPDATE memory_entries SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(now, now, id))
-            sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "memory", id, old, null, "user", "forget", now))
-            return@withChatWriteTransaction PersonalMemoryReceipt(id, "forgotten", revisionCount(id))
+            sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "memory", id, old.first, null, "user", "forget", now))
+            return@withChatWriteTransaction PersonalMemoryReceipt(id, "forgotten", revisionCount(id), project = old.second, scope = old.third, observationType = observationType(id)).withObservationState()
         }
+        check(!memoryExists) { "memory_not_found" }
         val directive = sql.query("SELECT section,directive FROM user_directives WHERE id=? AND scope='user' AND status='active'", arrayOf(id)).use { c ->
             if (c.moveToFirst()) c.getString(0) to c.getString(1) else null
         } ?: throw IllegalStateException("memory_not_found")
@@ -1064,60 +1569,78 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         PersonalMemoryReceipt(id, "forgotten", 2, directive.second)
     }
 
-    suspend fun correct(id: String, newText: String): PersonalMemoryReceipt {
-        val next = newText.trim()
-        require(next.isNotEmpty()) { "memory_empty" }
+    suspend fun update(id: String, expectedProject: String, options: MemoryUpdateOptions,
+        namespace: MemoryNamespace = MemoryNamespace.central(), actor: String = "user"): PersonalMemoryReceipt {
+        require(actor in setOf("user", "agent")) { "memory_actor_invalid" }
+        require(MemoryObservationContent.trimSpace(expectedProject).isNotEmpty()) { "memory_expected_project_required" }
+        val expected = MemoryNamespace.normalizeProject(expectedProject)
+        namespace.requireOwner(expected)
+        val hasPair = options.find != null || options.replace != null
+        require(!hasPair || options.find != null && options.replace != null) { "memory_replace_pair_required" }
+        require(!hasPair || options.content == null) { "memory_content_replace_exclusive" }
+        require(!hasPair || options.find!!.toByteArray(Charsets.UTF_8).size <= MemoryObservationContent.LIMIT_BYTES &&
+            options.replace!!.toByteArray(Charsets.UTF_8).size <= MemoryObservationContent.LIMIT_BYTES) { "memory_replace_input_too_large" }
+        val metadata = options.title != null || options.type != null || options.scope != null || options.topicKey != null
+        require(metadata || options.content != null || hasPair) { "memory_update_empty" }
+        val suppliedTitle = options.title?.let(MemoryObservationContent::prepareTitle)
+        require(suppliedTitle == null || suppliedTitle.isNotEmpty()) { "memory_title_empty" }
+        val prepared = options.content?.let(MemoryObservationContent::prepareContent)
+        val suppliedContent = prepared?.content
+        require(suppliedContent == null || suppliedContent.isNotEmpty()) { "memory_content_required" }
+        val suppliedTopic = options.topicKey?.let(MemoryObservationContent::normalizeTopicBytes)
+        val suppliedScope = options.scope?.let(MemoryNamespace::normalizeScope)
         return database.withChatWriteTransaction {
-            val old = sql.query(
-                "SELECT text,layer,category,importance,source_ref,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq " +
-                    "FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id),
-            ).use { c ->
-                if (c.moveToFirst()) CorrectedRow(
-                    text = c.getString(0), layer = c.getString(1), category = c.getStringOrNullM1b("category"), importance = c.getDouble(3),
-                    sourceRef = c.getStringOrNullM1b("source_ref"), kind = c.getString(5), topicKey = c.getStringOrNullM1b("topic_key"),
-                    title = c.getStringOrNullM1b("title"), narration = c.getString(8), eventAt = if (c.isNull(9)) null else c.getLong(9),
-                    sourceConversationId = c.getStringOrNullM1b("source_conversation_id"),
-                    sourceMessageId = c.getStringOrNullM1b("source_message_id"), throughSeq = if (c.isNull(12)) null else c.getLong(12),
-                ) else null
+            requireEntry(id, namespace.ids())
+            val old = sql.query("SELECT text,CAST(title AS BLOB),observation_type,scope,CAST(topic_key AS BLOB),project,provenance FROM memory_entries WHERE id=? AND deleted_at IS NULL", arrayOf(id)).use { c ->
+                check(c.moveToFirst()) { "memory_not_found" }
+                UpdateRow(c.getString(0), if(c.isNull(1)) null else c.getBlob(1), c.getString(2), c.getString(3), if(c.isNull(4)) null else c.getBlob(4), c.getString(5), c.getString(6))
             }
-            if (old == null) {
-                val directive = sql.query("SELECT section,directive FROM user_directives WHERE id=? AND scope='user' AND status='active'", arrayOf(id)).use { c ->
-                    if (c.moveToFirst()) c.getString(0) to c.getString(1) else null
-                } ?: throw IllegalStateException("memory_not_found")
-                val now = System.currentTimeMillis()
-                val newId = UUID.randomUUID().toString()
-                sql.execSQL("UPDATE user_directives SET status='superseded',superseded_by=? WHERE id=? AND status='active'", arrayOf(newId, id))
-                sql.execSQL("INSERT INTO user_directives(id,scope,section,directive,status,observed_at,source_message_id,evidence,provenance,superseded_by) VALUES(?,?,?,?,'active',?,NULL,?,'explicit_user_statement',NULL)",
-                    arrayOf(newId, "user", directive.first, next, now, "Corrected from the personal memory screen or memory tool."))
-                sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "directive", id, directive.second, next, "user", "correct", now))
-                sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "directive", newId, null, next, "user", "profile_set", now))
-                return@withChatWriteTransaction PersonalMemoryReceipt(newId, "corrected", 2, next)
-            }
+            require(old.project == expected) { "memory_expected_project_mismatch" }
+            val nextContent = suppliedContent ?: if (hasPair) MemoryObservationContent.replace(old.text, options.find!!, options.replace!!) else old.text
+            if (hasPair && !metadata && nextContent == old.text)
+                return@withChatWriteTransaction PersonalMemoryReceipt(id, "unchanged", revisionCount(id), project = old.project, scope = old.scope, observationType = old.type).withObservationState()
+            val nextTitle = suppliedTitle?.toByteArray(Charsets.UTF_8) ?: old.title
+            val nextScope = suppliedScope ?: old.scope
+            val nextTopic = if (options.topicKey != null) suppliedTopic else old.topic
+            val protected = old.provenance in setOf("runtime", "compaction_flush", "daily_consolidation", "passive_capture") ||
+                sql.query("SELECT 1 FROM memory_evidence WHERE entry_id=? LIMIT 1", arrayOf(id)).use { it.moveToFirst() }
+            require(!protected || nextScope == old.scope && MemoryObservationContent.sameTopic(nextTopic, old.topic)) { "memory_runtime_identity_conflict" }
             val now = System.currentTimeMillis()
-            val newId = UUID.randomUUID().toString()
-            // The old row leaves first so a topic key it held is free for its replacement (one active row per key).
-            sql.execSQL("UPDATE memory_entries SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", arrayOf(now, now, id))
-            sql.execSQL(
-                "INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at," +
-                    "kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq) VALUES(?,?,?,?,?,?,?,?,?,0,NULL,?,?,NULL,?,?,?,?,?,?,?,?)",
-                arrayOf(newId, old.layer, old.eventAt?.let { dayOf(it) } ?: LocalDate.now().toString(), next, old.category, old.importance, "",
-                    "user_correction", old.sourceRef, now, now, old.kind, old.topicKey, old.title, old.narration, old.eventAt,
-                    old.sourceConversationId, old.sourceMessageId, old.throughSeq),
-            )
-            // Evidence describes what happened, not the wording of the note, so it moves to the corrected entry.
-            sql.execSQL("UPDATE memory_evidence SET entry_id=? WHERE entry_id=?", arrayOf(newId, id))
-            insertLink(newId, id, "supersedes", "user", null, now)
-            sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "memory", id, old.text, next, "user", "correct", now))
-            sql.execSQL("INSERT INTO memory_revisions(id,target_type,target_id,before_content,after_content,actor,cause,created_at) VALUES(?,?,?,?,?,?,?,?)", arrayOf(UUID.randomUUID().toString(), "memory", newId, old.text, next, "user", "correct", now))
-            PersonalMemoryReceipt(newId, "corrected", revisionCount(newId))
+            val bodyIntent = options.title != null || options.content != null || hasPair && nextContent != old.text
+            val revision = MemoryObservationHistory.recordChangeRaw(database, id, nextContent, nextTitle, actor,
+                if (bodyIntent) MemoryObservationHistory.BODY_UPDATE else MemoryObservationHistory.METADATA_UPDATE, now)
+            sql.execSQL("UPDATE memory_entries SET text=?,title=CAST(? AS TEXT),observation_type=?,scope=?,topic_key=CAST(? AS TEXT),updated_at=? WHERE id=? AND deleted_at IS NULL",
+                arrayOf(nextContent, nextTitle, options.type ?: old.type, nextScope, nextTopic, now, id))
+            PersonalMemoryReceipt(id, "updated", revision, project = old.project, scope = nextScope,
+                contentTruncated = prepared?.truncated ?: false, contentOriginalBytes = prepared?.originalBytes, contentLimitBytes = prepared?.limitBytes, observationType = options.type ?: old.type).withObservationState()
         }
     }
 
-    private data class CorrectedRow(
-        val text: String, val layer: String, val category: String?, val importance: Double, val sourceRef: String?,
-        val kind: String, val topicKey: String?, val title: String?, val narration: String, val eventAt: Long?,
-        val sourceConversationId: String?, val sourceMessageId: String?, val throughSeq: Long?,
-    )
+    private data class UpdateRow(val text: String, val title: ByteArray?, val type: String, val scope: String,
+        val topic: ByteArray?, val project: String, val provenance: String)
+
+    suspend fun versionHistory(id: String, limit: Int, cursor: Long,
+        namespace: MemoryNamespace = MemoryNamespace.central()): PersonalMemoryHistoryPage {
+        require(limit in 1..100) { "memory_history_limit_invalid" }
+        require(cursor >= 0) { "memory_history_cursor_invalid" }
+        return database.withChatReadTransaction {
+            requireEntry(id, namespace.ids(), includeDeleted = true)
+            readVersionHistory(id, limit, cursor)
+        }
+    }
+
+    private fun readVersionHistory(id: String, limit: Int, cursor: Long): PersonalMemoryHistoryPage {
+        val total = sql.query("SELECT COUNT(*) FROM memory_revisions WHERE target_type='memory' AND target_id=? AND snapshot_version IS NOT NULL", arrayOf(id))
+            .use { it.moveToFirst(); it.getLong(0) }
+        val versions = sql.query("SELECT snapshot_version,CAST(before_title AS BLOB),before_content,created_at FROM memory_revisions WHERE target_type='memory' AND target_id=? AND snapshot_version IS NOT NULL" +
+            (if (cursor > 0) " AND snapshot_version<?" else "") + " ORDER BY snapshot_version DESC LIMIT ?",
+            (listOf<Any?>(id) + (if (cursor > 0) listOf(cursor) else emptyList()) + (limit + 1)).toTypedArray()).use { c ->
+            buildList { while (c.moveToNext()) add(PersonalMemoryVersion(c.getLong(0), MemoryObservationContent.topicDisplay(if(c.isNull(1)) null else c.getBlob(1)), c.getString(2), c.getLong(3),MemoryObservationContent.topicBase64(if(c.isNull(1)) null else c.getBlob(1)),MemoryObservationContent.topicIsUtf8(if(c.isNull(1)) null else c.getBlob(1)))) }
+        }
+        val more = versions.size > limit
+        val page = versions.take(limit).reversed()
+        return PersonalMemoryHistoryPage(page, total, more, if (more) page.first().version else null)
+    }
 
     suspend fun saveAgentProfile(name: String, vibe: String, emoji: String, bootstrapCompleted: Boolean = true): PersonalMemoryReceipt = database.withChatWriteTransaction {
         val now = System.currentTimeMillis()
@@ -1171,13 +1694,12 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         true
     }
 
-    suspend fun enqueueMemoryJob(conversationId: String?, type: String = "extract"): String = database.withChatWriteTransaction {
+    suspend fun enqueueMemoryJob(conversationId: String?, type: String = "extract", now:Long=System.currentTimeMillis()): String = database.withChatWriteTransaction {
         require(type in setOf("extract", "snapshot", "narrate", "daily_consolidate")) { "memory_job_type_invalid" }
         require((type == "daily_consolidate") == conversationId.isNullOrBlank()) { "memory_job_scope_invalid" }
         val existing = sql.query("SELECT id FROM memory_jobs WHERE job_type=? AND ((source_conversation_id=?) OR (source_conversation_id IS NULL AND ? IS NULL)) AND state IN ('queued','leased') ORDER BY created_at LIMIT 1", arrayOf(type, conversationId, conversationId)).use { if (it.moveToFirst()) it.getString(0) else null }
         if (existing != null) return@withChatWriteTransaction existing
         val id = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
         sql.execSQL("INSERT INTO memory_jobs(id,job_type,scope,source_conversation_id,state,lease_owner,lease_expires_at,attempts,available_at,last_error,created_at,updated_at) VALUES(?,?, 'user',?,'queued',NULL,NULL,0,?,NULL,?,?)", arrayOf(id, type, conversationId?.takeIf(String::isNotBlank), now, now, now))
         id
     }
@@ -1259,15 +1781,10 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
     private companion object {
-        val MEMORY_KINDS = setOf("fact", "preference", "decision", "episode", "digest", "note")
         val LINK_RELATIONS = setOf("related", "compatible", "conflicts_with")
 
         /** Two bind groups per id stay under SQLite's 999 variable limit. */
         const val MAX_IN_IDS = 400
-
-        /** A topic key is compared as typed, ignoring case and runs of whitespace, so "Auth Model" and "auth-model" are one topic. */
-        fun normalizeTopicKey(key: String?): String? = key?.trim()?.lowercase(java.util.Locale.ROOT)
-            ?.replace(Regex("\\s+"), "-")?.takeIf(String::isNotEmpty)
 
         fun dayOf(epochMillis: Long): String =
             java.time.LocalDate.ofInstant(java.time.Instant.ofEpochMilli(epochMillis), java.time.ZoneId.systemDefault()).toString()

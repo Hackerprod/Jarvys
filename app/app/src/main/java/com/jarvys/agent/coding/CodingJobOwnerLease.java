@@ -1,6 +1,8 @@
 package com.jarvys.agent.coding;
 
 import com.jarvys.agent.linux.CodingJobJournalWriter;
+import android.system.Os;
+import android.system.OsConstants;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -48,6 +50,13 @@ public final class CodingJobOwnerLease {
             if(failure instanceof IOException)throw (IOException)failure;
             throw new IOException("Could not establish Coding owner liveness",failure);
         }
+    }
+    private CodingCancellation.Issuer cancellationIssuer;
+    /** Exact manager issuer; no token registration, decoded identity, or replacement issuer. */
+    public synchronized CodingCancellation.Issuer cancellationIssuer() {
+        if(released)throw new IllegalStateException("Coding owner is released");
+        if(cancellationIssuer==null)cancellationIssuer=new CodingCancellation.Issuer(this);
+        return cancellationIssuer;
     }
     public String processId(){return PROCESS_ID;}
     public String managerId(){return managerId;}
@@ -99,8 +108,24 @@ public final class CodingJobOwnerLease {
         private final Handle handle;
         private final FileLock lock;
         private String registeredPath;
+        private final java.util.Map<File,Object> pathIdentities = new java.util.LinkedHashMap<>();
         private Probe(Liveness liveness,Handle handle,FileLock lock){this.liveness=liveness;this.handle=handle;this.lock=lock;}
         public Liveness liveness(){return liveness;}
+        /** The exact existing header and exclusively held lock, never an inferred PID/timeout. */
+        public void requireDeadOwner(File filesRoot,String process,String manager) throws IOException {
+            File expected=new File(filesRoot.getAbsoluteFile(),"jarvys/runtime-owners/coding/"+CodingJobEvidence.uuid(manager)+".lock");
+            verify(expected);
+            if(liveness!=Liveness.DEAD || registeredPath==null || !registeredPath.equals(expected.getPath()) ||
+                    lock==null || !lock.isValid() || handle==null)
+                throw new IOException("No exclusive lease for the exact recovered owner");
+            for(java.util.Map.Entry<File,Object> entry:pathIdentities.entrySet())
+                if(!entry.getValue().equals(pathIdentity(entry.getKey())))throw new IOException("Recovered owner path was replaced");
+            try {
+                byte[] bytes=header(CodingJobEvidence.uuid(process),manager);
+                if(!Arrays.equals(bytes,handle.read(bytes.length)))throw new IOException("Recovered owner header changed");
+            } catch(IOException failure){throw failure;}
+            catch(Exception failure){throw new IOException("Recovered owner identity is unavailable",failure);}
+        }
         @Override public void close() throws IOException {
             try {if(lock!=null&&lock.isValid())lock.release();}finally{if(handle!=null)handle.close();}
             if(registeredPath!=null)synchronized(LOCAL_FILES){LOCAL_FILES.remove(registeredPath,this);}
@@ -120,12 +145,17 @@ public final class CodingJobOwnerLease {
                     return new Probe(Liveness.ALIVE,null,null);
                 return new Probe(Liveness.UNKNOWN,null,null);
             }
+            Object existingIdentity=pathIdentity(file);
             opened=open(file,false);byte[] expected=header(process,manager);
             if(!Arrays.equals(expected,opened.read(expected.length))) {opened.close();return new Probe(Liveness.UNKNOWN,null,null);}
             try {held=opened.channel().tryLock();}catch(OverlappingFileLockException alive){opened.close();return new Probe(Liveness.ALIVE,null,null);}
             if(held==null){opened.close();return new Probe(Liveness.ALIVE,null,null);}
             if(!Arrays.equals(expected,opened.read(expected.length))){held.release();opened.close();return new Probe(Liveness.UNKNOWN,null,null);}
+            if(!existingIdentity.equals(pathIdentity(file)))throw new IOException("Owner path changed during probe");
             Probe probe=new Probe(Liveness.DEAD,opened,held);probe.registeredPath=file.getPath();
+            probe.pathIdentities.put(file,existingIdentity);
+            for(File directory=file.getParentFile(); directory!=null && (directory.equals(root)||directory.getPath().startsWith(root.getPath()+File.separator)); directory=directory.getParentFile())
+                probe.pathIdentities.put(directory,pathIdentity(directory));
             LOCAL_FILES.put(file.getPath(),probe);
             return probe;
         } catch(Exception unknown) {
@@ -134,6 +164,15 @@ public final class CodingJobOwnerLease {
             return new Probe(Liveness.UNKNOWN,null,null);
         }
         }
+    }
+    private static Object pathIdentity(File file) throws IOException {
+        verify(file);
+        if(!System.getProperty("java.vm.name","").contains("Dalvik"))return Host.pathIdentity(file);
+        try {
+            android.system.StructStat stat=Os.lstat(file.getPath());
+            if(!OsConstants.S_ISREG(stat.st_mode)&&!OsConstants.S_ISDIR(stat.st_mode))throw new IOException("Owner path is not ordinary");
+            return stat.st_dev+":"+stat.st_ino;
+        } catch(android.system.ErrnoException failure){throw new IOException("Owner path identity unavailable",failure);}
     }
     private static byte[] header(String process,String manager){return (HEADER+process+"\n"+manager+"\n").getBytes(StandardCharsets.US_ASCII);}
     private interface Handle extends AutoCloseable {
@@ -146,10 +185,17 @@ public final class CodingJobOwnerLease {
         return Host.open(file,create);
     }
     private static final class Host {
+        static Object pathIdentity(File file)throws IOException {
+            java.nio.file.attribute.BasicFileAttributes attributes=java.nio.file.Files.readAttributes(file.toPath(),
+                java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            if((!attributes.isRegularFile()&&!attributes.isDirectory())||attributes.fileKey()==null)
+                throw new IOException("Owner path identity unavailable");
+            return attributes.fileKey();
+        }
         static Handle open(File file,boolean create)throws IOException {
             final FileChannel channel=create
-                ? FileChannel.open(file.toPath(),java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.READ,java.nio.file.StandardOpenOption.WRITE)
-                : FileChannel.open(file.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.StandardOpenOption.WRITE);
+                ? FileChannel.open(file.toPath(),java.nio.file.StandardOpenOption.CREATE_NEW,java.nio.file.StandardOpenOption.READ,java.nio.file.StandardOpenOption.WRITE,java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                : FileChannel.open(file.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.StandardOpenOption.WRITE,java.nio.file.LinkOption.NOFOLLOW_LINKS);
             return new Handle(){
                 public FileChannel channel(){return channel;}
                 public void write(byte[] bytes)throws IOException{ByteBuffer buffer=ByteBuffer.wrap(bytes);while(buffer.hasRemaining())channel.write(buffer);}

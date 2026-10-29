@@ -105,9 +105,11 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 if (manager.bot(visible.id) != null) continue;
                 String issue = "Historical snapshot: no resumable transcript is available.";
                 try {
-                    CrewCheckpointStore.Snapshot saved = this.store.load(this.conversation, visible.id);
+                    CrewCheckpointStore.Snapshot discovered = this.store.load(this.conversation, visible.id);
+                    CrewCheckpointStore.ConfirmedSnapshot saved = discovered == null ? null :
+                            this.store.confirmDurable(this.conversation, visible.id, discovered.scopeIdentity);
                     if (saved != null) {
-                        JSONObject data = saved.metadata;
+                        JSONObject data = saved.metadataJson();
                         if (!this.conversation.equals(data.getString("conversationId")) || !visible.id.equals(data.getString("botId")) || !mission.missionId.equals(data.getString("missionId")) || !CrewCheckpointStore.sanitizeText(visible.mission).equals(data.getString("mission"))) {
                             throw new IllegalStateException("Checkpoint identity does not match its mission");
                         }
@@ -121,6 +123,11 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         WorkspaceConversationInputStore.acknowledgeApplied(this.context, this.conversation,
                                 saved.loop.appliedIncomingIds);
                         List<String> owners = strings(data.getJSONArray("jobOwners"));
+                        ProjectScope recoveredScope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
+                        if (!recoveredScope.durableIdentity().equals(saved.scopeIdentity))
+                            throw new IllegalStateException("Saved project identity changed");
+                        for (String owner : FlavorLinuxTools.correlatedCheckpointOwners(this.context, recoveredScope, saved))
+                            if (!owners.contains(owner)) owners.add(owner);
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
@@ -131,7 +138,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         boolean deliveryStateVersioned = data.has(CONVERSATION_DELIVERY_VERSION_FIELD);
                         String assignmentId = resolveAssignmentId(mission.missionId, visible.id,
                                 data.optString("assignmentId", ""));
-                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership,
+                        manager.restoreBot(presentation, precise, role, saved.loopForEvidence(), saved.artifactOwnershipJson(),
                                 saved.scopeIdentity, owners, data.getLong("completedCycles"),
                                 restoredMessages,
                                 decodeMessages(data.getJSONArray("pending"), visible.id, mission.missionId, true),
@@ -222,22 +229,34 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
     }
 
     @Override
+    public void beforeReconcile(CrewManager.Bot bot) {
+        try {
+            ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
+            if (!scope.durableIdentity().equals(bot.scopeIdentity()))
+                throw new IllegalStateException("Saved project identity changed");
+            FlavorLinuxTools.refreshCheckpointRecovery(this.context, scope);
+        } catch (java.io.IOException failure) {
+            throw new IllegalStateException("Saved project recovery is unavailable", failure);
+        }
+    }
+
+    @Override
     public CrewManager.ResumePlan reconcile(CrewManager.Bot bot) {
         try {
-            CrewCheckpointStore.Snapshot saved = this.store.load(this.conversation, bot.id);
+            CrewCheckpointStore.ConfirmedSnapshot saved = this.store.confirmDurable(this.conversation, bot.id, bot.scopeIdentity());
             if (saved == null || !saved.scopeIdentity.equals(bot.scopeIdentity())) {
                 throw new IllegalStateException("Saved checkpoint is missing or changed");
             }
             CrewRole role = this.currentRole.apply(bot);
             FlavorLinuxTools.validateProfileResume(this.context, role.tools);
-            ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation);
+            ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
             if (!scope.durableIdentity().equals(bot.scopeIdentity())) {
                 throw new IllegalStateException("Project root identity changed; the saved scope cannot be resumed");
             }
             CrewContextArtifacts artifacts = new CrewContextArtifacts(this.context.getFilesDir(), this.conversation, bot.id);
-            artifacts.restoreOwnership(saved.artifactOwnership);
+            artifacts.restoreOwnership(saved.artifactOwnershipJson());
             StringBuilder artifactRefs = new StringBuilder();
-            Iterator<String> artifactIds = saved.artifactOwnership.keys();
+            Iterator<String> artifactIds = saved.artifactOwnershipJson().keys();
             while (artifactIds.hasNext()) {
                 artifactRefs.append(artifactIds.next()).append("\n");
             }

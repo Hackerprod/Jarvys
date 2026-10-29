@@ -962,6 +962,11 @@ public final class LocalRunStore {
     }
 
     /** Atomically checks the latest active assistant, resolves its prompt owner, and hides it for regeneration. */
+    public boolean validateMemoryResumeReceipt(com.jarvys.agent.chatdb.MemorySessionResumeReceipt receipt) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.validateMemoryResumeReceipt(receipt);
+    }
+
     public RegenerationPromptValue regenerateAssistantIfLatest(String sessionId, String messageId) {
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.regenerateIfLatestAssistantSync(sessionId, messageId),
@@ -1728,6 +1733,13 @@ public final class LocalRunStore {
                 "persist model checkpoint and input acknowledgements");
     }
 
+    private static String memorySaveInputDigest(JSONObject call) {
+        Object value = call.opt("memorySaveInputDigest");
+        if (value == null || value == JSONObject.NULL) return null;
+        if (!(value instanceof String)) throw new IllegalArgumentException("Invalid memory save input digest");
+        return (String) value;
+    }
+
     private static com.jarvys.agent.chatdb.ModelTranscriptWrite modelTranscriptWrite(
             String sessionId, JSONObject row) {
         String type = row.optString("type");
@@ -1744,7 +1756,7 @@ public final class LocalRunStore {
                     if (arguments == null) arguments = new JSONObject();
                     calls.add(new com.jarvys.agent.chatdb.ModelCallInput(
                             call.optString("id"), call.optString("name"), arguments.toString(),
-                            artifactIds(call.optJSONArray("artifactIds"))));
+                            artifactIds(call.optJSONArray("artifactIds")), memorySaveInputDigest(call)));
                 }
                 String provider = row.optString("providerOutputItems", "");
                 if (provider.isEmpty()) provider = null;
@@ -1753,7 +1765,7 @@ public final class LocalRunStore {
                                 sessionId, row.optString("batchId"), emptyToNull(row.optString("userMessageId")),
                                 row.optLong("messageIndex"), row.optString("assistantText", ""),
                                 row.optBoolean("assistantProgress", true), calls, null, null, provider, time,
-                                artifactIds(row.optJSONArray("assistantTextArtifactIds"))));
+                                artifactIds(row.optJSONArray("assistantTextArtifactIds")), emptyToNull(row.optString("memorySessionId"))));
             }
             case "model_tool_started":
             case "model_tool_not_started":
@@ -1804,7 +1816,7 @@ public final class LocalRunStore {
                     if (arguments == null) arguments = new JSONObject();
                     calls.add(new com.jarvys.agent.chatdb.ModelCallInput(
                             call.optString("id"), call.optString("name"), arguments.toString(),
-                            artifactIds(call.optJSONArray("artifactIds"))));
+                            artifactIds(call.optJSONArray("artifactIds")), memorySaveInputDigest(call)));
                 }
                 String provider = row.optString("providerOutputItems", "");
                 if (provider.isEmpty()) provider = null;
@@ -1812,7 +1824,7 @@ public final class LocalRunStore {
                         sessionId, row.optString("batchId"), emptyToNull(row.optString("userMessageId")),
                         row.optLong("messageIndex"), row.optString("assistantText", ""),
                         row.optBoolean("assistantProgress", true), calls, null, null, provider, time,
-                        artifactIds(row.optJSONArray("assistantTextArtifactIds")));
+                        artifactIds(row.optJSONArray("assistantTextArtifactIds")), emptyToNull(row.optString("memorySessionId")));
                 requireChatDbSuccess(chatDatabaseBridge.appendToolBatchSync(batch), "append model tool batch");
                 return;
             }
@@ -2225,6 +2237,36 @@ public final class LocalRunStore {
             String summary, int firstKept, String trigger, String mode, int summarizedMessages,
             List<String> sourceArtifactIds, com.jarvys.agent.chatdb.CompactionCoverage coverage,
             com.jarvys.agent.chatdb.PreparedCompactionFlush prepared, String sessionKind) {
+        return appendCompactionPrepared(sessionId, summary, firstKept, trigger, mode, summarizedMessages,
+                sourceArtifactIds, coverage, prepared, sessionKind, null);
+    }
+
+    public com.jarvys.agent.chatdb.CompactionCoverage prepareProtectedCompactionCoverage(String sessionId, List<ConversationTurn> turns) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        List<ConversationTurn.Source> sources = new ArrayList<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.source() == null) throw new IllegalStateException("context_compaction_source_unavailable");
+            sources.add(turn.source());
+        }
+        return chatDatabaseBridge.prepareCompactionCoverageSync(sessionId, sources);
+    }
+
+    public com.jarvys.agent.chatdb.InteractionProtectionSnapshot readInteractionProtection(String sessionId) {
+        if (chatDatabaseBridge == null) throw noChatDatabase();
+        return chatDatabaseBridge.readInteractionProtectionSync(sessionId);
+    }
+
+    public synchronized com.jarvys.agent.chatdb.Compaction appendCompactionPrepared(String sessionId,
+            String summary, int firstKept, String trigger, String mode, int summarizedMessages,
+            List<String> sourceArtifactIds, com.jarvys.agent.chatdb.CompactionCoverage coverage,
+            com.jarvys.agent.chatdb.PreparedCompactionFlush prepared, String sessionKind, com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection) {
+        return appendCompactionPrepared(sessionId,summary,firstKept,trigger,mode,summarizedMessages,sourceArtifactIds,coverage,prepared,sessionKind,protection,null);
+    }
+    public synchronized com.jarvys.agent.chatdb.Compaction appendCompactionPrepared(String sessionId,
+            String summary,int firstKept,String trigger,String mode,int summarizedMessages,List<String> sourceArtifactIds,
+            com.jarvys.agent.chatdb.CompactionCoverage coverage,com.jarvys.agent.chatdb.PreparedCompactionFlush prepared,
+            String sessionKind,com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection,
+            com.jarvys.agent.chatdb.CompactionMemoryAttempt attempt) {
         if (summary == null || summary.trim().isEmpty()) throw new IllegalArgumentException("Compaction summary is empty");
         if (chatDatabaseBridge == null) throw noChatDatabase();
         return requireChatDbSuccess(chatDatabaseBridge.appendCompactionPreparedSync(
@@ -2232,7 +2274,7 @@ public final class LocalRunStore {
                         trigger == null ? "manual" : trigger, mode == null ? "all" : mode,
                         Math.max(0, summarizedMessages), System.currentTimeMillis() / 1000.0,
                         sourceArtifactIds == null ? Collections.emptyList() : new ArrayList<>(sourceArtifactIds)),
-                coverage, prepared, sessionKind), "append compaction with exact flush binding");
+                coverage, prepared, sessionKind, protection, attempt), "append compaction with exact flush binding");
     }
 
     public synchronized boolean compactionFlushCompleted(String sessionId, String compactionId) {

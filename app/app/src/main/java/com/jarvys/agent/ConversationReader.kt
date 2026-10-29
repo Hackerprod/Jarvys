@@ -70,8 +70,66 @@ internal class ConversationReader(
         val hasOlder: Boolean get() = olderCursorSeq != null
     }
 
-    suspend fun loadConversationContext(conversationId: String): List<ConversationTurn> = readProjection {
-        val compaction = memory.activeCompaction(conversationId)
+    /** Lookup only: no write witness, admission, RESULT backfill or producer replay. */
+    private fun memorySaveReferences(conversationId: String,
+        namespace: com.jarvys.agent.chatdb.MemoryNamespace?,
+    ): Map<String, Map<String, String>> {
+        if (conversationId != WorkspaceIdentity.CENTRAL_SESSION || namespace == null) return emptyMap()
+        val generation = try {
+            com.jarvys.agent.chatdb.MemorySaveSourceIdentity.existingGeneration(database)
+        } catch (_: com.jarvys.agent.chatdb.MemorySaveSourceIdentity.InvalidSource) { null } ?: return emptyMap()
+        val calls = database.chatSql.query(
+            "SELECT c.batch_id,c.call_id FROM tool_calls c WHERE c.conversation_id=? AND c.name='memory_save' AND c.lifecycle='STARTED' " +
+                "AND NOT EXISTS(SELECT 1 FROM tool_results r WHERE r.conversation_id=c.conversation_id AND r.batch_id=c.batch_id AND r.call_id=c.call_id)",
+            arrayOf(conversationId),
+        ).use { c -> buildList { while(c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
+        val references = linkedMapOf<String, MutableMap<String, String>>()
+        for ((batch, call) in calls) {
+            val source = try {
+                com.jarvys.agent.chatdb.MemorySaveSourceIdentity.read(database, generation, conversationId, batch, call)
+            } catch (_: com.jarvys.agent.chatdb.MemorySaveSourceIdentity.InvalidSource) { null } ?: continue
+            val result = com.jarvys.agent.chatdb.MemorySaveOperations.lookup(database, namespace, source)
+            val text = when (result.status) {
+                com.jarvys.agent.chatdb.MemorySaveOperationStatus.NOT_RECORDED -> continue
+                com.jarvys.agent.chatdb.MemorySaveOperationStatus.COMMITTED_REFERENCE ->
+                    "MEMORY_SAVE_COMMITTED_REFERENCE: The save operation has a committed memory-ID reference: " +
+                        org.json.JSONObject.quote(checkNotNull(result.id)) +
+                        ". Its tool response was not durably recorded. This is a reference only, not a new effect receipt or historical content. It was not replayed."
+                com.jarvys.agent.chatdb.MemorySaveOperationStatus.EXPIRED ->
+                    "MEMORY_SAVE_REFERENCE_EXPIRED: The retained save operation's memory is unavailable or deleted. " +
+                        "Its tool response was not durably recorded. No content was recovered and the operation was not replayed."
+            }
+            references.getOrPut(batch) { linkedMapOf() }[call] = text
+        }
+        return references
+    }
+
+    suspend fun loadConversationContext(conversationId: String,
+        memoryRecoveryNamespace: com.jarvys.agent.chatdb.MemoryNamespace? = null,
+    ): List<ConversationTurn> = readProjection {
+        val protection = if (conversationId == WorkspaceIdentity.CENTRAL_SESSION)
+            com.jarvys.agent.chatdb.InteractionProtection(database).read(conversationId) else null
+        val active = memory.activeCompaction(conversationId)
+        // A persisted summary is never a substitute for protected originals. Missing boundary
+        // evidence takes the same conservative original-reader path, without rewriting storage.
+        val overlaps = active != null && protection != null && (protection.unsafeAnchor ||
+            protection.protectedSources.any { source ->
+                when (source.kind) {
+                    ConversationTurn.Source.Kind.MESSAGE -> database.chatSql.query(
+                        "SELECT message_index FROM messages WHERE conversation_id=? AND message_id=?",
+                        arrayOf(conversationId,source.sourceId)).use { !it.moveToFirst() || it.getLong(0) < active.first_kept }
+                    ConversationTurn.Source.Kind.BATCH, ConversationTurn.Source.Kind.BATCH_RESULT -> database.chatSql.query(
+                        "SELECT message_index FROM tool_batches WHERE conversation_id=? AND batch_id=?",
+                        arrayOf(conversationId,source.sourceId)).use { !it.moveToFirst() || it.getLong(0) < active.first_kept }
+                    else -> true
+                }
+            })
+        val priorCoverage = if(active != null && protection != null && !overlaps)
+            com.jarvys.agent.chatdb.CompactionMemoryRepository(database).prepare(conversationId,
+                listOf(ConversationTurn.Source(ConversationTurn.Source.Kind.COMPACTION,conversationId,active.compaction_id,null))) else null
+        val coverageOverlaps = active != null && protection != null && (priorCoverage == null ||
+            priorCoverage.leaves.any { it.source in protection.protectedSources })
+        val compaction = active.takeUnless { overlaps || coverageOverlaps }
         val modelSnapshot = transcript.readModelTranscript(conversationId)
         val modelRows = readModelRows(modelSnapshot, conversationId)
         val compactionRow = compaction?.let { active ->
@@ -85,7 +143,8 @@ internal class ConversationReader(
         val firstKept = compaction?.first_kept ?: 0L
         val messageRows = conversations.readMessagesAtOrAfterIndex(conversationId, firstKept)
         val modelJsonRows = modelRows.map { it.row }
-        val groups = MainChatTranscriptStore.restore(modelJsonRows, firstKept.toInt(), compactionRow)
+        val memoryReferences = memorySaveReferences(conversationId, memoryRecoveryNamespace)
+        val groups = MainChatTranscriptStore.restore(modelJsonRows, firstKept.toInt(), compactionRow, memoryReferences)
         val providerItems = MainChatTranscriptStore.restoreProviderOutputItems(
             modelJsonRows, firstKept.toInt(), compactionRow,
         )
@@ -154,6 +213,32 @@ internal class ConversationReader(
                 }
             }
         context
+    }
+
+    suspend fun readInteractionProtection(conversationId: String): com.jarvys.agent.chatdb.InteractionProtectionSnapshot =
+        readProjection { com.jarvys.agent.chatdb.InteractionProtection(database).read(conversationId) }
+
+    suspend fun validateProtectedContext(conversationId: String, turns: List<ConversationTurn>) = readProjection {
+        val projection = com.jarvys.agent.chatdb.InteractionProtection(database).read(conversationId)
+        if (conversationId == WorkspaceIdentity.CENTRAL_SESSION) {
+            check(!projection.unsafeAnchor) { "context_protected_source_anchor_unavailable" }
+            // Reuse the original Reader's visibility/status/protocol conversion. Excluded metadata
+            // can keep a group uncertain without requiring hidden text in the provider payload.
+            val visible = loadConversationContext(conversationId)
+            val visibleBySource = visible.filter { it.source() != null }.associateBy { it.source()!! }
+            for (turn in turns) {
+                val source = turn.source() ?: continue
+                if (source.conversationId != conversationId) error("context_protected_source_owner_mismatch")
+                val current = visibleBySource[source]
+                check(current != null) { "context_protected_payload_unavailable" }
+                if (source.kind == ConversationTurn.Source.Kind.MESSAGE)
+                    check(current.content == turn.content && current.role == turn.role) { "context_protected_payload_changed" }
+            }
+            val required = visible.mapNotNull { it.source() }.filter { it in projection.protectedSources }.toSet()
+            val present = turns.mapNotNull { it.source() }.toSet()
+            check(present.containsAll(required)) { "context_protected_payload_unavailable" }
+        }
+        projection
     }
 
     suspend fun readModelTranscript(conversationId: String): ModelTranscriptSnapshot =
@@ -549,7 +634,12 @@ internal class ConversationReader(
                         "NEVER_LAUNCHED" -> "tool_not_started"
                         else -> if (result.output.startsWith("Tool error:")) "tool_error" else "tool_result"
                     }
-                    events += AgentRunUiEvent.toolEvent(seq, stage, tool, result.output.ifEmpty { null }, resultEntry.callId, null, timestamp)
+                    val previewId = if (result.lifecycle == "RESULT" && stage == "tool_result"
+                        && result.tool_name == "preview_workspace"
+                        && batch?.calls?.singleOrNull { it.callId == resultEntry.callId }?.name == result.tool_name) {
+                        recordedModelPreview(conversationId, resultEntry.batchId, resultEntry.callId, result.output)
+                    } else null
+                    events += AgentRunUiEvent.toolEvent(seq, stage, tool, result.output.ifEmpty { null }, resultEntry.callId, previewId, timestamp)
                         .copyToolTimelineIdentity(key, owner)
                 }
                 "tool_presentation" -> {
@@ -1298,6 +1388,53 @@ internal class ConversationReader(
         return rows.sortedBy { it.position }
     }
 
+    /** Recovers only the recorded call's owned immutable preview, never its current workspace path. */
+    private suspend fun recordedModelPreview(conversationId: String, batchId: String, callId: String,
+                                            output: String): String? {
+        val fields = previewRecoveryFields(output, setOf("attached", "preview_available", "preview_id")) ?: return null
+        if (fields["attached"] != true || fields["preview_available"] != true) return null
+        val token = fields["preview_id"] as? String ?: return null
+        if (!HtmlPreviewDescriptor.isSnapshotToken(token)) return null
+        // Timeline batches intentionally omit opaque arguments. Fetch only this exact call, bounded
+        // before materialization, under the existing read fence; never load a whole/latest batch.
+        val arguments = database.chatSql.query(
+            "SELECT arguments_json FROM tool_calls WHERE conversation_id=? AND batch_id=? AND call_id=? " +
+                "AND name='preview_workspace' AND length(arguments_json)<=?",
+            arrayOf<Any>(conversationId, batchId, callId, PREVIEW_RECOVERY_JSON_CHARS),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else cursor.getString(0).takeIf { !cursor.moveToNext() }
+        } ?: return null
+        val path = previewRecoveryFields(arguments, setOf("path"))?.get("path") as? String ?: return null
+        if (path.isEmpty()) return null
+        return verifiedTimelinePreview(conversationId, token)
+    }
+
+    /** Same 16,384-character recovery budget as LocalRunStore's legacy modelPreviewToken. */
+    private fun previewRecoveryFields(json: String, wanted: Set<String>): Map<String, Any>? {
+        if (json.length > PREVIEW_RECOVERY_JSON_CHARS) return null
+        return try {
+            android.util.JsonReader(java.io.StringReader(json)).use { reader ->
+                reader.isLenient = false
+                val seen = HashSet<String>()
+                val fields = HashMap<String, Any>()
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    val name = reader.nextName()
+                    if (!seen.add(name)) return null
+                    if (name !in wanted) reader.skipValue()
+                    else when (reader.peek()) {
+                        android.util.JsonToken.BOOLEAN -> fields[name] = reader.nextBoolean()
+                        android.util.JsonToken.STRING -> fields[name] = reader.nextString()
+                        else -> return null
+                    }
+                }
+                reader.endObject()
+                if (reader.peek() != android.util.JsonToken.END_DOCUMENT) return null
+                fields
+            }
+        } catch (_: Exception) { null }
+    }
+
     /** Only a snapshot this conversation owns is a preview; a recorded workspace id has no viewer to open. */
     private suspend fun verifiedTimelinePreview(conversationId: String, recordedId: String): String? {
         if (!HtmlPreviewDescriptor.isSnapshotToken(recordedId)) return null
@@ -1447,3 +1584,6 @@ private fun StoredMessage.isMissionReference(): Boolean =
 private fun String.isTimelineToolResultStage(): Boolean = this in setOf(
     "tool_result", "tool_error", "tool_interrupted", "tool_not_started",
 )
+
+// Existing preview result-recovery bound, also used for the exact call arguments lookup.
+private const val PREVIEW_RECOVERY_JSON_CHARS = 16_384

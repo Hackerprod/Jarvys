@@ -34,7 +34,7 @@ object ApprovalNotificationCenter {
             val lines = summary.localizedLines?.map { it.resolve(localized) } ?: summary.lines
             val detail = (listOf(title) + lines + localized.getString(R.string.proactive_notification_approval_warning))
                 .filter(String::isNotBlank).joinToString("\n\n")
-            val openIntent = com.jarvys.agent.SingleSessionReset.stamp(Intent(app, MainActivity::class.java))
+            val openIntent = com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, MainActivity::class.java))
                 .putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, AgentRunUiState.state.value.sessionId.orEmpty())
                 .putExtra(EXTRA_APPROVAL_ID, id)
                 .setData(Uri.parse("jarvys://approval/${Uri.encode(id)}"))
@@ -66,7 +66,7 @@ object ApprovalNotificationCenter {
     private fun approvalAction(app: Context, id: String, decision: ApprovalDecision, label: String) =
         NotificationCompat.Action.Builder(0, label,
             PendingIntent.getBroadcast(app, (id.hashCode() * 31) + decision.ordinal,
-                com.jarvys.agent.SingleSessionReset.stamp(Intent(app, ApprovalActionReceiver::class.java))
+                com.jarvys.agent.FreshStorageBootstrap.stamp(Intent(app, ApprovalActionReceiver::class.java))
                     .setAction(ApprovalActionReceiver.ACTION_RESOLVE)
                     .putExtra(EXTRA_APPROVAL_ID, id)
                     .putExtra(ApprovalActionReceiver.EXTRA_DECISION, decision.name)
@@ -102,7 +102,7 @@ object ApprovalNotificationActionResolver {
 
 class ApprovalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (!com.jarvys.agent.SingleSessionReset.isCurrent(intent)) return
+        if (!com.jarvys.agent.FreshStorageBootstrap.isCurrent(intent)) return
         if (intent.action != ACTION_RESOLVE) return
         val id = intent.getStringExtra(ApprovalNotificationCenter.EXTRA_APPROVAL_ID).orEmpty()
         val decision = when (intent.getStringExtra(EXTRA_DECISION)) {

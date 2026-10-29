@@ -41,6 +41,14 @@ final class DeliverFileTool implements CoreTool {
     @Override public String auditDetail(Map<String, Object> arguments) { return "Deliver a local file to this conversation"; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+        return executeDelivery(arguments, token, null);
+    }
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token,
+            ProgressListener progress, EffectInvocation invocation) {
+        return executeDelivery(arguments, token, invocation);
+    }
+    private CoreToolResult executeDelivery(Map<String, Object> arguments, CancellationToken token,
+            EffectInvocation invocation) {
         token.throwIfCancelled();
         if (token.isCrewRun() || session == null || session.isEmpty()) return CoreToolResult.failure("File delivery is available only in the main chat.");
         try {
@@ -51,12 +59,32 @@ final class DeliverFileTool implements CoreTool {
                         || ((String) arguments.get("filename")).isEmpty() || ((String) arguments.get("filename")).length() > 1024))
                 return CoreToolResult.failure("Provide an existing scoped path and optional filename.");
             if (conversations.readConversationMetadata(session).deleted) return CoreToolResult.failure("This conversation was deleted.");
+            // Persist invocation admission before staging/copy/manifest IO; no artifact, UI or STOP lock is held here.
+            token.throwIfCancelled();
+            if (invocation != null) invocation.admit(new EffectInvocation.Admission(
+                    EffectInvocation.Authorization.ALLOW, "native", NAME, null, "native_contract"));
+            token.throwIfCancelled();
             ChatAttachment artifact = artifacts.snapshot(session, workspace, (String) arguments.get("path"),
                     (String) arguments.get("filename"), token);
             token.throwIfCancelled();
-            conversations.appendDeliveredFile(session, artifact);
-            AgentRunUiState.deliveredFileAdded(session, artifact);
-            return deliveryResult(session, artifact, artifacts);
+            com.jarvys.agent.chatdb.DeliveredArtifactCommit committed =
+                    conversations.appendDeliveredFileWithReceipt(session, artifact);
+            com.jarvys.agent.chatdb.ConversationArtifact owned = committed.getArtifact();
+            ChatAttachment delivered = new ChatAttachment(owned.getArtifact_id(), owned.getName(),
+                    owned.getMime_type(), owned.getSize_bytes(), ChatAttachment.Kind.valueOf(owned.getKind()),
+                    owned.getRelative_path());
+            if (!session.equals(owned.getConversation_id()) || !artifact.equals(delivered))
+                throw new IllegalStateException("Committed delivery identity changed");
+            AgentRunUiState.deliveredFileAdded(session, delivered);
+            CoreToolResult result = deliveryResult(session, delivered, artifacts);
+            if (invocation == null) return result; // Legacy direct-call compatibility is not owned effect evidence.
+            EffectInvocation.EffectReference reference = new EffectInvocation.EffectReference(
+                    EffectInvocation.EffectReferenceKind.DELIVERY, owned.getConversation_id(), owned.getArtifact_id());
+            // Snapshot work may have happened even for a duplicate; never claim NOT_EXECUTED from identity reuse.
+            return result.withEffectReceipt(invocation.receipt(
+                    committed.getInserted() ? EffectInvocation.Outcome.OK : EffectInvocation.Outcome.UNCERTAIN,
+                    committed.getInserted() ? EffectInvocation.CompletionSemantics.LOCAL_DELIVERY_CONFIRMED
+                            : EffectInvocation.CompletionSemantics.EXISTING_REFERENCE, reference));
         } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
         catch (IOException | IllegalArgumentException unavailable) {
             return CoreToolResult.failure("Could not attach file. Check that it is an ordinary file in this conversation's workspace, within 256 MiB, and that storage is available. No file was uploaded.");

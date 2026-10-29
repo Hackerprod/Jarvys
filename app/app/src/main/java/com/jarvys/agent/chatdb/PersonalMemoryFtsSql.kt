@@ -10,34 +10,34 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** SQL for each optional memory-search implementation. Never let an FTS failure block chat DB open. */
 internal object PersonalMemoryFtsSql {
     const val FTS5_CREATE =
-        "CREATE VIRTUAL TABLE memory_fts USING fts5(title,text,topic_key, content='memory_entries', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')"
+        "CREATE VIRTUAL TABLE memory_fts USING fts5(title,text,tool_name,observation_type,project,topic_key, content='memory_entries', content_rowid='rowid', tokenize='trigram')"
     const val FTS5_INSERT_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(rowid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
+        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries WHEN NEW.deleted_at IS NULL BEGIN " +
+            "INSERT INTO memory_fts(rowid,title,text,tool_name,observation_type,project,topic_key) SELECT NEW.rowid,NEW.title,NEW.text,NEW.tool_name,NEW.observation_type,NEW.project,NEW.topic_key WHERE NEW.deleted_at IS NULL; END"
     const val FTS5_DELETE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(memory_fts,rowid,title,text,topic_key) VALUES('delete',OLD.rowid,OLD.title,OLD.text,OLD.topic_key); END"
+        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries WHEN OLD.deleted_at IS NULL BEGIN " +
+            "INSERT INTO memory_fts(memory_fts,rowid,title,text,tool_name,observation_type,project,topic_key) VALUES('delete',OLD.rowid,OLD.title,OLD.text,OLD.tool_name,OLD.observation_type,OLD.project,OLD.topic_key); END"
     const val FTS5_UPDATE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(memory_fts,rowid,title,text,topic_key) VALUES('delete',OLD.rowid,OLD.title,OLD.text,OLD.topic_key); " +
-            "INSERT INTO memory_fts(rowid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
-    const val FTS5_REBUILD = "INSERT INTO memory_fts(memory_fts) VALUES('rebuild')"
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,tool_name,observation_type,project,topic_key,deleted_at ON memory_entries BEGIN " +
+            "INSERT INTO memory_fts(memory_fts,rowid,title,text,tool_name,observation_type,project,topic_key) SELECT 'delete',OLD.rowid,OLD.title,OLD.text,OLD.tool_name,OLD.observation_type,OLD.project,OLD.topic_key WHERE OLD.deleted_at IS NULL; " +
+            "INSERT INTO memory_fts(rowid,title,text,tool_name,observation_type,project,topic_key) SELECT NEW.rowid,NEW.title,NEW.text,NEW.tool_name,NEW.observation_type,NEW.project,NEW.topic_key WHERE NEW.deleted_at IS NULL; END"
+    const val FTS5_REBUILD = "INSERT INTO memory_fts(rowid,title,text,tool_name,observation_type,project,topic_key) SELECT rowid,title,text,tool_name,observation_type,project,topic_key FROM memory_entries WHERE deleted_at IS NULL"
 
     const val FTS4_CREATE = "CREATE VIRTUAL TABLE memory_fts USING fts4(title, text, topic_key, tokenize=unicode61)"
     const val FTS4_INSERT_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries BEGIN " +
-            "INSERT INTO memory_fts(docid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
+        "CREATE TRIGGER trg_memory_fts_insert AFTER INSERT ON memory_entries WHEN NEW.deleted_at IS NULL BEGIN " +
+            "INSERT INTO memory_fts(docid,title,text,topic_key) SELECT NEW.rowid,NEW.title,NEW.text,NEW.topic_key WHERE NEW.deleted_at IS NULL; END"
     const val FTS4_DELETE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries BEGIN " +
+        "CREATE TRIGGER trg_memory_fts_delete AFTER DELETE ON memory_entries WHEN OLD.deleted_at IS NULL BEGIN " +
             "DELETE FROM memory_fts WHERE docid=OLD.rowid; END"
     const val FTS4_UPDATE_TRIGGER =
-        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key ON memory_entries BEGIN " +
-            "DELETE FROM memory_fts WHERE docid=OLD.rowid; " +
-            "INSERT INTO memory_fts(docid,title,text,topic_key) VALUES(NEW.rowid,NEW.title,NEW.text,NEW.topic_key); END"
-    const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,title,text,topic_key) SELECT rowid,title,text,topic_key FROM memory_entries"
+        "CREATE TRIGGER trg_memory_fts_update AFTER UPDATE OF title,text,topic_key,deleted_at ON memory_entries BEGIN " +
+            "DELETE FROM memory_fts WHERE docid=OLD.rowid AND OLD.deleted_at IS NULL; " +
+            "INSERT INTO memory_fts(docid,title,text,topic_key) SELECT NEW.rowid,NEW.title,NEW.text,NEW.topic_key WHERE NEW.deleted_at IS NULL; END"
+    const val FTS4_REBUILD = "INSERT INTO memory_fts(docid,title,text,topic_key) SELECT rowid,title,text,topic_key FROM memory_entries WHERE deleted_at IS NULL"
 
     /** bm25 column weights: a title or topic key match outranks the same words in a long body. */
-    private const val FTS5_WEIGHTS = "5.0,1.0,3.0"
+    private const val FTS5_WEIGHTS = "5.0,1.0,0.0,0.0,0.0,3.0"
 
     /**
      * Ranked search; [filters] is an `AND ...` suffix over alias `m` with its own bind arguments, appended after
@@ -120,11 +120,28 @@ internal object PersonalMemorySearchIndex {
         }
     }
 
+    /** Existing auxiliary indexes are not silently upgraded or accepted by name alone. */
+    fun requireCanonical(db: ChatSqlDatabase) {
+        check(readMode(db) == PersonalMemorySearchMode.FTS5) { "memory_search_index_unavailable" }
+        val expected = mapOf(
+            "memory_fts" to PersonalMemoryFtsSql.FTS5_CREATE,
+            "trg_memory_fts_insert" to PersonalMemoryFtsSql.FTS5_INSERT_TRIGGER,
+            "trg_memory_fts_delete" to PersonalMemoryFtsSql.FTS5_DELETE_TRIGGER,
+            "trg_memory_fts_update" to PersonalMemoryFtsSql.FTS5_UPDATE_TRIGGER,
+        )
+        expected.forEach { (name, definition) ->
+            val actual = db.query("SELECT sql FROM sqlite_master WHERE name=?", arrayOf(name)).use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+            check(actual == definition) { "memory_search_index_unavailable" }
+        }
+    }
+
     fun currentMode(db: ChatSqlDatabase): PersonalMemorySearchMode =
         runCatching { readMode(db) }.getOrDefault(PersonalMemorySearchMode.LIKE)
 
     private fun detect(db: ChatSqlDatabase): PersonalMemorySearchMode {
-        if (probe(db, TEST_FTS5, "fts5(text, tokenize='unicode61 remove_diacritics 2')")) return PersonalMemorySearchMode.FTS5
+        if (probe(db, TEST_FTS5, "fts5(text, tokenize='trigram')")) return PersonalMemorySearchMode.FTS5
         if (probe(db, TEST_FTS4, "fts4(text, tokenize=unicode61)")) return PersonalMemorySearchMode.FTS4
         return PersonalMemorySearchMode.LIKE
     }

@@ -13,6 +13,7 @@ import android.os.IBinder;
 import android.widget.Toast;
 import com.artemis.helper.ArtemisAccessibilityService;
 import com.jarvys.agent.crew.CrewNotificationPolicy;
+import com.jarvys.agent.chatdb.MemorySessionResumeReceipt;
 import com.jarvys.agent.device.AccessibilityDriver;
 import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.device.SwipeDirection;
@@ -152,6 +153,31 @@ public final class AgentForegroundService extends Service {
     }
   }
 
+  /** Host-only admission: a serialized receipt or a finished Future cannot manufacture this. */
+  public static final class MemoryResumeAdmission {
+    private final AgentForegroundService service;
+    private final ActiveRun active;
+    private final MemorySessionResumeReceipt receipt;
+    private MemoryResumeAdmission(AgentForegroundService service, ActiveRun active, MemorySessionResumeReceipt receipt) {
+      this.service = service; this.active = active; this.receipt = receipt;
+    }
+    public MemorySessionResumeReceipt getReceipt() { return receipt; }
+    public void requireCurrent(CancellationToken token) {
+      token.throwIfCancelled();
+      if (token != active.token || token.generation() != active.generation)
+        throw new IllegalStateException("memory_resume_host_admission_invalid");
+      synchronized (service.sessionLaneLock) {
+        SessionLane lane = service.sessionLanes.get(active.sessionId);
+        if (lane == null) throw new IllegalStateException("memory_resume_host_admission_invalid");
+        synchronized (lane) {
+          if (!lane.draining || lane.active != active || service.activeRuns.get(active.sessionId) != active)
+            throw new IllegalStateException("memory_resume_host_admission_invalid");
+        }
+      }
+      token.throwIfCancelled();
+    }
+  }
+
   private void enqueueSessionRun(String sessionId, SessionRequest request) {
     final SessionLane lane;
     boolean startDrain = false;
@@ -220,7 +246,7 @@ public final class AgentForegroundService extends Service {
 
   private void drainSession(String sessionId, SessionLane lane) {
     RuntimeException storageFailure = null;
-    try { SingleSessionReset.awaitReadyBlocking(getFilesDir()); }
+    try { FreshStorageBootstrap.awaitReadyBlocking(getFilesDir()); }
     catch (Exception failure) {
       storageFailure = new IllegalStateException("Conversation storage could not be initialized", failure);
     }
@@ -654,21 +680,44 @@ public final class AgentForegroundService extends Service {
         .putExtra("chat_user_message_id", userMessageId);
   }
 
-  public static void startRegenerateAssistant(
-      Context context,
-      String prompt,
-      ArrayList<String> skillIds,
-      String sessionId,
-      String userMessageId) {
-    startRealAgentInternal(
-        context,
-        prompt,
-        skillIds,
-        sessionId,
-        prompt,
-        true,
-        true,
-        userMessageId);
+  public static void startRegenerateAssistant(Context context, String prompt, ArrayList<String> skillIds,
+      String sessionId, String userMessageId) {
+    startRegenerateAssistant(context, prompt, skillIds, sessionId, userMessageId, null);
+  }
+
+  public static void startRegenerateAssistant(Context context, String prompt, ArrayList<String> skillIds,
+      String sessionId, String userMessageId, MemorySessionResumeReceipt receipt) {
+    Intent intent = storedChatMessageIntent(context, WorkspaceIdentity.serviceSession(sessionId), userMessageId)
+        .putExtra("agent_goal", prompt == null ? "" : prompt)
+        .putExtra("agent_display_goal", prompt == null ? "" : prompt)
+        .putExtra("chat_regeneration", true)
+        .putStringArrayListExtra("agent_skill_ids", skillIds == null ? new ArrayList<>() : new ArrayList<>(skillIds));
+    if (receipt != null) {
+      intent.putExtra("memory_resume_generation", receipt.getSourceGeneration());
+      intent.putExtra("memory_resume_conversation", receipt.getConversationId());
+      intent.putExtra("memory_resume_owner", receipt.getOwnerMessageId());
+      intent.putExtra("memory_resume_assistant", receipt.getAssistantMessageId());
+      intent.putExtra("memory_resume_run", receipt.getPriorRunId());
+      intent.putExtra("memory_resume_hidden_seq", receipt.getHiddenSeq());
+      intent.putExtra("memory_resume_root", receipt.getRootSessionId());
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
+    else context.startService(intent);
+  }
+
+  private static MemorySessionResumeReceipt untrustedResumeLocator(Intent intent) {
+    if (intent == null || intent.getExtras() == null) return null;
+    android.os.Bundle values = intent.getExtras();
+    String[] keys = {"generation", "conversation", "owner", "assistant", "run", "root"};
+    String[] fields = new String[keys.length];
+    for (int i = 0; i < keys.length; i++) {
+      Object value = values.get("memory_resume_" + keys[i]);
+      if (!(value instanceof String) || ((String) value).isEmpty()) return null;
+      fields[i] = (String) value;
+    }
+    Object seq = values.get("memory_resume_hidden_seq");
+    if (!(seq instanceof Long) || ((Long) seq) <= 0) return null;
+    return new MemorySessionResumeReceipt(fields[0], fields[1], fields[2], fields[3], fields[4], (Long) seq, fields[5]);
   }
 
   private static void startRealAgentInternal(
@@ -734,7 +783,7 @@ public final class AgentForegroundService extends Service {
   public static boolean interruptAndSend(Context context, String sessionId, String text,
       ArrayList<String> skills) {
     AgentForegroundService service = currentInstance;
-    if (sessionId == null || !MessageReactionTool.isOrdinaryChat(sessionId)
+    if (!WorkspaceIdentity.isCentral(sessionId)
         || text == null || text.trim().isEmpty()) return false;
     Runnable hook = service == null ? null : service.beforeInterruptAdmissionForTesting;
     if (hook != null) hook.run();
@@ -957,15 +1006,11 @@ public final class AgentForegroundService extends Service {
   }
 
   private void failPendingInputRecovery(String onlySessionId) {
+    if (onlySessionId != null && !WorkspaceIdentity.isCentral(onlySessionId)) return;
     try {
       LocalRunStore store = new LocalRunStore(this);
       if (onlySessionId == null) {
-        Set<String> pendingSessions = new java.util.LinkedHashSet<>();
-        for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
-          String sessionId = request.optString("sessionId", "");
-          if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
-        }
-        for (String sessionId : pendingSessions) failPendingInputRecovery(sessionId);
+        failPendingInputRecovery(WorkspaceIdentity.CENTRAL_SESSION);
         return;
       }
       synchronized (interruptAdmissionLock(onlySessionId)) {
@@ -985,16 +1030,13 @@ public final class AgentForegroundService extends Service {
   }
 
   private void recoverPendingInputs(String onlySessionId) {
+    if (onlySessionId != null && !WorkspaceIdentity.isCentral(onlySessionId)) return;
     LocalRunStore store = new LocalRunStore(this);
     if (onlySessionId == null) {
-      Set<String> pendingSessions = new java.util.LinkedHashSet<>();
-      for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
-        String session = request.optString("sessionId", "");
-        if (!session.isEmpty()) pendingSessions.add(session);
-      }
+      boolean centralPending = !store.readPendingInterruptRequests(WorkspaceIdentity.CENTRAL_SESSION).isEmpty();
       Runnable hook = afterPendingInputRecoveryScanForTesting;
       if (hook != null) hook.run();
-      for (String session : pendingSessions) recoverPendingInputs(session);
+      if (centralPending) recoverPendingInputs(WorkspaceIdentity.CENTRAL_SESSION);
       return;
     }
     String sessionId = onlySessionId;
@@ -1237,7 +1279,7 @@ public final class AgentForegroundService extends Service {
     }
     if (intent != null && ACTION_REFLECT_MEMORY.equals(intent.getAction())) {
       String session = intent.getStringExtra("chat_session_id");
-      if (session == null || !session.matches("[A-Za-z0-9_.-]{1,100}")) {
+      if (!WorkspaceIdentity.isCentral(session)) {
         stopServiceIfIdle();
         return START_NOT_STICKY;
       }
@@ -1248,6 +1290,13 @@ public final class AgentForegroundService extends Service {
     boolean manualDeviceTest =
         intent != null && ACTION_MANUAL_DEVICE_TEST.equals(intent.getAction());
     boolean realAgent = intent != null && ACTION_REAL_AGENT.equals(intent.getAction());
+    final String sessionId;
+    try {
+      sessionId = WorkspaceIdentity.serviceSession(intent.getStringExtra("chat_session_id"));
+    } catch (IllegalArgumentException invalidSession) {
+      stopServiceIfIdle();
+      return START_NOT_STICKY;
+    }
     if (realAgent) com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.cancelAll();
     boolean compactConversation =
         intent != null && ACTION_COMPACT_CONVERSATION.equals(intent.getAction());
@@ -1259,12 +1308,12 @@ public final class AgentForegroundService extends Service {
     boolean chatRegeneration = intent != null && intent.getBooleanExtra("chat_regeneration", false);
     String chatUserMessageId = intent == null ? "" : intent.getStringExtra("chat_user_message_id");
     String chatFollowUpRequestId = intent == null ? "" : intent.getStringExtra("chat_follow_up_request_id");
-    String sessionId = WorkspaceIdentity.serviceSession(intent == null ? null : intent.getStringExtra("chat_session_id"));
     final String chatSessionId = sessionId;
     final String chatAgentGoal = agentGoal == null ? "" : agentGoal;
     final String chatDisplayGoal = displayGoal == null ? "" : displayGoal;
     final boolean userMessageAlreadyRecorded = chatMessageRecorded;
     final boolean regeneration = chatRegeneration;
+    final MemorySessionResumeReceipt resumeLocator = chatRegeneration ? untrustedResumeLocator(intent) : null;
     final String existingUserMessageId = chatUserMessageId == null ? "" : chatUserMessageId;
     final String followUpRequestId = chatFollowUpRequestId == null ? "" : chatFollowUpRequestId;
     ArrayList<String> selectedSkillIds =
@@ -1378,9 +1427,20 @@ public final class AgentForegroundService extends Service {
         try {
           if (compactConversation) runManualConversationCompaction(active.token, chatSessionId);
           else {
+            MemoryResumeAdmission memoryResume = null;
+            if (regeneration && resumeLocator != null && !internalInputSubmission
+                && chatSessionId.equals(resumeLocator.getConversationId())
+                && existingUserMessageId.equals(resumeLocator.getOwnerMessageId())) {
+              active.token.throwIfCancelled();
+              // This runs in the physical lane's work, after predecessor unwind, outside all lane locks.
+              if (new LocalRunStore(this).validateMemoryResumeReceipt(resumeLocator)) {
+                memoryResume = new MemoryResumeAdmission(this, active, resumeLocator);
+                memoryResume.requireCurrent(active.token);
+              }
+            }
             runRealAgent(active.token, chatAgentGoal, runSkillIds, chatSessionId, chatDisplayGoal,
                 userMessageAlreadyRecorded, regeneration,
-                internalInputSubmission ? internalRunInputId : existingUserMessageId);
+                internalInputSubmission ? internalRunInputId : existingUserMessageId, memoryResume);
           }
         } catch (RuntimeException earlyFailure) {
           if (!isInteractive) throw earlyFailure;
@@ -1556,6 +1616,19 @@ public final class AgentForegroundService extends Service {
       boolean userMessageAlreadyRecorded,
       boolean regeneration,
       String existingUserMessageId) {
+    runRealAgent(token, goal, selectedSkillIds, sessionId, displayGoal, userMessageAlreadyRecorded,
+        regeneration, existingUserMessageId, null);
+  }
+
+  private void runRealAgent(
+      CancellationToken token,
+      String goal,
+      List<String> selectedSkillIds,
+      String sessionId,
+      String displayGoal,
+      boolean userMessageAlreadyRecorded,
+      boolean regeneration,
+      String existingUserMessageId, MemoryResumeAdmission memoryResumeAdmission) {
     // Mission lifetime is independent of elapsed wall time. STOP still owns cancellation.
     new JarvysUiPreferences(this); // Retire restored legacy deadline settings before starting.
     LocalRunStore conversationStore = new LocalRunStore(this);
@@ -1615,6 +1688,7 @@ public final class AgentForegroundService extends Service {
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
+      runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
       runtime.setMainChatSteeringCursor(userMessageId == null ? "" : userMessageId);
       runtime.setCurrentUserMessageId(internalInput ? "" : userMessageId);
       runtime.setCurrentTurnOwnerMessageId(userMessageId);
@@ -1819,10 +1893,6 @@ public final class AgentForegroundService extends Service {
       finishCoreRun(token, chatMessage);
       if (!token.wasStoppedByUser() && steeringProvider != null && steeringRemainsUnconsumed)
         enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
-      if (!timedOut && "COMPLETED".equals(result.outcome)) {
-        try { SingleSessionReset.onSuccessfulRun(this, sessionId); }
-        catch (Exception failure) { AgentErrorReporter.reportBackgroundFailure(this, failure); }
-      }
       if (!assistantOwnerInternal.get() && !timedOut && "COMPLETED".equals(result.outcome)) {
         enqueueAutomaticReflection(sessionId, assistantMessageId);
       }
@@ -2043,7 +2113,7 @@ public final class AgentForegroundService extends Service {
                     .build())
             .setOngoing(true)
             .build();
-    notification.extras.putString(SingleSessionReset.GENERATION_EXTRA, StorageGeneration.NAME);
+    notification.extras.putString(FreshStorageBootstrap.GENERATION_EXTRA, StorageGeneration.NAME);
     return notification;
   }
 

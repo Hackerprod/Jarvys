@@ -42,15 +42,38 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
         recordInsideTransaction(commit, kind)
     }
 
+    suspend fun verifyExisting(binding: CodingJobEvidence.Binding) = database.withChatReadTransaction {
+        check(readGeneration() == binding.technicalStoreGeneration) { "Coding recovery destination changed" }
+        requireBinding(binding)
+    }
+
+    suspend fun recordRecovered(verified: CodingJobJournalStore.RecoveryVerified) = database.withChatWriteTransaction {
+        val record = verified.record()
+        require(record.binding == verified.recoveryBinding().candidate().record().binding) { "Recovery binding changed" }
+        check(record.terminal != null) { "Recovery projects terminal facts only" }
+        // Exact journal bytes never manufacture missing Room admission history.
+        check(hasKind(record.binding.jobId, Kind.SUBMISSION_ACCEPTED)) { "Recovered journal has no accepted submission" }
+        if (record.terminal.exitCode != null || record.highestEffectPhase == CodingJobEvidence.Phase.LAUNCH_INTENT)
+            check(hasKind(record.binding.jobId, Kind.PREPARATION_ADMITTED)) { "Recovered launch facts lack preparation admission" }
+        recordPayloadInsideTransaction(record, verified.copyPayload(), verified.payloadSha256(), Kind.JOURNAL_PROJECTION)
+        // No reconstructed ticket or semantic backfill on recovery; existing linked history survives.
+        CodingJobSemanticRepository(database).suppress(record.binding.jobId)
+    }
+
     private fun recordInsideTransaction(commit: CodingJobJournalStore.Commit, kind: Kind) {
         val reservation = commit.reservation()
         val record = commit.record()
         require(record.binding == reservation.binding()) { "Coding journal binding mismatch" }
+        if (kind == Kind.RESERVATION_ABANDONED) reservation.submission().requirePreDispatchAbandoned()
+        recordPayloadInsideTransaction(record, commit.copyPayload(), commit.payloadSha256(), kind)
+    }
+
+    private fun recordPayloadInsideTransaction(record: CodingJobEvidence.Record, payload: ByteArray,
+        expectedDigest: String, kind: Kind) {
         check(readGeneration() == record.binding.technicalStoreGeneration) { "Coding technical destination changed" }
         requireBinding(record.binding)
-        val payload = commit.copyPayload()
         val digest = sha256(payload)
-        check(digest == commit.payloadSha256()) { "Coding journal payload identity mismatch" }
+        check(digest == expectedDigest) { "Coding journal payload identity mismatch" }
         val encoded = CodingJobEvidenceCodec.encode(record)
         val duplicate = sql.query("SELECT observation_kind,evidence_json,payload_sha256,payload_bytes FROM coding_job_observations WHERE job_id=? AND revision=?",
             arrayOf(record.binding.jobId, record.revision)).use { c ->
@@ -71,7 +94,6 @@ internal class CodingJobRepository(private val database: JarvysChatDatabase) {
                 "Preparation requires accepted submission and exact preparation intent"
             }
             Kind.RESERVATION_ABANDONED -> {
-                reservation.submission().requirePreDispatchAbandoned()
                 val terminal = record.terminal
                 check(!accepted && !hasKind(record.binding.jobId, Kind.PREPARATION_ADMITTED) &&
                     record.highestEffectPhase == CodingJobEvidence.Phase.SUBMISSION_INTENT && terminal != null &&

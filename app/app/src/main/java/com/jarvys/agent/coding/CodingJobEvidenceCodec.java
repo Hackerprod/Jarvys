@@ -43,14 +43,40 @@ public final class CodingJobEvidenceCodec {
                 number(root, "revision"), enumeration(root, "highestEffectPhase", Phase.class),
                 bool(root, "submissionCommitted"), readAuth(root.get("authorization")), readTerminal(root.get("terminal"))));
     }
+    /** Standalone attribution metadata only: decoding cannot mint a runtime or persistence witness. */
+    public static String encodeSourceMetadata(Source source) {
+        return json(object("sourceVersion",1L,"source",sourceObject(Objects.requireNonNull(source))));
+    }
+    public static Source decodeSourceMetadata(String encoded,int maxChars) {
+        if(maxChars<=0 || encoded==null || encoded.length()>maxChars)
+            throw new IllegalArgumentException("Source metadata exceeds supplied parse budget");
+        Map<String,Object> root=map(new Parser(encoded).parse());
+        keys(root,"sourceVersion","source");
+        if(number(root,"sourceVersion")!=1L)throw new IllegalArgumentException("Unsupported source metadata version");
+        return readSource(map(root.get("source")));
+    }
+    /** Exact pre-existing cancellation source_json shape, including escaped UTF-16 identity. */
+    public static String encodeCrewCallMetadata(CrewSource c) {
+        Objects.requireNonNull(c);
+        return json(object("executionSessionId",c.executionSessionId,"botId",c.botId,"missionId",c.missionId,
+            "cycleId",c.cycleId,"scopeIdentity",c.scopeIdentity,"checkpointPayloadSha256",c.checkpointPayloadSha256,
+            "callId",c.callId,"toolName",c.toolName,"inputContext",inputContext(c.inputContext)));
+    }
+    /** Canonical source-call identity used by the technical ledger's UNIQUE key. */
+    public static String encodeCrewCallIdentity(CrewSource c) {
+        Objects.requireNonNull(c);
+        return json(Arrays.asList(c.executionSessionId,c.botId,c.missionId,c.cycleId,c.scopeIdentity,
+            c.checkpointPayloadSha256,c.callId,c.toolName));
+    }
     private static Map<String,Object> binding(Binding b) {
-        CrewSource c = b.source.crew; WorkspaceBinding w = b.source.workspace;
-        CentralInvocationSource a = b.source.rootCentral;
         return object("technicalStoreGeneration", b.technicalStoreGeneration, "jobId", b.jobId, "submissionId", b.submissionId, "owner", b.owner,
                 "scopeId", b.scopeId, "durableScopeIdentity", b.durableScopeIdentity,
                 "ownerProcessId", b.ownerProcessId, "managerInstanceId", b.managerInstanceId,
-                "semanticCapture", b.semanticCapture.name(), "source", object(
-                    "crew", object("kind", c.kind.name(),
+                "semanticCapture", b.semanticCapture.name(), "source", sourceObject(b.source));
+    }
+    private static Map<String,Object> sourceObject(Source s) {
+        CrewSource c=s.crew;WorkspaceBinding w=s.workspace;CentralInvocationSource a=s.rootCentral;
+        return object("crew", object("kind", c.kind.name(),
                         "executionSessionId", c.executionSessionId, "botId", c.botId, "missionId", c.missionId,
                         "cycleId", c.cycleId, "scopeIdentity", c.scopeIdentity,
                         "checkpointPayloadSha256", c.checkpointPayloadSha256, "callId", c.callId, "toolName", c.toolName, "inputContext", inputContext(c.inputContext)),
@@ -58,11 +84,16 @@ public final class CodingJobEvidenceCodec {
                     "rootCentral", a == null ? null : object("storageGeneration", a.storageGeneration,
                         "ownerCentralSessionId", a.ownerCentralSessionId, "sourceMessageId", a.sourceMessageId,
                         "sourceBatchId", a.sourceBatchId, "sourceCallId", a.sourceCallId,
-                        "sourceRunId", a.sourceRunId, "sourceProcessId", a.sourceProcessId)));
+                        "sourceRunId", a.sourceRunId, "sourceProcessId", a.sourceProcessId));
     }
     private static Binding readBinding(Map<String,Object> b) {
         keys(b, "technicalStoreGeneration", "jobId", "submissionId", "owner", "scopeId", "durableScopeIdentity", "ownerProcessId", "managerInstanceId", "semanticCapture", "source");
-        Map<String,Object> s = map(b.get("source")); keys(s, "crew", "workspace", "rootCentral");
+        return new Binding(string(b,"technicalStoreGeneration"), string(b,"jobId"), string(b,"submissionId"), string(b,"owner"), string(b,"scopeId"),
+                string(b,"durableScopeIdentity"), string(b,"ownerProcessId"), string(b,"managerInstanceId"),
+                readSource(map(b.get("source"))), enumeration(b,"semanticCapture",SemanticCapture.class));
+    }
+    private static Source readSource(Map<String,Object> s) {
+        keys(s, "crew", "workspace", "rootCentral");
         Map<String,Object> c = map(s.get("crew"));
         keys(c, "kind", "executionSessionId", "botId", "missionId", "cycleId", "scopeIdentity", "checkpointPayloadSha256", "callId", "toolName", "inputContext");
         enumeration(c, "kind", SourceKind.class);
@@ -82,11 +113,9 @@ public final class CodingJobEvidenceCodec {
                     string(a,"sourceMessageId"), string(a,"sourceBatchId"), string(a,"sourceCallId"),
                     string(a,"sourceRunId"), string(a,"sourceProcessId"));
         }
-        return new Binding(string(b,"technicalStoreGeneration"), string(b,"jobId"), string(b,"submissionId"), string(b,"owner"), string(b,"scopeId"),
-                string(b,"durableScopeIdentity"), string(b,"ownerProcessId"), string(b,"managerInstanceId"),
-                new Source(crew, workspace, central), enumeration(b,"semanticCapture",SemanticCapture.class));
+        return new Source(crew,workspace,central);
     }
-    private static Map<String,Object> inputContext(CrewInputContext context) {
+    static Map<String,Object> inputContext(CrewInputContext context) {
         List<Object> refs = new ArrayList<>();
         for (CrewInputContext.Reference ref : context.references) {
             Map<String,Object> item = object("channel", ref.channel.name(), "inputId", ref.inputId,

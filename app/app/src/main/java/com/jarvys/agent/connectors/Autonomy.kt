@@ -151,27 +151,9 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     private val actionPolicies = PersistedActionPolicies(preferences, authorityScope)
     private val lock = actionPolicies.lock
     private val fallbackAudit = mutableListOf<AutonomyAuditRecord>()
-    private val migrationLock = migrationLocks.computeIfAbsent(authorityScope) { Any() }
-    private val migration = auditDatabase?.let { database -> AutonomyAuditMigration(
-        object : LegacyAutonomyAuditSource {
-            override fun migrated() = preferences.getBoolean(AUDIT_MIGRATED_KEY, false)
-            override fun original() = preferences.getString(AUDIT_KEY, null)
-            override fun complete(expectedOriginal: String?): Boolean {
-                check(original() == expectedOriginal) { "Legacy audit changed during import" }
-                // Room has already committed every row. Failure here is cleanup pending, not rollback.
-                return preferences.edit().remove(AUDIT_KEY).putBoolean(AUDIT_MIGRATED_KEY, true).commit()
-            }
-        }, AutonomyAuditMigrationTarget(database::importConnectorAuditSync), migrationLock,
-    ) }
 
     init {
         ActionPolicyDefaults.bindDefaultPolicyPreferences(preferences)
-        synchronized(lock) {
-            preferences.edit().remove("autonomy_hourly_reservations").apply()
-            listOf("email", "sms_draft").forEach { connectorId ->
-                runCatching { actionPolicies.clearPolicies(connectorId) }
-            }
-        }
     }
 
     override fun policy(connectorId: String, operationName: String): AutonomyPolicy = snapshot(connectorId, operationName).policy
@@ -191,12 +173,6 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
         val bounded = record.bounded()
         val database = auditDatabase
         if (database != null) {
-            // Legacy corruption must not misreport a successfully persisted NEW audit row as lost.
-            try { migration?.migrate() }
-            catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
-            catch (_: Exception) {
-                android.util.Log.w("ConnectorAudit", "Legacy audit migration pending; source content not logged")
-            }
             database.appendConnectorAuditSync(bounded)
         } else synchronized(lock) { fallbackAudit.add(bounded) }
     }
@@ -204,8 +180,6 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     override fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord> {
         val database = auditDatabase
         if (database != null) {
-            // Off-main API: a failed migration is not an apparently complete empty history.
-            migration?.migrate()
             return database.recentConnectorAuditSync(connectorId, limit.coerceAtLeast(0))
         }
         return synchronized(lock) {
@@ -213,11 +187,6 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
         }
     }
 
-    companion object {
-        private const val AUDIT_KEY = "autonomy_audit"
-        private const val AUDIT_MIGRATED_KEY = "autonomy_audit_room_migrated"
-        private val migrationLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
-    }
 }
 
 class AndroidAutonomyActionNotifier(context: Context) : AutonomyActionNotifier {

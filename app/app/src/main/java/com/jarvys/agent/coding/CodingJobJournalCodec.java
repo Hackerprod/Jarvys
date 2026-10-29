@@ -25,13 +25,18 @@ public final class CodingJobJournalCodec {
                 "exitCode",s.exitCode==null?null:s.exitCode.longValue(),"logArtifact",s.logArtifact,"error",s.error,
                 "logBytes",s.logBytes,"logComplete",s.logComplete),"evidence",recordObject(r))).getBytes(StandardCharsets.UTF_8);
     }
-    public static Decoded decode(byte[] bytes, int maxBytes) {
+    /** Strict discriminator only; legacy decoders retain their own format/authority boundary. */
+    public static long schemaVersion(byte[] bytes,int maxBytes) { return number(readRoot(bytes,maxBytes),"schema"); }
+    private static Map<String,Object> readRoot(byte[] bytes,int maxBytes) {
         if (bytes == null || maxBytes <= 0 || bytes.length > maxBytes) throw new IllegalArgumentException("Journal exceeds input budget");
         final String encoded;
         try { encoded = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString(); }
         catch (CharacterCodingException bad) { throw new IllegalArgumentException("Invalid journal UTF-8",bad); }
-        Map<String,Object> root = parseJournal(encoded,maxBytes);
+        return parseJournal(encoded,maxBytes);
+    }
+    public static Decoded decode(byte[] bytes, int maxBytes) {
+        Map<String,Object> root = readRoot(bytes,maxBytes);
         keys(root,"schema","snapshot","evidence");
         if (number(root,"schema") != 3) throw new IllegalArgumentException("Unsupported operational journal schema");
         Map<String,Object> s = map(root.get("snapshot"));

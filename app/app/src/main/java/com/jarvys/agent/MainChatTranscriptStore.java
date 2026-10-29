@@ -61,6 +61,11 @@ final class MainChatTranscriptStore {
     private final Map<String, CallBinding> committedCalls = new java.util.concurrent.ConcurrentHashMap<>();
 
     private volatile Object attachmentIdentity = new Object();
+    private com.jarvys.agent.chatdb.MemorySessionBinding memorySessionBinding;
+    void setMemorySessionBinding(com.jarvys.agent.chatdb.MemorySessionBinding binding) {
+        this.memorySessionBinding = binding;
+    }
+
     static final class CallBinding {
         final String batchId, callId, toolName, ownerMessageId, runId;
         final Object attachment;
@@ -148,6 +153,11 @@ final class MainChatTranscriptStore {
     }
 
     void attach(CoreAgentLoop loop, List<ConversationTurn> priorHistory, String turnOwnerId, String runId) {
+        if (memorySessionBinding != null && (!sessionId.equals(memorySessionBinding.getOwnerConversation())
+                || !java.util.Objects.equals(turnOwnerId, memorySessionBinding.getOwnerMessageId())
+                || !java.util.Objects.equals(runId, memorySessionBinding.getRunId())
+                || !com.jarvys.agent.crew.CrewProcessIdentity.ID.equals(memorySessionBinding.getProcessId())))
+            throw new IllegalStateException("memory_session_source_invalid");
         final Object attachment = new Object();
         attachmentIdentity = attachment;
         committedCalls.clear();
@@ -200,13 +210,48 @@ final class MainChatTranscriptStore {
                                         if (call.id == null || call.id.isEmpty() || call.id.length() > 512
                                                 || call.name == null || call.name.isEmpty() || call.name.length() > 256 || !callIds.add(call.id))
                                             throw new IllegalStateException("Provider returned a missing or reused tool call ID");
+                                        String memorySaveInputDigest = null;
+                                        if ("memory_save".equals(call.name) && memorySessionBinding != null) {
+                                            try {
+                                                memorySaveInputDigest = PersonalMemoryTools.checkpointInputDigest(
+                                                        call.arguments, sessionId, userMessageId, memorySessionBinding.getId());
+                                            } catch (IllegalArgumentException invalidArguments) {
+                                                // Preserve ordinary tool rejection; invalid input never receives save proof.
+                                            }
+                                        }
+                                        if (com.jarvys.agent.chatdb.MemorySessionCommands.isCommand(call.name) && memorySessionBinding != null) {
+                                            try {
+                                                memorySaveInputDigest = PersonalMemoryTools.checkpointSessionCommandDigest(
+                                                        call.name, call.arguments, memorySessionBinding.getId());
+                                            } catch (IllegalArgumentException invalidArguments) {
+                                                // Invalid commands remain ordinary rejected calls, never certified effects.
+                                            }
+                                        }
+                                        if ("memory_review".equals(call.name) && memorySessionBinding != null) {
+                                            try {
+                                                memorySaveInputDigest = com.jarvys.agent.chatdb.MemoryReviewArguments.checkpointDigest(
+                                                        call.arguments, memorySessionBinding.getId());
+                                            } catch (IllegalArgumentException invalidArguments) {
+                                                // Only valid semantic mark selectors receive proof before lossy retention.
+                                            }
+                                        }
+                                        if (com.jarvys.agent.chatdb.MemoryJudgmentArguments.isTool(call.name) && memorySessionBinding != null) {
+                                            try {
+                                                memorySaveInputDigest = com.jarvys.agent.chatdb.MemoryJudgmentArguments.checkpointDigest(
+                                                        call.name, call.arguments, memorySessionBinding.getId());
+                                            } catch (IllegalArgumentException invalidArguments) {
+                                                // Invalid envelopes receive no mutation proof; batch item errors remain encoded.
+                                            }
+                                        }
                                         BoundedArguments arguments = boundedArguments(call.arguments);
                                         calls.put(new JSONObject().put("id", call.id).put("name", call.name)
-                                                .put("arguments", arguments.json).put("artifactIds", new JSONArray(arguments.artifactIds)));
+                                                .put("arguments", arguments.json).put("artifactIds", new JSONArray(arguments.artifactIds))
+                                                .put("memorySaveInputDigest", memorySaveInputDigest == null ? JSONObject.NULL : memorySaveInputDigest));
                                     }
                                     Retained assistantText = retain(turn.content);
                                     append(new JSONObject().put("type", "model_tool_calls").put("batchId", batch)
                                             .put("userMessageId", userMessageId).put("messageIndex", messageIndex)
+                                            .put("memorySessionId", memorySessionBinding == null ? JSONObject.NULL : memorySessionBinding.getId())
                                             .put("assistantText", assistantText.text)
                                             .put("assistantTextArtifactIds", new JSONArray(assistantText.artifactIds))
                                             .put("assistantProgress", true).put("calls", calls)
@@ -537,6 +582,12 @@ final class MainChatTranscriptStore {
 
     /** Resolve journal deltas to indivisible call/result groups at their original ledger position. */
     static Map<Integer, List<ConversationTurn>> restore(List<JSONObject> rows, int firstKept, int compactionRow) {
+        return restore(rows, firstKept, compactionRow, Collections.emptyMap());
+    }
+
+    /** Read-only memory references do not create durable RESULT rows or effect receipts. */
+    static Map<Integer, List<ConversationTurn>> restore(List<JSONObject> rows, int firstKept, int compactionRow,
+            Map<String, Map<String, String>> memorySaveReferences) {
         Map<String, JSONObject> calls = new LinkedHashMap<>();
         Map<String, Integer> positions = new LinkedHashMap<>();
         Map<String, Integer> latestActivity = new LinkedHashMap<>();
@@ -600,7 +651,10 @@ final class MainChatTranscriptStore {
                         group.add(ConversationTurn.toolResult(call.id, call.name, output.getString("output")));
                     else {
                         boolean launched = "STARTED".equals(states.get(batch).get(call.id));
+                        String memoryReference = launched && "memory_save".equals(call.name)
+                                ? memorySaveReferences.getOrDefault(batch, Collections.emptyMap()).get(call.id) : null;
                         group.add(ConversationTurn.toolResult(call.id, call.name,
+                                memoryReference != null ? memoryReference :
                                 (launched ? "INTERRUPTED_UNCERTAIN: execution started; effects may have occurred, but no durable result is available."
                                         : "NEVER_LAUNCHED: recorded tool intent was not launched.")
                                         + " It was not automatically replayed. Inspect current evidence before continuing."));

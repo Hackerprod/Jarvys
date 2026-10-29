@@ -1,5 +1,6 @@
 package com.jarvys.agent.flavor
 
+import com.jarvys.agent.CrewCheckpointStore
 import android.content.Context
 import com.jarvys.agent.CorePromptBudget
 import com.jarvys.agent.CoreTool
@@ -23,6 +24,18 @@ object FlavorLinuxTools {
 
     @JvmStatic fun validateProfileResume(context: Context, selectedNames: List<String>) {
         requireUnavailableCapabilitiesAbsent(selectedNames)
+    }
+
+    @JvmStatic fun refreshCheckpointRecovery(context: Context, scope: ProjectScope) {
+        scope.validate() // No Linux recovery producer exists in Play.
+    }
+
+    @JvmStatic fun correlatedCheckpointOwners(context: Context, scope: ProjectScope,
+            checkpoint: CrewCheckpointStore.ConfirmedSnapshot): List<String> {
+        check(!checkpoint.hasStartedCodingCall()) {
+            "Saved Linux project dispatch cannot be verified in this Play build; no resume was started"
+        }
+        return emptyList()
     }
 
     @JvmStatic fun checkpointRecovery(context: Context, conversationId: String, scope: ProjectScope,

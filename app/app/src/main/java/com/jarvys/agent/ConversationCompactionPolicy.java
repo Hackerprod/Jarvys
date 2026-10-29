@@ -56,12 +56,22 @@ public final class ConversationCompactionPolicy {
     }
 
     public static int estimateTokens(String system, String tools, List<ConversationTurn> transcript, String prompt) {
+        return estimateTokens(system, tools, transcript, prompt, false);
+    }
+
+    /** Final logical principal request, including attachment expansion and incoming-content escaping. */
+    public static int estimatePreparedTokens(String system, String tools, List<ConversationTurn> transcript, String prompt) {
+        return estimateTokens(system, tools, transcript, prompt, true);
+    }
+
+    private static int estimateTokens(String system, String tools, List<ConversationTurn> transcript,
+                                      String prompt, boolean prepared) {
         long bytes = utf8(system) + utf8(tools) + utf8(prompt);
         if (transcript != null) for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
-            bytes += utf8(turn.content) + utf8(turn.thinking) + (long) turn.imageCount * 4_800L + 24;
+            bytes += utf8(prepared ? turn.renderedModelContent("adapter") : turn.content) + utf8(turn.thinking) + (long) turn.imageCount * 4_800L + 24;
             if (turn.incomingMetadata != null && turn.incomingMetadata.untrusted) {
-                bytes += utf8(turn.incomingMetadata.render("", "adapter"))
+                bytes += (prepared ? 0 : utf8(turn.incomingMetadata.render("", "adapter")))
                         + utf8(turn.incomingMetadata.chatMessageName());
             }
             for (ModelReply.Call call : turn.toolCalls) bytes += utf8(call.name) + utf8(call.arguments.toString()) + 48;

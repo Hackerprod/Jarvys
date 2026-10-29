@@ -22,7 +22,7 @@ import java.util.UUID
  */
 class WorkspaceRegistry(context: Context) : Closeable {
     companion object {
-        const val DATABASE_NAME = "jarvys-workspaces-v2.db"
+        const val DATABASE_NAME = "jarvys-workspaces-agent-v1.db"
         const val NATIVE_UI_ORIGIN = "NATIVE_UI"
         private val TRANSACTION_LOCK = Any()
         private const val MAX_PAGE = 100
@@ -30,8 +30,99 @@ class WorkspaceRegistry(context: Context) : Closeable {
             "source_call", "source_run", "source_process")
         private val TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}")
         private val DIGEST = Regex("[0-9a-f]{64}")
+        private val CREATE_SQL = listOf(
+            """CREATE TABLE workspace (
+                workspace_id TEXT PRIMARY KEY NOT NULL, creation_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+                execution_session_id TEXT NOT NULL UNIQUE, owner_central_session_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL CHECK(created_at>0))""",
+            """CREATE TABLE assignment (
+                assignment_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
+                assignment_key TEXT NOT NULL, request_id TEXT NOT NULL, original_user_request TEXT NOT NULL,
+                mission_id TEXT NOT NULL, role TEXT NOT NULL, mission_text TEXT NOT NULL, tools_json TEXT, name TEXT,
+                mission_access TEXT NOT NULL CHECK(mission_access IN ('STANDARD','READ_ONLY')),
+                revision INTEGER NOT NULL CHECK(revision>0), process_id TEXT,
+                source_generation TEXT, source_owner TEXT, source_message TEXT, source_batch TEXT,
+                source_call TEXT, source_run TEXT, source_process TEXT,
+                state TEXT NOT NULL CHECK(state IN ('PREPARED','STARTED','BOUND','UNCERTAIN')), bot_id TEXT,
+                created_at INTEGER NOT NULL CHECK(created_at>0), updated_at INTEGER NOT NULL CHECK(updated_at>0),
+                UNIQUE(workspace_id,assignment_key), UNIQUE(workspace_id,assignment_id),
+                FOREIGN KEY(workspace_id) REFERENCES workspace(workspace_id))""",
+            "CREATE INDEX assignment_request ON assignment(workspace_id,request_id)",
+            """CREATE TABLE user_control (
+                request_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL, assignment_id TEXT NOT NULL,
+                bot_id TEXT NOT NULL, assignment_revision INTEGER NOT NULL CHECK(assignment_revision>0),
+                admitted_assignment_revision INTEGER, type TEXT NOT NULL CHECK(type IN ('PAUSE','RESUME','CORRECT')),
+                user_text TEXT NOT NULL, origin TEXT NOT NULL CHECK(origin='NATIVE_UI'),
+                revision INTEGER NOT NULL CHECK(revision>0), process_id TEXT,
+                state TEXT NOT NULL CHECK(state IN ('PENDING','STARTED','COMPLETE','UNCERTAIN')),
+                created_at INTEGER NOT NULL CHECK(created_at>0), updated_at INTEGER NOT NULL CHECK(updated_at>0),
+                FOREIGN KEY(workspace_id,assignment_id) REFERENCES assignment(workspace_id,assignment_id))""",
+            "CREATE INDEX control_workspace ON user_control(workspace_id,request_id)",
+            "CREATE INDEX control_active ON user_control(workspace_id,assignment_id,state)",
+            """CREATE TABLE central_read_receipt (
+                workspace_id TEXT NOT NULL, assignment_id TEXT NOT NULL, snapshot_digest TEXT NOT NULL,
+                read_at INTEGER NOT NULL CHECK(read_at>0), reader_central_session_id TEXT NOT NULL,
+                PRIMARY KEY(workspace_id,assignment_id,snapshot_digest),
+                FOREIGN KEY(workspace_id,assignment_id) REFERENCES assignment(workspace_id,assignment_id))"""
+        )
+
+        /** Read-only identity check before any current store is created. SQLite may maintain SHM coordination. */
+        internal fun preflightFreshStorage(context: Context) {
+            val file = context.applicationContext.getDatabasePath(DATABASE_NAME).absoluteFile
+            // Context supplies trusted higher ancestors (which may include Android system aliases).
+            // This boundary checks the immediate database directory and leaves, not an entire tree fence.
+            file.parentFile?.let { parent ->
+                val stat = statOrNull(parent)
+                if (stat != null && !android.system.OsConstants.S_ISDIR(stat.st_mode)) incompatible()
+            }
+            val main = statOrNull(file)
+            val sidecars = listOf("-wal", "-shm", "-journal").map { suffix ->
+                statOrNull(java.io.File(file.path + suffix))?.also {
+                    if (!android.system.OsConstants.S_ISREG(it.st_mode)) incompatible()
+                }
+            }
+            if (main == null || main.st_size == 0L) {
+                if (main != null && !android.system.OsConstants.S_ISREG(main.st_mode)) incompatible()
+                if (sidecars.any { it != null }) incompatible()
+                return
+            }
+            if (!android.system.OsConstants.S_ISREG(main.st_mode)) incompatible()
+            try {
+                SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY,
+                    DatabaseErrorHandler { incompatible() }).use { actual ->
+                    if (actual.version != 1) incompatible()
+                    SQLiteDatabase.create(null).use { expected ->
+                        CREATE_SQL.forEach(expected::execSQL)
+                        if (schema(actual) != schema(expected)) incompatible()
+                    }
+                }
+            } catch (_: android.database.sqlite.SQLiteDatabaseCorruptException) {
+                incompatible()
+            }
+        }
+
+        private fun schema(db: SQLiteDatabase): List<List<String?>> =
+            db.rawQuery("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name", null).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        val name = cursor.getString(1)
+                        // SQLite-owned autoindexes/statistics and Android locale metadata are not application DDL.
+                        if (name.startsWith("sqlite_") || name == "android_metadata") continue
+                        add((0..3).map { if (cursor.isNull(it)) null else cursor.getString(it) })
+                    }
+                }
+            }
+
+        private fun statOrNull(file: java.io.File): android.system.StructStat? = try {
+            android.system.Os.lstat(file.path)
+        } catch (missing: android.system.ErrnoException) {
+            if (missing.errno == android.system.OsConstants.ENOENT) null else throw missing
+        }
+
+        private fun incompatible(): Nothing = throw com.jarvys.agent.CleanInstallRequiredException()
     }
 
+    init { com.jarvys.agent.FreshStorageBootstrap.requireFreshInstall(context.applicationContext ?: context) }
     private val helper = Helper(context.applicationContext ?: context)
 
     data class Creation(val record: WorkspaceRecord, val created: Boolean)
@@ -57,7 +148,7 @@ class WorkspaceRegistry(context: Context) : Closeable {
         }
     }
 
-    internal fun openForReset() { helper.writableDatabase }
+    internal fun openForBootstrap() { helper.writableDatabase }
 
     fun nativeControls(): NativeWorkspaceControls = NativeWorkspaceControls(this)
 
@@ -633,60 +724,29 @@ class WorkspaceRegistry(context: Context) : Closeable {
         }
     }
 
-    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 2,
+    private class Helper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 1,
         DatabaseErrorHandler { throw WorkspaceRegistryCorruptException("Workspace database is corrupt; preserved without deletion") }) {
-        override fun getReadableDatabase(): SQLiteDatabase {
-            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir)
-            return super.getReadableDatabase()
+        private var preflightComplete = false
+        @Synchronized override fun getReadableDatabase(): SQLiteDatabase {
+            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
+            if (!preflightComplete) preflightFreshStorage(context)
+            return super.getReadableDatabase().also { preflightComplete = true }
         }
-        override fun getWritableDatabase(): SQLiteDatabase {
-            com.jarvys.agent.SingleSessionReset.awaitReadyBlocking(context.filesDir)
-            return super.getWritableDatabase()
+        @Synchronized override fun getWritableDatabase(): SQLiteDatabase {
+            com.jarvys.agent.FreshStorageBootstrap.awaitReadyBlocking(context.filesDir)
+            if (!preflightComplete) preflightFreshStorage(context)
+            return super.getWritableDatabase().also { preflightComplete = true }
+        }
+        @Synchronized override fun close() {
+            try { super.close() } finally { preflightComplete = false }
         }
         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
-        override fun onCreate(db: SQLiteDatabase) {
-            db.execSQL("""CREATE TABLE workspace (
-                workspace_id TEXT PRIMARY KEY NOT NULL, creation_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
-                execution_session_id TEXT NOT NULL UNIQUE, owner_central_session_id TEXT NOT NULL,
-                created_at INTEGER NOT NULL CHECK(created_at>0))""")
-            db.execSQL("""CREATE TABLE assignment (
-                assignment_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL,
-                assignment_key TEXT NOT NULL, request_id TEXT NOT NULL, original_user_request TEXT NOT NULL,
-                mission_id TEXT NOT NULL, role TEXT NOT NULL, mission_text TEXT NOT NULL, tools_json TEXT, name TEXT,
-                mission_access TEXT NOT NULL CHECK(mission_access IN ('STANDARD','READ_ONLY')),
-                revision INTEGER NOT NULL CHECK(revision>0), process_id TEXT,
-                state TEXT NOT NULL CHECK(state IN ('PREPARED','STARTED','BOUND','UNCERTAIN')), bot_id TEXT,
-                created_at INTEGER NOT NULL CHECK(created_at>0), updated_at INTEGER NOT NULL CHECK(updated_at>0),
-                UNIQUE(workspace_id,assignment_key), UNIQUE(workspace_id,assignment_id),
-                FOREIGN KEY(workspace_id) REFERENCES workspace(workspace_id))""")
-            addSourceColumns(db)
-            db.execSQL("CREATE INDEX assignment_request ON assignment(workspace_id,request_id)")
-            db.execSQL("""CREATE TABLE user_control (
-                request_id TEXT PRIMARY KEY NOT NULL, workspace_id TEXT NOT NULL, assignment_id TEXT NOT NULL,
-                bot_id TEXT NOT NULL, assignment_revision INTEGER NOT NULL CHECK(assignment_revision>0),
-                admitted_assignment_revision INTEGER, type TEXT NOT NULL CHECK(type IN ('PAUSE','RESUME','CORRECT')),
-                user_text TEXT NOT NULL, origin TEXT NOT NULL CHECK(origin='NATIVE_UI'),
-                revision INTEGER NOT NULL CHECK(revision>0), process_id TEXT,
-                state TEXT NOT NULL CHECK(state IN ('PENDING','STARTED','COMPLETE','UNCERTAIN')),
-                created_at INTEGER NOT NULL CHECK(created_at>0), updated_at INTEGER NOT NULL CHECK(updated_at>0),
-                FOREIGN KEY(workspace_id,assignment_id) REFERENCES assignment(workspace_id,assignment_id))""")
-            db.execSQL("CREATE INDEX control_workspace ON user_control(workspace_id,request_id)")
-            db.execSQL("CREATE INDEX control_active ON user_control(workspace_id,assignment_id,state)")
-            db.execSQL("""CREATE TABLE central_read_receipt (
-                workspace_id TEXT NOT NULL, assignment_id TEXT NOT NULL, snapshot_digest TEXT NOT NULL,
-                read_at INTEGER NOT NULL CHECK(read_at>0), reader_central_session_id TEXT NOT NULL,
-                PRIMARY KEY(workspace_id,assignment_id,snapshot_digest),
-                FOREIGN KEY(workspace_id,assignment_id) REFERENCES assignment(workspace_id,assignment_id))""")
-        }
-        private fun addSourceColumns(db: SQLiteDatabase) {
-            SOURCE_COLUMNS.forEach { db.execSQL("ALTER TABLE assignment ADD COLUMN $it TEXT") }
-        }
+        override fun onCreate(db: SQLiteDatabase) { CREATE_SQL.forEach(db::execSQL) }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion == 1 && newVersion == 2) { addSourceColumns(db); return }
-            throw WorkspaceRegistryCorruptException("Unsupported workspace registry upgrade $oldVersion to $newVersion")
+            throw com.jarvys.agent.CleanInstallRequiredException()
         }
         override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            throw WorkspaceRegistryCorruptException("Unsupported workspace registry downgrade $oldVersion to $newVersion")
+            throw com.jarvys.agent.CleanInstallRequiredException()
         }
     }
 }

@@ -1,1 +1,0 @@
-.\gradlew.bat :app:testFullDebugUnitTest --rerun --tests com.jarvys.agent.MainAgentInteractionTest --tests com.jarvys.agent.MainActivityWorkspaceRoutingTest -x :app:prepareApkFactoryTemplate --console=plain

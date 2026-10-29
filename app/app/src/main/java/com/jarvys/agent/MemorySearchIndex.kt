@@ -134,7 +134,7 @@ class Bm25SearchRanker(
             if (score <= 0.0) return@forEach
             val phraseMatches = parsed.phrases.count { phrase -> containsAdjacent(tokens, phrase) }
             score += phraseMatches * phraseBonus
-            scored += SearchHit(doc, score, fragments(doc.content, parsed), MemoryStore.containsLikelySecret(doc.content))
+            scored += SearchHit(doc, score, fragments(doc.content, parsed), ContentSecretHeuristic.containsLikelySecret(doc.content))
         }
         val ordered = scored.sortedWith(compareByDescending<SearchHit> { it.score }
             .thenBy { it.document.path }

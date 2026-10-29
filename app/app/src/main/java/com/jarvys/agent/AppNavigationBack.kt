@@ -48,8 +48,6 @@ object AppNavigationBackPolicy {
     const val MEMORY = "memory"
     const val TASKS = "tasks"
     const val TASK_DETAIL = "tasks/detail/{taskId}"
-    const val MEMORY_HISTORY = "memory/history"
-    const val MEMORY_FILE = "memory/file?path={path}&new={new}"
     const val BOTS = "bots"
     /** A mission is addressed by its execution session, which the argument keeps through activity recreation. */
     const val CREW = "crew/{missionId}?session={session}"
@@ -64,15 +62,13 @@ object AppNavigationBackPolicy {
         "connectors/remote/${android.net.Uri.encode(id)}?title=${android.net.Uri.encode(title)}"
     fun connectorGoogle(id: String, title: String) =
         "connectors/google/${android.net.Uri.encode(id)}?title=${android.net.Uri.encode(title)}"
-    fun memoryFile(path: String, isNew: Boolean) =
-        "memory/file?path=${android.net.Uri.encode(path)}&new=$isNew"
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
         CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, SETTINGS_DEVELOPER, SETTINGS_STORAGE, SETUP_WIZARD,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, MODULES, CONNECTORS,
-        CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
+        CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY,
         TASKS, TASK_DETAIL,
         BOTS, CREW, CREW_BOT, ARTIFACT_PREVIEW, MODULE_ARTIFACT_VIEWER,
     )
@@ -104,8 +100,6 @@ object AppNavigationBackPolicy {
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE ->
             AppRouteMeta(detailTitle ?: context.getString(R.string.connectors_title), false)
         MEMORY -> AppRouteMeta(context.getString(R.string.memory_title), false)
-        MEMORY_HISTORY -> AppRouteMeta(context.getString(R.string.memory_history), false)
-        MEMORY_FILE -> AppRouteMeta(context.getString(R.string.memory_title), false)
         TASKS -> AppRouteMeta(context.getString(R.string.tasks_title), false)
         TASK_DETAIL -> AppRouteMeta(detailTitle ?: context.getString(R.string.task_detail_title), false)
         BOTS -> AppRouteMeta(context.getString(R.string.drawer_bots), false, showTopBar = false)

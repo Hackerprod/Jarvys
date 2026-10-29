@@ -28,8 +28,10 @@ public final class WorkspaceIdentity {
         return sessionId.substring(PREFIX.length());
     }
 
+    /** Ordinary conversation service only. Workspace workers use their supervisor/Crew route. */
     public static String serviceSession(String requested) {
-        return isExecutionSession(requested) ? requested : CENTRAL_SESSION;
+        if (requested == null || requested.isEmpty() || isCentral(requested)) return CENTRAL_SESSION;
+        throw new IllegalArgumentException("The conversation service requires Central");
     }
 
     public static boolean isCentral(String sessionId) { return CENTRAL_SESSION.equals(sessionId); }

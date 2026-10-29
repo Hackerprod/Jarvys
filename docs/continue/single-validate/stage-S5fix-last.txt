@@ -1,5 +1,0 @@
-He corregido las ocho incidencias: la evidencia sigue protegiendo artefactos al olvidar o sustituir episodios; solo la compactación que primero cubre un lote queda protegida; y corregí los enlaces, filtros, candidatos de solapamiento, presupuesto de `expand=source` y migración del prompt con la regla F34.
-
-**Verificación:** compilación Full/Play y fuentes de tests: `BUILD SUCCESSFUL`. El lote limitado terminó con **88 tests, 0 fallos y 0 errores**. `git diff --check` no reportó errores.
-
-El informe con comandos, cambios, limitaciones y verificaciones pendientes está en [stage-S5fix-report.md](C:/Projects/Jarvys-wt/single-validate/stage-S5fix-report.md). No ejecuté la suite completa, no generé APK ni hice commit o push; `docs/SINGLE_SESSION.md` quedó intacto.

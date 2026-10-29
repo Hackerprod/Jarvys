@@ -67,7 +67,7 @@ class TaskManualRunWorker @JvmOverloads constructor(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         try {
-            com.jarvys.agent.SingleSessionReset.awaitReady(applicationContext)
+            com.jarvys.agent.FreshStorageBootstrap.awaitReady(applicationContext)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

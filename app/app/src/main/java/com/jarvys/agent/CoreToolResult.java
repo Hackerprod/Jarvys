@@ -80,6 +80,17 @@ public final class CoreToolResult {
         return new CoreToolResult(true, content, false, previewId, false);
     }
     public static CoreToolResult failure(String content) { return new CoreToolResult(false, content, false, null, false); }
+    /** Transport failure after a confirmed effect, not a rollback of that effect. */
+    public static CoreToolResult persistedResultUnavailable(String content, String evidence) {
+        if (evidence == null || evidence.trim().isEmpty()) throw new IllegalArgumentException("Persistence evidence is required");
+        return new CoreToolResult(false, content, true, null, false, evidence);
+    }
+
+    public static CoreToolResult persistedComplete(String content, String evidence) {
+        if (evidence == null || evidence.trim().isEmpty()) throw new IllegalArgumentException("Persistence evidence is required");
+        return new CoreToolResult(true, content, true, null, false, evidence);
+    }
+
     public static CoreToolResult persisted(String content, String evidence) {
         if (evidence == null || evidence.trim().isEmpty()) throw new IllegalArgumentException("Persistence evidence is required");
         return new CoreToolResult(true, content, false, null, false, evidence);

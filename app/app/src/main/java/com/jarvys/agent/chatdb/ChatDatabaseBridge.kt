@@ -7,6 +7,7 @@ import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.ConversationReader
 import com.jarvys.agent.ConversationTurn
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.EffectInvocation
 import com.jarvys.agent.MemoryWriteGate
 import com.jarvys.agent.MemoryWritePolicy
 import com.jarvys.agent.proactive.ProactiveReplyClaim
@@ -172,7 +173,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             try {
                 // This method only runs from execute()'s background task. Provider initialization
                 // and its schema preflight therefore cannot block the caller's main thread.
-                com.jarvys.agent.SingleSessionReset.ensure(applicationContext)
+                com.jarvys.agent.FreshStorageBootstrap.ensure(applicationContext)
                 val database = JarvysChatDatabaseProvider.getInstance(applicationContext)
                 val conversations = ConversationRepository(database)
                 val transcript = ModelTranscriptRepository(database)
@@ -221,22 +222,181 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     // Runtime-only automatic entrypoints: tickets never originate in model arguments. Human UI
     // editing uses the existing explicit methods; causal evidence is intentionally not gated.
+    @JvmOverloads
     fun personalAgentSetDirectiveAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
         section: String, directive: String, sourceMessageId: String?, evidence: String,
-        supersedesId: String?, conversationId: String?): PersonalMemoryReceipt =
-        executeAutomatic(ticket, token) { it.agentMemory.setDirective(section, directive, sourceMessageId,
-            evidence, supersedesId, conversationId) }
+        supersedesId: String?, conversationId: String?, witness: com.jarvys.agent.CentralInvocationWitness? = null): PersonalMemoryReceipt =
+        executeBoundMemoryMutation(ticket,token,conversationId,null,false,"user_profile_set",witness) { repos,_ ->
+            repos.agentMemory.setDirective(section,directive,sourceMessageId,evidence,supersedesId,conversationId)
+        }
 
     fun personalAgentSaveMemoryAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
         text: String, layer: String, category: String?, importance: Double, sourceRef: String?,
         options: MemorySaveOptions): PersonalMemoryReceipt =
         executeAutomatic(ticket, token) { it.agentMemory.saveMemory(text, layer, category, importance, sourceRef, options) }
 
+    fun personalAgentSaveMemoryAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        text: String, layer: String, category: String?, importance: Double, sourceRef: String?,
+        options: MemorySaveOptions, callerConversation: String?, project: String?, scope: String?): PersonalMemoryReceipt =
+        executeAutomaticNamespace(ticket, token, callerConversation, project, scope, false) { repos, namespace ->
+            repos.agentMemory.saveMemory(text, layer, category, importance, sourceRef, options, namespace)
+        }
+
+    /** Native save is keyed by its actual Central checkpoint, not an argument supplied by the model. */
+    fun personalAgentSaveMemoryOperationAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        request: MemorySaveRequest, witness: com.jarvys.agent.CentralInvocationWitness): PersonalMemoryReceipt = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        witness.requireInvocationCurrent()
+        val source = witness.source()
+        check(request.callerConversation == source.ownerCentralSessionId) { "memory_save_source_invalid" }
+        val namespace = MemoryNamespace.resolve(applicationContext, request.callerConversation, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, {
+            token.throwIfCancelled()
+            witness.requireInvocationCurrent()
+            true
+        }, Callable { runBlocking {
+            witness.requireInvocationCurrent()
+            repos.agentMemory.saveMemory(request.text, request.layer, request.category, request.importance, request.sourceRef,
+                request.options, namespace, MemorySaveOperationInput(request, witness))
+        } })
+    }
+
+    /** Separate post-commit operation: a rejected optional detection never rolls back the acknowledged save. */
+    fun personalAgentFindRelationCandidatesAutomatic(ticket:MemoryWriteGate.Ticket,token:CancellationToken,
+        request:MemorySaveRequest,witness:com.jarvys.agent.CentralInvocationWitness,savedId:String):MemoryCandidateResult = executeOnWorker { repos ->
+        val input=MemorySaveOperationInput(request,witness)
+        val gate=MemoryWritePolicy.forContext(applicationContext).gate()
+        fun owners()=MemoryNamespace.resolve(applicationContext,request.callerConversation,null,null,false,true,true)
+        fun check() { token.throwIfCancelled(); witness.requireInvocationCurrent() }
+        val repository=MemoryRelationRepository(repos.database)
+        detectRelationCandidates({
+            check(); val namespace=owners()
+            gate.commit(ticket,{ check(); true },Callable { runBlocking {
+                repos.database.withChatReadTransaction {
+                    check(); MemorySaveOperations.requireCommittedCandidateSource(repos.database,input,savedId,namespace)
+                    repository.lookup(savedId,namespace)
+                }
+            } })
+        }) { lookup,match ->
+            check(); val namespace=owners()
+            gate.commit(ticket,{ check(); true },Callable { runBlocking {
+                var prepared:MemorySaveOperations.Prepared?=null
+                repository.insertPending(lookup,match,namespace,beforeEffect={
+                    check(); prepared=MemorySaveOperations.requireCommittedCandidateSource(repos.database,input,savedId,namespace)
+                },afterEffect={
+                    check(); MemorySaveOperations.requireSessionForWrite(repos.database,input,requireNotNull(prepared)); check()
+                })
+            } })
+        }
+    }
+
+    fun personalAgentRelationDetails(judgmentId:String):MemoryRelationDetails = executeOnWorker { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        runBlocking { MemoryRelationRepository(repos.database).details(judgmentId,namespace) }
+    }
+    fun personalAgentJudgeRelation(details:MemoryRelationDetails,relation:String,reason:String?,evidence:String?,confidence:Double?):MemoryRelationView = executeOnWorker { repos ->
+        val args=linkedMapOf<String,Any?>("judgment_id" to details.relation.judgmentId,"relation" to relation)
+        reason?.let { args["reason"]=it };evidence?.let { args["evidence"]=it };confidence?.let { args["confidence"]=it }
+        val item=MemoryJudgmentArguments.prepare("memory_judge",args).items.single()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        runBlocking { MemoryRelationRepository(repos.database).judge(item,namespace,"user","human",null,displayed=details) }
+    }
+    /** One actual item submission. The selected operation comes only from the whole certified request. */
+    fun memoryJudgmentAutomatic(ticket:MemoryWriteGate.Ticket,token:CancellationToken,callerConversation:String?,
+        request:MemoryJudgmentRequest,index:Int,witness:com.jarvys.agent.CentralInvocationWitness):MemoryRelationView = executeOnWorker { repos ->
+        token.throwIfCancelled();witness.requireInvocationCurrent()
+        val namespace=try { MemoryNamespace.resolve(applicationContext,callerConversation,null,null,true,true) }
+            catch(failure:CancellationException) { throw failure }
+            catch(failure:RuntimeException) { throw MemoryJudgmentSourceResolutionException(failure) }
+        check(callerConversation==witness.source().ownerCentralSessionId) { "memory_judgment_source_invalid" }
+        check(index in request.items.indices && request.items[index].index==index && request.items[index].error==null) { "memory_judgment_source_invalid" }
+        val item=request.items[index]
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{
+            token.throwIfCancelled();witness.requireInvocationCurrent();true
+        },Callable { runBlocking {
+            val sessions=MemorySessionRepository(repos.database);var binding:MemorySessionBinding?=null
+            var sourceGuardPassed=false
+            val before={ token.throwIfCancelled();witness.requireInvocationCurrent();binding=sessions.requireJudgmentSource(request,witness);sourceGuardPassed=true;Unit }
+            val after={ token.throwIfCancelled();witness.requireInvocationCurrent();sessions.renewCurrent(requireNotNull(binding));token.throwIfCancelled();witness.requireInvocationCurrent() }
+            try {
+                // session provenance is obtained inside the writer guard, never from an argument or latest row.
+                repos.database.withChatWriteTransaction {
+                    before()
+                    val repository=MemoryRelationRepository(repos.database)
+                    if(request.toolName=="memory_compare") repository.compare(item,namespace,requireNotNull(binding).id,afterEffect=after)
+                    else repository.judge(item,namespace,"agent","agent",requireNotNull(binding).id,afterEffect=after)
+                }
+            } catch(failure:android.database.SQLException) {
+                // Corruption is not an ordinary recoverable item error. Preserve its original category.
+                if(isChatSqlCorruption(failure)) throw MemoryJudgmentStorageCorruptionException(failure)
+                if(!sourceGuardPassed) throw MemoryJudgmentSourceResolutionException(failure)
+                // This exception crossed the owned transaction rollback, not an unknown executor ACK.
+                throw MemoryJudgmentSqlItemException(failure)
+            }
+        } })
+    }
+
+    /** Human-requested detection is independent of automatic capture, never a model-supplied grant. */
+    fun personalAgentFindRelationCandidates(id:String,expectedProject:String):MemoryCandidateResult = executeOnWorker { repos ->
+        fun owners()=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,expectedProject,null,false,true)
+        val repository=MemoryRelationRepository(repos.database)
+        detectRelationCandidates({
+            val namespace=owners()
+            runBlocking { repository.lookup(id,namespace).also {
+                check(it.source.project==MemoryNamespace.normalizeProject(expectedProject)) { "memory_project_mismatch" }
+            } }
+        }) { lookup,match ->
+            val namespace=owners()
+            runBlocking { repository.insertPending(lookup,match,namespace) }
+        }
+    }
+
+    @JvmOverloads
+    fun personalAgentPendingRelations(limit:Int=20,offset:Int=0):MemoryRelationPage = executeOnWorker { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        runBlocking { MemoryRelationRepository(repos.database).pendingRelations(namespace,limit,offset) }
+    }
+
+    private fun detectRelationCandidates(lookup:()->MemoryRelationLookup,
+        insert:(MemoryRelationLookup,MemoryRelationMatch)->MemoryRelationCandidate?):MemoryCandidateResult {
+        val confirmed=ArrayList<MemoryRelationCandidate>(); var problem:String?=null
+        try {
+            val selected=lookup()
+            for(match in selected.candidates) {
+                try { insert(selected,match)?.let(confirmed::add) }
+                catch(failure:android.database.SQLException) { problem="memory_relation_sql_incomplete" }
+            }
+        } catch(failure:CancellationException) { throw failure }
+        catch(failure:MemoryWriteGate.RejectedException) { problem="memory_relation_policy_revoked" }
+        catch(failure:MemoryRelationSourceChanged) { problem="memory_relation_source_changed" }
+        catch(failure:MemoryRelationUnknownOutcome) { problem="memory_relation_unknown_outcome" }
+        catch(failure:android.database.SQLException) { problem="memory_relation_sql_incomplete" }
+        // Unexpected registry/proof/storage invariants propagate; they are not a benign policy denial.
+        return MemoryCandidateResult(if(problem==null) "complete" else "incomplete",confirmed,problem)
+    }
+
+    @JvmOverloads
+    fun personalAgentSetPinnedAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, pinned: Boolean, callerConversation: String?, witness: com.jarvys.agent.CentralInvocationWitness? = null): PersonalMemoryReceipt =
+        executeBoundMemoryMutation(ticket, token, callerConversation, null, true,if(pinned) "memory_pin" else "memory_unpin",witness) { repos, namespace ->
+            repos.agentMemory.setPinned(id, pinned, namespace)
+        }
+
+    @JvmOverloads
+    fun personalAgentForgetAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, callerConversation: String?, witness: com.jarvys.agent.CentralInvocationWitness? = null): PersonalMemoryReceipt = executeBoundMemoryMutation(ticket, token, callerConversation, null, true,"memory_forget",witness) { repos, namespace ->
+            repos.agentMemory.forget(id, namespace)
+        }
+
+    @JvmOverloads
+    fun personalAgentUpdateAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        id: String, expectedProject: String, options: MemoryUpdateOptions, callerConversation: String?, witness: com.jarvys.agent.CentralInvocationWitness? = null): PersonalMemoryReceipt =
+        executeBoundMemoryMutation(ticket, token, callerConversation, expectedProject, true,"memory_update",witness) { repos, namespace ->
+            repos.agentMemory.update(id, expectedProject, options, namespace, "agent")
+        }
+
     fun personalAgentForgetAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
         id: String): PersonalMemoryReceipt = executeAutomatic(ticket, token) { it.agentMemory.forget(id) }
-
-    fun personalAgentCorrectAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
-        id: String, text: String): PersonalMemoryReceipt = executeAutomatic(ticket, token) { it.agentMemory.correct(id, text) }
 
     fun personalAgentConsolidateAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
         sourceIds: List<String>, summary: String): PersonalMemoryReceipt =
@@ -256,10 +416,10 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     fun personalAgentNameSync(): String? = withAgentMemory("read agent name") { it.agentName() }
 
-    fun appendConnectorAuditSync(record: AutonomyAuditRecord) = importConnectorAuditSync(listOf(record))
+    fun appendConnectorAuditSync(record: AutonomyAuditRecord) = appendConnectorAuditsSync(listOf(record))
 
-    /** Atomic legacy import and idempotent append. Conflicting reuse of an ID is not a replay. */
-    fun importConnectorAuditSync(records: List<AutonomyAuditRecord>) = execute { repositories ->
+    /** Atomic batch append with idempotent IDs. Conflicting reuse of an ID is not a replay. */
+    fun appendConnectorAuditsSync(records: List<AutonomyAuditRecord>) = execute { repositories ->
         repositories.database.withChatWriteTransaction {
             val sql = repositories.database.chatSql
             records.forEach { record ->
@@ -380,15 +540,28 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     /** [runKind] is the wire name of the run's `RunKind`; unattended runs pass an empty [conversationId]. */
     fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean,
                                    runKind: String): PersonalAgentPromptContext =
-        withAgentMemory("read personal context") { it.promptContext(conversationId, memoryEnabled, runKind) }
+        withAgentMemory("read personal context") {
+            // Existing profile/docs projection is not a canonical memory-context grant.
+            val canonical = conversationId == MemoryNamespace.CENTRAL && runKind == "principal"
+            val namespace = if (memoryEnabled && canonical)
+                MemoryNamespace.resolve(applicationContext, conversationId, null, null, false, true)
+            else MemoryNamespace.centralRead()
+            it.promptContext(conversationId, memoryEnabled, runKind, namespace, canonical)
+        }
+
+    /** Trusted request-local namespace already resolved outside Room; it is not a model argument. */
+    @JvmOverloads
+    fun personalAgentPromptContextWithNamespace(conversationId: String, memoryEnabled: Boolean,
+        runKind: String, namespace: MemoryNamespace, reminder: String = "",
+        compactionSession: MemorySessionBinding? = null): PersonalAgentPromptContext =
+        withAgentMemory("read personal context") {
+            require(conversationId == MemoryNamespace.CENTRAL && runKind == "principal") { "memory_caller_denied" }
+            it.promptContext(conversationId, memoryEnabled, runKind, namespace, true, reminder, compactionSession)
+        }
 
     fun personalAgentSetDirective(section: String, directive: String, sourceMessageId: String?, evidence: String,
                                   supersedesId: String? = null, conversationId: String? = null): PersonalMemoryReceipt =
         withAgentMemory("save user directive") { it.setDirective(section, directive, sourceMessageId, evidence, supersedesId, conversationId) }
-
-    fun personalAgentSaveMemory(text: String, layer: String, category: String?, importance: Double,
-                                sourceRef: String?): PersonalMemoryReceipt =
-        withAgentMemory("save memory") { it.saveMemory(text, layer, category, importance, sourceRef) }
 
     fun personalAgentSaveMemory(text: String, layer: String, category: String?, importance: Double,
                                 sourceRef: String?, options: MemorySaveOptions): PersonalMemoryReceipt =
@@ -400,32 +573,394 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentConsolidateDailyNotes(sourceIds: List<String>, summary: String): PersonalMemoryReceipt =
         withAgentMemory("consolidate daily notes") { it.consolidateDailyNotes(sourceIds, summary) }
 
-    fun personalAgentSearch(query: String, limit: Int = DEFAULT_MEMORY_SEARCH_LIMIT): List<PersonalMemoryHit> =
-        withAgentMemory("search memory") { it.search(query, limit) }
+    fun personalAgentTimeline(id: String, before: Int, after: Int,
+        callerConversation: String?, project: String?): PersonalMemoryTimeline =
+        withAgentMemory("read memory timeline") { repository ->
+            val namespace = MemoryNamespace.resolve(applicationContext, callerConversation, project, null, false, true)
+            repository.timeline(id, before, after, namespace)
+        }
+
+    @JvmOverloads
+    fun personalAgentList(limit: Int = 8, filter: MemorySearchFilter = MemorySearchFilter()): List<PersonalMemoryHit> =
+        personalAgentList(limit, filter, MemoryNamespace.CENTRAL, null, null, false)
+
+    fun personalAgentList(limit: Int, filter: MemorySearchFilter, callerConversation: String?,
+        project: String?, scope: String?, allProjects: Boolean): List<PersonalMemoryHit> =
+        withAgentMemory("list memory") { repository ->
+            val namespace = MemoryNamespace.resolve(applicationContext, callerConversation, project, scope, allProjects, true)
+            repository.listMemories(limit, filter, namespace)
+        }
+
+    fun personalAgentSearch(query: String, limit: Int = 10): List<PersonalMemoryHit> =
+        personalAgentSearch(query, limit, MemorySearchFilter(), MemoryNamespace.CENTRAL, null, null, false)
 
     fun personalAgentSearch(query: String, limit: Int, filter: MemorySearchFilter): List<PersonalMemoryHit> =
-        withAgentMemory("search memory") { it.search(query, limit, filter) }
+        personalAgentSearch(query, limit, filter, MemoryNamespace.CENTRAL, null, null, false)
+
+    @JvmOverloads
+    fun personalAgentSearch(query: String, limit: Int, filter: MemorySearchFilter,
+        callerConversation: String?, project: String?, scope: String?, allProjects: Boolean,
+        activity: com.jarvys.agent.MemorySessionActivity.Handle? = null): List<PersonalMemoryHit> =
+        withAgentMemory("search memory") { repository ->
+            CanonicalMemorySearch.normalizeMatchMode(filter.matchMode)
+            val namespace = MemoryNamespace.resolve(applicationContext, callerConversation, project, scope, allProjects, true)
+            repository.search(query, limit, filter, namespace, activity)
+        }
+
+    internal var compactionClock:java.time.Clock = java.time.Clock.systemUTC()
+    @JvmOverloads
+    fun beginCompactionMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,parent:MemorySessionBinding,coverage:CompactionCoverage?=null):CompactionMemoryBinding = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,false,true,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable {
+            runBlocking { repos.database.withChatWriteTransaction {
+                token.throwIfCancelled();CompactionExecutionRepository(repos.database,compactionClock).begin(parent,coverage)
+            } }
+        })
+    }
+    fun finishCompactionMemory(ticket:MemoryWriteGate.Ticket,binding:CompactionMemoryBinding,outcome:String):Boolean = executeOnWorker { repos ->
+        require(outcome in setOf("incomplete","cancelled")) { "memory_compaction_cleanup_outcome_invalid" }
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{true},Callable {
+            runBlocking { CompactionExecutionRepository(repos.database,compactionClock).finish(binding,outcome) }
+        })
+    }
+    fun saveCompactionMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:CompactionMemoryBinding,request:MemorySaveRequest):PersonalMemoryReceipt =
+        executeCompactionMemory(ticket,token,binding) { repos,namespace ->
+            check(request.callerConversation==MemoryNamespace.CENTRAL && (request.requestedProject==null || request.requestedProject==MemoryNamespace.CENTRAL)) { "memory_compaction_scope_invalid" }
+            repos.agentMemory.saveMemory(request.text,request.layer,request.category,request.importance,request.sourceRef,request.options,namespace.selectWrite(request.requestedProject,request.rawScope),compaction=binding)
+        }
+    fun setCompactionDirective(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:CompactionMemoryBinding,
+        section:String,directive:String,source:String?,evidence:String,supersedes:String?,conversation:String?):PersonalMemoryReceipt =
+        executeCompactionMemory(ticket,token,binding) { repos,_ ->
+            check(conversation==MemoryNamespace.CENTRAL) { "memory_compaction_scope_invalid" }
+            repos.agentMemory.setDirective(section,directive,source,evidence,supersedes,conversation)
+        }
+    fun setCompactionNarration(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:CompactionMemoryBinding,id:String,state:String,title:String?,text:String?) =
+        executeCompactionMemory(ticket,token,binding,true) { repos,_ ->
+            check(binding.acknowledgedCoverage?.episodes?.any { it.id==id }==true) { "memory_compaction_narration_scope_invalid" }
+            repos.agentMemory.setEpisodeNarration(id,state,title,text)
+        }
+    fun commitCompactionNarration(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:CompactionMemoryBinding,id:String,expected:EpisodeNarrationInput,state:String,title:String?,text:String?):Boolean =
+        executeCompactionMemory(ticket,token,binding,true) { repos,_ ->
+            check(binding.acknowledgedCoverage?.episodes?.any { it.id==id }==true) { "memory_compaction_narration_scope_invalid" }
+            repos.agentMemory.commitEpisodeNarration(id,expected,state,title,text)
+        }
+    private fun <T> executeCompactionMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:CompactionMemoryBinding,
+        narration:Boolean=false,block:suspend(Repositories,MemoryNamespace)->T):T {
+        val previous=if(narration) binding.acknowledgedCoverage else null
+        try {
+            val acknowledged=executeOnWorker { repos ->
+                binding.check(token)
+                val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,false,true,true)
+                MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{binding.check(token);true},Callable {
+                    runBlocking { repos.database.withChatWriteTransaction {
+                        binding.check(token)
+                        val execution=CompactionExecutionRepository(repos.database,compactionClock)
+                        execution.requireCurrent(binding)
+                        if(narration) check(previous!=null && CompactionMemoryRepository(repos.database).prepare(previous.conversationId,previous.sources)==previous) { "memory_compaction_source_changed" }
+                        // Only these narrow closures: no provider or swallowed savepoint rollback.
+                        val before=execution.changes()
+                        val result=block(repos,namespace)
+                        binding.check(token)
+                        if(execution.changes()>before) execution.renew(binding)
+                        val after=if(narration) CompactionMemoryRepository(repos.database).prepare(requireNotNull(previous).conversationId,previous.sources) else null
+                        if(narration) check(after!=null && after.sources==previous?.sources && after.leaves==previous?.leaves && after.coverageHash==previous?.coverageHash) { "memory_compaction_source_changed" }
+                        Pair(result,after)
+                    } }
+                })
+            }
+            // Only a returned transport ACK can advance the exact own-mutation snapshot.
+            if(narration) binding.acknowledge(previous,acknowledged.second)
+            return acknowledged.first
+        } catch(failure:RuntimeException) { binding.recordFailure(failure);throw failure }
+    }
+
+    internal var maintenanceClock:java.time.Clock = java.time.Clock.systemUTC()
+    internal fun maintenanceNow():Long = maintenanceClock.millis()
+    fun claimMaintenanceJob(ticket:MemoryWriteGate.Ticket,token:CancellationToken,id:String,owner:String,now:Long,leaseUntil:Long,
+        workerActive:java.util.function.BooleanSupplier=java.util.function.BooleanSupplier { true }):MaintenanceClaimResult = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,false,true,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{if(!workerActive.asBoolean) token.cancel();token.throwIfCancelled();true},Callable {
+            runBlocking { MaintenanceMemoryRepository(repos.database,maintenanceClock).claim(id,owner,now,leaseUntil) { if(!workerActive.asBoolean) token.cancel();token.throwIfCancelled() } }.let { result ->
+                result.copy(binding=result.binding?.withWorkerCheck { workerActive.asBoolean })
+            }
+        })
+    }
+    fun completeMaintenanceJob(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding):Boolean =
+        executeMaintenance(ticket,token,binding,setOf("extract","snapshot","narrate","daily_consolidate")) { repos,_ -> MaintenanceMemoryRepository(repos.database,maintenanceClock).complete(binding) }
+    fun retryMaintenanceJob(ticket:MemoryWriteGate.Ticket,binding:MaintenanceMemoryBinding,reason:String,availableAt:Long):Boolean = executeOnWorker { repos ->
+        try { MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{true},Callable {
+            runBlocking { MaintenanceMemoryRepository(repos.database,maintenanceClock).retry(binding,reason,availableAt,true) }
+        }) } catch(rejected:MemoryWriteGate.RejectedException) {
+            runBlocking { MaintenanceMemoryRepository(repos.database,maintenanceClock).retry(binding,reason,availableAt,false) }
+        }
+    }
+    fun abortDeletedMaintenanceJob(binding:MaintenanceMemoryBinding):Boolean = executeOnWorker { repos ->
+        runBlocking { MaintenanceMemoryRepository(repos.database,maintenanceClock).deleted(binding) }
+    }
+    fun saveMaintenanceMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,request:MemorySaveRequest):PersonalMemoryReceipt =
+        executeMaintenance(ticket,token,binding,setOf("extract","snapshot")) { repos,namespace ->
+            check(request.callerConversation==binding.sourceConversation && (request.requestedProject==null || request.requestedProject==MemoryNamespace.CENTRAL)) { "memory_job_scope_invalid" }
+            val selected=namespace.selectWrite(request.requestedProject,request.rawScope)
+            repos.agentMemory.saveMemory(request.text,request.layer,request.category,request.importance,request.sourceRef,request.options,selected,maintenance=binding)
+        }
+    fun setMaintenanceDirective(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,
+        section:String,directive:String,source:String?,evidence:String,supersedes:String?,conversation:String?):PersonalMemoryReceipt =
+        executeMaintenance(ticket,token,binding,setOf("extract","snapshot")) { repos,_ ->
+            check(conversation==binding.sourceConversation) { "memory_job_scope_invalid" }
+            repos.agentMemory.setDirective(section,directive,source,evidence,supersedes,conversation)
+        }
+    fun consolidateMaintenanceMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,ids:List<String>,summary:String):PersonalMemoryReceipt =
+        executeMaintenance(ticket,token,binding,setOf("daily_consolidate")) { repos,_ -> repos.agentMemory.consolidateDailyNotes(ids,summary,binding) }
+    fun setMaintenanceNarration(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,id:String,state:String,title:String?,text:String?) =
+        executeMaintenance(ticket,token,binding,setOf("narrate")) { repos,_ -> repos.agentMemory.setEpisodeNarration(id,state,title,text) }
+    fun commitMaintenanceNarration(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,id:String,expected:EpisodeNarrationInput,state:String,title:String?,text:String?):Boolean =
+        executeMaintenance(ticket,token,binding,setOf("narrate")) { repos,_ -> repos.agentMemory.commitEpisodeNarration(id,expected,state,title,text) }
+    fun advanceMaintenanceCursor(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,conversation:String,throughSeq:Long) =
+        executeMaintenance(ticket,token,binding,setOf("extract","snapshot")) { repos,_ ->
+            check(conversation==binding.sourceConversation) { "memory_job_scope_invalid" };repos.agentMemory.advanceExtractionCursor(conversation,throughSeq)
+        }
+    private fun <T> executeMaintenance(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MaintenanceMemoryBinding,
+        allowed:Set<String>,block:suspend(Repositories,MemoryNamespace)->T):T = executeOnWorker { repos ->
+        binding.checkCancellation(token)
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,false,true,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{binding.checkCancellation(token);true},Callable {
+            runBlocking { repos.database.withChatWriteTransaction {
+                binding.checkCancellation(token)
+                try { MaintenanceMemoryRepository(repos.database,maintenanceClock).requireCurrent(binding,allowed) }
+                catch(deleted:MaintenanceSessionDeletedException) { binding.recordDeletion(deleted);throw deleted }
+                block(repos,namespace)
+            } }
+        })
+    }
+
+    fun personalAgentGet(ids: List<String>, withEvidence: Boolean, callerConversation: String?): List<PersonalMemoryHit> =
+        personalAgentGet(ids, withEvidence, callerConversation, false, 0L)
+
+    fun personalAgentGet(ids: List<String>, withEvidence: Boolean, callerConversation: String?, includeHistory: Boolean, historyCursor: Long): List<PersonalMemoryHit> =
+        withAgentMemory("read memory") { repository ->
+            val namespace = MemoryNamespace.resolve(applicationContext, callerConversation, null, null, false, true, true)
+            repository.get(ids, withEvidence, namespace, includeHistory, historyCursor, 50)
+        }
+
+    fun personalAgentPromptContext(conversationId: String, memoryEnabled: Boolean, runKind: String,
+        project: String?, scope: String?): PersonalAgentPromptContext = withAgentMemory("memory context") {
+            val namespace = MemoryNamespace.resolve(applicationContext, conversationId, project, scope, false, true)
+            it.promptContext(conversationId, memoryEnabled, runKind, namespace)
+        }
 
     fun personalAgentSearchCapability(): String =
         withAgentMemory("read memory search capability") { it.searchCapability() }
 
     fun personalAgentGet(ids: List<String>): List<PersonalMemoryHit> =
-        withAgentMemory("read memory") { it.get(ids) }
+        personalAgentGet(ids, false, MemoryNamespace.CENTRAL)
 
     fun personalAgentGet(ids: List<String>, withEvidence: Boolean): List<PersonalMemoryHit> =
-        withAgentMemory("read memory") { it.get(ids, withEvidence) }
+        personalAgentGet(ids, withEvidence, MemoryNamespace.CENTRAL)
 
-    fun personalAgentBrowse(): List<PersonalMemoryItem> =
-        withAgentMemory("browse memory") { it.browse() }
+    @JvmOverloads
+    fun personalAgentBrowse(includeDeleted: Boolean = false): List<PersonalMemoryItem> =
+        withAgentMemory("browse memory") { it.browse(MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true), includeDeleted) }
+
+    /** Trusted runtime producer only; session IDs are allocated once before this call, never from model input. */
+    fun beginMemorySession(ticket: MemoryWriteGate.Ticket, token: CancellationToken, canonicalId: String,
+        conversation: String, ownerMessage: String, runId: String, processId: String): MemorySessionBinding = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext, conversation, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { token.throwIfCancelled(); true }, Callable {
+            runBlocking { MemorySessionRepository(repos.database).begin(canonicalId, conversation, ownerMessage, runId, processId) }
+        })
+    }
+    fun memorySessionCommandAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        action: String, args: Map<String, Any?>, witness: com.jarvys.agent.CentralInvocationWitness): Any = executeOnWorker { repos ->
+        val claimed=witness.source()
+        val content=MemorySessionCommands.content(action,args)
+        val request=MemorySessionCommands.request(content,claimed.ownerCentralSessionId,claimed.sourceMessageId)
+        val namespace=MemoryNamespace.resolve(applicationContext,claimed.ownerCentralSessionId,null,null,false,true,true)
+        val input=MemorySaveOperationInput(request,witness,action)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { token.throwIfCancelled(); witness.requireInvocationCurrent(); true }, Callable {
+            runBlocking {
+                if(action==MemorySessionCommands.FINALIZE) MemorySessionRepository(repos.database).finalize(input,namespace)
+                else repos.agentMemory.saveMemory(request.text,request.layer,request.category,request.importance,request.sourceRef,request.options,namespace,input)
+            }
+        })
+    }
+    /** Internal completed-answer producer. No transcript scan, retry, fallback session, or model tool. */
+    @JvmOverloads
+    fun capturePassiveMemory(ticket:MemoryWriteGate.Ticket,token:CancellationToken,binding:MemorySessionBinding,
+        answer:String,activity:com.jarvys.agent.MemorySessionActivity.Handle?=null):MemoryPassiveCaptureResult = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext,binding.ownerConversation,null,null,false,true,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable {
+            runBlocking { repos.database.withChatReadTransaction { MemorySessionRepository(repos.database).requirePassiveCurrent(binding) } }
+        })
+        activity?.recordToolCall()
+        val learnings=MemoryPassiveCapture.extractLearnings(answer)
+        var saved=0;var duplicates=0
+        try {
+            learnings.forEachIndexed { ordinal,learning ->
+                val namespace=MemoryNamespace.resolve(applicationContext,binding.ownerConversation,null,null,false,true,true)
+                val didSave=MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable {
+                    runBlocking { repos.agentMemory.capturePassiveItem(learning,ordinal,binding,namespace) }
+                })
+                if(didSave) saved++ else duplicates++
+            }
+        } catch(failure:Exception) {
+            throw MemoryPassiveCaptureException(MemoryPassiveCaptureResult(learnings.size,saved,duplicates),failure)
+        }
+        MemoryPassiveCaptureResult(learnings.size,saved,duplicates)
+    }
+    fun validateMemoryResumeReceipt(receipt: MemorySessionResumeReceipt): Boolean = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext, receipt.conversationId, null, null, false, true, true)
+        runBlocking { repos.database.withChatReadTransaction { MemorySessionRepository(repos.database).validResumeReceipt(receipt) } }
+    }
+    fun beginResumedMemorySession(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        admission: com.jarvys.agent.AgentForegroundService.MemoryResumeAdmission,
+        runId: String, processId: String): MemorySessionBinding = executeOnWorker { repos ->
+        admission.requireCurrent(token)
+        val receipt=admission.receipt
+        MemoryNamespace.resolve(applicationContext, receipt.conversationId, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { admission.requireCurrent(token); token.throwIfCancelled(); true }, Callable {
+            runBlocking { MemorySessionRepository(repos.database).resume(receipt,runId,processId) }
+        })
+    }
+    fun renewMemorySession(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        binding: MemorySessionBinding): Boolean = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext, binding.ownerConversation, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { token.throwIfCancelled(); true }, Callable {
+            runBlocking { MemorySessionRepository(repos.database).renew(binding) }
+        })
+    }
+    fun captureMemoryPrompt(ticket: MemoryWriteGate.PromptCaptureTicket, token: CancellationToken,
+        binding: MemorySessionBinding): String = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext, binding.ownerConversation, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commitPrompt(ticket, { token.throwIfCancelled(); true }, Callable {
+            runBlocking { MemorySessionRepository(repos.database).capturePrompt(binding) }
+        })
+    }
+    /** Cancellation is the outcome here, not permission to create content. OFF/ABA still denies this commit. */
+    fun finishMemorySession(ticket: MemoryWriteGate.Ticket, binding: MemorySessionBinding, outcome: String) = executeOnWorker { repos ->
+        MemoryNamespace.resolve(applicationContext, binding.ownerConversation, null, null, false, true, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { true }, Callable {
+            runBlocking { MemorySessionRepository(repos.database).finish(binding, outcome) }
+        })
+    }
+    fun memoryReviewList(ticket:MemoryWriteGate.Ticket,token:CancellationToken,caller:String?,project:String?,limit:Long):List<PersonalMemoryHit> = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val all=MemoryObservationContent.trimSpace(project.orEmpty()).isEmpty()
+        val namespace=MemoryNamespace.resolve(applicationContext,caller,project,null,all,true)
+        val reviewNow=System.currentTimeMillis()
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable {
+            runBlocking { repos.database.withChatReadTransaction {
+                token.throwIfCancelled()
+                repos.agentMemory.memoriesNeedingReview(namespace,limit,reviewNow).also { token.throwIfCancelled() }
+            } }
+        })
+    }
+
+    fun memoryMarkReviewedAutomatic(ticket:MemoryWriteGate.Ticket,token:CancellationToken,caller:String?,project:String?,id:String,
+        witness:com.jarvys.agent.CentralInvocationWitness):PersonalMemoryReviewReceipt =
+        executeBoundMemoryMutation(ticket,token,caller,project?.takeIf { MemoryObservationContent.trimSpace(it).isNotEmpty() },false,"memory_review",witness,reviewTargetId=id) { repos,namespace ->
+            repos.agentMemory.markReviewed(id,namespace.project,namespace)
+        }
+
+    @JvmOverloads
+    fun personalAgentMemoriesNeedingReview(project:String?=null,limit:Long=20):List<PersonalMemoryItem> = withAgentMemory("read memories needing review") {
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,project,null,
+            MemoryObservationContent.trimSpace(project.orEmpty()).isEmpty(),true)
+        it.reviewItems(namespace,limit)
+    }
+    /** Explicit human metadata editing remains independent of the automatic-memory switch. */
+    fun personalAgentMarkReviewed(id:String,expectedProject:String):PersonalMemoryReviewReceipt = withAgentMemory("mark memory reviewed") {
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,expectedProject,null,false,true)
+        it.markReviewed(id,expectedProject,namespace)
+    }
+
+    @JvmOverloads
+    fun memoryContext(ticket:MemoryWriteGate.Ticket, token:CancellationToken, callerConversation:String?,
+        project:String?, scope:String?, compact:Boolean, olderHistory:Boolean, maxBytes:Int,
+        activity:com.jarvys.agent.MemorySessionActivity.Handle?=null):String = executeOnWorker { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext,callerConversation,project,scope,false,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();true},Callable {
+            token.throwIfCancelled()
+            // One reached handler event, outside the replayable read snapshot. This handle grants nothing.
+            activity?.recordToolCall()
+            val reminder=activity?.reminder(namespace.project).orEmpty()
+            runBlocking { repos.database.withChatReadTransaction {
+                token.throwIfCancelled()
+                repos.agentMemory.canonicalContext(namespace,compact,olderHistory,
+                    CanonicalMemoryContextArguments.maxBytes(maxBytes),reminder).also { token.throwIfCancelled() }
+            } }
+        })
+    }
+
+    fun searchMemoryPrompts(ticket:MemoryWriteGate.Ticket, token:CancellationToken, callerConversation:String?,
+        query:String, limit:Long, project:String?, allProjects:Boolean):List<PersonalMemoryPromptView> = execute { repos ->
+        require(query.isNotEmpty()) { "memory_search_prompts_query_required" }
+        require(project==null || MemoryObservationContent.trimSpace(project).isNotEmpty()) { "memory_search_prompts_project_invalid" }
+        require(!allProjects || project==null) { "memory_search_prompts_project_conflict" }
+        val namespace=MemoryNamespace.resolve(applicationContext,callerConversation,project,null,allProjects,true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { token.throwIfCancelled(); true }, Callable {
+            runBlocking { repos.database.withChatReadTransaction {
+                token.throwIfCancelled()
+                MemorySessionRepository(repos.database).searchPrompts(query,limit,namespace,token)
+            } }
+        })
+    }
+
+    fun personalAgentMemorySessions(): List<PersonalMemorySessionView> = execute { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)
+        MemorySessionRepository(repos.database).sessions(namespace)
+    }
+    fun personalAgentMemoryPrompts(sessionId: String): List<PersonalMemoryPromptView> = execute { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)
+        MemorySessionRepository(repos.database).prompts(sessionId,namespace)
+    }
+    fun personalAgentDeleteMemoryPrompt(id: String, expectedProject: String): PersonalMemoryDomainDeletionReceipt = execute { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)
+        MemorySessionRepository(repos.database).deletePrompt(id,expectedProject,namespace)
+    }
+    fun personalAgentDeleteMemorySession(id: String, expectedProject: String): PersonalMemoryDomainDeletionReceipt = execute { repos ->
+        val namespace=MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)
+        MemorySessionRepository(repos.database).deleteSession(id,expectedProject,namespace)
+    }
+
+    /** Manual memory-domain project management; no autonomous tool, transcript, or workspace deletion. */
+    fun personalAgentMemoryProjects(): List<PersonalMemoryProjectSummary> =
+        withAgentMemory("list projects with memories") { it.memoryProjects(
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
+
+    fun personalAgentPreviewProjectDeletion(project: String, hardDelete: Boolean): PersonalMemoryProjectDeletionPreview =
+        withAgentMemory("preview project memory deletion") { it.previewProjectDeletion(project, hardDelete,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
+
+    fun personalAgentDeleteProjectMemories(preview: PersonalMemoryProjectDeletionPreview): PersonalMemoryProjectDeletionReceipt =
+        withAgentMemory("delete project memories") { it.deleteProjectMemories(preview,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
 
     fun personalAgentRevisions(targetId: String): List<PersonalMemoryRevision> =
         withAgentMemory("read directive revision history") { it.revisions(targetId) }
 
-    fun personalAgentForget(id: String): PersonalMemoryReceipt =
-        withAgentMemory("forget memory") { it.forget(id) }
+    fun personalAgentSetPinned(id: String, pinned: Boolean): PersonalMemoryReceipt =
+        withAgentMemory("update memory pin") { it.setPinned(id, pinned,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
 
-    fun personalAgentCorrect(id: String, text: String): PersonalMemoryReceipt =
-        withAgentMemory("correct memory") { it.correct(id, text) }
+    /** Explicit user UI operation; not an automatic memory tool entry point. */
+    fun personalAgentDeleteObservation(id: String, expectedProject: String): PersonalMemoryReceipt =
+        withAgentMemory("delete memory observation") { it.deleteObservation(id, expectedProject,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
+
+    /** Explicit irreversible manual action; never registered as an autonomous tool. */
+    fun personalAgentHardDeleteObservation(id: String, expectedProject: String): PersonalMemoryDeletionReceipt =
+        withAgentMemory("permanently delete memory observation") { it.hardDeleteObservation(id, expectedProject,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
+
+    fun personalAgentForgetDirective(id: String): PersonalMemoryReceipt =
+        withAgentMemory("forget profile directive") { it.forgetDirective(id) }
+
+    fun personalAgentForget(id: String): PersonalMemoryReceipt =
+        withAgentMemory("forget memory") { it.forget(id, MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, false, true, true)) }
+
+    fun personalAgentUpdate(id: String, expectedProject: String, options: MemoryUpdateOptions): PersonalMemoryReceipt =
+        withAgentMemory("update memory") { it.update(id, expectedProject, options,
+            MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, expectedProject, null, false, true, true)) }
 
     fun personalAgentSetProfile(name: String, vibe: String, emoji: String, bootstrapCompleted: Boolean = true): PersonalMemoryReceipt =
         withAgentMemory("save assistant profile") { it.saveAgentProfile(name, vibe, emoji, bootstrapCompleted) }
@@ -443,7 +978,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         withAgentMemory("record memory flush") { it.markMemoryFlushCompleted(conversationId, kind) }
 
     fun personalAgentEnqueueJob(conversationId: String?, type: String = "extract"): String =
-        withAgentMemory("queue memory maintenance") { it.enqueueMemoryJob(conversationId, type) }
+        withAgentMemory("queue memory maintenance") { it.enqueueMemoryJob(conversationId, type, maintenanceClock.millis()) }
 
     fun personalAgentClaimJob(id: String, owner: String, now: Long, leaseUntil: Long): PersonalMemoryJob? =
         withAgentMemory("claim memory maintenance") { it.claimExtractionJob(id, owner, now, leaseUntil) }
@@ -494,6 +1029,158 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun projectCodingJobSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit) {
         recordCodingCommit(commit, CodingJobRepository.Kind.JOURNAL_PROJECTION)
     }
+
+    /** Durable exact-source cancellation intent. A late ACK never resumes the cancellation caller. */
+    /** Optional attribution lookup only; always validate the live cancellation witness around IO. */
+    fun resolveCodingCancellationSource(invocation: EffectInvocation): com.jarvys.agent.coding.CodingJobEvidence.Source? {
+        check(LeasedConnectionElement.current()==null && RawReadConnectionElement.current()==null)
+        val witness=checkNotNull(invocation.crewSource()) { "Cancellation requires its actual Crew source" }
+        witness.requireInvocationCurrent()
+        val source=witness.source()
+        val resolved=try {resolveCodingJobSource(applicationContext,source)}
+            // Attribution is optional, never cancellation authority. A current store rejected by
+            // fresh-schema preflight stays unavailable; do not adopt it or invent semantic roles.
+            catch(_:com.jarvys.agent.CleanInstallRequiredException){null}
+            catch(_:android.database.sqlite.SQLiteException){null}
+            catch(_:java.io.IOException){null}
+        witness.requireInvocationCurrent()
+        check(invocation.crewSource()===witness && witness.source()===source) { "Cancellation source changed during attribution lookup" }
+        return resolved
+    }
+
+    fun linkCodingCancelSemanticSync(checkpoint: CodingCancellationCheckpoint) {
+        val result=checkNotNull(checkpoint.result()) { "Semantic cancellation requires RESULT, never INTENT" }
+        checkpoint.requireResult(result)
+        val request=result.request()
+        executeCancellationOnWorker(request) {repos,_ ->
+            linkCodingCancellationInWorker(repos,request.reservation(),request.semanticTicket(),request.requestId()) {
+                CodingCancellationRepository(repos.database).requireCompleted(result)
+            }
+        }
+    }
+    fun linkCodingCancelSemanticSync(checkpoint: CodingCancellationObservationCheckpoint) {
+        val observation=checkpoint.observation();checkpoint.requireFor(observation)
+        val operation=observation.beginOperation()
+        executeOwnedOnWorker(operation::fail,operation::close,null) {repos ->
+            linkCodingCancellationInWorker(repos,observation.reservation(),observation.semanticTicket(),observation.observationId()) {
+                CodingCancellationRepository(repos.database).requireObserved(observation)
+            }
+        }
+    }
+    private fun linkCodingCancellationInWorker(repos:Repositories,reservation:CodingJobReservation,
+        ticket:MemoryWriteGate.Ticket,id:String,verify:()->Unit) {
+        reservation.requireJournalOwner(com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir))
+        val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        fun current(){check(anchor.accepts(reservation.lifecycle(),repos.database));reservation.requireCurrentProjection()}
+        try {
+            MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{true},Callable {
+                anchor.fenced {current();runBlocking {repos.database.withChatWriteTransaction {
+                    verify();CodingCancellationSemanticRepository(repos.database).link(id)
+                }}}
+            })
+        } catch(_:MemoryWriteGate.RejectedException) {
+            anchor.fenced {current();runBlocking {repos.database.withChatWriteTransaction {
+                verify();CodingCancellationSemanticRepository(repos.database).suppress(id)
+            }}}
+        }
+    }
+    fun personalAgentCodingCancellationSourceSync(entryId:String,requestId:String,maxChars:Int):JSONObject =
+        execute {repos ->repos.database.withChatReadTransaction {
+            CodingCancellationSemanticRepository(repos.database).source(entryId,requestId,maxChars)
+        }}
+
+    /** Records a real known no-op; this checkpoint cannot authorize a cancellation request. */
+    fun observeCodingCancellationSync(observation: com.jarvys.agent.coding.CodingCancellation.Observation): CodingCancellationObservationCheckpoint {
+        val operation=observation.beginOperation()
+        return executeOwnedOnWorker(operation::fail,operation::close,observation::abandonDispatch) { repos ->
+            val reservation=observation.reservation()
+            val journal=com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            reservation.requireJournalOwner(journal)
+            observation.requireIssuer()
+            val anchor=JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            val checkpoint=anchor.fenced {
+                check(anchor.accepts(reservation.lifecycle(),repos.database)) { "Stale cancellation observation destination" }
+                reservation.requireCurrentProjection()
+                runBlocking { CodingCancellationRepository(repos.database).observe(observation) }
+                CodingCancellationObservationCheckpoint.confirmed(observation)
+            }
+            observation.captureConfirmed()
+            operation.complete(checkpoint) // Historical publication outside the Room/anchor locks.
+            checkpoint
+        }
+    }
+
+    fun admitCodingCancelSync(request: com.jarvys.agent.coding.CodingCancellation.Request,
+        admission: EffectInvocation.Admission): CodingCancellationCheckpoint = executeCancellationOnWorker(request) { repos, operation ->
+        val reservation = request.reservation()
+        val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+        reservation.requireJournalOwner(journal)
+        val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+        val checkpoint = anchor.fenced {
+            check(anchor.accepts(reservation.lifecycle(), repos.database)) { "Stale cancellation target destination" }
+            reservation.requireCurrentProjection()
+            runBlocking { CodingCancellationRepository(repos.database).admit(request, admission) }
+            CodingCancellationCheckpoint.confirmed(request, null, admission, reservation.lifecycle())
+        }
+        request.captureConfirmed()
+        operation.complete(checkpoint) // Outside Room/anchor, historical observation only.
+        checkpoint
+    }
+
+    /** Persists the exact manager result; never signals a token or derives a result from stored JSON. */
+    fun finishCodingCancelSync(result: com.jarvys.agent.coding.CodingCancellation.Result): CodingCancellationCheckpoint =
+        executeCancellationOnWorker(result.request()) { repos, operation ->
+            val request = result.request()
+            val intent = result.intentCheckpoint()
+            intent.requireIntent(request)
+            result.requireIssuer()
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            request.reservation().requireJournalOwner(journal)
+            result.cancellingCommit()?.let { commit ->
+                commit.requireMintedBy(journal)
+                check(commit.reservation() === request.reservation() &&
+                    commit.snapshot().state == com.jarvys.agent.coding.CodingJobSnapshot.State.CANCELLING) {
+                    "Cancellation result requires its exact CANCELLING journal"
+                }
+            }
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            val checkpoint = anchor.fenced {
+                check(anchor.accepts(intent.lifecycle(), repos.database)) { "Stale cancellation result destination" }
+                intent.requireCurrentProjection()
+                runBlocking { CodingCancellationRepository(repos.database).finish(result) }
+                CodingCancellationCheckpoint.confirmed(request, result, intent.admission(), intent.lifecycle())
+            }
+            operation.complete(checkpoint)
+            checkpoint
+        }
+
+    /** Existing-only verification: never creates a generation, binding, source or reservation. */
+    fun verifyExistingCodingJobSync(candidate: com.jarvys.agent.coding.CodingJobJournalStore.RecoveryCandidate): CodingJobRecoveryBinding =
+        executeOnWorker { repos ->
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            check(candidate.journal() === journal) { "Foreign Coding recovery journal" }
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                runBlocking { CodingJobRepository(repos.database).verifyExisting(candidate.record().binding) }
+                CodingJobRecoveryBinding.verified(candidate, journal,
+                    anchor.attest(repos.database, candidate.record().binding.technicalStoreGeneration))
+            }
+        }
+
+    /** Recertified journal facts only; no invocation, ticket, acceptance or command is recreated. */
+    fun projectRecoveredCodingJobSync(verified: com.jarvys.agent.coding.CodingJobJournalStore.RecoveryVerified) =
+        executeOnWorker { repos ->
+            val journal = com.jarvys.agent.coding.CodingJobJournalStore.forFilesRoot(applicationContext.filesDir)
+            verified.requireMintedBy(journal)
+            val binding = verified.recoveryBinding()
+            binding.requireFor(binding.candidate(), journal)
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                check(anchor.accepts(binding.lifecycle(), repos.database)) { "Stale Coding recovery destination" }
+                binding.requireCurrentProjection()
+                runBlocking { CodingJobRepository(repos.database).recordRecovered(verified) }
+            }
+        }
 
     /** Live-owner terminal repair only. This never admits or dispatches a command. */
     fun repairCodingJobTerminalSync(commit: com.jarvys.agent.coding.CodingJobJournalStore.Commit,
@@ -636,6 +1323,37 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         }, Callable { runBlocking { block(repos) } })
     }
 
+    private fun <T> executeBoundMemoryMutation(ticket:MemoryWriteGate.Ticket,token:CancellationToken,
+        caller:String?,project:String?,byId:Boolean,action:String,witness:com.jarvys.agent.CentralInvocationWitness?,reviewTargetId:String?=null,
+        block:suspend (Repositories,MemoryNamespace)->T):T {
+        if(witness==null && action=="user_profile_set") return executeAutomatic(ticket,token) { block(it,MemoryNamespace.central()) }
+        if(witness==null) return executeAutomaticNamespace(ticket,token,caller,project,null,byId,block)
+        return executeOnWorker { repos ->
+            witness.requireInvocationCurrent()
+            val namespace=MemoryNamespace.resolve(applicationContext,caller,project,null,false,byId,byId)
+            check(caller==witness.source().ownerCentralSessionId) { "memory_save_source_invalid" }
+            MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{token.throwIfCancelled();witness.requireInvocationCurrent();true},Callable {
+                runBlocking { repos.database.withChatWriteTransaction {
+                    token.throwIfCancelled()
+                    MemorySessionRepository(repos.database).requireInvocationForWrite(action,witness,reviewTargetId,namespace.project)
+                    block(repos,namespace).also { token.throwIfCancelled(); witness.requireInvocationCurrent() }
+                } }
+            })
+        }
+    }
+
+    /** Registry resolution is worker-local and finishes before taking the memory gate or Room transaction. */
+    private fun <T> executeAutomaticNamespace(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        caller: String?, project: String?, scope: String?, byId: Boolean,
+        block: suspend (Repositories, MemoryNamespace) -> T): T = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace = MemoryNamespace.resolve(applicationContext, caller, project, scope, false, byId, byId)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, {
+            token.throwIfCancelled()
+            true
+        }, Callable { runBlocking { block(repos, namespace) } })
+    }
+
     private fun <T> executeOnWorker(block: (Repositories) -> T): T = executeTrackedOnWorker(null, null, block)
 
     private fun <T> executeCodingOnWorker(submission: com.jarvys.agent.coding.CodingJobSubmission,
@@ -648,7 +1366,17 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         return executeTrackedOnWorker(operation, { submission.abandonDispatch() }) { repos -> block(repos, operation) }
     }
 
+    private fun <T> executeCancellationOnWorker(request: com.jarvys.agent.coding.CodingCancellation.Request,
+        block: (Repositories, com.jarvys.agent.coding.CodingCancellation.Request.RoomOperation) -> T): T {
+        val operation = request.beginOperation()
+        return executeOwnedOnWorker(operation::fail, operation::close, request::abandonDispatch) { repos -> block(repos, operation) }
+    }
+
     private fun <T> executeTrackedOnWorker(operation: com.jarvys.agent.coding.CodingJobSubmission.RoomOperation?,
+        interruptedObserver: (() -> Unit)?, block: (Repositories) -> T): T =
+        executeOwnedOnWorker(operation?.let { it::fail }, operation?.let { it::close }, interruptedObserver, block)
+
+    private fun <T> executeOwnedOnWorker(onFailure: ((Throwable) -> Unit)?, onFinished: (() -> Unit)?,
         interruptedObserver: (() -> Unit)?, block: (Repositories) -> T): T {
         val ownership = java.util.concurrent.atomic.AtomicInteger(0)
         val pending = try {
@@ -665,13 +1393,13 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
                 executor.submit(Callable {
                     check(ownership.compareAndSet(0, 1)) { "Bridge operation was rejected before worker claim" }
                     try { block(repositories()) }
-                    catch (failure: Throwable) { operation?.fail(failure); throw failure }
-                    finally { operation?.close() } // Block has released all Room leases/anchor fences.
+                    catch (failure: Throwable) { onFailure?.invoke(failure); throw failure }
+                    finally { onFinished?.invoke() } // Block has released all Room leases/anchor fences.
                 })
             }
         } catch (failure: Throwable) {
             if (ownership.compareAndSet(0, 2)) {
-                try { operation?.fail(failure) } finally { operation?.close() }
+                try { onFailure?.invoke(failure) } finally { onFinished?.invoke() }
             }
             throw failure
         }
@@ -868,23 +1596,39 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         execute { it.conversations.pendingInterruptRequests(conversationId) }
 
     fun markInputStateSync(conversationId: String, messageIds: List<String>, state: String): ChatDbResult<List<String>> =
-        executeMissionWrite { it.conversations.markInputState(conversationId, messageIds, state) }
+        executeMissionWrite { repos,authorization -> repos.conversations.markInputStateForMission(conversationId, messageIds, state,authorization) }
 
-    internal fun bindMissionEpisodeInputSync(input: MissionEpisodeInput) = executeMissionWrite {
-        MissionEpisodeRepository(it.database).bind(input)
+    internal fun bindMissionEpisodeInputSync(input: MissionEpisodeInput) = executeMissionWrite { repos,authorization ->
+        MissionEpisodeRepository(repos.database).bind(input,authorization)
     }
 
     /** Publish the wake only after the receipt and episode transaction commits. */
-    private fun <T> executeMissionWrite(block: suspend (Repositories) -> T): T {
-        val (result, materialized) = execute { repositories ->
-            // Do not wrap result-returning repositories in another writer transaction: they
-            // catch their own aborts only after their transaction has rolled back.
-            val missions = MissionEpisodeRepository(repositories.database)
-            val before = missions.pendingIds()
-            val value = block(repositories)
-            value to (missions.pendingIds() - before).isNotEmpty()
+    private fun <T> executeMissionWrite(block:suspend(Repositories,MissionReceiptAuthorization)->T):T {
+        val policy=MemoryWritePolicy.forContext(applicationContext)
+        // Capture before submission: an OFF/ON change while queued never upgrades this source operation.
+        val ticket=policy.captureTicket()
+        val (result,materialized)=executeOnWorker { repositories ->
+            // Known absent workspace membership is source-only; malformed registry/SQL still throws.
+            val ownership=if(ticket.enabledAtCapture()) MissionReceiptAuthorization.currentOwnership(applicationContext) else null
+            var entered=false
+            fun source(authorization:MissionReceiptAuthorization)=runBlocking {
+                val missions=MissionEpisodeRepository(repositories.database)
+                val before=missions.pendingIds()
+                val value=block(repositories,authorization)
+                value to (missions.pendingIds()-before).isNotEmpty()
+            }
+            try {
+                policy.gate().commit(ticket,{true},Callable {
+                    entered=true
+                    source(requireNotNull(ownership))
+                })
+            } catch(rejected:MemoryWriteGate.RejectedException) {
+                if(entered) throw rejected
+                // Only pre-entry denial: no source operation or ambiguous ACK is ever replayed here.
+                source(MissionReceiptAuthorization.policyDenied())
+            }
         }
-        if (materialized) wakeMissionNarration()
+        if(materialized) wakeMissionNarration()
         return result
     }
 
@@ -1043,8 +1787,23 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         ))
     }
 
-    fun loadConversationContextSync(conversationId: String): List<ConversationTurn> =
-        execute { it.reader.loadConversationContext(conversationId) }
+    fun readInteractionProtectionSync(conversationId: String): InteractionProtectionSnapshot =
+        execute { it.reader.readInteractionProtection(conversationId) }
+
+    fun validateProtectedContextSync(conversationId: String, turns: List<ConversationTurn>) =
+        execute { it.reader.validateProtectedContext(conversationId, turns) }
+
+    fun loadConversationContextSync(conversationId: String): List<ConversationTurn> = executeOnWorker { repos ->
+        // Only optional recovery enrichment degrades; Room, lifecycle and clean-install failures still propagate.
+        val namespace = if (conversationId == MemoryNamespace.CENTRAL) try {
+            MemoryNamespace.resolve(applicationContext, conversationId, null, null, false, true, true)
+        } catch (_: com.jarvys.agent.workspaces.WorkspaceRegistryCorruptException) { null
+        } catch (_: android.database.sqlite.SQLiteException) { null
+        } catch (failure: IllegalArgumentException) {
+            if (failure.message == "memory_owner_denied") null else throw failure
+        } else null
+        runBlocking { repos.reader.loadConversationContext(conversationId, namespace) }
+    }
 
     fun readConversationContextSync(conversationId: String): String =
         execute { it.reader.readConversationContext(conversationId) }
@@ -1105,7 +1864,7 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
 
     /** Commits tool-call, result, provider-output, error, and optional incorporated-input rows atomically. */
     fun appendModelTurnSync(input: ConversationModelTurnInput): ChatDbResult<ConversationModelTurnResult> =
-        executeMissionWrite { it.modelTurnWriter.append(input) }
+        executeMissionWrite { repos,authorization -> repos.modelTurnWriter.appendForMission(input,authorization) }
 
     fun setCallLifecycleSync(conversationId: String, batchId: String, callId: String, lifecycle: String): ChatDbResult<Long> =
         execute { it.transcript.setCallLifecycle(conversationId, batchId, callId, lifecycle) }
@@ -1198,18 +1957,21 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun prepareCompactionCoverageSync(conversationId: String, sources: List<ConversationTurn.Source>): CompactionCoverage? =
         execute { CompactionMemoryRepository(it.database).prepare(conversationId, sources) }
 
-    fun appendCompactionPreparedSync(input: CompactionInput, coverage: CompactionCoverage?,
-        prepared: PreparedCompactionFlush?, sessionKind: String): ChatDbResult<Compaction> =
-        executeOnWorker { repos ->
-            if (prepared == null) runBlocking { repos.memory.appendCompactionPrepared(input, coverage, null, sessionKind) }
-            else try {
-                MemoryWritePolicy.forContext(applicationContext).gate().commit(prepared.memoryTicket, prepared.canCommit,
-                    Callable { runBlocking { repos.memory.appendCompactionPrepared(input, coverage, prepared, sessionKind) } })
-            } catch (_: MemoryWriteGate.RejectedException) {
-                // OFF or a stale phase denies semantic memory, not safe structural compaction.
-                runBlocking { repos.memory.appendCompactionPrepared(input, coverage, null, sessionKind) }
-            }
+    @JvmOverloads
+    fun appendCompactionPreparedSync(input:CompactionInput,coverage:CompactionCoverage?,prepared:PreparedCompactionFlush?,sessionKind:String,
+        protection:InteractionProtectionSnapshot?=null,attempt:CompactionMemoryAttempt?=null):ChatDbResult<Compaction> = executeOnWorker { repos ->
+        fun structural()=runBlocking { repos.memory.appendCompactionPrepared(input,coverage,null,sessionKind,protection,attempt,false,compactionClock) }
+        if(attempt==null) structural()
+        else {
+            try {
+                MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,false,true,true)
+                MemoryWritePolicy.forContext(applicationContext).gate().commit(attempt.memoryTicket,{attempt.binding.check(attempt.token);true},Callable {
+                    runBlocking { repos.memory.appendCompactionPrepared(input,coverage,prepared,sessionKind,protection,attempt,true,compactionClock) }
+                })
+            } catch(unavailable:MemorySessionUnavailableException) { structural() }
+              catch(rejected:MemoryWriteGate.RejectedException) { structural() }
         }
+    }
 
     fun readCompactionFlushStatusSync(conversationId: String, compactionId: String): String? =
         execute { CompactionMemoryRepository(it.database).status(conversationId, compactionId) }
@@ -1242,18 +2004,21 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         execute { it.memory.appendCrewSnapshot(conversationId, row) }
 
     // Typed strict journals preserve their conflict/invalid/not-found outcomes for Java callers.
+    private class MissionEvidenceAbort(val result:ChatDbResult<CrewResultJournalEvidence>):RuntimeException()
     @JvmOverloads
-    fun appendCrewResultEvidenceSync(
-        evidence: CrewResultJournalEvidence,
-        beforeWrite: BeforeChatWrite? = null,
-    ): ChatDbResult<CrewResultJournalEvidence> = executeMissionWrite { repositories ->
-        repositories.database.withChatWriteTransaction {
-            val result = repositories.strictJournals.appendCrewResultEvidence(evidence) { beforeWrite?.check() }
-            if (result is ChatDbResult.Success)
-                MissionEpisodeRepository(repositories.database).reconcileEvidence(result.value)
-            result
+    fun appendCrewResultEvidenceSync(evidence:CrewResultJournalEvidence,beforeWrite:BeforeChatWrite?=null):ChatDbResult<CrewResultJournalEvidence> =
+        executeMissionWrite { repositories,authorization ->
+            try {
+                repositories.database.withChatWriteTransaction {
+                    var inserted=false
+                    val result=repositories.strictJournals.appendCrewResultEvidence(evidence) { beforeWrite?.check();inserted=true }
+                    // A normalized nested Conflict must escape the outer TX before being returned.
+                    if(result !is ChatDbResult.Success) throw MissionEvidenceAbort(result)
+                    MissionEpisodeRepository(repositories.database).reconcileEvidence(result.value,authorization,inserted)
+                    result
+                }
+            } catch(aborted:MissionEvidenceAbort) { aborted.result }
         }
-    }
 
     fun readCrewResultEvidenceSync(executionSessionId: String, evidenceId: String): ChatDbResult<CrewResultJournalEvidence?> =
         execute { it.strictJournals.readCrewResultEvidence(executionSessionId, evidenceId) }

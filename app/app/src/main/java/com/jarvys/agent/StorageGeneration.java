@@ -5,12 +5,13 @@ import java.io.File;
 
 /** Keeps application identity separate from conversation file generations. */
 public final class StorageGeneration {
-    public static final String NAME = "g3";
+    public static final String NAME = "agent-v1";
     private final File filesDir;
     private final File chatRoot;
 
     public StorageGeneration(File filesDir) {
-        SingleSessionReset.awaitReadyBlocking(filesDir);
+        FreshStorageBootstrap.requireFreshFiles(filesDir);
+        FreshStorageBootstrap.awaitReadyBlocking(filesDir);
         this.filesDir = filesDir.getAbsoluteFile();
         this.chatRoot = new File(new File(this.filesDir, "jarvys"), NAME);
         try {

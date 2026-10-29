@@ -552,26 +552,8 @@
     <string name="memory_actor_user">You</string>
     <string name="memory_actor_agent">Jarvys</string>
     <string name="memory_actor_reflection">Reflection</string>
-    <string name="memory_seed_root_index">"# Memory
-
-Index of durable memories about the user. Keep links to detailed notes here; consult each index before reading details.
-
-- [User](human.md)
-- [Interaction preferences](persona.md)
-"</string>
-    <string name="memory_seed_human">"---
-name: User
-description: Information, interests, preferences, and personal context the user has explicitly shared.
----
-"</string>
-    <string name="memory_seed_persona">"---
-name: Interaction preferences
-description: Explicit preferences about language, tone, style, and how to help the user.
----
-"</string>
     <string name="memory_add_note">Add a note</string>
     <string name="memory_add_section">Create a section</string>
-    <string name="memory_history">Revision history</string>
     <string name="memory_export">Export this chat’s memory</string>
     <string name="memory_clear_all">Delete this chat’s memory</string>
     <string name="memory_file_path">File name, such as preferences.md</string>
@@ -584,6 +566,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="memory_editor_body">Memory notes</string>
     <string name="memory_index_hint">This is an index, not a core fact file. Use relative Markdown links to point to notes in this section.</string>
     <string name="memory_editor_limit">Maximum %1$d characters per memory file.</string>
+    <string name="memory_note_title">Title</string>
     <string name="memory_save">Save changes</string>
     <string name="memory_back">Back</string>
     <string name="memory_saved">Memory saved on this device.</string>
@@ -1476,7 +1459,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="setup_wizard_back">Back</string>
     <string name="setup_wizard_finish">Finish</string>
     <string name="single_session_retired">This update starts a new Central conversation and personal memory. Old conversations, memory and their files will now be removed.</string>
-    <string name="single_session_started">This update starts a new Central conversation and resets all personal memory. Old data will be removed after the first successful run.</string>
 
     <string name="settings_storage">Storage</string>
     <string name="settings_storage_description">Jarvys keeps the full output of its tools so it can answer exactly what it did. When the device runs low on space it only removes copies that no remembered action depends on.</string>
@@ -1504,4 +1486,127 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="connector_transition_permission_denied">Access was not granted. Review the connector permissions.</string>
     <string name="connector_transition_runtime_failed">The connector did not finish starting. Check its status before trying again.</string>
     <string name="connector_transition_cleanup_failed">Connector cleanup could not be confirmed. Review the current connection state.</string>
+    <string name="clean_install_required_title">Clean installation required</string>
+    <string name="clean_install_required_body">This version needs a clean installation. Existing app storage is incompatible. No data was imported or deleted. Reinstall or clear app storage in Android settings before continuing.</string>
+    <string name="memory_pinned">Pinned</string>
+    <string name="memory_not_pinned">Not pinned</string>
+    <string name="memory_pin_action">Pin</string>
+    <string name="memory_unpin_action">Unpin</string>
+    <string name="memory_pin_failed">Could not change the pinned state.</string>
+    <string name="memory_delete_action">Remove memory</string>
+    <string name="memory_observation_delete_title">Remove this memory?</string>
+    <string name="memory_delete_target">Memory: %1$s\nProject: %2$s</string>
+    <string name="memory_delete_soft_description">This memory will no longer appear in recall. Its retained history and evidence are not permanently erased.</string>
+    <string name="memory_delete_cancel">Cancel</string>
+    <string name="memory_delete_failed">Could not remove this memory.</string>
+    <string name="memory_show_removed">Show removed memories</string>
+    <string name="memory_removed_state">Removed memory</string>
+    <string name="memory_hard_delete_action">Permanently delete memory</string>
+    <string name="memory_hard_delete_title">Permanently delete this memory?</string>
+    <string name="memory_hard_delete_description">This permanently deletes this memory observation and its history. It cannot be undone. Independent source messages, technical records and relation history remain.</string>
+    <string name="memory_hard_delete_confirm">Permanently delete</string>
+    <string name="memory_inspector_action">View details and history</string>
+    <string name="memory_inspector_title">Memory details and history</string>
+    <string name="memory_inspector_loading">Loading memory…</string>
+    <string name="memory_inspector_unavailable">This memory is no longer available.</string>
+    <string name="memory_inspector_changed">This memory changed. Reload the newest versions.</string>
+    <string name="memory_inspector_error">Memory could not be loaded. Try again.</string>
+    <string name="memory_inspector_id">ID: %1$s</string>
+    <string name="memory_inspector_project">Project: %1$s</string>
+    <string name="memory_inspector_scope">Scope: %1$s</string>
+    <string name="memory_inspector_type">Type: %1$s</string>
+    <string name="memory_inspector_untitled">(No title)</string>
+    <string name="memory_inspector_empty_content">(Empty content)</string>
+    <string name="memory_inspector_unknown">Unavailable</string>
+    <string name="memory_inspector_duplicates">Duplicate count: %1$d</string>
+    <string name="memory_inspector_last_seen">Last seen (epoch ms): %1$s</string>
+    <string name="memory_inspector_revision">Current revision: %1$d</string>
+    <string name="memory_inspector_total">History snapshots: %1$d</string>
+    <string name="memory_inspector_version">Version %1$d · created (epoch ms): %2$d</string>
+    <string name="memory_inspector_newest">Newest versions</string>
+    <string name="memory_inspector_older">Load older versions</string>
+    <string name="memory_inspector_retry">Retry</string>
+    <string name="memory_inspector_close">Close</string>
+
+    <string name="memory_projects_action">Project memories</string>
+    <string name="memory_projects_title">Remove project memories</string>
+    <string name="memory_projects_hard_title">Permanently delete project memories</string>
+    <string name="memory_projects_scope">Affects observations in every scope, saved prompts and eligible canonical memory sessions of this project. It does not delete chats, workspaces, profiles, independent technical records or sync data.</string>
+    <string name="memory_projects_counts">Live observations: %1$d · Removed: %2$d · Total: %3$d · Pinned: %4$d · Saved prompts: %5$d · Memory sessions: %6$d</string>
+    <string name="memory_projects_soft_warning">Remove live observations, including pinned memories, from normal retrieval and permanently delete saved prompts. Observation content and history, memory sessions and original chat messages remain.</string>
+    <string name="memory_projects_hard_warning">Irreversible: deletes observations and their history, including removed and pinned memories, saved prompts, and memory sessions with no remaining observations. Independent source transcripts, technical records and retained relationship metadata remain. This is not secure erasure of every copy.</string>
+    <string name="memory_projects_soft_confirm">Remove observations and delete saved prompts</string>
+    <string name="memory_projects_hard_choice">Review permanent deletion instead</string>
+    <string name="memory_projects_hard_confirm">Permanently delete these memories</string>
+    <string name="memory_projects_refresh">Refresh projects and preview again</string>
+    <string name="memory_projects_empty">No authorized project contains retained observations, saved prompts or memory sessions.</string>
+    <string name="memory_projects_failed">The project memory operation failed. Refresh and confirm again.</string>
+
+    <string name="memory_prompt_capture_label">Save my user messages as memory</string>
+    <string name="memory_prompt_capture_description">Off by default. When enabled together with automatic memory, eligible user messages can be stored as saved prompts. Private-tag content is redacted; attachments and unrelated history are not copied. Turning this off stops future capture, not the original conversation transcript.</string>
+    <string name="memory_prompt_capture_memory_off">Automatic memory is off: prompt capture is inactive. You can still turn this preference off.</string>
+    <string name="memory_prompt_capture_failed">The capture preference could not be confirmed. Turn it off explicitly to confirm a safe state.</string>
+    <string name="memory_sessions_action">Memory sessions and saved prompts</string>
+    <string name="memory_sessions_title">Memory sessions</string>
+    <string name="memory_sessions_description">These are memory execution records, not chats. Viewing a session does not select it for a new run or save.</string>
+    <string name="memory_sessions_empty">No authorized memory sessions are stored.</string>
+    <string name="memory_sessions_delete">Delete this memory session</string>
+    <string name="memory_sessions_delete_warning">Deletes this memory session and its saved prompts only if no observation still refers to it, including removed observations. Original conversation messages remain.</string>
+    <string name="memory_prompt_delete">Delete this saved prompt</string>
+    <string name="memory_prompt_delete_warning">Permanently removes this saved prompt from memory and prevents capture of the same source in this session. The original conversation message is not deleted.</string>
+    <string name="memory_sessions_target">ID: %1$s
+Project: %2$s</string>
+    <string name="memory_sessions_state">State: %1$s · Observations: %2$d · Prompts: %3$d</string>
+    <string name="memory_sessions_back">Back to memory sessions</string>
+    <string name="memory_sessions_refresh">Refresh</string>
+    <string name="memory_sessions_failed">Memory session data is unavailable. Refresh to try again.</string>
+    <string name="memory_sessions_no_prompts">No saved prompts in this session.</string>
+    <string name="memory_sessions_confirm">Confirm deletion from memory</string>
+    <string name="memory_prompt_capture_recover">Turn off and confirm</string>
+    <string name="memory_sessions_times">Started (epoch ms): %1$s · Ended (epoch ms): %2$s</string>
+    <string name="memory_prompt_created">Created (epoch ms): %1$s</string>
+    <string name="memory_sessions_unconfirmed_close">No confirmed closure. This stored state does not verify that execution is still running.</string>
+    <string name="memory_review_due_only">Only memories due for review</string>
+    <string name="memory_review_none_due">No memories are currently due for review.</string>
+    <string name="memory_review_due">Needs review</string>
+    <string name="memory_review_active">Not currently due for review</string>
+    <string name="memory_review_date">Review date (stored): %1$s</string>
+    <string name="memory_review_no_date">No review date</string>
+    <string name="memory_review_metadata_only">Marking reviewed updates review metadata only; it does not verify or rewrite this memory.</string>
+    <string name="memory_review_mark">Mark reviewed</string>
+    <string name="memory_relations_open">Pending relation questions</string>
+    <string name="memory_relations_questions">Pending pairs are questions, not verified relations or conflict verdicts. Existing explicit links remain separate.</string>
+    <string name="memory_relations_detect">Find candidate relations</string>
+    <string name="memory_relations_detection_complete">%1$d new pending pairs confirmed in this attempt. Zero does not mean there are no conflicts or existing pending pairs. Inspect both memories from the pending list.</string>
+    <string name="memory_relations_detection_incomplete">Detection is incomplete. %1$d new pending pairs were confirmed. Earlier saved pairs and memories remain; inspect the pending list.</string>
+    <string name="memory_relations_detection_unknown">Detection could not be confirmed. Memories and already saved pending pairs are not rolled back; reopen the pending list.</string>
+    <string name="memory_relations_read_failed">Could not read pending relations. Retry to load current authorized data.</string>
+    <string name="memory_relations_page">Total pending pairs: %1$d · Page offset: %2$d</string>
+    <string name="memory_relations_empty">No pending pairs on this page. This is not a conflict assessment.</string>
+    <string name="memory_relations_identity">Pair %1$s · %2$s / %3$s</string>
+    <string name="memory_relations_endpoint">Memory %1$s: %2$s</string>
+    <string name="memory_relations_missing">Unavailable or removed endpoint</string>
+    <string name="memory_relations_inspect_source">Inspect source memory</string>
+    <string name="memory_relations_inspect_target">Inspect target memory</string>
+    <string name="memory_relations_previous">Previous page</string>
+    <string name="memory_relations_next">Next page</string>
+    <string name="memory_judgment_open">Inspect and judge this relation</string>
+    <string name="memory_judgment_title">Your relation judgment</string>
+    <string name="memory_judgment_metadata_only">Inspect both complete observations below. This records your judgment only: it does not merge, replace or delete memories.</string>
+    <string name="memory_judgment_deleted">Deleted observation retained for inspection; judging does not restore it.</string>
+    <string name="memory_judgment_choose">Choose one verdict consciously. No verdict is selected by default.</string>
+    <string name="memory_judgment_reason">Reason (optional)</string>
+    <string name="memory_judgment_evidence">Evidence (optional)</string>
+    <string name="memory_judgment_confidence">Confidence 0–1 (optional)</string>
+    <string name="memory_judgment_omitted">Blank optional fields clear the previous values when judging again.</string>
+    <string name="memory_judgment_submit">Record my judgment</string>
+    <string name="memory_judgment_error">The judgment was not confirmed or the displayed evidence is no longer available/current. Previous writes may remain. Reload and inspect before deciding whether to submit again; no automatic retry occurs.</string>
+    <string name="memory_judgment_reload">Reload evidence</string>
+    <string name="memory_judgment_topic">Topic: %1$s</string>
+    <string name="memory_judgment_related">Related</string>
+    <string name="memory_judgment_compatible">Compatible</string>
+    <string name="memory_judgment_scoped">Different scope</string>
+    <string name="memory_judgment_conflicts">Conflicts with</string>
+    <string name="memory_judgment_supersedes">Supersedes (judgment only)</string>
+    <string name="memory_judgment_not_conflict">Not a conflict</string>
 </resources>

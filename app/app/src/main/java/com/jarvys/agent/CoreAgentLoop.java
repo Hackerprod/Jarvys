@@ -270,6 +270,26 @@ public final class CoreAgentLoop {
             return complete(transcript, prompt, tools, token);
         }
 
+        default boolean usesPreparedRequests() { return false; }
+
+        /** Called only after an acknowledged successful compaction, before preparing its next request. */
+        default void onCompactionCompleted() {}
+
+        default PreparedModelRequest prepareRequest(List<ConversationTurn> transcript, String prompt,
+                List<ToolSpec> tools, CancellationToken token) {
+            throw new IllegalStateException("prepared_model_request_unavailable");
+        }
+
+        default PreparedModelRequest prepareRequest(List<ConversationTurn> transcript, String prompt,
+                List<ToolSpec> tools, CancellationToken token, boolean activityAttempt) {
+            return prepareRequest(transcript,prompt,tools,token);
+        }
+
+        default ModelReply completePrepared(PreparedModelRequest request, CancellationToken token,
+                ModelProviderClient.TextDeltaListener listener) {
+            throw new IllegalStateException("prepared_model_request_unavailable");
+        }
+
         default int contextWindow(CancellationToken token) {
             return ProviderContextWindowResolver.FALLBACK_CONTEXT_WINDOW;
         }
@@ -866,7 +886,7 @@ public final class CoreAgentLoop {
                     }
                     return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                 }
-                if (compactor != null && !truncateToolResultsForProvider) {
+                if (compactor != null && !truncateToolResultsForProvider && !model.usesPreparedRequests()) {
                     try {
                         int window = model.contextWindow(token);
                         int estimate = estimateContext(transcript, prompt, declarations);
@@ -885,7 +905,7 @@ public final class CoreAgentLoop {
                         compactionFailed(listener, "No se pudo compactar; se reducirán los resultados de herramientas según el presupuesto existente.");
                     }
                 }
-                List<ConversationTurn> requestTranscript = truncateToolResultsForProvider
+                List<ConversationTurn> requestTranscript = truncateToolResultsForProvider && !model.usesPreparedRequests()
                         ? truncateToolResultsOnly(transcript, budget, toolResultBudget) : transcript;
                 if (!initialInternalInputsReported && listener != null) {
                     List<IncomingMessage> initialInternal = internalMessagesIn(requestTranscript);
@@ -900,11 +920,27 @@ public final class CoreAgentLoop {
                         try {
                             emit(listener, "model_wait", "Esperando respuesta del modelo");
                             if (listener != null) listener.onAssistantTextStreamStarted(runId);
-                            reply = model.complete(requestTranscript, turnPrompt, declarations, token,
-                                    delta -> {
-                                        if (listener != null && delta != null && !delta.isEmpty())
-                                            listener.onAssistantTextDelta(runId, delta);
-                                    });
+                            ModelProviderClient.TextDeltaListener stream = delta -> {
+                                if (listener != null && delta != null && !delta.isEmpty())
+                                    listener.onAssistantTextDelta(runId, delta);
+                            };
+                            if (model.usesPreparedRequests()) {
+                                PreparedModelRequest prepared = model.prepareRequest(requestTranscript, turnPrompt, declarations, token, true);
+                                if (ConversationCompactionPolicy.shouldCompact(prepared.estimateTokens(), prepared.contextWindow)
+                                        && compactor != null) {
+                                    ConversationCompactor.Outcome compacted = compactPrepared(transcript, prepared, token, listener);
+                                    if (compacted != null) {
+                                        transcript = new ArrayList<>(compacted.context);
+                                        requestTranscript = transcript;
+                                        updateTranscriptSnapshot(transcript);
+                                        prepared = model.prepareRequest(requestTranscript, turnPrompt, declarations, token);
+                                    }
+                                }
+                                prepared.requireFits(token);
+                                reply = model.completePrepared(prepared, token, stream);
+                            } else {
+                                reply = model.complete(requestTranscript, turnPrompt, declarations, token, stream);
+                            }
                             emit(listener, "model_response", "Respuesta del modelo recibida");
                             break;
                         } catch (RuntimeException failure) {
@@ -937,6 +973,15 @@ public final class CoreAgentLoop {
                     }
                     if (compactor == null || !ConversationCompactionPolicy.isContextOverflow(failure) || overflowCompactions >= 3) throw failure;
                     token.throwIfCancelled();
+                    if (model.usesPreparedRequests()) {
+                        PreparedModelRequest overflowRequest = model.prepareRequest(transcript, prompt, declarations, token);
+                        ConversationCompactor.Outcome safe = compactPrepared(transcript, overflowRequest, token, listener);
+                        if (safe == null) throw failure;
+                        transcript = new ArrayList<>(safe.context);
+                        updateTranscriptSnapshot(transcript);
+                        overflowCompactions++;
+                        continue;
+                    }
                     int window = model.contextWindow(token);
                     try {
                         ConversationCompactor.Outcome outcome = compact(transcript, window, "overflow", ConversationCompactionPolicy.Mode.SLIDING_WINDOW, prompt, token, listener);
@@ -1066,11 +1111,21 @@ public final class CoreAgentLoop {
             if (admissionReason == null && preflightError == null && tool == null) {
                 preflightError = "Tool is not available in this agent scope: " + call.name;
             } else if (admissionReason == null && preflightError == null) {
-                ToolArgumentValidator.Result validation = ToolArgumentValidator.coerceAndValidate(
-                        rawArguments, tool.declaration().jsonSchema());
-                invokeArguments = validation.arguments;
-                preflightError = validation.error == null ? null
-                        : tool.preflightErrorMessage(call.arguments, validation.error);
+                // Native memory project presence must be checked before generic optional-null/string coercion.
+                preflightError = PersonalMemoryTools.rawSaveProjectError(tool, rawArguments);
+                if (preflightError == null) preflightError = PersonalMemoryTools.rawPromptSearchError(tool, rawArguments);
+                if (preflightError == null) preflightError = PersonalMemoryTools.rawReviewError(tool, rawArguments);
+                if (preflightError == null) preflightError = PersonalMemoryTools.rawJudgmentError(tool, rawArguments);
+                if (preflightError == null && PersonalMemoryTools.isJudgment(tool)) {
+                    // Native judgment parser preserves per-item errors and raw semantics before generic coercion.
+                    invokeArguments = rawArguments;
+                } else if (preflightError == null) {
+                    ToolArgumentValidator.Result validation = ToolArgumentValidator.coerceAndValidate(
+                            PersonalMemoryTools.reviewArguments(tool, PersonalMemoryTools.contextArguments(tool, PersonalMemoryTools.promptSearchArguments(tool, rawArguments))), tool.declaration().jsonSchema());
+                    invokeArguments = validation.arguments;
+                    preflightError = validation.error == null ? null
+                            : tool.preflightErrorMessage(call.arguments, validation.error);
+                }
                 if (preflightError == null && tool.responseCallPolicy() == CoreTool.ResponseCallPolicy.ONE_PER_RESPONSE) {
                     if (completeResultAlreadyVisible(tool, invokeArguments, sentTranscript)) {
                         admissionReason = tool.completeResultAlreadyVisibleMessage();
@@ -1791,6 +1846,23 @@ public final class CoreAgentLoop {
                 if (listener != null) listener.onCompactionCompleted(summary, summarizedMessages, actualMode);
             }
         });
+    }
+
+    private ConversationCompactor.Outcome compactPrepared(List<ConversationTurn> transcript,
+            PreparedModelRequest request, CancellationToken token, ProgressListener listener) {
+        updateTranscriptSnapshot(transcript);
+        ConversationCompactor.Outcome outcome = compactor.compact(transcript, request.contextWindow, request.overheadTokens(),
+                "auto_preflight", ConversationCompactionPolicy.Mode.SLIDING_WINDOW, token,
+                new ConversationCompactor.Listener() {
+                    @Override public void onStarted(String trigger) {
+                        if (listener != null) listener.onCompactionStarted(trigger);
+                    }
+                    @Override public void onCompleted(String summary, int count, String mode) {
+                        if (listener != null) listener.onCompactionCompleted(summary, count, mode);
+                    }
+                });
+        if (outcome != null) model.onCompactionCompleted();
+        return outcome;
     }
 
     private static void compactionFailed(ProgressListener listener, String message) {

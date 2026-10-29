@@ -112,6 +112,35 @@ public final class CrewCheckpointStore {
             catch (Exception invalid) { throw new IllegalStateException("Confirmed checkpoint payload invalid", invalid); }
         }
 
+        /** Historical correlation only, never a live invocation witness or permission to replay. */
+        public boolean matchesCodingSource(com.jarvys.agent.coding.CodingJobEvidence.CrewSource source) {
+            if(source==null || !conversationId.equals(source.executionSessionId) || !botId.equals(source.botId) ||
+                    !scopeIdentity.equals(source.scopeIdentity) || !payloadSha256.equals(source.checkpointPayloadSha256) ||
+                    !"project_exec".equals(source.toolName))return false;
+            try {
+                JSONObject metadata=metadataJson();
+                if(!source.missionId.equals(metadata.getString("missionId")) || !source.cycleId.equals(metadata.getString("cycleId")))return false;
+                CoreAgentLoop.Checkpoint raw=loopForEvidence();
+                if(!"STARTED".equals(raw.toolLifecycle.get(source.callId)))return false;
+                int matches=0;
+                for(ConversationTurn turn:raw.transcript)for(ModelReply.Call call:turn.toolCalls) {
+                    if(source.callId.equals(call.id)) {
+                        if(!source.toolName.equals(call.name))return false;
+                        matches++;
+                    }
+                }
+                return matches==1;
+            } catch(org.json.JSONException invalid) {return false;}
+        }
+
+        /** Historical RAW dispatch detection; Play cannot verify this Linux history. */
+        public boolean hasStartedCodingCall() {
+            CoreAgentLoop.Checkpoint raw=loopForEvidence();
+            for(ConversationTurn turn:raw.transcript)for(ModelReply.Call call:turn.toolCalls)
+                if("project_exec".equals(call.name) && "STARTED".equals(raw.toolLifecycle.get(call.id)))return true;
+            return false;
+        }
+
         public JSONObject metadataJson() {
             return defensiveJson(serializedMetadata);
         }

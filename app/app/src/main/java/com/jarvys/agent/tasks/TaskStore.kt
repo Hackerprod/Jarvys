@@ -107,6 +107,8 @@ class TaskStore(private val ledger: File) {
         tombstone
     }
 
+    private class UnsupportedTaskScopeFormatException : IllegalArgumentException("Unsupported task scope field: memory")
+
     private data class Snapshot(val task: ScheduledTask, val deleted: Boolean)
     private data class Latest(val rows: LinkedHashMap<String, Snapshot>, val ignored: Int)
 
@@ -117,7 +119,11 @@ class TaskStore(private val ledger: File) {
             BufferedReader(InputStreamReader(FileInputStream(ledger), StandardCharsets.UTF_8)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
-                    val decoded = runCatching { decode(JSONObject(line)) }.getOrNull()
+                    val decoded = runCatching { decode(JSONObject(line)) }.getOrElse { failure ->
+                        // Never expose an older revision when a newer row uses a retired authority field.
+                        if (failure is UnsupportedTaskScopeFormatException) throw failure
+                        null
+                    }
                     if (decoded == null) ignored++ else rows[decoded.task.id] = decoded
                 }
             }
@@ -152,7 +158,6 @@ class TaskStore(private val ledger: File) {
             .put("tools", JSONArray(task.toolScope.tools))
             .put("web", task.toolScope.web)
             .put("writes", task.toolScope.writes)
-            .put("memory", task.toolScope.memory)
             .put("skillIds", JSONArray(task.toolScope.skillIds)))
         .put("delivery", task.delivery.name)
         .put("createdBy", task.createdBy)
@@ -187,6 +192,8 @@ class TaskStore(private val ledger: File) {
         .putNullableString("causeCode", run.causeCode?.code)
 
     private fun decode(row: JSONObject): Snapshot {
+        // Check before any other field can fail into the ordinary malformed-row skip.
+        if (row.optJSONObject("toolScope")?.has("memory") == true) throw UnsupportedTaskScopeFormatException()
         val scheduleRow = row.getJSONObject("schedule")
         val schedule = when (scheduleRow.getString("kind")) {
             "At" -> TaskSchedule.At(scheduleRow.getString("localDateTime"), decodeZone(scheduleRow.getString("zone")))
@@ -228,7 +235,7 @@ class TaskStore(private val ledger: File) {
             nextRunAt = row.optNullableLong("nextRunAt"), lastRun = lastRun,
             toolScope = TaskToolScope(scope.optString("mode", "READ_ONLY"), scope.optJSONArray("tools").toStringList(),
                 scope.optBoolean("web", false), scope.optString("writes", "DEFER"),
-                scope.optBoolean("memory", false), scope.optJSONArray("skillIds").toStringList()),
+                scope.optJSONArray("skillIds").toStringList()),
             delivery = TaskDelivery.valueOf(row.optString("delivery", "ALWAYS")),
             createdBy = row.optString("createdBy", "USER_UI"),
             creatorToolNames = row.optJSONArray("creatorToolNames").toStringList(),

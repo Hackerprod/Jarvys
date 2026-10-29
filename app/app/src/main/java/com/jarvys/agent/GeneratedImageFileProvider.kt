@@ -7,7 +7,7 @@ import androidx.core.content.FileProvider
 
 /** Shared image grants use the same admission barrier as in-process conversation stores. */
 class GeneratedImageFileProvider : FileProvider() {
-    private fun awaitStorage() = SingleSessionReset.awaitReadyBlocking(requireNotNull(context).filesDir)
+    private fun awaitStorage() = FreshStorageBootstrap.awaitReadyBlocking(requireNotNull(context).filesDir)
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
         awaitStorage()

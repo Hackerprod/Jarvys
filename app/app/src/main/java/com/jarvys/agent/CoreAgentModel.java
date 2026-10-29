@@ -100,6 +100,38 @@ public final class CoreAgentModel {
     }
   }
 
+  /** Preparation is done once per attempt, before the loop estimates the actual request. */
+  PreparedModelRequest prepareMainChat(String instructions, List<ConversationTurn> transcript,
+      String prompt, List<ToolSpec> tools, CancellationToken token) {
+    return prepareMainChat(instructions, transcript, prompt, tools, token, null, null);
+  }
+
+  PreparedModelRequest prepareMainChat(String instructions, List<ConversationTurn> transcript,
+      String prompt, List<ToolSpec> tools, CancellationToken token,
+      com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection,
+      PreparedModelRequest.MemoryBoundary memoryBoundary) {
+    token.throwIfCancelled();
+    List<ConversationTurn> prepared = context == null
+        ? AttachmentModelContext.withoutAttachments(transcript)
+        : AttachmentModelContext.prepare(AppLanguageRuntime.localizedContext(context), sessionId, transcript, token);
+    return new PreparedModelRequest(instructions, prepared, prompt, tools, contextWindow(token), protection, transcript, memoryBoundary);
+  }
+
+  ModelReply completePrepared(PreparedModelRequest request, CancellationToken token,
+      ModelProviderClient.TextDeltaListener listener) {
+    // The final gate consumes the exact logical payload subsequently handed to the provider.
+    request.requireFits(token);
+    try {
+      return provider.completeConversation(request.instructions, request.transcript, request.prompt,
+          java.util.Collections.emptyList(), request.tools, sessionId, token, listener);
+    } catch (RuntimeException failure) {
+      recordProviderFailure(failure, token);
+      if (context != null && AttachmentModelContext.hasImages(request.transcript))
+        throw AttachmentModelContext.providerFailure(AppLanguageRuntime.localizedContext(context), failure);
+      throw failure;
+    }
+  }
+
   int contextWindow(CancellationToken token) {
     if (context == null || settings == null)
       return ProviderContextWindowResolver.FALLBACK_CONTEXT_WINDOW;

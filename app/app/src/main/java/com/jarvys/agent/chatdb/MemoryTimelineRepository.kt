@@ -85,11 +85,29 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
         appendCompactionInternal(input, null, null, null)
 
     suspend fun appendCompactionPrepared(input: CompactionInput, coverage: CompactionCoverage?,
-        prepared: PreparedCompactionFlush?, sessionKind: String): ChatDbResult<Compaction> =
-        appendCompactionInternal(input, coverage, prepared, sessionKind)
+        prepared: PreparedCompactionFlush?, sessionKind: String, protection: InteractionProtectionSnapshot? = null,
+        attempt:CompactionMemoryAttempt?=null,memoryAllowed:Boolean=false,clock:java.time.Clock=java.time.Clock.systemUTC()): ChatDbResult<Compaction> =
+        appendCompactionInternal(input, coverage, prepared, sessionKind, protection,attempt,memoryAllowed,clock)
 
     private suspend fun appendCompactionInternal(input: CompactionInput, coverage: CompactionCoverage?,
-        prepared: PreparedCompactionFlush?, sessionKind: String?): ChatDbResult<Compaction> = transaction {
+        prepared: PreparedCompactionFlush?, sessionKind: String?, protection: InteractionProtectionSnapshot? = null,
+        attempt:CompactionMemoryAttempt?=null,memoryAllowed:Boolean=false,clock:java.time.Clock=java.time.Clock.systemUTC()): ChatDbResult<Compaction> = transaction {
+        if (protection != null) {
+            val current = InteractionProtection(database).read(input.conversationId)
+            if (protection.conversationId != input.conversationId || current.unsafeAnchor ||
+                current.fingerprint != protection.fingerprint)
+                throw M1bAbort("context_protection_changed")
+            val protectedMessages = current.protectedSources.filter { it.kind == com.jarvys.agent.ConversationTurn.Source.Kind.MESSAGE }
+            for (source in protectedMessages) {
+                val index = sql.query("SELECT message_index FROM messages WHERE conversation_id=? AND message_id=?",
+                    arrayOf(input.conversationId,source.sourceId)).use { if(it.moveToFirst()) it.getLong(0) else null }
+                if(index == null || index < input.firstKept) throw M1bAbort("context_protected_compaction_boundary")
+            }
+            if (coverage == null || coverage.leaves.any { it.source in current.protectedSources ||
+                    current.earliestProtected?.let { boundary ->
+                        current.sourcePositions[it.source]?.let { position -> position >= boundary } ?: true
+                    } == true }) throw M1bAbort("context_protected_compaction_coverage")
+        }
         if (input.conversationId.isBlank() || input.summary.isBlank() || input.summary.trim().isEmpty())
             return@transaction ChatDbResult.Invalid("compaction summary and conversation are required")
         ensureConversationExists(input.conversationId)
@@ -114,7 +132,7 @@ internal class MemoryTimelineRepository internal constructor(database: JarvysCha
             )
         }
         val saved = readCompaction(input.conversationId, id)!!
-        if (sessionKind != null) CompactionMemoryRepository(database).bind(saved, coverage, prepared, sessionKind)
+        if (sessionKind != null) CompactionMemoryRepository(database).bind(saved, coverage, prepared, sessionKind,attempt,memoryAllowed,clock)
         ChatDbResult.Success(saved)
     }
 
