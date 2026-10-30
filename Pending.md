@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria F34 — consulta observable y reconciliación P4 — checkpoint 29-10-2026
+
+**Candidate1: Full: 29 pruebas / Play: 29 pruebas; cuatro clases por sabor, cero fallos/errores/skips; doble PASS acotado.** Focal3 separado; código `6eaebb0e95b7f77a28e000ab870a0807d77ae3be`. Tests-only:1.282 archivos productivos byteidénticos, sin cambio de runtime jars.
+
+[Reporte y mapa F26–F35](docs/continue/engram-port/F34-consultation-report.md) · [Resultados exactos](docs/continue/engram-port/F34-consultation-results.json).
+
+La política existente llega al proveedor y el diálogo fake ejercita consulta/control; **no es enforcement ni evaluación de obediencia de modelos reales**. P4 local se reconcilia por unidades A–F más este cierre, sin sumar cohortes ni declarar suite conjunta. Próximo: P5 Stats bajo contrato separado, con adaptación explícita de privacidad si el primario MCP agrega globalmente. Doctor/portabilidad/réplica y dispositivo real siguen pendientes.
+
 ## Memoria P4-F — consolidación explícita — checkpoint 29-10-2026
 
 **Candidate5: Full: 321 pruebas / Play: 321 pruebas; 36 clases por sabor, cero fallos/errores/skips; doble PASS independiente acotado.** Preview completo → confirmación exacta → retirada atómica de originales y superviviente nuevo. Focal128 separado; código `0fb294063f7fcf83be3a592b9b507d7b26b601af`.

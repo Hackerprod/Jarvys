@@ -1,6 +1,6 @@
 {
-  "source_commit": "a1bd361c0649ed7990d3302ecc2ff4fd5bfa8cc1",
-  "parent_commit": "4c8f30f6c77de9b6bd78281c6f9650ec1d351709",
+  "source_commit": "a6e7f00245af0d9df252aab10c3e242b97151102",
+  "parent_commit": "6fe908bb27e3a0e8d07d6218299c3b27a705750a",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
   "source_file_count": 946,
   "files": [
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "b99ad6ff0aab0073448a9e2af441fa7a4c1bbb50",
-      "sha256": "68b8b0a8744c8a70f466acd3e4dc1ccb64d88733e335e183ff29b061ca22943b",
-      "bytes": 368916
+      "git_blob_sha1": "071d218cabc2328fc0712b36994cd2582d2c5916",
+      "sha256": "9ad2b2b14c11184827d5e5ffdbd33768052f720b2dec4254b51cff583200204c",
+      "bytes": 369900
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "bbca2707d4372badb2f34e60cc8bc7a0469d619d",
-      "sha256": "5f22f4a53ca91b5441e62e94d81bbf8471fad7548fdba72911c51b9a35d45917",
-      "bytes": 92186
+      "git_blob_sha1": "dc4ffdc2a7e56950e3dd4e71a82b68eebfd0b618",
+      "sha256": "48ee3739ab40b4862e2d554b4613e46160ed7bd87807c86de34cdb1ac9c66c98",
+      "bytes": 93170
     },
     {
       "path": "app/.gitignore",
