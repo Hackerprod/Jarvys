@@ -88,6 +88,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
+    var showMemorySelftest by remember { mutableStateOf(false) }
     var showPendingRelations by remember { mutableStateOf(false) }
     var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
@@ -168,6 +169,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryStats = true },
                         modifier = Modifier.testTag("memory-stats-open")) { Text(stringResource(R.string.memory_stats_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
+                        modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySessions = true },
                         modifier = Modifier.testTag("memory-sessions-open")) { Text(stringResource(R.string.memory_sessions_action)) }
@@ -311,6 +315,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
 
     if (showProjectMemories) ProjectMemoryDeleteDialog(
         onClose = { showProjectMemories = false },
@@ -560,6 +565,88 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
         },
         dismissButton = { TextButton(enabled = !mutationPending, onClick = { if (!mutationPending) onClose() }, modifier = Modifier.testTag("memory-inspector-close")) { Text(stringResource(R.string.memory_inspector_close)) } },
     )
+}
+
+/** Local synthetic selftest only; this dialog never opens a user Bridge or provider configuration. */
+@Composable
+private fun MemorySelftestDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val controller = remember(context) { com.jarvys.agent.MemorySelftestController.get(context) }
+    val scope = rememberCoroutineScope()
+    var suite by remember { mutableStateOf("all") }
+    var quick by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<com.jarvys.agent.MemorySelftestResult?>(null) }
+    var pending by remember { mutableStateOf(false) }
+    var observedOperation by remember { mutableStateOf(controller.activeOperation()) }
+    var ownToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var ownJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    fun invalidate() { report = null; failed = false }
+    fun close() { ownToken?.cancel(); ownJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { ownToken?.cancel(); ownJob?.cancel() } }
+    fun start() {
+        if (pending || controller.isRunning()) return
+        val options = com.jarvys.agent.MemorySelftestOptions(suite, quick)
+        val token = CancellationToken.cancellable()
+        invalidate(); ownToken = token; pending = true
+        ownJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { controller.execute(options, token) }
+                coroutineContext.ensureActive()
+                // A cancelled run's received envelope is meaningful; cancellation is never a successful report.
+                report = result
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) failed = true
+            } catch (_: Exception) { coroutineContext.ensureActive(); failed = true }
+            finally {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true) {
+                    pending = false; ownToken = null; ownJob = null; observedOperation = controller.activeOperation()
+                }
+            }
+        }
+    }
+    val busy = pending || observedOperation != null
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_selftest_title)) }, text = {
+        // Observation only. The standalone controller owns physical drain/cleanup and admission.
+        LaunchedEffect(controller) { while (true) { observedOperation = controller.activeOperation(); kotlinx.coroutines.delay(100) } }
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-selftest-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { Text(stringResource(R.string.memory_selftest_explanation)) }
+            items(listOf("all", "reliability", "performance")) { choice ->
+                TextButton(enabled = !busy, onClick = { suite = choice; invalidate() }, modifier = Modifier.testTag("memory-selftest-suite-$choice")) {
+                    Text((if (suite == choice) "✓ " else "") + stringResource(when (choice) { "reliability" -> R.string.memory_selftest_reliability; "performance" -> R.string.memory_selftest_performance; else -> R.string.memory_selftest_all }))
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(stringResource(R.string.memory_selftest_quick))
+                    Switch(checked = quick, enabled = !busy, onCheckedChange = { quick = it; invalidate() }, modifier = Modifier.testTag("memory-selftest-quick"))
+                }
+                Text(stringResource(R.string.memory_selftest_full_cost))
+                TextButton(enabled = !busy, onClick = { start() }, modifier = Modifier.testTag("memory-selftest-start")) { Text(stringResource(R.string.memory_selftest_start)) }
+                if (busy) Text(stringResource(R.string.memory_selftest_busy), modifier = Modifier.testTag("memory-selftest-busy"))
+                if (failed) Text(stringResource(R.string.memory_selftest_failed), modifier = Modifier.testTag("memory-selftest-failed"))
+            }
+            report?.let { result ->
+                item {
+                    val passed = result.executionState == "completed" && result.cleanupState == "cleaned" && result.report.passed
+                    Text(stringResource(if (passed) R.string.memory_selftest_passed else R.string.memory_selftest_not_passed), modifier = Modifier.testTag("memory-selftest-result"))
+                    Text(stringResource(R.string.memory_selftest_states, result.executionState, result.cleanupState), modifier = Modifier.testTag("memory-selftest-states"))
+                    Text(stringResource(R.string.memory_selftest_report, result.report.schemaVersion, result.report.suite, result.report.quick.toString(), result.report.durationMs), modifier = Modifier.testTag("memory-selftest-report"))
+                    Text(stringResource(R.string.memory_selftest_adapter, result.adapter.platform, result.adapter.corpusProject, result.adapter.sessionMode, result.adapter.userStoreChecked.toString()), modifier = Modifier.testTag("memory-selftest-adapter"))
+                    result.error?.let { Text(it, modifier = Modifier.testTag("memory-selftest-error")) }
+                }
+                items(result.report.scenarios, key = { it.name }) { scenario ->
+                    Column(Modifier.testTag("memory-selftest-scenario-${scenario.name}"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.memory_selftest_scenario, scenario.name, scenario.suite, scenario.passed.toString(), scenario.durationMs))
+                        scenario.error?.let { Text(it) }
+                        scenario.metrics.forEach { (metric, value) -> Text("$metric: $value", modifier = Modifier.testTag("memory-selftest-metric-${scenario.name}-$metric")) }
+                    }
+                }
+            }
+        }
+    }, confirmButton = {
+        if (busy) TextButton(onClick = { if (ownToken != null) ownToken?.cancel() else observedOperation?.let { controller.cancelIfCurrent(it) } }, modifier = Modifier.testTag("memory-selftest-cancel")) { Text(stringResource(R.string.memory_selftest_cancel)) }
+    }, dismissButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-selftest-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
 }
 
 /** Explicit manual read, independent of automatic memory capture; no model or background refresh. */

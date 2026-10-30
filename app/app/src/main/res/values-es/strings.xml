@@ -1721,4 +1721,22 @@ Fuentes retiradas confirmadas:
     <string name="memory_stats_prompts">Mensajes de usuario conservados: %1$d</string>
     <string name="memory_stats_projects">Proyectos con observaciones vigentes</string>
     <string name="memory_stats_no_projects">Ninguno</string>
+    <string name="memory_selftest_action">Selftest aislado</string>
+    <string name="memory_selftest_title">Selftest local aislado</string>
+    <string name="memory_selftest_explanation">Ejecuta escenarios reales de almacenamiento con datos sintéticos temporales nuevos. No inspecciona ni repara tus recuerdos personales y no usa un modelo ni la red. Abrir este diálogo o elegir opciones no ejecuta pruebas.</string>
+    <string name="memory_selftest_all">Todos los escenarios</string>
+    <string name="memory_selftest_reliability">Fiabilidad</string>
+    <string name="memory_selftest_performance">Rendimiento</string>
+    <string name="memory_selftest_quick">Rápido (corpus sintético menor)</string>
+    <string name="memory_selftest_full_cost">La ejecución completa es la opción inicial. Estas pruebas usan CPU y disco locales; las cifras de rendimiento son mediciones, no una garantía de velocidad.</string>
+    <string name="memory_selftest_start">Iniciar selftest aislado</string>
+    <string name="memory_selftest_busy">En ejecución o cancelación. Aún no se han confirmado la finalización física y la limpieza temporal. Todavía no puede iniciarse otra ejecución.</string>
+    <string name="memory_selftest_failed">No se confirmó un reporte final. No es un resultado aprobado; cerrar esta vista no demuestra la limpieza.</string>
+    <string name="memory_selftest_passed">Selftest aprobado; limpieza temporal confirmada. No se comprobó la memoria personal.</string>
+    <string name="memory_selftest_not_passed">Selftest no aprobado</string>
+    <string name="memory_selftest_states">Ejecución: %1$s · Limpieza: %2$s</string>
+    <string name="memory_selftest_report">%1$s · Suite: %2$s · Rápido: %3$s · Duración: %4$d ms</string>
+    <string name="memory_selftest_adapter">Adaptación: %1$s · Proyecto sintético: %2$s · Modo de sesión: %3$s · Almacén personal comprobado: %4$s</string>
+    <string name="memory_selftest_scenario">%1$s · %2$s · Aprobado: %3$s · %4$d ms</string>
+    <string name="memory_selftest_cancel">Cancelar selftest</string>
 </resources>

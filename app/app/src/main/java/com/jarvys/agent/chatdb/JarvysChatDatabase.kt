@@ -294,50 +294,100 @@ internal object JarvysChatDatabaseProvider {
      * Opens an isolated file for schema tests while applying the production future-version gate and
      * connection PRAGMAs. It is internal so production callers use only the process singleton.
      */
-    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase =
-        projectionAnchor(databaseFile).fenced {
-        projectionAnchor(databaseFile).opening()
-        databaseFile.parentFile?.mkdirs()
-        val executorSet = createExecutors()
-        var openedDatabase: JarvysChatDatabase? = null
-        var readPool: ReadDatabasePool? = null
-        try {
-            buildDatabase(context.applicationContext, databaseFile, executorSet).also { database ->
-                openedDatabase = database
-                kotlinx.coroutines.runBlocking { database.useWriterConnection { } }
-                readPool = ReadDatabasePool(databaseFile)
-                synchronized(databaseExecutors) { databaseExecutors[database] = executorSet }
-                synchronized(queryDispatchers) { queryDispatchers[database] = executorSet[0].asCoroutineDispatcher() }
-                synchronized(writerDispatchers) { writerDispatchers[database] = executorSet[1].asCoroutineDispatcher() }
-                synchronized(applicationFiles) { applicationFiles[database] = context.applicationContext.filesDir }
-                synchronized(databaseFiles) { databaseFiles[database] = databaseFile }
-                synchronized(readPools) { readPools[database] = checkNotNull(readPool) }
-                projectionAnchor(databaseFile).opened(database)
+    internal fun openDatabaseFileForTests(context: Context, databaseFile: File): JarvysChatDatabase {
+        val resources = ExplicitFileResources(context, databaseFile, reportFailures = true)
+        return try { resources.open() } catch (failure: Throwable) {
+            runCatching { resources.close(awaitTermination = false) }
+            throw failure
+        }
+    }
+
+    /** Only a selftest-owned path/context reaches this handle; it never joins the user singleton. */
+    internal class ScratchDatabase internal constructor(context: Context, file: File) {
+        private val resources = ExplicitFileResources(context, file, reportFailures = false)
+        fun open(): JarvysChatDatabase = resources.open()
+        /** Must be called after the operation's workers have physically returned, including setup failure. */
+        fun closeAndAwait() = resources.close(awaitTermination = true)
+    }
+
+    /** Shared explicit-file implementation, also used by schema tests; no alternate Room engine. */
+    private class ExplicitFileResources(val context: Context, val file: File, val reportFailures: Boolean) {
+        private var executors: List<ExecutorService> = emptyList()
+        private var database: JarvysChatDatabase? = null
+        private var pool: ReadDatabasePool? = null
+        private var registered = false
+        private var opened = false
+        private var partialCloseUnconfirmed = false
+        fun open(): JarvysChatDatabase = projectionAnchor(file).fenced {
+            check(!opened) { "scratch_database_already_opened" }
+            opened = true
+            projectionAnchor(file).opening()
+            file.parentFile?.mkdirs()
+            executors = createExecutors()
+            val db = buildDatabase(context.applicationContext, file, executors, reportFailures)
+            database = db // Retain each partial resource before the next potentially failing step.
+            kotlinx.coroutines.runBlocking { db.useWriterConnection { } }
+            pool = ReadDatabasePool(file, if (!reportFailures) ({ partialCloseUnconfirmed = true }) else null)
+            synchronized(databaseExecutors) { databaseExecutors[db] = executors }
+            synchronized(queryDispatchers) { queryDispatchers[db] = executors[0].asCoroutineDispatcher() }
+            synchronized(writerDispatchers) { writerDispatchers[db] = executors[1].asCoroutineDispatcher() }
+            synchronized(applicationFiles) { applicationFiles[db] = context.applicationContext.filesDir }
+            synchronized(databaseFiles) { databaseFiles[db] = file }
+            synchronized(readPools) { readPools[db] = checkNotNull(pool) }
+            registered = true
+            projectionAnchor(file).opened(db)
+            db
+        }
+        fun close(awaitTermination: Boolean) {
+            var failure: Throwable? = null
+            fun attempt(block: () -> Unit) { try { block() } catch (caught: Throwable) {
+                if (failure == null) failure = caught else failure!!.addSuppressed(caught)
+            } }
+            val db = database
+            if (registered && db != null) attempt { closeDatabaseOwned(db, strictClose = awaitTermination) }
+            else {
+                attempt { pool?.close(strict = awaitTermination) }
+                attempt { db?.close() }
             }
-        } catch (error: Throwable) {
-            runCatching { readPool?.close() }
-            runCatching { openedDatabase?.close() }
-            executorSet.forEach(ExecutorService::shutdown)
-            throw error
+            executors.forEach { executor -> attempt { executor.shutdown() } }
+            // A cancelled caller must not abandon cleanup or mistake shutdown-requested for terminated.
+            var interrupted = Thread.interrupted()
+            if (awaitTermination) executors.forEach { executor ->
+                while (!executor.isTerminated) {
+                    try { executor.awaitTermination(100, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                    catch (_: InterruptedException) { interrupted = true }
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+            if (awaitTermination && partialCloseUnconfirmed) attempt { error("scratch_partial_close_unconfirmed") }
+            if (awaitTermination && failure == null) {
+                val anchor = projectionAnchor(file)
+                anchor.fenced { synchronized(projectionAnchors) {
+                    if (projectionAnchors[file.canonicalPath] === anchor) projectionAnchors.remove(file.canonicalPath)
+                } }
+            }
+            failure?.let { throw it }
         }
     }
 
     /** Closes provider-owned handles and executors together with their Room database. */
-    internal fun closeDatabase(database: JarvysChatDatabase) {
+    internal fun closeDatabase(database: JarvysChatDatabase) = closeDatabaseOwned(database, strictClose = false)
+
+    private fun closeDatabaseOwned(database: JarvysChatDatabase, strictClose: Boolean) {
         val file = synchronized(databaseFiles) { databaseFiles[database] } ?: return
         val anchor = projectionAnchor(file)
         anchor.fenced {
             anchor.invalidate(database)
-            try { closeDatabaseUnderFence(database) } finally { anchor.closed(database) }
+            try { closeDatabaseUnderFence(database, strictClose) } finally { anchor.closed(database) }
         }
     }
 
-    private fun closeDatabaseUnderFence(database: JarvysChatDatabase) {
+    private fun closeDatabaseUnderFence(database: JarvysChatDatabase, strictClose: Boolean) {
         val readPool = synchronized(readPools) { readPools[database] }
         try {
             // Owners must drain active Room transactions before shutdown; Room does not await them.
             // Wake blocked raw acquisitions; borrowed raw handles close when returned.
-            readPool?.close()
+            readPool?.close(strict = strictClose)
         } finally {
             synchronized(readPools) {
                 if (readPools[database] === readPool) readPools.remove(database)
@@ -482,6 +532,7 @@ internal object JarvysChatDatabaseProvider {
         context: Context,
         databaseFile: File,
         executors: List<ExecutorService>,
+        reportFailures: Boolean = true,
     ): JarvysChatDatabase {
         runVersionPreflightOnQueryExecutor(databaseFile, executors[0])
         // Even closing an initialized Room object may open its lazy Android connection. Reject an
@@ -496,7 +547,7 @@ internal object JarvysChatDatabaseProvider {
             .setQueryExecutor(executors[1])
             .setTransactionExecutor(executors[1])
             // Fresh-only schema: no imports, historical migration chain or destructive fallback.
-            .addCallback(connectionPragmasCallback(context.applicationContext))
+            .addCallback(connectionPragmasCallback(context.applicationContext, reportFailures))
             .build()
     }
 
@@ -577,7 +628,7 @@ internal object JarvysChatDatabaseProvider {
         }
     }
 
-    internal fun connectionPragmasCallback(context: Context): Callback = object : Callback() {
+    internal fun connectionPragmasCallback(context: Context, reportFailures: Boolean = true): Callback = object : Callback() {
         private val driverTriggersInstalled = AtomicBoolean(false)
         private val driverTriggerInstallLock = Any()
 
@@ -585,7 +636,7 @@ internal object JarvysChatDatabaseProvider {
             if (driverTriggersInstalled.get()) return
             synchronized(driverTriggerInstallLock) {
                 if (driverTriggersInstalled.get()) return
-                DatabaseTriggers.create(connection, context)
+                DatabaseTriggers.create(connection, context, reportFailures)
                 driverTriggersInstalled.set(true)
             }
         }
@@ -606,18 +657,18 @@ internal object JarvysChatDatabaseProvider {
         // BundledSQLiteDriver and calls the SQLiteConnection overloads above.
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
-            DatabaseTriggers.create(db, context)
+            DatabaseTriggers.create(db, context, reportFailures)
         }
 
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
-            configureOpenedConnection(db)
+            configureOpenedConnection(db, reportFailures)
         }
     }
 
     /** Shared Room/test-helper connection setup; each opened connection gets triggers and PRAGMAs. */
-    internal fun configureOpenedConnection(db: SupportSQLiteDatabase) {
-        DatabaseTriggers.create(db)
+    internal fun configureOpenedConnection(db: SupportSQLiteDatabase, reportFailures: Boolean = true) {
+        DatabaseTriggers.create(db, reportFailures = reportFailures)
         // Applies to each connection (including readers opened later), unlike a one-time PRAGMA.
         db.setForeignKeyConstraintsEnabled(true)
         setPragma(db, "foreign_keys=ON")
@@ -651,16 +702,16 @@ internal object JarvysChatDatabaseProvider {
 
 /** Invariants Room cannot encode, installed when creating the current fresh schema. */
 internal object DatabaseTriggers {
-    fun create(connection: SQLiteConnection, context: Context? = null) {
+    fun create(connection: SQLiteConnection, context: Context? = null, reportFailures: Boolean = true) {
         val sql = DriverChatSqlDatabase(connection)
-        create(sql, context)
+        create(sql, context, reportFailures)
     }
 
-    fun create(db: SupportSQLiteDatabase, context: Context? = null) = create(SupportChatSqlDatabase(db), context)
+    fun create(db: SupportSQLiteDatabase, context: Context? = null, reportFailures: Boolean = true) = create(SupportChatSqlDatabase(db), context, reportFailures)
 
-    fun create(db: ChatSqlDatabase, context: Context? = null) {
+    fun create(db: ChatSqlDatabase, context: Context? = null, reportFailures: Boolean = true) {
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(project,scope,topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
-        PersonalMemorySearchIndex.install(db, context)
+        PersonalMemorySearchIndex.install(db, context, reportFailures)
         MemoryPromptSearchIndex.install(db)
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_artifact_owner ON transcript_artifact_refs(conversation_id,owner_kind,batch_id,IFNULL(call_id,''),artifact_id)")
         MessageSearchIndex.install(db)
@@ -772,7 +823,7 @@ internal object DatabaseTriggers {
         BundledSQLiteDriver().open(file.absolutePath, SQLITE_OPEN_READONLY or SQLITE_OPEN_FULLMUTEX)
 
     /** Independent committed-read handles; retain the established bounded pool and snapshot fence. */
-    private class ReadDatabasePool(databaseFile: File) {
+    private class ReadDatabasePool(databaseFile: File, private val onPartialCloseFailure: (() -> Unit)? = null) {
         private val all = mutableListOf<SQLiteConnection>()
         private val lock = java.lang.Object()
         private val available = ArrayDeque<SQLiteConnection>()
@@ -792,12 +843,12 @@ internal object DatabaseTriggers {
                         all += database
                         available.addLast(database)
                     } catch (error: Throwable) {
-                        runCatching { database.close() }
+                        runCatching { database.close() }.onFailure { onPartialCloseFailure?.invoke() }
                         throw error
                     }
                 }
             } catch (error: Throwable) {
-                all.forEach { runCatching { it.close() } }
+                all.forEach { runCatching { it.close() }.onFailure { onPartialCloseFailure?.invoke() } }
                 throw error
             }
         }
@@ -834,17 +885,28 @@ internal object DatabaseTriggers {
             if (closeOnReturn) runCatching { database.close() }
         }
 
-        fun close() {
+        fun close(strict: Boolean = false) {
+            var failure: Throwable? = null
             val availableToClose = synchronized(lock) {
-                if (closed) return
-                closed = true
-                val handles = available.toList()
-                available.clear()
-                all.removeAll { handle -> handles.any { it === handle } }
-                lock.notifyAll()
-                handles
+                // Preserve uncertainty about borrowed handles, but never strand the idle handles.
+                if (strict && borrowed.isNotEmpty()) failure = IllegalStateException("scratch_read_handles_not_drained")
+                if (closed) emptyList() else {
+                    closed = true
+                    val handles = available.toList()
+                    available.clear()
+                    all.removeAll { handle -> handles.any { it === handle } }
+                    lock.notifyAll()
+                    handles
+                }
             }
-            availableToClose.forEach { runCatching { it.close() } }
+            availableToClose.forEach { handle ->
+                try { handle.close() } catch (caught: Throwable) {
+                    if (strict) {
+                        if (failure == null) failure = caught else failure!!.addSuppressed(caught)
+                    }
+                }
+            }
+            failure?.let { throw it }
         }
 
         private fun verifyPragma(database: SQLiteConnection, pragma: String, expected: String) {

@@ -1,8 +1,8 @@
 {
-  "source_commit": "21bc0a0bf511d55e86041959519b06a385cd3b2d",
-  "parent_commit": "d5fe522575fba6e96b461b7c7400f66a1469c448",
+  "source_commit": "2d94900cc99abdd313c2ae58a22e2f781c898d92",
+  "parent_commit": "da3ac54b958d2f5d5a2c23e7758accd8449613ca",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
-  "source_file_count": 947,
+  "source_file_count": 949,
   "files": [
     {
       "path": ".gitignore",
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "79dbdf6f73c29554f31597de43c98a932a306915",
-      "sha256": "b5b3fd592c3cd782d73394ddfbf7237ff5cee4a3a7be82887b0ad67b77736829",
-      "bytes": 370880
+      "git_blob_sha1": "7591b3ec1fc4256cedb2cb4e0f63d3f6e6161496",
+      "sha256": "b5549e36c1f6da14308bcd96d03965ed1d04d2b41cc51343d4807910e45fb242",
+      "bytes": 371844
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "79ce6912e32a0646740f2b3655928f76a5a2ce76",
-      "sha256": "55849ad69f963fd5e8b929eb3349d30d8a8eaabeefe067ef4cef5503e7eb7382",
-      "bytes": 94150
+      "git_blob_sha1": "546c71621c1a940116d22d516b2198725f308fb9",
+      "sha256": "5d4b4e8437b111b01ab1050806e52ae8a22eed4c5c1e6260cafb946db84bacc4",
+      "bytes": 95114
     },
     {
       "path": "app/.gitignore",
@@ -1818,6 +1818,20 @@
       "bytes": 5605
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/MemorySelftest.kt",
+      "mode": "100644",
+      "git_blob_sha1": "2a0f1bfc97b2884c4dd0bfa1c77f076b14d49e4b",
+      "sha256": "02709fda3df041943d2897aec309021650816e8c0225aa65f573bfb408006762",
+      "bytes": 14525
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/MemorySelftestController.kt",
+      "mode": "100644",
+      "git_blob_sha1": "a61feb36fde8765d72b04c5fe5cf782b3a8cea70",
+      "sha256": "deb37428c581817bd058786723753ec8b949be45dc296574d736dbbdf8f0dc43",
+      "bytes": 2495
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/MemorySemanticScan.kt",
       "mode": "100644",
       "git_blob_sha1": "8cc211c99aa97d11a8f63b32f26db379b6acb237",
@@ -2926,9 +2940,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/JarvysChatDatabase.kt",
       "mode": "100644",
-      "git_blob_sha1": "aef7e3fbefb2e0c958b8d24df46a5505b0574bb5",
-      "sha256": "54a0cf5d573c952b3549b4474f4688bcdbf3b10359b2732a6b5cb74147960c38",
-      "bytes": 42516
+      "git_blob_sha1": "66f877c95acec2e40dab94868cbc9b5fa2cc09b4",
+      "sha256": "4ccc13d98da1560acd1561bded4a91f303d8f0a6076b5e2cea2b5b26892ba723",
+      "bytes": 46615
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/M1bWriteSupport.kt",
@@ -3164,9 +3178,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalMemoryFtsSql.kt",
       "mode": "100644",
-      "git_blob_sha1": "f8e1369e0b0eb04f2a07fd94db92417d0f29315b",
-      "sha256": "5f47d6f9ba843ed5692ceca463b72cd9fc63906802877315451f07bcc4e52214",
-      "bytes": 11752
+      "git_blob_sha1": "d07df43680f2dbf27f312d2ee572cd016ff1e079",
+      "sha256": "0d16ccd357b3ca1c8850f000dadb1f351029a60230747f41e9fd380bce3e6579",
+      "bytes": 11802
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/PersonalMemoryTimeline.kt",
@@ -4144,9 +4158,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/memory/PersonalMemoryScreen.kt",
       "mode": "100644",
-      "git_blob_sha1": "dc991f487e11631cf16c37f8695a12cb781347cd",
-      "sha256": "94ca98241174a56674f360dbd0d892e54574d36cf9960025ef312b269c891fda",
-      "bytes": 112953
+      "git_blob_sha1": "de65a2fa3ee6484e5e3904c000c1779461bfa47e",
+      "sha256": "e28c24183e1f8b8ff2bcddffacc205da04a28a3b353b9fb48a58a32be104c27d",
+      "bytes": 119978
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/modules/ModuleArtifactViewerLaunch.kt",
@@ -5278,9 +5292,9 @@
     {
       "path": "app/app/src/main/res/values-es/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "01bc675d0366a8ceabf46186604a1c1366b348d0",
-      "sha256": "eb9c84d90724dbbd6b51c82d28d28b3da47be9349861ad703d695b9e50a3925f",
-      "bytes": 171132
+      "git_blob_sha1": "c659ad2c29ae44fcca77305f768b3105c5371647",
+      "sha256": "730f5de0a0a028d09e7d1cdab994331272adddfb81b333e46d1ee4b557ae1fc6",
+      "bytes": 173220
     },
     {
       "path": "app/app/src/main/res/values-es/strings_ux44_mcp.xml",
@@ -5425,9 +5439,9 @@
     {
       "path": "app/app/src/main/res/values/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "32547b4ca77f893a435743afc061c1049f4d10b8",
-      "sha256": "fdf70e525ee836d3526b551cb5c9b9ecb0e773e8b05e4585ae3295b098fc83be",
-      "bytes": 160307
+      "git_blob_sha1": "7546aafb19e32b9c93403c513f7b3c5b44e0b459",
+      "sha256": "d7c903ad3b4c9ed6c2e925c18924307027cb93d228a77462857d2de706ce01fd",
+      "bytes": 162262
     },
     {
       "path": "app/app/src/main/res/values/strings_ux44_mcp.xml",

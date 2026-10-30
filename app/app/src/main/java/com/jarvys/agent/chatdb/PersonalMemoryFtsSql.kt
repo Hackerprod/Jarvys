@@ -104,7 +104,7 @@ internal object PersonalMemorySearchIndex {
 
     @Volatile internal var capabilityOverrideForTests: PersonalMemorySearchMode? = null
 
-    fun install(db: ChatSqlDatabase, context: Context?) {
+    fun install(db: ChatSqlDatabase, context: Context?, reportFailures: Boolean = true) {
         try {
             val previous = readMode(db)
             val wanted = capabilityOverrideForTests ?: detect(db)
@@ -114,7 +114,7 @@ internal object PersonalMemorySearchIndex {
         } catch (failure: Throwable) {
             runCatching { clearIndex(db) }
             runCatching { saveMode(db, PersonalMemorySearchMode.LIKE) }
-            if (failureReported.compareAndSet(false, true)) {
+            if (reportFailures && failureReported.compareAndSet(false, true)) {
                 runCatching { AgentErrorReporter.reportChatDatabaseFailure(context, failure) }
             }
         }

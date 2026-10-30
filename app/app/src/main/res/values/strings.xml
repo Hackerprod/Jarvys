@@ -1720,4 +1720,22 @@ Confirmed retired sources:
     <string name="memory_stats_prompts">Retained prompts: %1$d</string>
     <string name="memory_stats_projects">Projects with live observations</string>
     <string name="memory_stats_no_projects">None</string>
+    <string name="memory_selftest_action">Isolated selftest</string>
+    <string name="memory_selftest_title">Isolated local selftest</string>
+    <string name="memory_selftest_explanation">Runs real storage scenarios using new temporary synthetic data. It does not inspect or repair your personal memories and does not use a model or network. Opening this dialog or choosing options does not run tests.</string>
+    <string name="memory_selftest_all">All scenarios</string>
+    <string name="memory_selftest_reliability">Reliability</string>
+    <string name="memory_selftest_performance">Performance</string>
+    <string name="memory_selftest_quick">Quick (smaller synthetic corpus)</string>
+    <string name="memory_selftest_full_cost">Full is the default. These tests use local CPU and disk; performance figures are measurements, not a speed guarantee.</string>
+    <string name="memory_selftest_start">Start isolated selftest</string>
+    <string name="memory_selftest_busy">Running or cancelling. Physical completion and temporary cleanup are not yet confirmed. A second run cannot start yet.</string>
+    <string name="memory_selftest_failed">No final report was confirmed. This is not a pass; closing this view does not prove cleanup.</string>
+    <string name="memory_selftest_passed">Selftest passed; temporary cleanup confirmed. Personal memory was not checked.</string>
+    <string name="memory_selftest_not_passed">Selftest not passed</string>
+    <string name="memory_selftest_states">Execution: %1$s · Cleanup: %2$s</string>
+    <string name="memory_selftest_report">%1$s · Suite: %2$s · Quick: %3$s · Duration: %4$d ms</string>
+    <string name="memory_selftest_adapter">Adapter: %1$s · Synthetic project: %2$s · Session mode: %3$s · Personal store checked: %4$s</string>
+    <string name="memory_selftest_scenario">%1$s · %2$s · Passed: %3$s · %4$d ms</string>
+    <string name="memory_selftest_cancel">Cancel selftest</string>
 </resources>
