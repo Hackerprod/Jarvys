@@ -1,8 +1,8 @@
 {
-  "source_commit": "45a675cfaacc5e07f31451811ae9aabae7f40f2a",
-  "parent_commit": "da4d96050ace3112455bd98450481ceb05e9a54c",
+  "source_commit": "a04e981615361694eaabf3623707bf60a09f675c",
+  "parent_commit": "ac4b681f895a20323081d15b345d11bab7ed6f20",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
-  "source_file_count": 981,
+  "source_file_count": 985,
   "files": [
     {
       "path": ".gitignore",
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "4272068df654d3a7822e26e99b46e98df3416e84",
-      "sha256": "fc6750c08726b79ad75c2dd2e452d7f14b5d19342d89a7cc697387eaf42950de",
-      "bytes": 381060
+      "git_blob_sha1": "af6dddefca4d1b7468f9685ee00dd009f05406fe",
+      "sha256": "5e56fa52a46d50a5ab3672b6d2d0f5d1839b62d680e9d10e0724c0c9d0afbf69",
+      "bytes": 382545
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "e335a19898cc1432c71e10ff27d02b4427e5ca57",
-      "sha256": "6844ec9b742fe20884c714a00b006400bf38302c520ae622d690e6584f60b2fc",
-      "bytes": 104330
+      "git_blob_sha1": "a28c6828b50d648f1210ec944370b4a88ffddf01",
+      "sha256": "874527601115959abcf368d59192546c7dc2db04b0dfab8aed66dba80d39a06f",
+      "bytes": 105815
     },
     {
       "path": "app/.gitignore",
@@ -1958,6 +1958,13 @@
       "bytes": 5037
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/MemorySourceTitleRepairController.kt",
+      "mode": "100644",
+      "git_blob_sha1": "17d0d4bef5807b693e988867969d35f080d61121",
+      "sha256": "ef5c4c31ab3979688ab914c3654cf93ecd216bc2df901e7520740078c15546f4",
+      "bytes": 2953
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/MemoryUiAutomationGuard.java",
       "mode": "100644",
       "git_blob_sha1": "a25a3c6ff6482783e217c6ce5e9fbf1e13a627ad",
@@ -2863,9 +2870,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
       "mode": "100644",
-      "git_blob_sha1": "fa4a02eb284503f556d4ea02d26594bb1db9d4f2",
-      "sha256": "3e8f8beefbf331b3057fa1fab571795036bc6243cf3702fa62b6c5f8f22111d0",
-      "bytes": 158132
+      "git_blob_sha1": "27fc39c21f4061fad17c835421c329eb504a0481",
+      "sha256": "4f25120f8a2eae40407b934873e81ffea61a5d8751a9e6b8fecbe39e9c9a9934",
+      "bytes": 160384
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatSqlConnection.kt",
@@ -3267,6 +3274,13 @@
       "bytes": 14097
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryRepairBackupStore.kt",
+      "mode": "100644",
+      "git_blob_sha1": "22658b38a4db296916e1ef1da11b44e449a21931",
+      "sha256": "9191a60df80d3a5c4c767d4e2d0d28b8eb9274ca9c216d86fc68791ad987e4e4",
+      "bytes": 17696
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryReview.kt",
       "mode": "100644",
       "git_blob_sha1": "fc3e619270275a5c60f944de76e1c6e9ac295a9e",
@@ -3328,6 +3342,13 @@
       "git_blob_sha1": "65effbd797eadead7569647f3456592294c9f20d",
       "sha256": "2bc35f0a96564f3095e52160acb47e3575f56fbade19c4854aea1049e638feed",
       "bytes": 404
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemorySourceTitleRepair.kt",
+      "mode": "100644",
+      "git_blob_sha1": "960dd6cf33d8084c5c918b975d782e5f7203e0e7",
+      "sha256": "1bda8cb19f90276e3b1621e7baf939f3deefc8b08fb73335b806bdb6d1a0633e",
+      "bytes": 16515
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryStats.kt",
@@ -4380,11 +4401,18 @@
       "bytes": 720
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/memory/MemorySourceTitleRepairDialog.kt",
+      "mode": "100644",
+      "git_blob_sha1": "7d300c26d767fa7318f762525fd36063776c710a",
+      "sha256": "122d364031a1c833889dc47fd07469bf9384d19d0f073d3fae4e936b8bbb3e3c",
+      "bytes": 14255
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/memory/PersonalMemoryScreen.kt",
       "mode": "100644",
-      "git_blob_sha1": "fd05542e67605f3e9de856876fc58e16685c4073",
-      "sha256": "b2ba6ae82cb12aa4d83922f17e24b4af2d27c1f669af0476a30daa176676d2d1",
-      "bytes": 208369
+      "git_blob_sha1": "81943e66cb3e13640ff3fc723e3ee26ba6b87843",
+      "sha256": "74c16e5be16ab855f9df13209e0c897f870afe455f447540a4c8e0a2c0c040b3",
+      "bytes": 208880
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/modules/ModuleArtifactViewerLaunch.kt",
@@ -5516,9 +5544,9 @@
     {
       "path": "app/app/src/main/res/values-es/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "1cb005181c091513dd79c8fbd6176f7b19def93e",
-      "sha256": "33421c9caea9636dc79ee95569dd2e8240fe64925a420c72d67e27376ae0b9d6",
-      "bytes": 198258
+      "git_blob_sha1": "d417c41efe197e37c861216e8378b6727f3f2c74",
+      "sha256": "3f0b033ac9cd64c307581be1ec0fba484be2770e9c610114de349959c53b537a",
+      "bytes": 204489
     },
     {
       "path": "app/app/src/main/res/values-es/strings_ux44_mcp.xml",
@@ -5663,9 +5691,9 @@
     {
       "path": "app/app/src/main/res/values/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "fa6c82865a1cb69f40ef9790b04f3650022173c4",
-      "sha256": "7b64d805dcc3a182b2edc5cf419891a702b1cea5667e0e090a7855cef5c7bdfe",
-      "bytes": 185516
+      "git_blob_sha1": "c5bcc2cb6a7ab452170a7522c31704b9a2efdf36",
+      "sha256": "e1e8dc442c2965fee1b19eee2a7b3674516550a107c81bfdd3b97a5f55a334ce",
+      "bytes": 191160
     },
     {
       "path": "app/app/src/main/res/values/strings_ux44_mcp.xml",

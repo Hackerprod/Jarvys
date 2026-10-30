@@ -1,3 +1,11 @@
+## Memoria P5-K — Reparación de títulos con copia SQLite privada — checkpoint 30-10-2026
+
+**Candidate4: Full145/0 y Play145/0, 21 clases por sabor, sin omisiones.** Focal19 separado. Doble PASS independiente acotado. Código `34e3b30af08c35ea542409ef2a903ef3af1c3a65`. [Reporte y límites](docs/continue/engram-port/P5-K-source-title-repair-report.md) · [Resultados exactos](docs/continue/engram-port/P5-K-source-title-repair-results.json).
+
+Preview manual de proyecto autorizado, fingerprint completo, consentimiento separado para copia **integral de Room (incluye conversaciones y bindings)** y reparación sólo del título derivado de contenido propio. No inventa tipo/contenido. MemoryOFF permanece OFF. SQLite verificado antes de mutar; copia local privada retenida sin borrado automático, con inventario de sólo lectura y estados incompleto/fallido/cancelado. No JSON como sustituto del backup.
+
+Se preservan fallos de compilación candidates1/2 y regresión candidate3 Full145/1 y Play145/1 por clave española preexistente ausente, corregida sin relajar tests. Host sintético no acredita durabilidad física ni protección frente a código malicioso del mismo UID. **P5 sigue parcial:** reparación general/ownership, gestión de borrado explícito de copias, restore, Detect/Inspect/current-project, merge/rescue, Markdown/grafo y P6 siguen pendientes. Sin PASS global ni autorización automática de otra unidad. Los bloques inferiores conservan historia previa.
+
 ## Prioridad siguiente tras completar Engram — portar lógica GrokBot
 
 - **Estado: pendiente; no iniciado.** Portar la lógica GrokBot de [milind-soni/OpenMausBot](https://github.com/milind-soni/OpenMausBot) a nuestros bots.

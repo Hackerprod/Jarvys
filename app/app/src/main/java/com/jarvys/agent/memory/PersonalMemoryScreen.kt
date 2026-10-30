@@ -99,6 +99,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
     var showMemoryProjectPrune by remember { mutableStateOf(false) }
+    var showMemorySourceTitleRepair by remember { mutableStateOf(false) }
     var showMemoryProjectHistory by remember { mutableStateOf(false) }
     var showMemoryAliases by remember { mutableStateOf(false) }
     var showMemoryProjectInventory by remember { mutableStateOf(false) }
@@ -198,6 +199,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectPrune = true },
                         modifier = Modifier.testTag("memory-project-prune-open")) { Text(stringResource(R.string.memory_project_prune_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemorySourceTitleRepair = true },
+                        modifier = Modifier.testTag("memory-repair-open")) { Text(stringResource(R.string.memory_repair_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
@@ -353,6 +357,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemorySourceTitleRepair) MemorySourceTitleRepairDialog { showMemorySourceTitleRepair = false }
     if (showMemoryProjectPrune) MemoryProjectPruneDialog { showMemoryProjectPrune = false }
     if (showMemoryProjectHistory) MemoryProjectHistoryDialog { showMemoryProjectHistory = false }
     if (showMemoryAliases) MemoryAliasesDialog { showMemoryAliases = false }

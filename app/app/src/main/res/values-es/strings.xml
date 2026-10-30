@@ -1460,6 +1460,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="setup_wizard_continue">Continuar</string>
     <string name="setup_wizard_back">Atrás</string>
     <string name="setup_wizard_finish">Finalizar</string>
+    <string name="single_session_retired">Esta actualización inicia una nueva conversación Central y una nueva memoria personal. Ahora se eliminarán las conversaciones antiguas, la memoria y sus archivos.</string>
 
     <string name="settings_storage">Almacenamiento</string>
     <string name="settings_storage_description">Jarvys guarda la salida completa de sus herramientas para poder responder con exactitud qué hizo. Cuando el dispositivo se queda sin espacio, solo elimina copias de las que no depende ninguna acción recordada.</string>
@@ -1930,4 +1931,50 @@ Fuentes retiradas confirmadas:
     <string name="memory_project_prune_error_code">Código de resultado seguro: %1$s</string>
     <string name="memory_project_prune_unavailable">La poda no está disponible. No se inició ninguna operación.</string>
     <string name="memory_project_prune_rejected">La operación devolvió un código de fallo seguro, no un recibo de poda exitosa. Actualiza la estimación actual antes de decidir qué hacer después.</string>
+
+    <!-- P5-K: manual source-title repair and retained local copy inventory. -->
+    <string name="memory_repair_action">Reparar títulos / copias locales</string>
+    <string name="memory_repair_title">Reparar títulos de origen ausentes</string>
+    <string name="memory_repair_explanation">Mantenimiento manual de un proyecto autorizado elegido expresamente. Solo se reparan títulos ausentes con contenido de origen utilizable. El tipo o contenido ausente se informa, no se inventa. No cambia la configuración de memoria ni se usa un modelo o la red.</string>
+    <string name="memory_repair_load_projects">Cargar proyectos autorizados</string>
+    <string name="memory_repair_select">Elige un proyecto expresamente</string>
+    <string name="memory_repair_preview">Previsualizar campos ausentes y cambios de título</string>
+    <string name="memory_repair_preview_note">Esta vista es un plan congelado, no un permiso nuevo. Si cambian los datos, los propietarios o el almacenamiento, necesitas otra vista y confirmación.</string>
+    <string name="memory_repair_findings">Observaciones con hallazgos: %1$d</string>
+    <string name="memory_repair_repairable">Títulos que pueden repararse: %1$d</string>
+    <string name="memory_repair_missing_fields">Campos obligatorios ausentes: %1$s</string>
+    <string name="memory_repair_old_title">Título original: %1$s</string>
+    <string name="memory_repair_new_title">Título propuesto: %1$s</string>
+    <string name="memory_repair_null_title">(NULL)</string>
+    <string name="memory_repair_empty_title">(vacío)</string>
+    <string name="memory_repair_not_repairable">No se propone cambiar el título de esta observación.</string>
+    <string name="memory_repair_no_actions">No hay títulos reparables. Confirmar esta operación vacía no crea copias ni modifica recuerdos.</string>
+    <string name="memory_repair_backup_warning">Antes de cambiar un título, se crea y verifica una copia privada de TODA la base SQLite compartida. Incluye conversaciones/transcripciones, vínculos técnicos, datos históricos y eliminados lógicamente, y OTROS PROYECTOS, no solo el elegido. La copia queda en el almacenamiento privado de la app; no se sube ni exporta. No es una exportación JSON, restauración automática ni recuperación forense garantizada.</string>
+    <string name="memory_repair_retention_warning">Todas las copias creadas, incluso parciales, fallidas o canceladas, se conservan indefinidamente. Esta versión solo las lista: no las elimina, restaura ni limpia automáticamente. Borrar los datos de la app también elimina estas copias privadas. Su gestión posterior requiere otra acción explícita.</string>
+    <string name="memory_repair_consent">Autorizo esta copia privada de toda la base y la reparación mostrada de títulos, y entiendo la conservación de las copias.</string>
+    <string name="memory_repair_apply">Crear copia privada verificada y reparar</string>
+    <string name="memory_repair_apply_noop">Confirmar operación vacía actual</string>
+    <string name="memory_repair_busy">Una operación sigue ejecutándose físicamente. Cerrar o reabrir no permite iniciar otra hasta que termine.</string>
+    <string name="memory_repair_cancel">Solicitar cancelación</string>
+    <string name="memory_repair_failed">Falló la lectura o preparación. No se deduce una vista vacía ni un resultado exitoso. Actualiza expresamente.</string>
+    <string name="memory_repair_unknown">El resultado no está confirmado y la reparación podría haberse guardado. No supongas reversión ni reintentes automáticamente. Cuando termine físicamente, actualiza la vista y el inventario; ninguno reconstruye un recibo perdido.</string>
+    <string name="memory_repair_cancelled">Se solicitó o detectó cancelación. La reparación podría haberse guardado y cualquier copia creada se conserva. Espera a que termine físicamente e inspecciona expresamente; no supongas reversión.</string>
+    <string name="memory_repair_receipt">Recibo confirmado de reparación</string>
+    <string name="memory_repair_repaired">Títulos realmente reparados: %1$d</string>
+    <string name="memory_repair_no_backup">Esta operación vacía no creó ninguna copia.</string>
+    <string name="memory_repair_backup_id">Operación de copia: %1$s</string>
+    <string name="memory_repair_inventory">Inventario de copias locales conservadas (solo lectura)</string>
+    <string name="memory_repair_inventory_refresh">Actualizar inventario de copias</string>
+    <string name="memory_repair_inventory_note">El inventario lee metadatos y disponibilidad actual, no el contenido copiado. La verificación histórica no es una nueva comprobación de integridad o restauración. Aquí no se reconstruye un recibo perdido.</string>
+    <string name="memory_repair_inventory_empty">No se encontraron copias conservadas en esta lectura.</string>
+    <string name="memory_repair_inventory_count">Entradas conservadas: %1$d</string>
+    <string name="memory_repair_backup_status">Estado histórico de la copia: %1$s</string>
+    <string name="memory_repair_backup_availability">Disponibilidad actual: %1$s</string>
+    <string name="memory_repair_backup_outcome">Resultado de reparación registrado: %1$s</string>
+    <string name="memory_repair_backup_size">Tamaño registrado (bytes): %1$d</string>
+    <string name="memory_repair_backup_hash">SHA-256 registrado: %1$s</string>
+    <string name="memory_repair_backup_time">Creación registrada (ms desde epoch): %1$d</string>
+    <string name="memory_repair_unavailable">La reparación no está disponible. No se inició ninguna operación.</string>
+    <string name="memory_repair_limitations">Solo se cubre la reparación de títulos de origen. Esta acción no implementa propagación de cambios de sincronización, reparación general, restauración ni gestión completa de copias.</string>
+    <string name="memory_repair_invalid_title">Título de tipo no admitido o UTF-8 inválido (se conserva sin cambios)</string>
 </resources>

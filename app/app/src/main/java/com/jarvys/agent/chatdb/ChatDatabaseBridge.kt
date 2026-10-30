@@ -1097,6 +1097,36 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         repo.apply(project,token,verify)
     }
 
+    /** Explicit human title repair. The lifecycle lock is owned by this Bridge thread, not the Room writer. */
+    private fun <T> withMemoryRepair(project: String?, token: CancellationToken,
+        block: suspend (MemorySourceTitleRepairRepository, MemoryNamespace, () -> Unit) -> T): T {
+        token.throwIfCancelled()
+        return executeImportOnWorker(token) { repos ->
+            val original = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+            if (project != null && (project.isEmpty() || !original.owns(project))) throw MemorySourceTitleRepairException("memory_repair_invalid_project")
+            val verify = {
+                token.throwIfCancelled()
+                val current = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+                if (!original.hasSameOwners(current)) throw MemorySourceTitleRepairException("memory_repair_owner_changed")
+                token.throwIfCancelled()
+            }
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val identity = JarvysChatDatabaseProvider.requireOpenFileIdentity(repos.database, applicationContext)
+                val result = runBlocking { block(MemorySourceTitleRepairRepository(repos.database, applicationContext), original) { verify(); identity() } }
+                verify(); identity(); result
+            }
+        }
+    }
+    fun personalAgentMemoryRepairProjects(token: CancellationToken): List<String> = withMemoryRepair(null, token) { _, namespace, verify ->
+        verify(); namespace.authorizedProjects()
+    }
+    fun personalAgentMemoryRepairPreview(project: String, token: CancellationToken): MemorySourceTitleRepairPlan = withMemoryRepair(project, token) { repo, namespace, verify ->
+        repo.preview(project, namespace, token, verify)
+    }
+    fun personalAgentMemoryRepairApply(plan: MemorySourceTitleRepairPlan, confirmedWholeDatabaseCopy: Boolean, token: CancellationToken): MemorySourceTitleRepairReceipt =
+        withMemoryRepair(plan.project, token) { repo, namespace, verify -> repo.apply(plan, namespace, confirmedWholeDatabaseCopy, token, verify) }
+
     /** Import private spools and prune slots remain owned until the actual callable physically returns. */
     private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
         val finished=java.util.concurrent.CountDownLatch(1)
