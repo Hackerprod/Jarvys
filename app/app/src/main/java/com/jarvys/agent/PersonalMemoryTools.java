@@ -198,6 +198,7 @@ final class PersonalMemoryTools {
     }
     if (allowDestructive && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId)) {
       result.add(new MemoryConsolidationTool(bridge,ticket,conversationId,resultChars));
+      result.add(new MemoryDoctorTool(context,MemoryWritePolicy.forContext(context).gate(),ticket,conversationId,resultChars));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_search_prompts", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_context", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_stats", Collections.emptyList(), resultChars, ticket));

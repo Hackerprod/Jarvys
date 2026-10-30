@@ -1,8 +1,8 @@
 {
-  "source_commit": "f65137b04d87494c7864e565b1d3a7019e7ef298",
-  "parent_commit": "dfc0b8d125b5957c2e0c02f1122a1a212e39bf2d",
+  "source_commit": "5246e2f24beb7cbe1286675d162ccfd9f9438a33",
+  "parent_commit": "12baf2aceb2f77b6b27173489f993d8f5398cdb0",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
-  "source_file_count": 951,
+  "source_file_count": 952,
   "files": [
     {
       "path": ".gitignore",
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "64d00ae94defdcca58284445c7f8db7bc551ec77",
-      "sha256": "7068e1345dc1c156bc54e55c8db1f2a2d5bf025506bfd16f8faaf21257892b99",
-      "bytes": 372746
+      "git_blob_sha1": "fe108c208f31e188177455d6d13a1a57f5a5027d",
+      "sha256": "5deeeb35289fb8ee88ad47a80ac184a921fe2863315bde51d218ee619ecf24da",
+      "bytes": 373776
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "827b98b078e092dc42cfb427c1fc331ba5390e62",
-      "sha256": "5d11285d2c8914d4bbf57f251f913bff00ffb4663f4c8dd63a4d11766497d7ff",
-      "bytes": 96016
+      "git_blob_sha1": "e864263b51b4b83116ddf86d3fffc41c603405e8",
+      "sha256": "2833c90bea8216883f60615869f63378934c512c33863f8096354f0e35376561",
+      "bytes": 97046
     },
     {
       "path": "app/.gitignore",
@@ -1365,9 +1365,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/CoreAgentRuntime.java",
       "mode": "100644",
-      "git_blob_sha1": "d99b18481e330c830d0dc2be3aa5dc9d001f6c99",
-      "sha256": "e986a8f67d535b250f7e20e913ccbc2387705b1bb78d20682435fa32df6559b6",
-      "bytes": 150650
+      "git_blob_sha1": "b72f12926ffff48136cf147eeb87af11f03f1120",
+      "sha256": "a295e08d9de785792e0f86ae342dd7da0d07515170d0a29863513f0a9311ecd4",
+      "bytes": 150725
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/CoreConnectorTool.java",
@@ -1790,6 +1790,13 @@
       "bytes": 2520
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/MemoryDoctorTool.java",
+      "mode": "100644",
+      "git_blob_sha1": "ee6e54ca78b378f93d45590b818e6da30b4a53c2",
+      "sha256": "c54ca808a83e1ac55351c1c6d080a6956807f20b1bedbae521eeff34f66d049a",
+      "bytes": 6952
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/MemoryReflectionPolicy.java",
       "mode": "100644",
       "git_blob_sha1": "237d00d560ab690dc6c5c6e190b7451bcc2cc353",
@@ -2009,9 +2016,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/PersonalMemoryTools.java",
       "mode": "100644",
-      "git_blob_sha1": "f9146581f5ed87346f94f1d89b988209a01c0ef8",
-      "sha256": "ca1c9c300a42cb702d9653ade2c653086e4898942a9b540ceb459eba410f492d",
-      "bytes": 83605
+      "git_blob_sha1": "212e27a2e5a99379728e6d73ca5a7254f55bfd15",
+      "sha256": "952b57c7f734f023104e140c066e19cc7d186f079769107478648b437fdd3200",
+      "bytes": 83733
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/PlannerAgent.java",

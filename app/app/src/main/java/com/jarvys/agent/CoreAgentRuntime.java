@@ -1772,6 +1772,7 @@ public final class CoreAgentRuntime {
             || "memory_search_prompts".equals(memoryTool.declaration().name)
             || "memory_context".equals(memoryTool.declaration().name)
             || "memory_stats".equals(memoryTool.declaration().name)
+            || MemoryDoctorTool.NAME.equals(memoryTool.declaration().name)
             || "memory_review".equals(memoryTool.declaration().name))
             && runKind() != RunKind.PRINCIPAL) continue;
         tools.add(memoryTool);

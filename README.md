@@ -1,3 +1,11 @@
+## Memoria P5-D — Doctor nativo — checkpoint 30-10-2026
+
+**Candidate2: Full57/0 y Play57/0; ocho clases por sabor, cero errores/skips; doble PASS acotado.** Focal14 separado; código `7eba69856942956de12ca123dbd11a1b23b17656`. Actual Main/Principal→controller real→siguiente proveedor falso; schema y engine manual intactos.
+
+[Reporte y adaptaciones](docs/continue/engram-port/P5-D-native-doctor-report.md) · [Resultados exactos](docs/continue/engram-port/P5-D-native-doctor-results.json).
+
+Ticket original pre/post sin lock durante I/O; OFF/ABA descarta reporte/error previo, STOP prioritario. Selectores direct/Main explícitos, JSON completo o error de presupuesto, doce grupos huérfanos dinámicos, sin activity/renew/capture. Focal1 14/1 por sabor conservado; único fix de contexto del actor policy en fixture, runtime jars idénticos. **Sin repair implícito, P5 global ni dispositivo físico**. Próximo: contrato de portabilidad export/import de memoria nueva, sin migración legacy ni preservar la app vieja.
+
 ## Memoria P5-C — Doctor manual observacional — checkpoint 30-10-2026
 
 **Candidate1: Full126/0 y Play126/0; quince clases por sabor, cero errores/skips; doble PASS acotado.** Focal9 separado; código `8c77ee51aad9228078586a63b88170386d5b3591`. Diez checks con cobertura explícita, sólo metadata autorizada de stores existentes; schema sin cambio.
