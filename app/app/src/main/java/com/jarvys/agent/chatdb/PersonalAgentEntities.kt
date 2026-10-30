@@ -98,6 +98,12 @@ data class MemoryEntry(
     val tool_name: String? = null,
     val review_after: String? = null,
     val superseded_by_id: String? = null,
+    val portable_sync_id: String? = null,
+    val portable_superseded_by_sync_id: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val created_at_submillis_nanos: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val updated_at_submillis_nanos: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted_at_submillis_nanos: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val last_seen_at_submillis_nanos: Int = 0,
 )
 
 /** Payload-free identity retained after explicit permanent observation deletion. */
@@ -111,6 +117,8 @@ data class MemoryDeletedObservation(
     val deleted_at: Long,
     val producer: String?,
     val producer_key: String?,
+    val portable_sync_id: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted_at_submillis_nanos: Int = 0,
 )
 
 @Entity(
@@ -287,4 +295,11 @@ data class MemoryRelationEntity(
     val reason:String?=null,val evidence:String?=null,val confidence:Double?=null,
     val marked_by_actor:String?=null,val marked_by_kind:String?=null,val marked_by_model:String?=null,
     val memory_session_id:String?=null,
+    val portable_sync_id:String?=null,
+    val superseded_at:Long?=null,
+    val superseded_by_relation_id:String?=null,
+    val portable_superseded_by_relation_sync_id:String?=null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val created_at_submillis_nanos:Int=0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val updated_at_submillis_nanos:Int=0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val superseded_at_submillis_nanos:Int=0,
 )

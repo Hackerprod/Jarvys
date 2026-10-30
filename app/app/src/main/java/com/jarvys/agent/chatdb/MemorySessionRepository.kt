@@ -312,7 +312,16 @@ internal class MemorySessionRepository(private val database: JarvysChatDatabase,
     }
     /** Caller TX. Keeps local inbox deletion evidence even after a session is deleted/recreated. */
     fun purgePrompt(id:String, now:Long) {
-        sql.execSQL("INSERT OR IGNORE INTO memory_prompt_tombstones(session_id,source_inbox_id,prompt_id,project,deleted_at) SELECT session_id,source_inbox_id,id,project,? FROM memory_prompts WHERE id=? AND source_inbox_id IS NOT NULL",arrayOf(now,id))
+        val matches = "t.prompt_id=p.id AND COALESCE(t.portable_sync_id,t.prompt_id)=COALESCE(p.portable_sync_id,p.id) " +
+            "AND t.project=p.project AND t.session_id IS p.session_id AND t.source_inbox_id IS p.source_inbox_id"
+        check(!sql.query("SELECT 1 FROM memory_prompt_tombstones t JOIN memory_prompts p ON p.id=? " +
+            "WHERE (t.prompt_id=p.id OR COALESCE(t.portable_sync_id,t.prompt_id)=COALESCE(p.portable_sync_id,p.id)) AND NOT ($matches) LIMIT 1",arrayOf(id)).use { it.moveToFirst() }) {
+            "memory_prompt_tombstone_identity_conflict"
+        }
+        sql.execSQL("INSERT OR IGNORE INTO memory_prompt_tombstones(session_id,source_inbox_id,prompt_id,project,deleted_at,portable_sync_id) SELECT session_id,source_inbox_id,id,project,?,COALESCE(portable_sync_id,id) FROM memory_prompts WHERE id=?",arrayOf(now,id))
+        check(sql.query("SELECT 1 FROM memory_prompt_tombstones t JOIN memory_prompts p ON p.id=? WHERE $matches",arrayOf(id)).use { it.moveToFirst() }) {
+            "memory_prompt_tombstone_readback_failed"
+        }
         sql.execSQL("DELETE FROM memory_prompts WHERE id=?",arrayOf(id))
     }
     suspend fun deletePrompt(id:String,expectedProject:String,namespace:MemoryNamespace):PersonalMemoryDomainDeletionReceipt = database.withChatWriteTransaction {

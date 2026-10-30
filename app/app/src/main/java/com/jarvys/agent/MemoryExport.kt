@@ -18,6 +18,10 @@ class PreparedMemoryExport internal constructor(
     val sizeBytes: Long get() = snapshot.sizeBytes
     val exportedAt: String get() = snapshot.exportedAt
     val projects: List<String> = Collections.unmodifiableList(ArrayList(snapshot.projects))
+    val requestedProjects: List<String> get() = projects
+    val supportingSessionProjects: List<String> = Collections.unmodifiableList(ArrayList(snapshot.supportingSessionProjects))
+    val supportingSessions: Long get() = snapshot.supportingSessions
+    val unresolvedRequiredReferences: Long get() = snapshot.unresolvedRequiredReferences
     val counts: Map<String, Long> = Collections.unmodifiableMap(LinkedHashMap(snapshot.counts))
     val includePrompts: Boolean get() = snapshot.options.includePrompts
     val unboundObservations: Long get() = snapshot.unboundObservations
@@ -26,7 +30,8 @@ class PreparedMemoryExport internal constructor(
         "Runtime authority, revision history and review-clear intent are excluded.",
         "Relations with endpoints outside the selected retained observations are excluded.",
         "Go re-export does not preserve Jarvys raw-byte/null/deletion extensions."
-    ) + if (snapshot.unboundObservations > 0) listOf("Unbound observations are preserved, but this file cannot be imported directly by upstream Go 0.2.0.") else emptyList())
+    ) + (if (snapshot.unboundObservations > 0) listOf("Unbound observations are preserved, but this file cannot be imported directly by upstream Go 0.2.0.") else emptyList()) +
+        (if(snapshot.unresolvedRequiredReferences > 0) listOf("Required relation references are absent from this file. It is not a self-contained import into a fresh store.") else emptyList()))
 }
 data class MemoryExportPreviewPage(val text: String, val nextOffset: Long?, val totalBytes: Long)
 data class MemoryExportCleanupResult(val cleanupState: String, val physicalBusy: Boolean)

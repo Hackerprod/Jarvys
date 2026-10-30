@@ -1003,6 +1003,52 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         } }
     }
 
+    /** Import owns its private spool until the actual Room callable has physically returned. */
+    private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
+        val finished=java.util.concurrent.CountDownLatch(1)
+        try { return executeOwnedOnWorker(null,{finished.countDown()},{token.cancel()},block) }
+        catch (interrupted:ChatDatabaseWaitInterruptedException) {
+            var restore=Thread.interrupted()
+            while(true)try{finished.await();break}catch(_:InterruptedException){restore=true;token.cancel()}
+            if(restore)Thread.currentThread().interrupt()
+            throw interrupted
+        }
+    }
+    internal fun importMemoryDestinations(token:CancellationToken):List<String> = executeImportOnWorker(token){ _ ->
+        token.throwIfCancelled()
+        MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true).authorizedProjects().also{token.throwIfCancelled()}
+    }
+    internal fun importMemoryInitialize(data:com.jarvys.agent.MemoryImportData,artifacts:com.jarvys.agent.MemoryImportArtifacts,
+        token:CancellationToken):com.jarvys.agent.MemoryImportMapping = executeImportOnWorker(token){repos->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        val result=runBlocking{MemoryImportRepository(repos.database,applicationContext).initialize(data,artifacts,namespace,token)}
+        check(namespace.hasSameOwners(MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true))){"memory_import_owner_changed"}
+        token.throwIfCancelled();result
+    }
+    internal fun importMemoryPlan(data:com.jarvys.agent.MemoryImportData,mapping:com.jarvys.agent.MemoryImportMapping,
+        artifacts:com.jarvys.agent.MemoryImportArtifacts,token:CancellationToken):MemoryImportPlan = executeImportOnWorker(token){repos->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        val result=runBlocking{MemoryImportRepository(repos.database,applicationContext).plan(data,mapping,artifacts,namespace,token)}
+        check(namespace.hasSameOwners(MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true))){"memory_import_owner_changed"}
+        token.throwIfCancelled();result
+    }
+    internal fun importMemoryApply(plan:MemoryImportPlan,offTicket:MemoryWriteGate.Ticket?,token:CancellationToken):Map<String,Long> = executeImportOnWorker(token){repos->
+        token.throwIfCancelled()
+        val namespace=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+        val effect=Callable {
+            runBlocking{MemoryImportRepository(repos.database,applicationContext).apply(plan,namespace,token){
+                token.throwIfCancelled()
+                check(namespace.hasSameOwners(MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true))){"memory_import_owner_changed"}
+            }}
+        }
+        if(plan.data.riskyFieldCount>0){
+            require(offTicket!=null){"memory_import_off_confirmation_required"}
+            MemoryWritePolicy.forContext(applicationContext).gate().commitManualImportWhileOff(offTicket,{token.throwIfCancelled();true},effect)
+        }else effect.call()
+    }
+
     /** Explicit manual export, with no automatic-memory grant or save/session side effect. */
     internal fun exportMemorySnapshot(options: com.jarvys.agent.MemoryExportOptions, exportedAt: String,
         token: CancellationToken, openOutput: () -> java.io.OutputStream): MemoryExportSnapshot = executeOnWorker { repos ->

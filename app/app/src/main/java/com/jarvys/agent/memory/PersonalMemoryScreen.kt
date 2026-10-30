@@ -12,9 +12,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -91,6 +95,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showMemorySelftest by remember { mutableStateOf(false) }
     var showMemoryDoctor by remember { mutableStateOf(false) }
     var showMemoryExport by remember { mutableStateOf(false) }
+    var showMemoryImport by remember { mutableStateOf(false) }
     var showPendingRelations by remember { mutableStateOf(false) }
     var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
@@ -180,6 +185,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryExport = true },
                         modifier = Modifier.testTag("memory-export-open")) { Text(stringResource(R.string.memory_export_json_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryImport = true },
+                        modifier = Modifier.testTag("memory-import-open")) { Text(stringResource(R.string.memory_import_json_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySessions = true },
                         modifier = Modifier.testTag("memory-sessions-open")) { Text(stringResource(R.string.memory_sessions_action)) }
@@ -326,6 +334,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
     if (showMemoryDoctor) MemoryDoctorDialog { showMemoryDoctor = false }
     if (showMemoryExport) MemoryExportDialog { showMemoryExport = false }
+    if (showMemoryImport) MemoryImportDialog(onClose = { showMemoryImport = false }, onCommitted = { reload() })
 
     if (showProjectMemories) ProjectMemoryDeleteDialog(
         onClose = { showProjectMemories = false },
@@ -577,6 +586,222 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
     )
 }
 
+/** Explicit local import. A picker result and a preview never authorize an application write. */
+@Composable
+private fun MemoryImportDialog(onClose: () -> Unit, onCommitted: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val controller = remember(context) { try { com.jarvys.agent.MemoryImportController.get(context) } catch (_: Exception) { null } }
+    if (controller == null) {
+        AlertDialog(onDismissRequest = onClose, title = { Text(stringResource(R.string.memory_import_json_title)) }, text = {
+            Text(stringResource(R.string.memory_import_json_failed), modifier = Modifier.testTag("memory-import-init-error"))
+        }, confirmButton = { TextButton(onClick = onClose, modifier = Modifier.testTag("memory-import-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+        return
+    }
+    val scope = rememberCoroutineScope()
+    var source by remember { mutableStateOf<com.jarvys.agent.MemoryImportSource?>(null) }
+    var prepared by remember { mutableStateOf<com.jarvys.agent.PreparedMemoryImport?>(null) }
+    var mappings by remember { mutableStateOf<com.jarvys.agent.MemoryImportProjectPage?>(null) }
+    var mappingOffset by remember { mutableStateOf(0L) }
+    var destinations by remember { mutableStateOf<List<String>>(emptyList()) }
+    var choosingMapping by remember { mutableStateOf<com.jarvys.agent.MemoryImportProjectRef?>(null) }
+    var page by remember { mutableStateOf<com.jarvys.agent.MemoryImportPreviewPage?>(null) }
+    var pageOffset by remember { mutableStateOf(0L) }
+    var inspectedProject by remember { mutableStateOf<com.jarvys.agent.MemoryImportProjectRef?>(null) }
+    var riskConfirmed by remember { mutableStateOf(false) }
+    var promptsConfirmed by remember { mutableStateOf(false) }
+    var contentConfirmed by remember { mutableStateOf(false) }
+    var receipt by remember { mutableStateOf<com.jarvys.agent.MemoryImportReceipt?>(null) }
+    var cleanup by remember { mutableStateOf<com.jarvys.agent.MemoryImportCleanupResult?>(null) }
+    var token by remember { mutableStateOf<CancellationToken?>(null) }
+    var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var observed by remember { mutableStateOf(controller.activeOperation()) }
+    var pending by remember { mutableStateOf(false) }
+    var requestId by remember { mutableStateOf(0L) }
+    var error by remember { mutableStateOf<String?>(null) }
+    fun invalidateConsent() { prepared = null; riskConfirmed = false; promptsConfirmed = false; contentConfirmed = false; choosingMapping = null }
+    fun clearSource() { invalidateConsent(); source = null; mappings = null; mappingOffset = 0; destinations = emptyList(); page = null; pageOffset = 0; inspectedProject = null }
+    fun discard() { requestId++; token?.cancel(); clearSource(); receipt = null; error = null }
+    fun close() { discard(); job?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { token?.cancel(); job?.cancel() } }
+    LaunchedEffect(controller) { while (true) { observed = controller.activeOperation(); cleanup = controller.lastCleanup(); kotlinx.coroutines.delay(100) } }
+    fun launchAction(currentToken: CancellationToken, action: suspend (Long) -> Unit) {
+        if (pending) return
+        val request = ++requestId
+        pending = true; error = null; receipt = null; token = currentToken; choosingMapping = null
+        job = scope.launch {
+            try { action(request) }
+            catch (cancelled: CancellationException) {
+                currentToken.cancel()
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && request == requestId) { clearSource(); error = "cancelled" }
+            } catch (_: Exception) {
+                currentToken.cancel(); coroutineContext.ensureActive()
+                if (request == requestId) { clearSource(); error = "unconfirmed" }
+            } finally {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && request == requestId) {
+                    pending = false; job = null; observed = controller.activeOperation(); cleanup = controller.lastCleanup()
+                }
+            }
+        }
+    }
+    fun chooseFile() {
+        if (pending || controller.activeOperation() != null) return
+        clearSource(); cleanup = null
+        val currentToken = CancellationToken.cancellable()
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.read(currentToken) {
+                val uri = com.jarvys.agent.connectors.SafDocumentPickerCoordinator.get(context)
+                    .pickForMemoryImport(arrayOf("application/json", "text/plain", "application/octet-stream"), currentToken) { currentToken.throwIfCancelled() }
+                if (uri == null) { currentToken.cancel(); throw CancellationException("Memory import picker cancelled") }
+                currentToken.throwIfCancelled(); require(uri.scheme == "content") { "memory_import_source_invalid" }
+                val rawName = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                val unknown = context.getString(R.string.memory_export_json_destination_unknown)
+                val provider = uri.authority?.takeIf { it.length <= 200 && it.matches(Regex("[A-Za-z0-9._-]+")) } ?: unknown
+                val name = rawName?.take(256)?.filter { !Character.isISOControl(it) && it !in '\u202a'..'\u202e' && it !in '\u2066'..'\u2069' }?.trim()?.takeIf { it.isNotEmpty() && !it.contains("://") } ?: unknown
+                currentToken.throwIfCancelled()
+                val input = context.contentResolver.openInputStream(uri) ?: error("memory_import_source_unavailable")
+                com.jarvys.agent.MemoryImportInput(input, provider, name)
+            } }
+            val choices = withContext(Dispatchers.IO) { controller.destinations(currentToken) }
+            val first = withContext(Dispatchers.IO) { controller.projectPage(received, 0L, 32, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) { source = received; mappings = first; mappingOffset = 0; destinations = choices; observed = received.operationHandle }
+        }
+    }
+    fun readMappings(offset: Long) {
+        val current = source ?: return; val currentToken = token ?: return
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.projectPage(current, offset, 32, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) { mappings = received; mappingOffset = offset }
+        }
+    }
+    fun mapProject(ref: com.jarvys.agent.MemoryImportProjectRef, destination: String) {
+        val current = source ?: return; val currentToken = token ?: return
+        invalidateConsent()
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) {
+                controller.setProject(current, ref, destination, currentToken)
+                controller.projectPage(current, mappingOffset, 32, currentToken)
+            }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) mappings = received
+        }
+    }
+    fun readContent(offset: Long) {
+        val current = source ?: return; val currentToken = token ?: return
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.preview(current, offset, 32768, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) { page = received; pageOffset = offset; inspectedProject = null }
+        }
+    }
+    fun readProject(ref: com.jarvys.agent.MemoryImportProjectRef, offset: Long) {
+        val current = source ?: return; val currentToken = token ?: return
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.previewProject(current, ref, offset, 32768, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) { page = received; pageOffset = offset; inspectedProject = ref }
+        }
+    }
+    fun validate() {
+        val current = source ?: return; val currentToken = token ?: return
+        if (current.riskyFieldCount > 0 && !riskConfirmed) return
+        prepared = null; contentConfirmed = false; promptsConfirmed = false
+        val capturedRisk = riskConfirmed
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.validate(current, capturedRisk, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) prepared = received
+        }
+    }
+    fun apply() {
+        val current = prepared ?: return; val currentToken = token ?: return
+        if (!contentConfirmed || (current.source.requiresPromptConsent && !promptsConfirmed) || (current.riskyFieldCount > 0 && !riskConfirmed)) return
+        val capturedPrompts = promptsConfirmed; val capturedRisk = riskConfirmed
+        launchAction(currentToken) { request ->
+            val received = withContext(Dispatchers.IO) { controller.apply(current, capturedPrompts, capturedRisk, currentToken) }
+            coroutineContext.ensureActive(); currentToken.throwIfCancelled()
+            if (request == requestId) { clearSource(); token = null; receipt = received; onCommitted() }
+        }
+    }
+    val busy = pending || (observed != null && observed !== source?.operationHandle)
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_import_json_title)) }, text = {
+        LazyColumn(Modifier.heightIn(max = 540.dp).testTag("memory-import-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_import_json_intro))
+                Text(stringResource(R.string.memory_import_json_future))
+                if (busy) Text(stringResource(R.string.memory_import_json_busy), modifier = Modifier.testTag("memory-import-busy"))
+                TextButton(enabled = !busy && source == null, onClick = { chooseFile() }, modifier = Modifier.testTag("memory-import-choose")) { Text(stringResource(R.string.memory_import_json_choose)) }
+                error?.let { Text(stringResource(if (it == "cancelled") R.string.memory_import_json_cancelled else R.string.memory_import_json_failed), modifier = Modifier.testTag("memory-import-error")) }
+            }
+            source?.let { current ->
+                item {
+                    Text(stringResource(R.string.memory_import_json_source, current.sizeBytes, current.sha256), modifier = Modifier.testTag("memory-import-source"))
+                    Text(stringResource(R.string.memory_import_json_provider, current.providerLabel, current.displayName))
+                    Text(stringResource(R.string.memory_import_json_mapping))
+                }
+                items(current.counts.entries.toList()) { Text("${it.key}: ${it.value}", modifier = Modifier.testTag("memory-import-count-${it.key}")) }
+                mappings?.entries?.let { entries -> itemsIndexed(entries) { index, entry ->
+                    Column {
+                        Text(if (entry.kind == "undeclared") stringResource(R.string.memory_import_json_undeclared) else entry.display)
+                        if (entry.displayTruncated) Text(stringResource(R.string.memory_import_json_label_truncated), modifier = Modifier.testTag("memory-import-group-truncated-${mappingOffset + index}"))
+                        if (entry.kind != "undeclared") TextButton(enabled = !pending, onClick = { readProject(entry.ref, 0) }, modifier = Modifier.testTag("memory-import-group-inspect-${mappingOffset + index}")) { Text(stringResource(R.string.memory_import_json_inspect_group)) }
+                        if (!entry.editable) {
+                            Text(stringResource(R.string.memory_import_json_anchor))
+                            Text(entry.destination?.let { if (it == WorkspaceIdentity.CENTRAL_SESSION) context.getString(R.string.memory_import_json_central) else it } ?: stringResource(R.string.memory_import_json_unmapped))
+                        } else Box {
+                            TextButton(enabled = !pending, onClick = { choosingMapping = entry.ref }, modifier = Modifier.testTag("memory-import-group-destination-${mappingOffset + index}")) {
+                                Text(entry.destination?.let { if (it == WorkspaceIdentity.CENTRAL_SESSION) context.getString(R.string.memory_import_json_central) else it } ?: stringResource(R.string.memory_import_json_unmapped))
+                            }
+                            DropdownMenu(expanded = choosingMapping === entry.ref, onDismissRequest = { choosingMapping = null }) {
+                                destinations.forEach { destination -> DropdownMenuItem(text = { Text(if (destination == WorkspaceIdentity.CENTRAL_SESSION) stringResource(R.string.memory_import_json_central) else destination) }, onClick = { mapProject(entry.ref, destination) }) }
+                            }
+                        }
+                    }
+                } }
+                item {
+                    TextButton(enabled = !pending && mappingOffset > 0, onClick = { readMappings(0) }, modifier = Modifier.testTag("memory-import-mapping-first")) { Text(stringResource(R.string.memory_import_json_mapping_first)) }
+                    mappings?.nextOffset?.let { next -> TextButton(enabled = !pending, onClick = { readMappings(next) }, modifier = Modifier.testTag("memory-import-mapping-next")) { Text(stringResource(R.string.memory_import_json_mapping_next)) } }
+                    if (current.riskyFieldCount > 0) {
+                        Text(stringResource(R.string.memory_import_json_risk, current.riskyFieldCount), modifier = Modifier.testTag("memory-import-risk"))
+                        Row { Checkbox(checked = riskConfirmed, enabled = !pending, onCheckedChange = { prepared = null; contentConfirmed = false; promptsConfirmed = false; riskConfirmed = it }, modifier = Modifier.testTag("memory-import-risk-consent")); Text(stringResource(R.string.memory_import_json_risk_consent)) }
+                    }
+                    TextButton(enabled = !pending, onClick = { readContent(0) }, modifier = Modifier.testTag("memory-import-view")) { Text(stringResource(R.string.memory_import_json_view)) }
+                    TextButton(enabled = !pending && (current.riskyFieldCount == 0L || riskConfirmed), onClick = { validate() }, modifier = Modifier.testTag("memory-import-validate")) { Text(stringResource(R.string.memory_import_json_validate)) }
+                }
+            }
+            page?.let { shown -> item {
+                Text(stringResource(if (inspectedProject == null) R.string.memory_import_json_page else R.string.memory_import_json_project_page, pageOffset, shown.totalBytes), modifier = Modifier.testTag("memory-import-page-range"))
+                Text(shown.text, modifier = Modifier.testTag("memory-import-json-page"))
+                TextButton(enabled = !pending && pageOffset > 0, onClick = { inspectedProject?.let { readProject(it, 0) } ?: readContent(0) }, modifier = Modifier.testTag("memory-import-page-first")) { Text(stringResource(R.string.memory_import_json_first)) }
+                shown.nextOffset?.let { next -> TextButton(enabled = !pending, onClick = { inspectedProject?.let { readProject(it, next) } ?: readContent(next) }, modifier = Modifier.testTag("memory-import-page-next")) { Text(stringResource(R.string.memory_import_json_next)) } }
+            } }
+            prepared?.let { validated ->
+                item { Text(stringResource(R.string.memory_import_json_impact, validated.fingerprint), modifier = Modifier.testTag("memory-import-impact")) }
+                items(validated.impact.entries.toList()) { Text("${it.key}: ${it.value}", modifier = Modifier.testTag("memory-import-impact-${it.key}")) }
+                item {
+                    if (validated.source.requiresPromptConsent) Row { Checkbox(checked = promptsConfirmed, enabled = !pending, onCheckedChange = { promptsConfirmed = it }, modifier = Modifier.testTag("memory-import-prompts-consent")); Text(stringResource(R.string.memory_import_json_prompts)) }
+                    Row { Checkbox(checked = contentConfirmed, enabled = !pending, onCheckedChange = { contentConfirmed = it }, modifier = Modifier.testTag("memory-import-content-consent")); Text(stringResource(R.string.memory_import_json_content_consent)) }
+                    TextButton(enabled = !pending && contentConfirmed && (!validated.source.requiresPromptConsent || promptsConfirmed) && (validated.riskyFieldCount == 0L || riskConfirmed), onClick = { apply() }, modifier = Modifier.testTag("memory-import-apply")) { Text(stringResource(R.string.memory_import_json_apply)) }
+                }
+            }
+            item {
+                if (source != null) TextButton(enabled = !pending, onClick = { discard() }, modifier = Modifier.testTag("memory-import-discard")) { Text(stringResource(R.string.memory_import_json_discard)) }
+                receipt?.let { received ->
+                    Text(stringResource(R.string.memory_import_json_receipt, received.status, received.cleanupState), modifier = Modifier.testTag("memory-import-receipt"))
+                    Text(stringResource(R.string.memory_import_json_source, received.sizeBytes, received.sha256))
+                    received.counts.forEach { (name, count) -> Text("$name: $count") }
+                }
+                if (source == null && !busy) cleanup?.let { Text(stringResource(R.string.memory_import_json_cleanup, it.cleanupState, it.physicalBusy.toString()), modifier = Modifier.testTag("memory-import-cleanup")) }
+            }
+        }
+    }, confirmButton = {
+        TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-import-close")) { Text(stringResource(R.string.memory_inspector_close)) }
+    }, dismissButton = {
+        TextButton(enabled = pending || observed != null, onClick = { if (pending) token?.cancel() else observed?.let { controller.cancelIfCurrent(it) }; clearSource() }, modifier = Modifier.testTag("memory-import-cancel")) { Text(stringResource(R.string.memory_import_json_cancel)) }
+    })
+}
+
 /** Explicit export of one sealed private snapshot. Only the final action may open the selected output. */
 @Composable
 private fun MemoryExportDialog(onClose: () -> Unit) {
@@ -737,10 +962,18 @@ private fun MemoryExportDialog(onClose: () -> Unit) {
                 item {
                     Text(stringResource(R.string.memory_export_json_snapshot, snapshot.sizeBytes, snapshot.sha256, snapshot.exportedAt, snapshot.includePrompts.toString()), modifier = Modifier.testTag("memory-export-snapshot"))
                     Text(stringResource(R.string.memory_export_json_compatibility, snapshot.unboundObservations))
+                    Text(stringResource(R.string.memory_export_json_unresolved_references, snapshot.unresolvedRequiredReferences), modifier = Modifier.testTag("memory-export-unresolved-references"))
+                    if (snapshot.unresolvedRequiredReferences > 0) Text(stringResource(R.string.memory_export_json_not_self_contained))
                     Text(stringResource(R.string.memory_export_json_exclusions))
                     Text(stringResource(R.string.memory_export_json_privacy))
                 }
-                items(snapshot.projects, key = { "selected-$it" }) { Text(it, modifier = Modifier.testTag("memory-export-selected-$it")) }
+                item { Text(stringResource(R.string.memory_export_json_requested_projects)) }
+                items(snapshot.requestedProjects, key = { "selected-$it" }) { Text(it, modifier = Modifier.testTag("memory-export-selected-$it")) }
+                item {
+                    Text(stringResource(R.string.memory_export_json_support_sessions, snapshot.supportingSessions), modifier = Modifier.testTag("memory-export-supporting-sessions"))
+                    if (snapshot.supportingSessionProjects.isNotEmpty()) Text(stringResource(R.string.memory_export_json_support_projects))
+                }
+                items(snapshot.supportingSessionProjects, key = { "support-$it" }) { Text(it, modifier = Modifier.testTag("memory-export-supporting-$it")) }
                 items(snapshot.counts.entries.toList(), key = { "count-${it.key}" }) { Text("${it.key}: ${it.value}", modifier = Modifier.testTag("memory-export-count-${it.key}")) }
                 items(snapshot.warnings) { Text(it) }
                 page?.let { shown ->

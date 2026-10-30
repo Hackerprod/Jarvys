@@ -1,3 +1,13 @@
+## Memoria P5-F — Importación manual por streaming — checkpoint 30-10-2026
+
+**Candidate6: Full345/0 y Play345/0, 45 clases por sabor; doble PASS acotado.** Focal92 separado; código `811c3dd6ee378b52ecd9f14a5def23b0ce17b6ce`. [Reporte y límites](docs/continue/engram-port/P5-F-import-report.md) · [Resultados exactos](docs/continue/engram-port/P5-F-import-results.json).
+
+La persona selecciona un archivo, revisa el mapeo explícito a proyectos existentes autorizados, el contenido paginado y el impacto, y confirma una aplicación atómica. Streaming sin cap1MiB; IDs portables opacos, raw/NULL y precisión sub-milisegundo sin transferir permisos ni identidad runtime. Riesgo señalado exige revisión externa o elección explícita de memoria OFF; activar ON después puede exponer recuerdos a futuras solicitudes conforme a permisos vigentes.
+
+Se corrigió el caso real workspace→sesión shared Central en Export/Doctor/Consolidation con ambos owners y apoyo mínimo, no nuevas grants. Los fallos de candidatos1–5 y recuperaciones de compilación quedan documentados; no se ocultó el defecto empty-TEXT Lookup ni se relajaron guards. Go→Jarvys→Go se verificó sobre bytes sintéticos reales, sin prometer compatibilidad lossless universal.
+
+**F37 local reconciliado por unidades; P5 sigue parcial.** Restan repair con backup verificado, administración de namespaces, Markdown/grafo y dominios de mantenimiento/réplica según roadmap. No migración legacy, sync P6, backup completo ni dispositivo físico. Los bloques inferiores son checkpoints históricos, no un reemplazo de este alcance vigente.
+
 ## Memoria P5-E — Exportación manual por streaming — checkpoint 30-10-2026
 
 **Candidate2: Full94/0 y Play94/0, 17 clases por sabor; doble PASS acotado.** Focal16 separado; código `6e85b1fe49a84d39a3f75460ca5d22c3d0fccfb8`. [Reporte y límites](docs/continue/engram-port/P5-E-export-report.md) · [Resultados exactos](docs/continue/engram-port/P5-E-export-results.json).

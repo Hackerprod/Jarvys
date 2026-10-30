@@ -196,6 +196,7 @@ class MemoryExportController private constructor(private val context: Context) {
         } }
         check(current.database===prepared.snapshot.database && current.generation==prepared.snapshot.generation &&
             current.owners==prepared.snapshot.owners && current.projects==prepared.projects &&
+            current.supportingSessionProjects==prepared.supportingSessionProjects && current.supportingSessions==prepared.supportingSessions && current.unresolvedRequiredReferences==prepared.unresolvedRequiredReferences &&
             current.sha256==prepared.sha256 && current.sizeBytes==prepared.sizeBytes) { "memory_export_source_changed" }
         prepared.snapshot.requireOriginalFile()
     }

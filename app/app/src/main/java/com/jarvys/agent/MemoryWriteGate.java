@@ -152,6 +152,28 @@ public final class MemoryWriteGate {
             return effect.call();
         } finally { lock.unlock(); }
     }
+    /**
+     * Manual sensitive-import restriction, not an automatic-memory write grant. The caller must
+     * independently authorize the selected projects and explicit human import. The existing lock
+     * remains held through the callable's actual Room commit/rollback; no provider or UI work here.
+     */
+    public <T> T commitManualImportWhileOff(Ticket ticket, BooleanSupplier pureCheck, Callable<T> effect) throws Exception {
+        rejectReentrantWrite();
+        Objects.requireNonNull(pureCheck);
+        Objects.requireNonNull(effect);
+        lock.lock();
+        try {
+            // STOP is checked before policy denial, including cancellation while waiting for this lock.
+            if (!pureCheck.getAsBoolean()) throw new RejectedException();
+            State current = state;
+            if (ticket == null || ticket.owner != this || ticket.epoch != current.epoch || ticket.enabled
+                    || current.denyOverlay || current.observedEnabled || settings.readEnabled()) {
+                throw new RejectedException();
+            }
+            return effect.call();
+        } finally { lock.unlock(); }
+    }
+
     private void rejectReentrantWrite() {
         if (lock.isHeldByCurrentThread()) {
             throw new IllegalStateException("Memory gate writes cannot be re-entered from a callback");

@@ -160,7 +160,7 @@ internal object MemoryDoctorReader {
                     if (capturedGeneration && currentGeneration != firstGeneration) throw MemoryDoctorUnavailable("source_changed")
                     firstGeneration = currentGeneration; capturedGeneration = true
                     val selected = options.project?.let(::setOf) ?: owners
-                    val results = ids(options).map { id -> token.throwIfCancelled(); check(id, sql, selected, token) }
+                    val results = ids(options).map { id -> token.throwIfCancelled(); check(id, sql, selected, owners, token) }
                     val finalGeneration = generation(sql)
                     val memoryAfter = version(sql)
                     val finalOwners = registry.owners()
@@ -180,14 +180,14 @@ internal object MemoryDoctorReader {
         return "${prefix}project IN (${projects.joinToString(",") { "?" }})" to projects.map { it as Any? }.toTypedArray()
     }
     private fun knownOwner(mode: String) = mode == "project_owned" || mode == "shared"
-    private fun check(id: String, sql: ChatSqlDatabase, projects: Set<String>, token: CancellationToken): MemoryDoctorCheck = when (id) {
+    private fun check(id: String, sql: ChatSqlDatabase, projects: Set<String>, authorizedOwners: Set<String>, token: CancellationToken): MemoryDoctorCheck = when (id) {
         "session_project_directory_mismatch", "manual_session_name_project_mismatch", "ambiguous_active_runtime_sessions" ->
             MemoryDoctorCheck(id, null, "not_applicable", "local_schema_has_no_equivalent", "The local session schema has no equivalent directory/name-based check.")
         "sync_mutation_required_fields", "sync_target_closed_space" ->
             MemoryDoctorCheck(id, null, "domain_pending", "sync_domain_pending", "The sync domain is not implemented; no empty healthy result is inferred.")
         "unowned_session_project" -> MemoryDoctorCheck(id, null, "unavailable", "unattributed_rows_not_authorized", "This scope does not grant global access to rows with broken ownership.")
         "invalid_session_identity" -> invalidSessions(sql, projects, token)
-        "orphaned_observation_session" -> orphanSessions(sql, projects, token)
+        "orphaned_observation_session" -> orphanSessions(sql, projects, authorizedOwners, token)
         "orphaned_pending_relations" -> pendingRelations(sql, projects, token)
         "sqlite_lock_contention" -> lockObservation(sql)
         else -> error("doctor_check_unknown")
@@ -217,7 +217,7 @@ internal object MemoryDoctorReader {
             "Only authorized local blank session identities and same-project references were evaluated; sync/quarantine components remain pending.",
             mapOf("invalid_sessions" to blank.size.toString(), "observation_references" to observations.toString(), "prompt_references" to prompts.toString()))
     }
-    private fun orphanSessions(sql: ChatSqlDatabase, projects: Set<String>, token: CancellationToken): MemoryDoctorCheck {
+    private fun orphanSessions(sql: ChatSqlDatabase, projects: Set<String>, authorizedOwners: Set<String>, token: CancellationToken): MemoryDoctorCheck {
         val id = "orphaned_observation_session"
         val (where, args) = guard(projects)
         val references = LinkedHashMap<Pair<String, String>, Pair<Long, Long>>()
@@ -237,7 +237,10 @@ internal object MemoryDoctorReader {
             val target = sql.query("SELECT project,ownership_mode FROM memory_sessions WHERE id=?", arrayOf(session)).use { c ->
                 if (!c.moveToFirst()) 0 else {
                     val targetProject = c.text(0); val mode = c.text(1)
-                    if (targetProject == project && targetProject in projects && knownOwner(mode)) 1 else 2
+                    // Selection limits reported observations, not authority over their referenced shared session.
+                    // Both owners come from this same Registry snapshot; no supporting rows enter the report.
+                    if (targetProject in authorizedOwners && knownOwner(mode) &&
+                        (targetProject == project || mode == "shared")) 1 else 2
                 }
             }
             if (target == 2) return MemoryDoctorCheck(id, null, "unavailable", "session_target_unattributed", "A referenced target cannot be attributed in this scope; no target details or partial counts are returned.")

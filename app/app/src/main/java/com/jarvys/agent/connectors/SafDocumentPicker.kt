@@ -66,6 +66,13 @@ class SafDocumentPickerCoordinator private constructor() {
             authorizeEffect = { token.throwIfCancelled(); authorizeEffect?.invoke(); token.throwIfCancelled() },
             physicalCancellation = token), token)
 
+    /** Import opts into the same physical result drain; selecting a URI does not authorize database writes. */
+    fun pickForMemoryImport(types: Array<String>, token: com.jarvys.agent.CancellationToken,
+        authorizeEffect: (() -> Unit)? = null): Uri? = awaitPhysical(
+        SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.OPEN, mimeTypes = types,
+            authorizeEffect = { token.throwIfCancelled(); authorizeEffect?.invoke(); token.throwIfCancelled() },
+            physicalCancellation = token), token)
+
     private fun awaitPhysical(request: SafPickerRequest, token: com.jarvys.agent.CancellationToken): Uri? {
         token.throwIfCancelled()
         val pendingResult = Pending(request, CompletableFuture())

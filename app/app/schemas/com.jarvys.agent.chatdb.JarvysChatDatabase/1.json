@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "aa62eda78fdf0d20bc4b810034e28fc1",
+    "identityHash": "24a1c8c8c1fb4da69ace2efebe961c18",
     "entities": [
       {
         "tableName": "conversations",
@@ -5789,7 +5789,7 @@
       },
       {
         "tableName": "memory_entries",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, `project` TEXT NOT NULL DEFAULT 'jarvys-central', `scope` TEXT NOT NULL DEFAULT 'project', `observation_type` TEXT NOT NULL DEFAULT 'manual', `revision_count` INTEGER NOT NULL DEFAULT 1, `normalized_hash` TEXT, `duplicate_count` INTEGER NOT NULL DEFAULT 1, `last_seen_at` INTEGER, `pinned` INTEGER NOT NULL DEFAULT 0, `memory_session_id` TEXT, `tool_name` TEXT, `review_after` TEXT, `superseded_by_id` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`memory_session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `layer` TEXT NOT NULL, `day` TEXT, `text` TEXT NOT NULL, `category` TEXT, `importance` REAL NOT NULL, `triggers` TEXT NOT NULL, `provenance` TEXT NOT NULL, `source_ref` TEXT, `usage_count` INTEGER NOT NULL, `last_used_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `deleted_at` INTEGER, `kind` TEXT NOT NULL DEFAULT 'note', `topic_key` TEXT, `title` TEXT, `narration` TEXT NOT NULL DEFAULT 'none', `event_at` INTEGER, `source_conversation_id` TEXT, `source_message_id` TEXT, `through_seq` INTEGER, `project` TEXT NOT NULL DEFAULT 'jarvys-central', `scope` TEXT NOT NULL DEFAULT 'project', `observation_type` TEXT NOT NULL DEFAULT 'manual', `revision_count` INTEGER NOT NULL DEFAULT 1, `normalized_hash` TEXT, `duplicate_count` INTEGER NOT NULL DEFAULT 1, `last_seen_at` INTEGER, `pinned` INTEGER NOT NULL DEFAULT 0, `memory_session_id` TEXT, `tool_name` TEXT, `review_after` TEXT, `superseded_by_id` TEXT, `portable_sync_id` TEXT, `portable_superseded_by_sync_id` TEXT, `created_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `updated_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `deleted_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `last_seen_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`), FOREIGN KEY(`memory_session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
         "fields": [
           {
             "fieldPath": "id",
@@ -5985,6 +5985,44 @@
             "fieldPath": "superseded_by_id",
             "columnName": "superseded_by_id",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "portable_sync_id",
+            "columnName": "portable_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "portable_superseded_by_sync_id",
+            "columnName": "portable_superseded_by_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "created_at_submillis_nanos",
+            "columnName": "created_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updated_at_submillis_nanos",
+            "columnName": "updated_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deleted_at_submillis_nanos",
+            "columnName": "deleted_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "last_seen_at_submillis_nanos",
+            "columnName": "last_seen_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -6129,7 +6167,7 @@
       },
       {
         "tableName": "memory_relations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `relation_id` TEXT NOT NULL, `source_id` TEXT NOT NULL, `target_id` TEXT NOT NULL, `project` TEXT NOT NULL, `scope` TEXT NOT NULL, `relation` TEXT NOT NULL, `status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `reason` TEXT, `evidence` TEXT, `confidence` REAL, `marked_by_actor` TEXT, `marked_by_kind` TEXT, `marked_by_model` TEXT, `memory_session_id` TEXT)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `relation_id` TEXT NOT NULL, `source_id` TEXT NOT NULL, `target_id` TEXT NOT NULL, `project` TEXT NOT NULL, `scope` TEXT NOT NULL, `relation` TEXT NOT NULL, `status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `reason` TEXT, `evidence` TEXT, `confidence` REAL, `marked_by_actor` TEXT, `marked_by_kind` TEXT, `marked_by_model` TEXT, `memory_session_id` TEXT, `portable_sync_id` TEXT, `superseded_at` INTEGER, `superseded_by_relation_id` TEXT, `portable_superseded_by_relation_sync_id` TEXT, `created_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `updated_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `superseded_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0)",
         "fields": [
           {
             "fieldPath": "id",
@@ -6225,6 +6263,47 @@
             "fieldPath": "memory_session_id",
             "columnName": "memory_session_id",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "portable_sync_id",
+            "columnName": "portable_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "superseded_at",
+            "columnName": "superseded_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "superseded_by_relation_id",
+            "columnName": "superseded_by_relation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "portable_superseded_by_relation_sync_id",
+            "columnName": "portable_superseded_by_relation_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "created_at_submillis_nanos",
+            "columnName": "created_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updated_at_submillis_nanos",
+            "columnName": "updated_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "superseded_at_submillis_nanos",
+            "columnName": "superseded_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -6265,7 +6344,7 @@
       },
       {
         "tableName": "memory_sessions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `project` TEXT NOT NULL, `ownership_mode` TEXT NOT NULL, `state` TEXT NOT NULL, `started_at` INTEGER NOT NULL, `ended_at` INTEGER, `source_generation` TEXT, `owner_conversation_id` TEXT, `owner_message_id` TEXT, `run_id` TEXT, `process_id` TEXT, `runtime_lease_expires_at` INTEGER, `runtime_root_id` TEXT, `resume_event_key` TEXT, `summary` TEXT, `maintenance_job_id` TEXT, `maintenance_lease_owner` TEXT, `compaction_parent_session_id` TEXT, `mission_execution_session_id` TEXT, `mission_evidence_id` TEXT, `mission_assignment_id` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `project` TEXT NOT NULL, `ownership_mode` TEXT NOT NULL, `state` TEXT NOT NULL, `started_at` INTEGER NOT NULL, `ended_at` INTEGER, `source_generation` TEXT, `owner_conversation_id` TEXT, `owner_message_id` TEXT, `run_id` TEXT, `process_id` TEXT, `runtime_lease_expires_at` INTEGER, `runtime_root_id` TEXT, `resume_event_key` TEXT, `summary` TEXT, `maintenance_job_id` TEXT, `maintenance_lease_owner` TEXT, `compaction_parent_session_id` TEXT, `mission_execution_session_id` TEXT, `mission_evidence_id` TEXT, `mission_assignment_id` TEXT, `directory` TEXT NOT NULL DEFAULT '', `started_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, `ended_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -6376,6 +6455,27 @@
             "fieldPath": "mission_assignment_id",
             "columnName": "mission_assignment_id",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "directory",
+            "columnName": "directory",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "started_at_submillis_nanos",
+            "columnName": "started_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "ended_at_submillis_nanos",
+            "columnName": "ended_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -6418,7 +6518,7 @@
       },
       {
         "tableName": "memory_prompts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `session_id` TEXT NOT NULL, `project` TEXT NOT NULL, `content` TEXT NOT NULL, `source_inbox_id` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `session_id` TEXT NOT NULL, `project` TEXT NOT NULL, `content` TEXT NOT NULL, `source_inbox_id` TEXT, `created_at` INTEGER NOT NULL, `portable_sync_id` TEXT, `created_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`), FOREIGN KEY(`session_id`) REFERENCES `memory_sessions`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
         "fields": [
           {
             "fieldPath": "id",
@@ -6454,6 +6554,18 @@
             "columnName": "created_at",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "portable_sync_id",
+            "columnName": "portable_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "created_at_submillis_nanos",
+            "columnName": "created_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -6499,19 +6611,17 @@
       },
       {
         "tableName": "memory_prompt_tombstones",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`session_id` TEXT NOT NULL, `source_inbox_id` TEXT NOT NULL, `prompt_id` TEXT NOT NULL, `project` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, PRIMARY KEY(`session_id`, `source_inbox_id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`session_id` TEXT, `source_inbox_id` TEXT, `prompt_id` TEXT NOT NULL, `project` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, `portable_sync_id` TEXT, `deleted_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`prompt_id`))",
         "fields": [
           {
             "fieldPath": "session_id",
             "columnName": "session_id",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "source_inbox_id",
             "columnName": "source_inbox_id",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "prompt_id",
@@ -6530,13 +6640,24 @@
             "columnName": "deleted_at",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "portable_sync_id",
+            "columnName": "portable_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deleted_at_submillis_nanos",
+            "columnName": "deleted_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "session_id",
-            "source_inbox_id"
+            "prompt_id"
           ]
         },
         "indices": [
@@ -6548,12 +6669,22 @@
             ],
             "orders": [],
             "createSql": "CREATE INDEX IF NOT EXISTS `index_memory_prompt_tombstones_project` ON `${TABLE_NAME}` (`project`)"
+          },
+          {
+            "name": "index_memory_prompt_tombstones_session_id_source_inbox_id",
+            "unique": false,
+            "columnNames": [
+              "session_id",
+              "source_inbox_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_memory_prompt_tombstones_session_id_source_inbox_id` ON `${TABLE_NAME}` (`session_id`, `source_inbox_id`)"
           }
         ]
       },
       {
         "tableName": "memory_session_tombstones",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `project` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `project` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, `deleted_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -6572,6 +6703,13 @@
             "columnName": "deleted_at",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "deleted_at_submillis_nanos",
+            "columnName": "deleted_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -6637,7 +6775,7 @@
       },
       {
         "tableName": "memory_deleted_observations",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`old_id` TEXT NOT NULL, `project` TEXT NOT NULL, `scope` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, `producer` TEXT, `producer_key` TEXT, PRIMARY KEY(`old_id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`old_id` TEXT NOT NULL, `project` TEXT NOT NULL, `scope` TEXT NOT NULL, `deleted_at` INTEGER NOT NULL, `producer` TEXT, `producer_key` TEXT, `portable_sync_id` TEXT, `deleted_at_submillis_nanos` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`old_id`))",
         "fields": [
           {
             "fieldPath": "old_id",
@@ -6672,6 +6810,18 @@
             "fieldPath": "producer_key",
             "columnName": "producer_key",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "portable_sync_id",
+            "columnName": "portable_sync_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deleted_at_submillis_nanos",
+            "columnName": "deleted_at_submillis_nanos",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -8136,7 +8286,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'aa62eda78fdf0d20bc4b810034e28fc1')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '24a1c8c8c1fb4da69ace2efebe961c18')"
     ]
   }
 }

@@ -29,22 +29,29 @@ data class MemorySession(
     val mission_execution_session_id: String? = null,
     val mission_evidence_id: String? = null,
     val mission_assignment_id: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "''") val directory: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "0") val started_at_submillis_nanos: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val ended_at_submillis_nanos: Int = 0,
 )
 
 @Entity(tableName = "memory_prompts", foreignKeys = [ForeignKey(entity = MemorySession::class,
     parentColumns = ["id"], childColumns = ["session_id"], onDelete = ForeignKey.RESTRICT)],
     indices = [Index(value = ["session_id", "source_inbox_id"], unique = true), Index(value = ["project"])])
 data class MemoryPrompt(@PrimaryKey val id: String, val session_id: String, val project: String,
-    val content: String, val source_inbox_id: String?, val created_at: Long)
+    val content: String, val source_inbox_id: String?, val created_at: Long,
+    val portable_sync_id: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val created_at_submillis_nanos: Int = 0)
 
 /** Local source-deletion evidence has no payload and no cascading session/chat FK. */
-@Entity(tableName = "memory_prompt_tombstones", primaryKeys = ["session_id", "source_inbox_id"],
-    indices = [Index(value = ["project"])])
-data class MemoryPromptTombstone(val session_id: String, val source_inbox_id: String,
-    val prompt_id: String, val project: String, val deleted_at: Long)
+@Entity(tableName = "memory_prompt_tombstones", indices = [Index(value = ["project"]), Index(value = ["session_id", "source_inbox_id"])])
+data class MemoryPromptTombstone(val session_id: String?, val source_inbox_id: String?,
+    @PrimaryKey val prompt_id: String, val project: String, val deleted_at: Long,
+    val portable_sync_id: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted_at_submillis_nanos: Int = 0)
 
 @Entity(tableName = "memory_session_tombstones", indices = [Index(value = ["project"])])
-data class MemorySessionTombstone(@PrimaryKey val id: String, val project: String, val deleted_at: Long)
+data class MemorySessionTombstone(@PrimaryKey val id: String, val project: String, val deleted_at: Long,
+    @androidx.room.ColumnInfo(defaultValue = "0") val deleted_at_submillis_nanos: Int = 0)
 
 /** Local atomic-finalization identity; deleting the summary does not erase its receipt. */
 @Entity(tableName = "memory_session_finalizations", foreignKeys = [ForeignKey(entity = MemorySession::class,

@@ -51,7 +51,7 @@ internal class MemoryExportJson(output: OutputStream, private val sql: ChatSqlDa
         check(c.moveToFirst()) { "memory_export_row_changed" }
         if (c.isNull(0)) null else {
             check(c.getType(0) == Cursor.FIELD_TYPE_FLOAT || c.getType(0) == Cursor.FIELD_TYPE_INTEGER) { "memory_export_storage_type" }
-            c.getDouble(0).also { check(it.isFinite() && it in 0.0..1.0) { "memory_export_confidence_invalid" } }
+            c.getDouble(0).also { check(it.isFinite()) { "memory_export_confidence_invalid" } }
         }
     }
     }

@@ -97,7 +97,7 @@ data class MemoryConsolidationResult(val status:String,val plan:MemoryConsolidat
 internal class MemoryConsolidationRepository(private val database:JarvysChatDatabase,private val clock:()->Long=System::currentTimeMillis) {
     private val sql get()=database.chatSql
     companion object {
-        val COLUMNS:List<String> = listOf("id","layer","day","text","category","importance","triggers","provenance","source_ref","usage_count","last_used_at","created_at","updated_at","deleted_at","kind","topic_key","title","narration","event_at","source_conversation_id","source_message_id","through_seq","project","scope","observation_type","revision_count","normalized_hash","duplicate_count","last_seen_at","pinned","memory_session_id","tool_name","review_after","superseded_by_id")
+        val COLUMNS:List<String> = listOf("id","layer","day","text","category","importance","triggers","provenance","source_ref","usage_count","last_used_at","created_at","updated_at","deleted_at","kind","topic_key","title","narration","event_at","source_conversation_id","source_message_id","through_seq","project","scope","observation_type","revision_count","normalized_hash","duplicate_count","last_seen_at","pinned","memory_session_id","tool_name","review_after","superseded_by_id","portable_sync_id","portable_superseded_by_sync_id","created_at_submillis_nanos","updated_at_submillis_nanos","deleted_at_submillis_nanos","last_seen_at_submillis_nanos")
         private const val MARKER="## consolidated_from"
         private val UUID_TOKEN=Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
     }
@@ -118,15 +118,35 @@ internal class MemoryConsolidationRepository(private val database:JarvysChatData
     }
     private fun plan(request:MemoryConsolidationRequest,namespace:MemoryNamespace):MemoryConsolidationPlan {
         namespace.requireOwner(request.expectedProject)
-        val sources=request.sourceIds.map(::row).sortedWith(compareByDescending<MemoryConsolidationSource> { it.long("created_at") }.thenByDescending { it.rowId })
+        val sources=request.sourceIds.map(::row).sortedWith(compareByDescending<MemoryConsolidationSource> { it.long("created_at") }.thenByDescending { it.long("created_at_submillis_nanos") }.thenByDescending { it.rowId })
         sources.forEach { source ->
             check(source.field("deleted_at").storageType=="null") { "memory_consolidation_source_deleted" }
             namespace.requireOwner(source.project)
             require(source.project==request.expectedProject) { "memory_consolidation_project_mismatch" }
             check(source.text("id")==source.id) { "memory_consolidation_source_invalid" }
+            for (date in listOf("created_at","updated_at","deleted_at","last_seen_at")) {
+                val precision=source.field(date+"_submillis_nanos")
+                check(precision.storageType=="integer" && source.long(date+"_submillis_nanos") in 0L..999999L &&
+                    (source.field(date).storageType!="null" || source.long(date+"_submillis_nanos")==0L)) { "memory_consolidation_source_invalid" }
+            }
+            for (identity in listOf("portable_sync_id","portable_superseded_by_sync_id")) {
+                check(source.field(identity).storageType in setOf("null","text")) { "memory_consolidation_source_invalid" }
+            }
             MemoryDeletionMarkers.validateTarget(database,source.id,source.project,source.scope)
             source.memorySessionId?.let { session ->
-                check(sql.query("SELECT 1 FROM memory_sessions WHERE id=? AND project=? AND NOT EXISTS(SELECT 1 FROM memory_session_tombstones WHERE id=?)",arrayOf(session,source.project,session)).use { it.moveToFirst() }) { "memory_consolidation_session_invalid" }
+                val bindings=listOf("source_generation","owner_conversation_id","owner_message_id","run_id","process_id",
+                    "runtime_lease_expires_at","runtime_root_id","resume_event_key","maintenance_job_id","maintenance_lease_owner",
+                    "compaction_parent_session_id","mission_execution_session_id","mission_evidence_id","mission_assignment_id")
+                val retained=sql.query("SELECT project,ownership_mode,state,"+bindings.joinToString(",")+" FROM memory_sessions WHERE id=?",arrayOf(session)).use { c ->
+                    check(c.moveToFirst() && (0..2).all { c.getType(it)==Cursor.FIELD_TYPE_STRING }) { "memory_consolidation_session_invalid" }
+                    val project=c.getString(0);val mode=c.getString(1);val state=c.getString(2)
+                    namespace.requireOwner(project)
+                    check(mode in setOf("shared","project_owned") && (project==source.project || mode=="shared")) { "memory_consolidation_session_invalid" }
+                    project to (state in setOf("manual","imported") && bindings.indices.all { c.isNull(it+3) })
+                }
+                sql.query("SELECT project FROM memory_session_tombstones WHERE id=?",arrayOf(session)).use { c ->
+                    if(c.moveToFirst()) check(c.getType(0)==Cursor.FIELD_TYPE_STRING && c.getString(0)==retained.first && retained.second) { "memory_consolidation_session_invalid" }
+                }
             }
             val marker=source.content.indexOf(MARKER)
             if(marker>=0) check(UUID_TOKEN.findAll(source.content.substring(marker+MARKER.length)).none { it.value in request.sourceIds }) { "memory_consolidation_provenance_cycle" }
@@ -136,8 +156,8 @@ internal class MemoryConsolidationRepository(private val database:JarvysChatData
         require(content.toByteArray(Charsets.UTF_8).size<=MemoryObservationContent.LIMIT_BYTES) { "memory_consolidation_content_too_large" }
         val survivor=MemoryConsolidationSurvivor(newest.memorySessionId,request.type?:newest.type,request.newTitle,content,
             MemoryNamespace.normalizeScope(newest.scope),request.expectedProject,request.topicKeyBytesBase64)
-        val tree=listOf("consolidate-local-v1",MemorySaveSourceIdentity.existingGeneration(database),sources.sortedBy { it.id }.map { it.tree() },survivor.tree(),request.expectedProject)
-        val fingerprint=MemoryConsolidationCodec.digest("consolidate-local-v1:",tree)
+        val tree=listOf("consolidate-local-v2",MemorySaveSourceIdentity.existingGeneration(database),sources.sortedBy { it.id }.map { it.tree() },survivor.tree(),request.expectedProject)
+        val fingerprint=MemoryConsolidationCodec.digest("consolidate-local-v2:",tree)
         return MemoryConsolidationPlan(request.sourceIds,sources,request.expectedProject,survivor,fingerprint)
     }
     suspend fun preview(request:MemoryConsolidationRequest,namespace:MemoryNamespace,check:()->Unit={}):MemoryConsolidationPlan = database.withChatReadTransaction {
@@ -152,7 +172,7 @@ internal class MemoryConsolidationRepository(private val database:JarvysChatData
         val id=UUID.randomUUID().toString();val now=clock();val survivor=plan.survivor
         // Retire before insert solely to preserve the local live-topic UNIQUE index. Entire writer is atomic.
         plan.sources.sortedBy { it.id }.forEach { source ->
-            sql.execSQL("UPDATE memory_entries SET deleted_at=?,updated_at=?,superseded_by_id=? WHERE id=? AND deleted_at IS NULL",arrayOf(now,now,id,source.id))
+            sql.execSQL("UPDATE memory_entries SET deleted_at=?,updated_at=?,superseded_by_id=?,portable_superseded_by_sync_id=?,deleted_at_submillis_nanos=0,updated_at_submillis_nanos=0 WHERE id=? AND deleted_at IS NULL",arrayOf(now,now,id,id,source.id))
             check(sql.query("SELECT changes()").use { it.moveToFirst();it.getLong(0)==1L }) { "memory_consolidation_source_changed" }
         }
         sql.execSQL("INSERT INTO memory_entries(id,layer,day,text,category,importance,triggers,provenance,source_ref,usage_count,last_used_at,created_at,updated_at,deleted_at,kind,topic_key,title,narration,event_at,source_conversation_id,source_message_id,through_seq,project,scope,observation_type,revision_count,normalized_hash,duplicate_count,last_seen_at,pinned,memory_session_id,tool_name,review_after,superseded_by_id) VALUES(?,'curated',NULL,?,NULL,0.5,'',?,NULL,0,NULL,?,?,NULL,'note',CAST(? AS TEXT),?,'none',NULL,NULL,NULL,NULL,?,?,?,1,?,1,?,0,?,'memory_consolidate',NULL,NULL)",
@@ -164,7 +184,9 @@ internal class MemoryConsolidationRepository(private val database:JarvysChatData
             "title" to survivor.title,"narration" to "none","event_at" to null,"source_conversation_id" to null,"source_message_id" to null,
             "through_seq" to null,"project" to survivor.project,"scope" to survivor.scope,"observation_type" to survivor.type,"revision_count" to 1L,
             "normalized_hash" to MemoryObservationContent.normalizedHash(survivor.content),"duplicate_count" to 1L,"last_seen_at" to now,"pinned" to 0L,
-            "memory_session_id" to survivor.memorySessionId,"tool_name" to "memory_consolidate","review_after" to null,"superseded_by_id" to null)
+            "memory_session_id" to survivor.memorySessionId,"tool_name" to "memory_consolidate","review_after" to null,"superseded_by_id" to null,
+            "portable_sync_id" to null,"portable_superseded_by_sync_id" to null,
+            "created_at_submillis_nanos" to 0L,"updated_at_submillis_nanos" to 0L,"deleted_at_submillis_nanos" to 0L,"last_seen_at_submillis_nanos" to 0L)
         val expectedFields=COLUMNS.map { name -> when(val value=expected[name]) {
             null -> MemoryConsolidationField(name,"null",null)
             is Long -> MemoryConsolidationField(name,"integer",value.toString())
@@ -177,8 +199,9 @@ internal class MemoryConsolidationRepository(private val database:JarvysChatData
         check(actual.content==survivor.content && actual.title==survivor.title && actual.project==survivor.project && actual.scope==survivor.scope && actual.type==survivor.type && actual.memorySessionId==survivor.memorySessionId && actual.topicKeyBytesBase64==survivor.topicKeyBytesBase64 && actual.field("deleted_at").value==null) { "memory_consolidation_readback_invalid" }
         plan.sources.forEach { old ->
             val retired=row(old.id)
-            check(retired.long("deleted_at")==now && retired.long("updated_at")==now && retired.text("superseded_by_id")==id &&
-                retired.fields.filter { it.name !in setOf("deleted_at","updated_at","superseded_by_id") }==old.fields.filter { it.name !in setOf("deleted_at","updated_at","superseded_by_id") }) { "memory_consolidation_readback_invalid" }
+            check(retired.long("deleted_at")==now && retired.long("updated_at")==now && retired.text("superseded_by_id")==id && retired.text("portable_superseded_by_sync_id")==id &&
+                retired.long("deleted_at_submillis_nanos")==0L && retired.long("updated_at_submillis_nanos")==0L &&
+                retired.fields.filter { it.name !in setOf("deleted_at","updated_at","superseded_by_id","portable_superseded_by_sync_id","deleted_at_submillis_nanos","updated_at_submillis_nanos") }==old.fields.filter { it.name !in setOf("deleted_at","updated_at","superseded_by_id","portable_superseded_by_sync_id","deleted_at_submillis_nanos","updated_at_submillis_nanos") }) { "memory_consolidation_readback_invalid" }
         }
         after();MemoryConsolidationResult("consolidated",plan,actual,java.util.Collections.unmodifiableList(ArrayList(plan.sourceIds)))
     }

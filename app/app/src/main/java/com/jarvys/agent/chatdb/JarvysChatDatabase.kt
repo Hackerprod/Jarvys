@@ -784,6 +784,7 @@ internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase, context: Context? = null, reportFailures: Boolean = true) = create(SupportChatSqlDatabase(db), context, reportFailures)
 
     fun create(db: ChatSqlDatabase, context: Context? = null, reportFailures: Boolean = true) {
+        MemoryPortableMetadata.install(db)
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(project,scope,topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
         PersonalMemorySearchIndex.install(db, context, reportFailures)
         MemoryPromptSearchIndex.install(db)

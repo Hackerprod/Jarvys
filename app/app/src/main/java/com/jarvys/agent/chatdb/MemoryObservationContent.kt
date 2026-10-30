@@ -9,12 +9,12 @@ object MemoryObservationContent {
     const val TRUNCATION_MARKER = "... [truncated]"
     data class Prepared(val content: String, val truncated: Boolean, val originalBytes: Int, val limitBytes: Int = LIMIT_BYTES)
     private val privateTags = Pattern.compile("<private>.*?</private>", Pattern.CASE_INSENSITIVE or Pattern.DOTALL)
-    private fun space(cp: Int) = cp in 9..13 || cp == 32 || cp == 0x85 || cp == 0xa0 || cp == 0x1680 ||
+    internal fun isGoSpace(cp: Int) = cp in 9..13 || cp == 32 || cp == 0x85 || cp == 0xa0 || cp == 0x1680 ||
         cp in 0x2000..0x200a || cp == 0x2028 || cp == 0x2029 || cp == 0x202f || cp == 0x205f || cp == 0x3000
     @JvmStatic fun trimSpace(value: String): String {
         var start=0; var end=value.length
-        while(start<end && space(value.codePointAt(start))) start+=Character.charCount(value.codePointAt(start))
-        while(end>start && space(value.codePointBefore(end))) end-=Character.charCount(value.codePointBefore(end))
+        while(start<end && isGoSpace(value.codePointAt(start))) start+=Character.charCount(value.codePointAt(start))
+        while(end>start && isGoSpace(value.codePointBefore(end))) end-=Character.charCount(value.codePointBefore(end))
         return value.substring(start,end)
     }
     @JvmStatic fun prepareTitle(raw: String): String = trimSpace(privateTags.matcher(raw).replaceAll("[REDACTED]"))
@@ -50,7 +50,7 @@ object MemoryObservationContent {
             var pendingSpace = false
             while (offset < content.length) {
                 val cp = content.codePointAt(offset)
-                if (space(cp)) pendingSpace = isNotEmpty()
+                if (isGoSpace(cp)) pendingSpace = isNotEmpty()
                 else {
                     if (pendingSpace) append(' ')
                     pendingSpace = false
@@ -96,7 +96,7 @@ object MemoryObservationContent {
         val parts = ArrayList<String>(); var start = -1; var index = 0
         while (index < raw.length) {
             val cp = raw.codePointAt(index)
-            if (space(cp)) { if (start >= 0) { parts.add(raw.substring(start, index)); start = -1 } }
+            if (isGoSpace(cp)) { if (start >= 0) { parts.add(raw.substring(start, index)); start = -1 } }
             else if (start < 0) start = index
             index += Character.charCount(cp)
         }

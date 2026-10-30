@@ -51,8 +51,8 @@ internal object MemoryDeletionMarkers {
     /** Caller holds the same transaction as owner validation and payload deletion. */
     fun insertForTarget(database: JarvysChatDatabase, id: String, project: String, scope: String, now: Long) {
         val producer=validateTarget(database,id,project,scope)
-        database.chatSql.execSQL("INSERT INTO memory_deleted_observations(old_id,project,scope,deleted_at,producer,producer_key) VALUES(?,?,?,?,?,?)",
-            arrayOf(id, project, scope, now, producer?.producer, producer?.key))
+        database.chatSql.execSQL("INSERT INTO memory_deleted_observations(old_id,project,scope,deleted_at,producer,producer_key,portable_sync_id) SELECT ?,?,?,?,?,?,COALESCE(portable_sync_id,id) FROM memory_entries WHERE id=?",
+            arrayOf(id, project, scope, now, producer?.producer, producer?.key,id))
     }
 
     /** Same retained producer validation, with no marker write for a soft consolidation. */
