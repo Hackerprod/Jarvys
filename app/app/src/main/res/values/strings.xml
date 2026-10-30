@@ -1888,4 +1888,18 @@ Confirmed retired sources:
     <string name="memory_aliases_conflict">Conflict: key and path point to different targets. No winner is selected.</string>
     <string name="memory_aliases_matched">Matched authorized alias. This preview is not a permission or a running-project change.</string>
     <string name="memory_aliases_unmatched">No alias matched. The result is the original raw key, not a validated project selection or permission.</string>
+
+    <string name="memory_project_history_action">Directory evidence</string>
+    <string name="memory_project_history_title">Historical directory evidence</string>
+    <string name="memory_project_history_warning">Weak historical or imported metadata only: this is not ownership, permission, or the current project. Descriptive paths are not visited. No project is selected automatically.</string>
+    <string name="memory_project_history_input">Descriptive absolute POSIX directory (empty is allowed)</string>
+    <string name="memory_project_history_query">Query / refresh evidence</string>
+    <string name="memory_project_history_loading">Reading retained metadata…</string>
+    <string name="memory_project_history_failed">Evidence could not be read. No partial or empty result is inferred. Query again explicitly.</string>
+    <string name="memory_project_history_raw">Original input</string>
+    <string name="memory_project_history_normalized">Normalized descriptive selection</string>
+    <string name="memory_project_history_blank">Empty selection (not a current directory)</string>
+    <string name="memory_project_history_count">Matching projects: %1$d</string>
+    <string name="memory_project_history_empty">No matching historical evidence.</string>
+    <string name="memory_project_history_projects">Canonical historical project names</string>
 </resources>

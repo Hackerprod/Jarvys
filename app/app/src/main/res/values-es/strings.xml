@@ -1889,4 +1889,18 @@ Fuentes retiradas confirmadas:
     <string name="memory_aliases_conflict">Conflicto: la clave y la ruta apuntan a destinos distintos. No se elige un ganador.</string>
     <string name="memory_aliases_matched">Alias autorizado coincidente. Este preview no concede permiso ni cambia el proyecto de un run.</string>
     <string name="memory_aliases_unmatched">Ningún alias coincide. El resultado es la clave original, no una selección de proyecto validada ni un permiso.</string>
+
+    <string name="memory_project_history_action">Evidencia por directorio</string>
+    <string name="memory_project_history_title">Evidencia histórica por directorio</string>
+    <string name="memory_project_history_warning">Sólo metadata débil histórica o importada: no es propiedad, permiso ni el proyecto actual. No se visitan las rutas descriptivas. No se selecciona ningún proyecto automáticamente.</string>
+    <string name="memory_project_history_input">Directorio POSIX absoluto descriptivo (se permite vacío)</string>
+    <string name="memory_project_history_query">Consultar / actualizar evidencia</string>
+    <string name="memory_project_history_loading">Leyendo metadata retenida…</string>
+    <string name="memory_project_history_failed">No se pudo leer la evidencia. No se infiere ningún resultado parcial ni vacío. Consulta de nuevo explícitamente.</string>
+    <string name="memory_project_history_raw">Entrada original</string>
+    <string name="memory_project_history_normalized">Selección descriptiva normalizada</string>
+    <string name="memory_project_history_blank">Selección vacía (no es un directorio actual)</string>
+    <string name="memory_project_history_count">Proyectos coincidentes: %1$d</string>
+    <string name="memory_project_history_empty">Sin evidencia histórica coincidente.</string>
+    <string name="memory_project_history_projects">Nombres canónicos de proyectos históricos</string>
 </resources>

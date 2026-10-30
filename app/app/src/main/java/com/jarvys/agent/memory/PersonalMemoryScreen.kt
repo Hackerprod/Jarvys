@@ -48,6 +48,7 @@ import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
 import com.jarvys.agent.chatdb.MemoryStats
+import com.jarvys.agent.chatdb.MemoryProjectHistory
 import com.jarvys.agent.chatdb.MemoryProjectAlias
 import com.jarvys.agent.chatdb.MemoryProjectAliasResolution
 import com.jarvys.agent.chatdb.MemoryProjectAliases
@@ -97,6 +98,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
+    var showMemoryProjectHistory by remember { mutableStateOf(false) }
     var showMemoryAliases by remember { mutableStateOf(false) }
     var showMemoryProjectInventory by remember { mutableStateOf(false) }
     var showMemorySelftest by remember { mutableStateOf(false) }
@@ -189,6 +191,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryAliases = true },
                         modifier = Modifier.testTag("memory-aliases-open")) { Text(stringResource(R.string.memory_aliases_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectHistory = true },
+                        modifier = Modifier.testTag("memory-project-history-open")) { Text(stringResource(R.string.memory_project_history_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
@@ -344,6 +349,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemoryProjectHistory) MemoryProjectHistoryDialog { showMemoryProjectHistory = false }
     if (showMemoryAliases) MemoryAliasesDialog { showMemoryAliases = false }
     if (showMemoryProjectInventory) MemoryProjectInventoryDialog { showMemoryProjectInventory = false }
     if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
@@ -1248,6 +1254,70 @@ private fun MemorySelftestDialog(onClose: () -> Unit) {
 }
 
 /** Explicit manual read, independent of automatic memory capture; no model or background refresh. */
+@Composable
+private fun MemoryProjectHistoryDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var input by remember { mutableStateOf("") }
+    var capturedInput by remember { mutableStateOf<String?>(null) }
+    var report by remember { mutableStateOf<MemoryProjectHistory?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    var requestId by remember { mutableStateOf(0L) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var activeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun invalidate() {
+        requestId++; activeToken?.cancel(); activeJob?.cancel(); activeToken = null; activeJob = null
+        capturedInput = null; report = null; loading = false; failed = false
+    }
+    fun close() { invalidate(); onClose() }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel(); activeJob?.cancel() } }
+    fun query() {
+        val raw = input
+        invalidate()
+        val captured = requestId
+        val token = CancellationToken.cancellable()
+        activeToken = token; loading = true
+        activeJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentMemoryProjectHistory(raw, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) { capturedInput = raw; report = result }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) { report = null; capturedInput = null; failed = true }
+            } finally {
+                if (captured == requestId) { loading = false; activeToken = null; activeJob = null }
+            }
+        }
+    }
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_project_history_title)) }, text = {
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-project-history-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_project_history_warning), modifier = Modifier.testTag("memory-project-history-warning"))
+                OutlinedTextField(value = input, onValueChange = { input = it; invalidate() }, label = { Text(stringResource(R.string.memory_project_history_input)) }, modifier = Modifier.testTag("memory-project-history-input"))
+                TextButton(enabled = !loading, onClick = { query() }, modifier = Modifier.testTag("memory-project-history-query")) { Text(stringResource(R.string.memory_project_history_query)) }
+                if (loading) Text(stringResource(R.string.memory_project_history_loading), modifier = Modifier.testTag("memory-project-history-loading"))
+                if (failed) Text(stringResource(R.string.memory_project_history_failed), modifier = Modifier.testTag("memory-project-history-failed"))
+            }
+            report?.let { received ->
+                item {
+                    Text(stringResource(R.string.memory_project_history_raw))
+                    Text(requireNotNull(capturedInput), modifier = Modifier.testTag("memory-project-history-raw"))
+                    Text(stringResource(R.string.memory_project_history_normalized))
+                    Text(received.directory, modifier = Modifier.testTag("memory-project-history-normalized"))
+                    if (received.directory.isEmpty()) Text(stringResource(R.string.memory_project_history_blank), modifier = Modifier.testTag("memory-project-history-blank"))
+                    Text(stringResource(R.string.memory_project_history_count, received.count), modifier = Modifier.testTag("memory-project-history-count"))
+                    if (received.projects.isEmpty()) Text(stringResource(R.string.memory_project_history_empty), modifier = Modifier.testTag("memory-project-history-empty"))
+                    else Text(stringResource(R.string.memory_project_history_projects))
+                }
+                itemsIndexed(received.projects) { index, project -> Text(project, modifier = Modifier.testTag("memory-project-history-project-$index")) }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-project-history-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+}
+
 @Composable
 private fun MemoryAliasesDialog(onClose: () -> Unit) {
     val context = LocalContext.current.applicationContext

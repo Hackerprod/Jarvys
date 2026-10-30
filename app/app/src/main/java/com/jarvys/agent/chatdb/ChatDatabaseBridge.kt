@@ -1017,6 +1017,24 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         result
     }
 
+    /** Explicit human weak-evidence query. Never uses alias rows or visits the described path. */
+    fun personalAgentMemoryProjectHistory(directory: String, token: CancellationToken): MemoryProjectHistory {
+        token.throwIfCancelled()
+        return executeOnWorker { repos ->
+            token.throwIfCancelled()
+            val original = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+            val verify = {
+                token.throwIfCancelled()
+                val current = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+                check(original.hasSameOwners(current)) { "memory_project_history_owner_changed" }
+                token.throwIfCancelled()
+            }
+            val result = runBlocking { MemoryProjectHistoryRepository(repos.database).read(directory, original, token, verify) }
+            verify()
+            result
+        }
+    }
+
     /** Human-only alias operations; no automatic tool admission, session or activity side effects. */
     private fun <T> withMemoryAliases(token: CancellationToken,
         block: suspend (MemoryProjectAliasRepository, MemoryNamespace, () -> Unit) -> T): T {

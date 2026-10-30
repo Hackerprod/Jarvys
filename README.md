@@ -1,3 +1,11 @@
+## Memoria P5-I — Evidencia histórica por directorio — checkpoint 30-10-2026
+
+**Candidate1: Full63/0 y Play63/0, 12 clases por sabor.** Focal9 separado. Doble PASS independiente acotado. Código `08f7e61068f9adb3b5918a92d71a21a17c91c87a`. [Reporte y límites](docs/continue/engram-port/P5-I-project-history-report.md) · [Resultados exactos](docs/continue/engram-port/P5-I-project-history-results.json).
+
+Consulta manual explícita con MemoryOFF: evidencia débil de sesiones retenidas/importadas, filtrada por owners actuales antes de normalizar; sin visitar esos directorios ni conceder ownership/routing. Selección externa y limpieza histórica distintas, sin cap oculto. Import real y corpus retenido diferenciados; schema intacto. Tres fallos daemon y recuperaciones Full1/Play2 conservados; ningún test FAIL ejecutado.
+
+**P5 sigue parcial.** Detect/Inspect/first-Git-binding/current-project, merge/rescue, repair/backup, Markdown/grafo y P6 permanecen pendientes. Prune manual es sólo propuesta para contrato separado, no autorización automática. Sin PASS global ni dispositivo físico. Los bloques inferiores son históricos.
+
 ## Memoria P5-H — Alias manuales de proyectos — checkpoint 30-10-2026
 
 **Candidate3: Full97/0 y Play97/0, 13 clases por sabor.** Focal40 separado. Doble PASS independiente acotado. Código `a15a462f040eb98b393878fb572e00c77a809342`. [Reporte y límites](docs/continue/engram-port/P5-H-project-aliases-report.md) · [Resultados exactos](docs/continue/engram-port/P5-H-project-aliases-results.json).

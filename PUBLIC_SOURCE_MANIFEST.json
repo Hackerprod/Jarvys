@@ -1,8 +1,8 @@
 {
-  "source_commit": "6495aa45c64358f025c27fdfb7112d67fb2ae42c",
-  "parent_commit": "21c1eef79b92da434cf9c03b4480d8600eabeae3",
+  "source_commit": "20cdc5c86cef17aa038a91b6fd7d200cae14aace",
+  "parent_commit": "5a16cd65b7fd0023172f120f66118d4dc662c9af",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
-  "source_file_count": 978,
+  "source_file_count": 979,
   "files": [
     {
       "path": ".gitignore",
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "69fe05f932f002ab453f4dfc958859d5d89bb334",
-      "sha256": "b5f304d33935def3b7734ecf428805cd0cff767293ef3b2faa526cef8bfe3641",
-      "bytes": 378726
+      "git_blob_sha1": "235fc2285e6c8aac2a19221ca7a1b4b775d9c979",
+      "sha256": "3f22f7e71e19bccc44080aac2aad041de1c83904be890812a6a0db2bfecf5e0d",
+      "bytes": 379870
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "c5d854ce77d390d79eb86bc2d7af4ad23545f98f",
-      "sha256": "497ef88a7e1d00574cde9b492b12cdbc90e296987209e4f4f9b43af1577a3104",
-      "bytes": 101996
+      "git_blob_sha1": "30685da0d1457245090c7647eda388e222226a94",
+      "sha256": "c96d60a8fe1546b7a5b9380855c92f2421781e96c127e9b71bba7d016312bb65",
+      "bytes": 103140
     },
     {
       "path": "app/.gitignore",
@@ -2856,9 +2856,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
       "mode": "100644",
-      "git_blob_sha1": "802513c8c0cc39a01202ad00d0cdf6213c377fda",
-      "sha256": "0bf7d99e17a7ec3ddd0bddb3edd57a6eef20618270b09df612be5d952052c58f",
-      "bytes": 155382
+      "git_blob_sha1": "a82470743c33724d4ef6d742b482ce66045827c8",
+      "sha256": "580b9e4b1b934ee48778eef8fde626d8fa3fe7992ae9d58fd248d034265e8e28",
+      "bytes": 156354
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatSqlConnection.kt",
@@ -3209,6 +3209,13 @@
       "git_blob_sha1": "e2223867242bf25a95584d969299d13a1f4e029c",
       "sha256": "9bac2c64895b20c30828ac4236990ad277c0624050083e31fa8405f395b83a45",
       "bytes": 2771
+    },
+    {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryProjectHistory.kt",
+      "mode": "100644",
+      "git_blob_sha1": "845e8f00f7b2e5e344e18611da347a00a670cb6a",
+      "sha256": "bbe45179711271ebd0018609af8316a5855ebc781e44c1f2de850e3d3d774ef2",
+      "bytes": 3754
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryProjectInventory.kt",
@@ -4361,9 +4368,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/memory/PersonalMemoryScreen.kt",
       "mode": "100644",
-      "git_blob_sha1": "7ebe61e0716f490ad81fe61410d441f4d8046289",
-      "sha256": "ba2c31e514fc040552d17c854e48c93d791d5cdd6517453d5ac8a210215d65c0",
-      "bytes": 192878
+      "git_blob_sha1": "a11112528216deee24525e69e0d6c179b17ebbd7",
+      "sha256": "3677aa641c0639018a53b015778624247695a6480d5aab87d5df7b8d5fc01716",
+      "bytes": 198062
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/modules/ModuleArtifactViewerLaunch.kt",
@@ -5495,9 +5502,9 @@
     {
       "path": "app/app/src/main/res/values-es/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "ab4a8a338c2857c07cbda1a87042ae5488622bee",
-      "sha256": "1133bdc6ae4bf34b0da26e9547b3c6189118de91ee411ced819dfc74537fda55",
-      "bytes": 193182
+      "git_blob_sha1": "33117e47be34b350b604768c3811ffcad2b40e6d",
+      "sha256": "796a24d46067304ce6c0414aa7161071292b7f6aaf14355cb6617e022282ad59",
+      "bytes": 194627
     },
     {
       "path": "app/app/src/main/res/values-es/strings_ux44_mcp.xml",
@@ -5642,9 +5649,9 @@
     {
       "path": "app/app/src/main/res/values/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "796abb6451ecbf9f42aa1318873cd27b98978556",
-      "sha256": "868ef3a8d103638914e8a4f21d0edbab037ff94e134807a021160a80bb127689",
-      "bytes": 180739
+      "git_blob_sha1": "1bd55c54ef80bd384fe06de9a8ac1326d33342bf",
+      "sha256": "3e043d37d9aa748dc6d3e3b5952177c47ad8dcf9b444970b3c3d77ead7504b47",
+      "bytes": 182101
     },
     {
       "path": "app/app/src/main/res/values/strings_ux44_mcp.xml",
