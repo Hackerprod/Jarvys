@@ -462,6 +462,60 @@ internal object JarvysChatDatabaseProvider {
         synchronized(databaseFiles) { databaseFiles[database] }
             ?: throw IllegalStateException("No database file is registered for the chat database")
 
+    /** Observation only: cold providers stay cold, and retries never acquire a writer lease. */
+    internal fun <T> observeOpenForDoctor(context: Context, token: com.jarvys.agent.CancellationToken,
+        block: (ChatSqlDatabase, () -> Unit) -> T): T {
+        check(LeasedConnectionElement.current() == null && RawReadConnectionElement.current() == null)
+        check(Looper.myLooper() != Looper.getMainLooper()) { "doctor_worker_required" }
+        token.throwIfCancelled()
+        val directories = com.jarvys.agent.MemoryDoctorPaths.memoryDirectories(context)
+        val file = File(directories.last(), DATABASE_NAME)
+        val key = file.canonicalPath
+        val database = synchronized(this) { instances[key] }
+            ?: throw com.jarvys.agent.MemoryDoctorUnavailable("store_not_open")
+        val anchor = synchronized(projectionAnchors) { projectionAnchors[key] }
+            ?: throw com.jarvys.agent.MemoryDoctorUnavailable("store_not_open")
+        val observedPool = synchronized(readPools) { readPools[database] }
+            ?: throw com.jarvys.agent.MemoryDoctorUnavailable("store_not_open")
+        val thread = Thread.currentThread()
+        val unregister = token.registerCancelAction { thread.interrupt() }
+        var locked = false
+        var handle: SQLiteConnection? = null
+        try {
+            while (!locked) {
+                token.throwIfCancelled()
+                locked = anchor.fence.tryLock(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+            fun requireCurrent() {
+                token.throwIfCancelled()
+                check(anchor.fence.isHeldByCurrentThread)
+                if (synchronized(this) { instances[key] !== database } ||
+                    synchronized(databaseFiles) { databaseFiles[database]?.canonicalPath != key } ||
+                    synchronized(readPools) { readPools[database] !== observedPool } ||
+                    synchronized(projectionAnchors) { projectionAnchors[key] !== anchor })
+                    throw com.jarvys.agent.MemoryDoctorUnavailable("source_changed")
+                observedPool.requireDoctorIdentity(file)
+            }
+            requireCurrent()
+            val identity = com.jarvys.agent.MemoryDoctorFileIdentity.capture(file, directories, "store_missing")
+            handle = acquireReadDatabaseBlocking(database)
+            token.throwIfCancelled()
+            return block(DriverChatSqlDatabase(checkNotNull(handle))) { requireCurrent(); identity.requireCurrent() }
+                .also { requireCurrent(); identity.requireCurrent() }
+        } catch (interrupted: InterruptedException) {
+            if (token.isCancellationRequested) throw java.util.concurrent.CancellationException("doctor_cancelled")
+            Thread.currentThread().interrupt()
+            throw interrupted
+        } finally {
+            try { handle?.let { releaseReadDatabase(database, it) } }
+            finally {
+                if (locked) anchor.fence.unlock()
+                unregister.run()
+                if (token.isCancellationRequested) Thread.interrupted()
+            }
+        }
+    }
+
     /** Runs a read projection on the query pool belonging to this exact Room database instance. */
     internal suspend fun <T> onQueryExecutor(database: JarvysChatDatabase, operation: suspend () -> T): T {
         ChatSqlBeforeWriteGuard.checkRepositoryAccess()
@@ -824,6 +878,23 @@ internal object DatabaseTriggers {
 
     /** Independent committed-read handles; retain the established bounded pool and snapshot fence. */
     private class ReadDatabasePool(databaseFile: File, private val onPartialCloseFailure: (() -> Unit)? = null) {
+        private data class OpenFileIdentity(val device: Long, val inode: Long)
+        private fun fileIdentity(file: File): OpenFileIdentity {
+            val value = android.system.Os.lstat(file.absolutePath)
+            check(android.system.OsConstants.S_ISREG(value.st_mode)) { "read_pool_file_invalid" }
+            return OpenFileIdentity(value.st_dev, value.st_ino)
+        }
+        // Runtime metadata only. A detached old pool must never attest a newly replaced file.
+        private val openedIdentity = fileIdentity(databaseFile)
+        fun requireDoctorIdentity(file: File) {
+            val current = try { fileIdentity(file) }
+            catch (failure: android.system.ErrnoException) {
+                if (failure.errno == android.system.OsConstants.ENOENT)
+                    throw com.jarvys.agent.MemoryDoctorUnavailable("source_changed")
+                throw failure
+            }
+            if (current != openedIdentity) throw com.jarvys.agent.MemoryDoctorUnavailable("source_changed")
+        }
         private val all = mutableListOf<SQLiteConnection>()
         private val lock = java.lang.Object()
         private val available = ArrayDeque<SQLiteConnection>()
@@ -840,6 +911,7 @@ internal object DatabaseTriggers {
                         verifyPragma(database, "journal_mode", "wal")
                         verifyPragma(database, "query_only", "1")
                         verifyPragma(database, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
+                        check(fileIdentity(databaseFile) == openedIdentity) { "read_pool_file_changed" }
                         all += database
                         available.addLast(database)
                     } catch (error: Throwable) {

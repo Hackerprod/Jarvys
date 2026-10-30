@@ -1739,4 +1739,27 @@ Fuentes retiradas confirmadas:
     <string name="memory_selftest_adapter">Adaptación: %1$s · Proyecto sintético: %2$s · Modo de sesión: %3$s · Almacén personal comprobado: %4$s</string>
     <string name="memory_selftest_scenario">%1$s · %2$s · Aprobado: %3$s · %4$d ms</string>
     <string name="memory_selftest_cancel">Cancelar selftest</string>
+
+    <string name="memory_doctor_action">Observar estado de memoria</string>
+    <string name="memory_doctor_title">Diagnóstico de memoria de solo lectura</string>
+    <string name="memory_doctor_explanation">Observa solo metadatos de un almacén ya abierto y autorizado. No abre, crea, repara, exporta ni envía datos de memoria. Abrir este diálogo solo carga opciones autorizadas; selecciona y empieza explícitamente. Memoria OFF permanece OFF.</string>
+    <string name="memory_doctor_all_projects">Agregado autorizado (no global)</string>
+    <string name="memory_doctor_choices_loading">Leyendo opciones autorizadas…</string>
+    <string name="memory_doctor_choices_failed">Las opciones autorizadas no están disponibles. No se infiere un almacén vacío ni sano.</string>
+    <string name="memory_doctor_choices_reload">Recargar opciones autorizadas</string>
+    <string name="memory_doctor_all_checks">Todas las comprobaciones registradas</string>
+    <string name="memory_doctor_selection">Ámbito: %1$s · Comprobación: %2$s</string>
+    <string name="memory_doctor_start">Ejecutar observación de solo lectura</string>
+    <string name="memory_doctor_busy">La observación está en curso o cancelándose. Espera a la liberación física de recursos antes de empezar otra solicitud. Cambiar opciones descarta este resultado y no inicia otra observación.</string>
+    <string name="memory_doctor_cancelled">Observación cancelada; no se confirma ningún informe sano.</string>
+    <string name="memory_doctor_failed">La observación falló. No hay un informe evaluado completo; no se reutilizan resultados anteriores ni parciales.</string>
+    <string name="memory_doctor_report">Estado: %1$s · Ámbito: %2$s · Cobertura completa: %3$s</string>
+    <string name="memory_doctor_coverage_notice">Cobertura y evaluación son distintas. Los dominios no aplicables, no disponibles, parciales o pendientes no son comprobaciones sanas. Esto no certifica la integridad total.</string>
+    <string name="memory_doctor_evaluations">Seleccionadas: %1$d · Evaluadas OK: %2$d · Avisos: %3$d · Bloqueadas: %4$d · Errores: %5$d</string>
+    <string name="memory_doctor_coverages">Cobertura — completa: %1$d · parcial: %2$d · no aplicable: %3$d · no disponible: %4$d · dominio pendiente: %5$d</string>
+    <string name="memory_doctor_check_result">Evaluación: %1$s · Cobertura: %2$s</string>
+    <string name="memory_doctor_not_evaluated">No evaluada</string>
+    <string name="memory_doctor_next_step">Solo orientación: %1$s</string>
+    <string name="memory_doctor_confirmation">Confirmación requerida por la orientación: %1$s. Esto no concede permiso ni ejecuta reparación.</string>
+    <string name="memory_doctor_cancel">Cancelar observación</string>
 </resources>

@@ -89,6 +89,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
     var showMemorySelftest by remember { mutableStateOf(false) }
+    var showMemoryDoctor by remember { mutableStateOf(false) }
     var showPendingRelations by remember { mutableStateOf(false) }
     var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
@@ -172,6 +173,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryDoctor = true },
+                        modifier = Modifier.testTag("memory-doctor-open")) { Text(stringResource(R.string.memory_doctor_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySessions = true },
                         modifier = Modifier.testTag("memory-sessions-open")) { Text(stringResource(R.string.memory_sessions_action)) }
@@ -316,6 +320,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
     if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
+    if (showMemoryDoctor) MemoryDoctorDialog { showMemoryDoctor = false }
 
     if (showProjectMemories) ProjectMemoryDeleteDialog(
         onClose = { showProjectMemories = false },
@@ -565,6 +570,145 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
         },
         dismissButton = { TextButton(enabled = !mutationPending, onClick = { if (!mutationPending) onClose() }, modifier = Modifier.testTag("memory-inspector-close")) { Text(stringResource(R.string.memory_inspector_close)) } },
     )
+}
+
+/** Explicit observation only. Neither choices nor execution may construct a user store or repair it. */
+@Composable
+private fun MemoryDoctorDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val initialized = remember(context) {
+        try { Pair<com.jarvys.agent.MemoryDoctorController?, String?>(com.jarvys.agent.MemoryDoctorController.get(context), null) }
+        catch (_: com.jarvys.agent.MemoryDoctorUnavailable) { Pair(null, "unavailable") }
+        catch (_: Exception) { Pair(null, "failed") }
+    }
+    val controller = initialized.first
+    if (controller == null) {
+        AlertDialog(onDismissRequest = onClose, title = { Text(stringResource(R.string.memory_doctor_title)) }, text = {
+            Column(Modifier.testTag("memory-doctor-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.memory_doctor_explanation))
+                Text(stringResource(if (initialized.second == "unavailable") R.string.memory_doctor_choices_failed else R.string.memory_doctor_failed), modifier = Modifier.testTag("memory-doctor-init-error"))
+                Text(stringResource(R.string.memory_doctor_selection, stringResource(R.string.memory_doctor_all_projects), stringResource(R.string.memory_doctor_all_checks)))
+                TextButton(enabled = false, onClick = {}, modifier = Modifier.testTag("memory-doctor-start")) { Text(stringResource(R.string.memory_doctor_start)) }
+            }
+        }, confirmButton = { TextButton(onClick = onClose, modifier = Modifier.testTag("memory-doctor-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+        return
+    }
+    val scope = rememberCoroutineScope()
+    var project by remember { mutableStateOf<String?>(null) }
+    var check by remember { mutableStateOf<String?>(null) }
+    var choices by remember { mutableStateOf<List<String>?>(null) }
+    var choicesLoading by remember { mutableStateOf(false) }
+    var choicesFailed by remember { mutableStateOf(false) }
+    var choicesUnavailable by remember { mutableStateOf(false) }
+    var choicesToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var choicesJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var report by remember { mutableStateOf<com.jarvys.agent.MemoryDoctorReport?>(null) }
+    var requestId by remember { mutableStateOf(0L) }
+    var pending by remember { mutableStateOf(false) }
+    var observedOperation by remember { mutableStateOf(controller.activeOperation()) }
+    var ownToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var ownJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    fun invalidate() { requestId++; ownToken?.cancel(); report = null; failure = null }
+    fun close() { invalidate(); ownJob?.cancel(); choicesToken?.cancel(); choicesJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { ownToken?.cancel(); ownJob?.cancel(); choicesToken?.cancel(); choicesJob?.cancel() } }
+    fun loadChoices() {
+        if (choicesLoading) return
+        invalidate(); choices = null; choicesFailed = false; choicesUnavailable = false; choicesLoading = true
+        val token = CancellationToken.cancellable(); choicesToken = token
+        choicesJob = scope.launch {
+            try {
+                val received = withContext(Dispatchers.IO) { controller.projects(token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                choices = received
+                if (project != null && project !in received) project = null
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && choicesToken === token) { choices = null; report = null; failure = "cancelled" }
+            }
+            catch (_: com.jarvys.agent.MemoryDoctorUnavailable) { coroutineContext.ensureActive(); project = null; choicesUnavailable = true }
+            catch (_: Exception) { coroutineContext.ensureActive(); choicesFailed = true }
+            finally { if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && choicesToken === token) { choicesLoading = false; choicesToken = null; choicesJob = null } }
+        }
+    }
+    fun start() {
+        if (pending || controller.isRunning() || (choices == null && !choicesUnavailable) || choicesLoading || choicesFailed) return
+        val options = com.jarvys.agent.MemoryDoctorOptions(project, check)
+        val captured = ++requestId
+        val token = CancellationToken.cancellable()
+        report = null; failure = null; ownToken = token; pending = true
+        ownJob = scope.launch {
+            try {
+                val received = withContext(Dispatchers.IO) { controller.execute(options, token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) report = received
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && captured == requestId) failure = "cancelled"
+            } catch (_: Exception) {
+                coroutineContext.ensureActive()
+                if (captured == requestId) { report = null; failure = "failed" }
+            } finally {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && ownToken === token) {
+                    pending = false; ownToken = null; ownJob = null; observedOperation = controller.activeOperation()
+                }
+            }
+        }
+    }
+    val busy = pending || observedOperation != null
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_doctor_title)) }, text = {
+        LaunchedEffect(Unit) { loadChoices() }
+        LaunchedEffect(controller) { while (true) { observedOperation = controller.activeOperation(); kotlinx.coroutines.delay(100) } }
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-doctor-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_doctor_explanation))
+                TextButton(enabled = choices != null || choicesUnavailable, onClick = { if (project != null) { invalidate(); project = null } }, modifier = Modifier.testTag("memory-doctor-project-all")) {
+                    Text((if (project == null) "✓ " else "") + stringResource(R.string.memory_doctor_all_projects))
+                }
+            }
+            items(choices.orEmpty(), key = { "project-$it" }) { selected ->
+                TextButton(onClick = { if (project != selected) { invalidate(); project = selected } }, modifier = Modifier.testTag("memory-doctor-project-$selected")) { Text((if (project == selected) "✓ " else "") + selected) }
+            }
+            item {
+                if (choicesLoading) Text(stringResource(R.string.memory_doctor_choices_loading), modifier = Modifier.testTag("memory-doctor-choices-loading"))
+                if (choicesFailed || choicesUnavailable) Text(stringResource(R.string.memory_doctor_choices_failed), modifier = Modifier.testTag("memory-doctor-choices-failed"))
+                TextButton(enabled = !busy && !choicesLoading, onClick = { loadChoices() }, modifier = Modifier.testTag("memory-doctor-choices-reload")) { Text(stringResource(R.string.memory_doctor_choices_reload)) }
+                TextButton(onClick = { if (check != null) { invalidate(); check = null } }, modifier = Modifier.testTag("memory-doctor-check-all")) { Text((if (check == null) "✓ " else "") + stringResource(R.string.memory_doctor_all_checks)) }
+            }
+            items(com.jarvys.agent.MemoryDoctorChecks.ids, key = { "option-$it" }) { selected ->
+                TextButton(onClick = { if (check != selected) { invalidate(); check = selected } }, modifier = Modifier.testTag("memory-doctor-check-$selected")) { Text((if (check == selected) "✓ " else "") + selected) }
+            }
+            item {
+                Text(stringResource(R.string.memory_doctor_selection, project ?: stringResource(R.string.memory_doctor_all_projects), check ?: stringResource(R.string.memory_doctor_all_checks)), modifier = Modifier.testTag("memory-doctor-selection"))
+                TextButton(enabled = !busy && (choices != null || choicesUnavailable) && !choicesLoading && !choicesFailed, onClick = { start() }, modifier = Modifier.testTag("memory-doctor-start")) { Text(stringResource(R.string.memory_doctor_start)) }
+                if (busy) Text(stringResource(R.string.memory_doctor_busy), modifier = Modifier.testTag("memory-doctor-busy"))
+                failure?.let { Text(stringResource(if (it == "cancelled") R.string.memory_doctor_cancelled else R.string.memory_doctor_failed), modifier = Modifier.testTag("memory-doctor-error")) }
+            }
+            report?.let { received ->
+                item {
+                    Text(stringResource(R.string.memory_doctor_report, received.status, received.selectedProject ?: stringResource(R.string.memory_doctor_all_projects), received.coverageComplete.toString()), modifier = Modifier.testTag("memory-doctor-report"))
+                    Text(stringResource(R.string.memory_doctor_coverage_notice))
+                    Text(stringResource(R.string.memory_doctor_evaluations, received.summary.total, received.summary.ok, received.summary.warnings, received.summary.blocked, received.summary.errors), modifier = Modifier.testTag("memory-doctor-evaluations"))
+                    Text(stringResource(R.string.memory_doctor_coverages, received.summary.complete, received.summary.partial, received.summary.notApplicable, received.summary.unavailable, received.summary.domainPending), modifier = Modifier.testTag("memory-doctor-coverages"))
+                }
+                items(received.checks, key = { it.checkId }) { item ->
+                    Column(Modifier.testTag("memory-doctor-result-${item.checkId}"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(item.checkId)
+                        Text(stringResource(R.string.memory_doctor_check_result, item.result ?: stringResource(R.string.memory_doctor_not_evaluated), item.coverage))
+                        Text(item.reasonCode); Text(item.message)
+                        item.evidence.forEach { (key, value) -> Text("$key: $value") }
+                        item.findings.forEachIndexed { index, finding ->
+                            Column(Modifier.testTag("memory-doctor-finding-${item.checkId}-$index")) {
+                                finding.forEach { (key, value) -> Text("$key: $value") }
+                            }
+                        }
+                        Text(stringResource(R.string.memory_doctor_next_step, item.safeNextStep))
+                        Text(stringResource(R.string.memory_doctor_confirmation, item.requiresConfirmation.toString()))
+                    }
+                }
+            }
+        }
+    }, confirmButton = {
+        if (busy) TextButton(onClick = { if (ownToken != null) ownToken?.cancel() else observedOperation?.let { controller.cancelIfCurrent(it) } }, modifier = Modifier.testTag("memory-doctor-cancel")) { Text(stringResource(R.string.memory_doctor_cancel)) }
+    }, dismissButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-doctor-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
 }
 
 /** Local synthetic selftest only; this dialog never opens a user Bridge or provider configuration. */

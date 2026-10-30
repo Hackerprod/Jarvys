@@ -1,3 +1,11 @@
+## Memoria P5-C — Doctor manual observacional — checkpoint 30-10-2026
+
+**Candidate1: Full126/0 y Play126/0; quince clases por sabor, cero errores/skips; doble PASS acotado.** Focal9 separado; código `8c77ee51aad9228078586a63b88170386d5b3591`. Diez checks con cobertura explícita, sólo metadata autorizada de stores existentes; schema sin cambio.
+
+[Reporte y adaptaciones](docs/continue/engram-port/P5-C-doctor-report.md) · [Resultados exactos](docs/continue/engram-port/P5-C-doctor-results.json).
+
+Frío no se abre; sin bootstrap/DDL/checkpoint/writer fallback, sin health0 para sync ausente o datos sin dueño. Identidad del pool abierto y owners actuales; cancelación espera unwind físico. Product compile1 FullFAIL/PlayNOTRUN conservado; compile2 e integral1 verdes, sin testFAIL ejecutado. Próximo: **Doctor nativo bajo contrato separado**, no repair, P5 global ni dispositivo físico.
+
 ## Memoria P5-B — selftest local aislado — checkpoint 30-10-2026
 
 **Candidate2: Full: 110 pruebas / Play: 110 pruebas; catorce clases por sabor, cero fallos/errores/skips; doble PASS acotado.** Focal9 separado; código `20af58236bd1a5687d51ba9071a0e0785e94548c`. Escenarios sintéticos reales quick/full en Room temporal, sin tocar configuración/store personal dentro del runner ni usar modelo/red.

@@ -1738,4 +1738,27 @@ Confirmed retired sources:
     <string name="memory_selftest_adapter">Adapter: %1$s · Synthetic project: %2$s · Session mode: %3$s · Personal store checked: %4$s</string>
     <string name="memory_selftest_scenario">%1$s · %2$s · Passed: %3$s · %4$d ms</string>
     <string name="memory_selftest_cancel">Cancel selftest</string>
+
+    <string name="memory_doctor_action">Observe memory health</string>
+    <string name="memory_doctor_title">Read-only memory doctor</string>
+    <string name="memory_doctor_explanation">Observes metadata only in an already open, authorized store. It does not open, create, repair, export, or send memory data. Opening this dialog loads only authorized choices; select options and start explicitly. Memory OFF remains OFF.</string>
+    <string name="memory_doctor_all_projects">Authorized aggregate (not global)</string>
+    <string name="memory_doctor_choices_loading">Reading authorized choices…</string>
+    <string name="memory_doctor_choices_failed">Authorized choices are unavailable. No empty or healthy store is inferred.</string>
+    <string name="memory_doctor_choices_reload">Reload authorized choices</string>
+    <string name="memory_doctor_all_checks">All registered checks</string>
+    <string name="memory_doctor_selection">Scope: %1$s · Check: %2$s</string>
+    <string name="memory_doctor_start">Run read-only observation</string>
+    <string name="memory_doctor_busy">Observation is running or cancelling. Wait for physical resource release before starting another request. Changing options discards this result and does not start another observation.</string>
+    <string name="memory_doctor_cancelled">Observation cancelled; no healthy report is confirmed.</string>
+    <string name="memory_doctor_failed">Observation failed. No complete evaluated report is available; no prior or partial result is reused.</string>
+    <string name="memory_doctor_report">Status: %1$s · Scope: %2$s · Complete coverage: %3$s</string>
+    <string name="memory_doctor_coverage_notice">Coverage and evaluation are different. Not applicable, unavailable, partial, or pending domains are not healthy checks. This is not a complete integrity certificate.</string>
+    <string name="memory_doctor_evaluations">Selected: %1$d · Evaluated OK: %2$d · Warnings: %3$d · Blocked: %4$d · Errors: %5$d</string>
+    <string name="memory_doctor_coverages">Coverage — complete: %1$d · partial: %2$d · not applicable: %3$d · unavailable: %4$d · domain pending: %5$d</string>
+    <string name="memory_doctor_check_result">Evaluation: %1$s · Coverage: %2$s</string>
+    <string name="memory_doctor_not_evaluated">Not evaluated</string>
+    <string name="memory_doctor_next_step">Guidance only: %1$s</string>
+    <string name="memory_doctor_confirmation">Confirmation required by guidance: %1$s. This is not permission or a repair action.</string>
+    <string name="memory_doctor_cancel">Cancel observation</string>
 </resources>

@@ -119,6 +119,133 @@ class WorkspaceRegistry(context: Context) : Closeable {
             if (missing.errno == android.system.OsConstants.ENOENT) null else throw missing
         }
 
+        private fun workspace(c: Cursor): WorkspaceRecord = decode("workspace") {
+            val id = c.string("workspace_id").also(::workspaceId)
+            val title = c.string("title").also { boundedText(it, "title", 640, 160); require(it == it.trim()) }
+            token(c.string("creation_key"), "creation_key")
+            val session = c.string("execution_session_id")
+            val owner = c.string("owner_central_session_id")
+            require(session == WorkspaceIdentity.executionSessionId(id) && owner == WorkspaceIdentity.CENTRAL_SESSION)
+            WorkspaceRecord(id, title, session, owner, c.positive("created_at"))
+        }
+
+        private fun workspaceId(value: String) { WorkspaceIdentity.requireWorkspaceId(value); uuid(value, "workspaceId") }
+        private fun uuid(value: String, label: String) {
+            require(value.length == 36 && UUID.fromString(value).toString() == value) { "$label must be a canonical UUID" }
+        }
+        private fun token(value: String, label: String) { require(TOKEN.matches(value)) { "$label must be a bounded safe token" } }
+        private fun digest(value: String) { require(DIGEST.matches(value)) { "snapshotDigest must be lowercase SHA-256 hex" } }
+        private fun page(limit: Int) { require(limit in 1..MAX_PAGE) { "Page limit must be 1..$MAX_PAGE" } }
+        private fun revision(value: Long) { require(value > 0L) { "Revision must be positive" } }
+        private fun increment(value: Long): Long { require(value in 1 until Long.MAX_VALUE) { "Revision exhausted" }; return value + 1 }
+        private fun checkRevision(actual: Long, expected: Long) {
+            if (actual != expected) throw StaleWorkspaceRevisionException("Revision changed: expected $expected, found $actual")
+        }
+        private fun boundedText(value: String, label: String, maxBytes: Int, maxChars: Int = maxBytes, allowEmpty: Boolean = false) {
+            require((allowEmpty || value.isNotBlank()) && value.length <= maxChars &&
+                value.toByteArray(StandardCharsets.UTF_8).size <= maxBytes) { "$label is empty or too large" }
+            var index = 0
+            while (index < value.length) {
+                val ch = value[index]
+                require(ch != '\u0000') { "$label contains NUL" }
+                if (Character.isHighSurrogate(ch)) {
+                    require(index + 1 < value.length && Character.isLowSurrogate(value[index + 1])) { "$label contains malformed Unicode" }
+                    index++
+                } else require(!Character.isLowSurrogate(ch)) { "$label contains malformed Unicode" }
+                index++
+            }
+        }
+        private fun missionId(workspaceId: String, requestId: String): String = UUID.nameUUIDFromBytes(
+            ("jarvys-workspace-mission-v1\u0000$workspaceId\u0000$requestId").toByteArray(StandardCharsets.UTF_8)).toString()
+        private fun now(): Long = System.currentTimeMillis().coerceAtLeast(1L)
+        private fun conflict(message: String): Nothing = throw WorkspaceIdempotencyConflictException(message)
+        private fun corrupt(message: String): Nothing = throw WorkspaceRegistryCorruptException(message)
+        private fun <T> decode(table: String, block: () -> T): T = try { block() } catch (error: Exception) {
+            throw WorkspaceRegistryCorruptException("Invalid durable $table row; no recovery or replay was attempted", error)
+        }
+
+        private fun Cursor.string(column: String): String {
+            val index = getColumnIndexOrThrow(column)
+            require(getType(index) == Cursor.FIELD_TYPE_STRING) { "$column must be TEXT" }
+            return getString(index)
+        }
+        private fun Cursor.optionalString(column: String): String? = if (isNull(getColumnIndexOrThrow(column))) null else string(column)
+        private fun Cursor.positive(column: String): Long {
+            val index = getColumnIndexOrThrow(column)
+            require(getType(index) == Cursor.FIELD_TYPE_INTEGER) { "$column must be INTEGER" }
+            return getLong(index).also { require(it > 0) { "$column must be positive" } }
+        }
+        private fun Cursor.optionalPositive(column: String): Long? = if (isNull(getColumnIndexOrThrow(column))) null else positive(column)
+
+
+        /** Opens only an existing validated registry file; no helper, bootstrap or schema construction. */
+        internal fun <T> observeForDoctor(context: Context, token: com.jarvys.agent.CancellationToken,
+            block: (DoctorReader) -> T): T {
+            token.throwIfCancelled()
+            val directories = com.jarvys.agent.MemoryDoctorPaths.registryDirectories(context)
+            val identity = com.jarvys.agent.MemoryDoctorFileIdentity.capture(
+                java.io.File(directories.last(), DATABASE_NAME), directories, "registry_missing")
+            val connection = androidx.sqlite.driver.bundled.BundledSQLiteDriver().open(identity.file.absolutePath,
+                androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY or androidx.sqlite.driver.bundled.SQLITE_OPEN_FULLMUTEX)
+            var prior: Throwable? = null
+            try {
+                val reader = DoctorReader(connection, identity, token)
+                token.throwIfCancelled()
+                return block(reader)
+            } catch (failure: Throwable) { prior = failure; throw failure }
+            finally {
+                try { connection.close() } catch (close: Throwable) {
+                    throw com.jarvys.agent.MemoryDoctorCloseUnconfirmed(close).also { prior?.let(it::addSuppressed) }
+                }
+            }
+        }
+
+        internal class DoctorReader(private val connection: androidx.sqlite.SQLiteConnection,
+            private val identity: com.jarvys.agent.MemoryDoctorFileIdentity,
+            private val token: com.jarvys.agent.CancellationToken) {
+            private val sql = com.jarvys.agent.chatdb.DriverChatSqlDatabase(connection)
+            fun requireCurrent() { token.throwIfCancelled(); identity.requireCurrent() }
+            fun dataVersion(): Long = sql.query("PRAGMA data_version").use { c ->
+                check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER) { "doctor_registry_version_invalid" }
+                c.getLong(0)
+            }
+            fun validateSchema() {
+                requireCurrent()
+                sql.query("PRAGMA user_version").use { c ->
+                    check(c.moveToFirst() && c.getType(0) == Cursor.FIELD_TYPE_INTEGER && c.getLong(0) == 1L) { "doctor_registry_schema_invalid" }
+                }
+                val names = listOf("workspace", "assignment", "assignment_request", "user_control", "control_workspace", "control_active", "central_read_receipt")
+                val tables = listOf("workspace", "assignment", "assignment", "user_control", "user_control", "user_control", "central_read_receipt")
+                val expected = CREATE_SQL.mapIndexed { index, statement ->
+                    listOf(if (statement.startsWith("CREATE INDEX")) "index" else "table", names[index], tables[index], statement)
+                }.sortedWith(compareBy<List<String>> { it[0] }.thenBy { it[1] })
+                val actual = sql.query("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").use { c ->
+                    buildList { while (c.moveToNext()) {
+                        val name = c.getString(1)
+                        if (!name.startsWith("sqlite_") && name != "android_metadata") {
+                            add((0..3).map { column ->
+                                check(c.getType(column) == Cursor.FIELD_TYPE_STRING) { "doctor_registry_schema_invalid" }
+                                c.getString(column)
+                            })
+                        }
+                    } }
+                }
+                check(actual == expected) { "doctor_registry_schema_invalid" }
+            }
+            fun owners(): Set<String> {
+                requireCurrent()
+                val projects = linkedSetOf(WorkspaceIdentity.CENTRAL_SESSION)
+                sql.query("SELECT workspace_id,creation_key,title,execution_session_id,owner_central_session_id,created_at FROM workspace ORDER BY workspace_id").use { c ->
+                    while (c.moveToNext()) {
+                        token.throwIfCancelled()
+                        val record = workspace(c) // Exactly the normal full durable decoder, no weaker accepted set.
+                        check(projects.add(com.jarvys.agent.chatdb.MemoryNamespace.normalizeProject(record.executionSessionId))) { "memory_project_collision" }
+                    }
+                }
+                return Collections.unmodifiableSet(projects)
+            }
+        }
+
         private fun incompatible(): Nothing = throw com.jarvys.agent.CleanInstallRequiredException()
     }
 
@@ -544,16 +671,6 @@ class WorkspaceRegistry(context: Context) : Closeable {
         one(db, "central_read_receipt", "workspace_id=? AND assignment_id=? AND snapshot_digest=?",
             arrayOf(workspaceId, assignmentId, hash), ::readReceipt)
 
-    private fun workspace(c: Cursor): WorkspaceRecord = decode("workspace") {
-        val id = c.string("workspace_id").also(::workspaceId)
-        val title = c.string("title").also { boundedText(it, "title", 640, 160); require(it == it.trim()) }
-        token(c.string("creation_key"), "creation_key")
-        val session = c.string("execution_session_id")
-        val owner = c.string("owner_central_session_id")
-        require(session == WorkspaceIdentity.executionSessionId(id) && owner == WorkspaceIdentity.CENTRAL_SESSION)
-        WorkspaceRecord(id, title, session, owner, c.positive("created_at"))
-    }
-
     private fun assignment(c: Cursor): WorkspaceAssignment = decode("assignment") {
         val workspaceId = c.string("workspace_id").also(::workspaceId)
         val requestId = c.string("request_id").also { token(it, "requestId") }
@@ -638,54 +755,6 @@ class WorkspaceRegistry(context: Context) : Closeable {
         require(tools == canonicalTools(tools)) { "Noncanonical tools" }
         return tools
     }
-
-    private fun workspaceId(value: String) { WorkspaceIdentity.requireWorkspaceId(value); uuid(value, "workspaceId") }
-    private fun uuid(value: String, label: String) {
-        require(value.length == 36 && UUID.fromString(value).toString() == value) { "$label must be a canonical UUID" }
-    }
-    private fun token(value: String, label: String) { require(TOKEN.matches(value)) { "$label must be a bounded safe token" } }
-    private fun digest(value: String) { require(DIGEST.matches(value)) { "snapshotDigest must be lowercase SHA-256 hex" } }
-    private fun page(limit: Int) { require(limit in 1..MAX_PAGE) { "Page limit must be 1..$MAX_PAGE" } }
-    private fun revision(value: Long) { require(value > 0L) { "Revision must be positive" } }
-    private fun increment(value: Long): Long { require(value in 1 until Long.MAX_VALUE) { "Revision exhausted" }; return value + 1 }
-    private fun checkRevision(actual: Long, expected: Long) {
-        if (actual != expected) throw StaleWorkspaceRevisionException("Revision changed: expected $expected, found $actual")
-    }
-    private fun boundedText(value: String, label: String, maxBytes: Int, maxChars: Int = maxBytes, allowEmpty: Boolean = false) {
-        require((allowEmpty || value.isNotBlank()) && value.length <= maxChars &&
-            value.toByteArray(StandardCharsets.UTF_8).size <= maxBytes) { "$label is empty or too large" }
-        var index = 0
-        while (index < value.length) {
-            val ch = value[index]
-            require(ch != '\u0000') { "$label contains NUL" }
-            if (Character.isHighSurrogate(ch)) {
-                require(index + 1 < value.length && Character.isLowSurrogate(value[index + 1])) { "$label contains malformed Unicode" }
-                index++
-            } else require(!Character.isLowSurrogate(ch)) { "$label contains malformed Unicode" }
-            index++
-        }
-    }
-    private fun missionId(workspaceId: String, requestId: String): String = UUID.nameUUIDFromBytes(
-        ("jarvys-workspace-mission-v1\u0000$workspaceId\u0000$requestId").toByteArray(StandardCharsets.UTF_8)).toString()
-    private fun now(): Long = System.currentTimeMillis().coerceAtLeast(1L)
-    private fun conflict(message: String): Nothing = throw WorkspaceIdempotencyConflictException(message)
-    private fun corrupt(message: String): Nothing = throw WorkspaceRegistryCorruptException(message)
-    private fun <T> decode(table: String, block: () -> T): T = try { block() } catch (error: Exception) {
-        throw WorkspaceRegistryCorruptException("Invalid durable $table row; no recovery or replay was attempted", error)
-    }
-
-    private fun Cursor.string(column: String): String {
-        val index = getColumnIndexOrThrow(column)
-        require(getType(index) == Cursor.FIELD_TYPE_STRING) { "$column must be TEXT" }
-        return getString(index)
-    }
-    private fun Cursor.optionalString(column: String): String? = if (isNull(getColumnIndexOrThrow(column))) null else string(column)
-    private fun Cursor.positive(column: String): Long {
-        val index = getColumnIndexOrThrow(column)
-        require(getType(index) == Cursor.FIELD_TYPE_INTEGER) { "$column must be INTEGER" }
-        return getLong(index).also { require(it > 0) { "$column must be positive" } }
-    }
-    private fun Cursor.optionalPositive(column: String): Long? = if (isNull(getColumnIndexOrThrow(column))) null else positive(column)
 
     private fun values(vararg entries: Pair<String, Any?>): ContentValues = ContentValues().apply {
         for ((key, value) in entries) when (value) {
