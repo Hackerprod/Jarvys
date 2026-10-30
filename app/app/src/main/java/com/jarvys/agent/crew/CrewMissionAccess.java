@@ -10,7 +10,7 @@ public enum CrewMissionAccess {
     public final String value;
     private static final List<String> READ_ONLY_TOOLS = Arrays.asList(
             "ls", "read", "coding_grep", "coding_glob", "read_skill", "project_environment_status",
-            "board_read", "msg_send", "ask_chief", "report_done");
+            "board_read", "msg_send", "ask_chief", "report_done", "memory_search", "memory_get");
 
     CrewMissionAccess(String value) { this.value = value; }
 

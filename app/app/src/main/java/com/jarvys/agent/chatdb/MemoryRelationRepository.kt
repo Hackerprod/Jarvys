@@ -78,7 +78,7 @@ internal class MemoryRelationRepository(private val database:JarvysChatDatabase,
         val query="SELECT r.relation_id,r.source_id,r.target_id,CAST(s.title AS BLOB),CAST(t.title AS BLOB),s.id,s.deleted_at,t.id,t.deleted_at,r.relation,r.status,r.created_at,r.reason,r.evidence,r.confidence,r.marked_by_actor,r.marked_by_kind,r.marked_by_model,r.memory_session_id,r.updated_at " +
             "FROM memory_relations r LEFT JOIN memory_entries s ON s.id=r.source_id LEFT JOIN memory_entries t ON t.id=r.target_id " +
             "WHERE ${if(pending) "r.status='pending'" else if(includeOrphan) "1" else "r.status!='orphaned'"} AND (s.id IS NOT NULL OR t.id IS NOT NULL) " +
-            "AND (s.id IS NULL OR $a) AND (t.id IS NULL OR $b)$selected ${if(relationId==null) "" else "AND r.relation_id=?"} ORDER BY r.created_at DESC,r.id DESC"
+            "${if(namespace.requiresCompleteEndpointAttribution()) "AND s.id IS NOT NULL AND t.id IS NOT NULL " else ""}AND (s.id IS NULL OR $a) AND (t.id IS NULL OR $b)$selected ${if(relationId==null) "" else "AND r.relation_id=?"} ORDER BY r.created_at DESC,r.id DESC"
         return sql.query(query,(aa+ba+(ids.orEmpty())+(ids.orEmpty())+listOfNotNull(relationId)).toTypedArray()).use { c -> buildList {
             while(c.moveToNext()) {
                 val sm=c.isNull(5)||!c.isNull(6); val tm=c.isNull(7)||!c.isNull(8)

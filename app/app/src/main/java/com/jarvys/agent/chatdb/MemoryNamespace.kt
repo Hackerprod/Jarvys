@@ -12,6 +12,7 @@ class MemoryNamespace private constructor(
     private val authorized: Set<String>,
     private val projectFilter: String?,
     private val scopeFilter: String?,
+    private val workspaceOnly: Boolean = false,
 ) {
     internal fun clause(alias: String = ""): Pair<String,List<Any?>> {
         val p=if(alias.isEmpty()) "" else "$alias."
@@ -29,17 +30,23 @@ class MemoryNamespace private constructor(
     internal fun owns(project:String) = project in authorized
     internal fun selectWrite(requestedProject:String?, rawScope:String?):MemoryNamespace {
         require(requestedProject == null || trimSpace(requestedProject).isNotEmpty()) { "memory_project_empty" }
-        val selected = requestedProject?.let(::normalizeProject) ?: CENTRAL
+        val selected = requestedProject?.let(::normalizeProject) ?: if(workspaceOnly) project else CENTRAL
         require(selected in authorized) { "memory_project_unknown" }
         val scope = normalizeScope(rawScope)
-        return MemoryNamespace(selected,scope,authorized,selected,scope)
+        require(!workspaceOnly || rawScope == null || rawScope == "project") { "workspace_memory_scope_denied" }
+        return MemoryNamespace(selected,scope,authorized,selected,scope,workspaceOnly)
     }
+    internal fun requiresCompleteEndpointAttribution() = workspaceOnly
     internal fun requireOwner(project:String) {require(project in authorized){"memory_owner_denied"}}
-    internal fun partition() = MemoryNamespace(project,scope,authorized,project,scope)
-    internal fun projectOnly() = MemoryNamespace(project,scope,authorized,projectFilter,null)
-    internal fun ids() = MemoryNamespace(project,scope,authorized,null,null)
+    internal fun partition() = MemoryNamespace(project,scope,authorized,project,scope,workspaceOnly)
+    internal fun projectOnly() = MemoryNamespace(project,scope,authorized,projectFilter,if(workspaceOnly) "project" else null,workspaceOnly)
+    internal fun ids() = MemoryNamespace(project,scope,authorized,null,if(workspaceOnly) "project" else null,workspaceOnly)
 
     companion object {
+        internal fun workspace(project: String): MemoryNamespace {
+            require(WorkspaceIdentity.isExecutionSession(project)) { "memory_owner_denied" }
+            return MemoryNamespace(project,"project",setOf(project),project,"project",true)
+        }
         const val CENTRAL = "jarvys-central"
         @JvmStatic fun central() = MemoryNamespace(CENTRAL,"project",setOf(CENTRAL),CENTRAL,"project")
         @JvmStatic fun centralRead() = MemoryNamespace(CENTRAL,"project",setOf(CENTRAL),CENTRAL,null)

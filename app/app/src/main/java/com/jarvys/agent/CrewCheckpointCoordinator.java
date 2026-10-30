@@ -46,7 +46,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
 
     @Override
     public boolean canPersist(CrewManager.Bot bot) {
-        return bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
+        return bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT
+                || WorkspaceMemoryTools.eligible(context, conversation, bot);
     }
 
     @Override
@@ -56,14 +57,23 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
 
     @Override
     public CrewCheckpointStore.ConfirmedSnapshot persistConfirmed(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
-        if (bot.role.profileVersion <= 0 || bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
-            return null;
-        }
+        if (!canPersist(bot)) return null;
         try {
-            if (bot.scopeIdentity().isEmpty()) {
+            boolean nativeTask = bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
+            if (nativeTask) {
+                String identity = "native-workspace:" + com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversation);
+                if (bot.scopeIdentity().isEmpty()) bot.setScopeIdentity(identity);
+                if (!identity.equals(bot.scopeIdentity())) throw new IllegalStateException("Native workspace identity changed");
+            } else if (bot.scopeIdentity().isEmpty()) {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
-            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("assignmentId", bot.assignmentId()).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id))
+            JSONObject role = nativeTask ? new JSONObject().put("id",bot.role.id).put("version",bot.role.profileVersion)
+                    .put("name",bot.role.name).put("description",bot.role.description).put("prompt",bot.role.missionPrompt)
+                    .put("skills",new JSONArray(bot.role.skillIds)).put("capabilities",new JSONArray(bot.role.tools))
+                    .put("workspaceMode",bot.role.workspaceMode.value)
+                    : new CrewProfile(bot.role.id,bot.role.profileVersion,bot.role.name,bot.role.description,
+                        bot.role.missionPrompt,bot.role.skillIds,bot.role.tools,bot.role.workspaceMode).toJson();
+            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("assignmentId", bot.assignmentId()).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", role).put("nativeWorkspaceCheckpoint", nativeTask).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id))
                     .put(CONVERSATION_DELIVERY_VERSION_FIELD, CONVERSATION_DELIVERY_VERSION)
                     .put(CONVERSATION_DELIVERY_RECEIPTS_FIELD, new JSONArray(bot.processedConversationMessageIds()));
             if (!bot.cycleId().isEmpty()) metadata.put("cycleId", bot.cycleId());
@@ -89,6 +99,15 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (!known.add(saved.botId)) continue;
             try {
                 JSONObject data = saved.metadata;
+                if (Boolean.TRUE.equals(data.opt("nativeWorkspaceCheckpoint"))) {
+                    JSONObject role = data.getJSONObject("role");
+                    CrewBotSnapshot nativeBot = new CrewBotSnapshot(saved.botId,role.getString("id"),role.getString("name"),
+                        data.getString("name"),role.getString("id"),data.getString("mission"),data.getString("status"),
+                        data.optString("error"),data.optString("result"),"",strings(role.getJSONArray("capabilities")),
+                        data.getLong("startedAtMillis"),data.getLong("finishedAtMillis"),false,"",false,"","",0L,historicalCycleId(data),null);
+                    missions.add(recoveredMission(data,nativeBot,saved.savedAtMs));
+                    continue;
+                }
                 CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
                 CrewBotSnapshot bot = new CrewBotSnapshot(saved.botId, profile.id, profile.name, data.getString("name"), profile.id, data.getString("mission"), data.getString("status"), data.optString("error"), data.optString("result"), "", profile.capabilities, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", "", 0L, historicalCycleId(data), null);
                 missions.add(recoveredMission(data, bot, saved.savedAtMs));
@@ -113,6 +132,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         if (!this.conversation.equals(data.getString("conversationId")) || !visible.id.equals(data.getString("botId")) || !mission.missionId.equals(data.getString("missionId")) || !CrewCheckpointStore.sanitizeText(visible.mission).equals(data.getString("mission"))) {
                             throw new IllegalStateException("Checkpoint identity does not match its mission");
                         }
+                        if (Boolean.TRUE.equals(data.opt("nativeWorkspaceCheckpoint")))
+                            throw new IllegalStateException("Native workspace checkpoint is historical; continue through a new bound assignment");
                         CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
                         if (profile.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
                             throw new IllegalStateException("Checkpoint workspace is not resumable");

@@ -75,7 +75,18 @@ internal class InteractionProtection(private val database: JarvysChatDatabase) {
             InteractionSourcePosition(it["sort_seq"]?.toLongOrNull() ?: return@let null,
                 it["sort_sub"]?.toIntOrNull() ?: return@let null, seq?.toLongOrNull() ?: return@let null)
         }
-        val messages = rows("messages")
+        // Match ConversationReader's timeline-only assistant-card rule. Membership is metadata,
+        // not invented user ownership; fingerprint it so a part-kind change invalidates the fence.
+        val missionCards = sql.query(
+            "SELECT message_id,ordinal,kind FROM message_parts WHERE conversation_id=? AND kind=? ORDER BY message_id,ordinal",
+            arrayOf(conversation,com.jarvys.agent.workspaces.MissionRef.PART_KIND),
+        ).use { c -> buildSet {
+            while(c.moveToNext()) {
+                add(c.getString(0))
+                evidence.put(JSONArray().put("mission_card_membership").put(c.getString(0)).put(c.getInt(1)).put(c.getString(2)))
+            }
+        } }
+        val messages = rows("messages").filterNot { it["role"] == "assistant" && it["message_id"] in missionCards }
         val groups = linkedMapOf<String,Group>()
         var unsafe = false
         for (row in messages.filter { it["role"] in setOf("user", "agent", "system") }) {

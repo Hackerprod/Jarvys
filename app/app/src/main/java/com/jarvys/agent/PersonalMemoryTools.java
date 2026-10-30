@@ -1043,38 +1043,7 @@ final class PersonalMemoryTools {
     }
 
     private JSONObject entryJson(PersonalMemoryHit hit) {
-      JSONObject item = new JSONObject();
-      put(item, "id", hit.getId()); put(item, "kind", hit.getKind()); put(item, "type", hit.getObservationType()); put(item, "layer", hit.getLayer());
-      put(item, "project", hit.getProject()); put(item, "scope", hit.getScope());
-      put(item, "pinned", hit.getPinned());
-      put(item,"superseded_by_id",hit.getSupersededById()==null?JSONObject.NULL:hit.getSupersededById());
-      put(item,"review_after",hit.getReviewAfter()==null?JSONObject.NULL:hit.getReviewAfter()); put(item,"state",hit.getReviewState());
-      put(item, "duplicate_count", hit.getDuplicateCount());
-      put(item, "last_seen_at", hit.getLastSeenAt() == null ? JSONObject.NULL : hit.getLastSeenAt());
-      put(item, "title", hit.getTitle() == null ? JSONObject.NULL : hit.getTitle()); put(item, "label", hit.getLabel()); putTopic(item, hit);
-      put(item, "date", hit.getEventAt() == null ? iso(hit.getUpdatedAt()) : iso(hit.getEventAt()));
-      put(item, "narration", hit.getNarration()); put(item, "evidence_count", hit.getEvidenceCount());
-      if (!hit.getLinks().isEmpty()) {
-        JSONArray links = new JSONArray();
-        for (PersonalMemoryLinkView link : hit.getLinks()) {
-          JSONObject entry = new JSONObject();
-          // "out" reads "this entry <relation> that one"; "in" is the reverse (superseded_by, ...).
-          put(entry, "relation", "in".equals(link.getDirection()) ? invert(link.getRelation()) : link.getRelation());
-          put(entry, "id", link.getId()); put(entry, "title", link.getTitle());
-          put(entry,"title_bytes_base64",link.getTitleBytesBase64()==null ? JSONObject.NULL : link.getTitleBytesBase64());
-          put(entry,"title_is_utf8",link.getTitleIsUtf8()==null ? JSONObject.NULL : link.getTitleIsUtf8());
-          links.put(entry);
-        }
-        put(item, "links", links);
-      }
-      if (!hit.getRelations().isEmpty()) {
-        JSONArray relations=new JSONArray();
-        for(com.jarvys.agent.chatdb.MemoryRelationView relation:hit.getRelations()) {
-          relations.put(relationJson(relation));
-        }
-        put(item,"relations",relations);
-      }
-      return item;
+      return com.jarvys.agent.chatdb.MemoryEntryJson.entry(hit);
     }
 
     /** The display may contain replacement characters; only the base64 metadata preserves raw identity. */

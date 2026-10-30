@@ -242,6 +242,40 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             repos.agentMemory.saveMemory(text, layer, category, importance, sourceRef, options, namespace)
         }
 
+    /** Host factory capture before model work; never derived from model project/source arguments. */
+    fun workspaceMemoryGeneration(ticket: MemoryWriteGate.Ticket, token: CancellationToken, currentPolicy: Runnable): String =
+        executeOnWorker { repos ->
+            MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, {
+                token.throwIfCancelled(); currentPolicy.run(); true
+            }, Callable { runBlocking { ConnectionProjectionRepository(repos.database).generation() } })
+        }
+
+    fun workspaceMemoryOperation(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        witness: com.jarvys.agent.CrewInvocationWitness, assignmentId: String, generation: String,
+        currentPolicy: Runnable, arguments: Map<String,Any?>, resultChars: Int): com.jarvys.agent.CoreToolResult {
+        check(LeasedConnectionElement.current()==null && RawReadConnectionElement.current()==null)
+        fun current() { token.throwIfCancelled(); currentPolicy.run(); witness.requireArguments(arguments) }
+        current()
+        val project=WorkspaceMemoryOperations.admit(applicationContext,witness,assignmentId)
+        val result=executeOnWorker { repos ->
+            MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{ current(); true },Callable {
+                runBlocking { WorkspaceMemoryOperations.execute(repos.database,repos.agentMemory,project,assignmentId,
+                    generation,witness,arguments,resultChars,::current) }
+            })
+        }
+        try {
+            current()
+            check(WorkspaceMemoryOperations.admit(applicationContext,witness,assignmentId)==project) { "workspace_memory_owner_changed" }
+            // Reads must not disclose a payload after an OFF/ON transition during the final registry check.
+            return MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket,{ current(); true },Callable { result })
+        } catch (unavailable: RuntimeException) {
+            if (result.persistenceEvidence != null) return com.jarvys.agent.CoreToolResult.persistedResultUnavailable(
+                "Workspace memory mutation committed, but its result is unavailable after authority changed. Do not blindly retry.",
+                "workspace_memory_mutation_committed; result_redacted")
+            throw unavailable
+        }
+    }
+
     /** Native save is keyed by its actual Central checkpoint, not an argument supplied by the model. */
     fun personalAgentSaveMemoryOperationAutomatic(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
         request: MemorySaveRequest, witness: com.jarvys.agent.CentralInvocationWitness): PersonalMemoryReceipt = executeOnWorker { repos ->

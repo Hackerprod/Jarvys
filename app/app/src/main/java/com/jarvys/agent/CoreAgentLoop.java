@@ -713,6 +713,10 @@ public final class CoreAgentLoop {
             try {
                 if (prepared == null) listener.persist(checkpoint);
                 else listener.persistStarted(checkpoint, prepared);
+            } catch (CancellationException cancelled) {
+                // Preserve STOP/interrupted database waits so the owner performs cancellation
+                // cleanup rather than retrying checkpoint writes with a stale interrupt flag.
+                throw cancelled;
             } catch (CheckpointFailure failure) {
                 throw failure;
             } catch (RuntimeException failure) {
