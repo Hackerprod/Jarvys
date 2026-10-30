@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "24a1c8c8c1fb4da69ace2efebe961c18",
+    "identityHash": "1ad574a6ba44dd5117e182c835f4f670",
     "entities": [
       {
         "tableName": "conversations",
@@ -6125,6 +6125,37 @@
         ]
       },
       {
+        "tableName": "memory_project_aliases",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`kind` TEXT NOT NULL, `alias_key` TEXT NOT NULL, `project` TEXT NOT NULL, PRIMARY KEY(`kind`, `alias_key`))",
+        "fields": [
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "alias_key",
+            "columnName": "alias_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "project",
+            "columnName": "project",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "kind",
+            "alias_key"
+          ]
+        }
+      },
+      {
         "tableName": "memory_review_clear_events",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `event_key` TEXT NOT NULL, `observation_id` TEXT NOT NULL)",
         "fields": [
@@ -8286,7 +8317,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '24a1c8c8c1fb4da69ace2efebe961c18')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1ad574a6ba44dd5117e182c835f4f670')"
     ]
   }
 }

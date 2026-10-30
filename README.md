@@ -1,3 +1,11 @@
+## Memoria P5-H — Alias manuales de proyectos — checkpoint 30-10-2026
+
+**Candidate3: Full97/0 y Play97/0, 13 clases por sabor.** Focal40 separado. Doble PASS independiente acotado. Código `a15a462f040eb98b393878fb572e00c77a809342`. [Reporte y límites](docs/continue/engram-port/P5-H-project-aliases-report.md) · [Resultados exactos](docs/continue/engram-port/P5-H-project-aliases-results.json).
+
+CRUD y resolución explícita manual con MemoryOFF; preview de coincidencias/conflicto/raw fallback, sin aplicar alias automáticamente ni conceder ownership. Cwd POSIX descriptivo, sin visitar esos directorios. Tabla nueva y dos triggers kind, no CHECK literal. Se preservan fallo de sintaxis, cuatro fallos de daemon y focal2 40/1 por matcher UI vacío corregido sólo en fixture; final2 no ejecutado.
+
+**P5 sigue parcial.** History requiere contrato separado. Detección/current-project, merge/prune/rescue, repair/backup, Markdown/grafo y P6 siguen pendientes; sin PASS global ni dispositivo físico. Los bloques inferiores son históricos.
+
 ## Memoria P5-G — Inventario autorizado de proyectos — checkpoint 30-10-2026
 
 **Candidate1: Full77/0 y Play77/0, 14 clases por sabor.** Focal13 separado. Doble PASS independiente acotado. Código `ddc4b7a9bd9e88d9930f71960f87cf350302117c`. [Reporte y límites](docs/continue/engram-port/P5-G-project-inventory-report.md) · [Resultados exactos](docs/continue/engram-port/P5-G-project-inventory-results.json).

@@ -88,6 +88,7 @@ import kotlin.coroutines.ContinuationInterceptor
         AgentDoc::class,
         UserDirective::class,
         MemoryEntry::class,
+        MemoryProjectAliasEntity::class,
         MemoryReviewClearEventEntity::class,
         MemoryRelationEntity::class,
         MemorySession::class,
@@ -177,6 +178,7 @@ internal abstract class JarvysChatDatabase : RoomDatabase() {
             "agent_docs",
             "user_directives",
             "memory_entries",
+            "memory_project_aliases",
             "memory_review_clear_events",
             "memory_relations",
             "memory_sessions", "memory_prompts", "memory_prompt_tombstones", "memory_session_tombstones", "memory_session_finalizations",
@@ -784,6 +786,10 @@ internal object DatabaseTriggers {
     fun create(db: SupportSQLiteDatabase, context: Context? = null, reportFailures: Boolean = true) = create(SupportChatSqlDatabase(db), context, reportFailures)
 
     fun create(db: ChatSqlDatabase, context: Context? = null, reportFailures: Boolean = true) {
+        // Room cannot emit CHECK: these two fresh-schema triggers enforce the same alias kind invariant.
+        for (event in listOf("INSERT", "UPDATE")) {
+            db.execSQL("CREATE TRIGGER IF NOT EXISTS trg_memory_project_alias_kind_${event.lowercase()} BEFORE $event ON memory_project_aliases WHEN NEW.kind NOT IN ('key','cwd') BEGIN SELECT RAISE(ABORT,'memory_alias_invalid_kind'); END")
+        }
         MemoryPortableMetadata.install(db)
         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_entries_topic_active ON memory_entries(project,scope,topic_key) WHERE topic_key IS NOT NULL AND deleted_at IS NULL")
         PersonalMemorySearchIndex.install(db, context, reportFailures)

@@ -303,3 +303,7 @@ data class MemoryRelationEntity(
     @androidx.room.ColumnInfo(defaultValue = "0") val updated_at_submillis_nanos:Int=0,
     @androidx.room.ColumnInfo(defaultValue = "0") val superseded_at_submillis_nanos:Int=0,
 )
+
+/** Local future-only alias, never portable ownership or a filesystem binding. */
+@Entity(tableName = "memory_project_aliases", primaryKeys = ["kind", "alias_key"])
+data class MemoryProjectAliasEntity(val kind: String, val alias_key: String, val project: String)

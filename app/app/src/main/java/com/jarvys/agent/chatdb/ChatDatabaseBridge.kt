@@ -1017,6 +1017,40 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         result
     }
 
+    /** Human-only alias operations; no automatic tool admission, session or activity side effects. */
+    private fun <T> withMemoryAliases(token: CancellationToken,
+        block: suspend (MemoryProjectAliasRepository, MemoryNamespace, () -> Unit) -> T): T {
+        token.throwIfCancelled()
+        return executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val original = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+        val verify = {
+            token.throwIfCancelled()
+            val current = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+            check(original.hasSameOwners(current)) { "memory_alias_owner_changed" }
+            token.throwIfCancelled()
+        }
+        val result = runBlocking { block(MemoryProjectAliasRepository(repos.database), original, verify) }
+        verify()
+        result
+        }
+    }
+    fun personalAgentMemoryAliasProjects(token: CancellationToken): List<String> = withMemoryAliases(token) { _, namespace, verify ->
+        verify();namespace.authorizedProjects()
+    }
+    fun personalAgentMemoryAliasList(token: CancellationToken): List<MemoryProjectAlias> = withMemoryAliases(token) { repo, namespace, verify ->
+        repo.list(namespace, token, verify)
+    }
+    fun personalAgentMemoryAliasSet(kind: String, key: String, project: String, token: CancellationToken): MemoryProjectAlias = withMemoryAliases(token) { repo, namespace, verify ->
+        repo.set(kind, key, project, namespace, token, verify)
+    }
+    fun personalAgentMemoryAliasRemove(kind: String, key: String, token: CancellationToken): Boolean = withMemoryAliases(token) { repo, namespace, verify ->
+        repo.remove(kind, key, namespace, token, verify)
+    }
+    fun personalAgentMemoryAliasResolve(key: String, cwd: String, token: CancellationToken): MemoryProjectAliasResolution = withMemoryAliases(token) { repo, namespace, verify ->
+        repo.resolve(key, cwd, namespace, token, verify)
+    }
+
     /** Import owns its private spool until the actual Room callable has physically returned. */
     private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
         val finished=java.util.concurrent.CountDownLatch(1)

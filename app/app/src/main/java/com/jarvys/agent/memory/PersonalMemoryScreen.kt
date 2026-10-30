@@ -48,6 +48,9 @@ import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
 import com.jarvys.agent.chatdb.MemoryStats
+import com.jarvys.agent.chatdb.MemoryProjectAlias
+import com.jarvys.agent.chatdb.MemoryProjectAliasResolution
+import com.jarvys.agent.chatdb.MemoryProjectAliases
 import com.jarvys.agent.chatdb.MemoryProjectInventory
 import com.jarvys.agent.chatdb.MemoryProjectInventoryItem
 import com.jarvys.agent.chatdb.MemoryConsolidationRequest
@@ -94,6 +97,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
+    var showMemoryAliases by remember { mutableStateOf(false) }
     var showMemoryProjectInventory by remember { mutableStateOf(false) }
     var showMemorySelftest by remember { mutableStateOf(false) }
     var showMemoryDoctor by remember { mutableStateOf(false) }
@@ -182,6 +186,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectInventory = true },
                         modifier = Modifier.testTag("memory-project-inventory-open")) { Text(stringResource(R.string.memory_project_inventory_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryAliases = true },
+                        modifier = Modifier.testTag("memory-aliases-open")) { Text(stringResource(R.string.memory_aliases_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
@@ -337,6 +344,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemoryAliases) MemoryAliasesDialog { showMemoryAliases = false }
     if (showMemoryProjectInventory) MemoryProjectInventoryDialog { showMemoryProjectInventory = false }
     if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
     if (showMemoryDoctor) MemoryDoctorDialog { showMemoryDoctor = false }
@@ -1240,6 +1248,177 @@ private fun MemorySelftestDialog(onClose: () -> Unit) {
 }
 
 /** Explicit manual read, independent of automatic memory capture; no model or background refresh. */
+@Composable
+private fun MemoryAliasesDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var rows by remember { mutableStateOf<List<MemoryProjectAlias>?>(null) }
+    var choices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mode by remember { mutableStateOf("list") }
+    var kind by remember { mutableStateOf("key") }
+    var input by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<MemoryProjectAlias?>(null) }
+    var savePreview by remember { mutableStateOf<MemoryProjectAlias?>(null) }
+    var confirmed by remember { mutableStateOf(false) }
+    var rawKey by remember { mutableStateOf("") }
+    var rawCwd by remember { mutableStateOf("") }
+    var resolution by remember { mutableStateOf<MemoryProjectAliasResolution?>(null) }
+    var resolvedInputs by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var mutating by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<Int?>(null) }
+    var requestId by remember { mutableStateOf(0L) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var activeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun invalidate() { savePreview = null; confirmed = false; message = null }
+    fun close() { requestId++; activeToken?.cancel(); activeJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel(); activeJob?.cancel() } }
+    fun <T> request(mutation: Boolean, produce: (CancellationToken) -> T, accept: (T) -> Unit) {
+        if (mutating) return
+        activeToken?.cancel(); activeJob?.cancel()
+        val captured = ++requestId
+        val token = CancellationToken.cancellable()
+        activeToken = token; busy = true; mutating = mutation; message = null
+        activeJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { produce(token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) accept(result)
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && captured == requestId) {
+                    rows = null; resolution = null; savePreview = null; confirmed = false
+                    if (mutation) { selected = null; choices = emptyList(); mode = "list" }
+                    message = if (mutation) R.string.memory_aliases_uncertain else R.string.memory_aliases_failed
+                }
+                throw cancelled
+            } catch (failure: Exception) {
+                coroutineContext.ensureActive()
+                if (captured == requestId) {
+                    rows = null; resolution = null; savePreview = null; confirmed = false
+                    if (mutation) { selected = null; choices = emptyList(); mode = "list" }
+                    message = if (mutation) R.string.memory_aliases_uncertain else R.string.memory_aliases_failed
+                }
+            } finally {
+                if (captured == requestId) { busy = false; mutating = false; activeToken = null; activeJob = null }
+            }
+        }
+    }
+    fun load() {
+        if (mutating) return
+        rows = null; choices = emptyList(); selected = null; resolution = null; resolvedInputs = null; target = null; invalidate(); mode = "list"
+        request(false, { token ->
+            val bridge = ChatDatabaseBridge.getInstance(context)
+            bridge.personalAgentMemoryAliasProjects(token) to bridge.personalAgentMemoryAliasList(token)
+        }) { (allowed, aliases) -> choices = allowed; rows = aliases }
+    }
+    fun edit(row: MemoryProjectAlias?) {
+        if (busy) return
+        kind = row?.kind ?: "key"; input = row?.key ?: ""; target = row?.project
+        selected = null; invalidate(); mode = "edit"
+    }
+    LaunchedEffect(Unit) { load() }
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_aliases_title)) }, text = {
+        Column {
+            TextButton(enabled = !mutating, onClick = { load() }, modifier = Modifier.testTag("memory-aliases-refresh")) { Text(stringResource(R.string.memory_aliases_refresh)) }
+            if (busy) Text(stringResource(R.string.memory_aliases_loading), modifier = Modifier.testTag("memory-aliases-loading"))
+            message?.let { Text(stringResource(it), modifier = Modifier.testTag("memory-aliases-message")) }
+            key(mode) {
+                LazyColumn(Modifier.heightIn(max = 410.dp).testTag("memory-aliases-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { Text(stringResource(R.string.memory_aliases_explanation)) }
+                    if (mode != "list") item {
+                        TextButton(enabled = !busy, onClick = { mode = "list"; selected = null; resolution = null; invalidate() }, modifier = Modifier.testTag("memory-aliases-back")) { Text(stringResource(R.string.memory_aliases_back)) }
+                    }
+                    when (mode) {
+                        "list" -> {
+                            item {
+                                TextButton(enabled = !busy && choices.isNotEmpty(), onClick = { edit(null) }, modifier = Modifier.testTag("memory-aliases-new")) { Text(stringResource(R.string.memory_aliases_new)) }
+                                TextButton(enabled = !busy, onClick = { resolution = null; resolvedInputs = null; mode = "resolve"; invalidate() }, modifier = Modifier.testTag("memory-aliases-resolve-open")) { Text(stringResource(R.string.memory_aliases_resolve)) }
+                                if (rows?.isEmpty() == true) Text(stringResource(R.string.memory_aliases_empty), modifier = Modifier.testTag("memory-aliases-empty"))
+                            }
+                            rows?.let { aliases -> itemsIndexed(aliases) { index, row ->
+                                Column(Modifier.testTag("memory-aliases-row-$index")) {
+                                    Text(row.kind, modifier = Modifier.testTag("memory-aliases-kind-$index"))
+                                    Text(row.key, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("memory-aliases-key-$index"))
+                                    Text(row.project, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("memory-aliases-target-$index"))
+                                    TextButton(enabled = !busy, onClick = { selected = row; mode = "inspect"; invalidate() }, modifier = Modifier.testTag("memory-aliases-inspect-$index")) { Text(stringResource(R.string.memory_aliases_inspect)) }
+                                    TextButton(enabled = !busy, onClick = { edit(row) }, modifier = Modifier.testTag("memory-aliases-edit-$index")) { Text(stringResource(R.string.memory_aliases_edit)) }
+                                    TextButton(enabled = !busy, onClick = { selected = row; mode = "remove"; invalidate() }, modifier = Modifier.testTag("memory-aliases-remove-$index")) { Text(stringResource(R.string.memory_aliases_remove)) }
+                                }
+                            } }
+                        }
+                        "edit" -> {
+                            item {
+                                Text(stringResource(R.string.memory_aliases_kind))
+                                Row { listOf("key", "cwd").forEach { option -> TextButton(enabled = !busy, onClick = { kind = option; invalidate() }, modifier = Modifier.testTag("memory-aliases-kind-choice-$option")) { Text((if (kind == option) "✓ " else "") + option) } } }
+                                OutlinedTextField(value = input, onValueChange = { input = it; invalidate() }, enabled = !busy, label = { Text(stringResource(R.string.memory_aliases_key)) }, modifier = Modifier.testTag("memory-aliases-input"))
+                                Text(stringResource(R.string.memory_aliases_target))
+                            }
+                            itemsIndexed(choices) { index, choice -> TextButton(enabled = !busy, onClick = { target = choice; invalidate() }, modifier = Modifier.testTag("memory-aliases-target-choice-$index")) { Text((if (target == choice) "✓ " else "") + choice) } }
+                            item {
+                                TextButton(enabled = !busy && target != null, onClick = {
+                                    invalidate()
+                                    try { savePreview = MemoryProjectAlias(kind, MemoryProjectAliases.normalize(kind, input), requireNotNull(target)) }
+                                    catch (_: IllegalArgumentException) { message = R.string.memory_aliases_invalid }
+                                }, modifier = Modifier.testTag("memory-aliases-prepare")) { Text(stringResource(R.string.memory_aliases_prepare)) }
+                            }
+                            savePreview?.let { preview ->
+                                item { Text(stringResource(R.string.memory_aliases_save_warning)); Text(preview.kind); Text(preview.key, modifier = Modifier.testTag("memory-aliases-preview-key")); Text(preview.project, modifier = Modifier.testTag("memory-aliases-preview-target")) }
+                                item {
+                                    Row { Checkbox(checked = confirmed, enabled = !busy, onCheckedChange = { confirmed = it }, modifier = Modifier.testTag("memory-aliases-consent")); Text(stringResource(R.string.memory_aliases_confirm)) }
+                                    TextButton(enabled = !busy && confirmed, onClick = {
+                                        val captured = preview
+                                        if (!confirmed || busy) return@TextButton
+                                        request(true, { token -> ChatDatabaseBridge.getInstance(context).personalAgentMemoryAliasSet(captured.kind, captured.key, captured.project, token) }) {
+                                            rows = null; selected = null; savePreview = null; confirmed = false; mode = "list"; message = R.string.memory_aliases_saved
+                                        }
+                                    }, modifier = Modifier.testTag("memory-aliases-save")) { Text(stringResource(R.string.memory_aliases_save)) }
+                                }
+                            }
+                        }
+                        "inspect", "remove" -> selected?.let { row ->
+                            item { Text(row.kind); Text(stringResource(R.string.memory_aliases_full_key)); Text(row.key, modifier = Modifier.testTag("memory-aliases-full-key")); Text(stringResource(R.string.memory_aliases_full_target)); Text(row.project, modifier = Modifier.testTag("memory-aliases-full-target")) }
+                            if (mode == "remove") item {
+                                Text(stringResource(R.string.memory_aliases_remove_warning))
+                                Row { Checkbox(checked = confirmed, enabled = !busy, onCheckedChange = { confirmed = it }, modifier = Modifier.testTag("memory-aliases-consent")); Text(stringResource(R.string.memory_aliases_confirm)) }
+                                TextButton(enabled = !busy && confirmed, onClick = {
+                                    val captured = row
+                                    if (!confirmed || busy) return@TextButton
+                                    request(true, { token -> ChatDatabaseBridge.getInstance(context).personalAgentMemoryAliasRemove(captured.kind, captured.key, token) }) { removed ->
+                                        rows = null; selected = null; confirmed = false; mode = "list"; message = if (removed) R.string.memory_aliases_removed else R.string.memory_aliases_absent
+                                    }
+                                }, modifier = Modifier.testTag("memory-aliases-delete-confirm")) { Text(stringResource(R.string.memory_aliases_remove)) }
+                            }
+                        }
+                        "resolve" -> {
+                            item {
+                                OutlinedTextField(value = rawKey, onValueChange = { rawKey = it; resolution = null; resolvedInputs = null; message = null }, enabled = !busy, label = { Text(stringResource(R.string.memory_aliases_raw_key)) }, modifier = Modifier.testTag("memory-aliases-raw-key"))
+                                OutlinedTextField(value = rawCwd, onValueChange = { rawCwd = it; resolution = null; resolvedInputs = null; message = null }, enabled = !busy, label = { Text(stringResource(R.string.memory_aliases_raw_cwd)) }, modifier = Modifier.testTag("memory-aliases-raw-cwd"))
+                                TextButton(enabled = !busy, onClick = {
+                                    val keyInput = rawKey; val cwdInput = rawCwd; resolution = null; resolvedInputs = null
+                                    request(false, { token -> ChatDatabaseBridge.getInstance(context).personalAgentMemoryAliasResolve(keyInput, cwdInput, token) }) { result -> resolvedInputs = keyInput to cwdInput; resolution = result }
+                                }, modifier = Modifier.testTag("memory-aliases-resolve-run")) { Text(stringResource(R.string.memory_aliases_resolve)) }
+                            }
+                            resolution?.let { result ->
+                                item {
+                                    Text(stringResource(if (result.conflict) R.string.memory_aliases_conflict else if (result.matched) R.string.memory_aliases_matched else R.string.memory_aliases_unmatched), modifier = Modifier.testTag("memory-aliases-resolution-status"))
+                                    Text(stringResource(R.string.memory_aliases_raw_key)); Text(requireNotNull(resolvedInputs).first, modifier = Modifier.testTag("memory-aliases-resolved-raw-key"))
+                                    Text(stringResource(R.string.memory_aliases_raw_cwd)); Text(requireNotNull(resolvedInputs).second, modifier = Modifier.testTag("memory-aliases-resolved-raw-cwd"))
+                                    Text(stringResource(R.string.memory_aliases_normalized_key)); Text(result.normalizedKey ?: stringResource(R.string.memory_aliases_none), modifier = Modifier.testTag("memory-aliases-normalized-key"))
+                                    Text(stringResource(R.string.memory_aliases_normalized_cwd)); Text(result.normalizedCwd ?: stringResource(R.string.memory_aliases_none), modifier = Modifier.testTag("memory-aliases-normalized-cwd"))
+                                    Text(stringResource(R.string.memory_aliases_key_match)); Text(result.keyAlias?.project ?: stringResource(R.string.memory_aliases_none), modifier = Modifier.testTag("memory-aliases-key-match"))
+                                    Text(stringResource(R.string.memory_aliases_cwd_match)); Text(result.cwdAlias?.project ?: stringResource(R.string.memory_aliases_none), modifier = Modifier.testTag("memory-aliases-cwd-match"))
+                                    Text(stringResource(R.string.memory_aliases_result)); Text(result.project, modifier = Modifier.testTag("memory-aliases-result"))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-aliases-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+}
+
 @Composable
 private fun MemoryProjectInventoryDialog(onClose: () -> Unit) {
     val context = LocalContext.current.applicationContext
