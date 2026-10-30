@@ -1707,4 +1707,17 @@ Topic raw bytes (Base64)=%5$s</string>
 Confirmed retired sources:
 %2$s</string>
     <string name="memory_consolidate_superseded_reference">Superseded by ID: %1$s. This retained reference does not imply that its target still exists or may be opened.</string>
+    <string name="memory_stats_action">Memory statistics</string>
+    <string name="memory_stats_title">Memory statistics</string>
+    <string name="memory_stats_explanation">Retained memory sessions and prompts, and live observations. These are not chat or workspace counts. Reading does not enable automatic memory or prompt capture.</string>
+    <string name="memory_stats_all">All currently authorized projects</string>
+    <string name="memory_stats_project">Selected project: %1$s</string>
+    <string name="memory_stats_reload">Reload statistics</string>
+    <string name="memory_stats_loading">Loading current statistics…</string>
+    <string name="memory_stats_failed">Statistics could not be confirmed. No previous totals are shown for this selection. Reload explicitly.</string>
+    <string name="memory_stats_sessions">Retained sessions: %1$d</string>
+    <string name="memory_stats_observations">Live observations: %1$d</string>
+    <string name="memory_stats_prompts">Retained prompts: %1$d</string>
+    <string name="memory_stats_projects">Projects with live observations</string>
+    <string name="memory_stats_no_projects">None</string>
 </resources>

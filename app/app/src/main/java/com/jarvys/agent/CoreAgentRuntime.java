@@ -1771,6 +1771,7 @@ public final class CoreAgentRuntime {
             || ("memory_consolidate".equals(memoryTool.declaration().name) && "agent_memory_consolidation".equals(memoryTool.declaration().source))
             || "memory_search_prompts".equals(memoryTool.declaration().name)
             || "memory_context".equals(memoryTool.declaration().name)
+            || "memory_stats".equals(memoryTool.declaration().name)
             || "memory_review".equals(memoryTool.declaration().name))
             && runKind() != RunKind.PRINCIPAL) continue;
         tools.add(memoryTool);

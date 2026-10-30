@@ -979,6 +979,36 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
             runBlocking { MemorySessionRepository(repos.database).finish(binding, outcome) }
         })
     }
+    fun memoryStats(ticket: MemoryWriteGate.Ticket, token: CancellationToken,
+        caller: String?, project: String?): MemoryStats = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val selected = MemoryStatsArguments.project(mapOf("project" to project))
+        val namespace = MemoryNamespace.resolve(applicationContext, caller, selected, null, selected == null, true)
+        MemoryWritePolicy.forContext(applicationContext).gate().commit(ticket, { token.throwIfCancelled(); true }, Callable {
+            runBlocking { repos.database.withChatReadTransaction {
+                token.throwIfCancelled()
+                repos.agentMemory.memoryStats(namespace).also { token.throwIfCancelled() }
+            } }
+        })
+    }
+
+    /** Explicit human read, independent of automatic memory/capture switches. */
+    fun personalAgentMemoryStats(project: String?, token: CancellationToken): MemoryStats = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val selected = MemoryStatsArguments.project(mapOf("project" to project))
+        val namespace = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, selected, null, selected == null, true)
+        runBlocking { repos.database.withChatReadTransaction {
+            token.throwIfCancelled()
+            repos.agentMemory.memoryStats(namespace).also { token.throwIfCancelled() }
+        } }
+    }
+
+    fun personalAgentMemoryStatsProjects(token: CancellationToken): List<String> = executeOnWorker { _ ->
+        token.throwIfCancelled()
+        MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+            .authorizedProjects().also { token.throwIfCancelled() }
+    }
+
     fun memoryReviewList(ticket:MemoryWriteGate.Ticket,token:CancellationToken,caller:String?,project:String?,limit:Long):List<PersonalMemoryHit> = executeOnWorker { repos ->
         token.throwIfCancelled()
         val all=MemoryObservationContent.trimSpace(project.orEmpty()).isEmpty()

@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P5-A — estadísticas autorizadas — checkpoint 30-10-2026
+
+**Candidate2: Full: 64 pruebas / Play: 64 pruebas; once clases por sabor, cero fallos/errores/skips; doble PASS acotado.** Focal12 separado; código `4026e0c57c0167499fdb255086a2b51a40b59513`. Cuatro campos primarios, snapshot Room readonly y consumidor Main/UI real; sin cambio de schema.
+
+[Reporte, adaptaciones e historia](docs/continue/engram-port/P5-A-stats-report.md) · [Resultados exactos](docs/continue/engram-port/P5-A-stats-results.json).
+
+Agregado sólo de proyectos autorizados frente al MCP global primario; proyecto explícito no amplía permisos. ManualOFF y captureOFF separados, JSON completo y errores sin falsos ceros. Focal1 12/2 por sabor conservado y fixes2 sólo fixtures, no fallo productivo inventado. Próxima propuesta a root: selftest/doctor readonly bajo contrato separado, sin saltar namespace/portabilidad/backup-repair ni habilitar P6. **No P5 global ni Android físico.**
+
 ## Memoria F34 — consulta observable y reconciliación P4 — checkpoint 29-10-2026
 
 **Candidate1: Full: 29 pruebas / Play: 29 pruebas; cuatro clases por sabor, cero fallos/errores/skips; doble PASS acotado.** Focal3 separado; código `6eaebb0e95b7f77a28e000ab870a0807d77ae3be`. Tests-only:1.282 archivos productivos byteidénticos, sin cambio de runtime jars.

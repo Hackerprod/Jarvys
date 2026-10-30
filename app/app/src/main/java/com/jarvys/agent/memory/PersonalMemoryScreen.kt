@@ -43,6 +43,7 @@ import com.jarvys.agent.chatdb.PersonalMemorySessionView
 import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
+import com.jarvys.agent.chatdb.MemoryStats
 import com.jarvys.agent.chatdb.MemoryConsolidationRequest
 import com.jarvys.agent.chatdb.MemoryConsolidationPlan
 import com.jarvys.agent.chatdb.MemoryConsolidationResult
@@ -86,6 +87,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var dueOnly by remember { mutableStateOf(false) }
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
+    var showMemoryStats by remember { mutableStateOf(false) }
     var showPendingRelations by remember { mutableStateOf(false) }
     var showRelationScan by remember { mutableStateOf(false) }
     var judgmentTarget by remember { mutableStateOf<String?>(null) }
@@ -163,6 +165,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                         }, modifier = Modifier.testTag("memory-daily-consolidation"))
                     }
                     PromptCapturePreference()
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryStats = true },
+                        modifier = Modifier.testTag("memory-stats-open")) { Text(stringResource(R.string.memory_stats_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySessions = true },
                         modifier = Modifier.testTag("memory-sessions-open")) { Text(stringResource(R.string.memory_sessions_action)) }
@@ -305,6 +310,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     }
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
+    if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
 
     if (showProjectMemories) ProjectMemoryDeleteDialog(
         onClose = { showProjectMemories = false },
@@ -554,6 +560,77 @@ private fun MemoryInspectorDialog(targetId: String, onChanged: () -> Unit, onJud
         },
         dismissButton = { TextButton(enabled = !mutationPending, onClick = { if (!mutationPending) onClose() }, modifier = Modifier.testTag("memory-inspector-close")) { Text(stringResource(R.string.memory_inspector_close)) } },
     )
+}
+
+/** Explicit manual read, independent of automatic memory capture; no model or background refresh. */
+@Composable
+private fun MemoryStatsDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var project by remember { mutableStateOf<String?>(null) }
+    var choices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var stats by remember { mutableStateOf<MemoryStats?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    var requestId by remember { mutableStateOf(0L) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var activeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun close() { requestId++; activeToken?.cancel(); activeJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel(); activeJob?.cancel() } }
+    fun load(selection: String?) {
+        if (loading && project == selection) return
+        activeToken?.cancel(); activeJob?.cancel()
+        val captured = ++requestId
+        val token = CancellationToken.cancellable()
+        project = selection; stats = null; failed = false; loading = true; activeToken = token
+        activeJob = scope.launch {
+            try {
+                val allowed = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentMemoryStatsProjects(token) }
+                coroutineContext.ensureActive()
+                if (captured != requestId) return@launch
+                choices = allowed
+                val result = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentMemoryStats(selection, token) }
+                coroutineContext.ensureActive()
+                if (captured == requestId) stats = result
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                coroutineContext.ensureActive()
+                if (captured == requestId) { stats = null; failed = true }
+            } finally {
+                if (captured == requestId) { loading = false; activeToken = null; activeJob = null }
+            }
+        }
+    }
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_stats_title)) }, text = {
+        LaunchedEffect(Unit) { load(null) }
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-stats-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_stats_explanation))
+                TextButton(onClick = { load(null) }, modifier = Modifier.testTag("memory-stats-project-all")) {
+                    Text((if (project == null) "✓ " else "") + stringResource(R.string.memory_stats_all))
+                }
+            }
+            items(choices, key = { it }) { choice ->
+                TextButton(onClick = { load(choice) }, modifier = Modifier.testTag("memory-stats-project-$choice")) { Text((if (project == choice) "✓ " else "") + choice) }
+            }
+            item {
+                Text(if (project == null) stringResource(R.string.memory_stats_all) else stringResource(R.string.memory_stats_project, requireNotNull(project)), modifier = Modifier.testTag("memory-stats-selection"))
+                TextButton(enabled = !loading, onClick = { load(project) }, modifier = Modifier.testTag("memory-stats-reload")) { Text(stringResource(R.string.memory_stats_reload)) }
+                if (loading) Text(stringResource(R.string.memory_stats_loading), modifier = Modifier.testTag("memory-stats-loading"))
+                if (failed) Text(stringResource(R.string.memory_stats_failed), modifier = Modifier.testTag("memory-stats-failed"))
+            }
+            stats?.let { received ->
+                item {
+                    Text(stringResource(R.string.memory_stats_sessions, received.totalSessions), modifier = Modifier.testTag("memory-stats-sessions"))
+                    Text(stringResource(R.string.memory_stats_observations, received.totalObservations), modifier = Modifier.testTag("memory-stats-observations"))
+                    Text(stringResource(R.string.memory_stats_prompts, received.totalPrompts), modifier = Modifier.testTag("memory-stats-prompts"))
+                    Text(stringResource(R.string.memory_stats_projects), modifier = Modifier.testTag("memory-stats-projects-heading"))
+                    if (received.projects.isEmpty()) Text(stringResource(R.string.memory_stats_no_projects), modifier = Modifier.testTag("memory-stats-projects-empty"))
+                }
+                items(received.projects, key = { "reported-$it" }) { name -> Text(name, modifier = Modifier.testTag("memory-stats-reported-$name")) }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-stats-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
 }
 
 /** A returned preview is only information; Apply starts a fresh operation on the same incoming page. */

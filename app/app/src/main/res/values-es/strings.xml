@@ -1708,4 +1708,17 @@ Bytes del tema (Base64)=%5$s</string>
 Fuentes retiradas confirmadas:
 %2$s</string>
     <string name="memory_consolidate_superseded_reference">Sustituida por el ID: %1$s. Esta referencia conservada no implica que su destino siga existiendo ni que se pueda abrir.</string>
+    <string name="memory_stats_action">Estadísticas de memoria</string>
+    <string name="memory_stats_title">Estadísticas de memoria</string>
+    <string name="memory_stats_explanation">Sesiones y mensajes de usuario conservados como memoria, y observaciones vigentes. No son recuentos de chats ni de espacios de trabajo. Consultar no activa la memoria automática ni la captura de mensajes.</string>
+    <string name="memory_stats_all">Todos los proyectos actualmente autorizados</string>
+    <string name="memory_stats_project">Proyecto seleccionado: %1$s</string>
+    <string name="memory_stats_reload">Volver a consultar</string>
+    <string name="memory_stats_loading">Consultando estadísticas actuales…</string>
+    <string name="memory_stats_failed">No se pudieron confirmar las estadísticas. No se muestran totales anteriores para esta selección. Vuelve a consultar explícitamente.</string>
+    <string name="memory_stats_sessions">Sesiones conservadas: %1$d</string>
+    <string name="memory_stats_observations">Observaciones vigentes: %1$d</string>
+    <string name="memory_stats_prompts">Mensajes de usuario conservados: %1$d</string>
+    <string name="memory_stats_projects">Proyectos con observaciones vigentes</string>
+    <string name="memory_stats_no_projects">Ninguno</string>
 </resources>

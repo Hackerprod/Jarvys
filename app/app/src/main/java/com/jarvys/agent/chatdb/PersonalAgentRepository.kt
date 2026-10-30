@@ -1341,6 +1341,24 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         }
     }
 
+    /** All four aggregates share one read-fenced snapshot; no initialization or content projection. */
+    suspend fun memoryStats(namespace: MemoryNamespace): MemoryStats = database.withChatReadTransaction {
+        val (guard, args) = namespace.projectOnly().clause()
+        fun count(table: String, extra: String = ""): Long =
+            sql.query("SELECT COUNT(*) FROM $table WHERE $guard$extra", args.toTypedArray()).use { cursor ->
+                check(cursor.moveToFirst()) { "memory_stats_count_missing" }
+                cursor.getLong(0).also { check(it >= 0) { "memory_stats_count_invalid" } }
+            }
+        val sessions = count("memory_sessions")
+        val observations = count("memory_entries", " AND deleted_at IS NULL")
+        val prompts = count("memory_prompts")
+        val projects = sql.query(
+            "SELECT project FROM memory_entries WHERE $guard AND project IS NOT NULL AND deleted_at IS NULL " +
+                "GROUP BY project ORDER BY MAX(created_at) DESC", args.toTypedArray()
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        MemoryStats(sessions, observations, prompts, projects)
+    }
+
     /** SQL eligibility intentionally follows SQLite datetime, separate from virtual display parsing. */
     suspend fun memoriesNeedingReview(namespace:MemoryNamespace, limit:Long=20, now:Long=observationClock()):List<PersonalMemoryHit> = database.withChatReadTransaction {
         val selected=namespace.projectOnly()

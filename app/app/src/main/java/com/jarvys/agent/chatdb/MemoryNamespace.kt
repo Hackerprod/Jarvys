@@ -23,6 +23,8 @@ class MemoryNamespace private constructor(
         scopeFilter?.let {parts.add("${p}scope=?");args.add(it)}
         return parts.joinToString(" AND ") to args
     }
+    /** Display choices only; callers must resolve ownership again for every actual operation. */
+    internal fun authorizedProjects(): List<String> = java.util.Collections.unmodifiableList(ArrayList(authorized))
     fun hasSameOwners(other: MemoryNamespace): Boolean = authorized == other.authorized
     internal fun owns(project:String) = project in authorized
     internal fun selectWrite(requestedProject:String?, rawScope:String?):MemoryNamespace {

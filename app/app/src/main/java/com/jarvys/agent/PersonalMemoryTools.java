@@ -200,6 +200,7 @@ final class PersonalMemoryTools {
       result.add(new MemoryConsolidationTool(bridge,ticket,conversationId,resultChars));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_search_prompts", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_context", Collections.emptyList(), resultChars, ticket));
+      result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_stats", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_review", Collections.emptyList(), resultChars, ticket));
       for(String judgment:Arrays.asList("memory_judge","memory_compare","memory_judge_many"))
         result.add(new MemoryTool(context,bridge,sourceMessageId,conversationId,judgment,Collections.emptyList(),resultChars,ticket));
@@ -338,6 +339,10 @@ final class PersonalMemoryTools {
           required=Collections.singletonList("action");
           description="Review reminders, not expiration or factual verification. action=list reads due live observations across authorized projects by default; limit defaults to 10, nonpositive uses 20, no positive cap. Inspect with memory_get. action=mark_reviewed explicitly resets one UUID observation's review date using its current type (unknown types clear the date). Mark defaults to current Central or an explicit authorized project, never globally. Read listing has no memory mutation; marking requires this live principal invocation. No automatic review or deletion.";
           break;
+        case "memory_stats":
+          properties.put("project", "string"); required = Collections.emptyList();
+          description = "Read counts of retained canonical memory sessions, live observations, retained prompts, and projects with live observations. Omitted/null/blank project selects all currently authorized projects; an explicit project selects only that authorized project. This is not a count of chats or workspace registry entries. No content is returned, no memory/session/activity state is changed, and no selector grants access. Only project is accepted.";
+          break;
         case "memory_context":
           properties.put("project", "string"); properties.put("scope", "string"); properties.put("max_bytes", "number");
           properties.put("older_history", "boolean"); properties.put("compact", "boolean");
@@ -417,12 +422,12 @@ final class PersonalMemoryTools {
     @Override public ToolSpec declaration() { return declaration; }
 
     @Override public AccessClassification accessClassification() {
-      return ("memory_suggest_topic_key".equals(name) || "memory_search".equals(name) || "memory_search_prompts".equals(name) || "memory_context".equals(name) || "memory_list".equals(name) || "memory_timeline".equals(name) || "memory_get".equals(name) || name.startsWith("history_"))
+      return ("memory_suggest_topic_key".equals(name) || "memory_search".equals(name) || "memory_search_prompts".equals(name) || "memory_context".equals(name) || "memory_stats".equals(name) || "memory_list".equals(name) || "memory_timeline".equals(name) || "memory_get".equals(name) || name.startsWith("history_"))
           ? AccessClassification.READ : AccessClassification.WRITE;
     }
 
     @Override public PersistenceEffect persistenceEffect() {
-      return (name.startsWith("history_") || "memory_suggest_topic_key".equals(name) || "memory_search".equals(name) || "memory_search_prompts".equals(name) || "memory_context".equals(name) || "memory_list".equals(name) || "memory_timeline".equals(name)) ? PersistenceEffect.NONE : PersistenceEffect.MEMORY;
+      return (name.startsWith("history_") || "memory_suggest_topic_key".equals(name) || "memory_search".equals(name) || "memory_search_prompts".equals(name) || "memory_context".equals(name) || "memory_stats".equals(name) || "memory_list".equals(name) || "memory_timeline".equals(name)) ? PersistenceEffect.NONE : PersistenceEffect.MEMORY;
     }
 
     private boolean reviewList(Map<String,Object> args) {
@@ -481,6 +486,8 @@ final class PersonalMemoryTools {
           }
           case "memory_review":
             return review(args,token,witness);
+          case "memory_stats":
+            return memoryStats(args, token);
           case "memory_context":
             return memoryContext(args, token);
           case "memory_search_prompts":
@@ -655,6 +662,24 @@ final class PersonalMemoryTools {
       if(relation.getMarkedByModel()!=null) put(entry,"model_provenance","caller_reported");
       put(entry,"memory_session_id",relation.getMemorySessionId());put(entry,"created_at",relation.getCreatedAt());put(entry,"updated_at",relation.getUpdatedAt());
       return entry;
+    }
+
+    private CoreToolResult memoryStats(Map<String,Object> args, CancellationToken token) {
+      String project=com.jarvys.agent.chatdb.MemoryStatsArguments.project(args);
+      com.jarvys.agent.chatdb.MemoryStats stats=bridge.memoryStats(memoryTicket,token,conversationId,project);
+      token.throwIfCancelled();
+      JSONObject body=new JSONObject();
+      put(body,"total_sessions",stats.getTotalSessions());
+      put(body,"total_observations",stats.getTotalObservations());
+      put(body,"total_prompts",stats.getTotalPrompts());
+      JSONArray projects=new JSONArray();for(String value:stats.getProjects()) projects.put(value);
+      put(body,"projects",projects);
+      put(body,"selection",project==null?"authorized_projects":"project");
+      put(body,"project",project==null?JSONObject.NULL:project);
+      String serialized=body.toString();
+      if(serialized.length()>resultChars) return CoreToolResult.failure("memory_stats_result_budget_exceeded");
+      token.throwIfCancelled();
+      return CoreToolResult.complete(serialized);
     }
 
     private CoreToolResult memoryContext(Map<String,Object> args, CancellationToken token) {
