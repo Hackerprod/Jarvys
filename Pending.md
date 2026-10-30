@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P5-J — Poda manual de proyectos — checkpoint 30-10-2026
+
+**Candidate1: Full75/0 y Play75/0, 13 clases por sabor.** Focal9 separado. Doble PASS independiente acotado. Código `c50b2899e582c06afe28ddf7c88b7b29bb6c5a7d`. [Reporte y límites](docs/continue/engram-port/P5-J-project-prune-report.md) · [Resultados exactos](docs/continue/engram-port/P5-J-project-prune-results.json).
+
+Preview estimado, confirmación manual y poda actual con MemoryOFF; cero live requerido en la misma TX. Conserva observaciones soft/crossproject y sesiones con referencias; ANY prompt remanente retiene sesión como adapter explícito. Markers compatibles preservan nanos y suprimen replay antiguo sin impedir nueva inscripción manual legítima. Sin hardDelete, grants, provider ni schema nuevo.
+
+Siete compileFAIL y recuperaciones Full7/Playinitial0 conservados; ningún test FAIL ejecutado. Pérdida de retorno postcommit no se transforma en receipt ni retry. **P5 sigue parcial:** Detect/Inspect/current-project, merge/rescue, repair/backup, Markdown/grafo y P6 permanecen pendientes, sin autorización automática de siguiente unidad ni PASS global. Los bloques inferiores son históricos.
+
 ## Memoria P5-I — Evidencia histórica por directorio — checkpoint 30-10-2026
 
 **Candidate1: Full63/0 y Play63/0, 12 clases por sabor.** Focal9 separado. Doble PASS independiente acotado. Código `08f7e61068f9adb3b5918a92d71a21a17c91c87a`. [Reporte y límites](docs/continue/engram-port/P5-I-project-history-report.md) · [Resultados exactos](docs/continue/engram-port/P5-I-project-history-results.json).

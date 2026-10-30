@@ -1903,4 +1903,31 @@ Fuentes retiradas confirmadas:
     <string name="memory_project_history_count">Proyectos coincidentes: %1$d</string>
     <string name="memory_project_history_empty">Sin evidencia histórica coincidente.</string>
     <string name="memory_project_history_projects">Nombres canónicos de proyectos históricos</string>
+
+    <string name="memory_project_prune_action">Podar metadata vacía</string>
+    <string name="memory_project_prune_title">Podar metadata del proyecto</string>
+    <string name="memory_project_prune_explanation">Mantenimiento manual explícito de un proyecto autorizado. No borra observaciones, espacios de trabajo ni directorios. No cambia las preferencias de memoria ni captura de prompts.</string>
+    <string name="memory_project_prune_refresh">Actualizar proyectos autorizados</string>
+    <string name="memory_project_prune_select">Selecciona un proyecto explícitamente</string>
+    <string name="memory_project_prune_preview">Ver estimación actual</string>
+    <string name="memory_project_prune_estimate">Estimación puntual, no un plan congelado ni CAS. Aplicar vuelve a comprobar la transacción actual; los conteos finales pueden diferir.</string>
+    <string name="memory_project_prune_warning">Elimina permanentemente los prompts de este proyecto y sólo sesiones sin referencia de ninguna observación ni prompt remanente. Se conservan todas las observaciones, incluidas las retiradas. Los marcadores pueden impedir reutilizar sesiones o prompts antiguos. Esta acción no ofrece deshacer ni crea un respaldo.</string>
+    <string name="memory_project_prune_consent">Autorizo esta operación definida sobre el proyecto mostrado, incluidos los conteos finales reevaluados.</string>
+    <string name="memory_project_prune_apply">Confirmar poda irreversible</string>
+    <string name="memory_project_prune_live">Observaciones vigentes: %1$d</string>
+    <string name="memory_project_prune_prompts">Prompts estimados a eliminar: %1$d</string>
+    <string name="memory_project_prune_sessions">Sesiones estimadas a eliminar: %1$d</string>
+    <string name="memory_project_prune_retained">Sesiones propias retenidas por referencias (adaptación): %1$d</string>
+    <string name="memory_project_prune_blocked">Las observaciones vigentes impiden la poda. Esta acción no eliminará ninguna observación.</string>
+    <string name="memory_project_prune_busy">Una operación sigue ejecutándose físicamente. Reabrir no permite otra aplicación hasta que termine.</string>
+    <string name="memory_project_prune_cancel">Cancelar operación actual</string>
+    <string name="memory_project_prune_failed">Falló la lectura o preparación. No se infiere una estimación vacía ni una poda exitosa. Actualiza explícitamente.</string>
+    <string name="memory_project_prune_unknown">Resultado de poda no confirmado. Puede haberse aplicado. No supongas rollback ni reintentes automáticamente. Actualiza para inspeccionar estimaciones actuales; eso no reconstruye un recibo.</string>
+    <string name="memory_project_prune_cancelled">Cancelado o interrumpido. Una poda puede haberse aplicado; no supongas rollback ni reintentes automáticamente. Espera a la terminación física y actualiza explícitamente.</string>
+    <string name="memory_project_prune_receipt">Recibo de poda confirmado</string>
+    <string name="memory_project_prune_deleted_prompts">Prompts realmente eliminados: %1$d</string>
+    <string name="memory_project_prune_deleted_sessions">Sesiones realmente eliminadas: %1$d</string>
+    <string name="memory_project_prune_error_code">Código de resultado seguro: %1$s</string>
+    <string name="memory_project_prune_unavailable">La poda no está disponible. No se inició ninguna operación.</string>
+    <string name="memory_project_prune_rejected">La operación devolvió un código de fallo seguro, no un recibo de poda exitosa. Actualiza la estimación actual antes de decidir qué hacer después.</string>
 </resources>

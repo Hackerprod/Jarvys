@@ -98,6 +98,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
+    var showMemoryProjectPrune by remember { mutableStateOf(false) }
     var showMemoryProjectHistory by remember { mutableStateOf(false) }
     var showMemoryAliases by remember { mutableStateOf(false) }
     var showMemoryProjectInventory by remember { mutableStateOf(false) }
@@ -194,6 +195,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectHistory = true },
                         modifier = Modifier.testTag("memory-project-history-open")) { Text(stringResource(R.string.memory_project_history_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectPrune = true },
+                        modifier = Modifier.testTag("memory-project-prune-open")) { Text(stringResource(R.string.memory_project_prune_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
@@ -349,6 +353,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemoryProjectPrune) MemoryProjectPruneDialog { showMemoryProjectPrune = false }
     if (showMemoryProjectHistory) MemoryProjectHistoryDialog { showMemoryProjectHistory = false }
     if (showMemoryAliases) MemoryAliasesDialog { showMemoryAliases = false }
     if (showMemoryProjectInventory) MemoryProjectInventoryDialog { showMemoryProjectInventory = false }
@@ -1254,6 +1259,131 @@ private fun MemorySelftestDialog(onClose: () -> Unit) {
 }
 
 /** Explicit manual read, independent of automatic memory capture; no model or background refresh. */
+@Composable
+private fun MemoryProjectPruneDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val controller = remember(context) { runCatching { com.jarvys.agent.MemoryProjectPruneController.get(context) }.getOrNull() }
+    if (controller == null) {
+        AlertDialog(onDismissRequest = onClose, title = { Text(stringResource(R.string.memory_project_prune_title)) }, text = { Text(stringResource(R.string.memory_project_prune_unavailable)) }, confirmButton = {
+            TextButton(onClick = onClose, modifier = Modifier.testTag("memory-project-prune-close")) { Text(stringResource(R.string.memory_inspector_close)) }
+        })
+        return
+    }
+    val scope = rememberCoroutineScope()
+    var choices by remember { mutableStateOf<List<String>>(emptyList()) }
+    var selection by remember { mutableStateOf<String?>(null) }
+    var preview by remember { mutableStateOf<com.jarvys.agent.chatdb.MemoryProjectPrunePreview?>(null) }
+    var receipt by remember { mutableStateOf<com.jarvys.agent.chatdb.MemoryProjectPruneReceipt?>(null) }
+    var consent by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf(false) }
+    var observed by remember { mutableStateOf(controller.activeOperation()) }
+    var ownToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var ownJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var requestId by remember { mutableStateOf(0L) }
+    var message by remember { mutableStateOf<Int?>(null) }
+    var safeCode by remember { mutableStateOf<String?>(null) }
+    fun invalidate() { preview = null; receipt = null; consent = false; message = null; safeCode = null }
+    fun close() { requestId++; ownToken?.cancel(); ownJob?.cancel(); onClose() }
+    DisposableEffect(Unit) { onDispose { ownToken?.cancel(); ownJob?.cancel() } }
+    fun <T> runOperation(mutation: Boolean, produce: (CancellationToken) -> T, accept: (T) -> Unit) {
+        if (pending || controller.activeOperation() != null) return
+        val captured = ++requestId
+        val token = CancellationToken.cancellable()
+        invalidate(); pending = true; ownToken = token
+        ownJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { produce(token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) accept(result)
+            } catch (cancelled: CancellationException) {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && captured == requestId) {
+                    invalidate(); message = R.string.memory_project_prune_cancelled
+                }
+            } catch (failure: Exception) {
+                coroutineContext.ensureActive()
+                if (captured == requestId) {
+                    invalidate()
+                    safeCode = (failure as? com.jarvys.agent.chatdb.MemoryProjectPruneException)?.code?.takeIf {
+                        it in setOf("memory_prune_invalid_project", "memory_prune_owner_changed", "memory_prune_live_observations_present", "memory_prune_session_marker_identity_conflict", "memory_prune_session_marker_corrupt", "memory_prune_readback_failed", "memory_prune_busy")
+                    }
+                    message = if (!mutation) R.string.memory_project_prune_failed else if (safeCode != null) R.string.memory_project_prune_rejected else R.string.memory_project_prune_unknown
+                }
+            } finally {
+                if (coroutineContext[kotlinx.coroutines.Job]?.isActive == true && captured == requestId) {
+                    pending = false; ownToken = null; ownJob = null; observed = controller.activeOperation()
+                }
+            }
+        }
+    }
+    fun loadProjects() {
+        if (pending || controller.activeOperation() != null) return
+        choices = emptyList(); selection = null
+        runOperation(false, { controller.projects(it) }) { choices = it }
+    }
+    LaunchedEffect(controller) {
+        if (controller.activeOperation() == null) loadProjects()
+        // Observation is not admission or evidence of drain; the controller remains authoritative.
+        while (true) { observed = controller.activeOperation(); kotlinx.coroutines.delay(100) }
+    }
+    val busy = pending || observed != null
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_project_prune_title)) }, text = {
+        LazyColumn(Modifier.heightIn(max = 440.dp).testTag("memory-project-prune-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text(stringResource(R.string.memory_project_prune_explanation))
+                TextButton(enabled = !busy, onClick = { loadProjects() }, modifier = Modifier.testTag("memory-project-prune-refresh")) { Text(stringResource(R.string.memory_project_prune_refresh)) }
+                if (busy) Text(stringResource(R.string.memory_project_prune_busy), modifier = Modifier.testTag("memory-project-prune-busy"))
+                message?.let { Text(stringResource(it), modifier = Modifier.testTag("memory-project-prune-message")) }
+                safeCode?.let { Text(stringResource(R.string.memory_project_prune_error_code, it), modifier = Modifier.testTag("memory-project-prune-error-code")) }
+                Text(stringResource(R.string.memory_project_prune_select))
+            }
+            itemsIndexed(choices) { index, project ->
+                TextButton(enabled = !busy, onClick = { selection = project; invalidate() }, modifier = Modifier.testTag("memory-project-prune-project-$index")) { Text((if (selection == project) "✓ " else "") + project) }
+            }
+            item {
+                selection?.let { Text(it, modifier = Modifier.testTag("memory-project-prune-selection")) }
+                TextButton(enabled = !busy && selection != null, onClick = {
+                    val selected = selection ?: return@TextButton
+                    runOperation(false, { controller.preview(selected, it) }) { preview = it }
+                }, modifier = Modifier.testTag("memory-project-prune-preview")) { Text(stringResource(R.string.memory_project_prune_preview)) }
+            }
+            preview?.let { estimate ->
+                item {
+                    Text(estimate.project, modifier = Modifier.testTag("memory-project-prune-preview-project"))
+                    Text(stringResource(R.string.memory_project_prune_estimate), modifier = Modifier.testTag("memory-project-prune-estimate-warning"))
+                    Text(stringResource(R.string.memory_project_prune_live, estimate.liveObservationCount), modifier = Modifier.testTag("memory-project-prune-live"))
+                    Text(stringResource(R.string.memory_project_prune_prompts, estimate.promptsToDelete), modifier = Modifier.testTag("memory-project-prune-prompts"))
+                    Text(stringResource(R.string.memory_project_prune_sessions, estimate.sessionsToDelete), modifier = Modifier.testTag("memory-project-prune-sessions"))
+                    Text(stringResource(R.string.memory_project_prune_retained, estimate.sessionsRetained), modifier = Modifier.testTag("memory-project-prune-retained"))
+                    if (estimate.liveObservationCount > 0L) Text(stringResource(R.string.memory_project_prune_blocked), modifier = Modifier.testTag("memory-project-prune-blocked"))
+                    Text(stringResource(R.string.memory_project_prune_warning), modifier = Modifier.testTag("memory-project-prune-destructive-warning"))
+                }
+                item {
+                    Row {
+                        Checkbox(checked = consent, enabled = !busy && estimate.liveObservationCount == 0L, onCheckedChange = { consent = it }, modifier = Modifier.testTag("memory-project-prune-consent"))
+                        Text(stringResource(R.string.memory_project_prune_consent))
+                    }
+                    TextButton(enabled = !busy && consent && estimate.liveObservationCount == 0L, onClick = {
+                        if (!consent || busy) return@TextButton
+                        val captured = estimate
+                        runOperation(true, { controller.apply(captured, it) }) { receipt = it }
+                    }, modifier = Modifier.testTag("memory-project-prune-apply")) { Text(stringResource(R.string.memory_project_prune_apply)) }
+                }
+            }
+            receipt?.let { result ->
+                item {
+                    Text(stringResource(R.string.memory_project_prune_receipt), modifier = Modifier.testTag("memory-project-prune-receipt"))
+                    Text(result.project, modifier = Modifier.testTag("memory-project-prune-receipt-project"))
+                    Text(stringResource(R.string.memory_project_prune_deleted_prompts, result.promptsDeleted), modifier = Modifier.testTag("memory-project-prune-deleted-prompts"))
+                    Text(stringResource(R.string.memory_project_prune_deleted_sessions, result.sessionsDeleted), modifier = Modifier.testTag("memory-project-prune-deleted-sessions"))
+                    Text(stringResource(R.string.memory_project_prune_retained, result.sessionsRetained), modifier = Modifier.testTag("memory-project-prune-final-retained"))
+                }
+            }
+        }
+    }, confirmButton = {
+        if (busy) TextButton(onClick = { if (ownToken != null) ownToken?.cancel() else observed?.let { controller.cancelIfCurrent(it) } }, modifier = Modifier.testTag("memory-project-prune-cancel")) { Text(stringResource(R.string.memory_project_prune_cancel)) }
+    }, dismissButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-project-prune-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+}
+
 @Composable
 private fun MemoryProjectHistoryDialog(onClose: () -> Unit) {
     val context = LocalContext.current.applicationContext

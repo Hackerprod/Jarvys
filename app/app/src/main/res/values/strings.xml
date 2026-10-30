@@ -1902,4 +1902,31 @@ Confirmed retired sources:
     <string name="memory_project_history_count">Matching projects: %1$d</string>
     <string name="memory_project_history_empty">No matching historical evidence.</string>
     <string name="memory_project_history_projects">Canonical historical project names</string>
+
+    <string name="memory_project_prune_action">Prune empty metadata</string>
+    <string name="memory_project_prune_title">Prune project metadata</string>
+    <string name="memory_project_prune_explanation">Explicit manual maintenance of one authorized project. This is not deletion of observations, a workspace, or directories. Memory and prompt-capture settings are unchanged.</string>
+    <string name="memory_project_prune_refresh">Refresh authorized projects</string>
+    <string name="memory_project_prune_select">Select a project explicitly</string>
+    <string name="memory_project_prune_preview">Preview current estimate</string>
+    <string name="memory_project_prune_estimate">Point-in-time estimate, not a frozen plan or compare-and-swap. Apply rechecks the current transaction; final counts may differ.</string>
+    <string name="memory_project_prune_warning">Permanently remove this project’s prompts and only sessions without any observation or remaining prompt reference. All observations, including removed ones, stay. Deletion markers can prevent reuse of old sessions or prompts. There is no UI undo or backup created by this action.</string>
+    <string name="memory_project_prune_consent">I authorize this defined operation on the displayed project, including re-evaluated final counts.</string>
+    <string name="memory_project_prune_apply">Confirm irreversible prune</string>
+    <string name="memory_project_prune_live">Live observations: %1$d</string>
+    <string name="memory_project_prune_prompts">Estimated prompts to remove: %1$d</string>
+    <string name="memory_project_prune_sessions">Estimated sessions to remove: %1$d</string>
+    <string name="memory_project_prune_retained">Own sessions retained by references (adapter): %1$d</string>
+    <string name="memory_project_prune_blocked">Live observations prevent pruning. No observation will be deleted by this action.</string>
+    <string name="memory_project_prune_busy">An operation is still physically running. Reopening does not permit another apply until it returns.</string>
+    <string name="memory_project_prune_cancel">Cancel current operation</string>
+    <string name="memory_project_prune_failed">The read or setup failed. No empty preview or successful prune is inferred. Refresh explicitly.</string>
+    <string name="memory_project_prune_unknown">Prune result unconfirmed. It may have committed. Do not assume rollback or retry automatically. Refresh to inspect current estimates; that does not reconstruct a receipt.</string>
+    <string name="memory_project_prune_cancelled">Cancelled or interrupted. A prune may already have committed; do not assume rollback or retry automatically. Wait for physical completion, then refresh explicitly.</string>
+    <string name="memory_project_prune_receipt">Confirmed prune receipt</string>
+    <string name="memory_project_prune_deleted_prompts">Prompts actually deleted: %1$d</string>
+    <string name="memory_project_prune_deleted_sessions">Sessions actually deleted: %1$d</string>
+    <string name="memory_project_prune_error_code">Safe outcome code: %1$s</string>
+    <string name="memory_project_prune_unavailable">Prune is unavailable. No operation was started.</string>
+    <string name="memory_project_prune_rejected">The operation returned a safe failure code, not a successful prune receipt. Refresh the current estimate before deciding what to do next.</string>
 </resources>

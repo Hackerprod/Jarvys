@@ -1069,7 +1069,35 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         repo.resolve(key, cwd, namespace, token, verify)
     }
 
-    /** Import owns its private spool until the actual Room callable has physically returned. */
+    /** Manual project pruning shares the existing physically-owned worker wait, not import authority. */
+    private fun <T> withMemoryPrune(project: String?, token: CancellationToken,
+        block: suspend (MemoryProjectPruneRepository, MemoryNamespace, () -> Unit) -> T): T {
+        token.throwIfCancelled()
+        return executeImportOnWorker(token) { repos ->
+            token.throwIfCancelled()
+            val original=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+            if(project!=null && (project.isEmpty() || !original.owns(project)))throw MemoryProjectPruneException("memory_prune_invalid_project")
+            val verify={
+                token.throwIfCancelled()
+                val current=MemoryNamespace.resolve(applicationContext,MemoryNamespace.CENTRAL,null,null,true,true)
+                if(!original.hasSameOwners(current))throw MemoryProjectPruneException("memory_prune_owner_changed")
+                token.throwIfCancelled()
+            }
+            val result=runBlocking { block(MemoryProjectPruneRepository(repos.database),original,verify) }
+            verify();result
+        }
+    }
+    fun personalAgentMemoryPruneProjects(token: CancellationToken): List<String> = withMemoryPrune(null,token) { _,namespace,verify ->
+        verify();namespace.authorizedProjects()
+    }
+    fun personalAgentMemoryPrunePreview(project:String,token:CancellationToken):MemoryProjectPrunePreview = withMemoryPrune(project,token) { repo,_,verify ->
+        repo.preview(project,token,verify)
+    }
+    fun personalAgentMemoryPruneApply(project:String,token:CancellationToken):MemoryProjectPruneReceipt = withMemoryPrune(project,token) { repo,_,verify ->
+        repo.apply(project,token,verify)
+    }
+
+    /** Import private spools and prune slots remain owned until the actual callable physically returns. */
     private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
         val finished=java.util.concurrent.CountDownLatch(1)
         try { return executeOwnedOnWorker(null,{finished.countDown()},{token.cancel()},block) }
