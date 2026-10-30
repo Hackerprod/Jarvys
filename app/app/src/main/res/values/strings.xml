@@ -1975,4 +1975,23 @@ Confirmed retired sources:
     <string name="memory_repair_unavailable">Repair is unavailable. No operation was started.</string>
     <string name="memory_repair_limitations">Only source-title repair is covered. Sync mutation propagation, general repair, restore and full backup management are not implemented by this action.</string>
     <string name="memory_repair_invalid_title">Unsupported non-text or invalid UTF-8 title (preserved unchanged)</string>
+
+    <string name="memory_orphan_title">Reclassify retired-endpoint relations</string>
+    <string name="memory_orphan_scope">Manual operation across all currently authorized memory projects. Memory can remain OFF.</string>
+    <string name="memory_orphan_partial">Partial coverage: only relations whose two endpoints are still retained and authorized. Missing or unattributed endpoints are not covered. No excluded-owner data or counts are shown.</string>
+    <string name="memory_orphan_terminal">Retained retired endpoints can still be judged manually in Jarvys. This action instead chooses terminal orphaned status and removes ordinary judgment for those relations. There is no undo in this flow.</string>
+    <string name="memory_orphan_estimate">Preview is an estimate, not a frozen list. Concurrent additions, retirements and judgments may change counts and membership. Apply uses the current predicate: pending with both authorized retained endpoints retired. Already judged relations stay judged; new matching relations may be included.</string>
+    <string name="memory_orphan_counts">Pending before apply: both retired %1$d · one retired %2$d · both live %3$d</string>
+    <string name="memory_orphan_relation">Relation: %1$s</string>
+    <string name="memory_orphan_source">Source: %1$s · Project: %2$s</string>
+    <string name="memory_orphan_target">Target: %1$s · Project: %2$s</string>
+    <string name="memory_orphan_always_backup">Every confirmed apply creates a whole-database copy, even with zero changes or a repeated no-op.</string>
+    <string name="memory_orphan_apply">Create private copy and reclassify current candidates</string>
+    <string name="memory_orphan_receipt">Confirmed reclassified relations: %1$d</string>
+    <string name="memory_repair_kind_title">Copy type: source-title repair</string>
+    <string name="memory_repair_kind_orphan">Copy type: retired-endpoint relation repair</string>
+    <string name="memory_repair_kind_unspecified">Copy type: unspecified (historical or unknown)</string>
+    <string name="memory_orphan_backup_warning">Before reclassification, this operation creates and verifies a private copy of the WHOLE shared SQLite database, even with zero candidates. It includes conversations/transcripts, bindings, historical and soft-deleted data, and OTHER PROJECTS, beyond the authorized repair scope. The copy stays in app-private storage; nothing is uploaded or exported. It is not JSON export, automatic restore, or guaranteed forensic recovery.</string>
+    <string name="memory_orphan_consent">I authorize this whole-database private copy even with zero changes, and terminal orphaned reclassification of the current matching relations. I understand the preview can change and the indefinite retention policy.</string>
+    <string name="memory_orphan_preview">Preview pending relation categories</string>
 </resources>

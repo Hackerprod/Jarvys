@@ -194,6 +194,11 @@ internal fun MemorySourceTitleRepairDialog(onClose: () -> Unit) {
                 itemsIndexed(entries) { index, copy ->
                     androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("memory-repair-backup-$index")) {
                         Text(stringResource(R.string.memory_repair_backup_id, copy.operationId))
+                        Text(stringResource(when (copy.kind) {
+                            "source_title" -> R.string.memory_repair_kind_title
+                            "orphan_pending_relations" -> R.string.memory_repair_kind_orphan
+                            else -> R.string.memory_repair_kind_unspecified
+                        }))
                         copy.createdAt?.let { Text(stringResource(R.string.memory_repair_backup_time, it)) }
                         Text(stringResource(R.string.memory_repair_backup_status, copy.status), modifier = Modifier.testTag("memory-repair-backup-status-$index"))
                         Text(stringResource(R.string.memory_repair_backup_availability, copy.availability), modifier = Modifier.testTag("memory-repair-backup-availability-$index"))

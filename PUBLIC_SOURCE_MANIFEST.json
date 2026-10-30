@@ -1,8 +1,8 @@
 {
-  "source_commit": "a04e981615361694eaabf3623707bf60a09f675c",
-  "parent_commit": "ac4b681f895a20323081d15b345d11bab7ed6f20",
+  "source_commit": "6904a6afdf593206bdf3e342bc4c741bd8759678",
+  "parent_commit": "2e5bf2112ce6f42ffb81a5f8dea58bd237087e46",
   "scope": "partial production code/configuration/schema/text resources plus root README/Pending; not build-ready or test-reproducible",
-  "source_file_count": 985,
+  "source_file_count": 988,
   "files": [
     {
       "path": ".gitignore",
@@ -14,16 +14,16 @@
     {
       "path": "Pending.md",
       "mode": "100644",
-      "git_blob_sha1": "af6dddefca4d1b7468f9685ee00dd009f05406fe",
-      "sha256": "5e56fa52a46d50a5ab3672b6d2d0f5d1839b62d680e9d10e0724c0c9d0afbf69",
-      "bytes": 382545
+      "git_blob_sha1": "ce486baac9cf22bfd768179f9b12134dcd3c0779",
+      "sha256": "7b8b9c1802ce3e43fca1a69ea5963edf0036929171af7fd2c8a9895e07307a13",
+      "bytes": 384213
     },
     {
       "path": "README.md",
       "mode": "100644",
-      "git_blob_sha1": "a28c6828b50d648f1210ec944370b4a88ffddf01",
-      "sha256": "874527601115959abcf368d59192546c7dc2db04b0dfab8aed66dba80d39a06f",
-      "bytes": 105815
+      "git_blob_sha1": "84eb1f287e6535df641f0396859c7ced60e9f289",
+      "sha256": "88c57fcdfd3485b86fde71443d47cb06a414c581e0785c42aca86f0065d9e0a9",
+      "bytes": 107483
     },
     {
       "path": "app/.gitignore",
@@ -1874,6 +1874,13 @@
       "bytes": 7196
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/MemoryOrphanRelationRepairController.kt",
+      "mode": "100644",
+      "git_blob_sha1": "fabdb5a60e76cd19fb864716254216fca56505d9",
+      "sha256": "b1c62a673f38ec614c2c42f052ec64d5a03040c2ac50ffb3886b21a7d2227e0b",
+      "bytes": 2824
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/MemoryProjectPruneController.kt",
       "mode": "100644",
       "git_blob_sha1": "618735273f5e65a93b19ea2490c61cdf3702dc0d",
@@ -2870,9 +2877,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatDatabaseBridge.kt",
       "mode": "100644",
-      "git_blob_sha1": "27fc39c21f4061fad17c835421c329eb504a0481",
-      "sha256": "4f25120f8a2eae40407b934873e81ffea61a5d8751a9e6b8fecbe39e9c9a9934",
-      "bytes": 160384
+      "git_blob_sha1": "e17bddbb6175a0c80bbdf4b7750b5534b02311af",
+      "sha256": "b4c227eb0353d2e4dcc8439de3c5f526da3358a9193365b56620ffae2f70bd13",
+      "bytes": 162175
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/ChatSqlConnection.kt",
@@ -3183,6 +3190,13 @@
       "bytes": 2540
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryOrphanRelationRepair.kt",
+      "mode": "100644",
+      "git_blob_sha1": "eed441591f479858c66ee49d24e6075d0830b044",
+      "sha256": "1579200fc8302e66cc9dabe58ba2be92cf8a08a53d06b0a8edf1916dc18431fb",
+      "bytes": 13780
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryPassiveCapture.kt",
       "mode": "100644",
       "git_blob_sha1": "cfc1e0bde0fa0a3af1036b064cb9c40426ca96e8",
@@ -3276,9 +3290,9 @@
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryRepairBackupStore.kt",
       "mode": "100644",
-      "git_blob_sha1": "22658b38a4db296916e1ef1da11b44e449a21931",
-      "sha256": "9191a60df80d3a5c4c767d4e2d0d28b8eb9274ca9c216d86fc68791ad987e4e4",
-      "bytes": 17696
+      "git_blob_sha1": "7b34c09b0e57e9d0302d6d7567a8f3dd9ddca846",
+      "sha256": "1f30b3ed6ae01eb2f09a0655dd8602463b4533a3849ff8058af314ac8f2ce025",
+      "bytes": 18067
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/chatdb/MemoryReview.kt",
@@ -4401,18 +4415,25 @@
       "bytes": 720
     },
     {
+      "path": "app/app/src/main/java/com/jarvys/agent/memory/MemoryOrphanRelationRepairDialog.kt",
+      "mode": "100644",
+      "git_blob_sha1": "1318ce3737e9d5a699ac8d64c0fdcd51452ff07c",
+      "sha256": "24df9c5d98ac0123b084831ffea07c9a547732fe87caba2fa84fc817b6379583",
+      "bytes": 11926
+    },
+    {
       "path": "app/app/src/main/java/com/jarvys/agent/memory/MemorySourceTitleRepairDialog.kt",
       "mode": "100644",
-      "git_blob_sha1": "7d300c26d767fa7318f762525fd36063776c710a",
-      "sha256": "122d364031a1c833889dc47fd07469bf9384d19d0f073d3fae4e936b8bbb3e3c",
-      "bytes": 14255
+      "git_blob_sha1": "b5e8e30181fdcbb491b409e832930066b25c7948",
+      "sha256": "0689918ef12e54be3acc3c5c7ff8736249a203d9b824007f295e802cca54f1e7",
+      "bytes": 14595
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/memory/PersonalMemoryScreen.kt",
       "mode": "100644",
-      "git_blob_sha1": "81943e66cb3e13640ff3fc723e3ee26ba6b87843",
-      "sha256": "74c16e5be16ab855f9df13209e0c897f870afe455f447540a4c8e0a2c0c040b3",
-      "bytes": 208880
+      "git_blob_sha1": "bb2b6fde2a4cb7d070522e2a9d0c13ed9ed15f94",
+      "sha256": "05e4d8077061f8ab34295e16b398d06773d2a4ad4158ffa700c4ceaecfbf95ef",
+      "bytes": 209405
     },
     {
       "path": "app/app/src/main/java/com/jarvys/agent/modules/ModuleArtifactViewerLaunch.kt",
@@ -5544,9 +5565,9 @@
     {
       "path": "app/app/src/main/res/values-es/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "d417c41efe197e37c861216e8378b6727f3f2c74",
-      "sha256": "3f0b033ac9cd64c307581be1ec0fba484be2770e9c610114de349959c53b537a",
-      "bytes": 204489
+      "git_blob_sha1": "62227dd4cc285a70cd38ea888ea8a330565ff522",
+      "sha256": "f2767bb872c68491cb20fa1a84aea54f9a59b3e3fea4f465f3ae95ca2e6ed69f",
+      "bytes": 207589
     },
     {
       "path": "app/app/src/main/res/values-es/strings_ux44_mcp.xml",
@@ -5691,9 +5712,9 @@
     {
       "path": "app/app/src/main/res/values/strings.xml",
       "mode": "100644",
-      "git_blob_sha1": "c5bcc2cb6a7ab452170a7522c31704b9a2efdf36",
-      "sha256": "e1e8dc442c2965fee1b19eee2a7b3674516550a107c81bfdd3b97a5f55a334ce",
-      "bytes": 191160
+      "git_blob_sha1": "53dc67f8c37581c646e36df535abd308a427b6ae",
+      "sha256": "62137f7d227b7317a24612258b4458b282528d19497bd272c72be2c2b368c0f5",
+      "bytes": 194033
     },
     {
       "path": "app/app/src/main/res/values/strings_ux44_mcp.xml",

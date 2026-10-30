@@ -1,3 +1,11 @@
+## Memoria P5-L — Relaciones retiradas retenidas — checkpoint 30-10-2026
+
+**Candidate1: Full144/0 y Play144/0, 22 clases por sabor, sin omisiones.** Focal36 separado. Doble PASS independiente acotado. Código `baddd42a53b3476128147744d13630366fd6dbd9`. [Reporte y límites](docs/continue/engram-port/P5-L-orphan-relations-report.md) · [Resultados exactos](docs/continue/engram-port/P5-L-orphan-relations-results.json).
+
+Reclasifica pending→orphaned sólo si AMBOS extremos siguen retenidos, retirados y autorizados; parejas cross-project permitidas cuando ambos owners están autorizados, nunca por metadata de la relación. Preview metadata-only estimado; apply rederiva bajo writer y preserva juicios concurrentes. Advierte estado terminal sin undo y exige consentimiento de copia integral Room incluso para cero cambios: cada apply completado con éxito conserva una SQLite verificada nueva, incluso con cero cambios; los intentos fallidos pueden dejar copias incompletas conservadas. Timestamp segundos/nanos0, demás campos intactos. Inventario identifica tipo de reparación; manifests antiguos permanecen de tipo no especificado.
+
+**F36 y P5 siguen abiertos.** La siguiente unidad inmediata es atribución segura de extremos físicamente ausentes mediante tombstones: conflictos fila/marker/identidad/reutilización y owners actuales, sin inventar autoridad ni filtrar datos ajenos. Este subset NO es reparación global upstream. Sin PASS global/P6/dispositivo físico, restore, borrado de copias o durabilidad power-loss. Primario7+oracle suplementario1 son evidencia separada, no se suman al candidato Android. Los bloques inferiores son históricos.
+
 ## Memoria P5-K — Reparación de títulos con copia SQLite privada — checkpoint 30-10-2026
 
 **Candidate4: Full145/0 y Play145/0, 21 clases por sabor, sin omisiones.** Focal19 separado. Doble PASS independiente acotado. Código `34e3b30af08c35ea542409ef2a903ef3af1c3a65`. [Reporte y límites](docs/continue/engram-port/P5-K-source-title-repair-report.md) · [Resultados exactos](docs/continue/engram-port/P5-K-source-title-repair-results.json).

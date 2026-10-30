@@ -1127,6 +1127,31 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun personalAgentMemoryRepairApply(plan: MemorySourceTitleRepairPlan, confirmedWholeDatabaseCopy: Boolean, token: CancellationToken): MemorySourceTitleRepairReceipt =
         withMemoryRepair(plan.project, token) { repo, namespace, verify -> repo.apply(plan, namespace, confirmedWholeDatabaseCopy, token, verify) }
 
+    private fun <T> withMemoryOrphanRepair(token: CancellationToken,
+        block: suspend (MemoryOrphanRelationRepairRepository, MemoryNamespace, () -> Unit) -> T): T {
+        token.throwIfCancelled()
+        return executeImportOnWorker(token) { repos ->
+            val original = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+            val verify = {
+                token.throwIfCancelled()
+                val current = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+                if (!original.hasSameOwners(current)) throw MemoryOrphanRelationRepairException("memory_orphan_owner_changed")
+                token.throwIfCancelled()
+            }
+            val anchor = JarvysChatDatabaseProvider.connectionProjectionAnchor(repos.database)
+            anchor.fenced {
+                val identity = JarvysChatDatabaseProvider.requireOpenFileIdentity(repos.database, applicationContext)
+                val result = runBlocking { block(MemoryOrphanRelationRepairRepository(repos.database, applicationContext), original) { verify(); identity() } }
+                verify(); identity(); result
+            }
+        }
+    }
+    fun personalAgentMemoryOrphanRelationRepairPreview(token: CancellationToken): MemoryOrphanRelationRepairPlan =
+        withMemoryOrphanRepair(token) { repo, namespace, verify -> repo.preview(namespace, token, verify) }
+    fun personalAgentMemoryOrphanRelationRepairApply(plan: MemoryOrphanRelationRepairPlan, confirmedWholeDatabaseCopy: Boolean,
+        token: CancellationToken): MemoryOrphanRelationRepairReceipt =
+        withMemoryOrphanRepair(token) { repo, namespace, verify -> repo.apply(plan, namespace, confirmedWholeDatabaseCopy, token, verify) }
+
     /** Import private spools and prune slots remain owned until the actual callable physically returns. */
     private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
         val finished=java.util.concurrent.CountDownLatch(1)

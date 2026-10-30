@@ -19,7 +19,7 @@ import java.util.UUID
 /** Hash/verification in inventory is historical, never a claim of a freshly verified restore. */
 data class MemoryRepairBackupInfo(
     val operationId: String, val createdAt: Long?, val status: String, val sizeBytes: Long?,
-    val sha256: String?, val availability: String, val repairOutcome: String,
+    val sha256: String?, val availability: String, val repairOutcome: String, val kind: String = "unspecified",
 )
 
 /**
@@ -34,7 +34,7 @@ class MemoryRepairBackupStore(context: Context) {
     internal data class Identity(val device: Long, val inode: Long)
     internal class Attempt internal constructor(
         val id: String, val createdAt: Long, val directory: File, val file: File,
-        val directories: List<Pair<File, Identity>>, val fileIdentity: Identity,
+        val directories: List<Pair<File, Identity>>, val fileIdentity: Identity, val kind: String,
     ) {
         var size: Long? = null
         var hash: String? = null
@@ -79,7 +79,8 @@ class MemoryRepairBackupStore(context: Context) {
         } catch (caught: Throwable) { failure = caught; throw caught }
         finally { close(fd, failure) }
     }
-    internal fun create(token: CancellationToken): Attempt {
+    internal fun create(token: CancellationToken, kind: String = "source_title"): Attempt {
+        require(kind == "source_title" || kind == "orphan_pending_relations") { "memory_repair_kind_invalid" }
         token.throwIfCancelled()
         val directories = ArrayList<Pair<File, Identity>>()
         directories.add(data to identity(data, true))
@@ -100,9 +101,9 @@ class MemoryRepairBackupStore(context: Context) {
             seal = Identity(stat.st_dev, stat.st_ino)
         } catch (caught: Throwable) { failure = caught; throw caught }
         finally { close(fd, failure) }
-        val attempt = Attempt(id, System.currentTimeMillis(), directory, file, Collections.unmodifiableList(directories), seal)
+        val attempt = Attempt(id, System.currentTimeMillis(), directory, file, Collections.unmodifiableList(directories), seal, kind)
         requireFile(attempt)
-        metadata(attempt, MANIFEST, JSONObject().put("version", 1).put("operation_id", id).put("created_at", attempt.createdAt).put("status", "reserved"))
+        metadata(attempt, MANIFEST, JSONObject().put("version", 1).put("operation_id", id).put("created_at", attempt.createdAt).put("status", "reserved").put("kind", kind))
         token.throwIfCancelled()
         return attempt
     }
@@ -206,7 +207,7 @@ class MemoryRepairBackupStore(context: Context) {
     }
     internal fun info(attempt: Attempt, outcome: String): MemoryRepairBackupInfo = MemoryRepairBackupInfo(
         attempt.id, attempt.createdAt, if (attempt.verified) "verified" else "incomplete", attempt.size, attempt.hash,
-        "verified_at_operation", outcome,
+        "verified_at_operation", outcome, attempt.kind,
     )
     /** Metadata-only inventory. No database opener, mkdir, JSON import, restore or automatic cleanup. */
     fun inventory(token: CancellationToken): List<MemoryRepairBackupInfo> {
@@ -261,7 +262,8 @@ class MemoryRepairBackupStore(context: Context) {
                     val status = when { historical -> "historically_verified"; manifest != null -> outcome?.optString("operation_status")?.takeIf { it in setOf("failed", "cancelled") } ?: "incomplete"; else -> "unknown" }
                     current()
                     if (identity(directory, true) != directoryId) error("memory_repair_backup_changed")
-                    MemoryRepairBackupInfo(operationId, manifest?.optLong("created_at", -1L)?.takeIf { it >= 0L }, status, size, hash, availability, state)
+                    MemoryRepairBackupInfo(operationId, manifest?.optLong("created_at", -1L)?.takeIf { it >= 0L }, status, size, hash, availability, state,
+                        manifest?.optString("kind")?.takeIf { it == "source_title" || it == "orphan_pending_relations" } ?: "unspecified")
                 } catch (failure: java.util.concurrent.CancellationException) { throw failure }
                 catch (_: Exception) {
                     current()

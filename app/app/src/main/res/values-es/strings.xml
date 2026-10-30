@@ -1977,4 +1977,23 @@ Fuentes retiradas confirmadas:
     <string name="memory_repair_unavailable">La reparación no está disponible. No se inició ninguna operación.</string>
     <string name="memory_repair_limitations">Solo se cubre la reparación de títulos de origen. Esta acción no implementa propagación de cambios de sincronización, reparación general, restauración ni gestión completa de copias.</string>
     <string name="memory_repair_invalid_title">Título de tipo no admitido o UTF-8 inválido (se conserva sin cambios)</string>
+
+    <string name="memory_orphan_title">Reclasificar relaciones con extremos retirados</string>
+    <string name="memory_orphan_scope">Operación manual en todos los proyectos de memoria actualmente autorizados. Memoria puede seguir desactivada.</string>
+    <string name="memory_orphan_partial">Cobertura parcial: solo relaciones cuyos dos extremos siguen retenidos y autorizados. No cubre extremos ausentes o sin atribución. No se muestran datos ni conteos de propietarios excluidos.</string>
+    <string name="memory_orphan_terminal">Los extremos retirados retenidos aún permiten juicio manual en Jarvys. Esta acción elige el estado terminal orphaned y deja de ofrecer el juicio ordinario para esas relaciones. Este flujo no tiene deshacer.</string>
+    <string name="memory_orphan_estimate">La vista previa es una estimación, no una lista congelada. Altas, retiros y juicios concurrentes pueden cambiar conteos y miembros. Se aplica el predicado actual: pending con ambos extremos autorizados, retenidos y retirados. Las relaciones ya juzgadas conservan su juicio; pueden incluirse nuevas candidatas.</string>
+    <string name="memory_orphan_counts">Pending antes de aplicar: ambos retirados %1$d · uno retirado %2$d · ambos activos %3$d</string>
+    <string name="memory_orphan_relation">Relación: %1$s</string>
+    <string name="memory_orphan_source">Origen: %1$s · Proyecto: %2$s</string>
+    <string name="memory_orphan_target">Destino: %1$s · Proyecto: %2$s</string>
+    <string name="memory_orphan_always_backup">Cada aplicación confirmada crea una copia integral, incluso con cero cambios o al repetir una operación sin cambios.</string>
+    <string name="memory_orphan_apply">Crear copia privada y reclasificar candidatas actuales</string>
+    <string name="memory_orphan_receipt">Relaciones reclasificadas confirmadas: %1$d</string>
+    <string name="memory_repair_kind_title">Tipo de copia: reparación de títulos</string>
+    <string name="memory_repair_kind_orphan">Tipo de copia: reparación de relaciones con extremos retirados</string>
+    <string name="memory_repair_kind_unspecified">Tipo de copia: sin especificar (histórico o desconocido)</string>
+    <string name="memory_orphan_backup_warning">Antes de reclasificar, esta operación crea y verifica una copia privada de TODA la base SQLite compartida, incluso con cero candidatas. Incluye conversaciones/transcripciones, bindings, datos históricos y borrados lógicamente, y OTROS PROYECTOS, más allá del alcance autorizado de reparación. La copia permanece en almacenamiento privado de la aplicación; no se sube ni exporta nada. No es una exportación JSON, restauración automática ni recuperación forense garantizada.</string>
+    <string name="memory_orphan_consent">Autorizo esta copia privada integral incluso con cero cambios y la reclasificación terminal orphaned de las relaciones que cumplan el predicado actual. Entiendo que la vista previa puede cambiar y la política de retención indefinida.</string>
+    <string name="memory_orphan_preview">Ver categorías de relaciones pending</string>
 </resources>
