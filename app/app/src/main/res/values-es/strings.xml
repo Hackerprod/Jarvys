@@ -1832,4 +1832,21 @@ Fuentes retiradas confirmadas:
     <string name="memory_import_json_label_truncated">La etiqueta de origen muestra solo un prefijo. Inspecciona este grupo de origen exacto antes de elegir su destino.</string>
     <string name="memory_import_json_inspect_group">Inspeccionar este grupo de origen completo</string>
     <string name="memory_import_json_project_page">Valor decodificado del grupo de origen · Desplazamiento: %1$d · Bytes del valor: %2$d (no es el archivo completo)</string>
+
+    <string name="memory_project_inventory_action">Proyectos de memoria</string>
+    <string name="memory_project_inventory_title">Inventario de proyectos de memoria autorizados</string>
+    <string name="memory_project_inventory_explanation">Memoria retenida en los proyectos autorizados actualmente, no el registro de espacios de trabajo. Las observaciones cuentan sólo las vigentes; las sesiones y los prompts incluyen filas retenidas de cualquier estado. Los directorios son texto descriptivo, no rutas que se puedan abrir aquí.</string>
+    <string name="memory_project_inventory_loading">Cargando el inventario actual…</string>
+    <string name="memory_project_inventory_failed">No se pudo cargar el inventario. No se muestra ningún resultado parcial. Actualiza para volver a intentarlo.</string>
+    <string name="memory_project_inventory_empty">No hay proyectos con memoria retenida.</string>
+    <string name="memory_project_inventory_refresh">Actualizar</string>
+    <string name="memory_project_inventory_inspect">Inspeccionar valores completos</string>
+    <string name="memory_project_inventory_back">Volver al inventario</string>
+    <string name="memory_project_inventory_count">Proyectos: %1$d</string>
+    <string name="memory_project_inventory_observations">Observaciones vigentes: %1$d</string>
+    <string name="memory_project_inventory_sessions">Sesiones retenidas: %1$d</string>
+    <string name="memory_project_inventory_prompts">Prompts retenidos: %1$d</string>
+    <string name="memory_project_inventory_name">Nombre exacto del proyecto</string>
+    <string name="memory_project_inventory_directories">Directorios descriptivos exactos</string>
+    <string name="memory_project_inventory_none">Sin directorios descriptivos</string>
 </resources>

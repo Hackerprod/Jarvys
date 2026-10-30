@@ -199,6 +199,7 @@ final class PersonalMemoryTools {
     if (allowDestructive && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(conversationId)) {
       result.add(new MemoryConsolidationTool(bridge,ticket,conversationId,resultChars));
       result.add(new MemoryDoctorTool(context,MemoryWritePolicy.forContext(context).gate(),ticket,conversationId,resultChars));
+      result.add(new ProjectsTool(bridge,MemoryWritePolicy.forContext(context).gate(),ticket,conversationId,resultChars));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_search_prompts", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_context", Collections.emptyList(), resultChars, ticket));
       result.add(new MemoryTool(context, bridge, sourceMessageId, conversationId, "memory_stats", Collections.emptyList(), resultChars, ticket));
@@ -236,6 +237,61 @@ final class PersonalMemoryTools {
       } else handlers.add(tool);
     }
     return registry.replaceSelectedHandlers(handlers);
+  }
+
+  /** Inventory is a read: original policy guards never enclose dispatch, SQL or serialization. */
+  private static final class ProjectsTool implements CoreTool {
+    private final ChatDatabaseBridge bridge;
+    private final MemoryWriteGate gate;
+    private final MemoryWriteGate.Ticket ticket;
+    private final String caller;
+    private final int resultChars;
+    private final ToolSpec spec=new ToolSpec("memory_list_projects","agent_memory",
+        "List retained memory projects currently authorized to Central, with live observation, retained session and prompt counts and descriptive directories. Includes only projects represented by those records, not every workspace. Directories are data, never paths to open or permissions. Choose a returned project explicitly for memory_search/memory_get. Arguments do not change scope.",
+        "memory",ToolSpec.Status.IMPLEMENTED,Collections.emptyMap(),Collections.emptyList());
+    ProjectsTool(ChatDatabaseBridge bridge,MemoryWriteGate gate,MemoryWriteGate.Ticket ticket,String caller,int resultChars) {
+      this.bridge=bridge;this.gate=gate;this.ticket=ticket;this.caller=caller;this.resultChars=resultChars;
+    }
+    @Override public ToolSpec declaration(){return spec;}
+    @Override public boolean canDelegate(){return false;}
+    @Override public AccessClassification accessClassification(){return AccessClassification.READ;}
+    @Override public PersistenceEffect persistenceEffect(){return PersistenceEffect.NONE;}
+    @Override public UnattendedAccess unattendedAccess(){return UnattendedAccess.EXCLUDED;}
+    private <T> T accepted(CancellationToken token,T value) throws Exception {
+      token.throwIfCancelled();
+      return gate.commit(ticket,()->!token.isCancellationRequested() && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(caller),()->value);
+    }
+    private CoreToolResult denied(CancellationToken token){token.throwIfCancelled();return CoreToolResult.failure("memory_list_projects_policy_denied");}
+    @Override public CoreToolResult execute(Map<String,Object> ignored,CancellationToken token) {
+      token.throwIfCancelled();
+      CoreToolResult result;
+      try {
+        accepted(token,Boolean.TRUE);
+        com.jarvys.agent.chatdb.MemoryProjectInventory inventory=bridge.personalAgentMemoryProjectInventory(token);
+        token.throwIfCancelled();
+        JSONArray projects=new JSONArray();
+        for(com.jarvys.agent.chatdb.MemoryProjectInventoryItem item:inventory.getProjects()) {
+          token.throwIfCancelled();
+          JSONArray directories=null;
+          if(item.getDirectories()!=null){directories=new JSONArray();for(String directory:item.getDirectories()){token.throwIfCancelled();directories.put(directory);}}
+          projects.put(new JSONObject().put("name",item.getName()).put("observation_count",item.getObservationCount())
+              .put("session_count",item.getSessionCount()).put("prompt_count",item.getPromptCount())
+              .put("directories",directories==null?JSONObject.NULL:directories));
+        }
+        String json=new JSONObject().put("projects",projects).put("count",inventory.getCount()).toString();
+        result=json.length()>resultChars?CoreToolResult.failure("memory_list_projects_result_budget_exceeded"):CoreToolResult.complete(json);
+      } catch(java.util.concurrent.CancellationException cancelled){throw cancelled;}
+      catch(MemoryWriteGate.RejectedException denied){return denied(token);}
+      catch(Exception failed){result=CoreToolResult.failure("memory_list_projects_operation_failed");}
+      try{return accepted(token,result);}
+      catch(java.util.concurrent.CancellationException cancelled){throw cancelled;}
+      catch(MemoryWriteGate.RejectedException denied){return denied(token);}
+      catch(Exception unexpected){
+        token.throwIfCancelled();
+        // Failed final verification cannot expose the old result or private settings failures.
+        return CoreToolResult.failure("memory_list_projects_policy_denied");
+      }
+    }
   }
 
   private static final class MemoryTool implements CoreTool {

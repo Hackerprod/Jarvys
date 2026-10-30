@@ -1003,6 +1003,20 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         } }
     }
 
+    /** Explicit manual read. Native callers enforce their ORIGINAL ticket briefly outside this dispatch. */
+    fun personalAgentMemoryProjectInventory(token: CancellationToken): MemoryProjectInventory = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        val namespace = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+        val result = runBlocking { repos.database.withChatReadTransaction {
+            token.throwIfCancelled()
+            repos.agentMemory.memoryProjectInventory(namespace).also { token.throwIfCancelled() }
+        } }
+        val current = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)
+        check(namespace.hasSameOwners(current)) { "memory_project_inventory_owner_changed" }
+        token.throwIfCancelled()
+        result
+    }
+
     /** Import owns its private spool until the actual Room callable has physically returned. */
     private fun <T> executeImportOnWorker(token:CancellationToken,block:(Repositories)->T):T {
         val finished=java.util.concurrent.CountDownLatch(1)

@@ -1359,6 +1359,44 @@ class PersonalAgentRepository internal constructor(private val database: JarvysC
         MemoryStats(sessions, observations, prompts, projects)
     }
 
+    /** Three aggregates, one coherent read fence. No payload hydration or activity updates. */
+    suspend fun memoryProjectInventory(namespace: MemoryNamespace): MemoryProjectInventory = database.withChatReadTransaction {
+        val (guard, args) = namespace.projectOnly().clause()
+        class Counts {
+            var observations = 0L
+            var sessions = 0L
+            var prompts = 0L
+            val directories = linkedSetOf<String>()
+        }
+        val projects = linkedMapOf<String, Counts>()
+        fun Cursor.name(): String {
+            check(getType(0) == Cursor.FIELD_TYPE_STRING) { "memory_project_inventory_invalid_project" }
+            return getString(0)
+        }
+        fun Cursor.count(): Long {
+            check(getType(1) == Cursor.FIELD_TYPE_INTEGER) { "memory_project_inventory_invalid_count" }
+            return getLong(1).also { check(it >= 0) { "memory_project_inventory_invalid_count" } }
+        }
+        sql.query("SELECT project,COUNT(*) FROM memory_entries WHERE $guard AND project<>'' AND deleted_at IS NULL GROUP BY project", args.toTypedArray()).use { c ->
+            while (c.moveToNext()) projects.getOrPut(c.name()) { Counts() }.observations = c.count()
+        }
+        sql.query("SELECT project,COUNT(*),directory FROM memory_sessions WHERE $guard AND project<>'' GROUP BY project,directory", args.toTypedArray()).use { c ->
+            while (c.moveToNext()) {
+                val item = projects.getOrPut(c.name()) { Counts() }
+                item.sessions = Math.addExact(item.sessions, c.count())
+                check(c.getType(2) == Cursor.FIELD_TYPE_STRING) { "memory_project_inventory_invalid_directory" }
+                c.getString(2).takeIf { it.isNotEmpty() }?.let(item.directories::add)
+            }
+        }
+        sql.query("SELECT project,COUNT(*) FROM memory_prompts WHERE $guard AND project<>'' GROUP BY project", args.toTypedArray()).use { c ->
+            while (c.moveToNext()) projects.getOrPut(c.name()) { Counts() }.prompts = c.count()
+        }
+        MemoryProjectInventory(projects.map { (name, item) ->
+            MemoryProjectInventoryItem(name, item.observations, item.sessions, item.prompts,
+                item.directories.takeIf { it.isNotEmpty() }?.toList())
+        }.sortedByDescending { it.observationCount })
+    }
+
     /** SQL eligibility intentionally follows SQLite datetime, separate from virtual display parsing. */
     suspend fun memoriesNeedingReview(namespace:MemoryNamespace, limit:Long=20, now:Long=observationClock()):List<PersonalMemoryHit> = database.withChatReadTransaction {
         val selected=namespace.projectOnly()

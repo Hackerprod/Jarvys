@@ -1,3 +1,11 @@
+## Memoria P5-G — Inventario autorizado de proyectos — checkpoint 30-10-2026
+
+**Candidate1: Full77/0 y Play77/0, 14 clases por sabor.** Focal13 separado. Doble PASS independiente acotado. Código `ddc4b7a9bd9e88d9930f71960f87cf350302117c`. [Reporte y límites](docs/continue/engram-port/P5-G-project-inventory-report.md) · [Resultados exactos](docs/continue/engram-port/P5-G-project-inventory-results.json).
+
+Main recibe inventario completo y consume proyecto→search→get; la persona dispone de listado manual independiente con MemoryOFF. Sólo datos de owners actuales: observaciones live, sesiones/prompts retenidos y directorios descriptivos (null si no hay), sin visitar esos directorios, actividad ni writes. No reemplaza la UI de borrado. Tres fallos de daemon conservados y recuperaciones Full2/Play1=0; ningún test FAIL ejecutado.
+
+**P5 sigue parcial.** Alias/history y resolver explícito requieren siguiente contrato; no cwd ficticio ni grants. Merge/prune/rescue, repair/backup, Markdown/grafo y P6 siguen pendientes. Sin PASS agregado ni dispositivo físico. Los bloques inferiores son históricos.
+
 ## Memoria P5-F — Importación manual por streaming — checkpoint 30-10-2026
 
 **Candidate6: Full345/0 y Play345/0, 45 clases por sabor; doble PASS acotado.** Focal92 separado; código `811c3dd6ee378b52ecd9f14a5def23b0ce17b6ce`. [Reporte y límites](docs/continue/engram-port/P5-F-import-report.md) · [Resultados exactos](docs/continue/engram-port/P5-F-import-results.json).

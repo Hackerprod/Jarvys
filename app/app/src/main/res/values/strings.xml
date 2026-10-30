@@ -1831,4 +1831,21 @@ Confirmed retired sources:
     <string name="memory_import_json_label_truncated">Source label is a prefix only. Inspect this exact source group before choosing its destination.</string>
     <string name="memory_import_json_inspect_group">Inspect this source group in full</string>
     <string name="memory_import_json_project_page">Decoded source-group value · Byte offset: %1$d · Value bytes: %2$d (not the whole file)</string>
+
+    <string name="memory_project_inventory_action">Memory projects</string>
+    <string name="memory_project_inventory_title">Authorized memory project inventory</string>
+    <string name="memory_project_inventory_explanation">Retained memory in currently authorized projects, not the workspace registry. Observation counts include live observations; session and prompt counts include retained rows in every state. Directories are descriptive text, not paths you can open here.</string>
+    <string name="memory_project_inventory_loading">Loading current inventory…</string>
+    <string name="memory_project_inventory_failed">The inventory could not be loaded. No partial result is shown. Refresh to try again.</string>
+    <string name="memory_project_inventory_empty">No retained memory projects.</string>
+    <string name="memory_project_inventory_refresh">Refresh</string>
+    <string name="memory_project_inventory_inspect">Inspect full values</string>
+    <string name="memory_project_inventory_back">Back to inventory</string>
+    <string name="memory_project_inventory_count">Projects: %1$d</string>
+    <string name="memory_project_inventory_observations">Live observations: %1$d</string>
+    <string name="memory_project_inventory_sessions">Retained sessions: %1$d</string>
+    <string name="memory_project_inventory_prompts">Retained prompts: %1$d</string>
+    <string name="memory_project_inventory_name">Exact project name</string>
+    <string name="memory_project_inventory_directories">Exact descriptive directories</string>
+    <string name="memory_project_inventory_none">No descriptive directories</string>
 </resources>

@@ -48,6 +48,8 @@ import com.jarvys.agent.chatdb.PersonalMemoryPromptView
 import com.jarvys.agent.chatdb.PersonalMemoryProjectSummary
 import com.jarvys.agent.chatdb.PersonalMemoryProjectDeletionPreview
 import com.jarvys.agent.chatdb.MemoryStats
+import com.jarvys.agent.chatdb.MemoryProjectInventory
+import com.jarvys.agent.chatdb.MemoryProjectInventoryItem
 import com.jarvys.agent.chatdb.MemoryConsolidationRequest
 import com.jarvys.agent.chatdb.MemoryConsolidationPlan
 import com.jarvys.agent.chatdb.MemoryConsolidationResult
@@ -92,6 +94,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
     var showProjectMemories by remember { mutableStateOf(false) }
     var showMemorySessions by remember { mutableStateOf(false) }
     var showMemoryStats by remember { mutableStateOf(false) }
+    var showMemoryProjectInventory by remember { mutableStateOf(false) }
     var showMemorySelftest by remember { mutableStateOf(false) }
     var showMemoryDoctor by remember { mutableStateOf(false) }
     var showMemoryExport by remember { mutableStateOf(false) }
@@ -176,6 +179,9 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemoryStats = true },
                         modifier = Modifier.testTag("memory-stats-open")) { Text(stringResource(R.string.memory_stats_action)) }
+                    TextButton(enabled = !deletePending && pinPendingId == null,
+                        onClick = { if (!deletePending && pinPendingId == null) showMemoryProjectInventory = true },
+                        modifier = Modifier.testTag("memory-project-inventory-open")) { Text(stringResource(R.string.memory_project_inventory_action)) }
                     TextButton(enabled = !deletePending && pinPendingId == null,
                         onClick = { if (!deletePending && pinPendingId == null) showMemorySelftest = true },
                         modifier = Modifier.testTag("memory-selftest-open")) { Text(stringResource(R.string.memory_selftest_action)) }
@@ -331,6 +337,7 @@ fun PersonalMemoryScreen(conversationId: String, onClose: (() -> Unit)? = null) 
 
     if (showMemorySessions) MemorySessionsDialog { showMemorySessions = false }
     if (showMemoryStats) MemoryStatsDialog { showMemoryStats = false }
+    if (showMemoryProjectInventory) MemoryProjectInventoryDialog { showMemoryProjectInventory = false }
     if (showMemorySelftest) MemorySelftestDialog { showMemorySelftest = false }
     if (showMemoryDoctor) MemoryDoctorDialog { showMemoryDoctor = false }
     if (showMemoryExport) MemoryExportDialog { showMemoryExport = false }
@@ -1233,6 +1240,84 @@ private fun MemorySelftestDialog(onClose: () -> Unit) {
 }
 
 /** Explicit manual read, independent of automatic memory capture; no model or background refresh. */
+@Composable
+private fun MemoryProjectInventoryDialog(onClose: () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var report by remember { mutableStateOf<MemoryProjectInventory?>(null) }
+    var inspected by remember { mutableStateOf<MemoryProjectInventoryItem?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    var requestId by remember { mutableStateOf(0L) }
+    var activeToken by remember { mutableStateOf<CancellationToken?>(null) }
+    var activeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun close() { requestId++; activeToken?.cancel(); activeJob?.cancel(); report = null; inspected = null; onClose() }
+    DisposableEffect(Unit) { onDispose { activeToken?.cancel(); activeJob?.cancel() } }
+    fun load() {
+        activeToken?.cancel(); activeJob?.cancel()
+        val captured = ++requestId
+        val token = CancellationToken.cancellable()
+        report = null; inspected = null; failed = false; loading = true; activeToken = token
+        activeJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { ChatDatabaseBridge.getInstance(context).personalAgentMemoryProjectInventory(token) }
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) report = result
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                coroutineContext.ensureActive(); token.throwIfCancelled()
+                if (captured == requestId) { report = null; inspected = null; failed = true }
+            } finally {
+                if (captured == requestId) { loading = false; activeToken = null; activeJob = null }
+            }
+        }
+    }
+    LaunchedEffect(Unit) { load() }
+    AlertDialog(onDismissRequest = { close() }, title = { Text(stringResource(R.string.memory_project_inventory_title)) }, text = {
+        Column {
+            TextButton(onClick = { load() }, modifier = Modifier.testTag("memory-project-inventory-refresh")) { Text(stringResource(R.string.memory_project_inventory_refresh)) }
+            if (loading) Text(stringResource(R.string.memory_project_inventory_loading), modifier = Modifier.testTag("memory-project-inventory-loading"))
+            if (failed) Text(stringResource(R.string.memory_project_inventory_failed), modifier = Modifier.testTag("memory-project-inventory-failed"))
+            val selected = inspected
+            if (selected != null) {
+                TextButton(onClick = { inspected = null }, modifier = Modifier.testTag("memory-project-inventory-back")) { Text(stringResource(R.string.memory_project_inventory_back)) }
+                key(selected.name) {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()).testTag("memory-project-inventory-inspection"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.memory_project_inventory_name))
+                        Text(selected.name, modifier = Modifier.testTag("memory-project-inventory-full-name"))
+                        Text(stringResource(R.string.memory_project_inventory_observations, selected.observationCount))
+                        Text(stringResource(R.string.memory_project_inventory_sessions, selected.sessionCount))
+                        Text(stringResource(R.string.memory_project_inventory_prompts, selected.promptCount))
+                        Text(stringResource(R.string.memory_project_inventory_directories))
+                        if (selected.directories == null) Text(stringResource(R.string.memory_project_inventory_none), modifier = Modifier.testTag("memory-project-inventory-no-directories"))
+                        else selected.directories.forEachIndexed { index, directory -> Text(directory, modifier = Modifier.testTag("memory-project-inventory-full-directory-$index")) }
+                    }
+                }
+            } else {
+                LazyColumn(Modifier.heightIn(max = 400.dp).testTag("memory-project-inventory-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { Text(stringResource(R.string.memory_project_inventory_explanation)) }
+                    report?.let { received ->
+                        item {
+                            Text(stringResource(R.string.memory_project_inventory_count, received.count), modifier = Modifier.testTag("memory-project-inventory-count"))
+                            if (received.projects.isEmpty()) Text(stringResource(R.string.memory_project_inventory_empty), modifier = Modifier.testTag("memory-project-inventory-empty"))
+                        }
+                        itemsIndexed(received.projects, key = { _, project -> project.name }) { index, project ->
+                            Column(Modifier.testTag("memory-project-inventory-item-$index"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(project.name, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.testTag("memory-project-inventory-name-$index"))
+                                Text(stringResource(R.string.memory_project_inventory_observations, project.observationCount), modifier = Modifier.testTag("memory-project-inventory-observations-$index"))
+                                Text(stringResource(R.string.memory_project_inventory_sessions, project.sessionCount), modifier = Modifier.testTag("memory-project-inventory-sessions-$index"))
+                                Text(stringResource(R.string.memory_project_inventory_prompts, project.promptCount), modifier = Modifier.testTag("memory-project-inventory-prompts-$index"))
+                                if (project.directories == null) Text(stringResource(R.string.memory_project_inventory_none), modifier = Modifier.testTag("memory-project-inventory-no-directories-$index"))
+                                TextButton(onClick = { inspected = project }, modifier = Modifier.testTag("memory-project-inventory-inspect-$index")) { Text(stringResource(R.string.memory_project_inventory_inspect)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { close() }, modifier = Modifier.testTag("memory-project-inventory-close")) { Text(stringResource(R.string.memory_inspector_close)) } })
+}
+
 @Composable
 private fun MemoryStatsDialog(onClose: () -> Unit) {
     val context = LocalContext.current.applicationContext
