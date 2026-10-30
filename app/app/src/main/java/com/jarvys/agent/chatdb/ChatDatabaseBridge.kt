@@ -1003,6 +1003,21 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
         } }
     }
 
+    /** Explicit manual export, with no automatic-memory grant or save/session side effect. */
+    internal fun exportMemorySnapshot(options: com.jarvys.agent.MemoryExportOptions, exportedAt: String,
+        token: CancellationToken, openOutput: () -> java.io.OutputStream): MemoryExportSnapshot = executeOnWorker { repos ->
+        token.throwIfCancelled()
+        require(options.project == null || MemoryObservationContent.trimSpace(options.project).isNotEmpty()) { "memory_project_empty" }
+        val selected = options.project?.let(MemoryNamespace::normalizeProject)
+        val normalized = options.copy(project = selected)
+        val namespace = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, selected, null, selected == null, true)
+        val result = runBlocking { MemoryExportRepository(repos.database, applicationContext).render(namespace, normalized, exportedAt, token, openOutput) }
+        val after = MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, selected, null, selected == null, true)
+        check(namespace.hasSameOwners(after)) { "memory_export_owner_changed" }
+        token.throwIfCancelled()
+        result
+    }
+
     fun personalAgentMemoryStatsProjects(token: CancellationToken): List<String> = executeOnWorker { _ ->
         token.throwIfCancelled()
         MemoryNamespace.resolve(applicationContext, MemoryNamespace.CENTRAL, null, null, true, true)

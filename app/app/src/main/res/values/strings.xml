@@ -1761,4 +1761,34 @@ Confirmed retired sources:
     <string name="memory_doctor_next_step">Guidance only: %1$s</string>
     <string name="memory_doctor_confirmation">Confirmation required by guidance: %1$s. This is not permission or a repair action.</string>
     <string name="memory_doctor_cancel">Cancel observation</string>
+
+    <string name="memory_export_json_action">Export memory JSON</string>
+    <string name="memory_export_json_title">Export a selected memory snapshot</string>
+    <string name="memory_export_json_explanation">Manual export only. Choose the authorized scope, prepare a private snapshot, inspect its complete paged JSON, then explicitly approve the content and the selected destination. No model is used. Automatic memory OFF does not turn itself on.</string>
+    <string name="memory_export_json_projects_failed">Authorized projects could not be loaded. No fallback scope or export was selected.</string>
+    <string name="memory_export_json_prompts">Include original prompts and their deletion markers</string>
+    <string name="memory_export_json_prompts_consent">I explicitly choose to include original prompts, which may contain sensitive personal content. Capture settings are not export consent.</string>
+    <string name="memory_export_json_prepare">Prepare private snapshot</string>
+    <string name="memory_export_json_busy">An export operation is active or physically draining. Closing or cancelling does not prove streams are closed or temporary data removed; no parallel copy can start.</string>
+    <string name="memory_export_json_cancelled">Cancelled. No successful delivery is confirmed; a selected destination may still exist or contain partial or complete bytes.</string>
+    <string name="memory_export_json_picker_cancelled">Destination selection was cancelled. No content copy was requested. The provider may already have created an empty document; the prepared snapshot is discarded.</string>
+    <string name="memory_export_json_failed">Export could not be confirmed. Do not assume rollback or an absent destination. A new attempt requires a new snapshot and new confirmations; no automatic retry occurs.</string>
+    <string name="memory_export_json_snapshot">Prepared bytes: %1$d · SHA-256: %2$s · Exported at: %3$s · Includes prompts: %4$s</string>
+    <string name="memory_export_json_compatibility">Format 0.2.0 plus Jarvys extension v1. Authorized observations without a session: %1$d. Any such observations prevent direct Go 0.2 import. Go ignores the extension; it cannot preserve all local raw bytes, nullable bindings, and deletion markers. Jarvys import is not implemented in this action.</string>
+    <string name="memory_export_json_exclusions">Not a complete app backup: excludes profiles, directives, chats/transcripts, files/logs, revisions/history, review-clear events, proofs/technical ledgers, runtime leases and permissions. Relations require both retained endpoints in the selected authorized scope; excluded or unattributable rows are not counted here. IDs in the paged JSON are transport/data references, not grants.</string>
+    <string name="memory_export_json_privacy">The bounded secret heuristic is not infallible and may reject false positives. A prepared snapshot is not certified secret-free. Review the content and its remaining sensitivity before sharing. Size is limited by real storage/provider capacity, not a 1 MiB truncation rule.</string>
+    <string name="memory_export_json_page">Complete JSON viewer — byte offset %1$d of %2$d. Only this bounded page is held in the view.</string>
+    <string name="memory_export_json_first_page">Return to first page</string>
+    <string name="memory_export_json_next_page">Next JSON page</string>
+    <string name="memory_export_json_content_consent">I approve sharing this exact prepared snapshot, including potentially sensitive content and the selected categories.</string>
+    <string name="memory_export_json_pick">Choose destination (no content stream yet)</string>
+    <string name="memory_export_json_destination_caveat">Android may create an empty document when you choose it. Its provider may be cloud-backed. Only the separate Write action opens the output stream; cancellation does not delete or roll back a document.</string>
+    <string name="memory_export_json_destination">Selected provider: %1$s · Display name (sanitized, limited): %2$s. Confirm that this is the intended destination.</string>
+    <string name="memory_export_json_destination_unknown">Not available for display</string>
+    <string name="memory_export_json_write">Confirm destination and write this snapshot</string>
+    <string name="memory_export_json_discard">Discard prepared snapshot</string>
+    <string name="memory_export_json_receipt">Received outcome: %1$s · Bytes: %2$d · SHA-256: %3$s · Temporary cleanup: %4$s · External document may exist: %5$s</string>
+    <string name="memory_export_json_receipt_limit">An exported receipt confirms bytes delivered and stream closure, not remote fsync or cloud durability. Cleanup status is separate.</string>
+    <string name="memory_export_json_cleanup">Last observed temporary cleanup: %1$s · Physical operation still busy: %2$s</string>
+    <string name="memory_export_json_cancel">Cancel export</string>
 </resources>

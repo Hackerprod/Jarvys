@@ -462,6 +462,26 @@ internal object JarvysChatDatabaseProvider {
         synchronized(databaseFiles) { databaseFiles[database] }
             ?: throw IllegalStateException("No database file is registered for the chat database")
 
+    /** Validate the already-open pool against its recorded main-file identity, without opening/adopting. */
+    internal fun requireOpenFileIdentity(database: JarvysChatDatabase, context: Context): () -> Unit {
+        val file = synchronized(databaseFiles) { databaseFiles[database] }
+            ?: throw IllegalStateException("memory_export_source_changed")
+        val pool = synchronized(readPools) { readPools[database] }
+            ?: throw IllegalStateException("memory_export_source_changed")
+        val directories = com.jarvys.agent.MemoryDoctorPaths.memoryDirectories(context)
+        check(file.absoluteFile == File(directories.last(), DATABASE_NAME).absoluteFile) { "memory_export_source_changed" }
+        pool.requireDoctorIdentity(file)
+        val identity = com.jarvys.agent.MemoryDoctorFileIdentity.capture(file, directories, "source_changed")
+        val validate: () -> Unit = {
+            identity.requireCurrent()
+            pool.requireDoctorIdentity(file)
+            check(synchronized(databaseFiles) { databaseFiles[database] == file } &&
+                synchronized(readPools) { readPools[database] === pool }) { "memory_export_source_changed" }
+        }
+        validate()
+        return validate
+    }
+
     /** Observation only: cold providers stay cold, and retries never acquire a writer lease. */
     internal fun <T> observeOpenForDoctor(context: Context, token: com.jarvys.agent.CancellationToken,
         block: (ChatSqlDatabase, () -> Unit) -> T): T {

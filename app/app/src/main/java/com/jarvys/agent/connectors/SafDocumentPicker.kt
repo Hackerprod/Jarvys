@@ -37,6 +37,7 @@ internal data class SafPickerRequest(
     val fileName: String = "",
     val mimeType: String = "",
     val authorizeEffect: (() -> Unit)? = null,
+    val physicalCancellation: com.jarvys.agent.CancellationToken? = null,
 )
 
 /** Activity Result bridge; its transparent Compose host lives for the full Activity, not only Settings. */
@@ -57,6 +58,53 @@ class SafDocumentPickerCoordinator private constructor() {
         SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.CREATE,
             fileName = fileName, mimeType = mimeType, authorizeEffect = authorizeEffect), token,
     )
+
+    /** Export opts into physical result drain; ordinary create/pick retain their existing behavior. */
+    fun createForMemoryExport(fileName: String, mimeType: String, token: com.jarvys.agent.CancellationToken,
+        authorizeEffect: (() -> Unit)? = null): Uri? = awaitPhysical(
+        SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.CREATE, fileName = fileName, mimeType = mimeType,
+            authorizeEffect = { token.throwIfCancelled(); authorizeEffect?.invoke(); token.throwIfCancelled() },
+            physicalCancellation = token), token)
+
+    private fun awaitPhysical(request: SafPickerRequest, token: com.jarvys.agent.CancellationToken): Uri? {
+        token.throwIfCancelled()
+        val pendingResult = Pending(request, CompletableFuture())
+        synchronized(lock) {
+            check(active == null && inFlightId == null) { "Another document picker is already open or draining its result" }
+            active = pendingResult; _pending.value = request
+        }
+        var interrupted: InterruptedException? = null
+        fun withdrawBeforeLaunch(): Boolean = synchronized(lock) {
+            if (inFlightId == request.id) false
+            else {
+                if (active?.request?.id == request.id) { active = null; _pending.value = null }
+                true
+            }
+        }
+        try {
+            while (true) {
+                if ((token.isCancellationRequested || interrupted != null) && withdrawBeforeLaunch()) {
+                    token.throwIfCancelled()
+                    throw requireNotNull(interrupted)
+                }
+                val selected: Uri?
+                try { selected = pendingResult.result.get(POLL_MILLIS, TimeUnit.MILLISECONDS) }
+                catch (_: TimeoutException) { continue } // Poll cancellation; never release an in-flight picker by timeout.
+                catch (failure: InterruptedException) { if (interrupted == null) interrupted = failure; continue }
+                catch (failure: java.util.concurrent.ExecutionException) {
+                    token.throwIfCancelled()
+                    interrupted?.let { throw it }
+                    throw (failure.cause as? RuntimeException ?: IllegalStateException("Document picker failed", failure.cause))
+                }
+                token.throwIfCancelled() // A cancelled picker callback must not authorize its returned URI.
+                interrupted?.let { throw it }
+                return selected
+            }
+        } finally {
+            synchronized(lock) { if (active?.request?.id == request.id) { active = null; _pending.value = null } }
+            if (interrupted != null) Thread.currentThread().interrupt()
+        }
+    }
 
     private fun await(request: SafPickerRequest, token: com.jarvys.agent.CancellationToken): Uri? {
         val pendingResult = Pending(request, CompletableFuture())
@@ -83,8 +131,14 @@ class SafDocumentPickerCoordinator private constructor() {
     }
 
     internal fun claimLaunch(id: String): Boolean = synchronized(lock) {
-        if (active?.request?.id != id || inFlightId != null) false
-        else { inFlightId = id; true }
+        val current = active
+        if (current == null || current.request.id != id || inFlightId != null) false
+        else if (current.request.physicalCancellation?.isCancellationRequested == true) {
+            // Same lock as awaitPhysical withdrawal: cancellation cannot race into a new export launch.
+            active = null; _pending.value = null
+            current.result.completeExceptionally(CancellationException("Document picker cancelled before launch"))
+            false
+        } else { inFlightId = id; true }
     }
 
     fun complete(id: String, uri: Uri?) {

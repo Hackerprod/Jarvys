@@ -4,6 +4,14 @@
 - **Dependencia obligatoria:** completar primero el port de Engram y su validación independiente. Esta prioridad no cambia el alcance activo ni autoriza iniciar ahora la investigación, instalación o ejecución del repositorio.
 - Prioridad solicitada explícitamente el 28-10-2026; plan técnico y revisión de alcance se prepararán cuando se cierre Engram.
 
+## Memoria P5-E — Exportación manual por streaming — checkpoint 30-10-2026
+
+**Candidate2: Full94/0 y Play94/0, 17 clases por sabor; doble PASS acotado.** Focal16 separado; código `6e85b1fe49a84d39a3f75460ca5d22c3d0fccfb8`. [Reporte y límites](docs/continue/engram-port/P5-E-export-report.md) · [Resultados exactos](docs/continue/engram-port/P5-E-export-results.json).
+
+La persona prepara un snapshot autorizado completo, revisa JSON paginado y confirma contenido/destino SAF; prompts opt-in y advertencia de sensibilidad. Streaming sin cap1MiB, bytes raw/NULL preservados en extensión, hash de bytes entregados y cancelación con retorno físico. No se exporta autoridad runtime ni se modifica memoria. Go0.2 acepta el corpus bound, pero pierde extensión y normaliza topic vacío; NULL-session no es importable allí sin adaptación. No roundtrip lossless universal.
+
+Focal1 fallido se conserva; tres premisas de fixture corregidas sin cambiar producto/guardias. **No importador terminado, F37/P5 global, backup completo ni dispositivo físico**. Próximo: importación streaming de memoria nueva con validación y rollback, sin migración legacy.
+
 ## Memoria P5-D — Doctor nativo — checkpoint 30-10-2026
 
 **Candidate2: Full57/0 y Play57/0; ocho clases por sabor, cero errores/skips; doble PASS acotado.** Focal14 separado; código `7eba69856942956de12ca123dbd11a1b23b17656`. Actual Main/Principal→controller real→siguiente proveedor falso; schema y engine manual intactos.

@@ -1762,4 +1762,34 @@ Fuentes retiradas confirmadas:
     <string name="memory_doctor_next_step">Solo orientación: %1$s</string>
     <string name="memory_doctor_confirmation">Confirmación requerida por la orientación: %1$s. Esto no concede permiso ni ejecuta reparación.</string>
     <string name="memory_doctor_cancel">Cancelar observación</string>
+
+    <string name="memory_export_json_action">Exportar memoria JSON</string>
+    <string name="memory_export_json_title">Exportar una instantánea de memoria seleccionada</string>
+    <string name="memory_export_json_explanation">Exportación solo manual. Elige el ámbito autorizado, prepara una instantánea privada, inspecciona su JSON completo por páginas y aprueba explícitamente el contenido y el destino elegido. No se usa ningún modelo. Memoria automática OFF no se activa.</string>
+    <string name="memory_export_json_projects_failed">No se pudieron cargar los proyectos autorizados. No se eligió ningún ámbito alternativo ni exportación.</string>
+    <string name="memory_export_json_prompts">Incluir peticiones originales y sus marcadores de borrado</string>
+    <string name="memory_export_json_prompts_consent">Elijo explícitamente incluir peticiones originales, que pueden contener información personal sensible. La configuración de captura no es consentimiento de exportación.</string>
+    <string name="memory_export_json_prepare">Preparar instantánea privada</string>
+    <string name="memory_export_json_busy">Hay una exportación activa o terminando físicamente. Cerrar o cancelar no demuestra que los streams estén cerrados ni que los temporales se hayan eliminado; no puede empezar otra copia paralela.</string>
+    <string name="memory_export_json_cancelled">Cancelado. No se confirma una entrega exitosa; un destino seleccionado puede existir o contener bytes parciales o completos.</string>
+    <string name="memory_export_json_picker_cancelled">Se canceló la selección del destino. No se solicitó copiar contenido. El proveedor puede haber creado ya un documento vacío; la instantánea preparada se descarta.</string>
+    <string name="memory_export_json_failed">No se pudo confirmar la exportación. No supongas reversión ni ausencia del destino. Un nuevo intento requiere otra instantánea y nuevas confirmaciones; no hay reintento automático.</string>
+    <string name="memory_export_json_snapshot">Bytes preparados: %1$d · SHA-256: %2$s · Fecha de exportación: %3$s · Incluye peticiones: %4$s</string>
+    <string name="memory_export_json_compatibility">Formato 0.2.0 más extensión Jarvys v1. Observaciones autorizadas sin sesión: %1$d. Cualquiera de ellas impide la importación directa en Go 0.2. Go ignora la extensión; no conserva todos los bytes originales locales, vínculos nulos y marcadores de borrado. Esta acción no implementa la importación en Jarvys.</string>
+    <string name="memory_export_json_exclusions">No es una copia completa de la app: excluye perfiles, directivas, chats/transcripciones, archivos/registros, revisiones/historial, eventos de borrado de revisión, pruebas/registros técnicos, leases y permisos de ejecución. Las relaciones requieren ambos extremos retenidos dentro del ámbito autorizado seleccionado; aquí no se cuentan filas excluidas o no atribuibles. Los IDs del JSON paginado son referencias de datos/transporte, no permisos.</string>
+    <string name="memory_export_json_privacy">La heurística acotada de secretos no es infalible y puede rechazar falsos positivos. Una instantánea preparada no certifica ausencia de secretos. Revisa el contenido y su sensibilidad restante antes de compartir. El tamaño depende de la capacidad real del almacenamiento/proveedor, no de un recorte a 1 MiB.</string>
+    <string name="memory_export_json_page">Visor del JSON completo — offset de bytes %1$d de %2$d. La vista conserva solo esta página acotada.</string>
+    <string name="memory_export_json_first_page">Volver a la primera página</string>
+    <string name="memory_export_json_next_page">Siguiente página del JSON</string>
+    <string name="memory_export_json_content_consent">Apruebo compartir esta instantánea preparada exacta, incluido el contenido potencialmente sensible y las categorías elegidas.</string>
+    <string name="memory_export_json_pick">Elegir destino (todavía sin stream de contenido)</string>
+    <string name="memory_export_json_destination_caveat">Android puede crear un documento vacío al elegirlo. Su proveedor puede usar la nube. Solo la acción Escribir abre el stream de salida; cancelar no elimina ni revierte un documento.</string>
+    <string name="memory_export_json_destination">Proveedor elegido: %1$s · Nombre mostrado (saneado y limitado): %2$s. Confirma que este es el destino deseado.</string>
+    <string name="memory_export_json_destination_unknown">No disponible para mostrar</string>
+    <string name="memory_export_json_write">Confirmar destino y escribir esta instantánea</string>
+    <string name="memory_export_json_discard">Descartar instantánea preparada</string>
+    <string name="memory_export_json_receipt">Resultado recibido: %1$s · Bytes: %2$d · SHA-256: %3$s · Limpieza temporal: %4$s · Puede existir documento externo: %5$s</string>
+    <string name="memory_export_json_receipt_limit">Un recibo exported confirma bytes entregados y cierre del stream, no fsync remoto ni durabilidad en la nube. El estado de limpieza es independiente.</string>
+    <string name="memory_export_json_cleanup">Última limpieza temporal observada: %1$s · Operación física aún ocupada: %2$s</string>
+    <string name="memory_export_json_cancel">Cancelar exportación</string>
 </resources>
