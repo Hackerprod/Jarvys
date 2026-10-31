@@ -75,6 +75,13 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
         if(old.state==TreeWaitState.READY) old else update(db,old,values("state" to "READY"))
     }
     fun claimWait(expected:TreeWait,process:String,generation:String,token:String):TreeWaitClaim=core.registry.treeTransaction { db ->
+        claimWithin(db,expected,process,generation,token,null)
+    }
+    fun claimUserWait(expected:TreeWait,controlId:String,process:String,generation:String,token:String):TreeUserWaitClaim=core.registry.treeTransaction { db ->
+        val claim=claimWithin(db,expected,process,generation,token,controlId)
+        TreeUserWaitClaim(claim,requireNotNull(core.registry.getControl(controlId)))
+    }
+    private fun claimWithin(db:SQLiteDatabase,expected:TreeWait,process:String,generation:String,token:String,controlId:String?):TreeWaitClaim {
         nonempty(process);nonempty(generation);nonempty(token)
         val old=requireWait(db,expected.rootId,expected.waitId)
         eligible(old==expected && old.state in setOf(TreeWaitState.WAITING,TreeWaitState.READY),"Wait is not an exact unclaimed episode")
@@ -91,7 +98,15 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
         integrity(core.event(db,parent.rootId,execution)==null,"Wait execution already reserved")
         val assignment=core.requireNativeAssignment(parent)
         val admittedRevision=next(assignment.revision)
-        integrity(db.update("assignment",values("revision" to admittedRevision,"updated_at" to timestamp()),
+        val userControl=controlId?.let { id ->
+            val control=core.registry.getControl(id) ?: throw TreeIntegrityException("Missing USER wait control")
+            eligible(control.state==WorkspaceControlState.PENDING && control.type==WorkspaceControlType.RESUME &&
+                control.origin==WorkspaceRegistry.NATIVE_UI_ORIGIN && control.assignmentId==parent.assignmentId &&
+                control.workspaceId==parent.workspaceId && control.botId==parent.botId && control.assignmentRevision==assignment.revision,
+                "USER Resume does not own this exact wait")
+            core.registry.markControlStarted(id,control.revision,process)
+        }
+        if(userControl==null) integrity(db.update("assignment",values("revision" to admittedRevision,"updated_at" to timestamp()),
             "workspace_id=? AND assignment_id=? AND revision=? AND state='BOUND' AND bot_id=?",
             arrayOf(requireNotNull(parent.workspaceId),requireNotNull(parent.assignmentId),assignment.revision.toString(),requireNotNull(parent.botId)))==1,
             "Native child-wait revision CAS failed")
@@ -105,7 +120,15 @@ internal class WorkspaceTreeWaitStore(private val core:WorkspaceTreeStore) {
         val started=update(db,old,values("state" to "STARTED","parent_revision" to claimed.revision,
             "selected_causes" to encodeCauses(causes),"successor_intent" to intent,"owner_process" to process,
             "owner_generation" to generation,"owner_token" to token))
-        TreeWaitClaim(started,causes,execution,assignment.revision,admittedRevision)
+        val claim=TreeWaitClaim(started,causes,execution,assignment.revision,admittedRevision)
+        if(userControl!=null) {
+            integrity(userControl.admittedAssignmentRevision==admittedRevision,"USER wait revision changed")
+            val authorization=JSONObject().put("controlId",userControl.requestId).put("claimDigest",claimDigest(claim))
+                .put("waitId",old.waitId).put("sourceRevision",assignment.revision).put("admittedRevision",admittedRevision).toString()
+            core.appendEvent(db,claimed,identity("user-wait",userControl.requestId),"USER_WAIT_AUTHORIZATION",authorization,
+                userControl.requestId,identity(authorization),old.waitId,old.waitId)
+        }
+        return claim
     }
     fun bindSuccessor(expected:TreeWait,cycle:String,assignmentRevision:Long,certificate:String,
         process:String,generation:String,token:String):TreeNode=core.registry.treeTransaction { db ->

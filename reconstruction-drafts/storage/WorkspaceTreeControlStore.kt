@@ -7,6 +7,8 @@ import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.eligible
 import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.integrity
 import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.nonempty
 import org.json.JSONObject
+import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.one
+import com.jarvys.agent.workspaces.WorkspaceTreeStore.Companion.s
 
 /** Existing registered USER rows remain authority; never synthesizes a control for child-wait. */
 internal class WorkspaceTreeControlStore(private val core:WorkspaceTreeStore) {
@@ -22,6 +24,8 @@ internal class WorkspaceTreeControlStore(private val core:WorkspaceTreeStore) {
         val root=core.requireRoot(db,node.rootId)
         if(control.type!=WorkspaceControlType.PAUSE) {
             eligible(!root.admissionsClosed && !root.wakesClosed,"Original root is closed")
+            eligible(one(db,"bot_tree_event","root_id=? AND node_id=? AND kind='CANCEL_TARGET'",arrayOf(node.rootId,node.nodeId)){it.s("event_key")}==null,
+                "Explicitly cancelled owned subtree cannot resume")
             eligible(node.state!=TreeNodeState.UNCERTAIN && node.controlIntent==null,"Uncertain/pending execution cannot replay")
             eligible(core.event(db,node.rootId,identity("control",controlId))==null,"Control already reserved")
         }

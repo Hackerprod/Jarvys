@@ -49,6 +49,7 @@ internal class WorkspaceTreeAnswerStore(private val core:WorkspaceTreeStore) {
             integrity(answer.digest==c.s("payload_digest") && answer.questionId==c.s("payload_ref"),"Answer claim changed");answer
         }
     }
+    fun acknowledged(answer:TreeAnswer):String?=core.registry.treeRead { db -> core.event(db,answer.rootId,identity("answer-ack",answer.eventKey)) }
     fun acknowledge(answer:TreeAnswer,controlId:String,cycle:String,checkpoint:String)=core.registry.treeTransaction { db ->
         val current=requireNotNull(forControl(answer.rootId,answer.childId,controlId));integrity(current==answer,"Answer content changed")
         val node=core.requireNode(db,answer.rootId,answer.childId)

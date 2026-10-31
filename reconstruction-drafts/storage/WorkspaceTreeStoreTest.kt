@@ -174,4 +174,31 @@ class WorkspaceTreeStoreTest {
         assertEquals(TreeNodeState.RUNNING,bound.state)
         denied { tree.bindExecution(TreeNodeFence.of(started),"bot","cycle",certificate(scope.workspaceId)) }
     }
+    @Test fun centralCompletionWaitsForReportedAndIncorporatedAwaitedChild() {
+        val parent=root();val scope=workspace();val child=running(queued(parent,scope,"awaited"))
+        val waiting=tree.finishCentral(TreeNodeFence.of(parent),"confirmed-exit-fixture",false)
+        assertEquals(TreeNodeState.WAITING,waiting.state);assertFalse(tree.getRoot(parent.rootId)!!.admissionsClosed)
+        val terminal=settle(child)
+        denied { tree.attachCentralExecution(TreeNodeFence.of(waiting),"new-central-cycle","fixture-source","claim",true,child.nodeId) }
+        WorkspaceTreeEvidenceStore(tree).markReported(child.rootId,child.nodeId,terminal.terminalRef!!,terminal.terminalHash!!,"reported-fixture")
+        val attached=tree.attachCentralExecution(TreeNodeFence.of(waiting),"new-central-cycle","fixture-source","claim",true,child.nodeId)
+        denied { tree.finishCentral(TreeNodeFence.of(attached),"second-exit",false) }
+        tree.recordCentralIncorporated(child.rootId,child.nodeId,"claim","confirmed-checkpoint-fixture")
+        val current=tree.getNode(parent.rootId,parent.nodeId)!!
+        val completed=tree.finishCentral(TreeNodeFence.of(current),"second-exit",false)
+        assertEquals(TreeNodeState.TERMINAL,completed.state);assertEquals("COMPLETED",tree.getRoot(parent.rootId)!!.closeReason)
+        val closed=tree.getRoot(parent.rootId)
+        assertEquals(closed,tree.beginRoot(origin,"new-source","new-runtime"))
+    }
+    @Test fun replyNoneDoesNotBlockConfirmedCentralCompletionOrReopenOnLateReport() {
+        val parent=root();val scope=workspace()
+        val child=running(tree.admitChild(TreeNodeFence.of(parent),request(scope,"detached").copy(reply=TreeReply.NONE)))
+        tree.finishCentral(TreeNodeFence.of(parent),"confirmed-exit",false)
+        val closed=tree.getRoot(parent.rootId)
+        assertEquals(child,tree.requireDispatch(TreeNodeFence.of(child)))
+        val terminal=settle(child)
+        WorkspaceTreeEvidenceStore(tree).markReported(child.rootId,child.nodeId,terminal.terminalRef!!,terminal.terminalHash!!,"late-report")
+        assertEquals(closed,tree.getRoot(parent.rootId))
+    }
+
 }

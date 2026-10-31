@@ -1,0 +1,50 @@
+    private fun delegateTreeCentral(workspaceId:String,key:String,role:String,mission:String,tools:List<String>?,name:String?,
+        missionAccess:String,requestId:String,originalUserRequest:String,token:CancellationToken,admission:Runnable,
+        context:WorkspaceMutationContext?,continueResult:Boolean):JSONObject {
+        val mutation=requireNotNull(context) { "Native Central invocation required for tree delegation" }
+        mutation.requireTreeAdmission();admission.run()
+        val capability=requireNotNull(mutation.treeAdmission)
+        val rootId=capability.rootId()
+        val request=TreeChildRequest(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,
+            if(CrewMissionAccess.parse(missionAccess)==CrewMissionAccess.READ_ONLY) TreeMode.CONSULT else TreeMode.WORK,
+            if(continueResult) TreeReply.AWAIT else TreeReply.NONE,WorkspaceTreeStore.centralReceipt(requireNotNull(mutation.rootSource)),mutation.rootSource)
+        mutation.admitMutation()
+        val prepared=mutation.withCurrentWorkspaceTransaction {
+            capability.withCurrentWorkspaceTransaction(token) {
+                synchronized(lock(workspaceId)) {
+                    registry().use { db ->
+                        mutation.requireInsideCurrentLease();mutation.requireTreeAdmission();admission.run()
+                        val tree=WorkspaceTreeStore(db);val parent=requireNotNull(tree.getNode(rootId,rootId))
+                        check(parent.cycleId==capability.cycleId())
+                        val prior=db.existingAssignment(workspaceId,key,requestId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+                        val child=if(prior==null)tree.admitChild(TreeNodeFence.of(parent),request) else {
+                            val enrolled=requireNotNull(tree.findAssignment(workspaceId,prior.assignmentId)) { "Historical assignment is not tree authority" }
+                            check(enrolled.rootId==rootId && enrolled.state==TreeNodeState.QUEUED && prior.state==WorkspaceAssignmentState.PREPARED) { "Existing execution cannot replay" }
+                            tree.retryPreparedCentral(TreeNodeFence.of(parent),TreeNodeFence.of(enrolled),request)
+                        }
+                        child
+                    }
+                }
+            }
+        }
+        if(!CrewMode.read(app).enabled())throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.CREW_DISABLED)
+        val scope=registry().use { workspace(it,workspaceId) }
+        val manager=managerFor(scope.executionSessionId)
+        val assignment=registry().use { requireNotNull(it.getAssignment(workspaceId,requireNotNull(prepared.assignmentId))) }
+        try {
+            manager.validateSpawnForMission(assignment.missionId,originalUserRequest,role,mission,tools,name,CrewMissionAccess.parse(missionAccess))
+        } catch(cancelled:java.util.concurrent.CancellationException) { throw cancelled }
+        catch(rejected:IllegalArgumentException) { throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED,rejected) }
+        catch(rejected:IllegalStateException) { throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED,rejected) }
+        val reservation=mutation.withCurrentWorkspaceTransaction {
+            capability.withCurrentWorkspaceTransaction(token) {
+                registry().use { db ->
+                    mutation.requireInsideCurrentLease();mutation.requireTreeAdmission();admission.run()
+                    WorkspaceTreeStore(db).reserveFirstExecution(TreeNodeFence.of(prepared),CrewProcessIdentity.ID)
+                }
+            }
+        }
+        val result=startReservedTreeAssignment(reservation,token,Runnable { mutation.requireTreeAdmission();admission.run() },continueResult)
+        mutation.acceptedAssignment(workspaceId,reservation.assignmentId)
+        return result
+    }

@@ -1,0 +1,3 @@
+At beginning WorkspaceCoordinator.delegateInternal, after key derivation and before old prepare path:
+if (WorkspaceTreePolicy.admissionEnabled()) return delegateTreeCentral(workspaceId,key,role,mission,tools,name,missionAccess,requestId,originalUserRequest,token,admission,context,continueResult)
+No fallback to old delegate path on missing capability, existing historical row, or rejection. OFF preserves delivered v98 until D3 succeeds. Continue-result maps to native AWAIT; existing false maps NONE without adding autonomous Central wake.

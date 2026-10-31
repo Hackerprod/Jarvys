@@ -26,6 +26,17 @@ object WorkspaceTreeStops {
             current=predecessors[current] ?: return
         }
     }
+    internal fun linkedFrom(storage:String,root:String,node:String,currentCycle:String,oldCycle:String):Boolean {
+        synchronized(admissionLock) {
+            val origin=key(storage,root,node,oldCycle)
+            var current=key(storage,root,node,currentCycle);val seen=HashSet<String>()
+            while(seen.add(current)) {
+                if(current==origin)return true
+                current=predecessors[current] ?: return false
+            }
+            throw TreeIntegrityException("Cyclic denial predecessor")
+        }
+    }
     internal fun linkChildWait(storage:String,root:String,node:String,oldCycle:String,newCycle:String) {
         synchronized(admissionLock) {
             requireAllowed(storage,root,node,oldCycle)

@@ -20,7 +20,7 @@ internal data class TreeInvocationReceipt(val sourceKey:String,val kind:String,v
     val argsJson:String,val resultJson:String?,val resultHash:String?)
 internal class WorkspaceTreeEvidenceStore(private val core:WorkspaceTreeStore) {
     fun recordInvocation(fence:TreeNodeFence,callId:String,kind:String,sourceReceipt:String,argsJson:String):String = core.registry.treeTransaction { db ->
-        require(kind in setOf("ADMISSION","WAIT_ARM","QUESTION_ARM","REPORT_DONE"))
+        require(kind in setOf("ADMISSION","WAIT_ARM","QUESTION_ARM","REPORT_DONE","ANSWER_ARM"))
         val node=core.active(db,fence);eligible(node.state==TreeNodeState.RUNNING,"Invocation worker not running")
         val assignment=core.requireNativeAssignment(node)
         val source=parseObject(sourceReceipt);val args=parseObject(argsJson)

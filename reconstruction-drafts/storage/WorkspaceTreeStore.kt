@@ -224,6 +224,8 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
         if(parent.parentNodeId==null) closeRoot(db,parent.rootId,reason)
         var settled=false
         val result=targets.map { child ->
+            appendEvent(db,child,identity("cancel-target",child.nodeId,child.cycleId),"CANCEL_TARGET",reason,
+                requestKey ?: payload,identity(reason),child.nodeId)
             cancelWaits(db,child)
             if(child.state==TreeNodeState.QUEUED) { settled=true;cancelQueued(db,child,parent,reason) }
             else updateNode(db,child,values("admissions_closed" to 1L,"wakes_closed" to 1L,"stop_epoch" to next(child.stopEpoch)))
@@ -250,7 +252,11 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
         updateRoot(db,root,values("admissions_closed" to 1L,"wakes_closed" to 1L,"close_reason" to reason))
     }
 
-    // PARENT_METHOD_INSERTION: wait/report/answer/control/successor/Central completion methods.
+    fun attachCentralExecution(fence:TreeNodeFence,cycle:String,source:String,claim:String,childDue:Boolean,childId:String)=
+        WorkspaceTreeCentralStore(this).attach(fence,cycle,source,claim,childDue,childId)
+    fun finishCentral(fence:TreeNodeFence,receipt:String,stopped:Boolean)=WorkspaceTreeCentralStore(this).finish(fence,receipt,stopped)
+    fun recordCentralIncorporated(root:String,child:String,claim:String,receipt:String)=WorkspaceTreeCentralStore(this).incorporated(root,child,claim,receipt)
+
 
     internal fun requireNativeAssignment(node:TreeNode,state:WorkspaceAssignmentState=WorkspaceAssignmentState.BOUND):WorkspaceAssignment {
         val scope=requireNotNull(registry.getWorkspace(requireNotNull(node.workspaceId)))
