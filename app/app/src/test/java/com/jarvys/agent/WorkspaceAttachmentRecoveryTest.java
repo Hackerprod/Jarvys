@@ -75,7 +75,8 @@ public class WorkspaceAttachmentRecoveryTest {
         WorkspaceStore delegated = owner.forDelegatedAgent();
         assertFalse(delegated.attachmentsEnabled());
         assertFalse(delegated.skillsEnabled());
-        assertFalse(delegated.memoryEnabled());
+        assertThrows(IllegalArgumentException.class, () -> delegated.read("/memory/private.md"));
+        assertThrows(IllegalArgumentException.class, () -> delegated.write("/memory/private.md", "denied"));
         assertEquals("public", delegated.read("public.txt"));
         assertThrows(IllegalArgumentException.class, () -> delegated.read(path));
         assertThrows(IllegalArgumentException.class, () -> delegated.read("alias.txt"));

@@ -36,3 +36,17 @@ Whole-file exclusions with original supplement hashes and individual reasons are
 Validation for this slice: `git diff --check`; no build or test execution by this helper. Full/Play compilation and tests remain integrator gates. Removed reset-driven tests are not evidence that attachment startup behavior passed on current generation; current behavior needs native tests rather than restoring obsolete reset APIs.
 
 - Fresh Full compile attempt2 failed after 4m42 with one remaining MainAgentInteractionTest setup reference to removed SingleSessionReset. Replaced only that setup call with current FreshStorageBootstrap; test bodies/assertions unchanged. No test execution or PASS from that attempt.
+
+## Java constructor pass after Full-tests-3
+
+The Full-tests-3 build reached Java compilation after Kotlin compilation, but failed; no execution PASS is implied. Seven assigned Java files only:
+
+- `HtmlPreviewSnapshotTest.java`: use current five-argument StorageGeneration constructor; actual workspace/manifest/asset mutation paths follow `StorageGeneration.NAME`. Retains alien owner and platform symlink checks, tampering and immutable preview assertions.
+- `HtmlThumbnailStoreTest.java`: current constructor and exact generation paths for thumbnail cache/manifest/captured CSS. Cache corruption and no-creation assertions still target actual storage, not an absent legacy directory.
+- `WorkspaceArtifactDeliveryTest.java`: current constructor and actual generation paths for delivery counts, source tampering and inspection cleanup. Preserve deliberate mismatched project/session fixture in forged-ownership negative test; do not “correct” its identity.
+- `DeliveredArtifactTest.java`: current generation constructor including provider fixture; actual current paths replace old generation literals. All artifact integrity, session and provider permission assertions retained.
+- `ToolArgumentValidatorTest.java`: generation-bound ordinary workspace fixture preserves exact real-schema nullable argument/default behavior. Removed old memory-enabled parameter is **not** mapped to current `skillsOnly`; the fixture intentionally reads an ordinary file.
+- `ProjectImageToolTest.java`: current three-argument Context/project/session constructor; image flow assertions unchanged.
+- `WorkspaceAttachmentRecoveryTest.java`: removed `memoryEnabled()` query replaced with actual denied `/memory` read and write operations. Existing delegated attachment/skill/alias/import/coding-scope assertions unchanged.
+
+Static validation: `git diff --check`. No builds run by the helper; all compiler/runtime acceptance remains pending the integrator.

@@ -42,9 +42,8 @@ public class HtmlPreviewSnapshotTest {
         singleton.set(null, new SecretStore(context.getSharedPreferences("html-preview-fixture", Context.MODE_PRIVATE)));
         files = chatTestStore.newFilesDirectory(); ledger = chatTestStore.localRunStore(files);
         store = new DeliveredArtifactStore(files);
-        workspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(session),
-                null, null, null, session, false);
-        workspaceRoot = new File(files, "jarvys/g3/workspaces/" + WorkspaceStore.projectIdForSession(session));
+        workspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(session), null, null, session);
+        workspaceRoot = new File(files, "jarvys/" + StorageGeneration.NAME + "/workspaces/" + WorkspaceStore.projectIdForSession(session));
         ledger.appendConversationMessage(session, "user", "Show the HTML app");
     }
     @After public void tearDown() throws Exception {
@@ -187,7 +186,7 @@ public class HtmlPreviewSnapshotTest {
         assertTrue(renamed.success); assertNull(renamed.previewId);
         CoreToolResult apk = deliver("package.apk"); assertNull(apk.previewId); assertEquals("application/vnd.android.package-archive", attachment(apk).mimeType);
         ChatAttachment connector = store.snapshotBytes(session, "<html>legacy single file</html>".getBytes(StandardCharsets.UTF_8), "legacy.html", "text/html", CancellationToken.uncancellable());
-        File legacyManifest = new File(files, "jarvys/g3/delivered/" + session + "/" + connector.id + ".json");
+        File legacyManifest = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + connector.id + ".json");
         byte[] beforeManifest = Files.readAllBytes(legacyManifest.toPath());
         write("legacy.html", "<html>mutable source must never be used</html>");
         HtmlPreviewDescriptor legacy = store.previewForAttachment(session, connector);
@@ -227,14 +226,14 @@ public class HtmlPreviewSnapshotTest {
     @Test public void assetCorruptionAndManifestOwnershipChangesFailClosed() throws Exception {
         write("index.html", "<html><script src='app.js'></script></html>"); write("app.js", "let x = 1;");
         ChatAttachment attachment = attachment(deliver("index.html")); HtmlPreviewDescriptor preview = store.previewForAttachment(session, attachment);
-        File asset = new File(files, "jarvys/g3/delivered/" + session + "/" + attachment.id + ".preview/app.js");
+        File asset = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + attachment.id + ".preview/app.js");
         Files.write(asset.toPath(), "let x = 2;".getBytes(StandardCharsets.UTF_8));
         // Timeline projection validates metadata only; actual open is the integrity gate.
         assertEquals(preview.token, store.previewMetadataForAttachment(session, attachment).token);
         assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(session, preview.token));
         assertThrows(java.io.IOException.class, () -> store.openPreview(session, preview.token, "app.js"));
         Files.write(asset.toPath(), "let x = 1;".getBytes(StandardCharsets.UTF_8));
-        File manifest = new File(files, "jarvys/g3/delivered/" + session + "/" + attachment.id + ".json");
+        File manifest = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + attachment.id + ".json");
         JSONObject json = new JSONObject(new String(Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8));
         json.put("conversation", "other-chat"); Files.write(manifest.toPath(), json.toString().getBytes(StandardCharsets.UTF_8));
         assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(session, preview.token));
@@ -298,8 +297,7 @@ public class HtmlPreviewSnapshotTest {
         write("index.html", "<html>Owner snapshot</html>"); CoreToolResult owner = deliver("index.html"); assertTrue(owner.success);
         String alien = "alien-preview-chat";
         String alienUser = ledger.appendConversationMessage(alien, "user", "Inspect only my own page");
-        WorkspaceStore alienWorkspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(alien),
-                null, null, null, alien, false);
+        WorkspaceStore alienWorkspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(alien), null, null, alien);
         alienWorkspace.write("index.html", "<html>Unrelated alien page</html>");
         ledger.appendConversationToolPresentation(alien, alienUser, "Preview Workspace", "tool_result", "alien-snapshot",
                 "An unavailable snapshot was requested", owner.previewId, "Preview requested HTML");
@@ -363,7 +361,7 @@ public class HtmlPreviewSnapshotTest {
         ChatAttachment attachment = attachment(deliver("index.html"));
         HtmlPreviewDescriptor descriptor = store.previewForAttachment(session, attachment);
         assertEquals(2, descriptor.fileCount); assertEquals("<svg></svg>", asset(store, descriptor, valid));
-        File manifest = new File(files, "jarvys/g3/delivered/" + session + "/" + attachment.id + ".json");
+        File manifest = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + attachment.id + ".json");
         File rejected = new File(manifest.getParentFile(), "oversized.json");
         java.lang.reflect.Method writeManifest = DeliveredArtifactStore.class.getDeclaredMethod("writeManifest", File.class, JSONObject.class);
         writeManifest.setAccessible(true);
@@ -386,14 +384,13 @@ public class HtmlPreviewSnapshotTest {
         File physical = temporary.newFolder("physical-files");
         File alias = new File(temporary.getRoot(), "platform-files-alias"); Files.createSymbolicLink(alias.toPath(), physical.toPath());
         String chat = "aliased-preview";
-        WorkspaceStore aliased = new WorkspaceStore(new StorageGeneration(alias), WorkspaceStore.projectIdForSession(chat),
-                null, null, null, chat, false);
+        WorkspaceStore aliased = new WorkspaceStore(new StorageGeneration(alias), WorkspaceStore.projectIdForSession(chat), null, null, chat);
         aliased.write("index.html", "<html><link rel='stylesheet' href='theme.css'></html>"); aliased.write("theme.css", "body { color: green }");
         DeliveredArtifactStore aliasedArtifacts = new DeliveredArtifactStore(alias);
         ChatAttachment attachment = aliasedArtifacts.snapshot(chat, aliased, "index.html", null, CancellationToken.uncancellable());
         HtmlPreviewDescriptor preview = aliasedArtifacts.previewForAttachment(chat, attachment);
         assertEquals(2, preview.fileCount);
-        File workspace = new File(physical, "jarvys/g3/workspaces/" + WorkspaceStore.projectIdForSession(chat));
+        File workspace = new File(physical, "jarvys/" + StorageGeneration.NAME + "/workspaces/" + WorkspaceStore.projectIdForSession(chat));
         File saved = new File(physical, "saved-workspace"); Files.move(workspace.toPath(), saved.toPath());
         Files.createSymbolicLink(workspace.toPath(), saved.toPath());
         assertThrows(java.io.IOException.class, () -> aliasedArtifacts.snapshot(chat, aliased, "index.html", null, CancellationToken.uncancellable()));

@@ -161,9 +161,9 @@ public class ToolArgumentValidatorTest {
         String session = "tool-schema-validation";
         File appFiles = temporary.newFolder("app-files");
         chatTestStore.localRunStore(appFiles);
-        File workspacesRoot = new File(new File(appFiles, "jarvys"), "workspaces");
+        File workspacesRoot = new StorageGeneration(appFiles).directory("workspaces");
         String projectId = WorkspaceStore.projectIdForSession(session);
-        WorkspaceStore workspace = new WorkspaceStore(workspacesRoot, projectId, null, null, null, session, true);
+        WorkspaceStore workspace = new WorkspaceStore(new StorageGeneration(appFiles), projectId, null, null, session);
         File workspaceRoot = new File(workspacesRoot, projectId);
         assertTrue(workspaceRoot.mkdirs() || workspaceRoot.isDirectory());
         Files.write(new File(workspaceRoot, "notes.txt").toPath(), "workspace note".getBytes(StandardCharsets.UTF_8));

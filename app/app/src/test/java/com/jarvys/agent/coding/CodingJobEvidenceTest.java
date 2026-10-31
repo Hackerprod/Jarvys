@@ -1,6 +1,8 @@
 package com.jarvys.agent.coding;
 
 import com.jarvys.agent.CentralInvocationSource;
+import com.jarvys.agent.CrewInputContext;
+import java.util.Collections;
 import org.junit.Test;
 import static org.junit.Assert.*;
 import static com.jarvys.agent.coding.CodingJobEvidence.*;
@@ -11,26 +13,34 @@ public class CodingJobEvidenceTest {
     private static final String SUBMISSION = "00000000-0000-0000-0000-000000000002";
     private static final String PROCESS = "00000000-0000-0000-0000-000000000003";
     private static final String MANAGER = "00000000-0000-0000-0000-000000000004";
+    private static final String GENERATION = "00000000-0000-0000-0000-000000000005";
     private static final String DIGEST = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     private static CrewSource crew(String cycle, String call) {
-        return new CrewSource("g3", "workspace-execution", "bot", "mission", cycle, "scope-identity", DIGEST, call, "project_exec");
+        return new CrewSource("workspace-execution", "bot", "mission", cycle, "scope-identity", DIGEST, call, "project_exec",
+                inputContext());
+    }
+    private static CrewInputContext inputContext() {
+        CrewInputContext.Scope scope = new CrewInputContext.Scope("central", "workspace-execution", "workspace", "assignment", "bot", "mission");
+        CrewInputContext.Reference reference = CrewInputContext.Reference.binding("input", "REPLY", "reply", scope,
+                "prior-cycle", "prior-cycle", "INBOX", DIGEST, DIGEST, DIGEST);
+        return CrewInputContext.resolve(java.util.Arrays.asList("input", "unresolved"), Collections.singletonList(reference));
     }
     private static CentralInvocationSource central(String call) {
         return new CentralInvocationSource("g3", "central", "message", "central-batch", call, "central-run", "central-process");
     }
-    private static Binding binding(CaptureMode mode) {
+    private static Binding binding(SemanticCapture mode) {
         Source source = new Source(crew("cycle", "child-call"), new WorkspaceBinding("workspace", "assignment", "request"),
-                mode == CaptureMode.CENTRAL_BINDING_ABSENT ? null : central("delegate-call"));
+                central("delegate-call"));
         return bind(source, mode);
     }
-    private static Binding bind(Source source, CaptureMode mode) {
-        return new Binding(JOB, SUBMISSION, "owner", "scope", "scope-identity", PROCESS, MANAGER, source, mode);
+    private static Binding bind(Source source, SemanticCapture mode) {
+        return new Binding(GENERATION, JOB, SUBMISSION, "owner", "scope", "scope-identity", PROCESS, MANAGER, source, mode);
     }
     private static AuthorizationSnapshot authorization() {
         return new AuthorizationSnapshot(Authorization.ASK_APPROVED, "coding", "project_exec", "7", "approved_snapshot");
     }
     private static CodingJobEvidence.Record record(long revision, Phase phase, boolean accepted, TerminalFacts terminal) {
-        return new CodingJobEvidence.Record(binding(CaptureMode.CENTRAL_ENABLED), revision, phase, accepted,
+        return new CodingJobEvidence.Record(binding(SemanticCapture.ENABLED), revision, phase, accepted,
                 phase == Phase.SUBMISSION_INTENT ? null : authorization(), terminal);
     }
     private static TerminalFacts terminal(TerminalState state, Integer code) {
@@ -52,29 +62,42 @@ public class CodingJobEvidenceTest {
         CodingJobEvidence.Record decoded = roundTrip(original);
         assertEquals(original, decoded); assertEquals(original.hashCode(), decoded.hashCode());
         assertEquals("child-call", decoded.binding.source.crew.callId);
-        assertEquals("delegate-call", decoded.binding.source.central.sourceCallId);
-        assertEquals("central-batch", decoded.binding.source.central.sourceBatchId);
-        assertEquals(central("delegate-call"), decoded.binding.source.central);
+        assertEquals("delegate-call", decoded.binding.source.rootCentral.sourceCallId);
+        assertEquals("central-batch", decoded.binding.source.rootCentral.sourceBatchId);
+        assertEquals(central("delegate-call"), decoded.binding.source.rootCentral);
+        assertEquals(inputContext(), decoded.binding.source.crew.inputContext);
+        assertEquals(CrewInputContext.Coverage.PARTIAL, decoded.binding.source.crew.inputContext.coverage);
+        assertEquals(Collections.singleton("unresolved"), decoded.binding.source.crew.inputContext.unresolvedInputIds);
+        assertEquals("prior-cycle", decoded.binding.source.crew.inputContext.references.get(0).admissionCycleId);
         assertNotSame(original, decoded);
     }
-    @Test public void missingCentralBindingIsDistinctFromMemoryDisabled() {
+    @Test public void semanticCaptureIsIndependentOfHistoricalCentralRoot() {
         Source operational = new Source(crew("cycle", "call"), null, null);
-        Binding absent = bind(operational, CaptureMode.CENTRAL_BINDING_ABSENT);
-        Binding off = bind(operational, CaptureMode.MEMORY_DISABLED);
-        assertNotEquals(absent, off);
-        for (Binding b : new Binding[]{absent, off}) {
+        Binding enabled = bind(operational, SemanticCapture.ENABLED);
+        Binding disabled = bind(operational, SemanticCapture.DISABLED);
+        assertNotEquals(enabled, disabled);
+        for (Binding b : new Binding[]{enabled, disabled, binding(SemanticCapture.ENABLED), binding(SemanticCapture.DISABLED)}) {
             CodingJobEvidence.Record r = new CodingJobEvidence.Record(b,1,Phase.SUBMISSION_INTENT,false,null,null);
             assertEquals(r, roundTrip(r));
         }
-        reject(() -> bind(operational, CaptureMode.CENTRAL_ENABLED));
         reject(() -> new Source(crew("cycle","call"), null, central("call")));
-        reject(() -> bind(binding(CaptureMode.CENTRAL_ENABLED).source, CaptureMode.CENTRAL_BINDING_ABSENT));
+        CodingJobEvidence.Record before = new CodingJobEvidence.Record(enabled,1,Phase.SUBMISSION_INTENT,false,null,null);
+        reject(() -> validateAdvance(before,new CodingJobEvidence.Record(disabled,2,Phase.SUBMISSION_INTENT,true,null,null)));
     }
-    @Test public void partialOrDifferentGenerationAttributionIsRejected() {
+    @Test public void partialAttributionAndForeignInputExecutionAreRejected() {
         reject(() -> new WorkspaceBinding("workspace", null, "request"));
         reject(() -> new CentralInvocationSource("g3","central","message",null,"call","run","process"));
-        CentralInvocationSource foreign = new CentralInvocationSource("g4","central","message","batch","call","run","process");
-        reject(() -> new Source(crew("cycle","call"),new WorkspaceBinding("workspace","assignment","request"),foreign));
+        CrewInputContext.Scope scope = new CrewInputContext.Scope("central", "other-execution", "workspace", "assignment", "bot", "mission");
+        CrewInputContext.Reference reference = CrewInputContext.Reference.binding("input", "REPLY", "reply", scope,
+                "cycle", "cycle", "INBOX", DIGEST, DIGEST, DIGEST);
+        CrewInputContext input = CrewInputContext.resolve(Collections.singleton("input"), Collections.singletonList(reference));
+        reject(() -> new CrewSource("workspace-execution", "bot", "mission", "cycle", "scope-identity", DIGEST,
+                "call", "project_exec", input));
+        // Historical root generation is retained metadata, not this technical store's authority.
+        CentralInvocationSource historical = new CentralInvocationSource("g4","central","message","batch","call","run","process");
+        Source source = new Source(crew("cycle","call"),new WorkspaceBinding("workspace","assignment","request"),historical);
+        assertEquals(historical,roundTrip(new CodingJobEvidence.Record(bind(source, SemanticCapture.ENABLED),1,
+                Phase.SUBMISSION_INTENT,false,null,null)).binding.source.rootCentral);
     }
     @Test public void acceptanceAndLaunchIntentRemainNonterminalMetadata() {
         CodingJobEvidence.Record initial = record(1,Phase.SUBMISSION_INTENT,false,null);
@@ -100,12 +123,13 @@ public class CodingJobEvidenceTest {
         CodingJobEvidence.Record one = record(1,Phase.SUBMISSION_INTENT,false,null);
         Binding b = one.binding;
         for (Binding foreign : new Binding[]{
-                new Binding(SUBMISSION,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
-                new Binding(JOB,JOB,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
-                new Binding(JOB,SUBMISSION,"other",b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.captureMode),
-                new Binding(JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,MANAGER,PROCESS,b.source,b.captureMode),
-                bind(new Source(crew("other-cycle","child-call"),b.source.workspace,b.source.central),b.captureMode),
-                bind(new Source(crew("cycle","other-call"),b.source.workspace,b.source.central),b.captureMode)}) {
+                new Binding(PROCESS,JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
+                new Binding(GENERATION,SUBMISSION,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
+                new Binding(GENERATION,JOB,JOB,b.owner,b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
+                new Binding(GENERATION,JOB,SUBMISSION,"other",b.scopeId,b.durableScopeIdentity,PROCESS,MANAGER,b.source,b.semanticCapture),
+                new Binding(GENERATION,JOB,SUBMISSION,b.owner,b.scopeId,b.durableScopeIdentity,MANAGER,PROCESS,b.source,b.semanticCapture),
+                bind(new Source(crew("other-cycle","child-call"),b.source.workspace,b.source.rootCentral),b.semanticCapture),
+                bind(new Source(crew("cycle","other-call"),b.source.workspace,b.source.rootCentral),b.semanticCapture)}) {
             reject(() -> validateAdvance(one,new CodingJobEvidence.Record(foreign,2,Phase.SUBMISSION_INTENT,true,null,null)));
         }
     }
@@ -156,6 +180,9 @@ public class CodingJobEvidenceTest {
     @Test public void decoderRejectsUnknownMissingPartialAndLegacyFields() {
         String json = CodingJobEvidenceCodec.encode(record(1,Phase.SUBMISSION_INTENT,false,null));
         rejectJson(json.replace("\"schema\":3","\"schema\":2"));
+        rejectJson(json.replace("\"envelopeVersion\":2", "\"envelopeVersion\":1"));
+        rejectJson(json.replace("\"inputContext\":", "\"legacyInput\":"));
+        rejectJson(json.replace("\"semanticCapture\":\"ENABLED\"", "\"captureMode\":\"CENTRAL_ENABLED\""));
         rejectJson(json.replace("\"schema\":3","\"schema\":3,\"command\":\"unexpected\""));
         rejectJson(json.replace("\"requestId\":\"request\"","\"requestId\":null"));
         rejectJson(json.replace("\"sourceRunId\":\"central-run\",", ""));
@@ -188,7 +215,7 @@ public class CodingJobEvidenceTest {
     }
     @Test public void escapedIdentifiersRoundTripWithoutMutableCollections() {
         CrewSource crew = crew("cycle\\quoted\"é", "child-call");
-        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),CaptureMode.CENTRAL_BINDING_ABSENT),1,Phase.SUBMISSION_INTENT,false,null,null);
+        CodingJobEvidence.Record r = new CodingJobEvidence.Record(bind(new Source(crew,null,null),SemanticCapture.ENABLED),1,Phase.SUBMISSION_INTENT,false,null,null);
         assertEquals(r,roundTrip(r));
         assertNotEquals(central("call1"),central("call2"));
     }

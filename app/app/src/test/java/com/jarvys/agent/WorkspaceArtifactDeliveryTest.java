@@ -76,8 +76,7 @@ public class WorkspaceArtifactDeliveryTest {
 
     private WorkspaceStore workspace(WorkspaceRecord record) {
         return new WorkspaceStore(new StorageGeneration(files),
-                WorkspaceStore.projectIdForSession(record.getExecutionSessionId()), null, null, null,
-                record.getExecutionSessionId(), false);
+                WorkspaceStore.projectIdForSession(record.getExecutionSessionId()), null, null, record.getExecutionSessionId());
     }
     private WorkspaceArtifactDelivery service() { return new WorkspaceArtifactDelivery(files, registry); }
     private JSONObject deliver(String path, String text) throws Exception {
@@ -93,7 +92,7 @@ public class WorkspaceArtifactDeliveryTest {
                 .findFirst().get().getDeliveredArtifact();
     }
     private long manifests() {
-        File[] entries = new File(files, "jarvys/g3/delivered/" + CENTRAL).listFiles();
+        File[] entries = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + CENTRAL).listFiles();
         return entries == null ? 0 : Arrays.stream(entries).filter(file -> file.getName().endsWith(".json")).count();
     }
     private void mutate(String column, String value) {
@@ -162,7 +161,7 @@ public class WorkspaceArtifactDeliveryTest {
         assertThrows(IllegalArgumentException.class, () -> service().deliver(UUID.randomUUID().toString(), "/project/report.txt",
                 hash("secret"), null, CancellationToken.cancellable(), () -> { }));
         assertEquals(0, opened.get());
-        assertFalse(new File(files, "jarvys/g3/delivered").exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered").exists());
         assertEquals(0, count(CENTRAL));
     }
 
@@ -184,7 +183,7 @@ public class WorkspaceArtifactDeliveryTest {
         WorkspaceRecord other = registry.createWorkspace("other-source", "Other workspace");
         workspace(other).write("report.txt", "other workspace");
         WorkspaceStore privateChat = new WorkspaceStore(new StorageGeneration(files),
-                WorkspaceStore.projectIdForSession("private-chat"), null, null, null, "private-chat", false);
+                WorkspaceStore.projectIdForSession("private-chat"), null, null, "private-chat");
         privateChat.write("report.txt", "private sentinel");
         assertThrows(IOException.class, () -> deliver("report.txt", "other workspace"));
         assertThrows(IOException.class, () -> deliver("report.txt", "private sentinel"));
@@ -207,8 +206,8 @@ public class WorkspaceArtifactDeliveryTest {
         assertThrows(SecurityException.class, () -> service().deliver(source.getWorkspaceId(), "/project/report.txt", hash("safe"), null,
                 CancellationToken.cancellable(), () -> { throw new SecurityException("Revoked"); }));
         assertEquals(0, opened.get());
-        assertFalse(new File(files, "jarvys/g3/coding-projects").exists());
-        assertFalse(new File(files, "jarvys/g3/delivered").exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/coding-projects").exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered").exists());
     }
 
     @Test public void policyRevocationDuringCopyPreventsImmutableCommitAndAttachment() throws Exception {
@@ -263,7 +262,7 @@ public class WorkspaceArtifactDeliveryTest {
             assertThrows(path, Exception.class, () -> deliver(path, "secret"));
         }
         workspace.write("base.txt", "safe");
-        File root = new File(files, "jarvys/g3/workspaces/" + WorkspaceStore.projectIdForSession(source.getExecutionSessionId()));
+        File root = new File(files, "jarvys/" + StorageGeneration.NAME + "/workspaces/" + WorkspaceStore.projectIdForSession(source.getExecutionSessionId()));
         File outside = temporary.newFile("private-sentinel.txt");
         Files.write(outside.toPath(), "sentinel".getBytes(StandardCharsets.UTF_8));
         Files.createSymbolicLink(new File(root, "link.txt").toPath(), outside.toPath());
@@ -307,8 +306,8 @@ public class WorkspaceArtifactDeliveryTest {
         assertEquals(12, metadata.getLong("size_bytes"));
         assertEquals(0, count(CENTRAL));
         assertEquals(0, count(source.getExecutionSessionId()));
-        assertFalse(new File(files, "jarvys/g3/delivered").exists());
-        assertEquals(0, new File(files, "jarvys/g3/workspace-inspections").listFiles().length);
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered").exists());
+        assertEquals(0, new File(files, "jarvys/" + StorageGeneration.NAME + "/workspace-inspections").listFiles().length);
         assertTrue(service().deliver(source.getWorkspaceId(), "report.txt", metadata.getString("sha256"), null,
                 CancellationToken.cancellable(), () -> { }).getBoolean("attached"));
         workspace.write("report.txt", "changed bytes");
@@ -339,24 +338,24 @@ public class WorkspaceArtifactDeliveryTest {
         ArtifactOsShadow.afterOpen = () -> revoked.set(true);
         assertThrows(SecurityException.class, () -> service().inspect(source.getWorkspaceId(), "report.txt", CancellationToken.cancellable(),
                 () -> { if (revoked.get()) throw new SecurityException("Revoked before disclosure"); }));
-        assertEquals(0, new File(files, "jarvys/g3/workspace-inspections").listFiles().length);
+        assertEquals(0, new File(files, "jarvys/" + StorageGeneration.NAME + "/workspace-inspections").listFiles().length);
         CancellationToken token = CancellationToken.cancellable();
         ArtifactOsShadow.afterOpen = token::cancel;
         assertThrows(CancellationException.class, () -> service().inspect(source.getWorkspaceId(), "report.txt", token, () -> { }));
-        assertEquals(0, new File(files, "jarvys/g3/workspace-inspections").listFiles().length);
+        assertEquals(0, new File(files, "jarvys/" + StorageGeneration.NAME + "/workspace-inspections").listFiles().length);
         assertEquals(0, count(CENTRAL));
-        assertFalse(new File(files, "jarvys/g3/delivered").exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered").exists());
     }
 
     @Test public void inspectUnknownOrPrivateSourceFailsWithoutReadingOtherChats() throws Exception {
         AtomicInteger opened = new AtomicInteger(); ArtifactOsShadow.beforeOpen = opened::incrementAndGet;
         assertThrows(IllegalArgumentException.class, () -> service().inspect(UUID.randomUUID().toString(), "report.txt",
                 CancellationToken.cancellable(), () -> { }));
-        assertFalse(new File(files, "jarvys/g3/workspace-inspections").exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/workspace-inspections").exists());
         assertThrows(IOException.class, () -> service().inspect(source.getWorkspaceId(), "memory/private.md",
                 CancellationToken.cancellable(), () -> { }));
         assertEquals(0, opened.get());
-        assertEquals(0, new File(files, "jarvys/g3/workspace-inspections").listFiles().length);
+        assertEquals(0, new File(files, "jarvys/" + StorageGeneration.NAME + "/workspace-inspections").listFiles().length);
         assertEquals(0, count(CENTRAL));
     }
 
@@ -377,7 +376,7 @@ public class WorkspaceArtifactDeliveryTest {
 
     @Test public void canonicalSessionCannotBePairedWithAnotherWorkspaceProjectId() throws Exception {
         WorkspaceStore forged = new WorkspaceStore(new StorageGeneration(files),
-                WorkspaceStore.projectIdForSession("private-chat"), null, null, null, source.getExecutionSessionId(), false);
+                WorkspaceStore.projectIdForSession("private-chat"), null, null, source.getExecutionSessionId());
         forged.write("report.txt", "private sentinel");
         AtomicInteger opened = new AtomicInteger(); ArtifactOsShadow.beforeOpen = opened::incrementAndGet;
         assertThrows(IllegalArgumentException.class, () -> artifacts.snapshotWorkspace(registry, source.getWorkspaceId(), forged,
@@ -460,7 +459,7 @@ public class WorkspaceArtifactDeliveryTest {
                 assertCancelled(publication); assertCancelled(ordinary); assertCancelled(connector); assertCancelled(thumbnail);
                 assertEquals(0, count(CENTRAL));
                 assertEquals(1, manifests()); // Immutable commit preceded STOP; no visible attachment did.
-                assertFalse(new File(files, "jarvys/g3/delivered/connector-overlap").exists());
+                assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/connector-overlap").exists());
                 assertNull(thumbnails.read(key));
             } else {
                 assertTrue(publication.value().getBoolean("attached"));

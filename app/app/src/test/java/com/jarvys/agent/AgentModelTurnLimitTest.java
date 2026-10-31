@@ -1,16 +1,13 @@
 package com.jarvys.agent;
 
 import static org.junit.Assert.*;
-import java.io.File;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import com.jarvys.agent.device.ScreenData;
 import org.json.JSONObject;
 import org.junit.*;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 @RunWith(RobolectricTestRunner.class)
@@ -42,35 +39,6 @@ public class AgentModelTurnLimitTest {
         assertEquals(131, requests.get()); assertEquals(130, effects.get());
         assertEquals(130, loop.transcriptSnapshot().stream()
             .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
-    }
-    @Test public void reflectionRetainsTwelveTurnCapFailureWrappingAndNoAutomaticRetry() throws Exception {
-        File files = temporary.newFolder("reflection");
-        MemoryStore memory = new MemoryStore(new File(files, "memory"), true,
-            MemorySeedTextProvider.fromAppLanguage(RuntimeEnvironment.getApplication())).forConversation("turn-limit");
-        memory.ensureInitialized();
-        WorkspaceStore workspace = new WorkspaceStore(new File(files, "workspaces"), "cccccccccccccccccccccccc",
-            null, null, memory, "turn-limit", true, MemoryStore.Actor.REFLECTION, "turn-limit-group", true);
-        AtomicInteger requests = new AtomicInteger();
-        ModelProviderClient provider = new ModelProviderClient() {
-            @Override public ModelReply complete(String system, String prompt, List<ScreenData> images,
-                    List<ToolSpec> declarations, String session, CancellationToken token) {
-                throw new AssertionError("Only the mock conversation boundary is allowed");
-            }
-            @Override public ModelReply completeConversation(String system, List<ConversationTurn> history,
-                    String prompt, List<ScreenData> images, List<ToolSpec> declarations, String session, CancellationToken token) {
-                int step = requests.incrementAndGet();
-                return new ModelReply("", Collections.singletonList(new ModelReply.Call("list-" + step,
-                    "ls", Collections.singletonMap("path", "/memory/missing-" + step))));
-            }
-        };
-        MemoryReflectionWorker worker = new MemoryReflectionWorker("turn-limit", "turn-limit-group", memory,
-            WorkspaceTools.createReflectionMemoryOnly(workspace), new CoreAgentModel(provider, "turn-limit"));
-        MemoryReflectionWorker.Failure failure = assertThrows(MemoryReflectionWorker.Failure.class,
-            () -> worker.run("[{\"role\":\"user\",\"content\":\"Synthetic preference\"}]", CancellationToken.uncancellable()));
-        assertTrue(failure.getCause() instanceof AgentModelTurnLimitException);
-        assertEquals(12, MemoryReflectionWorker.MAX_MODEL_TURNS);
-        assertEquals(MemoryReflectionWorker.MAX_MODEL_TURNS, requests.get());
-        assertTrue(memory.reflectionGroupRevisions("turn-limit-group").isEmpty());
     }
     @Test public void turnLimitHasSafeStructuralDiagnosticIdentityWithoutMessageText() throws Exception {
         LocalDiagnostics store = new LocalDiagnostics(temporary.newFolder("no-backup"), () -> 1_800_000_000_000L);

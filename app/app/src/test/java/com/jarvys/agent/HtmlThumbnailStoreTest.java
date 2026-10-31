@@ -60,11 +60,11 @@ public class HtmlThumbnailStoreTest {
         ledger.appendDeliveredFile(chat, file); return file;
     }
     private static String token(ChatAttachment attachment) { return HtmlPreviewDescriptor.TOKEN_PREFIX + attachment.id; }
-    private File cacheDirectory() { return new File(files, "jarvys/g3/delivered/" + session + "/.html-thumbnails"); }
+    private File cacheDirectory() { return new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/.html-thumbnails"); }
     private File pngFile(HtmlThumbnailStore.Key target) {
-        return new File(files, "jarvys/g3/delivered/" + target.session + "/.html-thumbnails/" + target.cacheId + ".png");
+        return new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + target.session + "/.html-thumbnails/" + target.cacheId + ".png");
     }
-    private File manifest() { return new File(files, "jarvys/g3/delivered/" + session + "/" + artifact.id + ".json"); }
+    private File manifest() { return new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + artifact.id + ".json"); }
     private static byte[] png(int width, int height, int seed) throws Exception {
         int stride = width * 4 + 1;
         byte[] pixels = new byte[stride * height];
@@ -145,8 +145,7 @@ public class HtmlThumbnailStoreTest {
     }
 
     @Test public void bundleFingerprintIncludesAssetsAndImmutableAssetCorruptionRejectsCache() throws Exception {
-        WorkspaceStore workspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(session),
-                null, null, null, session, false);
+        WorkspaceStore workspace = new WorkspaceStore(new StorageGeneration(files), WorkspaceStore.projectIdForSession(session), null, null, session);
         workspace.write("bundle.html", "<html><link href='style.css' rel='stylesheet'><body>bundle</body></html>");
         workspace.write("style.css", "body {color: red}");
         ChatAttachment first = delivered.snapshot(session, workspace, "bundle.html", null, CancellationToken.uncancellable());
@@ -158,7 +157,7 @@ public class HtmlThumbnailStoreTest {
         ledger.appendDeliveredFile(session, second);
         assertNotEquals(firstKey.fingerprint, cache.prepare(session, token(second), 32, 24, "policy").fingerprint);
         assertArrayEquals(png(32, 24, 1), cache.read(firstKey));
-        File capturedCss = new File(files, "jarvys/g3/delivered/" + session + "/" + first.id + ".preview/style.css");
+        File capturedCss = new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session + "/" + first.id + ".preview/style.css");
         Files.write(capturedCss.toPath(), "body {color: bad}".getBytes(StandardCharsets.UTF_8));
         assertThrows(IOException.class, () -> cache.read(firstKey));
     }
@@ -299,13 +298,13 @@ public class HtmlThumbnailStoreTest {
         assertFalse(cacheDirectory().exists()); assertFalse(cache.isCurrent(key));
         assertThrows(IOException.class, () -> cache.read(key));
         assertThrows(IOException.class, () -> cache.write(key, png(32, 24, 2)));
-        assertFalse(new File(files, "jarvys/g3/delivered/" + session).exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session).exists());
     }
 
     @Test public void deliveredDeletionWithoutTombstoneStillCannotRecreateSession() throws Exception {
         assertTrue(delivered.deleteSession(session));
         assertThrows(IOException.class, () -> cache.write(key, png(32, 24, 1)));
-        assertFalse(new File(files, "jarvys/g3/delivered/" + session).exists());
+        assertFalse(new File(files, "jarvys/" + StorageGeneration.NAME + "/delivered/" + session).exists());
     }
 
     @Test public void directDeletionRevokesGenerationEvenAfterIdenticalSessionArtifactIsRecreated() throws Exception {

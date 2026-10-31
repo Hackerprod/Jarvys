@@ -225,7 +225,7 @@ public class ProjectImageToolTest {
     @Test public void generatedAssetIsCapturedByImmutableHtmlDelivery() throws Exception {
         success(generate(tool(),"assets/hero.png"));
         new ProjectMutationService().apply(scope,"fixture",scope.version(),Collections.singletonList(ProjectMutationService.Operation.add("index.html","<!doctype html><html><body><img src='assets/hero.png'></body></html>")),CancellationToken.uncancellable());
-        WorkspaceStore workspace = new WorkspaceStore(context,WorkspaceStore.projectIdForSession(session),session,false);
+        WorkspaceStore workspace = new WorkspaceStore(context,WorkspaceStore.projectIdForSession(session),session);
         JSONObject receipt = success(new DeliverFileTool(context,session,workspace).execute(args("path","/project/index.html"),CancellationToken.uncancellable()));
         assertTrue(receipt.getBoolean("preview_available")); assertEquals(2,receipt.getInt("preview_file_count")); assertEquals(0,receipt.getJSONArray("preview_warnings").length());
         assertEquals(1,calls.get());
