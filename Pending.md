@@ -1,3 +1,14 @@
+## Estado vigente — P1 y APK v98 aceptados en host; P2 espera decisión — 31-10-2026
+
+**PASS independiente P1 R3 en host** sobre `6bfd252a7e516cc25144194913a93b13b4dc8c67`: Full798/0 y Play798/0, 90 clases por sabor, cero errores u omisiones; focal independiente62/0 por sabor, no sumado. [Checkpoint público y límites](docs/BOT_PORTABILITY_P1_CHECKPOINT.md). D1 quedó resuelto para el roadmap aprobado por fases, sin anular los demás gates; Central único, generalistas, memoria nativa y menú v97 permanecen.
+
+- **P2 bloqueado por D2 del usuario:** valores de profundidad/fan-out/llamadas/costo y política ANY/STOP del padre frente a cancelación de subárbol, incluidos hijos ya admitidos. No activar nuevas cuotas/autonomía sin esa decisión.
+- **PASS independiente v98 host + APK:** source `a50dd3ab9b4029af3a88a5260e59183349bacc4e`, Full/Play 92 clases y 833 casos por sabor; focal independiente64/0 por sabor. APK firmado SHA-256 `d70949e04935964d61ab6b7e9d352308c1ef7e1ed602fa6d8bb4b36e9676dd54`. [Checkpoint de entrega](docs/BOT_PORTABILITY_V98_DELIVERY.md).
+- **P3 del slice P1 preparado:** APK/identidad/firma/recursos verificados; pendiente coordinar la entrega del artefacto y su validación física. No hay nueva entrega, instalación ni validación física o proveedor vivo acreditadas; aceptación física del menú v97 aún pendiente.
+- Conservar datos y evidencia: sin migración/borrado; downgrade binario a v97 con episodios/referencias BLOB nuevos no soportado. R1/R2 siguen FAIL históricos corregidos, no se reetiquetan como PASS.
+
+El historial inferior queda íntegro. Sus prioridades antiguas no anulan este checkpoint ni cierran los residuales de Engram u otros gates.
+
 ## Prioridad vigente — restauración acotada del menú y Workspaces — 30-10-2026
 
 **v97, candidato 6: Full146/0 y Play146/0**, 28 clases por sabor, cero errores y omisiones; focal21/0 por sabor separado. Revisión independiente de fuentes, artefactos, resultados y captura de la Activity real en host: PASS acotado. Código `bc3639918b36cf0af7831d057c29b90e6f43001e`. Los intentos intermedios y sus fallos de fixtures se conservan, no se suman a este resultado.

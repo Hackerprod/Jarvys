@@ -166,8 +166,15 @@ public final class CoreAgentLoop {
         /** Ends the transient stream after a tool-call preamble had a chance to promote it. */
         default void onAssistantTextStreamEnded(String runId) { }
 
-        /** A completed assistant turn that precedes a newly incorporated durable user message. */
+        /** A completed assistant turn that precedes a newly incorporated durable input. */
         default void onAssistantAnswerBeforeInput(String runId, String message, IncomingMessage nextInput) { }
+
+        /** Exact durable receipt, if this listener persists the intermediate assistant turn. */
+        default ConversationTurn.Source persistAssistantAnswerBeforeInput(String runId, String message,
+                IncomingMessage nextInput) {
+            onAssistantAnswerBeforeInput(runId, message, nextInput);
+            return null;
+        }
 
         /** Called after the initial run request has entered the transcript. */
         default void onInitialUserMessageIncorporated() { }
@@ -353,9 +360,10 @@ public final class CoreAgentLoop {
                     ? message.inputBinding : null;
             String sourceSession = "chief".equals(message.from)
                     ? com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION : message.conversationId;
-            ConversationInput.Provenance provenance = binding == null ? null : new ConversationInput.Provenance(
+            ConversationInput.Provenance provenance = binding == null ? null : message.inputProvenance != null
+                    ? message.inputProvenance : new ConversationInput.Provenance(
                     sourceSession, binding.workspaceId, binding.assignmentId, binding.botId,
-                    message.id, kindFor(message.type), binding.sourceKind == CrewInputBinding.SourceKind.WORKSPACE_REPLY
+                    message.id, kindFor(message.type), binding.sourceKind != CrewInputBinding.SourceKind.NATIVE_CORRECT
                         ? ConversationInput.Provenance.PrincipalRole.SUPERVISOR
                         : ConversationInput.Provenance.PrincipalRole.PEER);
             return new IncomingMessage(message.id, message.from, message.text, user, binding,
@@ -385,6 +393,23 @@ public final class CoreAgentLoop {
             String kind = input.provenance == null ? "message" : input.provenance.kind.name();
             return new IncomingMessage(input.messageId, source, input.content, false, null, kind,
                     Collections.emptyList(), "crew", input.origin, input.provenance);
+        }
+
+        /** Preserve exact mailbox proof while keeping the durable resolver's attributed input. */
+        public static IncomingMessage agentInput(ConversationInput input, CrewMessage original) {
+            IncomingMessage attributed = agentInput(input);
+            if (original == null || (original.inputBinding != null && input.origin != ConversationInput.Origin.AGENT)
+                    || !input.conversationId.equals(original.conversationId)
+                    || !input.messageId.equals(original.id)
+                    || !input.content.equals(original.conversationContent())
+                    || (original.inputProvenance != null && (input.provenance == null
+                        || !original.inputProvenance.toJson().toString().equals(input.provenance.toJson().toString()))))
+                throw new IllegalArgumentException("Resolved worker input does not match its admitted message");
+            CrewInputBinding binding = original.inputBinding != null && original.inputBinding.matchesDelivery(original)
+                    ? original.inputBinding : null;
+            return new IncomingMessage(attributed.id, attributed.source, attributed.content, false, binding,
+                    attributed.messageType, attributed.references, attributed.sourceKind, attributed.origin,
+                    attributed.provenance);
         }
 
         private static ConversationInput.Kind kindFor(CrewMessage.Type type) {
@@ -511,6 +536,7 @@ public final class CoreAgentLoop {
         boolean allCallsTerminal;
         boolean noProgress;
         boolean steeringReceived;
+        boolean exclusiveYield;
     }
     static final String TIMEOUT_MESSAGE = "The requested deadline was reached. Progress may be partial; inspect existing results before continuing.";
     static final String LOOP_MESSAGE = "Jarvys paused after repeated calls without progress. Inspect existing results before continuing.";
@@ -934,19 +960,44 @@ public final class CoreAgentLoop {
                                     listener.onAssistantTextDelta(runId, delta);
                             };
                             if (model.usesPreparedRequests()) {
-                                PreparedModelRequest prepared = model.prepareRequest(requestTranscript, turnPrompt, declarations, token, true);
-                                if (ConversationCompactionPolicy.shouldCompact(prepared.estimateTokens(), prepared.contextWindow)
-                                        && compactor != null) {
-                                    ConversationCompactor.Outcome compacted = compactPrepared(transcript, prepared, token, listener);
-                                    if (compacted != null) {
-                                        transcript = new ArrayList<>(compacted.context);
-                                        requestTranscript = transcript;
-                                        updateTranscriptSnapshot(transcript);
-                                        prepared = model.prepareRequest(requestTranscript, turnPrompt, declarations, token);
+                                boolean refreshed = false;
+                                boolean compactionAttempted = false;
+                                PreparedModelRequest originalPrepared = null;
+                                while (true) {
+                                    PreparedModelRequest prepared = model.prepareRequest(
+                                            requestTranscript, turnPrompt, declarations, token, !refreshed);
+                                    if (originalPrepared == null) originalPrepared = prepared;
+                                    else prepared = prepared.retainingMemoryAuthorityOf(originalPrepared);
+                                    // Refresh is a zero-provider recovery path, not permission to start a summary
+                                    // before the retained original memory epoch reaches its dispatch gate.
+                                    if (refreshed) prepared.requireFits(token);
+                                    if (ConversationCompactionPolicy.shouldCompact(prepared.estimateTokens(), prepared.contextWindow)
+                                            && compactor != null) {
+                                        // Compaction can call a summary provider and commit artifacts. Never replay it
+                                        // under the zero-dispatch metadata-refresh allowance below.
+                                        compactionAttempted = true;
+                                        ConversationCompactor.Outcome compacted = compactPrepared(transcript, prepared, token, listener);
+                                        if (compacted != null) {
+                                            transcript = new ArrayList<>(compacted.context);
+                                            requestTranscript = transcript;
+                                            updateTranscriptSnapshot(transcript);
+                                            prepared = model.prepareRequest(requestTranscript, turnPrompt, declarations, token);
+                                            if (refreshed) prepared = prepared.retainingMemoryAuthorityOf(originalPrepared);
+                                        }
+                                    }
+                                    prepared.requireFits(token);
+                                    try {
+                                        reply = model.completePrepared(prepared, token, stream);
+                                        break;
+                                    } catch (CoreAgentRuntime.PreparedContextStale stale) {
+                                        token.throwIfCancelled();
+                                        if (refreshed || compactionAttempted || !stale.matches(prepared, token)) throw stale;
+                                        // The runtime already revalidated every canonical source and has not called
+                                        // the provider. Discard this immutable request, then re-run all preparation
+                                        // and dispatch gates once, without counting another activity/model attempt.
+                                        refreshed = true;
                                     }
                                 }
-                                prepared.requireFits(token);
-                                reply = model.completePrepared(prepared, token, stream);
                             } else {
                                 reply = model.complete(requestTranscript, turnPrompt, declarations, token, stream);
                             }
@@ -1027,12 +1078,13 @@ public final class CoreAgentLoop {
                         }
                         return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                     }
+                    ConversationTurn answerTurn = ConversationTurn.assistantReply(answer, reply.providerOutputItems);
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
-                        transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
+                        transcript.add(answerTurn);
                         updateTranscriptSnapshot(transcript, Collections.emptyMap());
                     }
-                    if (drainTurnContext(transcript, true, listener, answer, runId)) {
+                    if (drainTurnContext(transcript, true, listener, answerTurn, runId)) {
                         requestInTranscript = true;
                         modelHasInput = true;
                         prompt = "";
@@ -1054,6 +1106,19 @@ public final class CoreAgentLoop {
                 if (listener != null) listener.onAssistantTextStreamEnded(runId);
                 ToolBatchOutcome batch = executeToolBatch(reply.calls, reply, runId, modelTurns, tools,
                         transcript, requestTranscript, token, listener, loopDetector, activeActivities);
+                if (batch.exclusiveYield) {
+                    // A native durable question is a suspension boundary, not an ordinary terminal
+                    // suggestion. Neither mixed calls nor arriving steering may reopen inference.
+                    closeTurnContextProvider();
+                    if (batch.allCallsTerminal && batch.terminalText != null) {
+                        emit(listener, "answer", batch.terminalText);
+                        return new Result(runId, batch.terminalText, modelTurns, "COMPLETED",
+                                Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                    }
+                    return new Result(runId,
+                            "The exclusive native coordination boundary did not complete. Other calls were not launched; review retained evidence before explicit continuation.",
+                            modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                }
                 if (batch.noProgress) {
                     closeTurnContextProvider();
                     return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL",
@@ -1061,7 +1126,8 @@ public final class CoreAgentLoop {
                 }
                 if (batch.executedCalls > 0 && batch.allCallsTerminal && batch.terminalText != null
                         && !batch.steeringReceived) {
-                    if (drainTurnContext(transcript, true, listener, batch.terminalText, runId)) {
+                    if (drainTurnContext(transcript, true, listener,
+                            ConversationTurn.assistantReply(batch.terminalText, Collections.emptyList()), runId)) {
                         requestInTranscript = true;
                         modelHasInput = true;
                         prompt = "";
@@ -1152,7 +1218,29 @@ public final class CoreAgentLoop {
         }
 
         try {
+        // Capability metadata, not a tool-name heuristic. Discover every exclusive boundary
+        // before starting ANY call, including earlier calls and PARALLEL declarations.
+        PreparedToolCall exclusive = null;
+        int exclusiveCount = 0;
+        for (PreparedToolCall item : prepared) {
+            if (item.tool != null && item.tool.responseCallPolicy() == CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD) {
+                exclusive = item;
+                exclusiveCount++;
+            }
+        }
+        if (exclusiveCount > 0) {
+            sequential = true;
+            for (PreparedToolCall item : prepared) {
+                if (exclusiveCount != 1 || item != exclusive) {
+                    item.skippedReason = exclusiveCount == 1
+                            ? "Not started: a native exclusive coordination boundary must yield first."
+                            : "Not started: multiple exclusive coordination boundaries require clarification.";
+                    toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
+                }
+            }
+        }
         ToolBatchOutcome outcome = new ToolBatchOutcome();
+        outcome.exclusiveYield = exclusiveCount > 0;
         outcome.allCallsTerminal = !prepared.isEmpty();
         // Results spend the shared turn budget in provider call order, never completion order.
         outcome.remainingResultChars = toolResultBudget.allowsCompleteToolResults()
@@ -1163,6 +1251,7 @@ public final class CoreAgentLoop {
             for (int index = 0; index < prepared.size(); index++) {
                 token.throwIfCancelled();
                 PreparedToolCall item = prepared.get(index);
+                if (item.skippedReason != null) continue;
                 if (item.admissionReason != null) {
                     appendNotStarted(item, item.admissionReason, transcript, listener);
                     continue;
@@ -1365,6 +1454,10 @@ public final class CoreAgentLoop {
         for (PreparedToolCall item : prepared) {
             outcome.allCallsTerminal &= item.finalized && item.result != null
                     && item.result.success && item.result.finishRun;
+        }
+        if (outcome.exclusiveYield) {
+            outcome.allCallsTerminal = exclusiveCount == 1 && exclusive.finalized
+                    && exclusive.result != null && exclusive.result.success && exclusive.result.finishRun;
         }
         return outcome;
         } finally {
@@ -1680,7 +1773,7 @@ public final class CoreAgentLoop {
     }
 
     private boolean drainTurnContext(List<ConversationTurn> transcript, boolean finalCheckpoint,
-            ProgressListener listener, String assistantAnswer, String runId) {
+            ProgressListener listener, ConversationTurn assistantAnswer, String runId) {
         collectTurnContext(finalCheckpoint);
         boolean appended = false;
         List<IncomingMessage> incorporated = new ArrayList<>();
@@ -1694,7 +1787,16 @@ public final class CoreAgentLoop {
                     break;
                 }
             }
-            if (nextInput != null) listener.onAssistantAnswerBeforeInput(runId, assistantAnswer, nextInput);
+            if (nextInput != null) {
+                ConversationTurn.Source receipt = listener.persistAssistantAnswerBeforeInput(
+                        runId, assistantAnswer.content, nextInput);
+                if (receipt != null) assistantAnswer.bindSource(receipt);
+                // Ordinary answers are already present. Terminal-tool answers become MESSAGEs
+                // only when steering requires persisting them before the next provider request.
+                boolean present = false;
+                for (ConversationTurn turn : transcript) if (turn == assistantAnswer) { present = true; break; }
+                if (!present) transcript.add(assistantAnswer);
+            }
         }
         for (IncomingMessage message : new ArrayList<>(pendingDurableMessages)) {
             pendingDurableMessages.remove(message);

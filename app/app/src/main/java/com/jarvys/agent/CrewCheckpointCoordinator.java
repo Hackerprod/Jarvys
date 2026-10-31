@@ -57,6 +57,21 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
 
     @Override
     public CrewCheckpointStore.ConfirmedSnapshot persistConfirmed(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
+        return persistCheckpoint(bot, messages, pending, null, null);
+    }
+
+    @Override public CrewCheckpointStore.ConfirmedSnapshot persistSuccessorConfirmed(CrewManager.Bot bot,
+            List<CrewMessage> messages, List<CrewMessage> pending,
+            CrewCheckpointStore.ConfirmedSnapshot expected, CentralContinuationRecord successor) {
+        if (expected == null || successor == null) throw new IllegalArgumentException("Exact successor source required");
+        CrewCheckpointStore.ConfirmedSnapshot committed = persistCheckpoint(bot, messages, pending, expected, successor);
+        if (committed == null) throw new IllegalStateException("Native successor checkpoint lost its current owner");
+        return committed;
+    }
+
+    private CrewCheckpointStore.ConfirmedSnapshot persistCheckpoint(CrewManager.Bot bot,
+            List<CrewMessage> messages, List<CrewMessage> pending,
+            CrewCheckpointStore.ConfirmedSnapshot expected, CentralContinuationRecord successor) {
         if (!canPersist(bot)) return null;
         try {
             boolean nativeTask = bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
@@ -81,6 +96,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
                     .put("title", title.title).put("titleSource", title.source)
                     .put("originalInstructions", bot.originalInstructions()));
+            if (successor != null)
+                return this.store.saveCentralContinuationSuccessor(expected, successor, metadata,
+                        bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
             return this.store.saveConfirmed(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
         } catch (CancellationException cancelled) {
             throw cancelled;
@@ -132,23 +150,30 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         if (!this.conversation.equals(data.getString("conversationId")) || !visible.id.equals(data.getString("botId")) || !mission.missionId.equals(data.getString("missionId")) || !CrewCheckpointStore.sanitizeText(visible.mission).equals(data.getString("mission"))) {
                             throw new IllegalStateException("Checkpoint identity does not match its mission");
                         }
-                        if (Boolean.TRUE.equals(data.opt("nativeWorkspaceCheckpoint")))
-                            throw new IllegalStateException("Native workspace checkpoint is historical; continue through a new bound assignment");
-                        CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
-                        if (profile.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
-                            throw new IllegalStateException("Checkpoint workspace is not resumable");
+                        boolean nativeTask = Boolean.TRUE.equals(data.opt("nativeWorkspaceCheckpoint"));
+                        CrewRole role;
+                        List<String> owners = strings(data.getJSONArray("jobOwners"));
+                        if (nativeTask) {
+                            requireNativeIdentity(context, conversation, saved);
+                            requireNativeSafePoint(saved);
+                            role = nativeRole(data);
+                            manager.validateCheckpointRole(role);
+                            if (!owners.isEmpty()) throw new IllegalStateException("Native checkpoint has uninspectable job ownership");
+                        } else {
+                            CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
+                            if (profile.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)
+                                throw new IllegalStateException("Checkpoint workspace is not resumable");
+                            role = profile.resolveRole(profile.capabilities, profile.skillIds)
+                                    .withMissionAccess(com.jarvys.agent.crew.CrewMissionAccess.parse(
+                                            data.has("missionAccess") ? data.getString("missionAccess") : null));
+                            ProjectScope recoveredScope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
+                            if (!recoveredScope.durableIdentity().equals(saved.scopeIdentity))
+                                throw new IllegalStateException("Saved project identity changed");
+                            for (String owner : FlavorLinuxTools.correlatedCheckpointOwners(this.context, recoveredScope, saved))
+                                if (!owners.contains(owner)) owners.add(owner);
                         }
-                        CrewRole role = profile.resolveRole(profile.capabilities, profile.skillIds)
-                                .withMissionAccess(com.jarvys.agent.crew.CrewMissionAccess.parse(
-                                        data.has("missionAccess") ? data.getString("missionAccess") : null));
                         WorkspaceConversationInputStore.acknowledgeApplied(this.context, this.conversation,
                                 saved.loop.appliedIncomingIds);
-                        List<String> owners = strings(data.getJSONArray("jobOwners"));
-                        ProjectScope recoveredScope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
-                        if (!recoveredScope.durableIdentity().equals(saved.scopeIdentity))
-                            throw new IllegalStateException("Saved project identity changed");
-                        for (String owner : FlavorLinuxTools.correlatedCheckpointOwners(this.context, recoveredScope, saved))
-                            if (!owners.contains(owner)) owners.add(owner);
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
@@ -252,6 +277,13 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
     @Override
     public void beforeReconcile(CrewManager.Bot bot) {
         try {
+            if (bot.scopeIdentity().startsWith("native-workspace:")) {
+                CrewCheckpointStore.ConfirmedSnapshot saved = store.confirmDurable(conversation, bot.id, bot.scopeIdentity());
+                if (saved == null) throw new IllegalStateException("Native checkpoint is missing");
+                requireNativeIdentity(context, conversation, saved);
+                requireNativeSafePoint(saved);
+                return;
+            }
             ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
             if (!scope.durableIdentity().equals(bot.scopeIdentity()))
                 throw new IllegalStateException("Saved project identity changed");
@@ -269,6 +301,19 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 throw new IllegalStateException("Saved checkpoint is missing or changed");
             }
             CrewRole role = this.currentRole.apply(bot);
+            if (saved.scopeIdentity.startsWith("native-workspace:")) {
+                requireNativeIdentity(context, conversation, saved);
+                requireNativeSafePoint(saved);
+                if (role.workspaceMode != CrewProfile.WorkspaceMode.LEGACY_CHAT
+                        || role.missionAccess != bot.role.missionAccess
+                        || !role.tools.containsAll(bot.role.tools))
+                    throw new IllegalStateException("Native checkpoint role changed");
+                if (!bot.recoveredJobOwners().isEmpty()) throw new IllegalStateException("Native checkpoint has owned jobs");
+                new CrewContextArtifacts(context.getFilesDir(), conversation, bot.id).restoreOwnership(saved.artifactOwnershipJson());
+                return new CrewManager.ResumePlan(role, "Explicit native Resume of a verified safe general-purpose checkpoint. "
+                        + "Original question and historical evidence are retained, not new grants. "
+                        + "Do not repeat prior effects; use only currently admitted scoped tools and the exact linked answer.");
+            }
             FlavorLinuxTools.validateProfileResume(this.context, role.tools);
             ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).openExisting(this.conversation);
             if (!scope.durableIdentity().equals(bot.scopeIdentity())) {
@@ -290,6 +335,136 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             return new CrewManager.ResumePlan(role, "Explicit user Resume. Reconciliation is an observation, not authorization. Continue by reviewing retained transcript, file versions, diffs and checks. Do not repeat any pending or uncertain tool call, command, write, patch, or external action. Pending approvals were discarded; every new action uses current policy and availability. No saved permission is reusable. A recovered process may still have unknown liveness; no saved PID was signalled.\nProfile version " + bot.role.profileVersion + " -> " + role.profileVersion + "; capabilities remain within the saved/current intersection.\n" + retainedArtifacts + mutations + "\n" + jobs);
         } catch (Exception failure) {
             throw new IllegalStateException(failure.getMessage() == null ? "Checkpoint reconciliation failed" : failure.getMessage(), failure);
+        }
+    }
+
+    @Override public void cancelContinuation(CrewManager.Bot bot) {
+        if (!bot.scopeIdentity().startsWith("native-workspace:")) return;
+        CrewCheckpointStore.ConfirmedSnapshot saved = store.confirmDurable(conversation, bot.id, bot.scopeIdentity());
+        if (saved == null || !saved.metadataJson().has(CentralContinuationRecord.FIELD)) return;
+        CentralContinuationRecord current = CrewCheckpointStore.continuation(saved);
+        current.requireCheckpoint(conversation, bot.id, saved.scopeIdentity, saved.metadataJson());
+        if ("STARTED".equals(current.dispatchState()) || "ACKNOWLEDGED".equals(current.dispatchState())) {
+            WorkspaceContinuationDelivery.cancelClaimedOwner(saved);
+            return;
+        }
+        if (!"NONE".equals(current.dispatchState()) && !"PREPARED".equals(current.dispatchState())) return;
+        WorkspaceContinuationDelivery.fenceCancelledEpisode(saved);
+        try {
+            JSONObject next = current.toJson().put("dispatchState", "CANCELLED").put("revision", current.revision() + 1);
+            store.updateCentralContinuation(saved, CentralContinuationRecord.fromJson(next));
+        } catch (JSONException invalid) { throw new IllegalStateException("Cannot cancel native continuation", invalid); }
+    }
+
+    @Override public boolean requiresLinkedResume(CrewManager.Bot bot) {
+        if (!bot.scopeIdentity().startsWith("native-workspace:")) return false;
+        CrewCheckpointStore.ConfirmedSnapshot saved = store.confirmDurable(conversation, bot.id, bot.scopeIdentity());
+        if (saved == null) throw new IllegalStateException("Native checkpoint is missing");
+        JSONObject value = saved.metadataJson().optJSONObject(CentralContinuationRecord.FIELD);
+        if (value == null) return false;
+        CentralContinuationRecord.fromJson(value).requireCheckpoint(conversation, bot.id, saved.scopeIdentity, saved.metadataJson());
+        return true;
+    }
+
+    static void requireNativeIdentity(Context context, String conversation, CrewCheckpointStore.ConfirmedSnapshot saved) {
+        try {
+            JSONObject data = saved.metadataJson();
+            CentralContinuationRecord record = CentralContinuationRecord.fromJson(data.optJSONObject(CentralContinuationRecord.FIELD));
+            record.requireCheckpoint(conversation, saved.botId, saved.scopeIdentity, data);
+            JSONObject continuation = record.toJson();
+            com.jarvys.agent.workspaces.WorkspaceRegistry registry = new com.jarvys.agent.workspaces.WorkspaceRegistry(context);
+            try {
+                String workspaceId = com.jarvys.agent.workspaces.WorkspaceIdentity.workspaceId(conversation);
+                com.jarvys.agent.workspaces.WorkspaceRecord workspace = registry.getWorkspace(workspaceId);
+                com.jarvys.agent.workspaces.WorkspaceAssignment assignment = registry.getAssignment(workspaceId, data.getString("assignmentId"));
+                if (workspace == null || assignment == null
+                        || !workspace.getExecutionSessionId().equals(conversation)
+                        || !workspace.getOwnerCentralSessionId().equals(com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION)
+                        || assignment.getState() != com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
+                        || !saved.botId.equals(assignment.getBotId())
+                        || !data.getString("missionId").equals(assignment.getMissionId())
+                        || !continuation.getString("requestId").equals(assignment.getRequestId())
+                        || !data.getJSONObject("role").getString("id").equals(assignment.getRole())
+                        || !assignment.getMissionAccess().value.equals(data.getString("missionAccess")))
+                    throw new IllegalStateException("Native checkpoint assignment ownership changed");
+            } finally { registry.close(); }
+        } catch (JSONException invalid) { throw new IllegalStateException("Invalid native checkpoint identity", invalid); }
+    }
+
+    private static CrewRole nativeRole(JSONObject data) throws JSONException {
+        JSONObject role = data.getJSONObject("role");
+        if (!CrewProfile.WorkspaceMode.LEGACY_CHAT.value.equals(role.getString("workspaceMode"))
+                || role.getInt("version") < 1)
+            throw new IllegalStateException("Native checkpoint profile is not versioned/current");
+        return new CrewRole(role.getString("id"), role.getString("name"), role.getString("id"),
+                role.getString("prompt"), strings(role.getJSONArray("capabilities")), null,
+                role.getString("description"), role.getInt("version"), strings(role.getJSONArray("skills")),
+                CrewProfile.WorkspaceMode.LEGACY_CHAT,
+                com.jarvys.agent.crew.CrewMissionAccess.parse(data.getString("missionAccess")));
+    }
+
+    /** Conservative first profile: exact completed local coordination/reads, never external effects. */
+    void requireNativeSafePoint(CrewCheckpointStore.ConfirmedSnapshot saved) {
+        CoreAgentLoop.Checkpoint raw = saved.loopForEvidence();
+        raw.reconciled(); // Structural validation only; it does not turn uncertainty into success.
+        try {
+            if (saved.metadataJson().getJSONArray("jobOwners").length() != 0)
+                throw new IllegalStateException("Native checkpoint has uninspectable job ownership");
+        } catch (JSONException invalid) { throw new IllegalStateException("Native job ownership is unavailable", invalid); }
+        Set<String> retainedCalls = new HashSet<>();
+        Set<String> usedQuestionReceipts = new HashSet<>();
+        for (ConversationTurn turn : raw.transcript) for (ModelReply.Call call : turn.toolCalls) retainedCalls.add(call.id);
+        if (!retainedCalls.containsAll(raw.toolLifecycle.keySet()))
+            throw new IllegalStateException("Native tool identity was compacted; effect safety cannot be established");
+        for (String lifecycle : raw.toolLifecycle.values())
+            if (!"RESULT".equals(lifecycle) && !"NEVER_LAUNCHED".equals(lifecycle))
+                throw new IllegalStateException("Native checkpoint contains an unresolved tool effect");
+        for (ConversationTurn turn : raw.transcript) for (ModelReply.Call call : turn.toolCalls) {
+            String state = raw.toolLifecycle.get(call.id);
+            if ("NEVER_LAUNCHED".equals(state)) continue;
+            if (!"RESULT".equals(state)) throw new IllegalStateException("Native checkpoint tool has no terminal receipt");
+            if ("board_read".equals(call.name) || "memory_search".equals(call.name) || "memory_get".equals(call.name)) continue;
+            if ("ask_chief".equals(call.name)) {
+                String text = String.valueOf(call.arguments.get("question"));
+                String evidenceId = null;
+                for (ConversationTurn result : raw.transcript) {
+                    if (result.kind != ConversationTurn.Kind.TOOL_RESULT || !call.id.equals(result.toolCallId)) continue;
+                    String prefix = "native-question-evidence:";
+                    if (evidenceId != null || !result.content.startsWith(prefix))
+                        throw new IllegalStateException("Native question has no unique exact tool receipt");
+                    int newline = result.content.indexOf('\n');
+                    if (newline < 0) throw new IllegalStateException("Native question receipt is incomplete");
+                    evidenceId = result.content.substring(prefix.length(), newline);
+                }
+                boolean verified = false;
+                try {
+                    JSONObject metadata = saved.metadataJson();
+                    JSONObject continuation = CrewCheckpointStore.continuation(saved).toJson();
+                    Set<String> cycles = new HashSet<>();
+                    cycles.add(continuation.getString("initialCycleId"));
+                    JSONArray links = continuation.getJSONArray("links");
+                    for (int i = 0; i < links.length(); i++)
+                        if ("BOUND".equals(links.getJSONObject(i).getString("state")))
+                            cycles.add(links.getJSONObject(i).getString("newCycleId"));
+                    for (CrewMessage message : decodeMessages(metadata.getJSONArray("messages"), saved.botId,
+                            metadata.getString("missionId"), false)) {
+                        if (!saved.botId.equals(message.from) || !"chief".equals(message.to)
+                                || !text.equals(message.text) || message.type != CrewMessage.Type.QUESTION
+                                || message.coordination == null || !message.coordination.evidenceId.equals(evidenceId)) continue;
+                        com.jarvys.agent.crew.CrewCoordinationEvidence source = new LocalRunStore(context)
+                                .readCrewCoordinationEvidence(conversation, evidenceId);
+                        if (source != null && message.coordination.matches(source)
+                                && source.conversationId.equals(conversation)
+                                && source.cycleId.equals(message.coordination.cycleId)
+                                && source.messageId.equals(message.id)
+                                && source.messageId.equals(message.coordination.messageId)
+                                && source.text.equals(text) && source.botId.equals(saved.botId)
+                                && source.missionId.equals(metadata.getString("missionId")) && cycles.contains(source.cycleId)) verified = true;
+                    }
+                } catch (JSONException invalid) { throw new IllegalStateException("Native coordination proof is invalid", invalid); }
+                if (verified && usedQuestionReceipts.add(evidenceId)) continue;
+            }
+            throw new IllegalStateException("Native checkpoint effect is not inspectable by the bounded recovery profile: " + call.name);
         }
     }
 

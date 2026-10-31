@@ -74,6 +74,7 @@ class WorkspaceResultDelivery internal constructor(
         // thread learns of the result through a card. It is written on every pass (idempotent), not only
         // when the notice was inserted, so a card lost after the notice is recovered.
         WorkspaceMissionCards.resultDelivered(app, reference)
+        WorkspaceContinuationDelivery.result(app, reference, token)
         return inserted
     }
 
@@ -93,8 +94,14 @@ class WorkspaceResultDelivery internal constructor(
                 val ids = ledger.listCrewResultEvidence(scope.executionSessionId, PAGE, cursor)
                 for (id in ids) {
                     token.throwIfCancelled()
-                    val reference = register(workspaceId, id, token) ?: continue
-                    visibleChange = discloseAutomatically(reference, token) || visibleChange
+                    try {
+                        val reference = register(workspaceId, id, token) ?: continue
+                        visibleChange = discloseAutomatically(reference, token) || visibleChange
+                    } catch (_: WorkspaceContinuationDelivery.AdmissionIneligible) {
+                        // Retained historical evidence/current controls are not fresh execution
+                        // authority. Only this episode is skipped; source corruption still fails.
+                        token.throwIfCancelled()
+                    }
                 }
                 cursor = ids.lastOrNull()
             } while (ids.size == PAGE)
@@ -171,7 +178,12 @@ class WorkspaceResultDelivery internal constructor(
         private const val PAGE = 50
         private const val RESULT_PAGE = 8000
         private val executor = Executors.newSingleThreadExecutor()
-        internal class PendingReceipt(val token: CancellationToken) { val dirty = AtomicBoolean(true) }
+        internal class PendingReceipt(val token: CancellationToken,
+            permits: Collection<WorkspaceContinuationDelivery.LiveResultPermit> = emptyList()) {
+            val dirty = AtomicBoolean(true)
+            val liveResults = java.util.concurrent.ConcurrentHashMap.newKeySet<WorkspaceContinuationDelivery.LiveResultPermit>()
+                .also { it.addAll(permits) }
+        }
         private val pending = HashMap<String, PendingReceipt>()
         private val pendingLock = Any()
         private val errors = ConcurrentHashMap<String, String>()
@@ -188,7 +200,7 @@ class WorkspaceResultDelivery internal constructor(
                             token.throwIfCancelled()
                             val rows = registry.listWorkspaces(PAGE, cursor)
                             for (row in rows) {
-                                if (!token.runIfActive { enqueue(app, row.executionSessionId, token) }) token.throwIfCancelled()
+                                if (!token.runIfActive { enqueue(app, row.executionSessionId, token, emptyList()) }) token.throwIfCancelled()
                             }
                             cursor = rows.lastOrNull()?.workspaceId
                         } while (rows.size == PAGE)
@@ -200,14 +212,20 @@ class WorkspaceResultDelivery internal constructor(
         }
 
         @JvmStatic fun issue(workspaceId: String): String? = errors[workspaceId]
-        @JvmStatic fun schedule(context: Context, executionSessionId: String) = enqueue(context, executionSessionId, null)
+        @JvmStatic fun schedule(context: Context, executionSessionId: String) {
+            if (!WorkspaceIdentity.isExecutionSession(executionSessionId)) return
+            enqueue(context, executionSessionId, null, WorkspaceContinuationDelivery.pendingLiveResults(context, executionSessionId))
+        }
         /** Only the map is locked here; cancellation gates always precede this lock. */
         internal fun claimPending(session: String, candidate: PendingReceipt): Boolean {
             var claimed = false
             candidate.token.runIfActive {
                 synchronized(pendingLock) {
                     val existing = pending[session]
-                    if (existing != null && !existing.token.isCancellationRequested) existing.dirty.set(true)
+                    if (existing != null && !existing.token.isCancellationRequested) {
+                        existing.dirty.set(true)
+                        existing.liveResults.addAll(candidate.liveResults)
+                    }
                     else { pending[session] = candidate; claimed = true }
                 }
             }
@@ -224,13 +242,14 @@ class WorkspaceResultDelivery internal constructor(
         internal fun retryPending(token: CancellationToken, again: Boolean, enqueue: () -> Unit): Boolean =
             again && token.runIfActive { enqueue() }
 
-        private fun enqueue(context: Context, executionSessionId: String, parent: CancellationToken?) {
+        private fun enqueue(context: Context, executionSessionId: String, parent: CancellationToken?,
+                            permits: Collection<WorkspaceContinuationDelivery.LiveResultPermit>) {
             parent?.throwIfCancelled()
             if (!WorkspaceIdentity.isExecutionSession(executionSessionId)) return
             val app = context.applicationContext
             val token = WorkspaceControlOwners.registerLocalReceipt()
             val unlink = parent?.registerCancelAction { token.cancel() }
-            val entry = PendingReceipt(token)
+            val entry = PendingReceipt(token, permits)
             if (!claimPending(executionSessionId, entry)) {
                 unlink?.run(); WorkspaceControlOwners.release(token)
                 return
@@ -242,6 +261,15 @@ class WorkspaceResultDelivery internal constructor(
                         beginPending(entry)
                         WorkspaceCoordinationDelivery.reconcileScheduled(app, id, token)
                         WorkspaceResultDelivery(app).reconcile(id, token)
+                        for (permit in entry.liveResults.toList()) {
+                            token.throwIfCancelled()
+                            try {
+                                WorkspaceContinuationDelivery.dispatchLiveResult(app, permit, token)
+                            } catch (_: WorkspaceContinuationDelivery.AdmissionIneligible) {
+                                // Exact stale authority cannot poison an unrelated live permit.
+                                token.throwIfCancelled()
+                            }
+                        }
                         if (errors.remove(id) != null) WorkspaceChanges.changed()
                     } catch (_: java.util.concurrent.CancellationException) {
                         // Durable evidence remains pending; STOP does not replay or delete it.
@@ -252,7 +280,7 @@ class WorkspaceResultDelivery internal constructor(
                         try {
                             // Keep the original owner and parent link alive through child registration.
                             // STOP before or during this handoff cancels the continuation as well.
-                            retryPending(token, again) { enqueue(app, executionSessionId, token) }
+                            retryPending(token, again) { enqueue(app, executionSessionId, token, entry.liveResults.toList()) }
                         } finally {
                             unlink?.run()
                             WorkspaceControlOwners.release(token)

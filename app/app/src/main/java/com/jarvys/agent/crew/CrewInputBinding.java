@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /** Immutable source description. It never grants permission or establishes source authenticity. */
 public final class CrewInputBinding {
-    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT }
+    public enum SourceKind { WORKSPACE_REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER }
     public final SourceKind sourceKind;
     public final String sourceId, ownerCentralSessionId, workspaceId, executionSessionId, assignmentId;
     public final String missionId, botId, mailboxMessageId, sourcePayloadSha256, deliverySha256, admissionCycleId;

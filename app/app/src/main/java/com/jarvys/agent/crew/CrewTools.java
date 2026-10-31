@@ -100,8 +100,15 @@ public final class CrewTools {
         });
         if (bot.role.tools.contains("ask_chief")) tools.add(new BotTool("ask_chief", "Ask the captain a question and wait for its correlated chief ANSWER. A direct answer to this worker is correlated to its sole live question; include the exact question message ID in answer refs when several questions are pending. Other chief or peer messages do not satisfy this question; any admitted reply arrives separately as supervisor input.",
                 schema(props("question","string"),"question")) {
+            @Override public CoreTool.ResponseCallPolicy responseCallPolicy() {
+                return manager.isLinkedQuestionYield(bot) ? CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD
+                        : CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;
+            }
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled();
+                String questionEvidence = manager.askChiefAndYieldIfLinked(bot, originalString(a,"question"), token);
+                if (questionEvidence != null)
+                    return CoreToolResult.finish("native-question-evidence:" + questionEvidence + "\nAwaiting exact answer and explicit native Resume; not task completion.");
                 boolean answered = manager.askChief(bot, originalString(a,"question"), token);
                 return answered
                         ? CoreToolResult.success("Question sent; the correlated chief reply was admitted as supervisor input for the next worker step.")

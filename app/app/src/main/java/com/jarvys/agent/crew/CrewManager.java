@@ -112,6 +112,19 @@ public final class CrewManager implements AutoCloseable {
         /** Explicit lifecycle observation only; invoked once outside the bot cycle monitor. */
         default void beforeReconcile(Bot bot) { }
         ResumePlan reconcile(Bot bot);
+        default boolean requiresLinkedResume(Bot bot) { return false; }
+        default void cancelContinuation(Bot bot) { }
+        default CrewCheckpointStore.ConfirmedSnapshot persistSuccessorConfirmed(Bot bot,
+                List<CrewMessage> messages, List<CrewMessage> pending,
+                CrewCheckpointStore.ConfirmedSnapshot expected,
+                com.jarvys.agent.CentralContinuationRecord successor) {
+            throw new IllegalStateException("Linked checkpoint resume is unavailable");
+        }
+    }
+
+    /** Runs under cycle ownership, before any successor executor dispatch. */
+    public interface ResumeCheckpointCommit {
+        void commit(Bot successor, CheckpointSupport support, List<CrewMessage> messages, List<CrewMessage> pending);
     }
 
     public interface OwnedWork {
@@ -153,6 +166,9 @@ public final class CrewManager implements AutoCloseable {
         private volatile long lastProgressAtMillis;
         private volatile Thread thread;
         private volatile boolean reported;
+        // Terminal presentation is visible before its result callback finishes. Wait completion
+        // must not race that publication; this is transient, never checkpoint execution authority.
+        private volatile boolean terminalResultPublicationPending;
         private volatile long startedAtMillis;
         private volatile long finishedAtMillis;
         private volatile java.util.concurrent.CountDownLatch terminated = new java.util.concurrent.CountDownLatch(1);
@@ -186,6 +202,7 @@ public final class CrewManager implements AutoCloseable {
         private volatile String recoveryNote = "";
         private volatile boolean checkpointAvailable;
         private volatile boolean requiresExplicitResume;
+        private volatile boolean durableQuestionYield;
         private volatile boolean stopping;
         private volatile boolean definitionDisabled;
         private volatile Runnable checkpointChanged = ()->{
@@ -653,13 +670,13 @@ public final class CrewManager implements AutoCloseable {
         java.util.function.BiFunction<Bot, CrewMessage, com.jarvys.agent.ConversationInput> resolver = conversationInputResolver;
         if (resolver != null) {
             com.jarvys.agent.ConversationInput resolved = resolver.apply(recipient, message);
-            if (resolved != null) return CoreAgentLoop.IncomingMessage.agentInput(resolved);
+            if (resolved != null) return CoreAgentLoop.IncomingMessage.agentInput(resolved, message);
         }
         if (message.inputProvenance != null) {
             com.jarvys.agent.ConversationInput attributed = new com.jarvys.agent.ConversationInput(
                     conversationId, message.id, message.conversationContent(),
                     com.jarvys.agent.ConversationInput.Origin.AGENT, message.inputProvenance);
-            return CoreAgentLoop.IncomingMessage.agentInput(attributed);
+            return CoreAgentLoop.IncomingMessage.agentInput(attributed, message);
         }
         if (message.inputBinding != null) return CoreAgentLoop.IncomingMessage.fromCrewMessage(message);
         ConversationInput.Origin origin = "recovery".equals(message.from)
@@ -974,7 +991,8 @@ public final class CrewManager implements AutoCloseable {
         bot.checkpointAvailable = checkpoint != null && issue.isEmpty();
         // A durably completed assignment can accept an ordinary same-assignment follow-up.
         // Incomplete/uncertain states retain the native explicit-resume boundary.
-        bot.requiresExplicitResume = bot.status != Status.DONE || !bot.checkpointAvailable;
+        bot.requiresExplicitResume = bot.status != Status.DONE || !bot.checkpointAvailable
+                || scopeIdentity != null && scopeIdentity.startsWith("native-workspace:");
         bot.recoveryNote = issue;
         if (checkpoint != null) {
             bot.checkpoint = checkpoint;
@@ -1135,7 +1153,13 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public void resumeExact(String id, CancellationToken expectedToken, String userText, CrewInputBinding inputBinding) {
-        resumeWithUserMessage(id, userText, inputBinding, expectedToken);
+        resumeWithUserMessage(id, userText, inputBinding, expectedToken, null);
+    }
+
+    public void resumeExact(String id, CancellationToken expectedToken, String userText,
+            CrewInputBinding inputBinding, ResumeCheckpointCommit linkedCommit) {
+        if (linkedCommit == null) throw new IllegalArgumentException("Linked resume commit is required");
+        resumeWithUserMessage(id, userText, inputBinding, expectedToken, linkedCommit);
     }
 
     public void resume(String id) { resumeWithUserMessage(id, null); }
@@ -1144,10 +1168,10 @@ public final class CrewManager implements AutoCloseable {
     public void resumeWithUserMessage(String id, String userText) {
         Bot bot = bots.get(id);
         if (bot == null) throw new IllegalArgumentException("Historical bot has no resumable checkpoint");
-        resumeWithUserMessage(id, userText, null, bot.token);
+        resumeWithUserMessage(id, userText, null, bot.token, null);
     }
 
-    private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding, CancellationToken expectedToken) {
+    private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding, CancellationToken expectedToken, ResumeCheckpointCommit linkedCommit) {
         if (userText != null && userText.trim().isEmpty())
             throw new IllegalArgumentException("User correction must be non-empty");
         Bot bot = bots.get(id);
@@ -1158,6 +1182,8 @@ public final class CrewManager implements AutoCloseable {
             if (!bot.canResume()) throw new IllegalStateException("This bot is not ready for explicit resume");
             support = checkpointSupport;
             if (support == null) throw new IllegalStateException("Resume is unavailable in this runtime");
+            if (support.requiresLinkedResume(bot) && linkedCommit == null)
+                throw new IllegalStateException("This native continuation requires its exact durable control link");
             if (inputBinding != null) validateInputBinding(bot, userText, inputBinding, CrewInputBinding.SourceKind.NATIVE_CORRECT);
         }
         support.beforeReconcile(bot);
@@ -1183,6 +1209,7 @@ public final class CrewManager implements AutoCloseable {
                 bot.requiresExplicitResume = false;
                 bot.stopping = false;
                 bot.reanimationRequested = false;
+                bot.durableQuestionYield = false;
                 bot.error = "";
                 bot.recoveryNote = "";
                 bot.status = Status.QUEUED;
@@ -1194,7 +1221,11 @@ public final class CrewManager implements AutoCloseable {
                     else bus.enqueueFresh(new CrewMessage(inputBinding.mailboxMessageId, conversationId, "user", bot.id,
                             CrewMessage.Type.USER, userText, Collections.emptyList(), System.currentTimeMillis()).withInputBinding(inputBinding));
                 }
-                persistCheckpoint(bot);
+                if (linkedCommit == null) persistCheckpoint(bot);
+                else synchronized (bot) {
+                    linkedCommit.commit(bot, support, bus.snapshot(), bus.pending(bot.id));
+                    bot.checkpointAvailable = true;
+                }
                 MissionState mission = missions.get(bot.missionId);
                 // Recovering one worker does not supply a new captain synthesis. The snapshot
                 // derives live activity from its children while retaining the partial outcome.
@@ -1305,6 +1336,9 @@ public final class CrewManager implements AutoCloseable {
             try { publishPresentation(bot.missionId); } catch (RuntimeException ignored) { }
         }
     }
+
+    /** Validation only; a persisted role never creates a profile or capability. */
+    public void validateCheckpointRole(CrewRole role) { validateCurrentProfile(role); }
 
     private void validateCurrentProfile(CrewRole role) {
         if (role.profileVersion <= 0 || !profilesConfigured) return;
@@ -1730,6 +1764,7 @@ public final class CrewManager implements AutoCloseable {
                             bot.reported = true;
                         }
                         invalidateCoordinationLocked(bot);
+                        bot.terminalResultPublicationPending = result.turns != 0;
                         bot.status = "STOPPED".equals(result.outcome) ? Status.STOPPED
                                 : "FAILED".equals(result.outcome) ? Status.FAILED : Status.PARTIAL;
                         bot.waitingReason = "";
@@ -1738,9 +1773,23 @@ public final class CrewManager implements AutoCloseable {
                         terminalReport = new TerminalReport(bot.status, bot.cycleResult, bot.finishedAtMillis);
                     }
                     if (result.turns != 0) {
-                        sendBotConversationMessage(bot, CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+                        publishTerminalResult(bot, bot.result);
                     }
                     bus.signalWaiters();
+                    publishMission(bot.missionId);
+                    return;
+                }
+                if (bot.durableQuestionYield) {
+                    // The question tool returned and its RESULT checkpoint committed. This is a
+                    // suspended request, not a successful result, and cannot trigger a result wake.
+                    synchronized (bot.cycleLock) {
+                        bot.status = Status.PARTIAL;
+                        bot.requiresExplicitResume = true;
+                        bot.waitingReason = "needs_input";
+                        bot.recoveryNote = "Question retained. An exact answer and native explicit Resume are required.";
+                        bot.finishedAtMillis = System.currentTimeMillis();
+                        invalidateCoordinationLocked(bot);
+                    }
                     publishMission(bot.missionId);
                     return;
                 }
@@ -1758,6 +1807,7 @@ public final class CrewManager implements AutoCloseable {
                         // Keep exact nonblocking requests for this completed cycle replyable. A
                         // successful exact reply claims the request and starts a fresh cycle;
                         // STOP, resume, user controls and any new cycle still invalidate them.
+                        bot.terminalResultPublicationPending = resultToPublish != null;
                         bot.status = Status.DONE;
                         bot.waitingReason = "";
                         bot.finishedAtMillis = System.currentTimeMillis();
@@ -1765,7 +1815,7 @@ public final class CrewManager implements AutoCloseable {
                     } else bot.status = Status.RUNNING;
                 }
                 if (resultToPublish != null)
-                    sendBotConversationMessage(bot, CrewMessage.Type.RESULT, resultToPublish, Collections.emptyList());
+                    publishTerminalResult(bot, resultToPublish);
                 bus.signalWaiters();
                 publishMission(bot.missionId);
                 if (complete) return;
@@ -1798,6 +1848,7 @@ public final class CrewManager implements AutoCloseable {
             bot.result = failureText;
             synchronized (bot.cycleLock) {
                 bot.cycleResult = failureText;
+                bot.terminalResultPublicationPending = true;
                 bot.status = Status.FAILED;
                 if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
                 bot.waitingReason = "";
@@ -1805,7 +1856,7 @@ public final class CrewManager implements AutoCloseable {
                 if (bus.hasMatching(bot.id, (message)->"user".equals(message.from) && message.type == CrewMessage.Type.USER)) bot.reanimationRequested = true;
                 terminalReport = new TerminalReport(Status.FAILED, failureText, bot.finishedAtMillis);
             }
-            sendBotConversationMessage(bot, CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+            publishTerminalResult(bot, bot.result);
             publishMissionAfterWorker(bot);
         } finally {
             java.util.concurrent.CountDownLatch completedLatch = bot.terminated;
@@ -2204,6 +2255,29 @@ public final class CrewManager implements AutoCloseable {
                 expectedToken, finalAdmission, true);
     }
 
+    /** Retained ANSWER admission after a linked native resume; never reanimates a terminal bot. */
+    public CrewMessage sendContinuationAnswerExact(String botId, CancellationToken expectedToken,
+            String text, com.jarvys.agent.ConversationInput.Provenance provenance,
+            CrewInputBinding inputBinding, Runnable finalAdmission) {
+        Bot bot = bots.get(botId);
+        if (bot == null) throw new IllegalArgumentException("Unknown worker");
+        synchronized (bot.cycleLock) {
+            if (bot.token != expectedToken || bot.requiresExplicitResume || bot.stopping
+                    || (bot.status != Status.QUEUED && bot.status != Status.RUNNING && bot.status != Status.WAITING))
+                throw new IllegalStateException("Continuation answer requires its live resumed cycle");
+            validateInputBinding(bot, text, inputBinding, CrewInputBinding.SourceKind.CONTINUATION_ANSWER);
+            if (provenance == null || provenance.kind != com.jarvys.agent.ConversationInput.Kind.ANSWER
+                    || provenance.principalRole != com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUPERVISOR
+                    || !inputBinding.assignmentId.equals(provenance.assignmentId))
+                throw new IllegalArgumentException("Continuation answer provenance mismatch");
+            CrewMessage proposed = new CrewMessage(inputBinding.mailboxMessageId, conversationId, "chief", bot.id,
+                    CrewMessage.Type.ANSWER, text, Collections.emptyList(), System.currentTimeMillis())
+                    .withInputProvenance(provenance).withInputBinding(inputBinding);
+            return dispatch(bot, "chief", bot.id, CrewMessage.Type.ANSWER, text, Collections.emptyList(), false,
+                    proposed, expectedToken, finalAdmission, true);
+        }
+    }
+
     private static boolean sameInputProvenance(com.jarvys.agent.ConversationInput.Provenance left,
             com.jarvys.agent.ConversationInput.Provenance right) {
         return left == null ? right == null : right != null && left.toJson().toString().equals(right.toJson().toString());
@@ -2291,6 +2365,8 @@ public final class CrewManager implements AutoCloseable {
                 if (recipient.requiresExplicitResume || status == Status.INTERRUPTED) throw new IllegalArgumentException("Interrupted bots cannot be reanimated");
                 if ((status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
                 if (status == Status.DONE || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) {
+                    if (checkpointSupport != null && checkpointSupport.requiresLinkedResume(recipient))
+                        throw new IllegalStateException("A terminal linked worker requires native explicit continuation, not generic reanimation");
                     MissionState mission = missions.get(recipient.missionId);
                     if (mission != null && !"RUNNING".equals(mission.status) && !"PARTIAL".equals(mission.status)) {
                         mission.status = "RUNNING";
@@ -2439,6 +2515,23 @@ public final class CrewManager implements AutoCloseable {
         publishMission(bot.missionId);
     }
 
+    /** Protocol-aware safe yield: source is durable, but no live capability survives the pause. */
+    public boolean isLinkedQuestionYield(Bot bot) {
+        CheckpointSupport support = checkpointSupport;
+        return support != null && support.requiresLinkedResume(bot);
+    }
+
+    public String askChiefAndYieldIfLinked(Bot bot, String question, CancellationToken expectedToken) {
+        if (!isLinkedQuestionYield(bot)) return null;
+        CrewMessage source = produceCoordination(bot, expectedToken, CrewMessage.Type.QUESTION, question, Collections.emptyList(), false);
+        synchronized (bot.cycleLock) {
+            if (bot.token != expectedToken) throw new IllegalStateException("Question cycle changed");
+            expectedToken.throwIfCancelled();
+            bot.durableQuestionYield = true;
+        }
+        return source.coordination.evidenceId;
+    }
+
     public boolean askChief(Bot bot, String question) {
         return askChief(bot, question, bot.token);
     }
@@ -2543,10 +2636,26 @@ public final class CrewManager implements AutoCloseable {
         return bus.drain("chief");
     }
 
+    private void publishTerminalResult(Bot bot, String text) {
+        try {
+            sendBotConversationMessage(bot, CrewMessage.Type.RESULT, text, Collections.emptyList());
+        } finally {
+            bot.terminalResultPublicationPending = false;
+            bus.signalWaiters();
+        }
+    }
+
     private boolean terminal(List<String> ids, WaitMode mode) {
-        if (ids.isEmpty()) return bots.values().stream().noneMatch((bot)->bot.status == Status.QUEUED || bot.status == Status.RUNNING || bot.status == Status.WAITING);
-        if (mode == WaitMode.ALL) return ids.stream().allMatch((id)->terminal(bots.get(id).status));
-        return ids.stream().anyMatch((id)->terminal(bots.get(id).status));
+        if (ids.isEmpty()) return bots.values().stream().allMatch(CrewManager::terminalForWait);
+        if (mode == WaitMode.ALL) return ids.stream().allMatch((id)->terminalForWait(bots.get(id)));
+        return ids.stream().anyMatch((id)->terminalForWait(bots.get(id)));
+    }
+
+    private static boolean terminalForWait(Bot bot) {
+        // Status is read first: its volatile terminal write follows publication reservation.
+        Status status = bot.status;
+        return terminal(status) && (!bot.terminalResultPublicationPending
+                || status == Status.STOPPED || bot.token.isCancellationRequested());
     }
 
     private static boolean terminal(Status status) {
@@ -2583,7 +2692,13 @@ public final class CrewManager implements AutoCloseable {
         Bot bot = bots.get(id);
         if (bot == null) return false;
         synchronized (bot.cycleLock) {
-            if (terminal(bot.status)) return false;
+            RuntimeException cancellationFailure = null;
+            try { if (checkpointSupport != null) checkpointSupport.cancelContinuation(bot); }
+            catch (RuntimeException failure) { cancellationFailure = failure; }
+            if (terminal(bot.status)) {
+                if (cancellationFailure != null) throw cancellationFailure;
+                return false;
+            }
             boolean pending = hasPendingOwnedWork(bot);
             invalidateCoordinationLocked(bot);
             bot.stopping = true;
@@ -2597,6 +2712,7 @@ public final class CrewManager implements AutoCloseable {
             if (thread != null) thread.interrupt();
             bus.signalWaiters();
             publishMission(bot.missionId);
+            if (cancellationFailure != null) throw cancellationFailure;
             return true;
         }
     }

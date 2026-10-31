@@ -72,10 +72,19 @@ public final class StopController {
         return stopRun(false);
     }
 
-    private boolean stopRun(boolean waitForCleanup) {
+    static void cleanupAsync(Runnable cleanup) { ASYNC_STOP.execute(cleanup); }
+
+    boolean stopExactRunAsync(CancellationToken expected) {
+        return stopRun(false, expected);
+    }
+
+    private boolean stopRun(boolean waitForCleanup) { return stopRun(waitForCleanup, null); }
+
+    private boolean stopRun(boolean waitForCleanup, CancellationToken expected) {
         final Future<?> future;
         final List<Runnable> actions;
         synchronized (this) {
+            if (expected != null && (activeToken != expected || !isActive(expected.generation()))) return false;
             if (!stopped.compareAndSet(false, true)) {
                 return false;
             }
@@ -88,12 +97,12 @@ public final class StopController {
             generation.incrementAndGet();
             future = runFuture;
             runFuture = null;
+            // beginRun registers under this same monitor; do not remove a replacement generation.
+            ACTIVE_CONTROLLERS.remove(this);
         }
-        ACTIVE_CONTROLLERS.remove(this);
-        if (future != null) {
-            future.cancel(true);
-        }
+        if (future != null && expected == null) future.cancel(true);
         Runnable cleanup = () -> {
+            if (future != null && expected != null) future.cancel(true);
             awaitActiveDispatches();
             if (actions != null) {
                 for (Runnable action : actions) {

@@ -256,7 +256,8 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
         evidence.refs.forEachIndexed { ordinal, ref ->
             sql.execSQL(
                 "INSERT INTO crew_coordination_evidence_refs(conversation_id,evidence_id,ordinal,ref) VALUES(?,?,?,?)",
-                arrayOf(evidence.conversationId, evidence.evidenceId, ordinal, ref),
+                arrayOf(evidence.conversationId, evidence.evidenceId, ordinal,
+                    if (NEW_EXACT_REF_WRITES_ENABLED) ExactUtf16.encode(ref) else ref),
             )
         }
         ChatDbResult.Success(evidence)
@@ -450,7 +451,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
                 }
                 if (!c.isNull(26)) {
                     check(c.getInt(26) == evidenceRefs.size) { "Corrupt crew_coordination_evidence_refs ordering" }
-                    evidenceRefs += c.getString(27)
+                    evidenceRefs += readExactCoordinationRef(c, 27)
                 }
             }
             emit()
@@ -636,7 +637,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
     ): ChatDbResult<Pair<InputIncorporation, Boolean>> = transaction {
         InputIncorporation.fromJsonStrict(proposed.toJson())
         requireCentralConversation(proposed.ownerCentralSessionId)
-        if (proposed.sourceKind == InputIncorporation.SourceKind.REPLY) {
+        if (proposed.sourceKind != InputIncorporation.SourceKind.NATIVE_CORRECT) {
             requireIncorporationSource(proposed)
         } else {
             ensureExecutionConversationForWrite(proposed.executionSessionId)
@@ -792,6 +793,8 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
                     if (!current.matchesReply(reply)) error("Incorporation has no exact admitted reply source")
                     validateReplyTransitions(reply, transitions.values.toList())
                 }
+                if (current.sourceKind == InputIncorporation.SourceKind.CONTINUATION_ANSWER)
+                    requireIncorporationSource(current)
                 values += current
             }
 
@@ -815,7 +818,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
                 }
                 if (!c.isNull(62)) {
                     val ordinal = c.getInt(62)
-                    val ref = c.getString(63)
+                    val ref = readExactCoordinationRef(c, 63)
                     val old = evidenceRefs.putIfAbsent(ordinal, ref)
                     check(old == null || old == ref) { "Corrupt crew_coordination_evidence_refs ordering" }
                 }
@@ -937,7 +940,7 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             arrayOf(conversationId, evidenceId),
         ).use { c -> buildList { while (c.moveToNext()) {
             check(c.getInt(0) == size) { "Corrupt crew_coordination_evidence_refs ordering" }
-            add(c.getString(1))
+            add(readExactCoordinationRef(c, 1))
         } } }
         check(row.schemaVersion == CrewCoordinationLedgerEvidence.SCHEMA_VERSION) { "Unsupported crew_coordination_evidence schema" }
         val value = CrewCoordinationLedgerEvidence.create(conversationId, row.missionId, row.botId, row.cycleId,
@@ -1065,6 +1068,37 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
             val reply = findCoordinationReply(value.ownerCentralSessionId, referenceId)
             check(value.matchesReply(reply)) { "Incorporation has no exact admitted reply source" }
             requireExactCoordinationSource(reply!!.reference)
+        } else if (value.sourceKind == InputIncorporation.SourceKind.CONTINUATION_ANSWER) {
+            val ref = checkNotNull(findCoordinationRef(value.executionSessionId, value.sourceReferenceId, false))
+            requireExactCoordinationSource(ref)
+            check(ref.assignmentId == value.assignmentId && ref.requestId == value.requestId &&
+                ref.missionId == value.missionId && ref.botId == value.botId && ref.workspaceId == value.workspaceId)
+            val stable = com.jarvys.agent.ConversationInput.stableId(com.jarvys.agent.ConversationInput.Origin.AGENT,
+                value.ownerCentralSessionId, value.sourceId)
+            val messageId = sql.query("SELECT message_id FROM messages WHERE conversation_id=? AND stable_id=? AND role='agent'",
+                arrayOf(value.executionSessionId, stable)).use { c -> check(c.moveToFirst()) { "Continuation answer outbox missing" }; c.getString(0) }
+            val parts = sql.query("SELECT kind,payload FROM message_parts WHERE conversation_id=? AND message_id=? ORDER BY ordinal",
+                arrayOf(value.executionSessionId, messageId)).use { c -> buildList {
+                    while (c.moveToNext()) add(c.getString(0) to c.getString(1))
+                } }
+            check(parts.size == 2 && parts[0].first == "text" &&
+                parts[1].first == com.jarvys.agent.ConversationInput.PROVENANCE_PART_KIND) { "Invalid continuation outbox parts" }
+            val envelope = org.json.JSONObject(parts[1].second)
+            check(envelope.getString("origin") == "AGENT")
+            val provenance = com.jarvys.agent.ConversationInput.Provenance.fromJson(envelope.getJSONObject("provenance"))
+            check(provenance.kind == com.jarvys.agent.ConversationInput.Kind.ANSWER &&
+                provenance.principalRole == com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUPERVISOR &&
+                provenance.sessionId == value.ownerCentralSessionId && provenance.messageId == value.sourceId &&
+                provenance.referenceId == ref.referenceId && provenance.contentSha256 == ref.contentSha256 &&
+                provenance.correlationMessageId == ref.messageId && provenance.cycleId == ref.cycleId &&
+                provenance.workspaceId == ref.workspaceId && provenance.assignmentId == ref.assignmentId &&
+                provenance.botId == ref.botId && provenance.missionId == ref.missionId && provenance.requestId == ref.requestId)
+            val input = com.jarvys.agent.ConversationInput(value.executionSessionId, value.sourceId, parts[0].second,
+                com.jarvys.agent.ConversationInput.Origin.AGENT, provenance)
+            val payload = com.jarvys.agent.WorkspaceContinuationAnswers.payloadDigest(input)
+            check(payload == value.sourcePayloadSha256)
+            val binding = com.jarvys.agent.workspaces.WorkspaceInputSources.continuationAnswer(input, value.admissionCycleId, payload)
+            check(binding.mailboxMessageId == value.mailboxMessageId && binding.deliverySha256 == value.deliveredContentSha256)
         }
     }
 
@@ -1236,7 +1270,17 @@ internal class StrictJournalRepository(private val database: JarvysChatDatabase)
 
     private class JournalAbort(val reason: String) : RuntimeException(reason)
 
-    private companion object {
+    companion object {
+        // Pre-write Full39/Play39 compatibility gate passed before enabling this local candidate.
+        // Old binaries read refs as TEXT and cannot safely downgrade after exact BLOB writes.
+        const val NEW_EXACT_REF_WRITES_ENABLED = true
+
+        private fun readExactCoordinationRef(cursor: Cursor, column: Int): String = when (cursor.getType(column)) {
+            Cursor.FIELD_TYPE_STRING -> cursor.getString(column) // Historical rows remain untouched.
+            Cursor.FIELD_TYPE_BLOB -> ExactUtf16.decode(cursor.getBlob(column))
+            else -> error("Corrupt crew_coordination_evidence_refs storage type")
+        }
+
         val TERMINAL_RESULT_STATES = setOf("DONE", "PARTIAL", "FAILED", "STOPPED")
         const val RESULT_CONFLICT = "Result identity already has a different payload"
         const val COORDINATION_CONFLICT = "Coordination identity already has a different payload"

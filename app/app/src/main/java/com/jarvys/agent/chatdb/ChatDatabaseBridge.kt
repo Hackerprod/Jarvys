@@ -1907,6 +1907,67 @@ class ChatDatabaseBridge private constructor(context: Context, injectedExecutor:
     fun readConversationMetadataSync(conversationId: String): ConversationMetadataValue? =
         execute { it.conversations.readConversationMetadata(conversationId) }
 
+    /** Existing tables, one native writer transaction; the checkpoint claim precedes this commit. */
+    fun prepareContinuationGenerationSync(runId: String, assistantStableId: String, inputMessageId: String): GenerationRunValue = execute { repos ->
+        repos.database.withChatWriteTransaction {
+            val central = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+            // This legacy column is the interaction owner, including AGENT inputs; never invent a USER.
+            // The caller has already fenced the exact protocol source before its STARTED checkpoint CAS.
+            val input = requireNotNull(repos.conversations.getMessage(central, inputMessageId))
+            check(input.role == "agent" && input.inputState == null) { "Continuation requires its unresolved Central AGENT input" }
+            check(repos.conversations.getMessageByStableId(central, assistantStableId) == null) {
+                "Continuation assistant already exists; never create another generation"
+            }
+            val message = requireSuccessSync(repos.conversations.appendMessage(AppendMessageInput(
+                conversationId = central, role = "assistant", parts = listOf(MessagePartInput("text", "")),
+                status = "streaming", runId = runId, stableId = assistantStableId,
+                ownerUserMessageId = input.messageId)), "prepare continuation assistant")
+            val run = requireSuccessSync(repos.conversations.createGenerationRun(runId, central, message.messageId),
+                "prepare continuation generation")
+            requireSuccessSync(repos.conversations.transitionGenerationRun(run.id, run.stateRevision, "requesting"),
+                "claim continuation generation")
+        }
+    }
+
+    fun finishContinuationGenerationSync(runId: String, assistantStableId: String, content: String,
+                                         outcome: String, durationMs: Long): String = execute { repos ->
+        repos.database.withChatWriteTransaction {
+            val central = com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION
+            val message = requireNotNull(repos.conversations.getMessageByStableId(central, assistantStableId))
+            check(message.role == "assistant" && message.runId == runId && message.stableId == assistantStableId)
+            val terminal = when (outcome) {
+                "COMPLETED" -> "completed"
+                "STOPPED", "PARTIAL" -> "interrupted"
+                "FAILED" -> "failed"
+                else -> error("Invalid continuation outcome")
+            }
+            val state = repos.database.chatSql.query(
+                "SELECT conversation_id,message_id,state,state_revision FROM generation_run WHERE id=?", arrayOf(runId)
+            ).use { cursor ->
+                check(cursor.moveToFirst()) { "Continuation generation is missing" }
+                check(cursor.getString(0) == central && cursor.getString(1) == message.messageId) {
+                    "Continuation generation identity changed"
+                }
+                cursor.getString(2) to cursor.getLong(3)
+            }
+            val parts = listOf(MessagePartInput("text", content))
+            if (state.first in setOf("completed", "interrupted", "failed")) {
+                // A lost return may be retried, but a service catch must not replace a committed answer.
+                check(state == (terminal to 2L) && message.status == outcome && message.parts == parts &&
+                    message.durationMillis == durationMs.takeIf { it > 0 }) { "Conflicting terminal continuation receipt" }
+            } else {
+                check(state == ("requesting" to 1L) && message.status == "streaming") {
+                    "Continuation receipt is not owned by the expected active generation"
+                }
+                requireSuccessSync(repos.conversations.finalizeMessage(central, message.messageId,
+                    parts, outcome, durationMs), "finalize continuation assistant")
+                requireSuccessSync(repos.conversations.transitionGenerationRun(runId, 1L, terminal),
+                    "finish continuation generation")
+            }
+            message.messageId
+        }
+    }
+
     fun appendMessageSync(input: AppendMessageInput): ChatDbResult<StoredMessage> =
         execute { it.conversations.appendMessage(input) }
 

@@ -8,7 +8,7 @@ import java.util.Map;
 public interface CoreTool {
   enum ExecutionMode { PARALLEL, SEQUENTIAL }
   /** Admission policy for calls returned together in one model response. */
-  enum ResponseCallPolicy { MULTIPLE_PER_RESPONSE, ONE_PER_RESPONSE }
+  enum ResponseCallPolicy { MULTIPLE_PER_RESPONSE, ONE_PER_RESPONSE, EXCLUSIVE_YIELD }
   enum UnattendedAccess { EXCLUDED, READ, WRITE }
   enum AccessClassification { READ, WRITE }
   enum EffectClass { READ, WRITE }

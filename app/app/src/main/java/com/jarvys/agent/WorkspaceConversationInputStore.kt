@@ -63,7 +63,21 @@ internal object WorkspaceConversationInputStore {
     @JvmStatic
     fun appendSupervisorIntent(context: Context, executionSessionId: String,
                                assignment: WorkspaceAssignment, botId: String, key: String,
-                               text: String, correlation: WorkspaceCoordinationReference?): ConversationInput {
+                               text: String, correlation: WorkspaceCoordinationReference?): ConversationInput =
+        appendSupervisorIntentOfKind(context, executionSessionId, assignment, botId, key, text, correlation,
+            ConversationInput.Kind.MESSAGE)
+
+    /** Retained answers never enter generic MESSAGE replay. The continuation coordinator owns dispatch. */
+    fun appendSupervisorAnswerIntent(context: Context, executionSessionId: String,
+                                    assignment: WorkspaceAssignment, botId: String, key: String,
+                                    text: String, correlation: WorkspaceCoordinationReference): ConversationInput =
+        appendSupervisorIntentOfKind(context, executionSessionId, assignment, botId, key, text, correlation,
+            ConversationInput.Kind.ANSWER)
+
+    private fun appendSupervisorIntentOfKind(context: Context, executionSessionId: String,
+                               assignment: WorkspaceAssignment, botId: String, key: String,
+                               text: String, correlation: WorkspaceCoordinationReference?,
+                               kind: ConversationInput.Kind): ConversationInput {
         require(WorkspaceIdentity.isExecutionSession(executionSessionId)
             && executionSessionId == WorkspaceIdentity.executionSessionId(assignment.workspaceId)
             && assignment.state == com.jarvys.agent.workspaces.WorkspaceAssignmentState.BOUND
@@ -71,7 +85,7 @@ internal object WorkspaceConversationInputStore {
         val messageId = supervisorMessageId(assignment.workspaceId, assignment.assignmentId, key)
         val input = ConversationInput(executionSessionId, messageId, text, ConversationInput.Origin.AGENT,
             ConversationInput.Provenance(WorkspaceIdentity.CENTRAL_SESSION, assignment.workspaceId,
-                assignment.assignmentId, botId, messageId, ConversationInput.Kind.MESSAGE,
+                assignment.assignmentId, botId, messageId, kind,
                 ConversationInput.Provenance.PrincipalRole.SUPERVISOR, correlation?.messageId ?: "",
                 correlation?.referenceId ?: "", correlation?.contentSha256 ?: "",
                 correlation?.observedAssignmentRevision ?: assignment.revision,
@@ -233,7 +247,7 @@ internal object WorkspaceConversationInputStore {
             && expected.origin == actual.origin
             && expected.provenance?.toJson()?.toString() == actual.provenance?.toJson()?.toString()
 
-    private fun supervisorMessageId(workspaceId: String, assignmentId: String, key: String): String =
+    internal fun supervisorMessageId(workspaceId: String, assignmentId: String, key: String): String =
         UUID.nameUUIDFromBytes(("jarvys-workspace-supervisor-message-v1\u0000"
             + workspaceId + "\u0000" + assignmentId + "\u0000" + key)
             .toByteArray(StandardCharsets.UTF_8)).toString()

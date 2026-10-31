@@ -53,6 +53,16 @@ public final class CancellationToken {
         return true;
     }
 
+    /** Closes only this exact run now; callback cleanup never executes under the caller's locks. */
+    public boolean cancelExactRunAsync() {
+        if (controller != null) return controller.stopExactRunAsync(this);
+        synchronized (standaloneActionLock) {
+            if (!standaloneCancellable || !standaloneCancelled.compareAndSet(false, true)) return false;
+        }
+        StopController.cleanupAsync(this::cancelStandaloneActions);
+        return true;
+    }
+
     private void cancelStandaloneActions() {
         for (Runnable action : standaloneCancelActions) {
             try { action.run(); } catch (RuntimeException ignored) { }

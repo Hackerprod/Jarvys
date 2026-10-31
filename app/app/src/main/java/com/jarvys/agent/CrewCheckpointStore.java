@@ -68,6 +68,10 @@ public final class CrewCheckpointStore {
             this.loop = CrewCheckpointStore.decodeLoop(payload.getJSONObject("loop"));
             this.artifactOwnership = payload.getJSONObject("artifactOwnership");
             this.savedAtMs = payload.getLong("savedAtMs");
+            if (metadata.has(CentralContinuationRecord.FIELD)) {
+                CentralContinuationRecord.fromJson(metadata.getJSONObject(CentralContinuationRecord.FIELD))
+                    .requireCheckpoint(conversationId, botId, scopeIdentity, metadata);
+            }
             for (CrewInputIncorporation proof : loop.incorporations.values()) {
                 if (!conversationId.equals(proof.binding.executionSessionId)
                         || !botId.equals(proof.binding.botId)
@@ -196,12 +200,32 @@ public final class CrewCheckpointStore {
 
     /** Returns evidence of these exact bytes only after the complete save/sync succeeded. */
     public ConfirmedSnapshot saveConfirmed(String conversationId, String botId, JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
+        return saveConfirmedInternal(conversationId, botId, metadata, scopeIdentity, loop, artifactOwnership, false);
+    }
+
+    /** Internal mode is reachable only after the native coordination CAS below. */
+    private ConfirmedSnapshot saveConfirmedInternal(String conversationId, String botId, JSONObject metadata, String scopeIdentity,
+            CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership, boolean coordinationWrite) {
         synchronized (ConversationMetadataAccess.lockForSession(conversationId)) {
             requireActive(conversationId);
             try {
                 if (scopeIdentity == null || scopeIdentity.isEmpty() || loop == null || metadata == null || artifactOwnership == null) {
                     throw new IllegalArgumentException("Complete checkpoint identity and state are required");
                 }
+                metadata = new JSONObject(metadata.toString());
+                File target = file(conversationId, botId);
+                Snapshot prior = target.exists() ? readLocked(conversationId, botId, target) : null;
+                if (prior == null) rejectIncompleteOnly(target.getParentFile());
+                if (!coordinationWrite) {
+                    Object oldBlock = prior == null ? null : prior.metadata.opt(CentralContinuationRecord.FIELD);
+                    if (metadata.has(CentralContinuationRecord.FIELD)
+                            && !CentralContinuationRecord.equal(oldBlock, metadata.opt(CentralContinuationRecord.FIELD)))
+                        throw new IllegalStateException("Ordinary checkpoint save cannot replace coordination metadata");
+                    if (oldBlock != null) metadata.put(CentralContinuationRecord.FIELD, new JSONObject(oldBlock.toString()));
+                }
+                if (metadata.has(CentralContinuationRecord.FIELD))
+                    CentralContinuationRecord.fromJson(metadata.getJSONObject(CentralContinuationRecord.FIELD))
+                        .requireCheckpoint(conversationId, botId, scopeIdentity, metadata);
                 long budget = materializationBudget();
                 long estimated = estimatedSize(metadata, budget) + estimatedSize(artifactOwnership, budget) + estimatedSize(loop.appliedIncomingIds, budget) + estimatedSize(loop.toolLifecycle, budget);
                 if (estimated > budget) {
@@ -219,8 +243,6 @@ public final class CrewCheckpointStore {
                         throw new IOException("Checkpoint exceeds current materialization headroom; evidence preserved");
                     }
                 }
-                File target = file(conversationId, botId);
-                if (target.exists()) readLocked(conversationId, botId, target); else rejectIncompleteOnly(target.getParentFile());
                 JSONObject payload = new JSONObject();
                 payload.put("conversationId", conversationId);
                 payload.put("botId", botId);
@@ -262,6 +284,100 @@ public final class CrewCheckpointStore {
                 throw new IllegalStateException("Could not save Crew checkpoint; original evidence is preserved", failure);
             }
         }
+    }
+
+    /** Initial coordination creation on an already confirmed, bound worker checkpoint. */
+    public ConfirmedSnapshot createCentralContinuation(ConfirmedSnapshot expected, CentralContinuationRecord initial) {
+        if (expected == null || initial == null) throw new IllegalArgumentException("Checkpoint and continuation are required");
+        synchronized (ConversationMetadataAccess.lockForSession(expected.conversationId)) {
+            ConfirmedSnapshot current = requireCurrentContinuation(expected, 0L);
+            JSONObject value = initial.toJson();
+            if (initial.revision() != 1L || value.optJSONArray("links").length() != 0
+                    || value.optJSONArray("answerBindings").length() != 0 || !"NONE".equals(initial.dispatchState()))
+                throw new IllegalArgumentException("Initial continuation must be pristine");
+            return saveCoordination(current, initial, current.metadataJson(), current.scopeIdentity,
+                    current.loopForEvidence(), current.artifactOwnershipJson());
+        }
+    }
+
+    /** No callbacks execute under this CAS: callers supply a complete validated next record. */
+    public ConfirmedSnapshot updateCentralContinuation(ConfirmedSnapshot expected, CentralContinuationRecord next) {
+        if (expected == null || next == null) throw new IllegalArgumentException("Checkpoint and continuation are required");
+        synchronized (ConversationMetadataAccess.lockForSession(expected.conversationId)) {
+            CentralContinuationRecord old = continuation(expected);
+            ConfirmedSnapshot current = requireCurrentContinuation(expected, old.revision());
+            old.requireSuccessor(next);
+            requireNewSourceCertificate(current, old, next);
+            return saveCoordination(current, next, current.metadataJson(), current.scopeIdentity,
+                    current.loopForEvidence(), current.artifactOwnershipJson());
+        }
+    }
+
+    /** Atomically confirms the successor checkpoint and binds its exact previously prepared control. */
+    public ConfirmedSnapshot saveCentralContinuationSuccessor(ConfirmedSnapshot expected, CentralContinuationRecord next,
+            JSONObject metadata, String scopeIdentity, CoreAgentLoop.Checkpoint loop, JSONObject artifactOwnership) {
+        if (expected == null || next == null) throw new IllegalArgumentException("Checkpoint and continuation are required");
+        synchronized (ConversationMetadataAccess.lockForSession(expected.conversationId)) {
+            CentralContinuationRecord old = continuation(expected);
+            ConfirmedSnapshot current = requireCurrentContinuation(expected, old.revision());
+            old.requireSuccessor(next);
+            if (old.expectedCycleId().equals(next.expectedCycleId()))
+                throw new IllegalArgumentException("Successor save requires a newly bound cycle");
+            return saveCoordination(current, next, metadata, scopeIdentity, loop, artifactOwnership);
+        }
+    }
+
+    public static CentralContinuationRecord continuation(ConfirmedSnapshot snapshot) {
+        try { return CentralContinuationRecord.fromJson(snapshot.metadataJson().getJSONObject(CentralContinuationRecord.FIELD)); }
+        catch (org.json.JSONException invalid) { throw new IllegalStateException("Checkpoint has no continuation record", invalid); }
+    }
+
+    /** Digests of retained source evidence; not a safety verdict or a permission. */
+    public static JSONObject continuationSourceCertificate(ConfirmedSnapshot source) {
+        try {
+            JSONObject metadata = source.metadataJson();
+            JSONObject profile = new JSONObject().put("role", metadata.getJSONObject("role"))
+                    .put("missionAccess", metadata.getString("missionAccess"));
+            JSONObject loop = encodeLoop(source.loopForEvidence());
+            return new JSONObject().put("originCheckpointSha256", source.payloadSha256)
+                    .put("originScopeIdentity", source.scopeIdentity).put("originSavedAtMs", source.savedAtMs)
+                    .put("profileSha256", digest(profile.toString().getBytes(StandardCharsets.UTF_8)))
+                    .put("transcriptSha256", digest(loop.getJSONArray("transcript").toString().getBytes(StandardCharsets.UTF_8)))
+                    .put("toolLifecycleSha256", digest(loop.getJSONObject("toolLifecycle").toString().getBytes(StandardCharsets.UTF_8)))
+                    .put("artifactOwnershipSha256", digest(source.artifactOwnershipJson().toString().getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception invalid) { throw new IllegalArgumentException("Incomplete continuation source certificate", invalid); }
+    }
+
+    private static void requireNewSourceCertificate(ConfirmedSnapshot source, CentralContinuationRecord old,
+            CentralContinuationRecord next) {
+        JSONArray before = old.toJson().optJSONArray("links"), after = next.toJson().optJSONArray("links");
+        if (after.length() == before.length()) return;
+        JSONObject certificate = continuationSourceCertificate(source), link = after.optJSONObject(after.length()-1);
+        for (Iterator<String> it=certificate.keys(); it.hasNext();) {
+            String key=it.next();
+            if (!CentralContinuationRecord.equal(certificate.opt(key), link.opt(key)))
+                throw new IllegalArgumentException("Prepared lineage certificate does not match confirmed source");
+        }
+    }
+
+    private ConfirmedSnapshot requireCurrentContinuation(ConfirmedSnapshot expected, long expectedRevision) {
+        ConfirmedSnapshot current = confirmDurable(expected.conversationId, expected.botId, expected.scopeIdentity);
+        if (current == null || !current.payloadSha256.equals(expected.payloadSha256))
+            throw new IllegalStateException("Checkpoint payload CAS conflict");
+        JSONObject metadata = current.metadataJson();
+        long revision = metadata.has(CentralContinuationRecord.FIELD) ? continuation(current).revision() : 0L;
+        if (revision != expectedRevision) throw new IllegalStateException("Continuation revision CAS conflict");
+        return current;
+    }
+
+    private ConfirmedSnapshot saveCoordination(ConfirmedSnapshot current, CentralContinuationRecord next,
+            JSONObject metadata, String scope, CoreAgentLoop.Checkpoint loop, JSONObject ownership) {
+        try {
+            JSONObject merged = new JSONObject(metadata.toString());
+            merged.put(CentralContinuationRecord.FIELD, next.toJson());
+            next.requireCheckpoint(current.conversationId, current.botId, scope, merged);
+            return saveConfirmedInternal(current.conversationId, current.botId, merged, scope, loop, ownership, true);
+        } catch (org.json.JSONException invalid) { throw new IllegalArgumentException("Invalid successor metadata", invalid); }
     }
 
     public Snapshot load(String conversationId, String botId) {

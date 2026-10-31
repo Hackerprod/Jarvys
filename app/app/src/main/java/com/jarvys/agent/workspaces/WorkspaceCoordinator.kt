@@ -107,6 +107,12 @@ class WorkspaceCoordinator internal constructor(context: Context,
                             token: CancellationToken, admission: Runnable): JSONObject =
         WorkspaceResultDelivery(app).read(workspaceId, resultId, expectedSha256, offset, token, admission)
 
+    override fun continueResult(workspaceId: String, resultId: String, expectedSha256: String,
+                                expectedAssignmentRevision: Long, token: CancellationToken, admission: Runnable,
+                                context: WorkspaceMutationContext): JSONObject =
+        WorkspaceContinuationDelivery.continueResult(app, workspaceId, resultId, expectedSha256,
+            expectedAssignmentRevision, token, admission, context)
+
     override fun inbox(workspaceId: String, limit: Int, afterMessageId: String?, admission: Runnable): JSONObject =
         WorkspaceCoordinationDelivery(app).inbox(workspaceId, limit, afterMessageId, admission)
 
@@ -169,9 +175,28 @@ class WorkspaceCoordinator internal constructor(context: Context,
                           token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext): JSONObject =
         delegateInternal(workspaceId, key, role, mission, tools, name, missionAccess, requestId, originalUserRequest, token, admission, context)
 
-    private fun delegateInternal(workspaceId: String, key: String, role: String, mission: String, tools: List<String>?,
+    override fun delegateContinuing(workspaceId: String, key: String, role: String, mission: String,
+                                    tools: List<String>?, name: String?, missionAccess: String,
+                                    requestId: String, originalUserRequest: String, token: CancellationToken,
+                                    admission: Runnable, context: WorkspaceMutationContext?): JSONObject {
+        check(WorkspaceContinuationDelivery.NEW_ADMISSION_ENABLED) { "Durable continuation admission is not enabled" }
+        return delegateInternal(workspaceId, key, role, mission, tools, name, missionAccess,
+            requestId, originalUserRequest, token, admission, context, true)
+    }
+
+    private fun delegateInternal(workspaceId: String, userKey: String, role: String, mission: String, tools: List<String>?,
                           name: String?, missionAccess: String, requestId: String, originalUserRequest: String,
-                          token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext?): JSONObject {
+                          token: CancellationToken, admission: Runnable, context: WorkspaceMutationContext?, continueResult: Boolean = false): JSONObject {
+        require(!userKey.startsWith("continuation-v1:")) { "Reserved continuation key prefix" }
+        val continuingKey = "continuation-v1:" + UUID.nameUUIDFromBytes(userKey.toByteArray(Charsets.UTF_8))
+        val key = if (continueResult) continuingKey else userKey
+        admission.run()
+        registry().use { existingStore ->
+            check(existingStore.existingAssignment(workspaceId, if (continueResult) userKey else continuingKey,
+                requestId, originalUserRequest, role, mission, tools, name, CrewMissionAccess.parse(missionAccess)) == null) {
+                "Delegation key conflicts with its original continuation mode"
+            }
+        }
         var sourcePrepared: WorkspaceAssignment? = null
         if (context != null) {
             admission.run()
@@ -246,7 +271,10 @@ class WorkspaceCoordinator internal constructor(context: Context,
                     if (token.isCancellationRequested) manager.stopExact(bot.id, admittedBot.get()!!.second)
                     val bound = store.bindBot(workspaceId, started.assignmentId, started.revision, bot.id)
                     context?.acceptedAssignment(workspaceId, bound.assignmentId) // Local proof only, no Room/listener.
-                    if (!token.isCancellationRequested) manager.startPreparedForMission(bot)
+                    if (!token.isCancellationRequested) {
+                        if (continueResult) WorkspaceContinuationDelivery.initialize(app, bound, manager, bot)
+                        manager.startPreparedForMission(bot)
+                    }
                     WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
                     WorkspaceMissionCards.delegated(app, scope, bound)
                     WorkspaceChanges.changed()
@@ -275,6 +303,8 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 val snapshot = snapshots.firstOrNull { it.missionId == assignment.missionId }
                 val observed = if (snapshot?.processId == CrewProcessIdentity.ID) snapshot else snapshot?.interrupted()
                 val row = assignmentJson(assignment, observed, if (assignmentId != null) 16000 else 500)
+                row.put("continuation", assignment.botId?.let {
+                    WorkspaceContinuationDelivery.status(app, scope.executionSessionId, it) } ?: JSONObject.NULL)
                 val unsettled = store.getUnsettledControl(workspaceId, assignment.assignmentId)
                 val pending = store.getPendingControl(workspaceId, assignment.assignmentId, assignment.revision)
                 row.put("pending_control", pending?.let { JSONObject().put("request_id", it.requestId)
@@ -315,6 +345,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                     val token = synchronized(controlDispatchLock(assignmentId)) {
                         WorkspaceControlOwners.register(type, assignmentId)
                     }
+                    var completed = false
                     try {
                         lateinit var control: WorkspaceUserControl
                         if (!token.runIfActive {
@@ -325,10 +356,15 @@ class WorkspaceCoordinator internal constructor(context: Context,
                             "$userText\n[Workspace $workspaceId; assignment $assignmentId; native control ${control.requestId}]")
                         runCatching { onAdmitted() } // UI observation must not cancel a durable user command.
                         val receipt = executeNativeControl(control.requestId, token)
+                        completed = true
                         ledger.appendConversationMessage(WorkspaceIdentity.CENTRAL_SESSION, "assistant", receipt)
                         receipt
                     } finally {
                         WorkspaceControlOwners.release(token)
+                        // A fast child result may have arrived while this owner still fenced its
+                        // continuation. Reconcile after release, never infer permission from a timer.
+                        if (completed && !token.isCancellationRequested)
+                            WorkspaceResultDelivery.schedule(app, WorkspaceIdentity.executionSessionId(workspaceId))
                     }
                 }
                 WorkspaceChanges.changed()
@@ -362,17 +398,29 @@ class WorkspaceCoordinator internal constructor(context: Context,
                     try {
                         synchronized(controlDispatchLock(control.assignmentId)) {
                             if (!token.runIfActive {
+                        if (control.type == WorkspaceControlType.PAUSE || control.type == WorkspaceControlType.CORRECT)
+                            WorkspaceContinuationDelivery.cancelActiveOwner(app, control.workspaceId, bot.id)
+                        val continuationPrepared = if ((control.type == WorkspaceControlType.RESUME && bot.canResume()) ||
+                            (control.type == WorkspaceControlType.CORRECT && bot.requiresExplicitResume() && bot.canResume()))
+                            WorkspaceContinuationDelivery.prepareResume(app, control, bot) else null
+                        if (control.type == WorkspaceControlType.CORRECT && continuationPrepared == null)
+                            WorkspaceContinuationDelivery.cancel(app, control.workspaceId, bot.id)
                         started = store.markControlStarted(controlId, control.revision, CrewProcessIdentity.ID, validate)
                         WorkspaceChanges.changed()
                         validate.run()
                         check(store.getAssignment(control.workspaceId, control.assignmentId)?.revision == started!!.admittedAssignmentRevision)
                         when (control.type) {
                             WorkspaceControlType.PAUSE -> {
+                                WorkspaceContinuationDelivery.cancel(app, control.workspaceId, bot.id)
                                 manager.stopForUserControl(bot.id, expectedToken)
                             }
                             WorkspaceControlType.RESUME -> {
                                 check(bot.isQuiescent) { "Worker cleanup is not complete" }
-                                if (bot.canResume()) manager.resumeExact(bot.id, expectedToken, null)
+                                if (bot.canResume()) {
+                                    if (continuationPrepared == null) manager.resumeExact(bot.id, expectedToken, null)
+                                    else manager.resumeExact(bot.id, expectedToken, null, null,
+                                        WorkspaceContinuationDelivery.resumeCommit(app, continuationPrepared, requireNotNull(started), manager, token))
+                                }
                                 else {
                                     check(assignment.processId == CrewProcessIdentity.ID && !bot.requiresExplicitResume()) {
                                         "This historical worker has no resumable checkpoint"
@@ -394,7 +442,9 @@ class WorkspaceCoordinator internal constructor(context: Context,
                                 }
                                 if (bot.requiresExplicitResume()) {
                                     check(bot.canResume() && bot.isQuiescent) { "Worker is not ready for checkpoint recovery" }
-                                    if (input == null) manager.resumeExact(bot.id, expectedToken, control.userText)
+                                    if (continuationPrepared != null) manager.resumeExact(bot.id, expectedToken, control.userText, input,
+                                        WorkspaceContinuationDelivery.resumeCommit(app, continuationPrepared, requireNotNull(started), manager, token))
+                                    else if (input == null) manager.resumeExact(bot.id, expectedToken, control.userText)
                                     else manager.resumeExact(bot.id, expectedToken, control.userText, input)
                                 } else if (input == null) manager.sendUserMessageExact(bot.id, expectedToken, control.userText)
                                 else manager.sendUserMessageExact(bot.id, expectedToken, control.userText, input)
@@ -419,6 +469,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                         persistMissionSnapshot(app, currentSnapshot)
                         WorkspaceChanges.snapshotSaved(scope.executionSessionId, assignment.missionId)
                         store.completeControl(controlId, started!!.revision)
+
                         WorkspaceResultDelivery.schedule(app, scope.executionSessionId)
                         WorkspaceChanges.changed()
                         "${control.type}: completed for assignment ${control.assignmentId}. This receipt does not verify its work result."

@@ -41,6 +41,10 @@ internal object WorkspaceAgentInputDelivery {
             nonDeliverable(context, "worker message does not match its bound assignment")
             return
         }
+        // This opted-in episode has one exact result input selected by its checkpoint CAS.
+        // Keep the ordinary path for every older/non-opted-in assignment and for questions/findings.
+        if (message.type == CrewMessage.Type.RESULT &&
+            WorkspaceContinuationDelivery.owns(context, message.conversationId, bot.id)) return
         val evidenceReference = message.coordination
         val reference = evidenceReference?.let {
             WorkspaceCoordinationDelivery(context).registerForIncomingInput(workspaceId, it.evidenceId)

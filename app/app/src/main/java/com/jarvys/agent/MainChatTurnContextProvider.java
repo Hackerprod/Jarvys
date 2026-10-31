@@ -79,7 +79,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
         String latest = "";
         for (JSONObject row : rows) {
             String id = row.optString("messageId", "");
-            if (!id.isEmpty() && !handled.contains(id)) latest = id;
+            if (!id.isEmpty() && !handled.contains(id) && !WorkspaceContinuationDelivery.isProtocolRow(row)) latest = id;
         }
         return latest;
     }
@@ -97,7 +97,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
             String id = row.optString("messageId", "");
             if (id.isEmpty()) continue;
             cursorMessageId = id;
-            if (handled.contains(id)) continue;
+            if (handled.contains(id) || WorkspaceContinuationDelivery.isProtocolRow(row)) continue;
             messages.add(CoreAgentLoop.IncomingMessage.mainChat(conversationInput(row, id)));
             collectedMessageIds.add(id);
             if (!row.optString("proactiveThreadKey", "").isEmpty()) replyCandidates.add(id);

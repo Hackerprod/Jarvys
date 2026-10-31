@@ -108,6 +108,32 @@ public final class CoreAgentRuntime {
   private volatile String mainChatSteeringCursor = "";
   private volatile String currentUserMessageId = "";
   private volatile String currentTurnOwnerMessageId = "";
+  private ConversationInput claimedContinuationInput;
+  private CancellationToken claimedContinuationToken;
+  private boolean claimedContinuationUsed;
+
+  /** Trusted service handoff only. The persisted claim, not a caller-supplied UUID, owns this run. */
+  synchronized void bindClaimedContinuation(ConversationInput input, CancellationToken token) {
+    if (context == null || !com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)
+        || input == null || !WorkspaceContinuationDelivery.isProtocol(input.provenance)
+        || claimedContinuationInput != null)
+      throw new IllegalStateException("Invalid continuation runtime binding");
+    token.throwIfCancelled();
+    WorkspaceContinuationDelivery.claimedRunId(context, input, token);
+    claimedContinuationInput = input;
+    claimedContinuationToken = token;
+  }
+
+  private synchronized String nextRuntimeRunId(boolean mainChat, CancellationToken token) {
+    if (claimedContinuationInput == null) return java.util.UUID.randomUUID().toString();
+    if (!mainChat || depth != 0 || token != claimedContinuationToken || claimedContinuationUsed)
+      throw new IllegalStateException("Continuation runtime already consumed or owner changed");
+    token.throwIfCancelled();
+    String id = WorkspaceContinuationDelivery.claimedRunId(context, claimedContinuationInput, token);
+    claimedContinuationUsed = true;
+    return id;
+  }
+
   private volatile MainChatTurnContextProvider mainChatSteeringProvider;
   private final ModelProviderClient modelProviderOverride;
   private CoreAgentModel modelOverrideForTests;
@@ -329,7 +355,7 @@ public final class CoreAgentRuntime {
       final boolean mainChat,
       final CancellationToken token,
       CoreAgentLoop.ProgressListener listener) {
-    final String runId = java.util.UUID.randomUUID().toString();
+    final String runId = nextRuntimeRunId(mainChat, token);
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
@@ -435,8 +461,21 @@ public final class CoreAgentRuntime {
               : null;
       if (mainChat && depth == 0 && context != null
           && com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) {
-        toolRegistry = toolRegistry.withInvocationSourceProvider(
-            transcriptStore.centralSourceProvider(currentTurnOwnerMessageId, runId));
+        if (claimedContinuationInput == null) {
+          toolRegistry = toolRegistry.withInvocationSourceProvider(
+              transcriptStore.centralSourceProvider(currentTurnOwnerMessageId, runId));
+        } else {
+          // A delegated result is not a USER witness and confers no Chief/write authority.
+          toolRegistry = toolRegistry.withInvocationSourceProvider(new CoreToolRegistry.InvocationSourceProvider() {
+            @Override public void bind(CoreTool tool, String callId, EffectInvocation invocation) {
+              throw new IllegalStateException("Continuation reads require exact checked arguments");
+            }
+            @Override public void bindPrepared(CoreTool tool, String callId, Map<String,Object> arguments,
+                CoreAgentLoop.PreparedInvocationSnapshot prepared, EffectInvocation invocation) {
+              WorkspaceContinuationDelivery.requireResultRead(context, claimedContinuationInput, token, tool, arguments);
+            }
+          });
+        }
       }
       if (mainChat && depth == 0 && context != null && memorySessionBinding != null && !currentTurnOwnerMessageId.isBlank()) {
         toolRegistry = toolRegistry.withInvocationObserver(
@@ -510,6 +549,62 @@ public final class CoreAgentRuntime {
       final boolean mainChat,
       final MessageReactionTool reactionTool) {
     return requestModel(model, runToolRegistry, mainChat, reactionTool, null, null, null, null);
+  }
+
+  /** Exact in-process invalidation before provider dispatch; never an instruction to replay effects. */
+  static final class PreparedContextStale extends IllegalStateException {
+    private final PreparedModelRequest request;
+    private final CancellationToken token;
+    private PreparedContextStale(PreparedModelRequest request, CancellationToken token) {
+      super("context_protection_changed");
+      this.request = request;
+      this.token = token;
+    }
+    boolean matches(PreparedModelRequest candidate, CancellationToken candidateToken) {
+      return request == candidate && token == candidateToken;
+    }
+  }
+
+  /** Validate the one live claimed input separately without admitting protocol rows to generic history. */
+  com.jarvys.agent.chatdb.InteractionProtectionSnapshot validateRuntimeProtectedContext(
+      List<ConversationTurn> transcript, CancellationToken token) {
+    token.throwIfCancelled();
+    List<ConversationTurn> ordinary = transcript;
+    if (claimedContinuationInput != null) {
+      if (token != claimedContinuationToken)
+        throw new IllegalStateException("context_continuation_token_changed");
+      ConversationInput input = claimedContinuationInput;
+      WorkspaceContinuationDelivery.claimedRunId(context, input, token);
+      ConversationInput retained = new LocalRunStore(context).readConversationInput(sessionId, input.messageId);
+      if (retained == null || !input.conversationId.equals(retained.conversationId)
+          || !input.messageId.equals(retained.messageId) || input.origin != retained.origin
+          || !input.content.equals(retained.content) || retained.provenance == null
+          || !input.provenance.toJson().toString().equals(retained.provenance.toJson().toString()))
+        throw new IllegalStateException("context_continuation_source_changed");
+      ConversationTurn.Source expectedSource = new ConversationTurn.Source(
+          ConversationTurn.Source.Kind.MESSAGE, sessionId, input.messageId, "");
+      ordinary = new ArrayList<>();
+      int matches = 0;
+      for (ConversationTurn turn : transcript) {
+        boolean protocol = turn.incomingMetadata != null
+            && WorkspaceContinuationDelivery.isProtocol(turn.incomingMetadata.provenance);
+        if (protocol || input.messageId.equals(turn.durableMessageId)
+            || expectedSource.equals(turn.source())) {
+          if (!protocol || turn.kind != ConversationTurn.Kind.MESSAGE || !"assistant".equals(turn.role)
+              || !input.messageId.equals(turn.durableMessageId) || !input.content.equals(turn.content)
+              || turn.incomingMetadata.origin != input.origin
+              || !input.provenance.toJson().toString().equals(turn.incomingMetadata.provenance.toJson().toString())
+              || (turn.source() != null && !expectedSource.equals(turn.source())))
+            throw new IllegalStateException("context_continuation_payload_changed");
+          matches++;
+        } else ordinary.add(turn);
+      }
+      if (matches != 1) throw new IllegalStateException("context_continuation_payload_unavailable");
+    }
+    // Only validation sees the filtered list. Provider payload, source transcript and the returned
+    // protection snapshot retain the exact input/source, so compaction cannot summarize it away.
+    return com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
+        .validateProtectedContextSync(sessionId, ordinary);
   }
 
   private CoreAgentLoop.Model requestModel(final CoreAgentModel model,
@@ -588,8 +683,7 @@ public final class CoreAgentRuntime {
               com.jarvys.agent.chatdb.MemoryNamespace.resolve(context, sessionId, null, null, false, true, false));
         }
         com.jarvys.agent.chatdb.InteractionProtectionSnapshot protection = context == null ? null
-            : com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
-                .validateProtectedContextSync(sessionId, transcript);
+            : validateRuntimeProtectedContext(transcript, runToken);
         if(activity!=null) activity.setAvailable(activityAvailable && memoryBoundary!=null);
         if(activity!=null && activityAttempt && memoryBoundary!=null) activity.recordToolCall();
         String reminder=activity==null || memoryBoundary==null ? "" : activity.reminder(memoryBoundary.namespace.getProject());
@@ -604,12 +698,13 @@ public final class CoreAgentRuntime {
       @Override public ModelReply completePrepared(PreparedModelRequest request,
           CancellationToken runToken, ModelProviderClient.TextDeltaListener listener) {
         if (!preparedPrincipal) throw new IllegalStateException("prepared_model_request_unavailable");
+        boolean metadataStale = false;
         if (context != null) {
           com.jarvys.agent.chatdb.InteractionProtectionSnapshot current =
-              com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(context)
-                  .validateProtectedContextSync(sessionId, request.sourceTranscript);
-          if (request.protection == null || !request.protection.getFingerprint().equals(current.getFingerprint()))
+              validateRuntimeProtectedContext(request.sourceTranscript, runToken);
+          if (request.protection == null)
             throw new IllegalStateException("context_protection_changed");
+          metadataStale = !request.protection.getFingerprint().equals(current.getFingerprint());
         }
         if (context != null && request.memoryBoundary != null) {
           com.jarvys.agent.chatdb.MemoryNamespace currentOwners =
@@ -625,7 +720,14 @@ public final class CoreAgentRuntime {
           } catch (RuntimeException failure) { throw failure; }
           catch (Exception failure) { throw new IllegalStateException("context_memory_unavailable", failure); }
         }
-        ModelReply reply = model.completePrepared(request, runToken, listener);
+        if (metadataStale) throw new PreparedContextStale(request, runToken);
+        ModelReply reply;
+        try {
+          reply = model.completePrepared(request, runToken, listener);
+        } catch (PreparedContextStale downstream) {
+          // A provider must never forward a retained pre-dispatch signal into local re-preparation.
+          throw new IllegalStateException("provider_forwarded_context_invalidation", downstream);
+        }
         if (reactionTool != null) reactionTool.modelRequestCompleted();
         return reply;
       }
@@ -726,6 +828,7 @@ public final class CoreAgentRuntime {
         if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
           throw new IllegalArgumentException("Result evidence owner changed");
         crewStore.appendCrewResultEvidence(evidence, () -> {});
+        WorkspaceContinuationDelivery.recordLiveResult(CoreAgentRuntime.this.context, manager, evidence);
         com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
         WorkspaceResultDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
       }

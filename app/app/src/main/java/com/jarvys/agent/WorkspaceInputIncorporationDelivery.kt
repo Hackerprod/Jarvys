@@ -37,6 +37,12 @@ internal class WorkspaceInputIncorporationDelivery(
                     referenceId = receiptReference.reference.referenceId
                     WorkspaceInputSources.reply(receiptReference)
                 }
+                CrewInputBinding.SourceKind.CONTINUATION_ANSWER -> {
+                    val resolved = WorkspaceContinuationAnswers(app).resolveBindingSource(input)
+                    check(resolved.first.assignmentId == assignment.assignmentId)
+                    referenceId = resolved.second
+                    input // resolveBindingSource checks exact outbox/checkpoint source payload.
+                }
                 CrewInputBinding.SourceKind.NATIVE_CORRECT -> {
                     val control = requireNotNull(registry.getControl(input.sourceId))
                     referenceId = control.requestId
@@ -87,8 +93,11 @@ internal class WorkspaceInputIncorporationDelivery(
                     if (candidate.loop.incorporations.isEmpty()) continue
                     if (admittedInput != null && candidate.loop.incorporations.values.none {
                             it.binding.samePayload(admittedInput) }) continue
+                    val native = candidate.metadata.optBoolean("nativeWorkspaceCheckpoint", false)
+                    val checkpointIdentity = if (native) "native-workspace:$workspaceId" else identity
                     val saved = checkpoints.confirmDurable(owner.executionSessionId,
-                        assignment.botId, identity) ?: continue
+                        assignment.botId, checkpointIdentity) ?: continue
+                    if (native) CrewCheckpointCoordinator.requireNativeIdentity(app, owner.executionSessionId, saved)
                     check(saved.metadataJson().getString("missionId") == assignment.missionId)
                     for (evidence in saved.loop.incorporations.values) {
                         val input = evidence.binding
@@ -108,7 +117,8 @@ internal class WorkspaceInputIncorporationDelivery(
                             synchronized(WorkspaceCoordinator.controlDispatchLock(input.assignmentId)) {
                                 token.throwIfCancelled(); admit()
                                 source(input)
-                                check(project.durableIdentity() == identity)
+                                if (native) CrewCheckpointCoordinator.requireNativeIdentity(app, owner.executionSessionId, saved)
+                                else check(project.durableIdentity() == identity)
                                 var inserted = false
                                 if (!token.runIfActive {
                                     inserted = ledger.appendWorkspaceInputIncorporationIfAbsentAndReport(row, Runnable {
@@ -119,6 +129,8 @@ internal class WorkspaceInputIncorporationDelivery(
                             }
                         }
                     }
+                    if (native) WorkspaceContinuationAnswers(app).reconcileIncorporations(owner.executionSessionId,
+                        assignment.botId, token, Runnable { admit() })
                 }
                 after = assignments.lastOrNull()?.assignmentId
             } while (assignments.size == PAGE)
@@ -169,6 +181,7 @@ internal class WorkspaceInputIncorporationDelivery(
         private fun kind(kind: CrewInputBinding.SourceKind) = when (kind) {
             CrewInputBinding.SourceKind.WORKSPACE_REPLY -> WorkspaceInputIncorporation.SourceKind.REPLY
             CrewInputBinding.SourceKind.NATIVE_CORRECT -> WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT
+            CrewInputBinding.SourceKind.CONTINUATION_ANSWER -> WorkspaceInputIncorporation.SourceKind.CONTINUATION_ANSWER
         }
     }
 }

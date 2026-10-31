@@ -19,7 +19,7 @@ import org.json.JSONObject;
 public final class WorkspaceInputIncorporation {
     public static final int SCHEMA_VERSION = 1;
     public static final String ROW_TYPE = "workspace_input_incorporation";
-    public enum SourceKind { REPLY, NATIVE_CORRECT }
+    public enum SourceKind { REPLY, NATIVE_CORRECT, CONTINUATION_ANSWER }
     public final String receiptId;
     public final SourceKind sourceKind;
     public final String sourceId, sourceReferenceId, mailboxMessageId;
@@ -47,6 +47,10 @@ public final class WorkspaceInputIncorporation {
         if (sourceKind == SourceKind.REPLY) {
             WorkspaceCoordinationReference.requireReferenceId(sourceReferenceId);
             if (!"INBOX".equals(transportKind) && !"ASK_CHIEF".equals(transportKind)) invalid("reply transport");
+        } else if (sourceKind == SourceKind.CONTINUATION_ANSWER) {
+            uuid(sourceId);
+            WorkspaceCoordinationReference.requireReferenceId(sourceReferenceId);
+            if (!"INBOX".equals(transportKind)) invalid("continuation answer transport");
         } else {
             if (!sourceId.equals(sourceReferenceId)) invalid("native source reference");
             if (!"USER".equals(transportKind)) invalid("native transport");

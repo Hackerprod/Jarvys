@@ -1,3 +1,13 @@
+## Estado vigente — portabilidad P1 y gate APK v98: PASS host independiente — 31-10-2026
+
+**P1 R3 aceptado en host**, código `6bfd252a7e516cc25144194913a93b13b4dc8c67`: Full798/0 y Play798/0, 90 clases por sabor, cero errores u omisiones; reejecución independiente focal62/0 por sabor, separada. [Checkpoint, alcance y hashes](docs/BOT_PORTABILITY_P1_CHECKPOINT.md).
+
+D1 quedó resuelto para implementar el roadmap aprobado por fases, conservando los demás gates. Se conservan Central único, agentes generalistas, Engram nativo y menú v97; sin replay incierto, migración ni borrado. **P2 espera D2 del usuario** sobre límites numéricos y política de costo/autonomía. P3 del slice P1 tiene PASS host del delta y del APK v98 firmado con la identidad DEBUG original; todavía no hay nueva entrega ni validación física/proveedor vivo. Downgrade binario a v97 con nuevos episodios/referencias BLOB no soportado.
+
+**v98 preparado y revisado:** source `a50dd3ab9b4029af3a88a5260e59183349bacc4e`, Full y Play 92 clases / 833 casos únicos por sabor; reejecución independiente 64/0 por sabor. APK SHA-256 `d70949e04935964d61ab6b7e9d352308c1ef7e1ed602fa6d8bb4b36e9676dd54`. [Identidad, reproducibilidad y límites del gate](docs/BOT_PORTABILITY_V98_DELIVERY.md). La entrega/instalación física no se presume.
+
+Los bloques siguientes se conservan como historial; no sustituyen este estado ni eliminan los pendientes anteriores.
+
 ## Prioridad vigente — restauración acotada del menú y Workspaces — 30-10-2026
 
 **v97, candidato 6: Full146/0 y Play146/0**, 28 clases por sabor, cero errores y omisiones; focal21/0 por sabor separado. Revisión independiente de fuentes, artefactos, resultados y captura de la Activity real en host: PASS acotado. Código `bc3639918b36cf0af7831d057c29b90e6f43001e`. Los intentos intermedios y sus fallos de fixtures se conservan, no se suman a este resultado.

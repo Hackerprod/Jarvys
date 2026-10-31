@@ -17,6 +17,19 @@ internal object WorkspaceInputSources {
             ref.missionId, ref.botId, reply.mailboxMessageId, reply.payloadSha256, ref.cycleId, reply.text)
     }
 
+    fun continuationAnswer(input: com.jarvys.agent.ConversationInput, admissionCycleId: String,
+                           payloadSha256: String): CrewInputBinding {
+        val provenance = requireNotNull(input.provenance)
+        check(input.origin == com.jarvys.agent.ConversationInput.Origin.AGENT &&
+            provenance.kind == com.jarvys.agent.ConversationInput.Kind.ANSWER &&
+            provenance.principalRole == com.jarvys.agent.ConversationInput.Provenance.PrincipalRole.SUPERVISOR &&
+            provenance.sessionId == WorkspaceIdentity.CENTRAL_SESSION && provenance.referenceId.isNotEmpty())
+        return CrewInputBinding.create(CrewInputBinding.SourceKind.CONTINUATION_ANSWER, input.messageId,
+            WorkspaceIdentity.CENTRAL_SESSION, provenance.workspaceId, input.conversationId,
+            provenance.assignmentId, provenance.missionId, provenance.botId, input.messageId,
+            payloadSha256, admissionCycleId, input.content)
+    }
+
     fun correction(scope: WorkspaceRecord, assignment: WorkspaceAssignment, control: WorkspaceUserControl,
                    admissionCycleId: String): CrewInputBinding {
         validateCorrection(scope, assignment, control)

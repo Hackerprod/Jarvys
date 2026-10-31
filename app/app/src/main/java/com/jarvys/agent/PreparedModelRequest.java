@@ -48,6 +48,16 @@ final class PreparedModelRequest {
         this.contextWindow = contextWindow;
     }
 
+    /** Re-preparation may refresh content, never acquire a different memory authority or epoch. */
+    PreparedModelRequest retainingMemoryAuthorityOf(PreparedModelRequest original) {
+        if ((memoryBoundary == null) != (original.memoryBoundary == null)
+                || (memoryBoundary != null
+                && !memoryBoundary.namespace.hasSameOwners(original.memoryBoundary.namespace)))
+            throw new IllegalStateException("context_memory_ownership_changed");
+        return new PreparedModelRequest(instructions, transcript, prompt, tools, contextWindow,
+                protection, sourceTranscript, original.memoryBoundary);
+    }
+
     private static Map<String, Object> freezeMap(Map<String, ?> input) {
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, ?> entry : input.entrySet()) copy.put(entry.getKey(), freeze(entry.getValue()));

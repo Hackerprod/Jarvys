@@ -195,7 +195,11 @@ internal class ConversationReader(
                 val index = message.messageIndex.toInt()
                 val assistantItems = if (message.role == "assistant") providerItems[message.ownerUserMessageId] else null
                 if (message.role == "agent" || message.role == "system") {
-                    context += internalConversationTurn(message, index)
+                    val internal = internalConversationTurn(message, index)
+                    // Deferred continuation inputs are admitted only by their durable fresh-turn claim.
+                    // Generic history/compaction must never consume a pending or uncertain episode.
+                    if (WorkspaceContinuationDelivery.isProtocol(internal.incomingMetadata?.provenance)) return@forEach
+                    context += internal
                 } else if (!assistantItems.isNullOrEmpty()) {
                     context += ConversationTurn.assistantReply(message.text, index, assistantItems)
                 } else {

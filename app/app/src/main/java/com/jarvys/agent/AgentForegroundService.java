@@ -937,7 +937,7 @@ public final class AgentForegroundService extends Service {
         if (!WorkspaceIdentity.CENTRAL_SESSION.equals(sessionId)) continue;
         // One ordered entry owns a fresh turn. That run's durable-input provider drains any
         // later rows in sequence; after a crash, the next scan starts the first still-pending ID.
-        org.json.JSONObject row = firstEligiblePendingAgentInput(sessionId,
+        org.json.JSONObject row = firstEligiblePendingAgentInput(this, sessionId,
             store.readPendingInternalConversationInputs(sessionId));
         if (row == null) continue;
         String messageId = row.optString("messageId", "");
@@ -992,6 +992,33 @@ public final class AgentForegroundService extends Service {
       if (!messageId.isEmpty() && !EARLY_FAILED_AGENT_INPUT_STARTS.contains(prefix + messageId)) return row;
     }
     return null;
+  }
+
+  /** Protocol-aware read-only scan. Blocked claims remain evidence, not head-of-line poison. */
+  static org.json.JSONObject firstEligiblePendingAgentInput(Context context, String sessionId,
+      List<org.json.JSONObject> pendingRows) {
+    if (pendingRows == null) return null;
+    List<org.json.JSONObject> eligible = new ArrayList<>();
+    for (org.json.JSONObject row : pendingRows) {
+      // App-open, STOP, and after-run recovery never infer from a retained continuation.
+      // Only its exact, independently admitted live/explicit stored-input action may dispatch it.
+      if (row != null && !WorkspaceContinuationDelivery.isProtocolRow(row)) eligible.add(row);
+    }
+    return firstEligiblePendingAgentInput(sessionId, eligible);
+  }
+
+  static String admittedInternalInputId(Context context, String sessionId, ConversationInput submitted,
+      List<org.json.JSONObject> pendingRows) {
+    if (submitted != null && WorkspaceContinuationDelivery.isProtocol(submitted.provenance)) {
+      return WorkspaceContinuationDelivery.isPendingDispatchEligible(context, submitted) ? submitted.messageId : "";
+    }
+    return nextEligibleInternalInputId(context, sessionId, pendingRows);
+  }
+
+  static String nextEligibleInternalInputId(Context context, String sessionId,
+      List<org.json.JSONObject> pendingRows) {
+    org.json.JSONObject row = firstEligiblePendingAgentInput(context, sessionId, pendingRows);
+    return row == null ? "" : row.optString("messageId", "");
   }
 
   static String nextEligibleInternalInputId(String sessionId,
@@ -1158,7 +1185,11 @@ public final class AgentForegroundService extends Service {
     try {
       if (userMessageAlreadyRecorded && userMessageId != null && !userMessageId.isEmpty()) {
         ConversationInput input = new LocalRunStore(this).readConversationInput(sessionId, userMessageId);
-        if (input != null && input.origin != ConversationInput.Origin.USER) return;
+        if (input != null && input.origin != ConversationInput.Origin.USER) {
+          if (stopped && WorkspaceContinuationDelivery.isProtocol(input.provenance))
+            WorkspaceContinuationDelivery.cancelPendingInput(this, input);
+          return;
+        }
       }
       if (stopped) {
         stopQueuedInteractiveSubmission(sessionId, displayGoal, userMessageAlreadyRecorded,
@@ -1370,7 +1401,7 @@ public final class AgentForegroundService extends Service {
             && submittedInput.origin != ConversationInput.Origin.USER;
         internalInputSubmissionRef.set(internalInputSubmission);
         String internalRunInputId = internalInputSubmission
-            ? nextEligibleInternalInputId(chatSessionId,
+            ? admittedInternalInputId(this, chatSessionId, submittedInput,
                 submittedInputStore.readPendingInternalConversationInputs(chatSessionId))
             : existingUserMessageId;
         internalRunInputIdRef.set(internalRunInputId);
@@ -1645,6 +1676,15 @@ public final class AgentForegroundService extends Service {
     MainChatTurnContextProvider steeringProvider = null;
     try {
       token.throwIfCancelled();
+      if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+        try {
+          if (!WorkspaceContinuationDelivery.claim(this, storedInput, token)) return;
+        } catch (Exception blockedClaim) {
+          // Claim may already be STARTED. Never append a fresh failure or requeue this episode.
+          // The unchanged input and durable continuation metadata remain available for inspection.
+          return;
+        }
+      }
       if (!internalInput && userMessageAlreadyRecorded
           && (goal == null || goal.trim().isEmpty())
           && userMessageId != null
@@ -1680,6 +1720,11 @@ public final class AgentForegroundService extends Service {
       assistantOwnerMessageId.set(userMessageId == null ? "" : userMessageId);
       if (!internalInput) AgentRunUiState.bindCurrentUserMessage(sessionId, userMessageId);
       List<ConversationTurn> conversationHistory = conversationStore.loadConversationContext(sessionId);
+      if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+        conversationHistory = new ArrayList<>(conversationHistory);
+        conversationHistory.add(ConversationTurn.internalInput(storedInput.content, -1,
+            ConversationTurn.IncomingMetadata.forInternalInput(storedInput.provenance), userMessageId));
+      }
       SkillRepository skills = SkillRepository.Companion.get(this);
       List<SkillEntry> enabledSkills =
           selectedSkillIds == null || selectedSkillIds.isEmpty()
@@ -1688,6 +1733,8 @@ public final class AgentForegroundService extends Service {
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills);
+      if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance))
+        runtime.bindClaimedContinuation(storedInput, token);
       runtime.withMemorySessionRegeneration(regeneration, memoryResumeAdmission);
       runtime.setMainChatSteeringCursor(userMessageId == null ? "" : userMessageId);
       runtime.setCurrentUserMessageId(internalInput ? "" : userMessageId);
@@ -1717,6 +1764,7 @@ public final class AgentForegroundService extends Service {
                 }
               if (incorporatedIds.isEmpty()) return;
               CentralAgentInputCatalog.acknowledge(conversationStore, sessionId, incorporatedIds, agentIds);
+              WorkspaceContinuationDelivery.acknowledge(AgentForegroundService.this, storedInput);
               if (internalInput) {
                 assistantOwnerInternal.set(true);
                 AgentRunUiState.markInternalConversationInput(sessionId, token.generation());
@@ -1724,13 +1772,14 @@ public final class AgentForegroundService extends Service {
             }
 
             @Override
-            public void onAssistantAnswerBeforeInput(String runId, String message,
+            public ConversationTurn.Source persistAssistantAnswerBeforeInput(String runId, String message,
                 CoreAgentLoop.IncomingMessage nextInput) {
-              if (nextInput == null || !"main_chat".equals(nextInput.sourceKind)) return;
-              conversationStore.appendAssistantMessageBefore(sessionId, message, runId,
+              if (nextInput == null || !"main_chat".equals(nextInput.sourceKind)) return null;
+              String persistedId = conversationStore.appendAssistantMessageBefore(sessionId, message, runId,
                   assistantOwnerMessageId.get(), nextInput.id);
               AgentRunUiState.refreshPersistedSession(sessionId,
                   conversationStore.readRecentConversationTimeline(sessionId));
+              return new ConversationTurn.Source(ConversationTurn.Source.Kind.MESSAGE, sessionId, persistedId, "");
             }
 
             @Override
@@ -1870,7 +1919,10 @@ public final class AgentForegroundService extends Service {
       String assistantMessageId = "";
       String proactiveThreadKey = assistantOwnerInternal.get() ? null
           : conversationStore.proactiveThreadKeyForUserMessage(sessionId, assistantOwnerMessageId.get());
-      assistantMessageId = conversationStore.appendConversationMessage(
+      assistantMessageId = storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)
+          ? WorkspaceContinuationDelivery.finish(this, storedInput, token, chatMessage,
+              timedOut ? "PARTIAL" : result.outcome, result.durationMs)
+          : conversationStore.appendConversationMessage(
               sessionId,
               "assistant",
               chatMessage,
@@ -1912,7 +1964,10 @@ public final class AgentForegroundService extends Service {
       String assistantMessageId = "";
       if (userMessageRecorded) {
         try {
-          conversationStore.appendConversationMessage(
+          if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+            assistantMessageId = WorkspaceContinuationDelivery.finish(this, storedInput, token, chatMessage,
+                stopped ? "STOPPED" : timedOut ? "PARTIAL" : "FAILED", 0L);
+          } else conversationStore.appendConversationMessage(
               sessionId,
               "assistant",
               chatMessage,
@@ -1949,6 +2004,11 @@ public final class AgentForegroundService extends Service {
           enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestUnincorporatedSteeringMessageId());
       }
     } finally {
+      if (storedInput != null && WorkspaceContinuationDelivery.isProtocol(storedInput.provenance)) {
+        try {
+          if (token.wasStoppedByUser()) WorkspaceContinuationDelivery.cancelPendingInput(this, storedInput);
+        } finally { WorkspaceContinuationDelivery.releaseClaim(storedInput, token); }
+      }
       AgentRunUiState.clearAssistantTextStreams(sessionId, token.generation());
       if (steeringProvider != null) {
         synchronized (interruptAdmissionLock(sessionId)) {

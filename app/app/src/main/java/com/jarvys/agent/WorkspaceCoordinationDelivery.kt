@@ -365,6 +365,12 @@ class WorkspaceCoordinationDelivery internal constructor(
         val reference = requireNotNull(ledger.readWorkspaceCoordinationReference(scope.executionSessionId, messageId))
         check(reference.workspaceId == workspaceId && reference.contentSha256 == expectedSha256)
         check(expectedRevision == reference.observedAssignmentRevision) { "Reply revision does not match its source reference" }
+        val continuationAnswers = WorkspaceContinuationAnswers(app)
+        if (continuationAnswers.canHandle(reference) &&
+            existingManager(scope.executionSessionId)?.canReplyToCoordination(source(reference)) != true) {
+            mutation?.admitMutation()
+            return continuationAnswers.retain(reference, key, text, expectedRevision, token, admission)
+        }
         val proposed = WorkspaceCoordinationReply.create(reference, key, text, requestId, originalUserRequest, System.currentTimeMillis())
         mutation?.admitMutation()
         return try { synchronized(WorkspaceCoordinator.controlDispatchLock(reference.assignmentId)) {

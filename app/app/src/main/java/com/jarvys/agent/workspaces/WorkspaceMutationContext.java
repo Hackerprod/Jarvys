@@ -29,6 +29,8 @@ public final class WorkspaceMutationContext {
             throw new IllegalArgumentException("Workspace source belongs to another invocation");
         this.checkAccess = Objects.requireNonNull(checkAccess);
         expectedKind(); // Reject read/unknown contexts before any admission.
+        if ("continue_result".equals(action) && rootSource == null)
+            throw new IllegalArgumentException("Explicit continuation requires a current Central source");
         if (!"create".equals(action) && (workspaceId == null || workspaceId.isEmpty()))
             throw new IllegalArgumentException("An exact workspace scope is required");
         decision = new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,
@@ -92,7 +94,7 @@ public final class WorkspaceMutationContext {
         switch (action) {
             case "create": return EffectInvocation.EffectReferenceKind.WORKSPACE;
             case "delegate": return EffectInvocation.EffectReferenceKind.ASSIGNMENT;
-            case "reply": case "message": return EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT;
+            case "reply": case "message": case "continue_result": return EffectInvocation.EffectReferenceKind.WORKSPACE_INPUT;
             case "deliver": return EffectInvocation.EffectReferenceKind.DELIVERY;
             default: throw new IllegalArgumentException("Not a workspace mutation");
         }
