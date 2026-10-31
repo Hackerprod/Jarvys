@@ -69,7 +69,7 @@
            if (token.wasStoppedByUser()) WorkspaceContinuationDelivery.cancelPendingInput(this, storedInput);
 --- /dev/null
 +++ b/app/app/src/main/java/com/jarvys/agent/CentralTreeAdmission.java
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,174 @@
 +package com.jarvys.agent;
 +
 +import android.content.Context;
@@ -208,7 +208,14 @@
 +        try(WorkspaceRegistry registry=new WorkspaceRegistry(context)){
 +            WorkspaceTreeStore trees=new WorkspaceTreeStore(registry);TreeNode node=Objects.requireNonNull(trees.getNode(rootId(),rootId()));
 +            if(!cycleId().equals(node.getCycleId()))throw new IllegalStateException("Exit cycle changed");
-+            withCurrentWorkspaceTransaction(token,()->trees.finishCentral(TreeNodeFence.Companion.of(node),receipt.digest+":"+assistantId+chain,false));
++            TreeNode finished=withCurrentWorkspaceTransaction(token,()->trees.finishCentral(TreeNodeFence.Companion.of(node),receipt.digest+":"+assistantId+chain,false));
++            if(finished.getState()==TreeNodeState.WAITING) {
++                java.util.LinkedHashSet<String> sessions=new java.util.LinkedHashSet<>();
++                for(TreeNode child:trees.children(rootId(),rootId())) if(child.getWorkspaceId()!=null)
++                    sessions.add(WorkspaceIdentity.executionSessionId(child.getWorkspaceId()));
++                // Metadata nudge only: schedule retains exact process-local P1 permits, never creates one.
++                for(String session:sessions) WorkspaceResultDelivery.schedule(context,session);
++            }
 +        }
 +    }
 +    void acknowledgeClaimed(Context context,ConversationInput input) {
@@ -616,7 +623,7 @@
 +}
 --- /dev/null
 +++ b/app/app/src/test/java/com/jarvys/agent/CentralTreeServiceAcceptanceTest.kt
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,244 @@
 +package com.jarvys.agent
 +
 +import android.content.Context
@@ -803,7 +810,10 @@
 +            }}
 +        }
 +    }
-+    @Test fun actualGeneralistResultReturnsThroughP1SerialContinuationOnSameRoot() {
++    @Test fun actualGeneralistResultReturnsThroughP1SerialContinuationOnSameRoot()=generalistResult(false)
++    @Test fun resultCannotClaimCentralUntilExactTreeSettlementAndReportCommit()=generalistResult(true)
++    private fun generalistResult(barrier:Boolean) {
++        val treeEntered=CountDownLatch(1);val releaseTree=CountDownLatch(1)
 +        val entered=CountDownLatch(1);val childCalls=AtomicInteger()
 +        val (scope,profile)=storage.onDatabaseWorker {
 +            val scope=WorkspaceRegistry(context).use {it.createWorkspace(UUID.randomUUID().toString(),"Generalist workspace")}
@@ -811,6 +821,17 @@
 +            val profile=CrewProfileRepository(context).create(CrewProfile(CrewProfileRepository.newCustomId(),1,"Generalist","General-purpose planning","Use retained evidence",emptyList(),emptyList(),CrewProfile.WorkspaceMode.LEGACY_CHAT),emptyList(),emptyList())
 +            val runtime=CoreAgentRuntime(context,scope.executionSessionId,emptyList(),CorePromptBudget.standard())
 +            manager=runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(context,provider {childCalls.incrementAndGet();entered.countDown();check(releaseChild.await(20,TimeUnit.SECONDS));ModelReply("Native itinerary evidence",emptyList())},scope.executionSessionId),null)
++            if(barrier) {
++                val field=CrewManager::class.java.getDeclaredField("treePublicationListener").apply {isAccessible=true}
++                val originalListener=field.get(manager!!) as CrewManager.TreePublicationListener
++                field.set(manager!!,object:CrewManager.TreePublicationListener {
++                    override fun onTreeResult(bot:CrewManager.Bot,evidence:CrewResultEvidence,lease:CrewManager.TreePublicationLease) {
++                        treeEntered.countDown();check(releaseTree.await(20,TimeUnit.SECONDS))
++                        originalListener.onTreeResult(bot,evidence,lease)
++                    }
++                    override fun onTreeQuestion(bot:CrewManager.Bot,evidence:CrewCoordinationEvidence,lease:CrewManager.TreePublicationLease)=originalListener.onTreeQuestion(bot,evidence,lease)
++                })
++            }
 +            scope to profile
 +        }
 +        val original=user("Plan a general itinerary");var step=0
@@ -819,8 +840,23 @@
 +        runStored(original);assertTrue(entered.await(10,TimeUnit.SECONDS));val before=root(original)
 +        storage.onDatabaseWorker {WorkspaceRegistry(context).use {assertEquals(TreeNodeState.WAITING,WorkspaceTreeStore(it).getNode(before.rootId,before.rootId)!!.state)}}
 +        val bot=manager!!.bots().single();assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT,bot.role.workspaceMode)
-+        releaseChild.countDown();waitUntil("Native DONE"){bot.isQuiescent};assertEquals(CrewManager.Status.DONE,bot.status())
 +        fun record()=storage.onDatabaseWorker {requireNotNull(CrewCheckpointStore(context.filesDir).load(scope.executionSessionId,bot.id)).metadata.getJSONObject(CentralContinuationRecord.FIELD)}
++        releaseChild.countDown()
++        if(barrier) try {
++            assertTrue(treeEntered.await(20,TimeUnit.SECONDS))
++            storage.onDatabaseWorker {WorkspaceRegistry(context).use {db ->
++                val node=WorkspaceTreeStore(db).findAssignment(scope.workspaceId,bot.assignmentId())!!
++                assertNull(node.reportReceipt);assertNotEquals(TreeNodeState.TERMINAL,node.state)
++                assertNotNull(LocalRunStore(context).readCrewResultEvidence(scope.executionSessionId,bot.resultEvidence()!!.evidenceId))
++            };WorkspaceResultDelivery(context).reconcile(scope.workspaceId,CancellationToken.uncancellable())}
++            assertEquals("PREPARED",record().getString("dispatchState"))
++            val stablePending=record().getString("inputStableId")
++            val pending=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessageByStableId(central,stablePending)!!.getString("messageId")}
++            val providerCount=calls.get();runStored(pending)
++            assertEquals(providerCount,calls.get());assertEquals("PREPARED",record().getString("dispatchState"))
++            assertEquals(before.executions,root(original).executions)
++        } finally {releaseTree.countDown()}
++        waitUntil("Native DONE"){bot.isQuiescent};assertEquals(CrewManager.Status.DONE,bot.status())
 +        waitUntil("Durable selected P1 result"){record().optString("dispatchState")=="PREPARED"}
 +        val selected=record().getJSONObject("selectedResult");val stable=record().getString("inputStableId")
 +        val input=storage.onDatabaseWorker {LocalRunStore(context).readConversationMessageByStableId(central,stable)!!.getString("messageId")}

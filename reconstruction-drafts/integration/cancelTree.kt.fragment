@@ -1,12 +1,14 @@
     override fun cancel(workspaceId:String,assignmentId:String,botId:String?,revision:Long,key:String,token:CancellationToken,
         admission:Runnable,context:WorkspaceMutationContext):JSONObject {
         check(WorkspaceTreePolicy.admissionEnabled());context.requireTreeAdmission();admission.run()
-        val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",workspaceId,assignmentId,key)
+        val rootId=requireNotNull(context.treeAdmission).rootId()
+        val requestKey=WorkspaceTreeStore.identity("native-user-subtree-cancel",rootId,key)
         context.admitMutation()
         val targets=context.withCurrentWorkspaceTransaction {
             registry().use { db ->
                 context.requireInsideCurrentLease();context.requireTreeAdmission();admission.run()
                 val tree=WorkspaceTreeStore(db);val target=requireNotNull(tree.findAssignment(workspaceId,assignmentId))
+                check(target.rootId==rootId) { "Cancellation target belongs to another original request" }
                 check(target.botId==botId && target.assignmentRevision==revision)
                 tree.cancelSubtree(TreeNodeFence.of(target),"CANCELLED",requestKey) { captured -> captured.forEach {
                     WorkspaceTreeStops.latchExact(db.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId)

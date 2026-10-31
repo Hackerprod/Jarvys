@@ -1,0 +1,55 @@
+--- a/app/app/src/main/java/com/jarvys/agent/WorkspaceContinuationDelivery.kt
++++ b/app/app/src/main/java/com/jarvys/agent/WorkspaceContinuationDelivery.kt
+@@ -20,7 +20,8 @@
+     private fun requireAdmission(eligible: Boolean, message: String) {
+         if (!eligible) throw AdmissionIneligible(message)
+     }
+-    private class ClaimOwner(val token: CancellationToken, val storageGeneration: String)
++    private class ClaimOwner(val token: CancellationToken, val storageGeneration: String,
++        val treeEnrollment: WorkspaceTreeP1Preclaim.Enrollment? = null)
+     private val owners = java.util.concurrent.ConcurrentHashMap<String, ClaimOwner>()
+     private val stoppedEpisodes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+ 
+@@ -317,16 +318,24 @@
+             val storageGeneration = ChatDatabaseBridge.getInstance(context).connectionProjectionEvidenceSync().generation()
+             val generation = token.generation().toString()
+             val run = UUID.nameUUIDFromBytes((value.getString("continuationKey") + "\u0000generation").toByteArray(StandardCharsets.UTF_8)).toString()
++            // Tree constraint is checked BEFORE consuming fresh P1 authority or crossing its durable STARTED boundary.
++            // Historical v98 assignments without tree enrollment retain the unmodified P1 path.
++            val treeEnrollment = WorkspaceTreeP1Preclaim.requireEligible(context, value)
++            treeEnrollment?.requireNotStopped()
+             requireDispatchAuthority(context, value, consume = true)
+             value.put("dispatchState", "STARTED").put("dispatchOwnerProcessId", CrewProcessIdentity.ID)
+                 .put("dispatchGenerationId", generation).put("generationRunId", run)
+                 .put("assistantMessageStableId", "continuation-assistant:$run")
+             store(context).updateCentralContinuation(saved, CentralContinuationRecord.fromJson(changed(value)))
+             val key = value.getString("continuationKey")
+-            check(owners.putIfAbsent(key, ClaimOwner(token, storageGeneration)) == null) { "Continuation owner is already registered" }
++            check(owners.putIfAbsent(key, ClaimOwner(token, storageGeneration, treeEnrollment)) == null) { "Continuation owner is already registered" }
+             // STOP may have observed durable STARTED before this transient owner existed. The
+             // denial latch and owner lookup commute: either STOP finds us or we observe its latch.
+             if (key in stoppedEpisodes) token.cancelExactRunAsync()
++            try { treeEnrollment?.requireNotStopped() } catch (failure: Exception) {
++                token.cancelExactRunAsync() // A post-CAS denial is uncertain, never PREPARED/replayed.
++                throw failure
++            }
+             token.throwIfCancelled()
+             ChatDatabaseBridge.getInstance(context).prepareContinuationGenerationSync(run, value.getString("assistantMessageStableId"), input.messageId)
+             true
+@@ -501,6 +510,7 @@
+                 row.getString("messageId") == input.messageId && expected.content == input.content &&
+                 expected.provenance!!.toJson().toString() == source.toJson().toString() &&
+                 hash(input.content) == value.getString("inputPayloadSha256")) { "Continuation input source is corrupt" }
++            WorkspaceTreeP1Preclaim.requireEligible(context, value)?.requireNotStopped()
+             ledger.readConversationInputState(input.conversationId, input.messageId) == null
+         }
+     }
+@@ -516,6 +526,8 @@
+         val key = value.getString("continuationKey")
+         check(key !in stoppedEpisodes) { "Continuation was stopped" }
+         val owner = requireNotNull(owners[key]) { "Continuation has no live owner" }
++        // This is denial-only; RUNNING/ACKNOWLEDGED claims must NOT be re-tested as preclaim WAITING.
++        owner.treeEnrollment?.requireNotStopped()
+         check(owner.token === token && owner.storageGeneration ==
+             ChatDatabaseBridge.getInstance(context).connectionProjectionEvidenceSync().generation()) { "Continuation live owner changed" }
+         val assigned = requireCurrent(context, value, false)

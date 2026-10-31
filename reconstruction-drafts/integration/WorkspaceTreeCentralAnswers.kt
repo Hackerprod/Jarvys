@@ -16,6 +16,7 @@ internal object WorkspaceTreeCentralAnswers {
         val target=WorkspaceRegistry(app).use { db -> WorkspaceTreeStore(db).findAssignment(workspace,reference.assignmentId) } ?: return null
         if(target.state!=TreeNodeState.NEEDS_INPUT)return null // Existing ordinary coordination semantics are preserved.
         context.requireTreeAdmission()
+        check(target.rootId==requireNotNull(context.treeAdmission).rootId()) { "Formal question belongs to another original request" }
         check(reference.contentSha256==hash && reference.assignmentRevision==revision && target.assignmentRevision==revision &&
             reference.botId==target.botId && reference.cycleId==target.cycleId && reference.evidenceId==target.terminalRef)
         val evidence=requireNotNull(ledger.readCrewCoordinationEvidence(session,reference.evidenceId))

@@ -8,7 +8,16 @@
  import com.jarvys.agent.CoreAgentLoop;
  import com.jarvys.agent.CoreToolAccessPolicy;
  import com.jarvys.agent.CoreToolRegistry;
-@@ -203,6 +204,9 @@
+@@ -87,6 +88,8 @@
+     /** Exact once-per-run capture, never sourced from coalesced UI snapshots. */
+     public interface ResultEvidenceListener {
+         void onResult(CrewResultEvidence evidence);
++        /** Live scheduling only after native durable evidence and every enrolled tree report committed. */
++        default void afterResult(CrewResultEvidence evidence) { }
+ 
+         /** Persistence failure is diagnostic; it must not change or replay worker execution. */
+         default void onDeliveryFailure(CrewResultEvidence evidence, RuntimeException failure) { }
+@@ -203,6 +206,9 @@
          private volatile boolean checkpointAvailable;
          private volatile boolean requiresExplicitResume;
          private volatile boolean durableQuestionYield;
@@ -18,7 +27,7 @@
          private volatile boolean stopping;
          private volatile boolean definitionDisabled;
          private volatile Runnable checkpointChanged = ()->{
-@@ -354,7 +358,7 @@
+@@ -354,7 +360,7 @@
          public boolean hasDurableCheckpoint() { return checkpointAvailable; }
  
          public boolean canResume() {
@@ -27,7 +36,7 @@
          }
  
          public String recoveryNote() {
-@@ -396,14 +400,17 @@
+@@ -396,14 +402,17 @@
          }
      }
  
@@ -46,7 +55,7 @@
              this.evidence = evidence; this.token = token;
          }
      }
-@@ -500,6 +507,97 @@
+@@ -500,6 +509,97 @@
      };
      private volatile ProgressFactory progressFactory;
      private volatile SnapshotListener snapshotListener;
@@ -144,19 +153,23 @@
      private volatile ResultEvidenceListener resultEvidenceListener;
      private volatile CoordinationEvidenceListener coordinationEvidenceListener;
      private volatile BiConsumer<Bot, CrewMessage> conversationMessageListener;
-@@ -741,6 +839,11 @@
+@@ -741,6 +841,15 @@
          if (listener == null || evidence == null) return;
          try {
              listener.onResult(evidence);
 +            Bot producer=bots.get(evidence.botId);TreePublicationListener treeListener=treePublicationListener;
-+            if(treeListener!=null&&producer!=null&&producer.resultEvidence()==evidence&&producer.cycleId().equals(evidence.cycleId)&&treeSupport(producer)!=null){
++            if(producer!=null&&treeSupport(producer)!=null){
++                if(treeListener==null||producer.resultEvidence()!=evidence||!producer.cycleId().equals(evidence.cycleId))
++                    throw new IllegalStateException("Enrolled result lost exact native publication owner");
 +                TreePublicationLease lease=new TreePublicationLease(this,producer,evidence.evidenceId,evidence.cycleId,TreePublicationLease.Kind.RESULT);
 +                try{treeListener.onTreeResult(producer,evidence,lease);}finally{lease.active=false;}
 +            }
++            if(resultEvidenceListener!=listener)throw new IllegalStateException("Native result listener replaced before live admission");
++            listener.afterResult(evidence);
          } catch (RuntimeException failure) {
              resultEvidenceDeliveryFailures.put(evidence.evidenceId,
                      failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
-@@ -788,7 +891,8 @@
+@@ -788,7 +897,8 @@
      }
  
      private CrewMessage produceCoordination(Bot bot, CancellationToken expectedToken,
@@ -166,7 +179,7 @@
          CoordinationEvidenceListener listener = coordinationEvidenceListener;
          if (listener == null) throw new IllegalStateException("Workspace coordination is not configured");
          CrewMessage source;
-@@ -801,9 +905,9 @@
+@@ -801,9 +911,9 @@
              evidence = CrewCoordinationEvidence.create(conversationId, bot.missionId, bot.id, bot.cycleId(),
                      message.id, type.name(), message.text, message.refs, message.timestampMillis);
              source = message.withCoordination(evidence);
@@ -178,7 +191,7 @@
          }
          try {
              // Never hold cycleLock across a storage callback: USER/STOP can invalidate this original slot.
-@@ -816,6 +920,11 @@
+@@ -816,6 +926,11 @@
                  bus.enqueueFresh(source);
              }
              publishBotConversationMessage(bot, source);
@@ -190,7 +203,7 @@
              publishMission(bot.missionId);
              return source;
          } catch (RuntimeException failure) {
-@@ -866,6 +975,9 @@
+@@ -866,6 +981,9 @@
              throw new IllegalArgumentException("Exact coordination reply fields are required");
          Bot bot = bots.get(evidence.botId);
          if (bot == null) throw new IllegalStateException("Original live worker is unavailable");
@@ -200,7 +213,7 @@
          validateCurrentProfile(bot.role);
          CrewMessage answer;
          bot.incomingDispatches.incrementAndGet();
-@@ -873,6 +985,8 @@
+@@ -873,6 +991,8 @@
              synchronized (bot.cycleLock) {
                  CoordinationRequest request = replyableCoordinationLocked(bot, evidence);
                  if (request == null) throw new IllegalStateException("Exact request is no longer replyable");
@@ -209,7 +222,7 @@
                  if (inputBinding != null) validateInputBinding(bot, text, inputBinding, CrewInputBinding.SourceKind.WORKSPACE_REPLY);
                  if (inputBinding != null && !deterministicReplyMessageId.equals(inputBinding.mailboxMessageId))
                      throw new IllegalArgumentException("Reply mailbox identity changed");
-@@ -892,7 +1006,13 @@
+@@ -892,7 +1012,13 @@
              // Use the ordinary recipient admission path after releasing cycleLock. It steers a live
              // loop and starts a new cycle for DONE, while refusing STOPPED/FAILED/interrupted bots.
              try {
@@ -224,7 +237,7 @@
                          Collections.emptyList(), false, answer);
              } catch (AdmissionUncertainException uncertain) {
                  finishCoordinationDispatch(bot, evidence, true);
-@@ -921,6 +1041,70 @@
+@@ -921,6 +1047,70 @@
          }
      }
  
@@ -295,7 +308,7 @@
      public void configureCheckpoints(CheckpointSupport support) {
          checkpointSupport = support;
      }
-@@ -1138,6 +1322,10 @@
+@@ -1138,6 +1328,10 @@
  
      private boolean persistCheckpoint(Bot bot) {
          synchronized (bot) {
@@ -306,7 +319,7 @@
              CheckpointSupport support = checkpointSupport;
              if (support != null && support.canPersist(bot) && (!bot.requiresExplicitResume || bot.checkpointAvailable)) {
                  support.persist(bot, bus.snapshot(), bus.pending(bot.id));
-@@ -1172,6 +1360,9 @@
+@@ -1172,6 +1366,9 @@
      }
  
      private void resumeWithUserMessage(String id, String userText, CrewInputBinding inputBinding, CancellationToken expectedToken, ResumeCheckpointCommit linkedCommit) {
@@ -316,7 +329,7 @@
          if (userText != null && userText.trim().isEmpty())
              throw new IllegalArgumentException("User correction must be non-empty");
          Bot bot = bots.get(id);
-@@ -1179,9 +1370,10 @@
+@@ -1179,9 +1376,10 @@
          final CheckpointSupport support;
          synchronized (bot.cycleLock) {
              if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
@@ -328,7 +341,7 @@
              if (support.requiresLinkedResume(bot) && linkedCommit == null)
                  throw new IllegalStateException("This native continuation requires its exact durable control link");
              if (inputBinding != null) validateInputBinding(bot, userText, inputBinding, CrewInputBinding.SourceKind.NATIVE_CORRECT);
-@@ -1190,7 +1382,7 @@
+@@ -1190,7 +1388,7 @@
          synchronized (bot.cycleLock) {
              if (bot.token != expectedToken || checkpointSupport != support)
                  throw new IllegalStateException("Worker cycle or checkpoint owner changed");
@@ -337,7 +350,7 @@
              try {
                  ResumePlan plan = support.reconcile(bot);
                  if (bot.role.missionAccess == CrewMissionAccess.READ_ONLY
-@@ -1210,6 +1402,7 @@
+@@ -1210,6 +1408,7 @@
                  bot.stopping = false;
                  bot.reanimationRequested = false;
                  bot.durableQuestionYield = false;
@@ -345,7 +358,29 @@
                  bot.error = "";
                  bot.recoveryNote = "";
                  bot.status = Status.QUEUED;
-@@ -1399,7 +1592,8 @@
+@@ -1320,6 +1519,7 @@
+         observedDefinitionRevisions.put(definition.id, definition.revision);
+         for (Bot bot : bots.values()) {
+             if (bot.role.profileVersion <= 0 || !definition.id.equals(bot.role.id)) continue;
++            CancellationToken changedToken=null;
+             synchronized (bot.cycleLock) {
+                 bot.definitionDisabled = !definition.enabled;
+                 if (!definition.enabled || definition.profile.version != bot.role.profileVersion) {
+@@ -1330,9 +1530,10 @@
+                             : "This bot definition is disabled. Enable it before starting or resuming work.";
+                     // Cancel even a terminal bot's old token so no late owned operation can survive.
+                     bot.token.cancel();
+-                    try { stop(bot.id); } catch (RuntimeException ignored) { }
+-                }
+-            }
++                    changedToken=bot.token;
++                }
++            }
++            if(changedToken!=null)try { stopExact(bot.id,changedToken); } catch(RuntimeException ignored) { }
+             try { publishPresentation(bot.missionId); } catch (RuntimeException ignored) { }
+         }
+     }
+@@ -1399,7 +1600,8 @@
              }
          }
          if (missionAccess == CrewMissionAccess.READ_ONLY
@@ -355,7 +390,7 @@
              throw new IllegalArgumentException("read_only requires a versioned conversation-project profile");
          }
          role = role.withMissionAccess(missionAccess);
-@@ -1490,6 +1684,17 @@
+@@ -1490,6 +1692,17 @@
                  missionId, originalInstructions, assignmentId, deferStart, initialTaskAssignment);
      }
  
@@ -373,7 +408,7 @@
      /** Starts a deferred worker after its workspace assignment is durably bound. */
      public void startPreparedForMission(Bot bot) {
          if (bot == null) throw new IllegalArgumentException("Prepared worker is required");
-@@ -1534,6 +1739,12 @@
+@@ -1534,6 +1747,12 @@
      private Bot spawnAdmitted(String roleId, String mission, List<String> requestedTools, String requestedName,
              CrewMissionAccess missionAccess, Object taskTitle, String explicitMissionId, String originalInstructions,
              String assignmentId, boolean deferStart, WorkspaceAssignment initialTaskAssignment) {
@@ -386,7 +421,7 @@
          CrewRole role = resolveAdmissionRole(roleId, mission, requestedTools, requestedName, missionAccess);
          String id = "bot-" + UUID.randomUUID();
          String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
-@@ -1567,12 +1778,12 @@
+@@ -1567,12 +1786,12 @@
          }
          String missionId = missionState.id;
          if (initialTaskAssignment != null) {
@@ -403,7 +438,7 @@
                      initialTaskAssignment.getRevision(), initialTaskAssignment.getRequestId(),
                      initialTaskAssignment.getMissionId(), "");
              CrewMessage admitted = bus.enqueueFresh(task.withInputProvenance(provenance));
-@@ -1645,6 +1856,7 @@
+@@ -1645,6 +1864,7 @@
          boolean lifecycleStarted = false;
          try {
              token.throwIfCancelled();
@@ -411,7 +446,7 @@
              validateCurrentProfile(bot.role);
              synchronized (bot.cycleLock) {
                  bot.status = Status.RUNNING;
-@@ -1788,13 +2000,14 @@
+@@ -1788,13 +2008,14 @@
                          bot.waitingReason = "needs_input";
                          bot.recoveryNote = "Question retained. An exact answer and native explicit Resume are required.";
                          bot.finishedAtMillis = System.currentTimeMillis();
@@ -427,7 +462,7 @@
                  boolean complete;
                  String resultToPublish = null;
                  synchronized (bot.cycleLock) {
-@@ -1868,7 +2081,7 @@
+@@ -1868,7 +2089,7 @@
                  boolean restart = false;
                  CrewResultEvidence evidence = null;
                  synchronized (bot.cycleLock) {
@@ -436,7 +471,7 @@
                      // Capture before replacing the generation, but never call persistence/model code here.
                      if (terminalReport != null && !cycleId.isEmpty() && resultEvidenceListener != null) {
                          evidence = CrewResultEvidence.create(conversationId, bot.missionId, bot.id, cycleId,
-@@ -1921,6 +2134,11 @@
+@@ -1921,6 +2142,11 @@
              } finally {
                  // Always release the generation that entered this run, including failed finalization.
                  completedLatch.countDown();
@@ -448,7 +483,7 @@
              }
          }
      }
-@@ -2058,8 +2276,10 @@
+@@ -2058,8 +2284,10 @@
          if (!"chief".equals(to) && recipient == null) throw new IllegalArgumentException("Unknown Crew recipient");
          if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
          if (sender != null && recipient == null && coordinationEvidenceListener != null && coordinationKind(type))
@@ -460,7 +495,7 @@
          if ("chief".equals(from) && recipient != null && type == CrewMessage.Type.ANSWER)
              correlatedAnswer = correlateChiefAnswer(recipient, text, refs);
          CrewMessage message;
-@@ -2118,7 +2338,7 @@
+@@ -2118,7 +2346,7 @@
              CrewMessage.Type type, String text, List<String> refs) {
          if (bots.get(bot.id) != bot) throw new IllegalArgumentException("Unknown worker");
          if (coordinationEvidenceListener != null && "chief".equals(to) && coordinationKind(type))
@@ -469,7 +504,7 @@
          synchronized (bot.cycleLock) {
              if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
              expectedToken.throwIfCancelled();
-@@ -2286,6 +2506,7 @@
+@@ -2286,6 +2514,7 @@
      /** Native CORRECT only; the source authority is checked by the caller before this exact admission. */
      public CrewMessage sendUserMessageExact(String botId, CancellationToken expectedToken, String text, CrewInputBinding inputBinding) {
          Bot bot = bots.get(botId);
@@ -477,7 +512,7 @@
          if (bot == null) throw new IllegalArgumentException("Unknown worker");
          synchronized (bot.cycleLock) {
              if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
-@@ -2314,6 +2535,7 @@
+@@ -2314,6 +2543,7 @@
  
      public CrewMessage sendUserMessage(String botId, String text) {
          Bot bot = bots.get(botId);
@@ -485,7 +520,7 @@
          if (bot == null || bot.status == Status.INTERRUPTED || bot.requiresExplicitResume) throw new IllegalArgumentException("Bot is not available for user messages");
          if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");
          CrewMessage message = dispatch(bot, "user", botId, CrewMessage.Type.USER, text.trim(), Collections.emptyList(), true);
-@@ -2339,6 +2561,10 @@
+@@ -2339,6 +2569,10 @@
      private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text,
              List<String> refs, boolean explicitUser, CrewMessage receipt,
              CancellationToken expectedToken, Runnable finalAdmission, boolean requireDurableAdmission) {
@@ -496,16 +531,22 @@
          if (recipient == null) {
              Bot sender = bots.get(from);
              CrewMessage proposed = new CrewMessage(conversationId, from, to, type,
-@@ -2357,6 +2583,8 @@
+@@ -2357,6 +2591,14 @@
          recipient.incomingDispatches.incrementAndGet();
          try {
              synchronized (recipient.cycleLock) {
 +                if(treeSupport(recipient)!=null&&recipient.treeWait!=null)
 +                    throw new IllegalStateException("Parked tree inbox requires exact typed successor staging");
++                if(type==CrewMessage.Type.ANSWER&&treeSupport(recipient)!=null) {
++                    for(CoordinationRequest question:recipient.coordinationRequests.values())
++                        if(question.purpose==CoordinationPurpose.LINKED_ASK&&question.valid&&question.active&&
++                                question.token==recipient.token&&question.evidence.cycleId.equals(recipient.cycleId()))
++                            throw new IllegalStateException("Formal tree answer must be retained for explicit USER Resume");
++                }
                  if (expectedToken != null && recipient.token != expectedToken)
                      throw new AdmissionDeferredException("Worker generation changed before supervisor message admission");
                  if (expectedToken != null && expectedToken.isCancellationRequested())
-@@ -2365,7 +2593,7 @@
+@@ -2365,7 +2607,7 @@
                  if (recipient.requiresExplicitResume || status == Status.INTERRUPTED) throw new IllegalArgumentException("Interrupted bots cannot be reanimated");
                  if ((status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
                  if (status == Status.DONE || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) {
@@ -514,7 +555,7 @@
                          throw new IllegalStateException("A terminal linked worker requires native explicit continuation, not generic reanimation");
                      MissionState mission = missions.get(recipient.missionId);
                      if (mission != null && !"RUNNING".equals(mission.status) && !"PARTIAL".equals(mission.status)) {
-@@ -2399,7 +2627,10 @@
+@@ -2399,7 +2641,10 @@
                  CrewMessage message = receipt;
                  if (message == null) message = bus.enqueueFresh(new CrewMessage(conversationId, from, to,
                          type, text, refs, System.currentTimeMillis()));
@@ -526,7 +567,7 @@
                  else bus.restore(Collections.singletonList(message), Collections.singletonList(message));
                  messageEnqueued = true;
                  if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED || recipient.status == Status.PARTIAL) recipient.status = Status.QUEUED;
-@@ -2518,16 +2749,31 @@
+@@ -2518,16 +2763,31 @@
      /** Protocol-aware safe yield: source is durable, but no live capability survives the pause. */
      public boolean isLinkedQuestionYield(Bot bot) {
          CheckpointSupport support = checkpointSupport;
@@ -560,7 +601,7 @@
          }
          return source.coordination.evidenceId;
      }
-@@ -2537,12 +2783,13 @@
+@@ -2537,12 +2797,13 @@
      }
  
      public boolean askChief(Bot bot, String question, CancellationToken expectedToken) {
@@ -575,7 +616,7 @@
                  synchronized (bot.cycleLock) { request = bot.coordinationRequests.get(source.coordination.evidenceId); }
                  if (request == null || !request.valid) return false;
              } else {
-@@ -2559,7 +2806,7 @@
+@@ -2559,7 +2820,7 @@
                              bot.missionId, bot.id, bot.cycleId(), plainQuestion.id, CrewMessage.Type.QUESTION.name(),
                              plainQuestion.text, plainQuestion.refs, plainQuestion.timestampMillis);
                      questionMessage = plainQuestion.withCoordination(evidence);
@@ -584,7 +625,7 @@
                      request.active = true;
                      bot.coordinationRequests.put(evidence.evidenceId, request);
                      bus.enqueueFresh(questionMessage);
-@@ -2611,6 +2858,10 @@
+@@ -2611,6 +2872,10 @@
      }
  
      public void reportDone(Bot bot, String result, List<String> refs) {
@@ -595,6 +636,65 @@
          if (result == null || result.trim().isEmpty()) throw new IllegalArgumentException("result must be non-empty");
          if (hasPendingOwnedWork(bot)) throw new IllegalStateException("Owned project jobs are still pending; wait for their terminal result before reporting done");
          synchronized (bot.cycleLock) {
+@@ -2672,29 +2937,37 @@
+ 
+     /** A late parent STOP may cancel only the cycle that parent actually admitted. */
+     public boolean stopForUserControl(String id, CancellationToken expectedToken) {
+-        Bot bot = bots.get(id);
+-        if (bot == null) throw new IllegalArgumentException("Unknown worker");
+-        synchronized (bot.cycleLock) {
+-            if (bot.token != expectedToken) throw new IllegalStateException("Worker cycle changed");
+-            return stop(id);
+-        }
+-    }
+-
+-    public boolean stopExact(String id, CancellationToken expectedToken) {
+-        Bot bot = bots.get(id);
+-        if (bot == null) return false;
+-        synchronized (bot.cycleLock) {
+-            return bot.token == expectedToken && stop(id);
+-        }
+-    }
+-
++        Bot bot=bots.get(id);
++        if(bot==null)throw new IllegalArgumentException("Unknown worker");
++        return stopCaptured(bot,expectedToken,true);
++    }
++    public boolean stopExact(String id,CancellationToken expectedToken) {
++        Bot bot=bots.get(id);return bot!=null&&stopCaptured(bot,expectedToken,false);
++    }
+     public boolean stop(String id) {
+-        Bot bot = bots.get(id);
+-        if (bot == null) return false;
+-        synchronized (bot.cycleLock) {
+-            RuntimeException cancellationFailure = null;
++        Bot bot=bots.get(id);return bot!=null&&stopCaptured(bot,bot.token,false);
++    }
++    private boolean stopCaptured(Bot bot,CancellationToken expectedToken,boolean requireExact) {
++        final String capturedCycle;
++        synchronized(bot.cycleLock) {
++            if(bots.get(bot.id)!=bot||bot.token!=expectedToken) {
++                if(requireExact)throw new IllegalStateException("Worker cycle changed");
++                return false;
++            }
++            capturedCycle=bot.cycleId();
++        }
++        RuntimeException cancellationFailure=null;
++        // The adapter captures durable targets/latches before terminal early-return. No cycle lock -> Registry inversion.
++        try { CrewTreeSupport support=treeSupport;if(support!=null)support.onRequesterStop(bot,expectedToken,capturedCycle); }
++        catch(RuntimeException failure){cancellationFailure=failure;}
++        synchronized(bot.cycleLock) {
++            if(bots.get(bot.id)!=bot||bot.token!=expectedToken||!bot.cycleId().equals(capturedCycle)) {
++                if(cancellationFailure!=null)throw cancellationFailure;
++                if(requireExact)throw new IllegalStateException("Worker cycle changed");
++                return false;
++            }
+             try { if (checkpointSupport != null) checkpointSupport.cancelContinuation(bot); }
+-            catch (RuntimeException failure) { cancellationFailure = failure; }
++            catch (RuntimeException failure) { if(cancellationFailure==null)cancellationFailure=failure;else cancellationFailure.addSuppressed(failure); }
+             if (terminal(bot.status)) {
+                 if (cancellationFailure != null) throw cancellationFailure;
+                 return false;
 --- a/app/app/src/main/java/com/jarvys/agent/crew/CrewTools.java
 +++ b/app/app/src/main/java/com/jarvys/agent/crew/CrewTools.java
 @@ -5,6 +5,8 @@
@@ -606,10 +706,30 @@
  import java.util.ArrayList;
  import java.util.Arrays;
  import java.util.Collections;
-@@ -104,6 +106,18 @@
+@@ -70,6 +72,18 @@
+         List<CoreTool> tools = new ArrayList<>();
+         if (bot.role.tools.contains("msg_send")) tools.add(new BotTool("msg_send", "Send an untrusted content-bearing Crew message (FINDING, CRITIQUE, QUESTION, BLOCKER, ANSWER, RESULT, STATUS or MESSAGE) to the captain or another bot; TASK may be sent to another bot only. USER authority is reserved for native user input, TASK assignments come from the captain, and PROGRESS is runtime-generated. Include the exact ask_chief question message ID in refs when answering it. board_post writes a shared note and does not message the captain.",
+                 schema(props("to","string","type","string","text","string","refs","array"),"to","type","text")) {
++            @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation) {
++                CrewTreeSupport owner=manager.treeSupport(bot);
++                if(owner==null||type(args,"type")!=CrewMessage.Type.ANSWER)return execute(args,token);
++                CrewInvocationWitness source=invocation==null?null:invocation.crewSource();
++                if(source==null)throw new IllegalStateException("Native answer source required");
++                source.requireArguments(args);source.requireInvocationCurrent();
++                invocation.admit(new EffectInvocation.Admission(EffectInvocation.Authorization.ALLOW,"native","msg_send",null,"native_tree_contract"));
++                CoreToolResult retained=owner.retainAnswer(bot,token,source,args);
++                if(retained==null)return execute(args,token); // Ordinary MESSAGE answer retains its exact native same-cycle guards.
++                if(manager.treeSupport(bot)!=owner)throw new IllegalStateException("Tree answer owner changed");
++                owner.recordInvocationResult(bot,token,source,retained);return retained;
++            }
+             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
+                 String to = string(a,"to");
+                 CrewMessage.Type type = type(a,"type");
+@@ -103,6 +117,18 @@
+             @Override public CoreTool.ResponseCallPolicy responseCallPolicy() {
                  return manager.isLinkedQuestionYield(bot) ? CoreTool.ResponseCallPolicy.EXCLUSIVE_YIELD
                          : CoreTool.ResponseCallPolicy.MULTIPLE_PER_RESPONSE;
-             }
++            }
 +            @Override public CoreToolResult execute(Map<String,Object> args,CancellationToken token,CoreTool.ProgressListener progress,EffectInvocation invocation){
 +                CrewTreeSupport owner=manager.treeSupport(bot);if(owner==null)return execute(args,token);
 +                CrewInvocationWitness source=invocation==null?null:invocation.crewSource();
@@ -621,11 +741,10 @@
 +                CoreToolResult result=CoreToolResult.finish("native-question-evidence:"+evidence+"\nAwaiting exact answer and explicit native Resume; not task completion.");
 +                if(manager.treeSupport(bot)!=owner)throw new IllegalStateException("Tree question owner changed");
 +                owner.recordInvocationResult(bot,token,source,result);return result;
-+            }
+             }
              @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                  token.throwIfCancelled();
-                 String questionEvidence = manager.askChiefAndYieldIfLinked(bot, originalString(a,"question"), token);
-@@ -117,6 +131,18 @@
+@@ -117,6 +143,18 @@
          });
          if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's verified, partial, or blocked result to the captain, with exact source/artifact refs, executed checks, unrun checks and limitations. A tool exit code alone does not establish test coverage or final-source validity. A later follow-up retains the mission restriction.",
                  schema(props("result","string","refs","array"),"result")) {
@@ -646,7 +765,20 @@
                  return CoreToolResult.finish("Reported result to the captain.");
 --- a/app/app/src/main/java/com/jarvys/agent/CoreAgentRuntime.java
 +++ b/app/app/src/main/java/com/jarvys/agent/CoreAgentRuntime.java
-@@ -892,6 +892,8 @@
+@@ -828,8 +828,11 @@
+         if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
+           throw new IllegalArgumentException("Result evidence owner changed");
+         crewStore.appendCrewResultEvidence(evidence, () -> {});
++        com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
++      }
++      @Override public void afterResult(com.jarvys.agent.crew.CrewResultEvidence evidence) {
++        // Manager calls this only after exact enrolled tree settle/report succeeds. Scans never mint this permit.
+         WorkspaceContinuationDelivery.recordLiveResult(CoreAgentRuntime.this.context, manager, evidence);
+-        com.jarvys.agent.workspaces.WorkspaceChanges.resultEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+         WorkspaceResultDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
+       }
+       @Override public void onDeliveryFailure(com.jarvys.agent.crew.CrewResultEvidence evidence, RuntimeException failure) {
+@@ -892,6 +895,8 @@
                }
              });
      manager.configureCheckpoints(checkpoints);
@@ -655,7 +787,7 @@
      if (WorkspaceCoordinationDelivery.isCanonicalWorkspace(this.context, this.sessionId)) {
        manager.setCheckpointCommittedListener(() ->
            WorkspaceCoordinationDelivery.schedule(CoreAgentRuntime.this.context, CoreAgentRuntime.this.sessionId));
-@@ -1313,7 +1315,7 @@
+@@ -1313,7 +1318,7 @@
                        profileSkills, this.budget.loadedSkillChars,
                        id -> skillCurrentlyAvailable(id, skillProfileId), skillProfileId)));
      }
@@ -664,7 +796,7 @@
        scoped =
            scoped.with(Collections.singletonList(delegationTool(scoped, profileSkills, 2, false)));
      }
-@@ -1335,6 +1337,12 @@
+@@ -1335,6 +1340,12 @@
      }
      CrewBoard board = new CrewBoard(WorkspaceStore.forCrewBoard(context, sessionId));
      CoreToolRegistry effective = scoped.with(CrewTools.bot(bot, manager, board));

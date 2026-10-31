@@ -288,6 +288,201 @@ class WorkspaceTreeNativeRuntimeTest {
     @Test fun enrolledNormalResumeWithoutRegisteredClaimIsDenied()=whileNativeRunning { f ->
         deny { f.manager.resumeExact(f.bot.id,f.bot.token,null) }
     }
+    @Test fun retainedReadyWaitReopensWithoutDispatchAndExactUserResumeConsumesOnce()=reopenedWait("ready")
+    @Test fun retainedQuestionWaitUsesFreshUserAuthorityWithoutVanishedLiveSlot()=reopenedWait("question")
+    @Test fun retainedStartedWaitNeverReplaysThroughNewUserResume()=reopenedWait("started")
+    @Test fun retainedArmingWaitCannotBypassMissingConfirmationThroughResume()=reopenedWait("arming")
+    @Test fun correctionCannotSilentlyDiscardRetainedUnconsumedWait()=reopenedWait("correct")
+    private fun reopenedWait(mode:String) {
+        val childEntered=CountDownLatch(1);val releaseChild=CountDownLatch(1);val originalCalls=AtomicInteger();val recoveredCalls=AtomicInteger()
+        val f=start { history,_,_ ->
+            if(task(history).contains("CHILD_RESTART")) {childEntered.countDown();assertTrue(releaseChild.await(15,TimeUnit.SECONDS));
+                if(mode=="question")call("reopen-question","ask_chief",mapOf("question" to "RESTART_EVIDENCE question")) else ModelReply("RESTART_EVIDENCE",emptyList())}
+            else when(originalCalls.incrementAndGet()) {
+                1->call("restart-delegate","delegate_subtask",mapOf("objective" to "CHILD_RESTART","role" to profileId,"tools" to emptyList<String>()))
+                2->call("restart-wait","wait_children",mapOf("ids" to listOf(child(history)),"mode" to "ALL"))
+                else->error("Old process must not resume")
+            }
+        }
+        try {
+            assertTrue(childEntered.await(15,TimeUnit.SECONDS));await(f.bot)
+            assertEquals(CrewManager.Status.WAITING,f.bot.status())
+            // Process-loss simulation: erase only ephemeral parked capability, retaining actual disk/Registry bytes.
+            val listenerField=CrewManager::class.java.getDeclaredField("treePublicationListener").apply {isAccessible=true}
+            val listener=listenerField.get(f.manager)
+            val parked=listener.javaClass.getDeclaredField("parked").apply {isAccessible=true}.get(listener) as MutableMap<*,*>
+            parked.clear();releaseChild.countDown();await(f.manager.bots().single {it.id!=f.bot.id})
+            val wait=storage.onDatabaseWorker {WorkspaceRegistry(app).use { db ->
+                val store=WorkspaceTreeWaitStore(WorkspaceTreeStore(db));val node=WorkspaceTreeStore(db).findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                val ready=store.prepareReady(node.rootId,store.list(node.rootId,node.nodeId).single().waitId)!!
+                if(mode=="started")store.claimWait(ready,CrewProcessIdentity.ID,
+                    ChatDatabaseBridge.getInstance(app).connectionProjectionEvidenceSync().generation(),
+                    (f.manager.treeSupport(f.bot) as WorkspaceTreeWorkerCoordinator).claimOwnerToken(f.bot,f.bot.token)).wait
+                else if(mode=="arming") {
+                    // Fault boundary: typed checkpoint exists, but durable confirmation did not commit.
+                    db.treeTransaction {sql -> sql.execSQL("UPDATE bot_tree_wait SET state='ARMING' WHERE root_id=? AND wait_id=?",arrayOf(ready.rootId,ready.waitId))}
+                    store.get(ready.rootId,ready.waitId)!!
+                } else ready
+            }}
+            val sealed=storage.onDatabaseWorker {CrewCheckpointStore(app.filesDir).confirmDurable(f.scope.executionSessionId,f.bot.id,f.bot.scopeIdentity())!!.payloadSha256}
+            val crews=CoreAgentRuntime::class.java.getDeclaredField("CREWS").apply {isAccessible=true}.get(null) as MutableMap<*,*>
+            crews.remove(f.scope.executionSessionId)
+            val restored=storage.onDatabaseWorker {
+                val provider=object:ModelProviderClient {
+                    override fun complete(systemPrompt:String,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply=error("Conversation required")
+                    override fun completeConversation(systemPrompt:String,history:List<ConversationTurn>,userPrompt:String,images:List<ScreenData>,tools:List<ToolSpec>,sessionId:String,token:CancellationToken):ModelReply {
+                        recoveredCalls.incrementAndGet();assertTrue(history.any {it.content.contains("RESTART_EVIDENCE")});return ModelReply("Recovered synthesis",emptyList())
+                    }
+                }
+                val runtime=CoreAgentRuntime(app,f.scope.executionSessionId,emptyList(),CorePromptBudget.standard())
+                runtime.configureCrewManager(runtime.createTools(),CoreAgentModel(app,provider,f.scope.executionSessionId),null).also {managers.add(it)}
+            }
+            val bot=restored.bot(f.bot.id)!!;assertNotSame(f.bot.token,bot.token);assertEquals(0,recoveredCalls.get())
+            if(mode=="question")storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val child=WorkspaceTreeStore(db).findAssignment(f.scope.workspaceId,restored.bots().single {it.id!=bot.id}.assignmentId())!!
+                val question=LocalRunStore(app).readCrewCoordinationEvidence(f.scope.executionSessionId,child.terminalRef!!)!!
+                assertFalse(restored.canReplyToCoordination(question))
+            }}
+            storage.onDatabaseWorker {
+                assertEquals(sealed,CrewCheckpointStore(app.filesDir).confirmDurable(f.scope.executionSessionId,bot.id,bot.scopeIdentity())!!.payloadSha256)
+                WorkspaceRegistry(app).use {db ->
+                    val assignment=db.getAssignment(f.scope.workspaceId,bot.assignmentId())!!
+                    val type=if(mode=="correct")WorkspaceControlType.CORRECT else WorkspaceControlType.RESUME
+                    val control=db.nativeControls().submit(UUID.randomUUID().toString(),f.scope.workspaceId,assignment.assignmentId,bot.id,assignment.revision,type,"Explicit retained-wait action")
+                    if(mode in setOf("ready","question"))WorkspaceCoordinator(app,{restored},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable())
+                    else deny {WorkspaceCoordinator(app,{restored},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable())}
+                }
+            }
+            if(mode in setOf("ready","question")) {await(bot);assertEquals(bot.error(),if(mode=="question")CrewManager.Status.WAITING else CrewManager.Status.DONE,bot.status());assertEquals(1,recoveredCalls.get())}
+            else assertEquals(0,recoveredCalls.get())
+            storage.onDatabaseWorker {WorkspaceRegistry(app).use {db ->
+                val after=WorkspaceTreeWaitStore(WorkspaceTreeStore(db)).get(wait.rootId,wait.waitId)!!
+                assertEquals(if(mode in setOf("ready","question"))TreeWaitState.ACKNOWLEDGED else wait.state,after.state)
+            }}
+        } finally {releaseChild.countDown()}
+    }
+    @Test fun actualParentMsgSendRetainsFormalAnswerWithoutDispatchUntilExplicitChildResume() {
+        val parentCalls=AtomicInteger();val childCalls=AtomicInteger();val parentParked=CountDownLatch(1)
+        val f=start { history,_,_ ->
+            if(task(history).contains("CHILD_QUESTION")) {
+                if(childCalls.incrementAndGet()==1)call("child-date","ask_chief",mapOf("question" to "Which date?"))
+                else { assertTrue(history.any { it.content.contains("June 4") });ModelReply("CHILD_ANSWERED",emptyList()) }
+            } else when(parentCalls.incrementAndGet()) {
+                1->call("delegate-question","delegate_subtask",mapOf("objective" to "CHILD_QUESTION","role" to profileId,"tools" to listOf("ask_chief")))
+                2->call("await-question","wait_children",mapOf("ids" to listOf(child(history)),"mode" to "ALL"))
+                3->{
+                    val childBot=liveManager.bots().single { it.mission.contains("CHILD_QUESTION") }
+                    val question=history.last { it.incomingMetadata?.provenance?.kind==ConversationInput.Kind.QUESTION }
+                    val questionId=question.content.lineSequence().first { it.startsWith("Question message ID: ") }.substringAfter("Question message ID: ")
+                    assertTrue(questionId.isNotBlank())
+                    call("answer-child","msg_send",mapOf("to" to childBot.id,"type" to "ANSWER","text" to "June 4","refs" to listOf(questionId,"additional untrusted reference")))
+                }
+                4->{assertTrue(history.any { it.kind==ConversationTurn.Kind.TOOL_RESULT && it.content.startsWith("native-tree-answer:") });parentParked.countDown();ModelReply("Wait for answered child",emptyList())}
+                else->{assertTrue(history.any { it.content.contains("CHILD_ANSWERED") });ModelReply("Finished",emptyList())}
+            }
+        }
+        assertTrue(parentParked.await(15,TimeUnit.SECONDS));await(f.bot)
+        val childBot=f.manager.bots().single { it.id!=f.bot.id };await(childBot)
+        assertEquals(1,childCalls.get());assertEquals(CrewManager.Status.PARTIAL,childBot.status());assertEquals(CrewManager.Status.WAITING,f.bot.status())
+        storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
+            val assignment=db.getAssignment(f.scope.workspaceId,childBot.assignmentId())!!
+            val control=db.nativeControls().submit(UUID.randomUUID().toString(),f.scope.workspaceId,assignment.assignmentId,childBot.id,
+                assignment.revision,WorkspaceControlType.RESUME,"Use the retained answer")
+            WorkspaceCoordinator(app,{f.manager},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable())
+        } }
+        await(childBot);await(f.bot);assertEquals(2,childCalls.get());assertEquals(5,parentCalls.get())
+        assertEquals(f.bot.error(),CrewManager.Status.DONE,f.bot.status())
+    }
+    @Test fun nativeRequesterStopDurablyClosesWakesAndCancelsOnlyNeverStartedChild()=whileNativeRunning { f ->
+        val queued=WorkspaceRegistry(app).use { db ->
+            val tree=WorkspaceTreeStore(db);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+            tree.admitChild(TreeNodeFence.of(parent),TreeChildRequest(f.scope.workspaceId,"queued-stop","queued-request","Queued task",profileId,
+                "NEVER_STARTED",caps,"Planner",TreeMode.WORK,TreeReply.AWAIT,"test_backend_queued_admission_not_invocation"))
+        }
+        assertTrue(f.manager.stopExact(f.bot.id,f.bot.token))
+        WorkspaceRegistry(app).use { reopened ->
+            val tree=WorkspaceTreeStore(reopened);val parent=tree.findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+            assertTrue(parent.admissionsClosed);assertTrue(parent.wakesClosed)
+            val cancelled=tree.getNode(queued.rootId,queued.nodeId)!!
+            assertEquals(TreeNodeState.TERMINAL,cancelled.state);assertNull(cancelled.botId);assertNull(cancelled.executionEventId)
+            assertEquals("CANCELLED",cancelled.terminalOutcome);assertEquals(1,f.manager.bots().size)
+            deny { tree.reserveFirstExecution(TreeNodeFence.of(cancelled),CrewProcessIdentity.ID) }
+        }
+    }
+    @Test fun nativeTerminalStopStillLatchesExactCycleBeforeReturningFalse() {
+        val f=start { _,_,_->ModelReply("Done",emptyList()) };await(f.bot)
+        assertEquals(CrewManager.Status.DONE,f.bot.status())
+        storage.onDatabaseWorker {
+            assertFalse(f.manager.stop(f.bot.id))
+            WorkspaceRegistry(app).use { db ->
+                val node=WorkspaceTreeStore(db).findAssignment(f.scope.workspaceId,f.bot.assignmentId())!!
+                deny { WorkspaceTreeStops.requireAllowed(db.treeStorageIdentity,node.rootId,node.nodeId,node.cycleId) }
+            }
+        }
+    }
+    @Test fun retainedFormalAnswerNeverDispatchesUntilExplicitNativeResumeAndIsAcknowledgedOnce() {
+        val calls=AtomicInteger()
+        val fixture=start { history,_,_ -> if(calls.incrementAndGet()==1)call("dates-user-resume","ask_chief",mapOf("question" to "Travel dates?"))
+            else { assertTrue(history.any { it.content.contains("June 4") && it.incomingMetadata?.origin==ConversationInput.Origin.AGENT &&
+                it.incomingMetadata?.provenance?.principalRole==ConversationInput.Provenance.PrincipalRole.PEER });ModelReply("Itinerary confirmed",emptyList()) }
+        }
+        await(fixture.bot);assertEquals(fixture.bot.error(),CrewManager.Status.PARTIAL,fixture.bot.status())
+        val answer=storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
+            val tree=WorkspaceTreeStore(db);val node=tree.findAssignment(fixture.scope.workspaceId,fixture.bot.assignmentId())!!
+            val parent=tree.getNode(node.rootId,node.parentNodeId!!)!!
+            WorkspaceTreeAnswerStore(tree).prepare(TreeNodeFence.of(parent),TreeNodeFence.of(node),"June 4","test_backend_exact_answer_data_not_USER_authority")
+        } }
+        assertEquals(1,calls.get());assertEquals(CrewManager.Status.PARTIAL,fixture.bot.status())
+        val control=storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
+            val assignment=db.getAssignment(fixture.scope.workspaceId,fixture.bot.assignmentId())!!
+            db.nativeControls().submit(UUID.randomUUID().toString(),fixture.scope.workspaceId,assignment.assignmentId,fixture.bot.id,
+                assignment.revision,WorkspaceControlType.RESUME,"Resume with retained answer")
+        } }
+        storage.onDatabaseWorker { assertTrue(WorkspaceCoordinator(app,{fixture.manager},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable()).contains("completed")) }
+        await(fixture.bot);assertEquals(fixture.bot.error(),CrewManager.Status.DONE,fixture.bot.status());assertEquals(2,calls.get())
+        storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
+            val answers=WorkspaceTreeAnswerStore(WorkspaceTreeStore(db));assertNotNull(answers.acknowledged(answer))
+            val saved=CrewCheckpointStore(app.filesDir).confirmDurable(fixture.scope.executionSessionId,fixture.bot.id,fixture.bot.scopeIdentity())!!
+            val original=answers.acknowledged(answer);WorkspaceTreeDelivery.reconcileCheckpoint(app,saved)
+            assertEquals(original,answers.acknowledged(answer));assertEquals(WorkspaceControlState.COMPLETE,db.getControl(control.requestId)!!.state)
+        } }
+    }
+    @Test fun oldStopCannotCrossFreshExplicitUserSuccessorBoundary() {
+        val calls=AtomicInteger();val oldCycle=java.util.concurrent.atomic.AtomicReference<String>();val checked=CountDownLatch(1)
+        val fixture=start(configureManager={ manager ->
+            val field=CrewManager::class.java.getDeclaredField("executor").apply { isAccessible=true }
+            val original=field.get(manager) as java.util.concurrent.ExecutorService;val submissions=AtomicInteger()
+            field.set(manager,object:java.util.concurrent.AbstractExecutorService() {
+                override fun shutdown()=original.shutdown();override fun shutdownNow():MutableList<Runnable> = original.shutdownNow()
+                override fun isShutdown()=original.isShutdown;override fun isTerminated()=original.isTerminated
+                override fun awaitTermination(timeout:Long,unit:TimeUnit)=original.awaitTermination(timeout,unit)
+                override fun execute(command:Runnable) {
+                    if(submissions.incrementAndGet()==2) {
+                        val bot=manager.bots().single();val old=requireNotNull(oldCycle.get())
+                        WorkspaceRegistry(app).use { db ->
+                            val tree=WorkspaceTreeStore(db);val node=tree.findAssignment(WorkspaceIdentity.workspaceId(manager.conversationId()),bot.assignmentId())!!
+                            assertNotEquals(old,node.cycleId)
+                            WorkspaceTreeStops.latchNode(app,node.rootId,node.nodeId,old)
+                            assertFalse(WorkspaceTreeStops.linkedFrom(db.treeStorageIdentity,node.rootId,node.nodeId,node.cycleId,old))
+                            tree.requireDispatch(TreeNodeFence.of(node))
+                        }
+                        checked.countDown()
+                    }
+                    original.execute(command)
+                }
+            })
+        }) { _,_,_->calls.incrementAndGet();ModelReply("Done",emptyList()) }
+        await(fixture.bot);assertEquals(CrewManager.Status.DONE,fixture.bot.status());oldCycle.set(fixture.bot.cycleId())
+        storage.onDatabaseWorker { WorkspaceRegistry(app).use { db ->
+            val assignment=db.getAssignment(fixture.scope.workspaceId,fixture.bot.assignmentId())!!
+            val control=db.nativeControls().submit(UUID.randomUUID().toString(),fixture.scope.workspaceId,assignment.assignmentId,fixture.bot.id,
+                assignment.revision,WorkspaceControlType.RESUME,"Explicitly continue the completed worker")
+            WorkspaceCoordinator(app,{fixture.manager},{}).executeNativeControl(control.requestId,CancellationToken.uncancellable())
+        } }
+        assertTrue(checked.await(15,TimeUnit.SECONDS));await(fixture.bot)
+        assertEquals(fixture.bot.error(),CrewManager.Status.DONE,fixture.bot.status());assertEquals(2,calls.get())
+    }
+
     @Test fun pendingUserControlRowCannotMintRegisteredResumeOrAlterSource()=whileNativeRunning { f ->
         val source=CrewCheckpointStore(app.filesDir).confirmDurable(f.scope.executionSessionId,f.bot.id,f.bot.scopeIdentity())!!
         WorkspaceRegistry(app).use { db ->

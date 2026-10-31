@@ -12,9 +12,13 @@ import org.json.JSONObject;
 /** Registry adapter; DTOs and checkpoint backlinks never create execution authority. */
 public interface CrewTreeSupport {
     boolean enrolled(CrewManager.Bot bot);
+    /** Denial only, called outside native cycle locks even for an already terminal requester. */
+    void onRequesterStop(CrewManager.Bot bot,CancellationToken token,String cycleId);
     /** Native cycle -> pure denial monitor -> mailbox only; no IO/listeners inside action. */
     void admitOrdinaryEnqueue(CrewManager.Bot bot,CancellationToken token,Runnable mailbox);
     void requireCurrentDispatch(CrewManager.Bot bot, CancellationToken token);
+    /** Null means not a formal child question; ordinary MESSAGE routing remains native. */
+    CoreToolResult retainAnswer(CrewManager.Bot bot,CancellationToken token,CrewInvocationWitness source,Map<String,Object> arguments);
     CoreToolResult delegateChild(CrewManager.Bot bot, CancellationToken token, CrewInvocationWitness source,
             Map<String,Object> arguments,List<String> toolCeiling,List<String> skillCeiling);
     void prepareInvocation(CrewManager.Bot bot,CancellationToken token,CrewInvocationWitness source,Map<String,Object> arguments,String kind);

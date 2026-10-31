@@ -239,8 +239,11 @@ internal class WorkspaceTreeStore(internal val registry:WorkspaceRegistry) {
             .put("cycleId",child.cycleId).put("assignmentId",child.assignmentId).put("cancelOwner",owner.nodeId).put("reason",reason).toString()
         val digest=identity(receipt)
         appendEvent(db,child,identity("terminal",child.nodeId,child.cycleId),"TERMINAL",receipt,owner.sourceReceipt,digest,ref)
-        return updateNode(db,child,values("state" to "TERMINAL","terminal_outcome" to "CANCELLED","terminal_ref" to ref,
+        updateNode(db,child,values("state" to "TERMINAL","terminal_outcome" to "CANCELLED","terminal_ref" to ref,
             "terminal_hash" to digest,"admissions_closed" to 1L,"wakes_closed" to 1L,"stop_epoch" to next(child.stopEpoch)))
+        // The Registry itself is the canonical producer for never-executed cancellation.
+        // Retain its report in the same transaction: no runtime, fabricated worker result or crash repair gap.
+        return WorkspaceTreeEvidenceStore(this).markReported(child.rootId,child.nodeId,ref,digest,"cancelled-admission:"+digest)
     }
     internal fun cancelWaits(db:SQLiteDatabase,node:TreeNode) {
         db.execSQL("UPDATE bot_tree_wait SET state='CANCELLED',revision=revision+1,updated_at=? WHERE root_id=? AND parent_node_id=? AND state IN ('ARMING','WAITING','READY')",

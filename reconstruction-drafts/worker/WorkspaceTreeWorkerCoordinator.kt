@@ -19,7 +19,7 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
     private val checkpoints = CrewCheckpointStore(app.filesDir)
     private val ownerKeys = Collections.synchronizedMap(IdentityHashMap<CancellationToken,String>())
     private val questionSources = Collections.synchronizedMap(IdentityHashMap<CrewManager.Bot,CrewInvocationWitness>())
-    private data class ResumeOwner(val bot:CrewManager.Bot,val token:CancellationToken,val claim:TreeWaitClaim)
+    private data class ResumeOwner(val bot:CrewManager.Bot,val token:CancellationToken,val claim:TreeWaitClaim,val user:TreeUserWaitClaim?=null)
     private val commits = Collections.synchronizedMap(IdentityHashMap<CrewManager.ResumeCheckpointCommit,ResumeOwner>())
     private data class UserResumeOwner(val bot:CrewManager.Bot,val token:CancellationToken,val claim:TreeControlClaim,
         val source:CrewCheckpointStore.ConfirmedSnapshot)
@@ -42,6 +42,23 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
         check(root.origin.storageGeneration==generation()) { "Tree storage owner changed" }
         return value
     }
+    override fun onRequesterStop(bot:CrewManager.Bot,token:CancellationToken,cycleId:String) {
+        WorkspaceRegistry(app).use { db ->
+            val tree=WorkspaceTreeStore(db)
+            val value=tree.findAssignment(workspace,bot.assignmentId()) ?: return@use
+            // Captured-cycle denial persists even if durable ownership changes before the CAS.
+            WorkspaceTreeStops.latchExact(db.treeStorageIdentity,value.rootId,value.nodeId,cycleId)
+            check(manager.bot(bot.id)===bot && bot.token===token && bot.cycleId()==cycleId &&
+                value.botId==bot.id && value.cycleId==cycleId) { "STOP requester cycle changed" }
+            val root=requireNotNull(tree.getRoot(value.rootId))
+            check(root.origin.storageGeneration==generation()) { "STOP storage generation changed" }
+            // A native PAUSE/cascade already performed this durable denial. Never increment it again.
+            if(value.stopEpoch>0 && value.admissionsClosed && value.wakesClosed)return@use
+            tree.stopRequester(TreeNodeFence.of(value)) { targets ->
+                targets.forEach { WorkspaceTreeStops.latchExact(db.treeStorageIdentity,it.rootId,it.nodeId,it.cycleId) }
+            }
+        }
+    }
     override fun requireCurrentDispatch(bot:CrewManager.Bot,token:CancellationToken) {
         WorkspaceRegistry(app).use { db -> val value=current(db,bot,token);WorkspaceTreeStore(db).requireDispatch(TreeNodeFence.of(value)) }
     }
@@ -53,6 +70,33 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
             WorkspaceTreeStops.admitNativeEnqueue(db.treeStorageIdentity,value.rootId,root.cycleId,value.nodeId,value.cycleId,mailbox)
         }
     }
+    override fun retainAnswer(bot:CrewManager.Bot,token:CancellationToken,source:CrewInvocationWitness,args:Map<String,Any?>):CoreToolResult? {
+        check(bot.role.missionAccess!=CrewMissionAccess.READ_ONLY && bot.role.tools.contains("msg_send"))
+        source.requireArguments(args);source.requireInvocationCurrent()
+        check(source.source().toolName=="msg_send" && (args["type"] as? String)?.uppercase()=="ANSWER")
+        val target=requireNotNull(args["to"] as? String);val text=requireNotNull(args["text"] as? String)
+        require(text.isNotBlank())
+        val refs=(args["refs"] ?: emptyList<String>()).let { value ->
+            require(value is List<*> && value.all { it is String && it.isNotBlank() });value.map { it as String }
+        }
+        WorkspaceRegistry(app).use { db ->
+            val tree=WorkspaceTreeStore(db);val parent=current(db,bot,token)
+            val targetBot=manager.bot(target) ?: return null
+            val child=tree.findAssignment(workspace,targetBot.assignmentId()) ?: return null
+            if(child.state!=TreeNodeState.NEEDS_INPUT)return null
+            check(child.rootId==parent.rootId && child.parentNodeId==parent.nodeId && child.botId==target && child.reply==TreeReply.AWAIT)
+            val evidence=requireNotNull(LocalRunStore(app).readCrewCoordinationEvidence(session,requireNotNull(child.terminalRef)))
+            check(evidence.kind=="QUESTION" && evidence.botId==target && evidence.cycleId==child.cycleId &&
+                evidence.contentSha256==child.terminalHash && refs.contains(evidence.messageId)) { "Exact formal question reference required" }
+            prepareInvocation(bot,token,source,args,"ANSWER_ARM")
+            val receipt=sourceJson(source,args)
+            val answer=manager.withCurrentTreeCycle(bot,token,parent.cycleId,Callable {
+                // Only retained data. The child performs no enqueue, wake, or execution until fresh native USER Resume.
+                WorkspaceTreeAnswerStore(tree).prepare(TreeNodeFence.of(parent),TreeNodeFence.of(child),text,receipt)
+            })
+            return CoreToolResult.complete("native-tree-answer:${answer.eventKey}\nRetained exact answer; child execution requires explicit native USER Resume.")
+        }
+    }
     private fun sourceJson(source:CrewInvocationWitness,args:Map<String,Any?>):String {
         source.requireArguments(args);source.requireInvocationCurrent();val s=source.source()
         val encoded=WorkspaceTreeEvidenceStore.canonical(JSONObject(args))
@@ -62,7 +106,7 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
             .put("argumentsDigest",WorkspaceTreeStore.identity(encoded)))
     }
     override fun prepareInvocation(bot:CrewManager.Bot,token:CancellationToken,source:CrewInvocationWitness,args:Map<String,Any?>,kind:String) {
-        val expected=when(kind) { "ADMISSION"->"delegate_subtask";"WAIT_ARM"->"wait_children";"QUESTION_ARM"->"ask_chief";"REPORT_DONE"->"report_done";else->error("Unknown native invocation kind") }
+        val expected=when(kind) { "ADMISSION"->"delegate_subtask";"WAIT_ARM"->"wait_children";"QUESTION_ARM"->"ask_chief";"REPORT_DONE"->"report_done";"ANSWER_ARM"->"msg_send";else->error("Unknown native invocation kind") }
         check(source.source().toolName==expected) { "Native invocation kind changed" }
         val receipt=sourceJson(source,args);val encoded=WorkspaceTreeEvidenceStore.canonical(JSONObject(args))
         WorkspaceRegistry(app).use { db -> val value=current(db,bot,token)
@@ -183,7 +227,7 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
         if(user!=null) { check(user.bot===bot && user.token===token);requireUserClaim(user);return }
         val owner=commits[commit] ?: error("Tree successor requires its registered exact native claim/control")
         check(owner.bot===bot && owner.token===token)
-        WorkspaceRegistry(app).use { requireClaim(it,bot,token,owner.claim) }
+        WorkspaceRegistry(app).use { if(owner.user==null)requireClaim(it,bot,token,owner.claim) else requireUserWaitClaim(it,bot,token,owner.user) }
     }
     override fun requireCompletedUserResume(bot:CrewManager.Bot,token:CancellationToken,commit:CrewManager.ResumeCheckpointCommit?) {
         val owner=userCommits[commit] ?: error("DONE requires fresh registered USER control, not child-wait authority")
@@ -246,9 +290,39 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
         check(userCommits.put(commit,owner)==null);return commit
     }
     fun releaseUserControl(commit:CrewManager.ResumeCheckpointCommit) { userCommits.remove(commit) }
+    fun userWaitOwnerToken(bot:CrewManager.Bot,token:CancellationToken):String {
+        check(manager.bot(bot.id)===bot && bot.token===token && bot.isQuiescent && bot.canResume())
+        return ownerKeys.getOrPut(token) { UUID.randomUUID().toString() }
+    }
+    private fun requireUserWaitClaim(db:WorkspaceRegistry,bot:CrewManager.Bot,token:CancellationToken,user:TreeUserWaitClaim) {
+        val claim=user.waitClaim;val control=user.control
+        check(manager.bot(bot.id)===bot && bot.token===token && bot.cycleId()==claim.wait.parentCycleId)
+        check(control==db.getControl(control.requestId) && control.state==WorkspaceControlState.STARTED &&
+            control.type==WorkspaceControlType.RESUME && control.origin==WorkspaceRegistry.NATIVE_UI_ORIGIN &&
+            control.processId==CrewProcessIdentity.ID && control.botId==bot.id && control.assignmentId==bot.assignmentId() &&
+            control.assignmentRevision==claim.sourceAssignmentRevision && control.admittedAssignmentRevision==claim.admittedAssignmentRevision)
+        val tree=WorkspaceTreeStore(db);val value=node(db,bot);val wait=WorkspaceTreeWaitStore(tree).get(value.rootId,claim.wait.waitId)
+        check(wait==claim.wait && wait.state==TreeWaitState.STARTED && wait.parentNodeId==value.nodeId &&
+            wait.ownerProcess==CrewProcessIdentity.ID && wait.ownerGeneration==generation() && wait.ownerToken==ownerKeys[token] &&
+            wait.selectedCauses==claim.causes && value.assignmentRevision==claim.admittedAssignmentRevision &&
+            value.controlIntent==wait.successorIntent && value.revision==wait.parentRevision)
+        val raw=db.treeRead { sql -> WorkspaceTreeStore.one(sql,"bot_tree_event","root_id=? AND event_key=? AND kind='USER_WAIT_AUTHORIZATION'",
+            arrayOf(value.rootId,WorkspaceTreeStore.identity("user-wait",control.requestId))) { c -> c.getString(c.getColumnIndexOrThrow("receipt")) } }
+        val receipt=JSONObject(requireNotNull(raw))
+        check(receipt.getString("controlId")==control.requestId && receipt.getString("claimDigest")==WorkspaceTreeWaitStore.claimDigest(claim) &&
+            receipt.getString("waitId")==wait.waitId && receipt.getLong("sourceRevision")==claim.sourceAssignmentRevision &&
+            receipt.getLong("admittedRevision")==claim.admittedAssignmentRevision)
+    }
+    fun resumeUserWait(bot:CrewManager.Bot,token:CancellationToken,user:TreeUserWaitClaim,stageReports:Consumer<CrewManager.Bot>) {
+        check(bot.isQuiescent && bot.canResume()) { "Exact retained native Resume unavailable" }
+        resumeClaimInternal(bot,token,user.waitClaim,stageReports,user)
+    }
     fun resumeClaim(bot:CrewManager.Bot,token:CancellationToken,claim:TreeWaitClaim,stageReports:Consumer<CrewManager.Bot>) {
         check(manager.isTreeParkQuiescent(bot,token)) { "Native parent has not quiesced" }
-        WorkspaceRegistry(app).use { requireClaim(it,bot,token,claim) }
+        resumeClaimInternal(bot,token,claim,stageReports,null)
+    }
+    private fun resumeClaimInternal(bot:CrewManager.Bot,token:CancellationToken,claim:TreeWaitClaim,stageReports:Consumer<CrewManager.Bot>,user:TreeUserWaitClaim?) {
+        WorkspaceRegistry(app).use { if(user==null)requireClaim(it,bot,token,claim) else requireUserWaitClaim(it,bot,token,user) }
         val source=requireNotNull(checkpoints.confirmDurable(session,bot.id,bot.scopeIdentity()))
         check(source.payloadSha256==claim.wait.checkpointSha256 &&
             CentralContinuationRecord.equal(CrewCheckpointStore.continuationSourceCertificate(source),JSONObject(claim.wait.checkpointCertificate!!)))
@@ -269,10 +343,11 @@ internal class WorkspaceTreeWorkerCoordinator(context: Context, private val sess
                 check(waits.get(claim.wait.rootId,claim.wait.waitId)==claim.wait)
                 waits.bindSuccessor(claim.wait,successor.cycleId(),claim.admittedAssignmentRevision,
                     CrewCheckpointStore.continuationSourceCertificate(saved).toString(),CrewProcessIdentity.ID,generation(),claimOwnerToken(successor,successor.token))
+                if(user!=null)db.completeControl(user.control.requestId,user.control.revision)
             }
             reconcileCheckpoint(app,saved)
         }
-        check(commits.put(commit,ResumeOwner(bot,token,claim))==null)
+        check(commits.put(commit,ResumeOwner(bot,token,claim,user))==null)
         try { manager.resumeExact(bot.id,token,null,null,commit) } finally { commits.remove(commit);ownerKeys.remove(token) }
     }
     companion object {

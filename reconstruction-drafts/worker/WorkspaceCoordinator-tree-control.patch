@@ -1,0 +1,135 @@
+--- a/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceCoordinator.kt
++++ b/app/app/src/main/java/com/jarvys/agent/workspaces/WorkspaceCoordinator.kt
+@@ -290,6 +290,124 @@
+                 }
+             }
+         }
++    }
++
++    /** Positive enrollment only. Historical native/P1 controls keep their original route unchanged. */
++    private fun executeTreeNativeControl(control:WorkspaceUserControl,token:CancellationToken):String? {
++        val observed=registry().use { db -> WorkspaceTreeStore(db).findAssignment(control.workspaceId,control.assignmentId) } ?: return null
++        if(control.type==WorkspaceControlType.PAUSE)
++            WorkspaceTreeStops.latchNode(app,observed.rootId,observed.nodeId,observed.cycleId) // Denial survives losing claim/CAS.
++        val scope=registry().use { workspace(it,control.workspaceId) }
++        val manager=managerFor(scope.executionSessionId)
++        val bot=requireNotNull(manager.bot(control.botId)) { "Enrolled worker has no native retained owner" }
++        val expectedToken=bot.token
++        val adapter=manager.treeSupport(bot) as? WorkspaceTreeWorkerCoordinator ?: error("Enrolled worker lost its native tree adapter")
++        val checkpoints=CrewCheckpointStore(app.filesDir)
++        var userWait:TreeUserWaitClaim?=null
++        var claimed:TreeControlClaim?=null
++        var registered:CrewManager.ResumeCheckpointCommit?=null
++        try {
++            synchronized(controlDispatchLock(control.assignmentId)) {
++                if(!token.runIfActive {
++                    registry().use { db ->
++                        val tree=WorkspaceTreeStore(db);val node=requireNotNull(tree.findAssignment(control.workspaceId,control.assignmentId))
++                        check(node==observed && db.getControl(control.requestId)==control && control.state==WorkspaceControlState.PENDING)
++                        check(bot.token===expectedToken && bot.cycleId()==node.cycleId && bot.assignmentId()==control.assignmentId)
++                        val retainedWaits=WorkspaceTreeWaitStore(tree).list(node.rootId,node.nodeId).filter {
++                            it.parentCycleId==node.cycleId && it.state !in setOf(TreeWaitState.ACKNOWLEDGED,TreeWaitState.CANCELLED)
++                        }
++                        if(control.type!=WorkspaceControlType.PAUSE && retainedWaits.isNotEmpty()) {
++                            check(control.type==WorkspaceControlType.RESUME && retainedWaits.size==1) { "Pending wait needs exact RESUME, not silent correction/discard" }
++                            val wait=retainedWaits.single()
++                            check(wait.state in setOf(TreeWaitState.WAITING,TreeWaitState.READY) && bot.isQuiescent && bot.canResume()) { "Uncertain/active wait cannot replay" }
++                            val source=requireNotNull(checkpoints.confirmDurable(scope.executionSessionId,bot.id,bot.scopeIdentity()))
++                            check(source.payloadSha256==wait.checkpointSha256 && CentralContinuationRecord.equal(
++                                CrewCheckpointStore.continuationSourceCertificate(source),org.json.JSONObject(requireNotNull(wait.checkpointCertificate))))
++                            CrewCheckpointCoordinator(app,scope.executionSessionId) { it.role }.requireNativeSafePoint(source)
++                            val claim=WorkspaceTreeWaitStore(tree).claimUserWait(wait,control.requestId,CrewProcessIdentity.ID,
++                                com.jarvys.agent.chatdb.ChatDatabaseBridge.getInstance(app).connectionProjectionEvidenceSync().generation(),
++                                adapter.userWaitOwnerToken(bot,expectedToken))
++                            userWait=claim
++                            adapter.resumeUserWait(bot,expectedToken,claim,java.util.function.Consumer { successor ->
++                                WorkspaceTreeDelivery.stageReports(app,scope.executionSessionId,manager,successor,claim.waitClaim)
++                            })
++                            keepalive();return@use
++                        }
++                        val starts=control.type==WorkspaceControlType.RESUME || control.type==WorkspaceControlType.CORRECT &&
++                            (bot.requiresExplicitResume() || bot.status()==CrewManager.Status.DONE)
++                        if(starts) check(bot.isQuiescent && (bot.canResume() || bot.status()==CrewManager.Status.DONE)) { "Native cleanup/safe Resume not available" }
++                        if(!starts && control.type==WorkspaceControlType.CORRECT)
++                            check(!bot.requiresExplicitResume() && bot.status() in setOf(CrewManager.Status.RUNNING,CrewManager.Status.WAITING))
++                        if(control.type==WorkspaceControlType.PAUSE || control.type==WorkspaceControlType.CORRECT)
++                            WorkspaceContinuationDelivery.cancelActiveOwner(app,control.workspaceId,bot.id)
++                        if(control.type==WorkspaceControlType.CORRECT && !starts)
++                            WorkspaceContinuationDelivery.cancel(app,control.workspaceId,bot.id)
++                        // Capture original source BEFORE P1 may append a PREPARED control link.
++                        val source=requireNotNull(checkpoints.confirmDurable(scope.executionSessionId,bot.id,bot.scopeIdentity()))
++                        check(source.metadataJson().getString("cycleId")==node.cycleId)
++                        val p1=if(starts && source.metadataJson().has(CentralContinuationRecord.FIELD))
++                            WorkspaceContinuationDelivery.prepareResume(app,control,bot) else null
++                        val validate=Runnable { token.throwIfCancelled();check(bot.token===expectedToken && bot.cycleId()==node.cycleId) }
++                        val claim=WorkspaceTreeControlStore(tree).claim(TreeNodeFence.of(node),control.requestId,CrewProcessIdentity.ID,starts,
++                            CrewCheckpointStore.continuationSourceCertificate(source).toString(),validate)
++                        claimed=claim
++                        if(control.type==WorkspaceControlType.PAUSE) {
++                            WorkspaceContinuationDelivery.cancel(app,control.workspaceId,bot.id)
++                            manager.stopForUserControl(bot.id,expectedToken)
++                        } else {
++                            val base=if(p1!=null) WorkspaceContinuationDelivery.resumeCommit(app,p1,claim.control,manager,token) else null
++                            val commit=adapter.authorizeUserControlResume(bot,expectedToken,claim,source,base,
++                                if(starts) java.util.function.Consumer { successor -> WorkspaceTreeDelivery.stageAnswer(app,manager,successor,claim) } else null)
++                            registered=commit
++                            val assignment=requireNotNull(db.getAssignment(control.workspaceId,control.assignmentId))
++                            val input=if(control.type==WorkspaceControlType.CORRECT) WorkspaceInputSources.correction(scope,assignment,claim.control,node.cycleId) else null
++                            val text=if(control.type==WorkspaceControlType.CORRECT)control.userText else null
++                            if(starts) {
++                                if(bot.status()==CrewManager.Status.DONE)manager.resumeCompletedTreeUserControlExact(bot.id,expectedToken,text,input,commit)
++                                else manager.resumeExact(bot.id,expectedToken,text,input,commit)
++                            } else manager.sendUserMessageSameCycleExact(bot.id,expectedToken,control.userText,requireNotNull(input),commit)
++                            keepalive()
++                        }
++                    }
++                }) throw java.util.concurrent.CancellationException("USER tree control stopped before native admission")
++            }
++            if(userWait!=null) {
++                persistMissionSnapshot(app,manager.missionSnapshots().first { it.missionId==bot.missionId })
++                WorkspaceChanges.changed()
++                return "RESUME: completed exact retained child wait for assignment ${control.assignmentId}."
++            }
++            val claim=requireNotNull(claimed)
++            if(control.type==WorkspaceControlType.PAUSE) {
++                // No Registry transaction or assignment/cycle monitor is held while worker-owned work drains.
++                bot.awaitTermination();check(!manager.hasPendingOwnedWork(bot))
++                val stopped=requireNotNull(checkpoints.confirmDurable(scope.executionSessionId,bot.id,bot.scopeIdentity()))
++                check(bot.token===expectedToken && stopped.metadataJson().getString("cycleId")==observed.cycleId)
++                synchronized(controlDispatchLock(control.assignmentId)) {
++                    registry().use { db -> WorkspaceTreeControlStore(WorkspaceTreeStore(db)).bind(claim,observed.cycleId,
++                        CrewCheckpointStore.continuationSourceCertificate(stopped).toString()) }
++                }
++                // Exact retained terminal/queued-cancellation repair only; it cannot wake a stopped requester.
++                WorkspaceTreeDelivery.reconcileAfterPause(app,scope.executionSessionId,manager,bot,claim)
++            }
++            persistMissionSnapshot(app,manager.missionSnapshots().first { it.missionId==bot.missionId })
++            registry().use { it.completeControl(control.requestId,claim.control.revision) }
++            WorkspaceChanges.changed()
++            return "${control.type}: completed for assignment ${control.assignmentId}. This receipt does not verify its work result."
++        } catch(failure:Exception) {
++            if(control.type==WorkspaceControlType.PAUSE) {
++                val current=manager.bot(control.botId)
++                if(current!=null) {
++                    val currentToken=current.token
++                    val currentCycle=current.cycleId()
++                    val storage=app.getDatabasePath(WorkspaceRegistry.DATABASE_NAME).canonicalPath
++                    if(WorkspaceTreeStops.linkedFrom(storage,observed.rootId,observed.nodeId,currentCycle,observed.cycleId))
++                        runCatching { manager.stopForUserControl(current.id,currentToken) }.exceptionOrNull()?.let { failure.addSuppressed(it) }
++                }
++            }
++            userWait?.let { wait -> runCatching { registry().use { it.markControlUncertain(control.requestId,wait.control.revision) } } }
++            claimed?.let { claim -> runCatching { registry().use { it.markControlUncertain(control.requestId,claim.control.revision) } } }
++            WorkspaceChanges.changed();throw failure
++        } finally { registered?.let { adapter.releaseUserControl(it) } }
+     }
+ 
+     override fun read(workspaceId: String, assignmentId: String?, limit: Int, afterAssignmentId: String?, admission: Runnable): JSONObject =
+@@ -382,6 +500,7 @@
+                 val control = requireNotNull(store.getControl(controlId))
+                 if (control.state != WorkspaceControlState.PENDING)
+                     return@use "Control ${control.requestId}: ${control.state}. No action was repeated."
++                executeTreeNativeControl(control,token)?.let { return@use it }
+                 val scope = workspace(store, control.workspaceId)
+                 val assignment = requireNotNull(store.getAssignment(control.workspaceId, control.assignmentId))
+                 check(assignment.revision == control.assignmentRevision && assignment.botId == control.botId)
