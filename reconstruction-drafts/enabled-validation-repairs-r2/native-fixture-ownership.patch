@@ -1,0 +1,69 @@
+--- a/app/app/src/test/java/com/jarvys/agent/WorkspaceMemoryContinuityTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/WorkspaceMemoryContinuityTest.kt
+@@ -28,7 +28,7 @@
+ 
+ /** Shared test fixture: genuine native assignments and the production catalog, loop and checkpoint installer. */
+ internal class WorkspaceMemoryFixture(storage: ChatTestStore, directBridge: Boolean = true) : AutoCloseable {
+-    val files = storage.newFilesDirectory("workspace-memory")
++    val files = storage.newFilesDirectory("workspace-memory-${UUID.randomUUID()}")
+     val context: Context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()), ConnectionAccessProvider {
+         override fun connectionAccess() = ConnectionAccess.forTests(emptyMap())
+         override fun getApplicationContext(): Context = this
+--- a/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/workspaces/WorkspaceCoordinatorIntegrationTest.kt
+@@ -228,7 +228,10 @@
+         assertEquals(first.getLong("revision"), duplicate.getLong("revision"))
+         assertEquals(2, modelCalls.get())
+         assertEquals(2, keepalives.get())
+-        assertEquals(listOf(firstScope.executionSessionId, secondScope.executionSessionId), managerLookups.toList())
++        // Each new admission resolves its manager once for preflight and once for the reserved spawn.
++        // The duplicate must add neither a third lookup nor another worker/provider call.
++        assertEquals(listOf(firstScope.executionSessionId, firstScope.executionSessionId,
++            secondScope.executionSessionId, secondScope.executionSessionId), managerLookups.toList())
+         assertNotEquals(firstScope.executionSessionId, secondScope.executionSessionId)
+         assertFalse(managerLookups.contains(WorkspaceIdentity.CENTRAL_SESSION))
+         assertEquals(1, managers.getValue(firstScope.executionSessionId).bots().size)
+@@ -1094,6 +1097,7 @@
+         manager.configureConversationInputPipeline(
+             { bot, message -> WorkspaceConversationInputStore.append(context, session, bot, message) },
+             { _, ids -> WorkspaceConversationInputStore.acknowledge(context, session, ids) },
++            { bot, message -> WorkspaceConversationInputStore.resolve(context, session, bot, message) },
+         )
+     }
+ 
+--- a/app/app/src/test/java/com/jarvys/agent/AgentMessagingPipelineTest.kt
++++ b/app/app/src/test/java/com/jarvys/agent/AgentMessagingPipelineTest.kt
+@@ -799,12 +799,19 @@
+         val scope = registry.createWorkspace("message-$key", "Message pipeline test")
+         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(scope.executionSessionId, "workspace") is ChatDbResult.Success)
+         assertTrue(ChatDatabaseBridge.getInstance(context).ensureConversationSync(WorkspaceIdentity.CENTRAL_SESSION, "chat") is ChatDbResult.Success)
++        // Explicit retained (unenrolled) assignment fixture with a real saved native profile.
++        // Runtime profile validation stays enabled; do not manufacture a version on an ephemeral alias.
++        val profiles = com.jarvys.agent.crew.CrewProfileRepository(context)
++        val profileId = com.jarvys.agent.crew.CrewProfileRepository.newCustomId()
++        val profile = profiles.create(CrewProfile(profileId, 1, "Pipeline Worker", "Synthetic message pipeline",
++            "Inspect the current project and report the result.", emptyList(), requestedTools,
++            CrewProfile.WorkspaceMode.LEGACY_CHAT), requestedTools, emptyList())
+         val manager = newManager(scope.executionSessionId, onModel)
+         managers += manager
+         val requestId = "request-$key"
+         val mission = "Inspect the current project and report the result."
+         val prepared = registry.prepareAssignment(scope.workspaceId, "assignment-$key", requestId,
+-            "Owner request", "custom", mission, emptyList(), "Worker", CrewMissionAccess.STANDARD)
++            "Owner request", profile.id, mission, requestedTools, "Worker", CrewMissionAccess.STANDARD)
+         val started = registry.markStarted(scope.workspaceId, prepared.assignmentId, prepared.revision, "process-$key")
+         manager.configureConversationInputPipeline(
+             { bot, message -> WorkspaceConversationInputStore.append(context, scope.executionSessionId, bot, message) },
+@@ -829,9 +836,11 @@
+             })
+         }
+         configureBeforeStart(manager)
+-        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", "custom", mission,
++        val bot = manager.spawnForMissionDeferred(prepared.missionId, "Owner request", profile.id, mission,
+             requestedTools, "Worker", CrewMissionAccess.STANDARD, null, started)
+         val bound = registry.bindBot(scope.workspaceId, prepared.assignmentId, started.revision, bot.id)
++        assertNull("Retained message fixture must not acquire tree authority",
++            com.jarvys.agent.workspaces.WorkspaceTreeStore(registry).findAssignment(scope.workspaceId, bound.assignmentId))
+         manager.startPreparedForMission(bot)
+         registry.close()
+         return BoundWorker(manager, bot, scope, bound)

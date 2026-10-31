@@ -1,0 +1,8 @@
+{
+  "README.md": "8f84ed04aeb92ac7852f1ebae560ec175f1ea82f68121877068a999f1e7dc805",
+  "central-source-diagnostics.patch": "8655e9b50778e27aa566a9bc4b81c3edeb282b3dc964510da78c752df393446f",
+  "native-fixture-ownership.patch": "b1a095be5d30d9eb7da822f464e22c60ba30265b39ad716fec411e39b5290689",
+  "service-call-identities.patch": "bd017f5125ded6766829cc6e150747cade8b55335f20d223e3c16ddb8672e6dc",
+  "service-native-context.patch": "440f717b1e04872cf344b86ade057cb0df4bd01d243e7b71a46e7cafd0b4b27e",
+  "worker-outcome-diagnostics.patch": "77af91f6c1c132acaba9dd365dd1449a52def96daae29bd1e584f80a76ac1abb"
+}
