@@ -256,6 +256,11 @@
       "path": "reconstruction-drafts/worker/WorkspaceTreeWorkerTools.kt",
       "sha256": "e9e7e7d3e7fe0a5253d7af33a4e7f1f85f07a4264716b55a501e150eafffd27f",
       "bytes": 5424
+    },
+    {
+      "path": "reconstruction-drafts/worker-join-tests/any-none-native-tests.patch",
+      "sha256": "d4af64555edb3728ff44208d68c9442b5d2614dab89c51e56cf6bbdb1c477d3f",
+      "bytes": 8870
     }
   ]
 }
